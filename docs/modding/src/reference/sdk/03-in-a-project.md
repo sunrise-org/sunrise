@@ -7,7 +7,7 @@ A code mod's project names the mod API by the path where `cargo sunrise-mod` kee
 sunrise-mod-api = { path = ".sunrise/sdk/api/crates/sunrise-mod-api" }
 ```
 
-`sunrise-mod-points`, `sunrise-internals` and `sunrise-wasmtime` (native mods only; [the game's wasmtime](../../concepts/native-route/8-wasmtime.md)) are named the same way, by `.sunrise/sdk/api/crates/<package>`. The
+`sunrise-internals` is named the same way, by `.sunrise/sdk/api/crates/sunrise-internals`. The
 SDK does not carry a `sunrise-internals` crate: `cargo sunrise-mod build` and `internals sync` generate the
 mod's own facade in its place. A plain `cargo check` cannot resolve it. Features
 (`features = ["testing"]` on a dev-dependency) are kept.
@@ -22,50 +22,72 @@ with the line to write instead:
 | `registry`, `registry-index`, `branch`, `tag`, `rev` or `workspace` | It does not name the SDK. |
 | `{ path = "…" }` anywhere else | The path must be the pinned SDK the tool fetches. |
 
+## Cargo dependencies in a native build
+
+A registry build checks the staged mod's `Cargo.toml` and each local crate it reaches, including
+build, dev and target-specific dependencies. Keep authored path dependencies inside the mod and
+under its packaged source tree, and use `package = "…"` if the dependency's alias differs from
+its package name. The generated `sunrise-internals` facade uses the alias `internals` unless you
+name it differently. If the alias is already used in `[dependencies]`, the registry build reports
+the conflict. Give one dependency a different alias with `package = "…"` and use that alias in Rust
+imports. To link another mod, declare it in `sunrise-mod.toml`; the builder adds the Cargo path to
+its staged library. Don't put that path in your own `Cargo.toml`.
+
+The builder takes the API and internals from the pinned SDK, not from crates.io. For other registry
+crates, use crates.io and keep the mod's `Cargo.lock` up to date with
+[`native-lock`](08-native-build.md#native-discover-and-native-lock). Only the SDK may supply patches.
+Mod crates cannot declare `[patch]`, `[replace]` or `[workspace]`. The build and lock commands
+run Cargo from their own staging workspace without using your project's Cargo configuration
+or rewriting your `Cargo.toml` files.
+
 ## The pin
 
-The build a mod is made for is its pin, always a full commit sha in the file:
+The build a native mod is made for is its pin, a full commit SHA in `[native] sunrise` in
+`sunrise-mod.toml`.
 
-- a native mod: `[native] sunrise` in `sunrise-mod.toml`;
-- a wasm mod: `sdk` under `[package.metadata.sunrise]` in `Cargo.toml`.
+`cargo sunrise-mod new` writes the current Nightly's build, or the one selected with `--sunrise`, in any of the
+[forms below](#build-names). The pin is always the full SHA.
 
-`cargo sunrise-mod new` writes the current Nightly's build, or the one selected with `--sunrise`.
 A native project normally leaves `[native] mixins` out. When a mod uses mixins, builds and discovery use the
 horizon-mixins revision and patch recorded in the pinned SDK's signed `sdk.json`. The mod tool must support that
 exact pair, and any explicit `[native] mixins` revision must match it. If the tool and SDK disagree, install the
-tool from that SDK or run `cargo sunrise-mod update` to move to an SDK that matches your tool. If the explicit
+tool from that SDK or run `cargo sunrise-mod pin` to move to an SDK that matches your tool. If the explicit
 revision disagrees, remove it to use the SDK's revision.
 
 A native build writes the revision into the package, not the project. For a mod that doesn't use mixins, the
 package keeps an explicit revision or records the SDK's revision if none was written, without requiring a match.
 A project in a game checkout uses the checkout's API surface instead of fetching one into the project, but its
-native compile and package revision still come from the pinned SDK. `cargo sunrise-mod update` moves the Sunrise
+native compile and package revision still come from the pinned SDK. `cargo sunrise-mod pin` moves the Sunrise
 build pin after checking the destination SDK; it leaves any explicit mixins revision alone.
 
-Wherever a build is given, these forms are accepted:
+### Build names
+
+Wherever a build is given (`new --sunrise`, `pin`, `sdk diff`, `check --build`), these forms are accepted:
 
 | Written | Means |
 |---|---|
 | `nightly` | The current Nightly's build. |
 | `nightly-YYYY-MM-DD` | That day's Nightly's build. |
+| A Stable tag such as `26.3-0.1.0` | That release's build. |
+| A Dev tag `dev-YYYY-MM-DD-<short sha>` | That Dev build's; the build must start with the short SHA. |
 | 40 hex digits | That build. |
-| 7 to 39 hex digits | The one SDK whose build id starts with them, among the releases listed: this repository's 100 newest on GitHub, or a folder base's entries. Another URL base takes the full sha only. |
+| 7 to 39 hex digits | The one SDK whose build id starts with them, among the releases listed: this repository's 100 newest on GitHub, or a folder base's entries. Another URL base has no listing, so it has no short-SHA lookup; it still serves release names and full SHAs. |
 
-A Nightly name is read from `<base>/<name>/sdk.json`. A Nightly whose build has no SDK says so, and asks for a build
-that has one.
+A release name is read from `<base>/<name>/sdk.json`. A Stable or Dev release's `sdk.json` must match its
+`SHA256SUMS`, signed with Sunrise's release key for exactly that tag (a Dev build's `SHA256SUMS.v2.sig`), so a mirror
+can't put another build under its name. A release whose build has no SDK says so, and asks for a build that has one.
 
 ## `.sunrise/sdk/`
 
-In a code mod, `new`, `build`, `build --wasm`, `check`, `hooks`, `fits` and `update` fetch the pinned build's SDK
-into `.sunrise/sdk/` when the folder is missing or holds another build, after the [checks](01-release.md#how-a-download-is-checked).
-It holds `sdk.json`, `surface.json`, the unpacked API source under `api/`, and `build`, a file naming the build. That
-file is written last, so a fetch that stopped partway is fetched again by the next command.
+In a code mod, commands such as `new`, `build`, `check` and `hooks` fetch the pinned build's SDK
+into `.sunrise/sdk/` after the [checks](01-release.md#how-a-download-is-checked). It holds `sdk.json`,
+`surface.json`, the unpacked API source under `api/`, and `build`, a stamp written only after the fetch finishes.
+The tool fetches again if the stamp is missing or if the pinned build or trusted SDK keys have changed.
+Run `check` without `--build` after a fresh clone to fetch the SDK before Cargo or an editor reads the API path.
 
-`fits` and `update` fetch no SDK for a mod made for exactly one build: its manifest says so before one is needed. Any of these commands makes a fresh clone of a mod work, `check` included, since it fetches before Cargo
-reads the path. An editor needs that first command too: until it runs, `sunrise-mod-api`'s path does not exist.
-
-`sdk diff`, `fits` and `update` read other builds' small files (`sdk.json` and `surface.json`) into
-`.sunrise/cache/<build id>/`, with the same checks.
+`sdk diff`, `check --build` and `pin` read other builds' small files (`sdk.json` and `surface.json`) into
+`.sunrise/cache/<build id>/`, with the same checks. A fit report needs no SDK for a mod made
+for exactly one build: its manifest says so before one is needed.
 
 `.sunrise/` is in the template's `.gitignore`, and the package walker skips it: it is never packed, copied by the
 launcher or sent to a registry.
@@ -74,15 +96,19 @@ launcher or sent to a registry.
 
 `SUNRISE_SDK_BASE` replaces the releases' base for the SDK fetches of the tool and the launcher alike:
 
-- a URL: a mirror with the same layout, `<base>/sdk-<build id>/<file>`;
-- anything else: a folder holding `sdk-<build id>/` folders, and `nightly/` or `nightly-<date>/` folders with their
-  `sdk.json` for Nightly names. The launcher also reads game releases' folders there, for their build ids.
+- a URL: a mirror with the same layout, `<base>/sdk-<build id>/<file>`, and `<base>/<tag>/sdk.json` for a
+  [release name](#build-names);
+- anything else: a folder holding `sdk-<build id>/` folders, and `<tag>/` folders with their `sdk.json`.
 
-Every SDK base is checked the same way, against Sunrise's signature. The launcher's own copies are described in
-[Cache and disk](../../how-to/native-mods/10-cache-and-disk.md).
+A Stable or Dev tag's folder also holds that release's `SHA256SUMS` and its signature, as published. The launcher also reads game releases' folders there, for their build ids.
 
-`internals add`, `inject add`, `inject update`, and pin changes that need catalogs read `internals.json` and
-`points.json` from the pinned build's signed SDK. The tool unpacks `build-data.tar.xz` into
-`.sunrise/cache/<build id>/build-data/`. `internals sync` checks pinned game source instead, as do the add and
-inject update commands when the mod adds `[[native.module]]` rows. Source discovery uses the Rust named by the
-signed SDK, but does not need its compiled game slices. See [Native dependency tools](../registry-index.md#native-dependency-tools).
+Every SDK base is checked the same way, against Sunrise's signature. For a [local SDK built from a
+checkout](../../how-to/native-mods/07-local-developer-builds.md), a debug build of the mod tool can also check
+against the public key set in `SUNRISE_SDK_TRUSTED_KEY`. The launcher's own copies are described in
+[Cache and disk](../../how-to/native-mods/04-what-the-launcher-does.md#cache-and-disk).
+
+`internals add` and pin changes that need catalogs read `internals.json` from the pinned build's signed SDK.
+The tool unpacks `build-data.tar.xz` into `.sunrise/cache/<build id>/build-data/`. `internals sync` checks
+pinned game source instead, as does `internals add` when the mod declares `[[native.module]]` rows. Source
+discovery uses the Rust named by the signed SDK, but does not need its compiled game slices.
+See [Native dependency tools](05-commands.md#native-dependency-tools).

@@ -78,7 +78,7 @@ impl<W: Write> RestitutionWorld for World<'_, W> {
         self.query("block-suppresses")?;
         Ok(self.f["tag"].as_bool().unwrap())
     }
-    fn block_bounce_restitution(&mut self, _: BlockStateId) -> io::Result<f32> {
+    fn block_bounce_restitution(&mut self, _: BlockStateId, _: BlockPos) -> io::Result<f32> {
         self.query("block-bounce")?;
         Ok(single(&self.f["block"]))
     }
@@ -140,6 +140,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut world,
             RestitutionInput {
                 block: BlockStateId(1),
+                effect_position: BlockPos::new(17, -63, -33),
                 collided_x: f["x"].as_bool().unwrap(),
                 collided_z: f["z"].as_bool().unwrap(),
                 vertical_collision: f["vertical"].as_bool().unwrap(),

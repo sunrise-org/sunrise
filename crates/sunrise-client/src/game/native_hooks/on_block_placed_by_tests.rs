@@ -1,4 +1,3 @@
-#![cfg(test)]
 //! Post-placement notices through the actual player and dispenser block-item paths.
 use crate::game::native_entity_refs::tests::{bind_local_player, run_fresh_cases, with_game_at};
 use crate::game::{Game, GuestUse, Hit};
@@ -56,7 +55,12 @@ impl ItemPart for Probe {
         let level = event.level;
         assert_eq!(level, host.level("minecraft:overworld").unwrap());
         assert_eq!(level.block_state(host, event.pos), Some(event.state));
-        let item = event.stack.item().id(host);
+        let item = event
+            .stack
+            .item()
+            .id(host)
+            .expect("placed item is registered")
+            .to_owned();
         match item.as_str() {
             CRATE => {
                 let entity = host
@@ -116,7 +120,7 @@ impl ItemPart for Probe {
                 assert_eq!(entity.name(host).as_deref(), Some("Shulker"));
             }
             SKULL => {
-                assert_eq!(event.state.block().id(host), "minecraft:air");
+                assert_eq!(event.state.block().id(host), Some("minecraft:air"));
                 crate::game::dispense_fixture::record(|| "item notice".into());
             }
             _ => panic!("unsubscribed item {item}"),
@@ -144,8 +148,8 @@ impl Hooks for Probe {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(CRATE, "minecraft:stone"));
+            .register(mod_api::Block::new(CRATE, "minecraft:stone"))
+            .unwrap();
     }
     fn entity_place(
         &self,
@@ -165,7 +169,7 @@ impl Hooks for Probe {
 
 fn place(game: &mut Game<'_>, pos: [i32; 3], stack: ItemStack) {
     *game.held_mut() = Some(stack);
-    game.guest_use = Some(GuestUse::OnBlock(mod_api::Hand::Main));
+    game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
     let [x, y, z] = pos;
     let hit = Hit {
         pos: [x, y - 1, z],
@@ -286,6 +290,8 @@ fn block_items_notify_after_setup_and_before_consumption() {
         let left = game
             .dispense_item((9, 64, 6), Direction::East, shulker_stack())
             .unwrap()
+            .continue_value()
+            .unwrap()
             .unwrap();
         assert_eq!(left.count, 3);
         let notices = probe.notices.lock().unwrap();
@@ -324,6 +330,8 @@ fn block_items_notify_after_setup_and_before_consumption() {
         let left = game
             .dispense_item((9, 64, 8), Direction::East, shulker_stack())
             .unwrap()
+            .continue_value()
+            .unwrap()
             .unwrap();
         assert_eq!(left.count, 4);
         assert_eq!(game.world.block(10, 64, 8), air);
@@ -331,6 +339,8 @@ fn block_items_notify_after_setup_and_before_consumption() {
         game.world.set(10, 64, 10, stone).unwrap();
         let left = game
             .dispense_item((9, 64, 10), Direction::East, shulker_stack())
+            .unwrap()
+            .continue_value()
             .unwrap()
             .unwrap();
         assert_eq!(left.count, 4);

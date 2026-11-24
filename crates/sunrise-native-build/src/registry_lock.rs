@@ -1,5 +1,6 @@
 //! The trust boundary for a mod-owned registry lock. Never resolve missing pins online.
 use std::collections::BTreeMap;
+use sunrise_mod_package::native_route::game_registry_pin_conflicts;
 
 const CRATES_IO: &str = sunrise_addresses::CARGO_CRATES_IO_SOURCE;
 
@@ -111,6 +112,26 @@ impl RegistryLock {
         Ok(())
     }
 
+    /// Returns the registry pins in `resolved` that moved a version this lock already supplies.
+    /// SDK-local identities are a separate source, checked by `check_pins`.
+    pub(super) fn moved_pins<'game, 'resolved>(
+        &'game self,
+        resolved: &'resolved Self,
+    ) -> impl Iterator<Item = (&'game Identity, &'resolved Identity)> {
+        resolved.packages.keys().filter_map(move |id| {
+            (!self.packages.contains_key(id))
+                .then(|| {
+                    self.packages.keys().find(|game| {
+                        game.name == id.name
+                            && game.source == id.source
+                            && game_registry_pin_conflicts(&game.version, &id.version)
+                    })
+                })
+                .flatten()
+                .map(|game| (game, id))
+        })
+    }
+
     /// Withholds the registry identity of each crate the SDK builds from its own source (`names`,
     /// local in the game's lock), so a mod's pin cannot authorize a registry copy of it at the
     /// SDK's version.
@@ -119,13 +140,35 @@ impl RegistryLock {
         game: &Self,
         names: &std::collections::BTreeSet<String>,
     ) {
-        self.packages.retain(|id, _| {
-            !names.contains(&id.name)
-                || !game
-                    .local
-                    .keys()
-                    .any(|sdk| sdk.name == id.name && sdk.version == id.version)
-        });
+        self.packages
+            .retain(|id, _| !names.contains(&id.name) || !game.supplies(id));
+    }
+
+    /// Whether a package of the mods' own (local, and not one the SDK builds) depends on `id`
+    /// directly. The lock resolves every target and feature of the workspace, so such a
+    /// package, and a release of `id`'s line, is in every graph of it.
+    pub(super) fn required_locally(&self, game: &Self, id: &Identity) -> bool {
+        let version = id.version.to_string();
+        self.local
+            .iter()
+            .filter(|(local, _)| !game.supplies(local))
+            .filter_map(|(_, record)| record.raw.get("dependencies")?.as_array())
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            // Cargo writes `name`, or `name version` (and its source) when the lock holds
+            // more than one release of the name.
+            .any(|dependency| {
+                let mut words = dependency.split(' ');
+                words.next() == Some(id.name.as_str())
+                    && words.next().is_none_or(|word| word == version)
+            })
+    }
+
+    /// Whether the SDK builds `id`'s name at `id`'s version from its own source.
+    pub(super) fn supplies(&self, id: &Identity) -> bool {
+        self.local
+            .keys()
+            .any(|sdk| sdk.name == id.name && sdk.version == id.version)
     }
 
     /// Checks a resolved build graph against these pins (the game's and the mods'): each registry
@@ -221,6 +264,16 @@ mod tests {
         let mut allowed = game.clone();
         allowed.extend(pins).unwrap();
         allowed
+    }
+
+    #[test]
+    fn separate_zero_zero_patch_versions_do_not_move_game_pins() {
+        let game = parsed(&[package("early-crate", "0.0.1", 'a', &[])]);
+        let resolved = parsed(&[
+            package("early-crate", "0.0.1", 'a', &[]),
+            package("early-crate", "0.0.2", 'b', &[]),
+        ]);
+        assert!(game.moved_pins(&resolved).next().is_none());
     }
 
     #[test]

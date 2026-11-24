@@ -89,12 +89,12 @@ fn a_flopping_fish_plays_at_its_voice_pitch_or_in_silence() {
                 let mut m = fish(types, name, silent);
                 // `!isInWater() && onGround() && verticalCollision`.
                 m.fluids.in_water = false;
-                (m.on_ground, m.vertical_collision_below) = (true, true);
+                (m.ground.on_ground, m.vertical_collision_below) = (true, true);
                 let (_, hop) = pitch_then(&m.random);
                 let mut events = Vec::new();
                 let mut test_level = crate::health::TestLevel::new(0);
                 ai_step(&mut m, w, &mut test_level.level(), &mut events);
-                assert!(!m.on_ground && m.velocity.y > 0.0, "{name} hops");
+                assert!(!m.ground.on_ground && m.velocity.y > 0.0, "{name} hops");
                 let played = sounds(&events);
                 if silent {
                     assert!(played.is_empty(), "a silent {name} flops in silence");
@@ -123,6 +123,7 @@ fn the_fish_ai_never_plays_the_players_sting() {
     let ran = with_test_world(&[], |w, types| {
         let p = crate::mobs::world::test_player(Vec3::new(0.5, 64.0, 0.5));
         let world = MobWorld {
+            side: sunrise_client::motion::dry_side(),
             player: Some(p),
             ..w.clone()
         };

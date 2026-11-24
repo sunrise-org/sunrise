@@ -331,7 +331,7 @@ pub fn server_ai_step(m: &mut Mob, target: Option<Vec3>) {
         m.extra.more_carrot_ticks =
             (m.extra.more_carrot_ticks - m.random.next_int_bound(3).unwrap_or(0)).max(0);
     }
-    if m.on_ground {
+    if m.ground.on_ground {
         if !m.extra.flag {
             m.ai.jumping = false;
             m.extra.ints[MOVE_DELAY] = if m.ai.mov.speed_modifier < 2.2 { 10 } else { 3 };
@@ -357,7 +357,7 @@ pub fn server_ai_step(m: &mut Mob, target: Option<Vec3>) {
             start_jumping(m);
         }
     }
-    m.extra.flag = m.on_ground;
+    m.extra.flag = m.ground.on_ground;
 }
 
 /// RabbitMoveControl.tick: wait on the ground and restore the last wanted speed in flight.
@@ -373,7 +373,7 @@ fn prepare_move(m: &mut Mob) {
             m.ai.mov.speed_modifier
         };
     }
-    if m.on_ground && !m.ai.jumping && !m.ai.jump {
+    if m.ground.on_ground && !m.ai.jumping && !m.ai.jump {
         m.ai.mov.speed_modifier = 0.0;
         m.set_speed(0.0);
     } else if m.ai.mov.has_wanted() || m.ai.mov.operation == Operation::Jumping {
@@ -418,8 +418,9 @@ fn jump_scale(m: &Mob) -> f32 {
             .as_ref()
             .filter(|p| !p.is_done())
             .is_some_and(|p| f64::from(p.next_node().y) > m.position.y + 0.5);
-    let high =
-        m.horizontal_collision || step || m.ai.jumping && m.ai.mov.wanted[1] > m.position.y + 0.5;
+    let high = m.ground.horizontal_collision
+        || step
+        || m.ai.jumping && m.ai.mov.wanted[1] > m.position.y + 0.5;
     let base = if high {
         0.5
     } else if m.ai.mov.speed_modifier <= 0.6 {
@@ -491,6 +492,7 @@ mod tests {
             &json!({"children": {"head": {}, "left_hind_foot": {}}}),
         ));
         let kind = Arc::new(MobType {
+            type_key: Default::default(),
             shadow: None,
             id: "minecraft:rabbit".into(),
             species: Species::Rabbit,
@@ -615,7 +617,7 @@ mod tests {
     #[test]
     fn landing_waits_then_real_hop_clock_moves_the_model() {
         let mut m = rabbit();
-        m.on_ground = true;
+        m.ground.on_ground = true;
         m.ai.mov.set_wanted(0.0, 0.0, 5.0, 0.6);
         server_ai_step(&mut m, None);
         assert_eq!(m.extra.ints[MOVE_DELAY], 10);
@@ -660,7 +662,7 @@ mod tests {
     #[test]
     fn panic_and_explicit_requests_use_their_own_hop_timing() {
         let mut m = rabbit();
-        m.on_ground = true;
+        m.ground.on_ground = true;
         m.ai.mov.set_wanted(0.0, 0.0, 5.0, 2.2);
         server_ai_step(&mut m, None);
         assert_eq!(m.extra.ints[MOVE_DELAY], 3);
@@ -717,7 +719,7 @@ mod tests {
     #[test]
     fn grounded_movement_waits_and_water_uses_its_hop_speed() {
         let mut m = rabbit();
-        m.on_ground = true;
+        m.ground.on_ground = true;
         m.ai.mov.set_wanted(0.0, 0.0, 5.0, 0.6);
         prepare_move(&mut m);
         assert_eq!(m.ai.mov.speed_modifier, 0.0);
@@ -744,7 +746,7 @@ mod tests {
         near(f64::from(jump_power(&m, 1.0)), 0.2);
         m.ai.mov.speed_modifier = 2.2;
         near(f64::from(jump_power(&m, 1.0)), 0.3);
-        m.horizontal_collision = true;
+        m.ground.horizontal_collision = true;
         near(f64::from(jump_power(&m, 1.0)), 0.5);
         m.attrs.jump_strength = 0.84;
         m.extra.effects.push(crate::mobs::StoredEffect::new(

@@ -10,7 +10,9 @@ use crate::{
     collisions::SceneCollisions,
     mobs::Who,
     motion::{FluidResources, LAVA, WATER},
-    projectiles::{Hit, Projectile, ProjectileKind},
+    projectiles::{
+        Hit, NearestHit, Projectile, ProjectileKind, TargetCandidate, TargetOrder, compute_margin,
+    },
     world::World,
 };
 use std::fmt;
@@ -159,6 +161,14 @@ pub enum BlockReaction {
     /// `setBlock(pos, lit=true, 11)`: campfires and candles.
     Light(BlockStateId),
 }
+/// Remaining segment and entity hits of a piercing arrow's `stepMoveAndHit` tick.
+#[derive(Clone, Debug)]
+pub struct PierceStep {
+    pub end: Vec3,
+    pub block: Option<(Vec3, BlockPos, [i32; 3])>,
+    pub remaining_hits: Vec<(Who, Vec3)>,
+}
+
 /// The arrow part of `AbstractArrow` and its `Entity` state.
 #[derive(Clone)]
 pub struct ArrowState {
@@ -190,6 +200,10 @@ pub struct ArrowState {
     /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
     /// through (cleared when it sticks in a block).
     pub pierced: Vec<Who>,
+    /// `piercedAndKilledEntities`: living victims killed by this piercing arrow.
+    pub pierced_killed: Vec<crate::advancements::EntityView>,
+    /// Pending `stepMoveAndHit` continuation for a piercing arrow this tick.
+    pub pierce_step: Option<PierceStep>,
     /// `Entity.remainingFireTicks`.
     pub fire_ticks: i32,
     /// The server's shared fire flag, independent of the client-local fire timer.
@@ -289,6 +303,8 @@ impl ArrowState {
             effect_color: -1,
             pierce: 0,
             pierced: Vec::new(),
+            pierced_killed: Vec::new(),
+            pierce_step: None,
             fire_ticks: 0,
             synced_fire: false,
             fall_distance: 0.0,
@@ -633,12 +649,116 @@ fn signum(v: f64) -> f64 {
         v
     }
 }
+/// Reusable scratch buffer for `AbstractArrow.findHitEntities` sorting.
+pub type ArrowHitScratch = Vec<(Who, Vec3, f64, TargetOrder)>;
+
+/// Live entity targets queried by `AbstractArrow` without allocating a snapshot vector.
+pub trait ArrowTargets {
+    fn visit(&self, visit: impl FnMut(TargetCandidate));
+    fn owner_tree_contains(&self, owner: Who, candidate: Who) -> bool {
+        candidate == owner
+    }
+    fn outside_owner_collision_range(&self, owner: Who, swept: Aabb) -> bool;
+}
+
+struct SliceTargets<'a>(&'a [(Who, Aabb)]);
+
+impl ArrowTargets for SliceTargets<'_> {
+    fn visit(&self, mut visit: impl FnMut(TargetCandidate)) {
+        for (idx, &(who, bounds)) in self.0.iter().enumerate() {
+            let c = bounds.center();
+            let position = Vec3::new(c.x, bounds.min_position().y, c.z);
+            visit(TargetCandidate {
+                who,
+                bounds,
+                position,
+                order: TargetOrder::entity(position, idx as u64),
+            });
+        }
+    }
+    fn outside_owner_collision_range(&self, owner: Who, swept: Aabb) -> bool {
+        !self
+            .0
+            .iter()
+            .any(|&(who, b)| who == owner && b.intersects(swept))
+    }
+}
+
 /// One arrow tick: whether to keep it and what it hit. An arrow that hit an
 /// entity stops there and is not kept: the game hands it to
 /// `finish_entity_hit` once it has hurt the entity.
 pub fn tick(p: &mut Projectile, scene: &ArrowScene, targets: &[(Who, Aabb)]) -> (bool, Hit) {
-    tick_with(p, scene, targets, true, false)
+    tick_to_block_contact(p, scene, targets, false)
 }
+
+/// With block impact listeners, stop after moving to the captured contact and
+/// applying the flight's block effects. The caller applies the hit response, if
+/// accepted, then runs the remainder of the tick.
+pub fn tick_to_block_contact(
+    p: &mut Projectile,
+    scene: &ArrowScene,
+    targets: &[(Who, Aabb)],
+    defer_block_hit: bool,
+) -> (bool, Hit) {
+    let mut scratch = ArrowHitScratch::new();
+    tick_with(
+        p,
+        scene,
+        &SliceTargets(targets),
+        true,
+        false,
+        defer_block_hit,
+        &mut scratch,
+    )
+}
+
+/// Zero-allocation live-target entry for `AbstractArrow.tick`.
+pub fn tick_to_block_contact_live(
+    p: &mut Projectile,
+    scene: &ArrowScene,
+    targets: &impl ArrowTargets,
+    defer_block_hit: bool,
+    scratch: &mut ArrowHitScratch,
+) -> (bool, Hit) {
+    tick_with(p, scene, targets, true, false, defer_block_hit, scratch)
+}
+
+/// `AbstractArrow.onHitBlock` for an accepted block contact.
+pub fn apply_block_contact(p: &mut Projectile, scene: &ArrowScene, block: BlockPos) {
+    let Some(mut st) = p.arrow.take() else {
+        return;
+    };
+    Ticker {
+        p,
+        st: &mut st,
+        scene,
+        client: false,
+    }
+    .on_hit_block(block, scene.block(block));
+    p.stuck = st.in_ground;
+    p.arrow = Some(st);
+}
+
+/// Run drag, gravity and the projectile base tick after a block contact. Returns
+/// false if the arrow expired. The caller publishes `PROJECTILE_LAND` first
+/// when the contact was accepted.
+pub fn finish_block_contact(p: &mut Projectile, scene: &ArrowScene) -> bool {
+    let Some(mut st) = p.arrow.take() else {
+        return false;
+    };
+    Ticker {
+        p,
+        st: &mut st,
+        scene,
+        client: false,
+    }
+    .finish();
+    p.stuck = st.in_ground;
+    let keep = !st.removed;
+    p.arrow = Some(st);
+    keep
+}
+
 /// One arrow tick whose hit is canceled (`ProjectileImpactEvent`): the arrow
 /// flies through its full movement: not stuck, nothing hurt, no hit.
 pub fn tick_through(
@@ -646,12 +766,39 @@ pub fn tick_through(
     scene: &ArrowScene,
     targets: &[(Who, Aabb)],
 ) -> (bool, Hit) {
-    tick_with(p, scene, targets, false, false)
+    let mut scratch = ArrowHitScratch::new();
+    tick_with(
+        p,
+        scene,
+        &SliceTargets(targets),
+        false,
+        false,
+        false,
+        &mut scratch,
+    )
+}
+/// Live-target variant of [`tick_through`].
+pub fn tick_through_live(
+    p: &mut Projectile,
+    scene: &ArrowScene,
+    targets: &impl ArrowTargets,
+    scratch: &mut ArrowHitScratch,
+) -> (bool, Hit) {
+    tick_with(p, scene, targets, false, false, false, scratch)
 }
 /// Simulate a remote arrow without server-only despawn or block reactions.
 /// Entity hits remain authoritative on the server.
 pub fn tick_client(p: &mut Projectile, scene: &ArrowScene) -> (bool, Hit) {
-    let out = tick_with(p, scene, &[], true, true);
+    let mut scratch = ArrowHitScratch::new();
+    let out = tick_with(
+        p,
+        scene,
+        &SliceTargets(&[]),
+        true,
+        true,
+        false,
+        &mut scratch,
+    );
     // `Entity.playSound` passes no player to `Level.playSound`, and
     // `ClientLevel.playSeededSound` plays only for its own player: the server's
     // sound packets carry the hit and splash. The sounds' draws still happened.
@@ -663,9 +810,11 @@ pub fn tick_client(p: &mut Projectile, scene: &ArrowScene) -> (bool, Hit) {
 fn tick_with(
     p: &mut Projectile,
     scene: &ArrowScene,
-    targets: &[(Who, Aabb)],
+    targets: &impl ArrowTargets,
     impact: bool,
     client: bool,
+    defer_block_hit: bool,
+    scratch: &mut ArrowHitScratch,
 ) -> (bool, Hit) {
     let Some(mut st) = p.arrow.take() else {
         return (false, Hit::None);
@@ -680,7 +829,7 @@ fn tick_with(
         scene,
         client,
     }
-    .tick(targets, impact);
+    .tick(targets, impact, defer_block_hit, scratch);
     p.stuck = st.in_ground;
     let keep = !st.removed && !matches!(hit, Hit::Entity { .. });
     p.arrow = Some(st);
@@ -745,16 +894,130 @@ pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: Entity
             }
         }
         EntityHit::Refused => ticker.turn_back(),
-        EntityHit::Dodged => {}
-        EntityHit::Deflected => {
-            // The deflection comes before `onHitEntity` adds the entity to
-            // `piercingIgnoreEntityIds`.
-            if (ticker.st.pierce as i8) > 0 {
-                ticker.st.pierced.pop();
+        EntityHit::Dodged => {
+            if trident {
+                ticker.st.dealt_damage = true;
             }
         }
+        EntityHit::Deflected => {}
     }
     ticker.finish();
+    p.stuck = st.in_ground;
+    let keep = !st.removed;
+    p.arrow = Some(st);
+    keep
+}
+
+/// `AbstractArrow.onHitEntity` pierce limit: records `who` or discards past `pierce + 1`.
+pub fn record_pierce_hit(p: &mut Projectile, who: Who) -> bool {
+    let Some(a) = p.arrow.as_mut() else {
+        return true;
+    };
+    if (a.pierce as i8) <= 0 {
+        return true;
+    }
+    if a.pierced.len() > usize::from(a.pierce) {
+        a.removed = true;
+        return false;
+    }
+    a.pierced.push(who);
+    true
+}
+
+/// Apply one entity hit's side effects inside `AbstractArrow.hitTargetsOrDeflectSelf`.
+pub fn apply_pierce_hit(p: &mut Projectile, outcome: EntityHit) {
+    let Some(mut st) = p.arrow.take() else {
+        return;
+    };
+    match outcome {
+        EntityHit::Hurt => {
+            let pitch = 1.2 / (p.entity_random().next_float() * 0.2 + 0.9);
+            let sound = if matches!(p.kind, ProjectileKind::Trident) {
+                ArrowSound::TridentHitGround
+            } else if st.crossbow_hit_sound {
+                ArrowSound::CrossbowHit
+            } else {
+                ArrowSound::HitGround
+            };
+            st.events.push(ArrowEvent::Sound {
+                sound,
+                volume: 1.0,
+                pitch,
+            });
+            if (st.pierce as i8) <= 0 {
+                st.removed = true;
+            }
+        }
+        EntityHit::Refused => {
+            deflect_reverse(&mut p.velocity, &mut p.yaw, &mut st, &mut p.random.0);
+        }
+        EntityHit::Dodged | EntityHit::Deflected => {}
+    }
+    p.arrow = Some(st);
+}
+
+/// Next iteration of `AbstractArrow.stepMoveAndHit` for a piercing arrow.
+pub fn step_pierce_next(
+    p: &mut Projectile,
+    scene: &ArrowScene,
+    targets: &[(Who, Aabb)],
+    end: Vec3,
+    block: Option<(Vec3, BlockPos, [i32; 3])>,
+) -> (Hit, Vec<(Who, Vec3)>) {
+    let mut scratch = ArrowHitScratch::new();
+    step_pierce_next_live(
+        p,
+        scene,
+        &SliceTargets(targets),
+        end,
+        block,
+        false,
+        &mut scratch,
+    )
+}
+
+/// Live-target continuation sweep of `AbstractArrow.stepMoveAndHit`.
+pub fn step_pierce_next_live(
+    p: &mut Projectile,
+    scene: &ArrowScene,
+    targets: &impl ArrowTargets,
+    end: Vec3,
+    block: Option<(Vec3, BlockPos, [i32; 3])>,
+    defer_block_hit: bool,
+    scratch: &mut ArrowHitScratch,
+) -> (Hit, Vec<(Who, Vec3)>) {
+    let Some(mut st) = p.arrow.take() else {
+        return (Hit::None, Vec::new());
+    };
+    let out = {
+        let mut ticker = Ticker {
+            p,
+            st: &mut st,
+            scene,
+            client: false,
+        };
+        let from = ticker.position();
+        ticker.step_once(from, end, block, targets, defer_block_hit, scratch)
+    };
+    p.stuck = st.in_ground;
+    p.arrow = Some(st);
+    out
+}
+
+/// Run drag, gravity, fluids, fire, and shoot event once after a piercing arrow's `stepMoveAndHit`.
+pub fn finish_pierce_tick(p: &mut Projectile, scene: &ArrowScene) -> bool {
+    let Some(mut st) = p.arrow.take() else {
+        return false;
+    };
+    {
+        let mut ticker = Ticker {
+            p,
+            st: &mut st,
+            scene,
+            client: false,
+        };
+        ticker.finish();
+    }
     p.stuck = st.in_ground;
     let keep = !st.removed;
     p.arrow = Some(st);
@@ -782,7 +1045,13 @@ impl Ticker<'_, '_, '_, '_> {
     fn trident(&self) -> bool {
         matches!(self.p.kind, ProjectileKind::Trident)
     }
-    fn tick(&mut self, targets: &[(Who, Aabb)], impact: bool) -> Hit {
+    fn tick(
+        &mut self,
+        targets: &impl ArrowTargets,
+        impact: bool,
+        defer_block_hit: bool,
+        scratch: &mut ArrowHitScratch,
+    ) -> Hit {
         // ThrownTrident.tick.
         if self.trident() && self.st.in_ground_time > 4 {
             self.st.dealt_damage = true;
@@ -899,8 +1168,10 @@ impl Ticker<'_, '_, '_, '_> {
             original.z + movement.z,
         );
         if physics && impact {
-            hit = self.step_move_and_hit(original, end, targets, impact);
-            if matches!(hit, Hit::Entity { .. }) {
+            hit = self.step_move_and_hit(original, end, targets, defer_block_hit, scratch);
+            if matches!(hit, Hit::Entity { .. })
+                || defer_block_hit && matches!(hit, Hit::Block { .. })
+            {
                 return hit;
             }
         } else {
@@ -916,13 +1187,15 @@ impl Ticker<'_, '_, '_, '_> {
     /// The end of a tick in flight: drag and gravity, then `Projectile.tick`
     /// and `Entity.baseTick`'s fluid and fire phases.
     fn finish(&mut self) {
+        self.st.pierce_step = None;
         let physics = !self.st.no_physics;
         if !self.st.was_touching_water {
             self.p.velocity = self.p.velocity.scale(f64::from(0.99f32));
         }
-        if physics && !self.st.in_ground {
-            // Entity.applyGravity: AbstractArrow.getDefaultGravity, none with NoGravity.
-            self.add_velocity(-self.p.get_gravity());
+        let gravity = self.p.get_gravity();
+        if physics && !self.st.in_ground && gravity != 0.0 {
+            // Entity.applyGravity skips the vector addition when gravity is zero.
+            self.add_velocity(-gravity);
         }
         // Projectile.tick, then Entity.baseTick's fluid and fire phases.
         if !self.st.has_been_shot {
@@ -954,20 +1227,19 @@ impl Ticker<'_, '_, '_, '_> {
         let v = self.p.velocity;
         self.p.velocity = Vec3::new(v.x + 0.0, v.y + y, v.z + 0.0);
     }
-    /// `Projectile.checkLeftOwner`: out of the owner's box once the arrow's
-    /// box, swept by its motion and grown by 1, no longer touches it.
-    fn check_left_owner(&mut self, targets: &[(Who, Aabb)]) {
+    /// `Projectile.checkLeftOwner`: out of the owner's vehicle tree once the arrow's
+    /// box, swept by its motion and grown by 1, no longer touches any pickable member.
+    fn check_left_owner(&mut self, targets: &impl ArrowTargets) {
         if self.p.left_owner {
             return;
         }
-        let owner = targets
-            .iter()
-            .find(|(who, _)| Some(*who) == self.p.collision_owner())
-            .map(|(_, b)| *b);
         let swept = bounds(self.p.position)
             .expand_towards(self.p.velocity)
             .inflate(Vec3::new(1.0, 1.0, 1.0));
-        self.p.left_owner = owner.is_none_or(|b| !swept.intersects(b));
+        self.p.left_owner = self
+            .p
+            .collision_owner()
+            .is_none_or(|o| targets.outside_owner_collision_range(o, swept));
     }
     /// `AbstractArrow.shouldFall`.
     fn should_fall(&self) -> bool {
@@ -987,15 +1259,111 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.velocity = Vec3::new(v.x * x, v.y * y, v.z * z);
         self.st.life = 0;
     }
-    /// `AbstractArrow.stepMoveAndHit`: the nearest entity on the way, else the
-    /// block. A piercing arrow that hits an entity here goes on from it next
-    /// tick (`finish_entity_hit`); vanilla's loop goes on within the same tick.
+    /// `AbstractArrow.findHitEntities` (or `ThrownTrident.findHitEntity` singleton sweep)
+    /// into reusable `scratch`, sorted by distance squared to actual entity position.
+    fn find_hit_entities(
+        &self,
+        from: Vec3,
+        end: Vec3,
+        targets: &impl ArrowTargets,
+        scratch: &mut ArrowHitScratch,
+    ) {
+        scratch.clear();
+        // ThrownTrident.findHitEntity: none once it has dealt damage.
+        if self.st.dealt_damage {
+            return;
+        }
+        let margin = compute_margin(self.p.age as i32);
+        let area = bounds(from)
+            .expand_towards(self.p.velocity)
+            .inflate(Vec3::new(1.0, 1.0, 1.0));
+        let owner = self.p.collision_owner();
+        let left_owner = self.p.left_owner;
+        // ThrownTrident.findHitEntities wraps the singleton ProjectileUtil.getEntityHitResult.
+        if self.trident() {
+            let mut nearest = NearestHit::new();
+            targets.visit(|c| {
+                if !left_owner && owner.is_some_and(|o| targets.owner_tree_contains(o, c.who)) {
+                    return;
+                }
+                if self.st.pierced.contains(&c.who) {
+                    return;
+                }
+                nearest.consider(c, area, from, end, margin);
+            });
+            if let Some((who, at)) = nearest.finish() {
+                scratch.push((who, at, 0.0, TargetOrder::dragon_part(0)));
+            }
+            return;
+        }
+        targets.visit(|c| {
+            if !c.bounds.intersects(area) || self.st.pierced.contains(&c.who) {
+                return;
+            }
+            // Vehicle ancestry is only relevant for candidates in the arrow's sweep.
+            if !left_owner && owner.is_some_and(|o| targets.owner_tree_contains(o, c.who)) {
+                return;
+            }
+            if let Some(at) = self.entity_hit(&c.bounds, from, end, margin) {
+                let d = from.distance_squared(c.position);
+                scratch.push((c.who, at, d, c.order));
+            }
+        });
+        scratch.sort_by(|a, b| a.2.total_cmp(&b.2).then_with(|| a.3.cmp(&b.3)));
+    }
+    /// One iteration of `AbstractArrow.stepMoveAndHit` from `from` towards `end`.
+    fn step_once(
+        &mut self,
+        from: Vec3,
+        end: Vec3,
+        block: Option<(Vec3, BlockPos, [i32; 3])>,
+        targets: &impl ArrowTargets,
+        defer_block_hit: bool,
+        scratch: &mut ArrowHitScratch,
+    ) -> (Hit, Vec<(Who, Vec3)>) {
+        self.find_hit_entities(from, end, targets, scratch);
+        let next = scratch.first().map_or(end, |h| h.1);
+        self.p.position = next;
+        self.apply_effects_from_blocks(from, next);
+        if let Some(&(who, at, _, _)) = scratch.first() {
+            let rest = if scratch.len() > 1 {
+                scratch.drain(1..).map(|(w, p, _, _)| (w, p)).collect()
+            } else {
+                Vec::new()
+            };
+            scratch.clear();
+            return (Hit::Entity { who, at }, rest);
+        }
+        let Some((at, pos, face)) = block else {
+            return (Hit::None, Vec::new());
+        };
+        if self.st.removed {
+            return (Hit::None, Vec::new());
+        }
+        let state = self.scene.block(pos);
+        if self.scene.is_air(state) {
+            return (Hit::None, Vec::new());
+        }
+        if !defer_block_hit {
+            self.on_hit_block(pos, state);
+        }
+        (
+            Hit::Block {
+                pos: [pos.x, pos.y, pos.z],
+                at,
+                face,
+            },
+            Vec::new(),
+        )
+    }
+    /// `AbstractArrow.stepMoveAndHit`: first entity (plus batch continuation) or block.
     fn step_move_and_hit(
         &mut self,
         from: Vec3,
         to: Vec3,
-        targets: &[(Who, Aabb)],
-        impact: bool,
+        targets: &impl ArrowTargets,
+        defer_block_hit: bool,
+        scratch: &mut ArrowHitScratch,
     ) -> Hit {
         let ignored = self
             .st
@@ -1003,70 +1371,16 @@ impl Ticker<'_, '_, '_, '_> {
             .then(|| self.block_position());
         let block = self.scene.clip(from, to, ignored);
         let end = block.map_or(to, |b| b.0);
-        // findHitEntities: ProjectileUtil.computeMargin and the search box.
-        let margin = f64::from(((self.p.age as i32 - 2) as f32 / 20.0).clamp(0.0, 0.3));
-        let area = bounds(from)
-            .expand_towards(self.p.velocity)
-            .inflate(Vec3::new(1.0, 1.0, 1.0));
-        let mut best: Option<(Who, Vec3, f64)> = None;
-        // ThrownTrident.findHitEntity: none once it has dealt damage.
-        let targets = if self.st.dealt_damage { &[] } else { targets };
-        for (who, b) in targets {
-            if Some(*who) == self.p.collision_owner() && !self.p.left_owner || !b.intersects(area) {
-                continue;
-            }
-            // canHitEntity: not an entity a piercing arrow has gone through.
-            if self.st.pierced.contains(who) {
-                continue;
-            }
-            if let Some(at) = self.entity_hit(b, from, end, margin) {
-                // Sorted by the distance to the entity's position (the
-                // stable sort keeps the first of equals).
-                let c = b.center();
-                let d = from.distance_squared(Vec3::new(c.x, b.min_position().y, c.z));
-                if best.is_none_or(|bb| d < bb.2) {
-                    best = Some((*who, at, d));
-                }
-            }
+        let (hit, rest) = self.step_once(from, end, block, targets, defer_block_hit, scratch);
+        // Keep the hit batch even at pierce 0: a refused hit (e.g. FallingBlock) continues the batch.
+        if matches!(hit, Hit::Entity { .. }) && !self.trident() {
+            self.st.pierce_step = Some(PierceStep {
+                end,
+                block,
+                remaining_hits: rest,
+            });
         }
-        let next = best.map_or(end, |b| b.1);
-        self.p.position = next;
-        self.apply_effects_from_blocks(from, next);
-        if let Some((who, at, _)) = best {
-            // A canceled impact ends the search, the arrow where it would have hit.
-            if !impact {
-                return Hit::None;
-            }
-            // AbstractArrow.onHitEntity: past pierce level + 1 entities the
-            // arrow is discarded before it hurts the next one.
-            if (self.st.pierce as i8) > 0 {
-                if self.st.pierced.len() > usize::from(self.st.pierce) {
-                    self.st.removed = true;
-                    return Hit::None;
-                }
-                self.st.pierced.push(who);
-            }
-            return Hit::Entity { who, at };
-        }
-        let Some((at, pos, face)) = block else {
-            return Hit::None;
-        };
-        if self.st.removed {
-            return Hit::None;
-        }
-        let state = self.scene.block(pos);
-        if self.scene.is_air(state) {
-            return Hit::None;
-        }
-        if !impact {
-            return Hit::None;
-        }
-        self.on_hit_block(pos, state);
-        Hit::Block {
-            pos: [pos.x, pos.y, pos.z],
-            at,
-            face,
-        }
+        hit
     }
     /// `ProjectileUtil.getManyEntityHitResult` for one entity box: where the
     /// path enters it, else where it enters the box grown by `margin`, if a
@@ -1166,6 +1480,8 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.set_critical(false);
         self.st.pierce = 0;
         self.st.pierced.clear();
+        self.st.pierced_killed.clear();
+        self.st.pierce_step = None;
     }
     /// `Projectile.mayInteract`: a mob's arrows need `mob_griefing`, or a
     /// mod's yes for the owner (NeoForge's `canEntityGrief(level, owner)`).

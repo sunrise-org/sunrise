@@ -2,9 +2,7 @@
 """Run every library test, ignored or not, with the prepared vanilla data, against a list of known failures.
 
 Usage: ignored_tests.py SHARD...  (SUNRISE_TEST_RESOURCES points at the prepared 26.3 data)
-       ignored_tests.py --needs VARIABLE (--one-process-each | --list) [--jobs N] [--binaries FILE]
-       ignored_tests.py --build-tests FILE
-       ignored_tests.py --prebuilt FILE -p PACKAGE (--lib | --test NAME | --bin NAME)... [-- ARGUMENTS...]
+       ignored_tests.py --needs VARIABLE (--one-process-each | --list) [--jobs N]
 
 A SHARD is a package, or one leg of it written `PACKAGE#NofM` (tools/ci/ignored_shards.py splits the biggest
 package so one process does not hold every test's memory). A leg runs the tests whose name hashes to its
@@ -28,21 +26,16 @@ the runner has a Vulkan driver (an ICD file), and must pass there.
 
 A row marked `daily` (`PACKAGE TEST TARGET daily REASON`, in `daily-<package>.txt`) is a test moved out of
 `verify` into the daily run with `#[ignore = "daily"]` (tools/ci/move_to_daily.py): not a known failure, it must
-pass, and its row must name a test that still runs. A package's shard runs the daily rows of the targets it
-already runs (its library; every target for the packages in INTEGRATION_TESTS); the shard `daily-rows`
+pass, and its row must name a test that still runs. Daily shards and `daily-rows` require an adapter for GPU
+fixtures, including rows with reason `gpu`. A package's shard runs the daily rows of the targets it already runs (its library; every target for the packages in INTEGRATION_TESTS); the shard `daily-rows`
 (tools/ci/ignored_shards.py) runs every other daily row: the root workspace's tests are built once with verify's command
 (WORKSPACE_TEST_BUILD) and each package's test executables then run with `--ignored --exact TEST...`; a package that
-build didn't make, or one in OWN_BUILD, runs `cargo test -p PACKAGE TARGET... -- --ignored --exact TEST...`, from the package's own workspace (`--locked`). A daily row whose reason names an input only one job builds (DAILY_INPUTS: `wasm-fixture`)
-runs in that job with the `needs` rows of that variable (`--needs SUNRISE_WASM_FIXTURE --one-process-each`), never in a
-shard.
+build didn't make, or one in OWN_BUILD, runs `cargo test -p PACKAGE TARGET... -- --ignored --exact TEST...`, from the
+package's own workspace (`--locked`).
 
 `--needs VARIABLE --one-process-each` runs the tests marked `needs VARIABLE`, each alone in its own process
 (`--list` prints those commands instead), and fails unless every run reports exactly one test passed: a
 renamed test would otherwise match nothing and pass. Every test runs, then the step fails if any did.
-`--build-tests FILE` builds the root workspace's tests once with verify's command (WORKSPACE_TEST_BUILD) and writes
-their executables to FILE; `--needs ... --binaries FILE` then runs each test from its executable when that build made
-it, and `--prebuilt FILE -p PACKAGE TARGET... -- ARGUMENTS` runs those targets' executables as `cargo test` would,
-for a job's other tests (the wasm fixture job: one build with one feature resolution instead of one per command).
 `--daily-tests PACKAGE TARGET` prints the tests one target's daily rows list, one per line (the Windows daily job
 runs sunrise-mod-package's with `-- --ignored --exact`).
 `--windows-rows` prints every `windows` daily row as `PACKAGE TARGET TEST`, one per line. With `--run`, it runs
@@ -92,6 +85,8 @@ POLICY_PATH = "tools/ci/ignored-tests"  # as messages name it
 # The single list these files replaced: a file there again fails every reader, naming the folder.
 RETIRED = Path(__file__).with_name("ignored-tests-known-failures.txt")
 RESULT = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED)$")
+# libtest's header over a failed test's captured output.
+CAPTURE = re.compile(r"^---- (\S+) stdout ----$")
 SUMMARY = re.compile(r"^test result: \S+\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured;")
 # Cargo's line as a test executable starts: `Running unittests src/lib.rs (…)`, `Running tests/x.rs (…)`, or a
 # target whose source lives in another package's folder (`Running ../sunrise-client/tests/lan_bot.rs (…)`).
@@ -113,14 +108,14 @@ LEG = re.compile(r"^(?P<package>[^#]+)#(?P<number>\d+)of(?P<count>\d+)$")
 LISTED = re.compile(r"^(\S+): test$")
 # A daily row's TARGET: the library, or one binary or integration test (cargo's --bin NAME, --test NAME).
 DAILY_TARGET = re.compile(r"^(?:lib|(?:bin|test):[\w-]+)$")
-# Why a test is a daily test (CONTRIBUTING.md "CI tiers"): slower than 2 s, or what it needs.
-DAILY_REASONS = ("slow", "game-boot", "resources", "child-process", "network", "wasm-fixture", "windows")
+# Why a test is a daily test (CONTRIBUTING.md "CI tiers"): slower than 2 s, or what it needs. `stable-line` is a check
+# `verify` runs too, repeated in the daily because a stable release needs a green daily of its commit to hold it.
+DAILY_REASONS = ("slow", "game-boot", "resources", "child-process", "network", "gpu", "windows", "own-sdk", "stable-line")
+# A test that needs the daily head's SDK in book-quickstart.yml, not a previous Nightly.
+OWN_SDK_REASON = "own-sdk"
 # A daily reason for a test whose target compiles only on Windows (`#![cfg(windows)]`): no Linux shard or `daily-rows`
 # leg selects or expects it, and the Windows job of windows-runtime-leases.yml runs it (--windows-rows).
 WINDOWS_REASON = "windows"
-# A daily reason that names an input only one job builds: its rows run there, each alone in its own process with the
-# `needs VARIABLE` rows (--needs VARIABLE --one-process-each), never in the shards, which do not have it.
-DAILY_INPUTS = {"wasm-fixture": "SUNRISE_WASM_FIXTURE"}
 # Who runs a `manual` row's test, never the daily shards: a person, its parent test (a child process it starts), or
 # a workflow of .github/workflows/ by file name.
 MANUAL_RUNNERS = re.compile(r"^(?:by-hand|subprocess|[\w.-]+\.ya?ml)$")
@@ -154,8 +149,12 @@ def compile_diagnostics(output):
         elif re.match(r"^\s*--> [\w./-]+:\d+:\d+$", line):
             headings.append(line)
     for line in headings[:20]:
+        location = re.match(r"^\s*--> ([\w./-]+):\d+:\d+$", line)
+        # A location is published only when it is a tracked source: a generated file's path is the runner's own.
+        if location and source_lines(location[1]) is None:
+            line, location = "  --> location withheld (not a tracked Rust source)", None
         print("  compiler: " + line[:300] + (" [shortened]" if len(line) > 300 else ""))
-        if line.strip().startswith("--> "):
+        if location:
             panic_source(line.strip()[4:], kind="compiler")
     if len(headings) > 20:
         print(f"  compiler diagnostics truncated: {len(headings) - 20} more headings")
@@ -282,14 +281,13 @@ def known_failures():
 
 def daily_rows():
     """The rows marked `daily` that the shards run: tests moved out of verify that the daily run must run and pass.
-    A row whose reason is in DAILY_INPUTS is left out: the job that builds its input runs it (needs_commands). So is a
-    `windows` row: its target does not compile on Linux, and the Windows job runs it (windows_rows)."""
+    Windows-only and own-SDK tests run in their respective jobs rather than a Linux shard."""
     return [row for row in listed_entries() if row.mark == "daily" and not kept_out(row)]
 
 
 def kept_out(row):
-    """Whether no Linux shard or `daily-rows` leg runs this daily row: another job does (DAILY_INPUTS, `windows`)."""
-    return row.reason in DAILY_INPUTS or row.reason == WINDOWS_REASON
+    """Whether this daily row runs in another job, not a Linux shard or the daily-rows leg."""
+    return row.reason in {WINDOWS_REASON, OWN_SDK_REASON}
 
 
 def windows_rows():
@@ -338,79 +336,15 @@ def harness_inputs():
 
 
 def needs_commands(variable, jobs=None):
-    """One `cargo test` command per test marked `needs variable`, and per daily row whose reason needs it
-    (DAILY_INPUTS), each selecting exactly that test. A daily row is built as it was before it moved here: a row of a
-    target its package's shard builds (shard_runs) as the shard builds it, so the library test the `needs` rows
-    built is reused; any other row with the features its workspace build turns on (a target's required-features, or
-    a test behind a feature like sunrise-mod-wasm's `test-copy-probe`), as the daily-rows leg gives it."""
+    """One exact `cargo test` command per test marked `needs variable`."""
     j = [f"-j{jobs}"] if jobs else []
     commands = [
         ["cargo", "test", *j, "-p", row.package, "--lib", "--", *(["--ignored"] if row.mark == "needs" else []), "--exact", row.test]
         for row in listed_entries() if row.mark in {"needs", "needs-plain"} and row.reference == variable
     ]
-    for row in listed_entries():
-        if row.mark != "daily" or DAILY_INPUTS.get(row.reason) != variable:
-            continue
-        kind, _, name = row.reference.partition(":")
-        features = [] if shard_runs(row.package, row.reference) else workspace_features().get(row.package, [])
-        commands.append(["cargo", "test", *j, "-p", row.package, *(["--features", ",".join(features)] if features else []),
-                         *(["--lib"] if kind == "lib" else [f"--{kind}", name]), "--", "--ignored", "--exact", row.test])
     if not commands:
         sys.exit(f"no `needs` row in {POLICY_PATH}/ names {variable}")
     return commands
-
-
-def write_built(path):
-    """--build-tests: the workspace's test executables (built_test_binaries) to `path`, `PACKAGE TARGET` -> path."""
-    binaries = built_test_binaries()
-    Path(path).write_text(json.dumps({f"{package} {target}": executable
-                                      for (package, target), executable in sorted(binaries.items())}, indent=1) + "\n")
-    return 0 if binaries else 1
-
-
-def read_built(path):
-    return {tuple(key.split(" ", 1)): executable for key, executable in json.loads(Path(path).read_text()).items()}
-
-
-def cargo_targets(arguments):
-    """(package, [target...], test arguments) of `-p PACKAGE --lib --test NAME --bin NAME ... -- ARGUMENTS`; other
-    cargo flags (`--features`, `--no-fail-fast`, `-jN`) say nothing about which executables run, so they are skipped."""
-    split = arguments.index("--") if "--" in arguments else len(arguments)
-    head, rest = arguments[:split], arguments[split + 1:]
-    package, targets, at = None, [], 0
-    while at < len(head):
-        if head[at] == "-p":
-            package, at = head[at + 1], at + 2
-        elif head[at] == "--lib":
-            targets, at = targets + ["lib"], at + 1
-        elif head[at] in ("--test", "--bin"):
-            targets, at = targets + [f"{head[at][2:]}:{head[at + 1]}"], at + 2
-        else:
-            at += 1 + (head[at] == "--features")
-    return package, targets, rest
-
-
-def run_prebuilt(path, arguments):
-    """--prebuilt: run `-p PACKAGE TARGET...`'s executables from the --build-tests file, printing their output as cargo
-    would (run_binaries); 101 when one failed or the build did not make it."""
-    package, targets, rest = cargo_targets(arguments)
-    built = read_built(path) if Path(path).is_file() else {}
-    missing = [target for target in targets if (package, target) not in built]
-    if not package or not targets or missing:
-        print(f"error: the workspace build made no test executable for {package} {' '.join(missing or ['(none named)'])}"
-              " (a compile error?)", flush=True)
-        return 101
-    done = run_binaries(package, {target: built[package, target] for target in targets}, rest, dict(os.environ))
-    print(done.stdout, end="", flush=True)
-    # A filter that matches nothing passes in libtest: a test renamed, or behind a feature the workspace build left
-    # off, would vanish and leave the step green.
-    ran = sum(int(found[1]) + int(found[2]) for found in re.finditer(r"^test result: \w+\. (\d+) passed; (\d+) failed;",
-                                                                       done.stdout, re.M))
-    if not ran:
-        print(f"error: no test of {package} {' '.join(targets)} ran with {shlex.join(rest) or '(no arguments)'}",
-              flush=True)
-        return 101
-    return done.returncode
 
 
 def write_report(path, report):
@@ -419,42 +353,25 @@ def write_report(path, report):
         Path(path).write_text(json.dumps(report, indent=1, sort_keys=True) + "\n")
 
 
-def run_one_process_each(variable, jobs=None, report=None, binaries=None):
-    """Run each test that needs `variable` in its own process; 1 unless every run reports exactly one passed test.
-    With `binaries` (a --build-tests file), a test the workspace build made runs from its executable."""
+def run_one_process_each(variable, jobs=None):
+    """Run each test that needs `variable` alone and require exactly one passing test per process."""
     if not os.environ.get(variable):
         sys.exit(f"{variable} is unset: these tests need it")
     failed = []
-    verdict = {"needs": variable, "problems": [], "passed": [], "incomplete": []}
     for command in needs_commands(variable, jobs):
-        # needs_commands ends each command with the test's exact name, after `-p PACKAGE`.
-        entry = {"package": command[command.index("-p") + 1], "test": safe_identity(command[-1])}
-        code, output = run_exact_command(command, binaries=binaries, show_output=True)
+        code, output = run_exact_command(command, show_output=True)
         lines = output.splitlines()
         passed = any(line.startswith("test result: ok. 1 passed;") for line in lines)
         if code or not passed:
             print(f"::error::expected 1 passing test from: {shlex.join(command)}", flush=True)
             failed.append(command)
-            verdict["problems"].append({**entry, "kind": "failed", "panic": None, "policy": None})
-        else:
-            verdict["passed"].append(entry)
-    write_report(report, verdict)
     print(f"{variable}: {len(failed)} of the runs failed" if failed else f"{variable}: every run passed its one test")
     return 1 if failed else 0
 
 
-def run_exact_command(command, *, binaries=None, show_output=False):
+def run_exact_command(command, *, show_output=False):
     """Run one exact selection and return its exit status and combined output, optionally streaming it."""
     print(f"$ {shlex.join(command)}", flush=True)
-    if binaries:
-        package, targets, rest = cargo_targets(command[2:])
-        if all((package, target) in binaries for target in targets):
-            print("  (from the workspace build)", flush=True)
-            done = run_binaries(package, {target: binaries[package, target] for target in targets}, rest,
-                                dict(os.environ))
-            if show_output:
-                print(done.stdout, end="", flush=True)
-            return done.returncode, done.stdout
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     lines = []
     for line in process.stdout:
@@ -595,6 +512,10 @@ def bounded_record(record, remaining):
 PUBLIC_WINDOW = (2, 12)
 PUBLIC_CHARS = 120
 
+# A subprocess compiler failure can appear in a test panic. Its bounded error codes are
+# diagnostic categories; the text, paths and source excerpts are still private payloads.
+RUSTC_ERROR = re.compile(r"^error\[(E[0-9]{4})\]:")
+
 
 def public_text(text, path, line):
     """`text` when it is provably the checkout's own source: it occurs verbatim in the tracked source around the
@@ -629,8 +550,10 @@ def assertion_source(path, line):
 def failure_diagnostics(output):
     """One record per failed result occurrence, including repeated names across targets.
 
-    Panic contexts use libtest's name model and the first panic for that name.
-    They cannot disambiguate identical names in different targets.
+    Panic contexts use libtest's name model. Within the first failed-test capture kept for a name (libtest's
+    `---- <name> stdout ----` block), its last panic wins: the one the test failed on, after any it caught. Across
+    targets the first kept context wins for every occurrence of the name, and so does the first panic of output
+    outside a failed test's capture (a fatal run's).
     Beside the classified reason, a record shows the statement that panicked and any part of the payload (a
     message, an operand) that occurs verbatim in the tracked source around it (public_text): the checkout's own text,
     never a computed or prepared value.
@@ -640,6 +563,16 @@ def failure_diagnostics(output):
     context = []
     aborts = []
     panic_reason_pending = False
+    thread_name = None
+    # Collect compiler codes only after a panic that already exposed a tracked message, or one whose payload starts as
+    # rustc's own output does.
+    compiler_codes = {}
+    pending_codes = None
+    # Which captured-output block a line is in (a result line or libtest's capture header starts the next), the test
+    # whose failed-test capture it is (None outside one), and the block each kept context came from.
+    block = 0
+    capture = None
+    kept_block = {}
     # The tracked (path, line) of the current panic, and whether its `left:`/`right:` operand lines may follow.
     where = None
     operands_pending = False
@@ -663,8 +596,13 @@ def failure_diagnostics(output):
                                               "; fatal thread unknown, see the last started tests below")
             if abort not in aborts:
                 aborts.append(abort)
-        if RESULT.match(line) or SUMMARY.match(line) or TARGET.match(line):
+        panic = PANIC.match(line)
+        if RESULT.match(line) or SUMMARY.match(line) or TARGET.match(line) or panic:
             panic_reason_pending = operands_pending = False
+            pending_codes = None
+        if pending_codes is not None and len(pending_codes) < 3 and (code := RUSTC_ERROR.match(line)):
+            if code[1] not in pending_codes:
+                pending_codes.append(code[1])
         if operands_pending and (operand := re.match(r"^\s*(left|right): (.*)$", line)):
             shown = public_text(operand[2], *where)
             context.append(f"  {operand[1]}: {shown}" if shown else
@@ -682,6 +620,10 @@ def failure_diagnostics(output):
                 ("index out of bounds", "index out of bounds"),
                 ("attempt to", "arithmetic failure"),
             ) if line.strip().startswith(prefix)), "custom panic")
+            # A test that compiles a generated program panics with rustc's own output: its codes are categories.
+            compiler = RUSTC_ERROR.match(line.strip())
+            if compiler:
+                reason = "rustc could not compile a test program"
             withheld_text = "payload withheld (resource privacy)"
             if reason == "Result::unwrap on an error":
                 if shape := unwrap_error_shape(line.strip().split(" value: ", 1)[-1]):
@@ -694,8 +636,13 @@ def failure_diagnostics(output):
                 message = line.strip().split("failed: ", 1)[1] if "failed: " in line else None
             elif where and reason in ("assertion condition failed", "custom panic"):
                 message = line.strip()
-            if shown := (public_text(message, *where) if message else None):
+            if compiler and context is contexts.get(thread_name):
+                context.append(f"  panic reason: {reason}; {withheld_text}")
+                pending_codes = compiler_codes[thread_name] = [compiler[1]]
+            elif shown := (public_text(message, *where) if message else None):
                 context.append(f"  panic reason: {reason}; message: {shown}")
+                if context is contexts.get(thread_name):
+                    pending_codes = compiler_codes[thread_name] = []
             else:
                 context.append(f"  panic reason: {reason}; {withheld_text}")
             if where and (statement := assertion_source(*where)):
@@ -706,21 +653,30 @@ def failure_diagnostics(output):
         if found := RESULT.match(line):
             if found[2] == "FAILED":
                 failures.append(found[1])
-        if found := PANIC.match(line):
+        header = CAPTURE.match(line)
+        if header or RESULT.match(line):
+            block += 1
+            capture = header[1] if header else None
+        if panic:
             context = []
-            if found[1] not in contexts:
+            thread_name = panic[1]
+            if thread_name in contexts and kept_block[thread_name] == block and capture == thread_name:
+                # A test that catches a panic it raises on purpose (a listener's) fails on its last one: a later
+                # panic in the same failed-test capture replaces the earlier.
+                contexts[thread_name] = context
+                compiler_codes.pop(thread_name, None)
+            elif thread_name not in contexts:
                 if len(contexts) < DIAGNOSTIC_CONTEXTS:
-                    contexts[found[1]] = context
+                    contexts[thread_name] = context
+                    kept_block[thread_name] = block
                 else:
                     skipped_contexts += 1
                     continue
-            location = re.fullmatch(r"(.+\.rs):(\d+):(\d+)", found[2])
+            location = re.fullmatch(r"(.+\.rs):(\d+):(\d+)", panic[2])
             path = location[1] if location else ""
             if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in path):
                 path = ""
-            # game-discovery emits canonical absolute #[path] declarations. Only
-            # this checkout's exact resolved prefix is authoritative; never guess
-            # another checkout's prefix or search for a matching path suffix.
+            # An absolute path counts only under this checkout's exact prefix, never a guessed one.
             path = path.replace(os.sep, "/")
             prefix = ROOT.as_posix() + "/"
             if path.startswith(prefix):
@@ -749,6 +705,9 @@ def failure_diagnostics(output):
                 context.append("  panic location withheld (not a bounded tracked Rust location)")
             context.append("  panic reason missing from captured output")
             panic_reason_pending = True
+    for name, codes in compiler_codes.items():
+        if codes:
+            contexts[name].append(f"  compiler: rustc {', '.join(codes)} (diagnostic text withheld)")
     remaining = _active_budget if _active_budget is not None else [FAILURE_TOTAL_BYTES]
     # What killed the process comes first: a test that libtest reported FAILED ran to its end, so it is never
     # the one that took the process down.
@@ -799,6 +758,18 @@ def failure_diagnostics(output):
 
 
 RUNNING_LONG = re.compile(r"^test (\S+) has been running for over 60 seconds$")
+# A hung test held its leg until the job's own time limit cancelled the job, and a cancelled job names no test
+# (the client halves in daily 44814607973). Each test run stops at this limit instead: GNU timeout ends the run's
+# whole process group, the test executable included, and returns TIMED_OUT, so the run is red with the tests still
+# running named (libtest's 60 s notices) and the job's later legs still run. The longest leg that finished ran
+# 1,424 s (daily 44781526923).
+TEST_RUN_LIMIT = 45 * 60
+TIMED_OUT = 124
+
+
+def time_limit():
+    """The prefix that stops a test run at TEST_RUN_LIMIT; none without GNU timeout (Windows' `timeout` only waits)."""
+    return ["timeout", f"{TEST_RUN_LIMIT}s"] if os.name == "posix" and shutil.which("timeout") else []
 CRASH_NAMES = 20
 # The job's cgroup (v2): the whole job's memory, compilation and file cache included, as the data-leg lines print it.
 CGROUP = Path("/sys/fs/cgroup")
@@ -928,6 +899,8 @@ def listed_result_records(line, expected, max_name_length):
 WORKSPACE_TEST_BUILD = ["cargo", "test", "--profile", "test", "--workspace", "--lib", "--bins", "--tests", "--no-run"]
 # The client-lib rows build at opt-level 3 (run()), which the workspace build does not.
 OWN_BUILD = {"sunrise-client-lib"}
+# Each test thread's stack (RUST_MIN_STACK), the one the parity harnesses give the same game fixtures.
+TEST_THREAD_STACK = 16 * 1024 * 1024
 
 
 def built_test_binaries():
@@ -971,11 +944,15 @@ def run_binaries(package, executables, arguments, env):
     for target, executable in executables.items():
         output.append(f"     Running {executable} ({executable})")
         crate = package if target == "lib" else target.split(":", 1)[1]
-        done = subprocess.run([executable, *arguments], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                              errors="replace", env=dict(env, CARGO_CRATE_NAME=crate.replace("-", "_")), cwd=folder)
+        done = subprocess.run([*time_limit(), executable, *arguments], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, errors="replace", env=dict(env, CARGO_CRATE_NAME=crate.replace("-", "_")),
+                              cwd=folder)
         output.append(done.stdout)
-        if done.returncode:
-            status = 101
+        if done.returncode == TIMED_OUT:
+            # The executables after it still run; the run as a whole reads as stopped at the limit.
+            status = TIMED_OUT
+        elif done.returncode:
+            status = status or 101
             ended = (f"signal: {-done.returncode}, {signal.Signals(-done.returncode).name}"
                      if done.returncode < 0 and -done.returncode in signal.valid_signals()
                      else f"exit status: {done.returncode}")
@@ -984,7 +961,31 @@ def run_binaries(package, executables, arguments, env):
     return subprocess.CompletedProcess(list(executables.values()), status, "\n".join(output) + "\n")
 
 
+# What the current run's commands printed, by stage (build, list, test): kept privately when the run fails.
+_captured = {}
+
+
 def run(package, skip, number=None, count=None, only=None, binaries=None):
+    """Run one leg (run_leg) and, when it fails in any way, keep everything its commands printed.
+
+    The public log withholds free-form panic payloads and compiler text (they can carry vanilla data). With
+    IGNORED_TESTS_PRIVATE_LOGS set, a run that stopped (None) or has a failed test keeps each stage's whole output
+    there as `<leg>.<stage>.log`, which ignored-tests.yml copies into the CI host's private keep; the public log
+    names the files only."""
+    _captured.clear()
+    results = run_leg(package, skip, number, count, only, binaries)
+    private = os.environ.get("IGNORED_TESTS_PRIVATE_LOGS")
+    if private and (results is None or not all(results.values())):
+        leg = package if number is None else f"{package}#{number}of{count}"
+        for stage, text in _captured.items():
+            kept = Path(private) / f"{leg}.{stage}.log"
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            kept.write_text(text, errors="replace")
+            print(f"{package}: kept privately on the runner: {kept.name}")
+    return results
+
+
+def run_leg(package, skip, number=None, count=None, only=None, binaries=None):
     """Each test's result in `package`'s ignored library tests but `skip` (and, with a leg, the other legs'), or None if they didn't build.
 
     `only=(targets, tests)` runs just those ignored tests of those targets (`lib`, `bin:NAME`, `test:NAME`) instead;
@@ -1002,6 +1003,8 @@ def run(package, skip, number=None, count=None, only=None, binaries=None):
         for key in ("SUNRISE_LAUNCHER_TRASH", "SUNRISE_LAUNCHER_CLIPBOARD", "SUNRISE_LAUNCHER_DESKTOP"):
             homes[key] = Path(scratch) / key.lower()
         env = lab.game_env(**homes)
+        # Some fixtures hold a server Game by value on a libtest thread and need more than its default stack.
+        env["RUST_MIN_STACK"] = str(TEST_THREAD_STACK)
         if package == "sunrise-client-lib":
             # Worldgen must meet its real-time deadlines without disabling test assertions.
             env["CARGO_PROFILE_TEST_OPT_LEVEL"] = "3"
@@ -1025,10 +1028,11 @@ def run(package, skip, number=None, count=None, only=None, binaries=None):
         if client_half:
             # The runner's own cap (tools/ci/cargo_jobs.py --cap) when set, else the old fixed one.
             command.append(f"--jobs={os.environ.get('CI_JOBS', '8')}")
-        # What the package's tests need built first (ignored_shards.PREPARE: the command verify runs too).
+        # What the package's tests need built first (ignored_shards.PREPARE).
         if prepare := ignored_shards.PREPARE.get(package):
             built = subprocess.run(prepare, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                    errors="replace", env=env, cwd=ROOT / workspace)
+            _captured["build"] = built.stdout
             if built.returncode:
                 print(f"{package}: building what its tests need failed (cargo exit {built.returncode})")
                 compile_diagnostics(built.stdout)
@@ -1046,6 +1050,7 @@ def run(package, skip, number=None, count=None, only=None, binaries=None):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace", env=env,
                 cwd=ROOT / workspace,
             )
+            _captured["list"] = (listing.stdout or "") + (listing.stderr or "")
             names = {found[1] for line in listing.stdout.splitlines() if (found := LISTED.match(line))}
             if listing.returncode or not names:
                 print(f"{package}: could not list the tests to split into legs (cargo exit {listing.returncode})")
@@ -1065,16 +1070,18 @@ def run(package, skip, number=None, count=None, only=None, binaries=None):
         threads = min(8 if client_half else 4, int(os.environ.get("CI_CPUS", "8")))
         selection = ["--ignored", "--exact", f"--test-threads={threads}", *only[1]] if only else \
             ["--include-ignored", "--exact", f"--test-threads={threads}", *skips]
+        env["SUNRISE_GPU_TESTS_REQUIRE_ADAPTER"] = "1"
         if binaries:
             process = run_binaries(package, {target: binaries[target] for target in only[0]}, selection, env)
         else:
             process = subprocess.run(
-                [*command, "--", *selection],
+                [*time_limit(), *command, "--", *selection],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", env=env,
                 cwd=ROOT / workspace,
             )
         if timing:
             print(f"data-leg phase={phase} test-command-end utc={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} execution_seconds={time.monotonic() - execution_started:.3f}", flush=True)
+    _captured["test"] = process.stdout
     results = {}
     summaries = []
     print(f"{package}: cargo exit {process.returncode}")
@@ -1157,6 +1164,12 @@ def run(package, skip, number=None, count=None, only=None, binaries=None):
                 if status != "ignored":
                     results[name] = results.get(name, True) and status == "ok"
     finish_target()
+    if process.returncode == TIMED_OUT:
+        ended_by = f"the {TEST_RUN_LIMIT} s limit"
+        stop("tests still running at the time limit (a hung test)")
+        still = ", ".join(_stopped["still_running"]) or "none named (each started under 60 s before the limit)"
+        print(f"{package}: stopped after {TEST_RUN_LIMIT} s; still running past 60 s: {still}")
+        return None
     if crashed:
         print(f"{package}: a test process crashed (cargo exit {process.returncode})")
         crash_report(package, process.stdout, expected, results)
@@ -1266,7 +1279,7 @@ def main(shards, report=None):
                 if listed == package and in_leg(test, number, count) and not os.environ.get(variable):
                     print(f"{package} {safe_identity(test)}: refused, needs {variable}; run by the parity harness")
                     skip.append(test)
-            # The daily rows another job runs (DAILY_INPUTS, `windows`) never run here.
+            # The daily rows another job runs never run here.
             skip += [row.test for row in listed_entries() if row.mark == "daily" and kept_out(row)
                      and row.package == package and in_leg(row.test, number, count)]
             if package == "sunrise-client" and count == 2:
@@ -1336,8 +1349,6 @@ def main(shards, report=None):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["--prebuilt"]:
-        sys.exit(run_prebuilt(sys.argv[2], sys.argv[3:]))
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("shards", nargs="*", metavar="SHARD")
     parser.add_argument("--needs", metavar="VARIABLE", help="the tests marked `needs VARIABLE`")
@@ -1346,8 +1357,6 @@ if __name__ == "__main__":
     each.add_argument("--list", action="store_true", help="print their commands")
     parser.add_argument("--jobs", type=int, help="cargo's -j for --needs")
     parser.add_argument("--report", metavar="FILE", help="also write the verdict as JSON for the daily summary")
-    parser.add_argument("--binaries", metavar="FILE", help="with --needs, the executables --build-tests wrote")
-    parser.add_argument("--build-tests", metavar="FILE", help="build the workspace's tests once; their executables to FILE")
     parser.add_argument("--daily-tests", nargs=2, metavar=("PACKAGE", "TARGET"),
                         help="print the daily rows' tests of one package's target, one per line")
     parser.add_argument("--windows-rows", action="store_true",
@@ -1356,8 +1365,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.run and not args.windows_rows:
         parser.error("--run requires --windows-rows")
-    if args.build_tests:
-        sys.exit(write_built(args.build_tests))
     if args.windows_rows:
         if args.run:
             sys.exit(run_windows_rows(args.report))
@@ -1368,9 +1375,7 @@ if __name__ == "__main__":
     elif args.needs and args.list:
         print("\n".join(shlex.join(command) for command in needs_commands(args.needs, args.jobs)))
     elif args.needs and args.one_process_each:
-        sys.exit(run_one_process_each(args.needs, args.jobs, args.report,
-                                      read_built(args.binaries) if args.binaries and Path(args.binaries).is_file()
-                                      else None))
+        sys.exit(run_one_process_each(args.needs, args.jobs))
     elif args.needs or args.one_process_each or args.list:
         parser.error("--needs takes --one-process-each or --list, and they take --needs")
     else:

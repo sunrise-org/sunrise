@@ -5,7 +5,7 @@
 //! drawn far to near, and clipped to the item's 16x16 slot unless the model
 //! is oversized in the GUI (`GuiItemAtlas` draws each item into a scissored
 //! 16x16 slot; oversized items get a picture-in-picture of their bounds).
-use super::{Foil, Glint, ItemQuad, ItemRenderState, ItemRenderer, SpecialHost};
+use super::{Foil, Glint, GlintFrame, ItemQuad, ItemRenderState, ItemRenderer, SpecialHost};
 use crate::cit::Rule;
 use crate::cit_glint::StackGlint;
 use crate::hud::cit_glint::{GlintTextures, layer_uv, vertex_color};
@@ -136,14 +136,14 @@ struct CitDraw<'a> {
     glint: &'a StackGlint,
     textures: &'a GlintTextures,
     rules: &'a [Rule],
-    millis: f32,
+    millis: i64,
 }
 
 /// The CIT glint layers over the item's clipped faces (`fans`, in draw order), bottom first:
 /// each layer is one run over all of them, blended as its rule says, at its intensity times
 /// the glint strength option (`HudBatch::glint_alpha`).
 fn emit_cit(batch: &mut HudBatch, fans: &[Vec<Point>], cit: CitDraw) {
-    let seconds = f64::from(cit.millis) / 1000.0;
+    let seconds = cit.millis as f64 / 1000.0;
     for (i, layer) in cit.glint.layers.iter().enumerate() {
         let Some(slot) = cit.textures.slot_of.get(layer.rule).copied().flatten() else {
             continue;
@@ -157,7 +157,15 @@ fn emit_cit(batch: &mut HudBatch, fans: &[Vec<Point>], cit: CitDraw) {
         }
         let glint = &cit.rules[layer.rule].glint;
         let color = vertex_color(slot, intensity);
-        let uv = |v: Point| layer_uv(v.cit_uv, cit.millis, glint.speed, glint.rotation, 8.0);
+        let uv = |v: Point| {
+            layer_uv(
+                v.cit_uv,
+                cit.millis as f32,
+                glint.speed,
+                glint.rotation,
+                8.0,
+            )
+        };
         let start = batch.vertices.len();
         for fan in fans {
             for k in 1..fan.len().saturating_sub(1) {
@@ -185,9 +193,38 @@ pub fn draw(
     batch: &mut HudBatch,
     x: f32,
     y: f32,
-    time: f32,
-    glint_speed: f32,
+    millis: i64,
+    glint_speed: f64,
     glint_alpha: f32,
+) {
+    draw_with_frame(
+        state,
+        renderer,
+        sprites,
+        host,
+        batch,
+        x,
+        y,
+        GlintFrame {
+            millis,
+            speed: glint_speed,
+            alpha: glint_alpha,
+            sprite: sprites.contains_key("misc/enchanted_glint_item"),
+        },
+    );
+}
+
+/// [`draw`] with the frame's exact [`GlintFrame`] so `millis` does not round-trip through seconds.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_with_frame(
+    state: &ItemRenderState,
+    renderer: &ItemRenderer,
+    sprites: &HashMap<String, Rect>,
+    host: &dyn SpecialHost,
+    batch: &mut HudBatch,
+    x: f32,
+    y: f32,
+    frame: GlintFrame,
 ) {
     if state.is_empty() {
         return;
@@ -202,23 +239,14 @@ pub fn draw(
             .ok()
             .and_then(|d| d.get(key).cloned())
     {
+        if !is_oversized_target(state) {
+            renderer.gui_item_slot(state, batch.scale.max(1.0));
+        }
         batch.vertices.extend_from_slice(&drawn);
         return;
     }
     let start = batch.vertices.len();
-    draw_now(
-        state,
-        renderer,
-        sprites,
-        host,
-        batch,
-        x,
-        y,
-        time,
-        glint_speed,
-        glint_alpha,
-        None,
-    );
+    draw_now(state, renderer, sprites, host, batch, x, y, frame, None);
     if let Some(key) = key
         && let Ok(mut drawn) = renderer.gui_drawn.lock()
     {
@@ -255,9 +283,7 @@ pub fn draw_scissored(
         batch,
         x,
         y,
-        0.0,
-        0.0,
-        0.0,
+        GlintFrame::default(),
         Some(scissor),
     );
 }
@@ -291,11 +317,13 @@ impl DrawnKey {
         let layers = state
             .layers
             .iter()
-            .map(|layer| match &layer.geometry {
-                super::LayerGeometry::Quads(baked) if layer.foil == super::FoilType::None => {
+            .map(|layer| match (&layer.geometry, &layer.tints) {
+                (super::LayerGeometry::Quads(baked), super::LayerTints::Owned(tints))
+                    if layer.foil == super::FoilType::None =>
+                {
                     Some((
                         Arc::as_ptr(baked) as usize,
-                        layer.tints.clone(),
+                        tints.clone(),
                         layer.matrix.to_cols_array().map(f32::to_bits),
                         layer.uses_block_light,
                     ))
@@ -313,6 +341,288 @@ impl DrawnKey {
     }
 }
 
+/// `GuiItemAtlas.MINIMUM_TEXTURE_SIZE`.
+const MINIMUM_ATLAS_TEXTURE_SIZE: u32 = 512;
+
+/// `Mth.smallestSquareSide`: smallest `n` such that `n * n >= count`.
+fn smallest_square_side(count: u32) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    let mut side = (count as f64).sqrt().ceil() as u32;
+    while side.saturating_mul(side) < count {
+        side += 1;
+    }
+    while side > 0 && (side - 1).saturating_mul(side - 1) >= count {
+        side -= 1;
+    }
+    side
+}
+
+/// `GuiItemAtlas.computeTextureSizeFor(slotTextureSize, requiredSlotCount)`.
+fn compute_atlas_texture_size(
+    slot_texture_size: u32,
+    required_slots: u32,
+    max_texture_size: u32,
+) -> u32 {
+    let preferred = required_slots.saturating_add(required_slots / 2).max(1);
+    let side = smallest_square_side(preferred);
+    let needed = side.saturating_mul(slot_texture_size);
+    let pow2 = needed
+        .checked_next_power_of_two()
+        .unwrap_or(max_texture_size);
+    let cap = max_texture_size.max(MINIMUM_ATLAS_TEXTURE_SIZE);
+    pow2.clamp(MINIMUM_ATLAS_TEXTURE_SIZE, cap)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum SlotGeometryKey {
+    Quads(usize),
+    Special(String, String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SlotLayerKey {
+    geometry: SlotGeometryKey,
+    tints: Vec<i32>,
+    special_tints: Option<String>,
+    foil: u8,
+    matrix: [u32; 16],
+    uses_block_light: bool,
+    display: sunrise_assets::item_model::DisplayContext,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SlotKey {
+    oversized: bool,
+    layers: Vec<SlotLayerKey>,
+}
+
+impl SlotKey {
+    fn of(state: &ItemRenderState) -> Self {
+        let layers = state
+            .layers
+            .iter()
+            .map(|layer| {
+                let geometry = match &layer.geometry {
+                    super::LayerGeometry::Quads(baked) => {
+                        SlotGeometryKey::Quads(Arc::as_ptr(baked) as usize)
+                    }
+                    super::LayerGeometry::Special { model, argument } => {
+                        SlotGeometryKey::Special(format!("{model:?}"), argument.to_string())
+                    }
+                };
+                let (tints, special_tints) = match &layer.tints {
+                    super::LayerTints::Owned(tints) => (tints.clone(), None),
+                    super::LayerTints::Special(tints) => (Vec::new(), Some(format!("{tints:?}"))),
+                };
+                let foil = match layer.foil {
+                    super::FoilType::None => 0,
+                    super::FoilType::Standard => 1,
+                    super::FoilType::Special => 2,
+                };
+                SlotLayerKey {
+                    geometry,
+                    tints,
+                    special_tints,
+                    foil,
+                    matrix: layer.matrix.to_cols_array().map(f32::to_bits),
+                    uses_block_light: layer.uses_block_light,
+                    display: layer.display,
+                }
+            })
+            .collect();
+        Self {
+            oversized: state.oversized_in_gui,
+            layers,
+        }
+    }
+}
+
+fn is_animated_slot(state: &ItemRenderState) -> bool {
+    state.animated
+        || state.cit_glint.is_some()
+        || state.layers.iter().any(|l| l.foil != super::FoilType::None)
+}
+
+#[derive(Clone, Copy)]
+struct SlotEntry {
+    index: u32,
+    discard_after_frame: bool,
+    used_this_frame: bool,
+}
+
+/// Vanilla 26.3's `GuiItemAtlas` / `DynamicAtlasAllocator` physical slot tracker per GUI scale.
+#[derive(Default)]
+pub(crate) struct GuiItemAtlasSlots {
+    gui_scale: u32,
+    slot_texture_size: u32,
+    texture_size: u32,
+    storage_size: u32,
+    free: Vec<bool>,
+    used: HashMap<SlotKey, SlotEntry>,
+}
+
+impl GuiItemAtlasSlots {
+    fn reset(&mut self, gui_scale: u32, texture_size: u32) {
+        self.gui_scale = gui_scale;
+        self.slot_texture_size = 16 * gui_scale;
+        self.texture_size = texture_size;
+        self.storage_size = (texture_size / self.slot_texture_size).max(1);
+        let total = (self.storage_size * self.storage_size) as usize;
+        self.free.clear();
+        self.free.resize(total, true);
+        self.used.clear();
+    }
+
+    pub(crate) fn end_frame(&mut self) {
+        let free = &mut self.free;
+        self.used.retain(|_, entry| {
+            if entry.discard_after_frame {
+                if let Some(slot) = free.get_mut(entry.index as usize) {
+                    *slot = true;
+                }
+                false
+            } else {
+                entry.used_this_frame = false;
+                true
+            }
+        });
+    }
+
+    pub(crate) fn slot_for(
+        &mut self,
+        state: &ItemRenderState,
+        gui_scale: f32,
+        max_texture_size: u32,
+    ) -> (u32, u32) {
+        let scale = (gui_scale.round() as u32).max(1);
+        if self.gui_scale != scale || self.storage_size == 0 {
+            let tex = compute_atlas_texture_size(16 * scale, 1, max_texture_size);
+            self.reset(scale, tex);
+        }
+        let key = SlotKey::of(state);
+        let animated = is_animated_slot(state);
+        if let Some(entry) = self.used.get_mut(&key) {
+            entry.discard_after_frame |= animated;
+            entry.used_this_frame = true;
+            return (
+                entry.index % self.storage_size,
+                entry.index / self.storage_size,
+            );
+        }
+        let mut free_idx = self.free.iter().position(|&f| f);
+        if free_idx.is_none() {
+            // `DynamicAtlasAllocator.reclaimSpaceFor`: reclaim a slot not used this frame.
+            if let Some(evict_key) = self
+                .used
+                .iter()
+                .filter(|(_, e)| !e.used_this_frame)
+                .min_by_key(|(_, e)| e.index)
+                .map(|(k, _)| k.clone())
+                && let Some(evicted) = self.used.remove(&evict_key)
+            {
+                self.free[evicted.index as usize] = true;
+                free_idx = Some(evicted.index as usize);
+            }
+        }
+        if free_idx.is_none() {
+            let new_tex = compute_atlas_texture_size(
+                self.slot_texture_size,
+                (self.used.len() + 1) as u32,
+                max_texture_size,
+            );
+            if new_tex > self.texture_size {
+                let mut live: Vec<(SlotKey, SlotEntry)> = self
+                    .used
+                    .drain()
+                    .filter(|(_, e)| e.used_this_frame)
+                    .collect();
+                live.sort_by_key(|(_, e)| e.index);
+                self.reset(scale, new_tex);
+                for (i, (k, mut e)) in live.into_iter().enumerate() {
+                    if i < self.free.len() {
+                        self.free[i] = false;
+                        e.index = i as u32;
+                        self.used.insert(k, e);
+                    }
+                }
+                free_idx = self.free.iter().position(|&f| f);
+            }
+        }
+        let Some(idx) = free_idx else {
+            return (0, 0);
+        };
+        self.free[idx] = false;
+        let index = idx as u32;
+        self.used.insert(
+            key,
+            SlotEntry {
+                index,
+                discard_after_frame: animated,
+                used_this_frame: true,
+            },
+        );
+        (index % self.storage_size, index / self.storage_size)
+    }
+}
+
+/// Whether `state` uses vanilla's `OversizedItemRenderer` target instead of `GuiItemAtlas`.
+fn is_oversized_target(state: &ItemRenderState) -> bool {
+    if !state.oversized_in_gui {
+        return false;
+    }
+    let (lo, hi) = state.bounding_box();
+    let actual_x_size = ((f64::from(hi.x) - f64::from(lo.x)) * 16.0).ceil() as i32;
+    let actual_y_size = ((f64::from(hi.y) - f64::from(lo.y)) * 16.0).ceil() as i32;
+    actual_x_size > 16 || actual_y_size > 16
+}
+
+/// Vanilla's pre-placement GUI pose (`GuiItemAtlas.drawToSlot` or `OversizedItemRenderer`),
+/// screen-space origin `(rel_x0, rel_y0)` relative to `(x, y)`, and physical atlas slot origin
+/// `(slot_left, slot_top)` in target pixels.
+fn gui_target_pose(
+    state: &ItemRenderState,
+    renderer: &ItemRenderer,
+    gui_scale: f32,
+) -> (Mat4, f32, f32, f32, f32) {
+    if state.oversized_in_gui {
+        let (lo, hi) = state.bounding_box();
+        let actual_x_size = ((f64::from(hi.x) - f64::from(lo.x)) * 16.0).ceil() as i32;
+        let actual_y_size = ((f64::from(hi.y) - f64::from(lo.y)) * 16.0).ceil() as i32;
+        if actual_x_size > 16 || actual_y_size > 16 {
+            let floored_x_offset = ((f64::from(lo.x) * 16.0) as f32).floor() as i32;
+            let floored_y_offset = ((f64::from(hi.y) * 16.0) as f32).floor() as i32;
+            let rel_x0 = floored_x_offset + 8;
+            let rel_y0 = -floored_y_offset + 8;
+            let width = actual_x_size as f32 * gui_scale;
+            let height = actual_y_size as f32 * gui_scale;
+            let scale = gui_scale * 16.0;
+            let center_x = (rel_x0 + rel_x0 + actual_x_size) as f32 * 0.5;
+            let center_y = (rel_y0 + rel_y0 + actual_y_size) as f32 * 0.5;
+            let pose = Mat4::from_translation(Vec3::new(width * 0.5, height * 0.5, 0.0))
+                * Mat4::from_scale(Vec3::new(scale, scale, -scale))
+                * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0))
+                * Mat4::from_translation(Vec3::new(
+                    (8.0 - center_x) / 16.0,
+                    (center_y - 8.0) / 16.0,
+                    0.0,
+                ));
+            return (pose, rel_x0 as f32, rel_y0 as f32, 0.0, 0.0);
+        }
+    }
+    let (slot_x, slot_y) = renderer.gui_item_slot(state, gui_scale);
+    let slot_size = 16.0 * gui_scale;
+    let slot_left = slot_x as f32 * slot_size;
+    let slot_top = slot_y as f32 * slot_size;
+    let pose = Mat4::from_translation(Vec3::new(
+        slot_left + slot_size * 0.5,
+        slot_top + slot_size * 0.5,
+        0.0,
+    )) * Mat4::from_scale(Vec3::new(slot_size, -slot_size, slot_size));
+    (pose, 0.0, 0.0, slot_left, slot_top)
+}
+
 /// [`draw`] without the cache.
 #[allow(clippy::too_many_arguments)]
 fn draw_now(
@@ -323,15 +633,26 @@ fn draw_now(
     batch: &mut HudBatch,
     x: f32,
     y: f32,
-    time: f32,
-    glint_speed: f32,
-    glint_alpha: f32,
+    frame: GlintFrame,
     scissor: Option<[f32; 4]>,
 ) {
-    let pose = Mat4::from_translation(Vec3::new(x + 8.0, y + 8.0, 0.0))
-        * Mat4::from_scale(Vec3::new(16.0, -16.0, 16.0));
+    let gui_scale = batch.scale.max(1.0);
+    let (target_pose, rel_x0, rel_y0, slot_left, slot_top) =
+        gui_target_pose(state, renderer, gui_scale);
     let mut quads: Vec<ItemQuad> = Vec::new();
-    state.submit(renderer, sprites, host, pose, &mut quads);
+    state.submit(renderer, sprites, host, target_pose, &mut quads);
+    // Place submitted target-space geometry onto the GUI screen after decal UV3 projection.
+    let origin_x = x + rel_x0;
+    let origin_y = y + rel_y0;
+    for q in &mut quads {
+        for p in &mut q.pos {
+            *p = Vec3::new(
+                origin_x + (p.x - slot_left) / gui_scale,
+                origin_y + (p.y - slot_top) / gui_scale,
+                p.z / gui_scale,
+            );
+        }
+    }
     let lights = if state.uses_block_light() {
         items_3d_lights()
     } else {
@@ -356,23 +677,107 @@ fn draw_now(
         ],
         None => rect,
     };
-    let glint = sprites
-        .contains_key("misc/enchanted_glint_item")
-        .then_some(Glint {
-            speed: glint_speed,
-            alpha: glint_alpha,
-            millis: time * 1000.0,
-            scale: 8.0,
-        });
-    batch.glint_alpha = glint_alpha;
+    let glint = frame.glint(Glint::ITEM_SCALE);
+    batch.glint_alpha = frame.alpha;
     let cit = state.cit_glint.as_deref().zip(renderer.cit.as_ref());
     let cit = cit.map(|(glint, models)| CitDraw {
         glint,
         textures: &models.glint_textures,
         rules: &models.rules.rules,
-        millis: time * 1000.0,
+        millis: frame.millis,
     });
     draw_quads_with(&quads, lights, batch, rect, glint.as_ref(), cit);
+}
+
+/// What an item's drawing reads of the game besides the item itself: the renderer, the atlas'
+/// sprites and the host of the special models.
+pub struct GuiItemEnv<'a> {
+    pub renderer: &'a ItemRenderer,
+    pub sprites: &'a HashMap<String, Rect>,
+    pub host: &'a dyn SpecialHost,
+}
+
+/// An item drawn under the caller's `pose` (GUI pixels, the slot's `translate(x + 8, y + 8)`
+/// and `scale(16, -16, 16)` with a turn of the caller's in between), lit and culled as in a
+/// slot but cut by no slot, and with a depth of its own like a GUI model
+/// ([`HudBatch::depth_glint_over`]): its faces meet each other by depth, whatever the turn, and
+/// never intersect what the screen drew before or after. The OptiFine CIT glint layers are not
+/// drawn. False, with nothing drawn, when a corner is not finite.
+pub fn draw_posed(
+    state: &ItemRenderState,
+    env: &GuiItemEnv,
+    batch: &mut HudBatch,
+    pose: Mat4,
+    frame: GlintFrame,
+) -> bool {
+    if state.is_empty() {
+        return true;
+    }
+    let mut quads: Vec<ItemQuad> = Vec::new();
+    state.submit(env.renderer, env.sprites, env.host, pose, &mut quads);
+    if !quads.iter().all(|q| q.pos.iter().all(|p| p.is_finite())) {
+        return false;
+    }
+    let lights = if state.uses_block_light() {
+        items_3d_lights()
+    } else {
+        items_flat_lights()
+    };
+    batch.glint_alpha = frame.alpha;
+    let glint = frame.glint(Glint::ITEM_SCALE);
+    let start = batch.vertices.len();
+    // The foil's faces follow the item's own, as `depth_glint_over` takes them.
+    let mut foil = Vec::new();
+    let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+    for face in depth::sort(&quads) {
+        let q = &quads[face.quad];
+        let color = lit_color(q, lights);
+        // A whole quad goes out as one; a face the sort split goes out as a fan of triangles.
+        let fan: Vec<[_; 4]> = if let Ok(quad) = <[_; 4]>::try_from(&face.corners[..]) {
+            vec![quad]
+        } else {
+            (1..face.corners.len().saturating_sub(1))
+                .map(|i| {
+                    let c = face.corners[i + 1];
+                    [face.corners[0], face.corners[i], c, c]
+                })
+                .collect()
+        };
+        for corners in fan {
+            for c in corners {
+                for axis in 0..2 {
+                    lo[axis] = lo[axis].min(c.pos[axis]);
+                    hi[axis] = hi[axis].max(c.pos[axis]);
+                }
+            }
+            if q.foil != Foil::GlintOnly {
+                batch.quad_3d(
+                    corners.map(|c| c.pos.to_array()),
+                    corners.map(|c| c.uv),
+                    color,
+                );
+            }
+            if q.foil != Foil::None && glint.is_some() {
+                foil.push((q.entity_glint, corners));
+            }
+        }
+    }
+    let glint_start = batch.vertices.len();
+    if let Some(glint) = glint {
+        for (entity_glint, corners) in foil {
+            let glint = glint.for_quad(entity_glint);
+            batch.quad_3d_glint(
+                corners.map(|c| c.pos.to_array()),
+                corners.map(|c| c.uv),
+                corners.map(|c| glint.uv(c.glint_uv)),
+                false,
+            );
+        }
+    }
+    if batch.vertices.len() > start {
+        batch.depth_glint_over(start, glint_start, lo, hi);
+    }
+    true
 }
 
 /// Lights, culls, sorts far to near and clips `quads` (GUI positions) to
@@ -417,12 +822,15 @@ fn draw_quads_with(
             if fan.len() < 3 {
                 continue;
             }
-            emit(batch, &fan, |_| color, None);
-            if q.foil != Foil::None {
-                emit(batch, &fan, |_| color, glint);
+            if q.foil != Foil::GlintOnly {
+                emit(batch, &fan, |_| color, None);
+                if cit.is_some() {
+                    fans.push(fan.clone());
+                }
             }
-            if cit.is_some() {
-                fans.push(fan);
+            if q.foil != Foil::None {
+                let quad_glint = glint.map(|g| g.for_quad(q.entity_glint));
+                emit(batch, &fan, |_| color, quad_glint.as_ref());
             }
         }
     }
@@ -592,10 +1000,12 @@ mod tests {
             normal: Vec3::Z,
             color,
             foil: Foil::None,
+            entity_glint: false,
             light_emission: 0,
             cull_back: false,
             translucent: false,
             oit: false,
+            banner_pattern: false,
         }
     }
 
@@ -725,7 +1135,7 @@ mod tests {
             glint: &glint,
             textures: &textures,
             rules: &rules,
-            millis: 0.0,
+            millis: 0,
         };
         let mut batch = HudBatch::scratch([320, 240]);
         batch.glint_alpha = 0.5;

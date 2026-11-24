@@ -2,6 +2,10 @@
 //! case (block state, light, partial tick and ticked block-entity fields)
 //! through `BlockEntityRenderer` at the block origin and writes the quads
 //! (texture, sprite-local UVs, tint, normal, light) and sign text calls.
+//!
+//! `reach INPUTS OUTPUT` is the block-entity reach parity gate's transport: for each case (block,
+//! block position, camera, render distance) it writes what `Reach` decides: off screen, view
+//! distance and whether the block entity is drawn.
 #![forbid(unsafe_code)]
 use glam::{DVec3, Mat4, Quat, Vec3};
 use serde_json::{Value, json};
@@ -22,6 +26,7 @@ use sunrise_client::{
         push_text,
     },
     chunk::{Chunk, Light},
+    gfx::{TEXT_NORMAL_SOLID_OVERLAY, TEXT_POLYGON_OFFSET_SOLID_OVERLAY},
     hud::{HudAtlas, Rect},
     item_render::{ItemRenderer, gui},
     signs::{DYE_TEXT, SignData, SignText},
@@ -120,8 +125,16 @@ fn intern(s: &str) -> &'static str {
 
 pub fn main() -> Result<()> {
     let args: Vec<PathBuf> = crate::args_os().skip(1).map(PathBuf::from).collect();
+    if let [mode, inputs, output] = args.as_slice()
+        && mode.as_os_str() == "reach"
+    {
+        return reach(inputs, output);
+    }
     let [root, inputs, textures, output] = args.as_slice() else {
-        return Err("usage: block_entity_render_fixture RESOURCES INPUTS TEXTURES OUTPUT".into());
+        return Err(
+            "usage: block_entity_render_fixture RESOURCES INPUTS TEXTURES OUTPUT | reach INPUTS OUTPUT"
+                .into(),
+        );
     };
     let assets = Assets::load(root)?;
     let registry = assets.registry;
@@ -371,6 +384,7 @@ pub fn main() -> Result<()> {
         let texts = RefCell::new(Vec::<TextCall>::new());
         let scene = Scene {
             camera,
+            sign_outline: sunrise_client::block_entity_render::SignOutline::CameraEntity(camera),
             orientation: Quat::from_euler(
                 glam::EulerRot::YXZ,
                 std::f32::consts::PI - yaw * (std::f32::consts::PI / 180.0),
@@ -395,6 +409,7 @@ pub fn main() -> Result<()> {
             glyph: &|c| atlas.glyph_cell(c),
             glyphs: atlas.font.epoch(),
             font: Some(&atlas.font),
+            inline_images: None,
             dynamic_visible: None,
         };
         let mut verts = Vec::new();
@@ -464,7 +479,12 @@ pub fn main() -> Result<()> {
                 push_text(&|c| atlas.font.glyph_styled(c, &t.style), Some(atlas.font.white()), &local.run(), &mut vertices);
                 let vertices: Vec<_> = vertices.iter().map(|v| {
                     let c = v.color;
-                    json!([v.pos[0], v.pos[1], v.pos[2], (c & 0xff00ff00) | (c & 255) << 16 | (c >> 16 & 255)])
+                    let mode = match v.layer & 0xffff {
+                        TEXT_NORMAL_SOLID_OVERLAY => "NORMAL",
+                        TEXT_POLYGON_OFFSET_SOLID_OVERLAY => "POLYGON_OFFSET",
+                        _ => "UNKNOWN",
+                    };
+                    json!([v.pos[0], v.pos[1], v.pos[2], (c & 0xff00ff00) | (c & 255) << 16 | (c >> 16 & 255), mode])
                 }).collect();
                 json!({"matrix": t.matrix.to_cols_array(), "x": t.x, "y": t.y, "text": t.text,
                        "color": t.color, "outline": t.outline, "glyphs": glyphs, "textVertices": vertices,
@@ -473,5 +493,42 @@ pub fn main() -> Result<()> {
             .collect();
         writeln!(out, "{}", json!({"quads": quads, "texts": texts}))?;
     }
+    Ok(())
+}
+
+/// The reach cases: `Reach`'s answers, one line per case.
+fn reach(inputs: &Path, output: &Path) -> Result<()> {
+    use sunrise_client_render::block_entity_reach::Reach;
+    let mut out = BufWriter::new(fs::File::create(output)?);
+    for line in fs::read_to_string(inputs)?.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let case: Value = serde_json::from_str(line)?;
+        let reach = Reach::of(case["block"].as_str().ok_or("case without block")?);
+        let int = |v: &Value| v.as_i64().map(|n| n as i32).ok_or("not an integer");
+        let float = |v: &Value| v.as_f64().ok_or("not a number");
+        let pos = [
+            int(&case["pos"][0])?,
+            int(&case["pos"][1])?,
+            int(&case["pos"][2])?,
+        ];
+        let camera = DVec3::new(
+            float(&case["camera"][0])?,
+            float(&case["camera"][1])?,
+            float(&case["camera"][2])?,
+        );
+        let render_distance = int(&case["renderDistance"])?;
+        writeln!(
+            out,
+            "{}",
+            json!({
+                "offScreen": reach.off_screen(),
+                "viewDistance": reach.view_distance(render_distance),
+                "shouldRender": reach.should_render(pos, camera, render_distance),
+            })
+        )?;
+    }
+    out.flush()?;
     Ok(())
 }

@@ -11,7 +11,7 @@ can live in its own repository.
 | --- | --- |
 | Contract | `"contract": 1` |
 | Level | experimental ([stability.md](stability.md)): its first reader is the launcher, after the launcher split |
-| Where | every Nightly and snapshot release, listed in `SHA256SUMS` and so covered by its signatures |
+| Where | every Nightly, Dev and Stable release, listed in `SHA256SUMS` and so covered by its signatures |
 | Written by | `tools/release_file.py write`, in `nightly-build.yml`'s `pick` job, from the built commit |
 
 SDK releases (`sdk-<sha>`) have no `sunrise-release.json`: their signed `sdk.json` covers them, with the same facts
@@ -38,8 +38,8 @@ SDK releases (`sdk-<sha>`) have no `sunrise-release.json`: their signed `sdk.jso
 | --- | --- |
 | `contract` | What a launcher must understand to install and run this build (below). An integer |
 | `launcher_min` | The oldest launcher version that may install it, even when it knows the contract |
-| `channel` | `nightly` or `snapshot` |
-| `build` | `<channel>-<date>-<short commit>`: the version `SHA256SUMS.v2.sig` is signed for and the release title names |
+| `channel` | `nightly`, `dev` or `stable` |
+| `build` | `<channel>-<date>-<short commit>`: the version `SHA256SUMS.v2.sig` is signed for and the release title names. A stable release's is its tag, `<target>-<semver>` (`26.3-0.1.0`), which its `SHA256SUMS.sig` is signed for |
 | `commit` | The full id of the commit built |
 | `version_id` | Minecraft's `WorldVersion.id()`: the version the player's files are prepared for and the launcher shows |
 | `vanilla` | Minecraft's `WorldVersion.name()` |
@@ -80,4 +80,4 @@ and published with each build.
 
 ## Changelog
 
-- contract 1: the file, on Nightlies and snapshots.
+- contract 1: the file, on Nightlies and Dev builds.

@@ -99,6 +99,8 @@ def run(label, command, client_command, build, world):
         client.tell('chat on')
         client.tell('state on')
         client.tell('players on')
+        # The clock snapshot produces the same reply as /time query gametime.
+        client.tell('list-syncs on')
 
         def phase(name):
             client.tell(f'step {name}')

@@ -16,7 +16,7 @@ pub mod key_display;
 pub mod lang;
 pub use sunrise_world::nbt_path;
 pub mod nbt_value;
-pub mod particle_type;
+pub use sunrise_world::particle_type;
 pub mod pattern;
 pub mod potions;
 pub mod registries;

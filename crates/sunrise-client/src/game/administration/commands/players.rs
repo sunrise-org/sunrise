@@ -7,12 +7,16 @@
 //! their chat.
 use super::{Game, Target};
 use sunrise_client::{command::args::Selector, lan::guest::Guest, text::Text};
-use sunrise_protocol::packets::play::{self, Clientbound as C};
 
 impl Target {
     /// A player, in place or not (`instanceof ServerPlayer`).
     pub(in crate::game) fn is_player(self) -> bool {
         matches!(self, Target::Player | Target::Guest(_))
+    }
+
+    /// A target with a `LivingEntity` body.
+    pub(in crate::game) fn is_living(self) -> bool {
+        self.is_player() || matches!(self, Self::Mob(_) | Self::Stand(_) | Self::Dragon(_))
     }
 }
 
@@ -52,7 +56,7 @@ impl Game<'_> {
     /// command typed by the player in place runs as them, the server
     /// console's as nobody.
     pub(in crate::game) fn source_entity(&self) -> Option<Target> {
-        match self.command_source {
+        match &self.command_source {
             Some(s) => s.entity,
             None => self.player.is_some().then_some(Target::Player),
         }
@@ -77,7 +81,7 @@ impl Game<'_> {
     /// command block's or minecart's own name when the source has no entity,
     /// or the server's.
     pub(in crate::game) fn source_display_name(&self) -> Text {
-        match self.command_source {
+        match &self.command_source {
             Some(source) => match source.entity {
                 Some(target) => self.target_name(target),
                 None => source
@@ -158,12 +162,12 @@ impl Game<'_> {
     /// The guests a selector looks at, in join order (`PlayerList.getPlayers`),
     /// the one in place as `Target::Player`: all of them, or those in the
     /// source's level when it limits the search to a place
-    /// (`isWorldLimited`); `@e` and `@n` skip the dead (`Entity::isAlive`).
-    pub(super) fn player_candidates(&self, s: &Selector) -> Vec<Target> {
+    /// (`isWorldLimited`); with only the `Entity::isAlive` ones when
+    /// `alive_only` (the built-in `@e` and `@n`).
+    pub(super) fn player_candidates(&self, s: &Selector, alive_only: bool) -> Vec<Target> {
         let limited = s.distance.is_some()
             || s.pos.iter().any(Option::is_some)
             || s.delta.iter().any(Option::is_some);
-        let alive = matches!(s.kind, 'e' | 'n');
         let here = self.dim.id();
         let in_place = self.lan_acting.filter(|_| self.player.is_some());
         self.lan
@@ -171,7 +175,7 @@ impl Game<'_> {
             .flat_map(|h| h.hub.online_players())
             .filter(|g| self.native_command_player_available(g))
             .filter(|g| !limited || g.dimension == here || Some(g.conn) == in_place)
-            .filter(|g| !alive || (!g.dead && g.health > 0.0))
+            .filter(|g| !alive_only || (!g.dead && g.health > 0.0))
             .map(|g| {
                 if Some(g.conn) == in_place {
                     Target::Player
@@ -215,8 +219,9 @@ impl Game<'_> {
         shown
     }
 
-    /// Run `f` for the player `t` (None for anything else): in place, or
-    /// with the guest's state swapped in, in their level, as their own turn.
+    /// Run `f` for the player `t`: in place, or with the guest's state swapped
+    /// in, in their level, as their own turn. Return `None` if the target is
+    /// not a reachable player or their level cannot be entered.
     /// What `f` tells the player (`system_message`) goes to their chat; the
     /// command's own feedback is the caller's to send.
     pub(in crate::game) fn for_player<T>(
@@ -226,48 +231,64 @@ impl Game<'_> {
     ) -> Option<T> {
         let conn = match t {
             Target::Player => return Some(f(self)),
-            Target::Guest(conn) if self.lan_acting == Some(conn) => return Some(f(self)),
+            // Their body is already in place, but a nested call can reach here in another
+            // level than theirs: run in theirs, with no second body swap.
+            Target::Guest(conn) if self.lan_acting == Some(conn) => {
+                let back = self.dim;
+                let theirs =
+                    super::super::Dim::from_id(&self.lan.as_ref()?.hub.guest(conn)?.dimension);
+                if theirs == back {
+                    return Some(f(self));
+                }
+                if let Err(e) = self.enter_level(theirs) {
+                    log::error!("could not open {}: {e}", theirs.id());
+                    return None;
+                }
+                let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+                if self.dim != back
+                    && let Err(e) = self.enter_level(back)
+                {
+                    log::error!("could not reopen {}: {e}", back.id());
+                }
+                return match out {
+                    Ok(out) => Some(out),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                };
+            }
             Target::Guest(conn) => conn,
             _ => return None,
         };
         let back = self.dim;
-        let theirs = self
-            .lan
-            .as_ref()?
-            .hub
-            .guest(conn)
-            .map(|g| super::super::Dim::from_id(&g.dimension));
-        if let Some(dim) = theirs.filter(|d| *d != back)
-            && let Err(e) = self.enter_level(dim)
-        {
-            log::error!("could not open {}: {e}", dim.id());
-        }
-        let Some(swap) = self.enter_guest_in_dimension(conn, back) else {
-            if self.dim != back
-                && let Err(e) = self.enter_level(back)
+        let theirs = super::super::Dim::from_id(&self.lan.as_ref()?.hub.guest(conn)?.dimension);
+        // Opening a level or leaving the guest can itself fire hooks. Put the outer level
+        // back even when one of those hooks, rather than `f`, unwinds.
+        let mut messages = Vec::new();
+        let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if theirs != back
+                && let Err(e) = self.enter_level(theirs)
             {
-                log::error!("could not reopen {}: {e}", back.id());
+                log::error!("could not open {}: {e}", theirs.id());
+                return None;
             }
-            return None;
-        };
-        let source = self.chat_capture.replace(Vec::new());
-        let out = f(self);
-        let told = std::mem::replace(&mut self.chat_capture, source).unwrap_or_default();
-        self.leave_guest(swap);
-        for line in told {
-            self.lan.as_ref()?.hub.send_to(
-                conn,
-                &C::SystemChat(play::SystemChat {
-                    content: sunrise_client::lan::data::component_nbt(&line.component()),
-                    overlay: false,
-                }),
-            );
-        }
+            self.with_guest_swap(conn, back, |game| {
+                let (result, told) = game.capture_guest_messages(f);
+                messages = told;
+                if result.is_err() {
+                    game.record_interrupted_turn(conn);
+                }
+                result
+            })
+        }));
+        self.send_guest_messages(conn, messages);
         if self.dim != back
             && let Err(e) = self.enter_level(back)
         {
             log::error!("could not reopen {}: {e}", back.id());
         }
-        Some(out)
+        match turn {
+            Ok(Some(Ok(out))) => Some(out),
+            Ok(None) => None,
+            Ok(Some(Err(payload))) | Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 }

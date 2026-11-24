@@ -8,15 +8,24 @@ pub trait Hooks {
     /// local player's UUID and entity id. `draw`'s pose stack starts at the
     /// arm model's origin, in blocks, posed as vanilla's arm is (with any
     /// `render_hand`), lit with the light at the eyes; add
-    /// geometry with `native_draw_cube`, `native_draw_quad`, `native_draw_block`
-    /// and `native_draw_item`. Set `canceled` to leave out vanilla's arm;
+    /// geometry with `draw.cube`, `draw.quad`, `draw.block` (taking a resolved
+    /// `BlockState`) and `draw.item`. Set `canceled` to leave out vanilla's arm;
     /// what the mods drew stays. Client-side.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
+        version = 2,
         contract = "cancel",
         out = "canceled",
         neoforge = "RenderArmEvent",
         cancellable = true
     )]
-    fn render_arm();
+    fn render_arm(
+        player: u128,
+        player_entity_id: i32,
+        left: bool,
+        draw: &mut dyn BlockEntityDrawContext,
+        canceled: &mut bool,
+    );
 }

@@ -23,6 +23,7 @@ fn translated(fragment: &str) -> Result<sunrise_shaders::Program, Vec<sunrise_sh
         &stage("void main() { gl_Position = gl_Vertex; }"),
         &stage(fragment),
         Target::Window,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
 }
 

@@ -4,9 +4,10 @@
 //! and uploaded each frame. Here each model's vertices are uploaded once, in
 //! model space, and a frame only sends each drawn part's matrices and one job
 //! per run of drawn parts; `entity_skin.wgsl` writes the same vertices, in the
-//! same order, into the entity vertex buffer, after the CPU's ordinary entities
-//! (`EntityBatch` leaves the gap). Every pass that draws ordinary entities
-//! then draws them as before.
+//! same order, into the entity vertex buffer, before the CPU's ordinary entities
+//! (`draw_frame` dispatches them at its start and counts them into the ordinary
+//! entities' draw). Every pass that draws ordinary entities then draws them as
+//! before, the posed vertices first.
 //!
 //! The game decides which draws come here (`SkinFrame`): models whose
 //! polygons all face an axis, drawn as ordinary opaque or cutout entities.
@@ -15,6 +16,7 @@
 
 use super::upload::Uploads;
 use crate::mesher::Vertex;
+use std::ops::Range;
 
 /// A model vertex: position / 16, model UV, the face's normal as an axis (0..2
 /// = +x, +y, +z; 3..5 = -x, -y, -z), the part's index in its model.
@@ -109,6 +111,9 @@ pub struct SkinFrame {
     pub spans: Vec<super::pack_draw::EntitySpan>,
     /// Vertices the jobs write: a whole number of quads.
     pub vertices: u32,
+    /// CPU draws that precede a posed draw, in increasing GPU destination order.
+    /// The CPU ranges index the unbatched stream.
+    pub insertions: Vec<(u32, Range<u32>)>,
     /// Glowing entities' silhouettes posed here (`OutlineBufferSource`'s copy of
     /// their draws, [`SkinFrame::outline_since`]): `dst` counts from the first.
     pub outline_jobs: Vec<SkinJob>,
@@ -122,9 +127,15 @@ impl SkinFrame {
         self.parts.clear();
         self.jobs.clear();
         self.spans.clear();
+        self.insertions.clear();
         self.vertices = 0;
         self.outline_jobs.clear();
         self.outline_vertices = 0;
+    }
+
+    /// Submit `cpu` before this mob's next GPU-posed draw, whose first vertex is `gpu`.
+    pub fn insert_cpu_before(&mut self, gpu: u32, cpu: Range<u32>) {
+        self.insertions.push((gpu, cpu));
     }
 
     /// Copies the draws since job `first` into the glowing entities' outline
@@ -161,6 +172,13 @@ impl SkinFrame {
         self.parts.truncate(parts);
         self.vertices = vertices;
         self.spans.retain(|s| s.start <= vertices);
+        while self
+            .insertions
+            .last()
+            .is_some_and(|(gpu, _)| *gpu >= vertices)
+        {
+            self.insertions.pop();
+        }
     }
 
     /// Whether the renderer has anything to take.
@@ -172,10 +190,109 @@ impl SkinFrame {
     }
 }
 
+/// Placement of the ordinary pass's vertices in its shared draw buffer. Normally all posed
+/// vertices precede the CPU stream. A CPU draw that precedes a posed layer of the same mob
+/// moves up to that layer. Later material passes and outlines keep their original offsets.
+#[derive(Default)]
+#[doc(hidden)]
+pub struct OrdinaryOrder {
+    posed: u32,
+    moved: u32,
+    cuts: Vec<u32>,
+    insertions: Vec<Insertion>,
+}
+
+struct Insertion {
+    gpu: u32,
+    cpu: Range<u32>,
+    moved_before: u32,
+}
+
+impl OrdinaryOrder {
+    pub fn prepare(&mut self, entities: &[Vertex], skin: Option<&SkinFrame>, oit: bool) {
+        self.posed = skin.map_or(0, |skin| skin.vertices);
+        self.moved = 0;
+        self.insertions.clear();
+        let Some(skin) = skin.filter(|skin| !skin.insertions.is_empty()) else {
+            return;
+        };
+        super::entity_batch::ordinary_vertices_at_cuts(
+            entities,
+            skin.insertions
+                .iter()
+                .flat_map(|(_, cpu)| [cpu.start, cpu.end]),
+            oit,
+            &mut self.cuts,
+        );
+        for ((gpu, _), &[start, end]) in skin.insertions.iter().zip(self.cuts.as_chunks::<2>().0) {
+            if start < end {
+                self.insertions.push(Insertion {
+                    gpu: *gpu,
+                    cpu: start..end,
+                    moved_before: self.moved,
+                });
+                self.moved += end - start;
+            }
+        }
+    }
+
+    /// CPU uploads, as (destination vertex, range in the batched CPU buffer).
+    pub fn cpu_uploads(&self, vertices: u32) -> impl Iterator<Item = (u32, Range<u32>)> {
+        let tail = self
+            .insertions
+            .last()
+            .map_or(0, |insertion| insertion.cpu.end);
+        let mut start = 0;
+        let cpu_base = self.posed + self.moved;
+        self.insertions
+            .iter()
+            .flat_map(move |insertion| {
+                let span = start..insertion.cpu.start;
+                start = insertion.cpu.end;
+                [
+                    (cpu_base + span.start - insertion.moved_before, span),
+                    (
+                        insertion.gpu + insertion.moved_before,
+                        insertion.cpu.clone(),
+                    ),
+                ]
+            })
+            .chain(std::iter::once((self.posed + tail, tail..vertices)))
+            .filter(|(_, range)| !range.is_empty())
+    }
+
+    /// GPU writes in the same vertex space as the CPU uploads.
+    pub fn posed_jobs<'a>(&'a self, frame: &'a SkinFrame) -> impl Iterator<Item = SkinJob> + 'a {
+        let mut insertions = self.insertions.iter().peekable();
+        let mut moved = 0;
+        frame.jobs.iter().map(move |job| {
+            while let Some(insertion) = insertions.next_if(|insertion| insertion.gpu <= job.dst) {
+                moved += insertion.cpu.end - insertion.cpu.start;
+            }
+            SkinJob {
+                dst: job.dst + moved,
+                ..*job
+            }
+        })
+    }
+
+    /// Prepared models are staged between entity draws, not inside a moved range. As before,
+    /// their cut follows the posed stream; only the CPU vertices still in the tail count here.
+    pub(super) fn prepared_cut(&self, cut: u32) -> u32 {
+        let index = self
+            .insertions
+            .partition_point(|insertion| insertion.cpu.start < cut);
+        let moved = self.insertions[..index].last().map_or(0, |insertion| {
+            insertion.moved_before + cut.min(insertion.cpu.end) - insertion.cpu.start
+        });
+        self.posed + self.moved + cut - moved
+    }
+}
+
 /// Jobs per row of workgroups (the dispatch limit is 65535 per dimension).
 const ROW: u32 = 32_768;
 
-pub(super) struct EntitySkin {
+pub(crate) struct EntitySkin {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     model: Vec<SkinVertex>,
@@ -323,7 +440,7 @@ impl EntitySkin {
     }
 
     /// Records the frame's jobs: they write `frame.vertices` vertices into
-    /// `out` from vertex `base` on, and the outline jobs `frame.outline_vertices`
+    /// `out` at their ordinary-pass positions, and the outline jobs `frame.outline_vertices`
     /// from vertex `outline_base` on. Call after the CPU vertices' upload.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn dispatch(
@@ -333,7 +450,7 @@ impl EntitySkin {
         encoder: &mut wgpu::CommandEncoder,
         frame: &SkinFrame,
         out: &wgpu::Buffer,
-        base: u32,
+        posed: impl Iterator<Item = SkinJob>,
         outline_base: u32,
     ) {
         self.dispatch_jobs(
@@ -341,17 +458,10 @@ impl EntitySkin {
             uploads,
             encoder,
             &frame.parts,
-            frame
-                .jobs
-                .iter()
-                .map(|job| SkinJob {
-                    dst: job.dst + base,
-                    ..*job
-                })
-                .chain(frame.outline_jobs.iter().map(|job| SkinJob {
-                    dst: job.dst + outline_base,
-                    ..*job
-                })),
+            posed.chain(frame.outline_jobs.iter().map(|job| SkinJob {
+                dst: job.dst + outline_base,
+                ..*job
+            })),
             out,
         );
     }
@@ -560,10 +670,24 @@ mod tests {
         assert!(!poses(false, Some(false), false, no_mod));
     }
 
+    #[test]
+    fn culling_keeps_earlier_cpu_insertions_and_discards_only_the_removed_draws() {
+        let mut frame = SkinFrame::default();
+        frame.insert_cpu_before(4, 0..4);
+        frame.vertices = 8;
+        let mark = frame.mark();
+        frame.insert_cpu_before(8, 4..8);
+        frame.insert_cpu_before(12, 8..12);
+        frame.vertices = 16;
+        frame.truncate(mark);
+        assert_eq!(frame.insertions, [(4, 0..4)]);
+        frame.truncate(mark);
+        assert_eq!(frame.insertions, [(4, 0..4)]);
+    }
+
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::gfx::test_gpu::instance();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        let (_, device, queue) = crate::gfx::test_gpu::optional_device()?;
+        Some((device, queue))
     }
 
     /// A cube's 24 vertices for part `part`, its faces on every axis.
@@ -599,6 +723,7 @@ mod tests {
     /// texture and the armour glint, and an item's: the shader writes what
     /// `expand` does, to the bit, after the vertices before them.
     #[test]
+    #[ignore = "daily"]
     fn the_shader_writes_what_the_cpu_reference_computes() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -702,6 +827,7 @@ mod tests {
                 },
             ],
             vertices: 120,
+            insertions: Vec::new(),
             outline_jobs: Vec::new(),
             outline_vertices: 0,
         };
@@ -740,7 +866,10 @@ mod tests {
             &mut encoder,
             &frame,
             &out,
-            before,
+            frame.jobs.iter().map(|job| SkinJob {
+                dst: job.dst + before,
+                ..*job
+            }),
             outline_base,
         );
         let read = device.create_buffer(&wgpu::BufferDescriptor {

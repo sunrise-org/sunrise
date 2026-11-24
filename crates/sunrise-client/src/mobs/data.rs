@@ -1,18 +1,25 @@
-//! Facts the mob AI and renderer read from vanilla code, exported by
-//! `VanillaMobDataExporter` into `mob-data.json`: per-state pathfinding types
+//! The server's `mob-data.json` holds per-state pathfinding types
 //! (`WalkNodeEvaluator.getPathTypeFromState` with vanilla's tags bound),
-//! pathfindability, spawn-surface predicates, collision tops, each entity
-//! type's spawn placement and the client's keyframe animation definitions.
+//! pathfindability, spawn-surface predicates, collision tops and spawn
+//! placements. The client's keyframes are exported separately.
 use super::keyframes::Animation;
 use super::path::PathType;
+use super::spawn_selection::Heightmap;
 use crate::blocks::{BlockFacts, Fluid};
+use mod_api::__private::{SpawnPlacementDeclaration, game::CallbackOwner};
 pub use mod_api::entity::mobs::PathComputationType;
+use mod_api::{
+    EntityTypeKey, SpawnPlacementOperation, SpawnPlacementPredicate, SpawnPlacementType,
+};
+use serde::Deserialize;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
-    fs,
+    collections::{HashMap, hash_map::Entry},
     path::Path,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
 };
 use sunrise_assets::resource_source::ResourceRoot;
 use sunrise_world::registry::BlockStateId;
@@ -130,13 +137,59 @@ impl PartAnswers<'_> {
         path_bit(kind) as u8
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum Placement {
     OnGround,
     InWater,
     InLava,
     NoRestrictions,
 }
+
+impl From<SpawnPlacementType> for Placement {
+    fn from(placement: SpawnPlacementType) -> Self {
+        match placement {
+            SpawnPlacementType::OnGround => Self::OnGround,
+            SpawnPlacementType::InWater => Self::InWater,
+            SpawnPlacementType::InLava => Self::InLava,
+            _ => Self::NoRestrictions,
+        }
+    }
+}
+
+/// A type's resolved native spawn registrations. Geometry overrides are keyed by
+/// the actual type, not its template species.
+pub struct RegisteredSpawnPlacement {
+    pub(super) kind: EntityTypeKey,
+    placement: Option<Placement>,
+    heightmap: Option<Heightmap>,
+    pub(super) predicates: SpawnPredicates,
+}
+
+pub(super) enum SpawnPredicates {
+    Combined {
+        /// `None` means the original is the vanilla predicate.
+        original: Option<OwnedSpawnPredicate>,
+        or: Vec<OwnedSpawnPredicate>,
+        and: Vec<OwnedSpawnPredicate>,
+    },
+    Replacement(OwnedSpawnPredicate),
+}
+
+pub(super) struct OwnedSpawnPredicate {
+    pub(super) owner: CallbackOwner,
+    pub(super) predicate: Arc<dyn SpawnPlacementPredicate>,
+}
+
+#[derive(Deserialize)]
+struct SpawnRule {
+    placement: Placement,
+    heightmap: String,
+    #[serde(default)]
+    registered: Value,
+}
+
+#[derive(Default)]
 pub struct MobData {
     pub states: Vec<StateData>,
     /// What the mods' block parts made of each state, by state (see [`MobData::resolve_parts`]).
@@ -144,8 +197,10 @@ pub struct MobData {
     pub resolved: std::sync::OnceLock<Vec<ResolvedState>>,
     pub placements: HashMap<String, Placement>,
     /// Each entity type's `SpawnPlacements.getHeightmapType`.
-    pub heightmaps: HashMap<String, String>,
+    pub heightmaps: HashMap<String, Heightmap>,
     pub animations: HashMap<String, Animation>,
+    /// Baked vanilla frame layouts, empty for resources that do not draw.
+    pub frame_models: super::render::BakedFrameModels,
     /// Replaced when the resource packs change (the rest of `MobData` never is).
     pub villager_hats: std::sync::RwLock<super::villager_hats::VillagerHats>,
     /// The packs' custom entity models (OptiFine CEM); replaced when the resource packs change.
@@ -158,64 +213,97 @@ pub struct MobData {
     pub blinks: std::sync::RwLock<sunrise_optifine::blink::Blinks>,
     /// Biome tags (spawns_warm_variant_farm_animals, is_ocean...) by tag id.
     pub biome_tags: HashMap<String, std::collections::HashSet<String>>,
-    /// Entity type tags (`data/*/tags/entity_type`).
-    pub entity_tags: HashMap<String, std::collections::HashSet<String>>,
     /// The villager POI type of every block state (`PoiTypes.forState`),
     /// worked out the first time a villager looks for one.
     pub pois: std::sync::OnceLock<Vec<Option<sunrise_world::poi::PoiType>>>,
-    /// [`MobData::placement`] of each species' entity type (by `Species as
-    /// usize`), worked out the first time a spawn asks.
+    /// The unmodified vanilla placement of each species' entity type (by `Species as usize`),
+    /// worked out the first time a spawn asks.
     pub species_placements: std::sync::OnceLock<Vec<Placement>>,
-    /// The spawn rules mods declared (`RegisterSpawnPlacementsEvent`), by
-    /// entity type id: resolved once at load by [`MobData::register_mod_spawn`],
-    /// empty with no mod. Their placement type and heightmap sit in
-    /// [`MobData::placements`] and [`MobData::heightmaps`] as vanilla's do.
-    pub mod_spawns: HashMap<String, mod_api::SpawnPlacementRule>,
+    /// Spawn predicates registered by mods, resolved once at load, by entity type id.
+    pub mod_spawns: HashMap<String, RegisteredSpawnPlacement>,
+    /// Entity type IDs with a vanilla spawn placement, before mod registration.
+    /// `None` means the original membership has not been captured.
+    pub vanilla_spawn_placements: Option<std::collections::HashSet<String>>,
 }
 impl MobData {
-    pub fn load(root: &ResourceRoot, facts: &BlockFacts) -> Self {
+    /// Loads the shared rules, plus presentation data when the game draws.
+    pub fn load(root: &ResourceRoot, state_count: usize, draws: bool) -> crate::Result<Self> {
         let source = root.source();
         let root = root.prepared();
-        let parsed: Option<Value> = fs::read(root.join("mob-data.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok());
-        let mut data = match parsed {
-            Some(v)
-                if v["states"]
-                    .as_array()
-                    .is_some_and(|a| a.len() == facts.states.len()) =>
-            {
-                Self::from_json(&v)
-            }
-            _ => Self::fallback(facts),
+        #[derive(Deserialize)]
+        struct Rules {
+            states: Vec<(String, u16, f32)>,
+            placements: HashMap<String, SpawnRule>,
+        }
+        let path = root.join("mob-data.json");
+        let rules: Rules = sunrise_world::json_file::read(&path)?;
+        if rules.states.len() != state_count {
+            return Err(format!(
+                "{}: expected {state_count} block states, found {}",
+                path.display(),
+                rules.states.len(),
+            )
+            .into());
+        }
+        let mut data = Self {
+            states: rules
+                .states
+                .into_iter()
+                .map(|(path, flags, top)| StateData {
+                    path: PathType::from_name(&path),
+                    flags,
+                    top,
+                })
+                .collect(),
+            ..Self::default()
         };
+        data.install_vanilla_placements(rules.placements);
         data.biome_tags = crate::items::load_tags(
             root,
             "worldgen/biome",
             &sunrise_world::loot::PackOverlay::NONE,
         )
         .unwrap_or_default();
-        data.entity_tags =
-            crate::items::load_tags(root, "entity_type", &sunrise_world::loot::PackOverlay::NONE)
-                .unwrap_or_default();
-        data.villager_hats =
-            std::sync::RwLock::new(super::villager_hats::VillagerHats::load(source));
-        let random = sunrise_optifine::random_textures::RandomTextures::scan(source);
-        let blinks = sunrise_optifine::blink::Blinks::scan(source, &random);
-        let mut emissive = sunrise_optifine::emissive::Emissive::scan(source, &random);
-        emissive.pair_beside(source, blinks.files());
-        data.emissive = std::sync::RwLock::new(std::sync::Arc::new(emissive));
-        data.blinks = std::sync::RwLock::new(blinks);
-        data.random_textures = std::sync::RwLock::new(random);
-        data
+        if draws {
+            data.animations = Self::load_animations(root)?;
+            data.villager_hats =
+                std::sync::RwLock::new(super::villager_hats::VillagerHats::load(source));
+            let random = sunrise_optifine::random_textures::RandomTextures::scan(source);
+            let blinks = sunrise_optifine::blink::Blinks::scan(source, &random);
+            let mut emissive = sunrise_optifine::emissive::Emissive::scan(source, &random);
+            emissive.pair_beside(source, blinks.files());
+            data.emissive = std::sync::RwLock::new(std::sync::Arc::new(emissive));
+            data.blinks = std::sync::RwLock::new(blinks);
+            data.random_textures = std::sync::RwLock::new(random);
+        }
+        Ok(data)
     }
-    /// Only the keyframe animation definitions of `mob-data.json`.
-    pub fn load_animations(root: &Path) -> HashMap<String, Animation> {
-        fs::read(root.join("mob-data.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-            .map(|v| Self::from_json(&v).animations)
-            .unwrap_or_default()
+    fn install_vanilla_placements(&mut self, rules: HashMap<String, SpawnRule>) {
+        let mut registered = Some(std::collections::HashSet::new());
+        for (id, rule) in rules {
+            match (registered.as_mut(), rule.registered.as_bool()) {
+                (Some(membership), Some(true)) => {
+                    membership.insert(id.clone());
+                }
+                (_, None) => registered = None,
+                _ => {}
+            }
+            if let Some(heightmap) = Heightmap::from_name(&rule.heightmap) {
+                self.heightmaps.insert(id.clone(), heightmap);
+            }
+            self.placements.insert(id, rule.placement);
+        }
+        self.vanilla_spawn_placements = registered;
+    }
+
+    /// Only the client jar's keyframe animation definitions.
+    pub fn load_animations(root: &Path) -> std::io::Result<HashMap<String, Animation>> {
+        let definitions: HashMap<String, Value> =
+            sunrise_world::json_file::read(&root.join("mob-animations.json"))?;
+        Ok(definitions
+            .into_iter()
+            .map(|(k, a)| (k, Animation::parse(&a)))
+            .collect())
     }
     fn resolved_state(&self, state: BlockStateId) -> Option<&ResolvedState> {
         self.resolved
@@ -270,68 +358,8 @@ impl MobData {
             slot.path.store(path as u8, Ordering::Relaxed);
         }
     }
-    pub fn entity_has(&self, tag: &str, entity: &str) -> bool {
-        self.entity_tags
-            .get(tag)
-            .is_some_and(|s| s.contains(entity))
-    }
     pub fn biome_has(&self, tag: &str, biome: &str) -> bool {
         self.biome_tags.get(tag).is_some_and(|s| s.contains(biome))
-    }
-    fn from_json(v: &Value) -> Self {
-        let states = v["states"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|s| StateData {
-                path: PathType::from_name(s[0].as_str().unwrap_or("BLOCKED")),
-                flags: s[1].as_u64().unwrap_or(0) as u16,
-                top: s[2].as_f64().unwrap_or(0.0) as f32,
-            })
-            .collect();
-        let placements = v["placements"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, p)| {
-                let placement = match p["placement"].as_str() {
-                    Some("on_ground") => Placement::OnGround,
-                    Some("in_water") => Placement::InWater,
-                    Some("in_lava") => Placement::InLava,
-                    _ => Placement::NoRestrictions,
-                };
-                (k.clone(), placement)
-            })
-            .collect();
-        let heightmaps = v["placements"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(k, p)| Some((k.clone(), p["heightmap"].as_str()?.to_owned())))
-            .collect();
-        let animations = v["animations"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, a)| (k.clone(), Animation::parse(a)))
-            .collect();
-        Self {
-            resolved: Default::default(),
-            states,
-            placements,
-            heightmaps,
-            animations,
-            villager_hats: Default::default(),
-            cem: Default::default(),
-            random_textures: Default::default(),
-            emissive: Default::default(),
-            blinks: Default::default(),
-            biome_tags: HashMap::new(),
-            entity_tags: HashMap::new(),
-            pois: Default::default(),
-            species_placements: Default::default(),
-            mod_spawns: Default::default(),
-        }
     }
     /// Without the export, approximate path types from the gameplay facts.
     pub fn fallback(facts: &BlockFacts) -> Self {
@@ -379,21 +407,8 @@ impl MobData {
             })
             .collect();
         Self {
-            resolved: Default::default(),
             states,
-            placements: HashMap::new(),
-            heightmaps: HashMap::new(),
-            animations: HashMap::new(),
-            villager_hats: Default::default(),
-            cem: Default::default(),
-            random_textures: Default::default(),
-            emissive: Default::default(),
-            blinks: Default::default(),
-            biome_tags: HashMap::new(),
-            entity_tags: HashMap::new(),
-            pois: Default::default(),
-            species_placements: Default::default(),
-            mod_spawns: Default::default(),
+            ..Self::default()
         }
     }
     pub fn state(&self, id: BlockStateId) -> StateData {
@@ -407,48 +422,119 @@ impl MobData {
             })
     }
     /// `SpawnPlacements.getHeightmapType` (MOTION_BLOCKING_NO_LEAVES unless registered).
-    pub fn heightmap(&self, entity: &str) -> &str {
-        self.heightmaps
+    pub fn heightmap(&self, entity: &str) -> Heightmap {
+        self.mod_spawns
             .get(entity)
-            .map_or("MOTION_BLOCKING_NO_LEAVES", String::as_str)
+            .and_then(|row| row.heightmap)
+            .or_else(|| self.heightmaps.get(entity).copied())
+            .unwrap_or(Heightmap::MotionBlockingNoLeaves)
     }
     pub fn placement(&self, entity: &str) -> Placement {
+        self.mod_spawns
+            .get(entity)
+            .and_then(|row| row.placement)
+            .unwrap_or_else(|| self.vanilla_placement(entity))
+    }
+    fn vanilla_placement(&self, entity: &str) -> Placement {
         self.placements
             .get(entity)
             .copied()
             .unwrap_or(Placement::OnGround)
     }
-    /// `SpawnPlacements.isSpawnPositionOk`'s placement type for `entity`, a type
-    /// of species `s`: a mod type's declared one, else the species'.
+    /// `SpawnPlacements.isSpawnPositionOk` uses the type's own override, if any,
+    /// before the usual placement of its species.
     pub fn entity_placement(&self, entity: &str, s: super::Species) -> Placement {
-        if self.mod_spawns.contains_key(entity) {
-            self.placement(entity)
-        } else {
-            self.species_placement(s)
+        self.mod_spawns
+            .get(entity)
+            .and_then(|row| row.placement)
+            .unwrap_or_else(|| self.species_placement(s))
+    }
+    /// Resolve the ordered registrations against loaded entity types. Neither the
+    /// predicates nor their geometry overrides are published if any row is refused.
+    pub fn install_spawn_placements(
+        &mut self,
+        declarations: &[SpawnPlacementDeclaration],
+        is_loaded: impl Fn(&str) -> bool,
+    ) -> Result<(), String> {
+        let mut installed = HashMap::new();
+        if let Some(first) = declarations.first() {
+            let Some(vanilla) = &self.vanilla_spawn_placements else {
+                return Err(format!(
+                    "mod {} spawn placement for {}: prepare resources to load vanilla spawn placement membership",
+                    first.mod_id, first.id
+                ));
+            };
+            for d in declarations {
+                let refuse = |reason: &str| {
+                    format!("mod {} spawn placement for {}: {reason}", d.mod_id, d.id)
+                };
+                let bind = || OwnedSpawnPredicate {
+                    owner: CallbackOwner::for_mod(d.mod_id),
+                    predicate: d.predicate.clone(),
+                };
+                let row = match installed.entry(d.id.clone()) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        if !is_loaded(&d.id) {
+                            return Err(refuse("no such loaded entity type"));
+                        }
+                        let is_vanilla = vanilla.contains(&d.id);
+                        let (placement, heightmap, original) = if is_vanilla {
+                            (None, None, None)
+                        } else {
+                            let (Some(placement), Some(heightmap)) = (d.placement, d.heightmap)
+                            else {
+                                return Err(refuse(
+                                    "the first registration needs both a placement and a heightmap",
+                                ));
+                            };
+                            (Some(placement.into()), Some(heightmap.into()), Some(bind()))
+                        };
+                        let row = entry.insert(RegisteredSpawnPlacement {
+                            kind: d.kind,
+                            placement,
+                            heightmap,
+                            predicates: SpawnPredicates::Combined {
+                                original,
+                                or: Vec::new(),
+                                and: Vec::new(),
+                            },
+                        });
+                        if !is_vanilla {
+                            continue;
+                        }
+                        row
+                    }
+                };
+                match d.operation {
+                    SpawnPlacementOperation::Replace => {
+                        row.placement = d.placement.map(Placement::from).or(row.placement);
+                        row.heightmap = d.heightmap.map(Heightmap::from).or(row.heightmap);
+                        row.predicates = SpawnPredicates::Replacement(bind());
+                    }
+                    op @ (SpawnPlacementOperation::And | SpawnPlacementOperation::Or) => {
+                        if d.placement.is_some() || d.heightmap.is_some() {
+                            return Err(refuse(
+                                "only Replace may supply placement or heightmap for an existing entry",
+                            ));
+                        }
+                        if let SpawnPredicates::Combined { or, and, .. } = &mut row.predicates {
+                            let predicates = if op == SpawnPlacementOperation::Or {
+                                or
+                            } else {
+                                and
+                            };
+                            predicates.push(bind());
+                        }
+                    }
+                }
+            }
         }
+        self.mod_spawns = installed;
+        Ok(())
     }
-    /// Take a mod's spawn rule for its entity type `id` (`SpawnPlacements.register`).
-    pub fn register_mod_spawn(&mut self, id: &str, rule: &mod_api::SpawnPlacementRule) {
-        use mod_api::Heightmap as H;
-        use mod_api::SpawnPlacementType as T;
-        let placement = match rule.placement {
-            T::OnGround => Placement::OnGround,
-            T::InWater => Placement::InWater,
-            T::InLava => Placement::InLava,
-            _ => Placement::NoRestrictions,
-        };
-        let heightmap = match rule.heightmap {
-            H::WorldSurface => "WORLD_SURFACE",
-            H::MotionBlocking => "MOTION_BLOCKING",
-            H::OceanFloor => "OCEAN_FLOOR",
-            _ => "MOTION_BLOCKING_NO_LEAVES",
-        };
-        self.placements.insert(id.to_owned(), placement);
-        self.heightmaps.insert(id.to_owned(), heightmap.to_owned());
-        self.mod_spawns.insert(id.to_owned(), rule.clone());
-    }
-    /// [`MobData::placement`] of the species' entity type, without building
-    /// its id: natural spawning asks it for every position it tries.
+    /// The unmodified vanilla placement of a species' entity type, without building
+    /// its id for each position.
     pub fn species_placement(&self, s: super::Species) -> Placement {
         let table = self.species_placements.get_or_init(|| {
             let defs = super::species::ALL;
@@ -460,12 +546,13 @@ impl MobData {
             let mut table = vec![Placement::OnGround; len];
             // `species::def` takes a species' first definition: so does this.
             for d in defs.iter().rev() {
-                table[d.species as usize] = self.placement(&format!("minecraft:{}", d.name));
+                table[d.species as usize] =
+                    self.vanilla_placement(&format!("minecraft:{}", d.name));
             }
             table
         });
         table.get(s as usize).copied().unwrap_or_else(|| {
-            self.placement(&format!("minecraft:{}", super::species::def(s).name))
+            self.vanilla_placement(&format!("minecraft:{}", super::species::def(s).name))
         })
     }
 }
@@ -473,3 +560,82 @@ impl MobData {
 #[cfg(test)]
 #[path = "path_type_tests.rs"]
 mod path_type_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_loads_exported_mob_rules_without_client_assets() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = ResourceRoot::directory(folder.path().to_path_buf());
+        let rules = folder.path().join("mob-data.json");
+        std::fs::write(
+            &rules,
+            r#"{
+            "states": [["WATER", 2, 0.25]],
+            "placements": {"minecraft:squid": {"placement": "in_water", "heightmap": "OCEAN_FLOOR"}}
+        }"#,
+        )
+        .unwrap();
+        let mobs = MobData::load(&root, 1, false).unwrap();
+        let state = BlockStateId(0);
+        assert_eq!(mobs.path_type(state), PathType::Water);
+        assert!(mobs.pathfindable(state, PathComputationType::Water));
+        assert_eq!(mobs.state(state).top, 0.25);
+        assert_eq!(mobs.placement("minecraft:squid"), Placement::InWater);
+        assert_eq!(mobs.heightmap("minecraft:squid"), Heightmap::OceanFloor);
+        assert!(mobs.animations.is_empty());
+        assert!(MobData::load(&root, 1, true).is_err());
+        assert!(MobData::load(&root, 2, false).is_err());
+        std::fs::remove_file(rules).unwrap();
+        assert!(MobData::load(&root, 1, false).is_err());
+    }
+
+    #[test]
+    fn vanilla_spawn_placement_membership_requires_complete_metadata() {
+        use serde_json::json;
+        use std::collections::HashSet;
+
+        let folder = tempfile::tempdir().unwrap();
+        let root = ResourceRoot::directory(folder.path().to_path_buf());
+        let rules = folder.path().join("mob-data.json");
+        let load_membership = |export: &serde_json::Value| {
+            std::fs::write(&rules, export.to_string()).unwrap();
+            MobData::load(&root, 0, false)
+                .unwrap()
+                .vanilla_spawn_placements
+        };
+        let mut export = json!({
+            "states": [],
+            "placements": {
+                "minecraft:shulker": {
+                    "placement": "no_restrictions",
+                    "heightmap": "MOTION_BLOCKING_NO_LEAVES",
+                    "registered": true
+                },
+                "minecraft:player": {
+                    "placement": "no_restrictions",
+                    "heightmap": "MOTION_BLOCKING_NO_LEAVES",
+                    "registered": false
+                }
+            }
+        });
+        assert_eq!(
+            load_membership(&export),
+            Some(HashSet::from(["minecraft:shulker".to_owned()]))
+        );
+
+        export["placements"]["minecraft:player"]["registered"] = json!("false");
+        assert_eq!(load_membership(&export), None);
+        export["placements"]["minecraft:player"]
+            .as_object_mut()
+            .unwrap()
+            .remove("registered");
+        assert_eq!(load_membership(&export), None);
+        assert_eq!(
+            load_membership(&json!({"states": [], "placements": {}})),
+            Some(HashSet::new())
+        );
+    }
+}

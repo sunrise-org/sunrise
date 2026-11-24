@@ -91,26 +91,21 @@ impl OwnedHeap for sunrise_core::nbt::Tag {
         }
     }
 }
+impl OwnedHeap for sunrise_core::nbt::Compound {
+    fn owned_heap_bytes(&self) -> usize {
+        self.iter().fold(self.storage_bytes(), |sum, (key, value)| {
+            sum.saturating_add(key.owned_heap_bytes())
+                .saturating_add(value.owned_heap_bytes())
+        })
+    }
+}
 impl<K: OwnedHeap, V: OwnedHeap> OwnedHeap for BTreeMap<K, V> {
     fn owned_heap_bytes(&self) -> usize {
-        // Audited Rust 1.99.1 alloc/collections/btree/node.rs: B=6, capacity=11,
-        // non-root minimum=5, leaf header=(parent pointer,u16 index,u16 len),
-        // internal nodes add 12 child pointers. Charge every node as internal.
-        // At most 1 + len/5 nodes, including a possibly retained empty root.
-        // Eight alignment gaps bound both layouts regardless of Rust field ordering.
-        let align = align_of::<K>()
-            .max(align_of::<V>())
-            .max(align_of::<usize>());
-        let node = 13usize
-            .saturating_mul(size_of::<usize>())
-            .saturating_add(4)
-            .saturating_add(11usize.saturating_mul(size_of::<K>().saturating_add(size_of::<V>())))
-            .saturating_add(8usize.saturating_mul(align - 1));
-        self.iter()
-            .fold((1 + self.len() / 5).saturating_mul(node), |sum, (k, v)| {
-                sum.saturating_add(k.owned_heap_bytes())
-                    .saturating_add(v.owned_heap_bytes())
-            })
+        let nodes = sunrise_mod_runtime::byte_channel::btree_node_bytes::<K, V>(self.len());
+        self.iter().fold(nodes, |sum, (k, v)| {
+            sum.saturating_add(k.owned_heap_bytes())
+                .saturating_add(v.owned_heap_bytes())
+        })
     }
 }
 

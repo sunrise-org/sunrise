@@ -10,15 +10,16 @@ use crate::{
     Result,
     bidi::visual,
     block_entity_anim::{self, EnchantingBook},
+    block_entity_reach::Reach,
     breaking::entity_geometry,
     fast_hash::FxHashMap,
-    font::{Font, Glyph},
+    font::{Font, Glyph, INLINE_OBJECT_SIZE},
     gfx::mark_oit,
     hud::Rect,
     mesher::{CULL_BACK, Vertex, cull_back},
     models::load_visibility,
     signs::{self, SignData, SignText},
-    text::{Style, Text},
+    text::{InlineObject, Style, Text},
     world::World,
 };
 use glam::{DVec3, Mat4, Quat, Vec3};
@@ -643,16 +644,29 @@ fn first_line(line: &Text, max_width: f32, advance: &dyn Fn(char, &Style) -> f32
     line.clone()
 }
 
-/// `AbstractSignRenderer.isOutlineVisible`: the camera within 16 blocks of
-/// the sign's centre.
-fn sign_text_near(pos: [i32; 3], camera: DVec3) -> bool {
-    DVec3::new(
-        f64::from(pos[0]) + 0.5,
-        f64::from(pos[1]) + 0.5,
-        f64::from(pos[2]) + 0.5,
-    )
-    .distance_squared(camera)
-        < 256.0
+/// Camera inputs for drawing glowing sign outlines, independent of the frame's view.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum SignOutline {
+    #[default]
+    None,
+    FirstPersonScope,
+    /// The camera entity's current base position, not its visual eye or render position.
+    CameraEntity(DVec3),
+}
+
+impl SignOutline {
+    /// `AbstractSignRenderer.isOutlineVisible`: first-person scoping or a camera entity
+    /// strictly within 16 blocks of the sign's centre.
+    fn visible(self, pos: [i32; 3]) -> bool {
+        match self {
+            Self::None => false,
+            Self::FirstPersonScope => true,
+            Self::CameraEntity(position) => {
+                let center = DVec3::from_array(pos.map(|axis| f64::from(axis) + 0.5));
+                position.distance_squared(center) < 16.0 * 16.0
+            }
+        }
+    }
 }
 
 /// `AbstractSignRenderer.submitSignText`: four centred lines, glowing text
@@ -665,7 +679,7 @@ fn sign_text_calls(
     text: &SignText,
     m: Mat4,
     packed: u8,
-    near: bool,
+    draw_outline: bool,
 ) -> Vec<TextCall> {
     let line_height = data.line_height();
     let midpoint = (4.0 * line_height / 2.0).floor();
@@ -674,25 +688,33 @@ fn sign_text_calls(
         let c = text.text_color();
         (
             0xFF00_0000 | c,
-            if c == 0 || near { dark } else { 0 },
+            if c == 0 || draw_outline { dark } else { 0 },
             240 | 240 << 8,
             crate::mesher::LOW,
         )
     } else {
         (dark, 0, vertex_light(packed), 0)
     };
-    let advance = |c: char, style: &Style| {
-        let g = scene
-            .font
-            .map_or_else(|| (scene.glyph)(c), |f| f.glyph_styled(c, style));
-        g.advance + if style.is_bold() { g.offset } else { 0.0 }
-    };
     let mut calls: Vec<TextCall> = Vec::with_capacity(text.lines.len());
     for i in 0..text.lines.len() {
         // The line that fits, in the order it is drawn (getVisualOrder).
         let line = text.line_text(i);
+        let substituted = scene
+            .inline_images
+            .as_ref()
+            .and_then(|images| (images.substitute)(&line));
+        let line = substituted.as_ref().unwrap_or(&line);
+        let advance = |c: char, style: &Style| {
+            if substituted.is_some() && c == '\u{fffc}' && style.inline_object.is_some() {
+                return INLINE_OBJECT_SIZE;
+            }
+            let g = scene
+                .font
+                .map_or_else(|| (scene.glyph)(c), |f| f.glyph_styled(c, style));
+            g.advance + if style.is_bold() { g.offset } else { 0.0 }
+        };
         let shown = if let Some(font) = scene.font {
-            font.split_formatted(&line, data.max_line_width())
+            font.split_formatted(line, data.max_line_width())
                 .into_iter()
                 .next()
                 .unwrap_or_default()
@@ -712,15 +734,30 @@ fn sign_text_calls(
         let first = calls.len();
         let mut pen = 0.0;
         for span in shown.spans.iter().filter(|s| !s.text.is_empty()) {
+            let inline_sprite = scene.inline_images.as_ref().and_then(|images| {
+                substituted.as_ref()?;
+                match &span.style.inline_object {
+                    Some(InlineObject::Atlas { atlas, sprite, .. }) => {
+                        (images.sprite)(atlas, sprite)
+                    }
+                    _ => None,
+                }
+            });
+            let base_color = if inline_sprite.is_some() {
+                0xFFFF_FFFF
+            } else {
+                color
+            };
             let run = span
                 .style
                 .color
-                .map_or(color, |rgb| 0xFF00_0000 | (rgb & 0xFF_FFFF));
+                .map_or(base_color, |rgb| 0xFF00_0000 | (rgb & 0xFF_FFFF));
             calls.push(TextCall {
                 matrix: m,
                 x: x + pen,
                 y,
                 text: span.text.clone(),
+                inline_sprite,
                 style: span.style.clone(),
                 color: run,
                 outline,
@@ -740,6 +777,7 @@ fn sign_text_calls(
                 x,
                 y,
                 text: String::new(),
+                inline_sprite: None,
                 style: Style::default(),
                 color,
                 outline,
@@ -762,18 +800,8 @@ fn sign_text_animated(data: &SignData) -> bool {
     })
 }
 
-/// How far the text of an outlined call sits in front of its outline, in
-/// text units (`Font.DisplayMode.POLYGON_OFFSET`, see `draw_text`).
-pub const TEXT_OVER_OUTLINE: f32 = 0.05;
-
-/// Draws a text call with the font atlas: 8x8 glyph cells, the outline as
-/// eight one-pixel offsets under the text.
-///
-/// `TextFeatureRenderer.renderText` draws the outline glyphs NORMAL and the
-/// text over them POLYGON_OFFSET, so the coplanar text always wins the depth
-/// test. Here both share one mesh, so the text is lifted a hair towards the
-/// reader instead (a twentieth of a font pixel, invisible) rather than
-/// z-fighting with the outline under it.
+/// Draws a text call with the font atlas: eight one-pixel offsets under
+/// an outlined glyph, with the underlying text geometry unchanged.
 fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
     let glyph = |c| {
         let Some(font) = scene.font else {
@@ -800,7 +828,7 @@ pub fn push_text(
     out: &mut Vec<Vertex>,
 ) {
     let bold = call.style.is_bold();
-    let mut quad = |corners: [(f32, f32); 4], cell: Rect, z: f32, argb: u32| {
+    let mut quad = |corners: [(f32, f32); 4], cell: Rect, z: f32, argb: u32, overlay: u32| {
         let uvs = [
             [cell.u0, cell.v1],
             [cell.u1, cell.v1],
@@ -813,14 +841,43 @@ pub fn push_text(
                 normal: [0; 4],
                 pos: call.matrix.transform_point3(Vec3::new(x, y, z)).to_array(),
                 uv,
-                layer: u32::from(call.tier) << 16,
+                layer: u32::from(call.tier) << 16 | overlay,
                 color,
                 light: call.light,
                 glint_uv: [0.0; 2],
             });
         }
     };
-    let mut emit = |dx: f32, dy: f32, z: f32, argb: u32, outline: bool| {
+    let mut emit = |dx: f32, dy: f32, argb: u32, outline: bool| {
+        if let Some(sprite) = call.inline_sprite {
+            // The outline is the text's: an image draws once.
+            if outline {
+                return;
+            }
+            let mut x = call.x + dx;
+            let y = call.y + dy - 1.0;
+            let bottom = y + INLINE_OBJECT_SIZE;
+            // Visual ordering can coalesce neighbouring objects of the same style.
+            for _ in call.text.chars() {
+                let right = x + INLINE_OBJECT_SIZE;
+                quad(
+                    [(x, bottom), (right, bottom), (right, y), (x, y)],
+                    sprite,
+                    0.0,
+                    argb,
+                    crate::gfx::TEXT_POLYGON_OFFSET_SOLID_OVERLAY,
+                );
+                x = right;
+            }
+            return;
+        }
+        // `AbstractSignRenderer.submitSignText` submits every face as POLYGON_OFFSET.
+        // `TextFeatureRenderer.renderText` uses NORMAL only for the outline copies.
+        let overlay = if outline {
+            crate::gfx::TEXT_NORMAL_SOLID_OVERLAY
+        } else {
+            crate::gfx::TEXT_POLYGON_OFFSET_SOLID_OVERLAY
+        };
         let mut pen = call.x;
         for (i, ch) in call.text.chars().enumerate() {
             let g = glyph(ch);
@@ -849,8 +906,9 @@ pub fn push_text(
                             (x0 + shear(g.top), top),
                         ],
                         cell,
-                        z + copy as f32 * 0.001,
+                        copy as f32 * 0.001,
                         argb,
+                        overlay,
                     );
                 }
             }
@@ -871,8 +929,9 @@ pub fn push_text(
                                 (x0, y + top),
                             ],
                             white,
-                            z + 0.01,
+                            0.01,
                             argb,
+                            overlay,
                         );
                     }
                 }
@@ -884,22 +943,12 @@ pub fn push_text(
         for dx in -1..=1 {
             for dy in -1..=1 {
                 if dx != 0 || dy != 0 {
-                    emit(dx as f32, dy as f32, 0.0, call.outline, true);
+                    emit(dx as f32, dy as f32, call.outline, true);
                 }
             }
         }
     }
-    emit(
-        0.0,
-        0.0,
-        if call.outline != 0 {
-            TEXT_OVER_OUTLINE
-        } else {
-            0.0
-        },
-        call.color,
-        false,
-    );
+    emit(0.0, 0.0, call.color, false);
 }
 
 /// Block-entity fields the level ticks, at one position (vanilla's own field
@@ -932,6 +981,8 @@ pub struct TextCall {
     pub x: f32,
     pub y: f32,
     pub text: String,
+    /// When set, this call is one inline image instead of a font glyph run.
+    pub inline_sprite: Option<Rect>,
     pub style: Style,
     /// ARGB.
     pub color: u32,
@@ -951,6 +1002,7 @@ impl TextCall {
             x: self.x,
             y: self.y,
             text: &self.text,
+            inline_sprite: self.inline_sprite,
             style: &self.style,
             color: self.color,
             outline: self.outline,
@@ -968,6 +1020,8 @@ pub struct TextRun<'a> {
     pub x: f32,
     pub y: f32,
     pub text: &'a str,
+    /// Inline atlas glyph in place of the text, with the same tint as the run.
+    pub inline_sprite: Option<Rect>,
     pub style: &'a Style,
     /// ARGB.
     pub color: u32,
@@ -979,9 +1033,19 @@ pub struct TextRun<'a> {
     pub tier: u8,
 }
 
+/// Optional presentation for sign lines, with the resource, sprite and listener revisions
+/// that invalidate cached text vertices.
+pub struct SignInlineImages<'a> {
+    pub revision: [u64; 3],
+    pub substitute: &'a dyn Fn(&Text) -> Option<Text>,
+    /// The sprite of an inline atlas object (`atlas`, `sprite`), as the HUD atlas resolves it for chat.
+    pub sprite: &'a dyn Fn(&str, &str) -> Option<Rect>,
+}
+
 /// Inputs from the game for one frame of block-entity rendering.
 pub struct Scene<'a> {
     pub camera: DVec3,
+    pub sign_outline: SignOutline,
     /// `Camera.rotation` (conduit eyes face the camera).
     pub orientation: Quat,
     /// Ticked block-entity state at a position.
@@ -1007,6 +1071,7 @@ pub struct Scene<'a> {
     pub lid: &'a dyn Fn([i32; 3]) -> f32,
     /// Sign block-entity data at a position.
     pub sign: &'a dyn Fn([i32; 3]) -> Option<&'a SignData>,
+    pub inline_images: Option<SignInlineImages<'a>>,
     /// Banner layers at a position: pattern texture and RGB tint, bottom first.
     pub banner: &'a dyn Fn([i32; 3]) -> Vec<(String, u32)>,
     /// The skin sprite a `player_head` shows at a position (`SkullBlockRenderer`
@@ -1172,9 +1237,10 @@ struct SignTextEntry {
     state: u32,
     data: SignData,
     packed: u8,
-    /// Within the glowing text outline's distance (only kept for glowing text).
-    near: bool,
+    /// Whether camera state makes glowing text draw its outline.
+    draw_outline: bool,
     glyphs: u64,
+    inline_images: Option<[u64; 3]>,
     /// Game time it was last drawn.
     used: i64,
     vertices: Vec<Vertex>,
@@ -1479,8 +1545,6 @@ const MODELS: [(&str, &str); 27] = [
     ),
     ("copper_golem_star", "minecraft:copper_golem_star#main"),
 ];
-/// `BlockEntityRenderer.getViewDistance` default.
-const VIEW_DISTANCE: f64 = 64.0;
 
 impl BlockEntityRenderer {
     pub fn load(
@@ -2057,18 +2121,13 @@ impl BlockEntityRenderer {
                 if cache_only && !static_candidate(kind, options) {
                     break 'draw;
                 }
-                let center = DVec3::new(
-                    f64::from(pos[0]) + 0.5,
-                    f64::from(pos[1]) + 0.5,
-                    f64::from(pos[2]) + 0.5,
-                );
-                // BlockEntityRenderer.getViewDistance: 256 for End gateways.
-                let distance = if matches!(kind, Kind::EndGateway { .. }) {
-                    256.0
+                // Neither reach drawn here depends on the render distance.
+                let reach = if matches!(kind, Kind::EndGateway { .. }) {
+                    Reach::EndGateway
                 } else {
-                    VIEW_DISTANCE
+                    Reach::Default
                 };
-                if center.distance_squared(scene.camera) > distance * distance {
+                if !reach.should_render(pos, scene.camera, 0) {
                     break 'draw;
                 }
                 let local = static_local_index(pos, section_min_y);
@@ -2487,7 +2546,10 @@ impl BlockEntityRenderer {
         let Some(data) = (scene.sign)(pos) else {
             return;
         };
-        let near = (data.front.glowing || data.back.glowing) && sign_text_near(pos, scene.camera);
+        let draw_outline = [&data.front, &data.back]
+            .into_iter()
+            .any(|side| side.glowing && side.text_color() != 0 && !side.is_empty())
+            && scene.sign_outline.visible(pos);
         let Ok(mut cache) = self.sign_texts.lock() else {
             return;
         };
@@ -2499,13 +2561,15 @@ impl BlockEntityRenderer {
                 .retain(|_, e| (now - SIGN_TEXT_KEEP..=now).contains(&e.used));
         }
         let glyphs = scene.glyphs;
+        let inline_images = scene.inline_images.as_ref().map(|images| images.revision);
         let signs = &mut cache.signs;
         let entry = match signs.entry(pos) {
             std::collections::hash_map::Entry::Occupied(mut occupied) => {
                 let entry = occupied.get_mut();
                 let changed = entry.data != *data;
-                if (entry.state, entry.packed, entry.near, entry.glyphs)
-                    != (state, packed, near, glyphs)
+                if (entry.state, entry.packed, entry.draw_outline, entry.glyphs)
+                    != (state, packed, draw_outline, glyphs)
+                    || entry.inline_images != inline_images
                     || changed
                     || entry.animated
                 {
@@ -2527,8 +2591,9 @@ impl BlockEntityRenderer {
                         entry.data.clone_from(data);
                     }
                     entry.packed = packed;
-                    entry.near = near;
+                    entry.draw_outline = draw_outline;
                     entry.glyphs = glyphs;
+                    entry.inline_images = inline_images;
                 }
                 occupied.into_mut()
             }
@@ -2550,8 +2615,9 @@ impl BlockEntityRenderer {
                     state,
                     data: data.clone(),
                     packed,
-                    near,
+                    draw_outline,
                     glyphs,
+                    inline_images,
                     used: now,
                     vertices,
                 })
@@ -2785,6 +2851,7 @@ impl BlockEntityRenderer {
                 let Some(data) = (scene.sign)(pos) else {
                     return;
                 };
+                let draw_outline = scene.sign_outline.visible(pos);
                 let s = Vec3::new(1.0, -1.0, 1.0);
                 for (front, text) in [(true, &data.front), (false, &data.back)] {
                     if text.is_empty() {
@@ -2814,8 +2881,7 @@ impl BlockEntityRenderer {
                         m *= Mat4::from_translation(Vec3::new(0.0, 1.0 / 3.0, 0.046_666_667))
                             * Mat4::from_scale(s * 0.010_416_667);
                     }
-                    let near = sign_text_near(pos, scene.camera);
-                    let calls = sign_text_calls(scene, data, text, m, packed, near);
+                    let calls = sign_text_calls(scene, data, text, m, packed, draw_outline);
                     match scene.texts {
                         Some(sink) => sink.borrow_mut().extend(calls),
                         None => calls.iter().for_each(|c| draw_text(scene, c, out)),
@@ -3777,6 +3843,7 @@ mod tests {
         let cache_lid = |_| cache_open.get();
         let mut scene = Scene {
             camera: DVec3::ZERO,
+            sign_outline: SignOutline::None,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -3796,6 +3863,7 @@ mod tests {
             glyph: &|_| Glyph::default(),
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         // Compare the cached world path with the original model renderer,
@@ -4146,11 +4214,10 @@ mod tests {
         }
     }
 
-    /// TextFeatureRenderer.renderText: an outlined call's text is drawn over
-    /// its outline (Font.DisplayMode.POLYGON_OFFSET), never level with it,
-    /// and plain text stays on the sign's plane.
+    /// `TextFeatureRenderer.renderText`: the outline does not change the face's depth.
     #[test]
-    fn outlined_sign_text_sits_in_front_of_its_outline() {
+    fn sign_text_faces_use_depth_bias_with_or_without_an_outline() {
+        use crate::gfx::{TEXT_NORMAL_SOLID_OVERLAY, TEXT_POLYGON_OFFSET_SOLID_OVERLAY};
         let world = World::new(BlockStateId(0), 1);
         let sprites = HashMap::new();
         let glyph = |_: char| {
@@ -4172,6 +4239,7 @@ mod tests {
         };
         let scene = Scene {
             camera: DVec3::ZERO,
+            sign_outline: SignOutline::None,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4191,6 +4259,7 @@ mod tests {
             glyph: &glyph,
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         let mut call = TextCall {
@@ -4198,6 +4267,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
             text: "Hi".into(),
+            inline_sprite: None,
             style: Style::default(),
             color: 0xFFFF_FF00,
             outline: 0xFF33_3300,
@@ -4209,17 +4279,23 @@ mod tests {
         // Eight outline copies, then the text, four corners a glyph.
         assert_eq!(out.len(), 9 * 2 * 4);
         let (outline, text) = out.split_at(8 * 2 * 4);
-        let front = outline.iter().map(|v| v.pos[2]).fold(f32::MIN, f32::max);
         assert!(
-            text.iter().all(|v| v.pos[2] > front),
-            "text z {:?} not in front of the outline at {front}",
-            text.iter().map(|v| v.pos[2]).collect::<Vec<_>>()
+            outline
+                .iter()
+                .all(|v| v.pos[2] == 0.0 && v.layer == TEXT_NORMAL_SOLID_OVERLAY)
+        );
+        assert!(
+            text.iter()
+                .all(|v| v.pos[2] == 0.0 && v.layer == TEXT_POLYGON_OFFSET_SOLID_OVERLAY)
         );
         call.outline = 0;
-        out.clear();
-        draw_text(&scene, &call, &mut out);
-        assert_eq!(out.len(), 2 * 4);
-        assert!(out.iter().all(|v| v.pos[2] == 0.0));
+        let mut plain = Vec::new();
+        draw_text(&scene, &call, &mut plain);
+        assert_eq!(plain.len(), 2 * 4);
+        for (plain, outlined) in plain.iter().zip(text) {
+            assert_eq!(plain.pos, outlined.pos);
+            assert_eq!(plain.layer, TEXT_POLYGON_OFFSET_SOLID_OVERLAY);
+        }
     }
 
     /// BakedSheetGlyph draws a glyph over its own box from the pen
@@ -4248,6 +4324,7 @@ mod tests {
         };
         let scene = Scene {
             camera: DVec3::ZERO,
+            sign_outline: SignOutline::None,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4267,6 +4344,7 @@ mod tests {
             glyph: &glyph,
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         let call = TextCall {
@@ -4274,6 +4352,7 @@ mod tests {
             x: 10.0,
             y: 2.0,
             text: "ab".into(),
+            inline_sprite: None,
             style: Style::default(),
             color: 0xFF00_0000,
             outline: 0,
@@ -4322,6 +4401,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
             text: "A ".into(),
+            inline_sprite: None,
             color: 0xff123456,
             outline: 0,
             light: 240,
@@ -4354,7 +4434,9 @@ mod tests {
         // Eight outlines contain glyphs only; effects appear once, in front.
         assert_eq!(out.len(), 8 * 8 + 24);
         assert!((out[0].pos[0] - -1.6).abs() < 1e-6);
-        assert!(out[64..].iter().all(|v| v.pos[2] >= TEXT_OVER_OUTLINE));
+        assert_eq!(out[64].pos[2], 0.0);
+        assert_eq!(out[68].pos[2], 0.001);
+        assert_eq!(out[72].pos[2], 0.01);
         // The glow tier reaches bold copies, outlines and decoration quads.
         assert!(out.iter().all(|v| v.layer >> 16 == 1));
         call.tier = 0;
@@ -4385,6 +4467,7 @@ mod tests {
         };
         let scene = Scene {
             camera: DVec3::ZERO,
+            sign_outline: SignOutline::None,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4404,6 +4487,7 @@ mod tests {
             glyph: &glyph,
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         sign_text_calls(&scene, data, &data.front, Mat4::IDENTITY, 0, near)
@@ -4455,6 +4539,57 @@ mod tests {
                 (String::new(), 0.0, 10.0, 0xFF00_0000, 0),
             ]
         );
+    }
+
+    /// An inline image draws once in the sign face's layer; only glyphs get the eight
+    /// glowing outline copies in the normal depth layer.
+    #[test]
+    fn a_glowing_sign_draws_an_inline_image_once() {
+        use crate::gfx::{TEXT_NORMAL_SOLID_OVERLAY, TEXT_POLYGON_OFFSET_SOLID_OVERLAY};
+
+        let cell = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 8,
+            h: 8,
+        };
+        let call = |text: &str, inline_sprite, outline| TextCall {
+            matrix: Mat4::IDENTITY,
+            x: 0.0,
+            y: 0.0,
+            text: text.into(),
+            inline_sprite,
+            style: Style::default(),
+            color: 0xFFFF_FFFF,
+            outline,
+            light: 0,
+            tier: 0,
+        };
+        let glyph = |_| Glyph {
+            rect: Some(cell),
+            right: 8.0,
+            bottom: 8.0,
+            advance: 6.0,
+            ..Glyph::default()
+        };
+        let layers = |call: &TextCall| {
+            let mut out = Vec::new();
+            push_text(&glyph, None, &call.run(), &mut out);
+            out.into_iter().map(|v| v.layer).collect::<Vec<_>>()
+        };
+        let outline = 0xFF00_0000;
+        let face = [TEXT_POLYGON_OFFSET_SOLID_OVERLAY; 4];
+        let image = |outline| call("\u{fffc}", Some(cell), outline);
+        assert_eq!(layers(&image(0)), face);
+        assert_eq!(layers(&image(outline)), face);
+        let letter = |outline| call("a", None, outline);
+        assert_eq!(layers(&letter(0)), face);
+        let glowing = layers(&letter(outline));
+        assert_eq!(glowing.len(), 36);
+        assert_eq!(glowing[..32], [TEXT_NORMAL_SOLID_OVERLAY; 32]);
+        assert_eq!(glowing[32..], face);
     }
 
     /// A glowing sign's own colour still wins over its dye, and the outline
@@ -4523,7 +4658,15 @@ mod tests {
             sign_cache_enabled: AtomicBool::new(false),
         };
         let world = World::new(BlockStateId(0), 1);
-        let sprites = HashMap::new();
+        let icon = Rect {
+            u0: 0.125,
+            v0: 0.5,
+            u1: 0.25,
+            v1: 0.625,
+            w: 16,
+            h: 16,
+        };
+        let sprites = HashMap::from([("demo:icon".into(), icon)]);
         let text = |line: &str, glowing| SignText {
             lines: [line.into(), "two".into(), String::new(), "four".into()],
             color: 3,
@@ -4570,6 +4713,7 @@ mod tests {
         );
         let mut scene = Scene {
             camera: DVec3::new(3.25, 70.5, -4.75),
+            sign_outline: SignOutline::CameraEntity(DVec3::new(3.25, 70.5, -4.75)),
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4589,6 +4733,7 @@ mod tests {
             glyph: &glyph,
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         let check = |scene: &Scene, pos: [i32; 3], state: u32| {
@@ -4626,6 +4771,7 @@ mod tests {
         scene.sign = &glowing_sign;
         check(&scene, pos, 0);
         scene.camera.z -= 20.0;
+        scene.sign_outline = SignOutline::CameraEntity(scene.camera);
         check(&scene, pos, 0);
         check(&scene, pos, 1);
         check(&scene, other, 1);
@@ -4638,6 +4784,34 @@ mod tests {
         let reads = glyph_reads.get();
         renderer.render(&scene, [(pos, 1)].iter(), &mut vertices);
         assert_eq!(glyph_reads.get(), reads);
+        // Black glowing text has the same geometry even as scope starts and ends.
+        let mut black = text("black", true);
+        black.color = 15;
+        let black = SignData {
+            front: black,
+            ..Default::default()
+        };
+        let black_sign = |_| Some(&black);
+        scene.sign = &black_sign;
+        let far_camera = SignOutline::CameraEntity(scene.camera);
+        scene.sign_outline = far_camera;
+        let mut unscoped = Vec::new();
+        renderer.render(&scene, [(pos, 1)].iter(), &mut unscoped);
+        let reads = glyph_reads.get();
+        for scope in [SignOutline::FirstPersonScope, far_camera] {
+            scene.sign_outline = scope;
+            vertices.clear();
+            renderer.render(&scene, [(pos, 1)].iter(), &mut vertices);
+            assert_eq!(
+                glyph_reads.get(),
+                reads,
+                "scope must not rebuild black-only text"
+            );
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&vertices),
+                bytemuck::cast_slice::<_, u8>(&unscoped)
+            );
+        }
         let animated = SignData {
             front: text("§kSecret", false),
             ..Default::default()
@@ -4648,6 +4822,60 @@ mod tests {
         let reads = glyph_reads.get();
         renderer.render(&scene, [(pos, 0)].iter(), &mut vertices);
         assert!(glyph_reads.get() > reads);
+        // Both faces of either sign kind submit the image through their usual text transforms.
+        let two_faces = SignData {
+            front: text(":icon:", false),
+            back: text(":icon:", false),
+            ..Default::default()
+        };
+        let two_faces_at = |_| Some(&two_faces);
+        let image_reads = std::cell::Cell::new(0);
+        let substitute = |line: &Text| {
+            if line.plain() != ":icon:" {
+                return None;
+            }
+            image_reads.set(image_reads.get() + 1);
+            let mut span = line.spans[0].with_text("\u{fffc}");
+            span.style.inline_object = Some(InlineObject::Atlas {
+                atlas: "minecraft:gui".into(),
+                sprite: "demo:icon".into(),
+                fallback: ":icon:".into(),
+            });
+            Some(Text::from_spans(vec![span]))
+        };
+        scene.sign = &two_faces_at;
+        let icon_sprite = |_: &str, _: &str| Some(icon);
+        for state in 0..2 {
+            scene.inline_images = Some(SignInlineImages {
+                revision: [1, 1, 0],
+                substitute: &substitute,
+                sprite: &icon_sprite,
+            });
+            let reads = image_reads.get();
+            for _ in 0..2 {
+                vertices.clear();
+                renderer.render(&scene, [(pos, state)].iter(), &mut vertices);
+                let images: Vec<_> = vertices
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|q| q[0].uv == [icon.u0, icon.v1])
+                    .collect();
+                assert_eq!(images.len(), 2);
+                assert_ne!(images[0][0].pos, images[1][0].pos);
+                assert!(images.into_iter().flatten().all(|v| v.color == u32::MAX));
+                assert_eq!(image_reads.get(), reads + 2);
+            }
+            scene.inline_images = Some(SignInlineImages {
+                revision: [1, 2, 0],
+                substitute: &|_| None,
+                sprite: &icon_sprite,
+            });
+            vertices.clear();
+            renderer.render(&scene, [(pos, state)].iter(), &mut vertices);
+            assert!(!vertices.iter().any(|v| v.uv[1] == icon.v1));
+        }
+        scene.inline_images = None;
         scene.sign = &first_sign;
         // Signs out of view for a while are dropped.
         scene.game_time = 2 * SIGN_TEXT_KEEP;
@@ -4764,6 +4992,7 @@ mod tests {
         let world = World::new(BlockStateId(0), 1);
         let scene = Scene {
             camera: DVec3::ZERO,
+            sign_outline: SignOutline::None,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4783,6 +5012,7 @@ mod tests {
             glyph: &|_| Glyph::default(),
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         let mut verts = Vec::new();
@@ -4861,6 +5091,7 @@ mod tests {
         let world = World::new(BlockStateId(0), 1);
         let scene = Scene {
             camera: DVec3::ZERO,
+            sign_outline: SignOutline::None,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4880,6 +5111,7 @@ mod tests {
             glyph: &|_| Glyph::default(),
             glyphs: 0,
             font: None,
+            inline_images: None,
             dynamic_visible: None,
         };
         // A closed single chest of `block` drawn by `renderer`: positions and UVs.

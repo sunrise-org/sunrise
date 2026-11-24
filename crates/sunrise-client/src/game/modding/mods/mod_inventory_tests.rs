@@ -8,44 +8,14 @@ struct EmptyCode;
 #[mod_api::__subscriptions]
 impl Hooks for EmptyCode {}
 
-fn selected(fixture: &Fixture, id: &str, code: bool, side: &str) -> SelectedPackage {
-    // The smallest shared group member: `dylink.0` memory info and the two guest exports.
-    let module = [
-        b"\0asm\x01\0\0\0".as_slice(),
-        b"\0\x0f\x08dylink.0\x01\x04\0\0\0\0",
-        b"\x01\x04\x01\x60\0\0",
-        b"\x03\x04\x03\0\0\0",
-        b"\x07\x1d\x02\x0asunrise_in\0\x01\x0csunrise_hook\0\x02",
-        b"\x0a\x0a\x03\x02\0\x0b\x02\0\x0b\x02\0\x0b",
-    ]
-    .concat();
-    let wasm = if code {
-        format!(
-            "\n[wasm]\nsha512='{}'\ntoolchain='fixture'\n",
-            sunrise_mod_package::manifest::sha512_of(&module)
-        )
-    } else {
-        String::new()
-    };
+fn selected(fixture: &Fixture, id: &str, side: &str) -> SelectedPackage {
     let manifest = format!(
-        "id='{id}'\nname='{id}'\nversion='1'\napi='0.2'\nside='{side}'\nnamespaces=['shared_space']\ncapabilities=['registries']\n{wasm}"
+        "id='{id}'\nname='{id}'\nversion='1'\napi='0.2'\nside='{side}'\nnamespaces=['shared_space']\n"
     );
-    let files: Vec<(&str, &[u8])> = if code {
-        vec![
-            ("mod.wasm", module.as_slice()),
-            (
-                "Cargo.toml",
-                b"[package]\nname='inventory_fixture'\nversion='1.0.0'\n".as_slice(),
-            ),
-            ("src/lib.rs", b"pub struct Mod;".as_slice()),
-        ]
-    } else {
-        Vec::new()
-    };
     let path = fixture.0.join(format!("{id}.smod"));
     std::fs::write(
         &path,
-        sunrise_mod_package::Package::write_files(&manifest, &files).unwrap(),
+        sunrise_mod_package::Package::write_files(&manifest, &[]).unwrap(),
     )
     .unwrap();
     SelectedPackage {
@@ -55,28 +25,20 @@ fn selected(fixture: &Fixture, id: &str, code: bool, side: &str) -> SelectedPack
 }
 
 #[test]
-fn admission_uses_active_native_and_wasm_entries_and_accepted_content_not_startup_metadata() {
+fn admission_uses_active_native_entries_and_accepted_content_not_startup_metadata() {
     let fixture = Fixture::new("inventory-admission");
     smod(&fixture.0, "machine_sample");
     let sources = ModsState {
         native: Arc::new(fixture.runtime()),
         selected: vec![
-            selected(&fixture, "wasm_mod", true, "both"),
-            selected(&fixture, "client_code", true, "client"),
-            selected(&fixture, "refused_code", true, "both"),
-            selected(&fixture, "plain", false, "both"),
-            selected(&fixture, "refused_content", false, "both"),
+            selected(&fixture, "plain", "both"),
+            selected(&fixture, "refused_content", "both"),
         ]
         .into(),
         ..Default::default()
     };
     with_mods(
-        vec![
-            ModEntry::new("machine_sample", Box::new(EmptyCode)),
-            ModEntry::new("wasm_mod", Box::new(EmptyCode)),
-            ModEntry::new("client_code", Box::new(EmptyCode)),
-        ]
-        .into(),
+        vec![ModEntry::new("machine_sample", Box::new(EmptyCode))].into(),
         || {
             mod_platform::__private::with_test_packages(&["refused_code", "shared_space"], || {
                 assert!(
@@ -85,8 +47,7 @@ fn admission_uses_active_native_and_wasm_entries_and_accepted_content_not_startu
                         .is_some()
                 );
                 let mut startup = sources.clone();
-                let disabled =
-                    std::collections::BTreeSet::from(["machine_sample".into(), "wasm_mod".into()]);
+                let disabled = std::collections::BTreeSet::from(["machine_sample".into()]);
                 startup.capture_code_switches(&disabled);
                 assert!(mod_api::__private::mod_index_on(
                     mod_api::__private::mod_index("machine_sample").unwrap()
@@ -100,34 +61,29 @@ fn admission_uses_active_native_and_wasm_entries_and_accepted_content_not_startu
                 );
                 startup.apply_code_switches(&disabled);
                 assert!(mod_api::__private::set_mod_enabled("machine_sample", true));
-                assert!(mod_api::__private::set_mod_enabled("wasm_mod", true));
                 assert_eq!(
                     startup
                         .enabled_inventory(|id| id == "plain")
                         .server_ids()
                         .collect::<Vec<_>>(),
-                    ["machine_sample", "plain", "wasm_mod"]
+                    ["machine_sample", "plain"]
                 );
                 let initial = sources.enabled_inventory(|id| id == "plain");
                 assert_eq!(
                     initial.client_ids().collect::<Vec<_>>(),
-                    ["client_code", "machine_sample", "plain", "wasm_mod"]
+                    ["machine_sample", "plain"]
                 );
                 assert_eq!(
                     initial.server_ids().collect::<Vec<_>>(),
-                    ["machine_sample", "plain", "wasm_mod"]
+                    ["machine_sample", "plain"]
                 );
                 assert!(mod_api::__private::set_mod_enabled("machine_sample", false));
-                assert!(mod_api::__private::set_mod_enabled("wasm_mod", false));
                 let paused = sources.enabled_inventory(|id| id == "plain");
                 assert_eq!(paused.server_ids().collect::<Vec<_>>(), ["plain"]);
-                assert_eq!(
-                    paused.client_ids().collect::<Vec<_>>(),
-                    ["client_code", "plain"]
-                );
+                assert_eq!(paused.client_ids().collect::<Vec<_>>(), ["plain"]);
                 assert_eq!(
                     initial.server_ids().collect::<Vec<_>>(),
-                    ["machine_sample", "plain", "wasm_mod"]
+                    ["machine_sample", "plain"]
                 );
             });
         },
@@ -139,21 +95,21 @@ impl mod_api::ServerReloadListener for Guard {
     fn prepare(
         &self,
         _: &mod_api::ServerReloadContext,
-    ) -> std::result::Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+    ) -> std::result::Result<Box<dyn FnOnce() + Send + 'static>, mod_api::ReloadResourceError> {
         if self.0.load(Ordering::Relaxed) {
             return Err(mod_api::ReloadResourceError::new(
                 mod_api::Identifier::parse("reload_guard:guard").unwrap(),
                 std::io::Error::other("inventory fixture rejected the new generation"),
             ));
         }
-        Ok(<dyn mod_api::ReloadApply>::new(|| {}))
+        Ok(Box::new(|| {}))
     }
 }
 #[mod_api::__subscriptions]
 impl Hooks for Guard {
     fn add_server_reload_listeners(
         &self,
-        _: &dyn mod_api::Host,
+        _: &dyn mod_api::ReloadContext,
         event: &mut mod_api::AddServerReloadListenersEvent<'_>,
     ) {
         event
@@ -224,7 +180,11 @@ fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_
                     ),
                     (
                         "enchantment",
-                        serde_json::json!({"description":"condition test","max_level":3}),
+                        serde_json::json!({
+                            "description":"condition test", "supported_items":"minecraft:stick", "weight":1, "max_level":3,
+                            "min_cost":{"base":1,"per_level_above_first":0}, "max_cost":{"base":1,"per_level_above_first":0},
+                            "anvil_cost":1, "slots":["mainhand"]
+                        }),
                     ),
                 ] {
                     value["neoforge:conditions"] = serde_json::json!([{"type":"neoforge:mod_loaded","modid":"machine_sample"}]);
@@ -233,10 +193,14 @@ fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_
                     std::fs::write(dir.join("requires_code.json"), value.to_string()).unwrap();
                     std::fs::write(
                         dir.join("unsupported.json"),
-                        br#"{"neoforge:conditions":[{"type":"unsupported"}]}"#,
+                        br#"{"neoforge:conditions":[{"type":"neoforge:never"}]}"#,
                     )
                     .unwrap();
                 }
+                // This fixture skips world open, which normally loads the built-in sound holders.
+                let registries = crate::game::chat::command_export(&original, false)
+                    .expect("prepared command registries");
+                game.ui.registries.fill_from_exported(&registries);
                 game.reload_datapacks(true, &[]).unwrap();
                 let loaded = |game: &Game<'_>, id: &str| {
                     let items = game.items();
@@ -263,6 +227,7 @@ fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_
                     crate::game::lan::sync::server_sources(
                         &game.options.resources,
                         &game.res.core.item_data,
+                        game.items(),
                         &game.pack_files(),
                     )
                     .unwrap()
@@ -302,9 +267,11 @@ fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_
                 game.reload_datapacks(true, &[]).unwrap();
                 assert_eq!(game.options.resources, original);
                 assert!(!has_recipe(&read(game)));
+                // Instruments and enchantments are world registries, frozen at world open: a
+                // reload re-evaluates the reloadable data (loot, songs, predicates, modifiers).
                 assert_eq!(
                     loaded(game, "inventorytest:requires_code"),
-                    (false, false, false, false, false, false)
+                    (false, false, true, true, false, false)
                 );
                 assert!(old_songs.contains_key("inventorytest:requires_code"));
                 // Tag files ignore load conditions, including mod_loaded.
@@ -329,21 +296,19 @@ fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_
     );
 }
 
-/// Capture metadata uses the same typed runtime and selected wasm provenance as loading.
+/// Capture metadata uses the same typed runtime provenance as loading.
 #[test]
-fn capture_metadata_distinguishes_content_native_wasm_and_unknown_code() {
+fn capture_metadata_distinguishes_content_native_and_unknown_code() {
     use sunrise_perf_format::v1::ModKind;
     let fixture = Fixture::new("perf-inventory");
     smod(&fixture.0, "machine_sample");
     let sources = ModsState {
         native: Arc::new(fixture.runtime()),
-        selected: vec![selected(&fixture, "wasm_mod", true, "both")].into(),
         ..Default::default()
     };
     let inventory: Vec<_> = [
         ("plain", mod_api::PackageKind::Content),
         ("machine_sample", mod_api::PackageKind::Code),
-        ("wasm_mod", mod_api::PackageKind::Code),
         ("builtin_code", mod_api::PackageKind::Code),
     ]
     .into_iter()
@@ -367,9 +332,122 @@ fn capture_metadata_distinguishes_content_native_wasm_and_unknown_code() {
         vec![
             ("plain", "2.3", ModKind::Content as i32),
             ("machine_sample", "2.3", ModKind::Native as i32),
-            ("wasm_mod", "2.3", ModKind::Wasm as i32),
             ("builtin_code", "2.3", ModKind::Unspecified as i32),
         ]
     );
     assert!(metadata.iter().all(|m| m.crate_name.is_empty()));
+}
+
+#[test]
+#[ignore = "daily"]
+fn content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_join_inventories() {
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::mods::tests::inventory::content_mod_dropped_for_foreign_minecraft_remainder_is_absent_from_save_and_join_inventories",
+        "SUNRISE_DROPPED_REMAINDER_INVENTORY_CHILD",
+        &["valid"],
+    ) {
+        return;
+    }
+
+    struct NativeMinecraftItem;
+    #[mod_api::__subscriptions]
+    impl Hooks for NativeMinecraftItem {
+        fn items(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::ItemsEvent<'_>) {
+            event
+                .register(mod_api::Item::new(
+                    "minecraft:foreign_bucket",
+                    "minecraft:bucket",
+                ))
+                .unwrap();
+        }
+    }
+
+    let fixture = Fixture::new("dropped-remainder-inventory");
+    let consumer_manifest = "id='consumer'\nname='consumer'\nversion='1'\napi='0.2'\nside='both'\ncapabilities=['registries']\n";
+    let consumer_path = fixture.0.join("consumer.smod");
+    std::fs::write(
+        &consumer_path,
+        sunrise_mod_package::Package::write_files(
+            consumer_manifest,
+            &[(
+                "data/consumer/sunrise/item/filled.json",
+                br#"{"template":"minecraft:bucket","crafting_remainder":"minecraft:missing_bucket"}"#,
+            )],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let consumer = sunrise_mod_package::Package::read(&consumer_path).unwrap();
+    let read = sunrise_mod_package::Content::read(&consumer_path, &consumer.manifest).unwrap();
+    assert_eq!(read.items.len(), 1);
+    assert_eq!(read.items[0].id, "consumer:filled");
+    assert_eq!(
+        read.items[0].crafting_remainder.as_deref(),
+        Some("minecraft:missing_bucket")
+    );
+
+    struct DropLog;
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+    impl log::Log for DropLog {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if record.level() == log::Level::Warn && record.args().to_string().contains(
+                "mod consumer content not loaded: consumer:filled: crafting_remainder \"minecraft:missing_bucket\" is not an item",
+            ) {
+                DROPPED.store(true, Ordering::Relaxed);
+            }
+        }
+        fn flush(&self) {}
+    }
+    log::set_logger(&DropLog).unwrap();
+    log::set_max_level(log::LevelFilter::Warn);
+
+    let survivor_manifest = "id='survivor'\nname='survivor'\nversion='1'\napi='0.2'\nside='both'\n";
+    let survivor_path = fixture.0.join("survivor.smod");
+    std::fs::write(
+        &survivor_path,
+        sunrise_mod_package::Package::write_files(survivor_manifest, &[]).unwrap(),
+    )
+    .unwrap();
+    let sources = ModsState {
+        selected: vec![
+            SelectedPackage {
+                package: consumer,
+                path: consumer_path,
+            },
+            SelectedPackage {
+                package: sunrise_mod_package::Package::read(&survivor_path).unwrap(),
+                path: survivor_path,
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+    with_mods(
+        vec![ModEntry::new("owner_mod", Box::new(NativeMinecraftItem))].into(),
+        || {
+            let overlay = content_overlay(&base, &sources, &fixture.0.join("jars")).unwrap();
+            assert!(overlay.announce);
+            assert!(
+                DROPPED.load(Ordering::Relaxed),
+                "consumer must reach remainder admission"
+            );
+            assert!(overlay.mods.iter().any(|m| {
+                m.id == "owner_mod"
+                    && m.content
+                        .items
+                        .iter()
+                        .any(|item| item.id == "minecraft:foreign_bucket")
+            }));
+            assert!(!overlay.mods.iter().any(|m| m.id == "consumer"));
+            assert!(!overlay.content_mods.iter().any(|m| m.id == "consumer"));
+            assert!(!overlay.announced.iter().any(|m| m.id == "consumer"));
+            assert!(overlay.mods.iter().any(|m| m.id == "survivor"));
+            assert!(overlay.content_mods.iter().any(|m| m.id == "survivor"));
+            assert!(overlay.announced.iter().any(|m| m.id == "survivor"));
+        },
+    );
 }

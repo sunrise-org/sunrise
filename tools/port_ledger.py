@@ -757,7 +757,9 @@ def parse_rust(path):
             header = " ".join(code[seg_start:i].split())
             m = RUST_FN.search(header)
             impl_type = next((s[1] for s in reversed(scopes) if s[0] in ("impl", "trait")), None)
-            if m and "=" not in header[:m.start()]:
+            # An attribute's `=` (`#[sunrise_loop(name = "x")]`) says nothing about what follows it.
+            before = re.sub(r"#!?\[[^\]]*\]", "", header[:m.start()]) if m else ""
+            if m and "=" not in before:
                 line = line_of(starts, seg_start + (code[seg_start:i].find("fn") if "fn" in code[seg_start:i] else 0))
                 owner = next((s[1] for s in reversed(scopes) if s[0] == "fn"), None)
                 in_tests = any(s[0] == "mod" and s[1] in ("tests", "test") for s in scopes) or "#[test]" in header

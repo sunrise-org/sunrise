@@ -39,6 +39,14 @@ impl ConfigSender {
         self.writer
             .disconnect(cfg::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
     }
+    #[cfg(test)]
+    pub(crate) fn test_sender(transport: Arc<Transport>) -> (Self, Connection) {
+        let (peer, server) = sunrise_protocol::connection::Pipe::pair();
+        let mut server = Connection::local(server);
+        let peer = Connection::local(peer);
+        let writer = QueuedWriter::new(server.writer.take()).unwrap();
+        (Self { writer, transport }, peer)
+    }
 }
 
 /// The engine's channels that every configuration loop reads itself, kept into play.
@@ -86,6 +94,7 @@ pub(super) struct ConfigIo<'a> {
     events: crate::net::ingress::Producer<super::NetEvent>,
     handed_off: bool,
     pub channels: EngineChannels,
+    configuration_session: Option<std::sync::Weak<super::configuration_tasks::Session>>,
 }
 impl<'a> ConfigIo<'a> {
     pub fn new(
@@ -107,7 +116,17 @@ impl<'a> ConfigIo<'a> {
             events,
             handed_off: false,
             channels: EngineChannels::default(),
+            configuration_session: None,
         })
+    }
+    pub(super) fn set_configuration_session(
+        &mut self,
+        session: std::sync::Weak<super::configuration_tasks::Session>,
+    ) {
+        self.configuration_session = Some(session);
+    }
+    pub(super) fn clear_configuration_session(&mut self) {
+        self.configuration_session = None;
     }
     pub fn send(&mut self, body: &[u8]) -> sunrise_protocol::Result<()> {
         match &self.sender {
@@ -157,10 +176,14 @@ impl<'a> ConfigIo<'a> {
             .map_err(|error| error.to_string())?
         {
             crate::raw_payloads::Classified::Other(payload) => Ok(Some(payload)),
-            // Raw channels are play-only: configuration never classifies one.
-            crate::raw_payloads::Classified::Raw(_) => Ok(None),
+            crate::raw_payloads::Classified::Skipped | crate::raw_payloads::Classified::Raw(_) => {
+                Ok(None)
+            }
             crate::raw_payloads::Classified::Application(incoming) => {
-                let endpoint = crate::raw_payloads::Endpoint::configuration(sender.clone());
+                let endpoint = crate::raw_payloads::Endpoint::configuration(
+                    sender.clone(),
+                    self.configuration_session.clone(),
+                );
                 crate::raw_payloads::dispatch(
                     incoming,
                     endpoint.clone(),

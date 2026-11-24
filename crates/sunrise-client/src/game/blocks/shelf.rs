@@ -1,7 +1,15 @@
 //! The displayed items of `ShelfBlockEntity`.
-use super::{Game, Hit, machines::dir_from_name};
+use super::{
+    Game, Hit,
+    item_draw::{BlockItemDraw, block_entity_pose},
+    machines::dir_from_name,
+};
 use sunrise_assets::item_model::DisplayContext;
-use sunrise_client::{block_entity_render::vertex_light, containers::BlockEntity, mesher::Vertex};
+use sunrise_client::{
+    block_entity_render::vertex_light, camera::rotate_degrees, containers::BlockEntity,
+    mesher::Vertex,
+};
+use sunrise_client_render::block_entity_reach::Reach;
 use sunrise_core::{
     geometry::{Direction, Vec3},
     position::BlockPos,
@@ -140,7 +148,7 @@ impl Game<'_> {
             if !swapped {
                 return Some(false);
             }
-            self.audio.play(
+            self.play_audio(
                 "minecraft:block.shelf.multi_swap",
                 Some(pos.map(|n| f64::from(n) + 0.5)),
                 1.0,
@@ -201,20 +209,30 @@ impl Game<'_> {
                 (false, true) => "minecraft:block.shelf.take_item",
                 (true, true) => "minecraft:block.shelf.single_swap",
             };
-            self.audio
-                .play(sound, Some(pos.map(|n| f64::from(n) + 0.5)), 1.0, 1.0);
+            self.play_audio(sound, Some(pos.map(|n| f64::from(n) + 0.5)), 1.0, 1.0);
             Some(true)
         }
     }
 
     /// `ShelfRenderer`: three items face out, aligned to the bottom or centre.
     pub(super) fn shelf_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
+        self.shelf_items(camera, |d| {
+            self.submit_item_world(d.state, d.pose, d.light, out);
+        });
+    }
+
+    /// The items [`Self::shelf_geometry`] draws, slot by slot.
+    pub(super) fn shelf_items(&self, camera: glam::DVec3, mut draw: impl FnMut(BlockItemDraw)) {
+        let _items = sunrise_client::spans::raw_flight_guard("block_entity_items");
+        let reach = Reach::Default;
+        sunrise_client::spans::note_block_entity_item_visits(|| {
+            self.world.block_entities.len() as u64
+        });
         for (key, entity) in &self.world.block_entities {
             let BlockEntity::Shelf(shelf) = entity else {
                 continue;
             };
-            let at = glam::DVec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
-            if at.distance_squared(camera) >= 64.0 * 64.0 {
+            if !reach.should_render([key.0, key.1, key.2], camera, 0) {
                 continue;
             }
             let block = self.world.block(key.0, key.1, key.2);
@@ -226,8 +244,9 @@ impl Game<'_> {
                 .and_then(|s| s.properties.get("facing"))
                 .map(String::as_str)
                 .unwrap_or("north");
+            // `-Direction.toYRot()` of a horizontal facing (south's is -0), else 180.
             let yaw: f32 = match facing {
-                "south" => 0.0,
+                "south" => -0.0,
                 "west" => -90.0,
                 "north" => -180.0,
                 "east" => -270.0,
@@ -252,33 +271,39 @@ impl Game<'_> {
             );
             for (slot, stack) in shelf.items.iter().enumerate() {
                 let Some(stack) = stack else { continue };
-                let item = self.resolve_item(
-                    stack,
-                    DisplayContext::OnShelf,
-                    Some(&owner),
-                    seed.wrapping_add(slot as i32),
-                );
+                let seed = seed.wrapping_add(slot as i32);
+                let item = self.resolve_item(stack, DisplayContext::OnShelf, Some(&owner), seed);
                 if item.is_empty() {
                     continue;
                 }
+                // `ShelfRenderer.submitItem`; the model's bounds are an `AABB` of doubles.
                 let (lo, hi) = item.bounding_box();
-                let offset_y = -lo.y
-                    - if shelf.align_to_bottom {
-                        0.0
-                    } else {
-                        (hi.y - lo.y) / 2.0
-                    };
-                let pose =
-                    glam::Mat4::from_translation((at - camera).as_vec3() + glam::Vec3::splat(0.5))
-                        * glam::Mat4::from_rotation_y(yaw.to_radians())
-                        * glam::Mat4::from_translation(glam::Vec3::new(
-                            (slot as f32 - 1.0) * 0.3125,
-                            if shelf.align_to_bottom { -0.25 } else { 0.0 },
-                            -0.25,
-                        ))
-                        * glam::Mat4::from_scale(glam::Vec3::splat(0.25))
-                        * glam::Mat4::from_translation(glam::Vec3::new(0.0, offset_y, 0.0));
-                self.submit_item_world(&item, pose, light, out);
+                let (lo, hi) = (f64::from(lo.y), f64::from(hi.y));
+                let mut offset_y = -lo;
+                if !shelf.align_to_bottom {
+                    offset_y += -(hi - lo) / 2.0;
+                }
+                let mut pose = block_entity_pose(*key, camera);
+                pose.translate(0.5, 0.5, 0.5);
+                rotate_degrees(&mut pose, 1, yaw);
+                pose.translate(
+                    (slot as i32 - 1) as f32 * 0.3125,
+                    if shelf.align_to_bottom { -0.25 } else { 0.0 },
+                    -0.25,
+                );
+                pose.scale(0.25, 0.25, 0.25);
+                pose.translate(0.0, offset_y as f32, 0.0);
+                draw(BlockItemDraw {
+                    #[cfg(test)]
+                    stack,
+                    #[cfg(test)]
+                    display: DisplayContext::OnShelf,
+                    #[cfg(test)]
+                    seed,
+                    state: &item,
+                    pose: pose.to_glam(),
+                    light,
+                });
             }
         }
     }

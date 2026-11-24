@@ -108,28 +108,40 @@ impl Game<'_> {
 
     /// Inventory.add: returns the stack that did not fit.
     pub(super) fn add_stack_to_inventory(&mut self, mut stack: ItemStack) -> Option<ItemStack> {
-        let tutorial_item = matches!(
-            self.tutorial.step,
-            tutorial::Step::FindTree | tutorial::Step::PunchTree | tutorial::Step::CraftPlanks
-        )
-        .then(|| stack.clone());
+        self.insert_stack_into_inventory(&mut stack)
+            .then_some(stack)
+    }
+
+    /// Consumes the fitted count, leaving the offered item and components in `stack`.
+    /// Returns true if some of the count remains.
+    pub(super) fn insert_stack_into_inventory(&mut self, stack: &mut ItemStack) -> bool {
         let max = self
             .res
             .items()
             .get(&stack.item)
             .map_or(64, |i| i.max_stack);
+        self.insert_stack_up_to(stack, max)
+    }
+
+    /// `insert_stack_into_inventory` with `max` the stack's own maximum.
+    pub(super) fn insert_stack_up_to(&mut self, stack: &mut ItemStack, max: u32) -> bool {
+        let tutorial_item = matches!(
+            self.tutorial.step,
+            tutorial::Step::FindTree | tutorial::Step::PunchTree | tutorial::Step::CraftPlanks
+        )
+        .then(|| stack.clone());
         let before = stack.count;
         let left = inventory_add(
             &mut self.inventory,
             &mut self.offhand,
             self.selected,
             max,
-            &mut stack,
+            stack,
         );
         if stack.count < before {
             self.tutorial_get_item(tutorial_item.as_ref());
         }
-        left.then_some(stack)
+        left
     }
 }
 

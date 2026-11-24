@@ -28,8 +28,8 @@ pub(super) fn component(kind: i32, r: &mut Reader) -> Result<()> {
         8 | 31 | 42 | 43 | 44 | 46 | 65 | 75 | 88..=108 | 110..=117 | 121 => varint(r),
         // FLOAT: minimum_attack_charge, potion_duration_scale.
         7 | 54 => f32(r),
-        // Identifier.STREAM_CODEC: tooltip_style, note_block_sound.
-        35 | 73 => ident(r),
+        // Identifier.STREAM_CODEC: note_block_sound.
+        73 => ident(r),
         // UseEffects: canSprint, interactVibrations, speedMultiplier.
         5 => {
             r.bool()?;
@@ -293,24 +293,26 @@ fn effect_details(r: &mut Reader) -> Result<()> {
 }
 /// ConsumeEffect.STREAM_CODEC: the consume_effect_type id, then that type's fields.
 fn consume_effect(r: &mut Reader) -> Result<()> {
-    match r.varint()? {
+    use super::consume_effects::{Kind, read_kind, skip_native};
+    match read_kind(r)? {
         // apply_effects: effects, probability.
-        0 => {
+        Kind::Builtin(0) => {
             list(r, mob_effect)?;
             f32(r)
         }
         // remove_effects: a mob effect holder set.
-        1 => holder_set(r),
+        Kind::Builtin(1) => holder_set(r),
         // clear_all_effects.
-        2 => Ok(()),
+        Kind::Builtin(2) => Ok(()),
         // teleport_randomly: diameter, directionalParticles.
-        3 => {
+        Kind::Builtin(3) => {
             f32(r)?;
             boolean(r)
         }
         // play_sound.
-        4 => sound(r),
-        other => Err(Error::new(format!("unknown consume effect type {other}"))),
+        Kind::Builtin(4) => sound(r),
+        Kind::Builtin(_) => unreachable!("built-in consume-effect type"),
+        Kind::Native(_, ty) => skip_native(ty, r),
     }
 }
 /// BlockPredicate: blocks, properties, nbt, then DataComponentMatchers (exact, partial).

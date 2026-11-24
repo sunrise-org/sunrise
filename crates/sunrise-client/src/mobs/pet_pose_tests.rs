@@ -46,12 +46,12 @@ fn ordering_a_pet_to_sit_in_water_leaves_the_pose_alone() {
             assert!(!m.extra.sitting_pose, "{id}: still standing in the water");
             // In the air (falling, jumping) it does not sit either.
             m.fluids.in_water = false;
-            m.on_ground = false;
+            m.ground.on_ground = false;
             assert!(!goal.can_use(&mut m, &mut cx), "{id}: sits in the air");
             assert!(!m.extra.sitting_pose, "{id}: still standing in the air");
             // On dry ground it sits, and standing up ends the pose but not
             // the order.
-            m.on_ground = true;
+            m.ground.on_ground = true;
             assert!(goal.can_use(&mut m, &mut cx), "{id}: does not sit on land");
             goal.start(&mut m, &mut cx);
             assert!(m.extra.sitting_pose, "{id}: not sitting on land");
@@ -100,7 +100,7 @@ fn a_cat_on_a_chest_is_in_the_sitting_pose() {
                 events: &mut events,
             };
             let mut m = pet("minecraft:cat", Species::Cat, Vec3::new(0.5, 65.0, 0.5));
-            m.on_ground = true;
+            m.ground.on_ground = true;
             let mut goal = CatSitOnBlock(super::super::goals::MoveToBlock::new(0.8, 8, 1));
             let found = goal.can_use(&mut m, &mut cx);
             goal.start(&mut m, &mut cx);

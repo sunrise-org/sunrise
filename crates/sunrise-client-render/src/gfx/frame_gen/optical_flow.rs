@@ -653,6 +653,7 @@ pub(super) mod tests {
     /// A frame moved right by 16 and down by 8: the blocks inside report where they were
     /// (-16, -8), and nothing reads as a scene change. A much darker frame then does.
     #[test]
+    #[ignore = "daily"]
     fn finds_a_shift_and_a_scene_change() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -691,6 +692,7 @@ pub(super) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn repeated_cuts_and_stable_frames_update_the_history() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {

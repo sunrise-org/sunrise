@@ -2,7 +2,7 @@
 //! and whether the player may fly (NeoForge's `IPlayerExtension.mayFly`).
 //! A client applies the same rules to its local player and the target's displayed box.
 use super::Game;
-use mod_api::{EntityReach, EntityRef, Hand, LivingRef, PlayerRef};
+use mod_api::{EntityReach, EntityRef, EquipmentSlot, LivingRef, PlayerRef};
 use sunrise_core::geometry::{Aabb, Vec3};
 
 impl Game<'_> {
@@ -35,8 +35,10 @@ impl Game<'_> {
             EntityReach::Container => within(4.0),
             EntityReach::Attack => {
                 let creative = self.player_is_creative(player)?;
-                let held = self.living_hand_item(living, Hand::Main);
-                self.stack_attack_range(held.as_ref(), true, creative, range)
+                let held = self
+                    .living_equipment_stack(living, EquipmentSlot::MainHand)
+                    .map(|stack| stack.base());
+                self.stack_attack_range(held, true, creative, range)
                     .contains(distance_squared.sqrt(), 3.0)
             }
         })

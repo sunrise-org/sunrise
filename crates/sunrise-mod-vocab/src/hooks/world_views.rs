@@ -1,5 +1,4 @@
 //! The `world_views` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0349
 
 pub trait Hooks {
     /// Asked once as each frame is built (not on the title screen's panorama): push the world
@@ -45,9 +44,6 @@ level are refused, as viewed levels are not drawn yet). Views taken for a frame 
 afterwards (`TitleScreen`). Each refusal is logged once: the first time a view of that `id` is refused for that
 reason.
 
-There is no Wire form: `world_views`, `world_view_drawn` and their types are native-only, since the renderer they
-come from refuses to build for wasm.
-
 Each view is drawn after the frame's world with the terrain it sees (solid and translucent), the frame's sky colour,
 fog and entities (block entities too), from its own camera and with its own frustum; then `world_view_drawn` hands
 it back as a `WorldViewDrawn`: its `id`, `parent` and `nesting_depth` (1 for a view with no parent), `color` (`color_format`, the world's light as `WorldDrawn::color` holds it,
@@ -79,5 +75,5 @@ that a clip plane leaves out what is behind it and that a child's picture is thi
         target = "mod_render::render::world_views",
         neoforge = "none (Sunrise-only; NeoForge has no counterpart)"
     )]
-    fn world_views();
+    fn world_views(views: &mut WorldViews<'_>);
 }

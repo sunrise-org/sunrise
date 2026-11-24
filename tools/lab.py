@@ -55,6 +55,44 @@ def cargo_target():
     return ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
 
 
+_PARITY_FIXTURES = {}
+
+
+def parity_fixtures(default_features=True):
+    """The `sunrise-parity-fixtures` program (crates/sunrise-parity-fixtures): sunrise-client's parity fixtures
+    (game/parity_fixtures.rs), run with libtest's command line and report, built without the lib's other tests, whose
+    one rustc a parity runner cannot hold (#4896). `default_features` is sunrise-client's default features, as
+    `client-defaults`; without it the build is sunrise-client's `--no-default-features` one. Built in the test
+    profile, as the lib test was, once per variant and process; the parity workflow's warm-up runs the same command,
+    so a harness finds it fresh.
+
+    Both variants are one Cargo binary, so Cargo puts whichever variant it built last at the same path, even when
+    the build was fresh, while other harnesses of the same run may be executing it. The returned path is the
+    variant's own hard link to its build, taken under a lock that covers the build, so another harness building the
+    other variant never changes it."""
+    if default_features not in _PARITY_FIXTURES:
+        import fcntl  # POSIX only, like the parity runner
+        features = 'fixtures,client-defaults' if default_features else 'fixtures'
+        command = ['cargo', 'build', '--locked', '--profile', 'test', '-p', 'sunrise-parity-fixtures',
+                   '--features', features, '--bin', 'sunrise-parity-fixtures',
+                   '--message-format=json-render-diagnostics']
+        cargo_target().mkdir(parents=True, exist_ok=True)
+        with open(cargo_target() / 'sunrise-parity-fixtures.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            built = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True)
+            executables = [row['executable'] for row in map(json.loads, filter(None, built.stdout.splitlines()))
+                           if row.get('reason') == 'compiler-artifact' and row.get('executable')
+                           and row['target']['name'] == 'sunrise-parity-fixtures']
+            if len(executables) != 1:
+                raise RuntimeError(f'cargo reported {len(executables)} sunrise-parity-fixtures executables')
+            variant = Path(executables[0]).with_name(
+                'sunrise-parity-fixtures-' + ('client-defaults' if default_features else 'no-default-features'))
+            variant.unlink(missing_ok=True)
+            os.link(executables[0], variant)
+        _PARITY_FIXTURES[default_features] = variant
+    return _PARITY_FIXTURES[default_features]
+
+
 def binary(folder, name):
     """A built program in folder: name.exe on Windows (Cargo's name there), name elsewhere."""
     path = Path(folder) / name

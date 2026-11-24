@@ -1,4 +1,5 @@
 //! Stack property calculations shared by gameplay, display and mod queries.
+use crate::items::{ItemInfo, ItemStack, Items};
 use sunrise_core::{color::hsv_to_argb, nbt::Tag};
 
 pub mod attack_range;
@@ -70,6 +71,19 @@ pub fn same_item_id(a: &str, b: &str) -> bool {
     path(a) == path(b)
 }
 
+/// `ItemStack.isBarVisible`, `getBarWidth` and `getBarColor`, before client
+/// drawing extensions. Dispatch on registered `BundleItem` behavior rather than
+/// mutable defaults, then read the effective component.
+pub fn stack_bar(items: &Items, stack: &ItemStack, info: Option<&ItemInfo>) -> Option<ItemBar> {
+    if info.is_some_and(|item| item.bundle) {
+        return crate::bundle::stack_bar(items, stack);
+    }
+    if !damageable(|id| stack.carries_component(info, id)) {
+        return None;
+    }
+    damage_bar(stack.effective_damage(info), stack.max_damage(info))
+}
+
 /// `Item.getBarWidth` and `getBarColor`, when the durability bar is visible.
 pub fn damage_bar(damage: i32, max_damage: i32) -> Option<ItemBar> {
     if max_damage <= 0 || damage <= 0 {
@@ -105,15 +119,7 @@ pub fn repairable(component: &Tag, item: &str, in_tag: impl FnMut(&str) -> bool)
 
 /// An NBT numeric component converted with Java's integer conversion rules.
 pub fn component_int(value: &Tag) -> Option<i32> {
-    Some(match value {
-        Tag::Byte(n) => i32::from(*n),
-        Tag::Short(n) => i32::from(*n),
-        Tag::Int(n) => *n,
-        Tag::Long(n) => *n as i32,
-        Tag::Float(n) => f32::from_bits(*n) as i32,
-        Tag::Double(n) => f64::from_bits(*n) as i32,
-        _ => return None,
-    })
+    sunrise_core::nbt::numeric_int(value)
 }
 
 /// An NBT number read as a component's float value.

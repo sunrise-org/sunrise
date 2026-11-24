@@ -531,6 +531,70 @@ fn the_stamp_follows_a_mod_files_contents_not_its_folder_or_time() {
     );
 }
 
+#[test]
+fn an_admitted_archive_keys_resource_caches_by_bytes_not_entry_metadata() {
+    use sunrise_mod_package::content::ContentSource;
+
+    const FILE: &str = "data/testmod/custom/value.bin";
+    // Equal length and CRC-32, but different bytes.
+    const FIRST: &[u8] = b"\xba\x42\xc6\x9b\xb4\x3d\x52\xdd";
+    const SECOND: &[u8] = b"\x63\xd6\x35\x1a\x43\xda\x3a\xd9";
+    let dir = tempfile::tempdir().unwrap();
+    let base = resources(dir.path());
+    let cache = dir.path().join("cache");
+    let jars = dir.path().join("jars");
+    let path = dir.path().join("testmod.smod");
+    let manifest_text = manifest("testmod", "");
+    let manifest = sunrise_mod_package::Manifest::parse(&manifest_text).unwrap();
+    let archive = |payload| {
+        let bytes =
+            sunrise_mod_package::Package::write_files(&manifest_text, &[(FILE, payload)]).unwrap();
+        {
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+            let entry = zip.by_name(FILE).unwrap();
+            assert_eq!((entry.crc32(), entry.size()), (0x5eab_a44f, 8));
+        }
+        bytes
+    };
+    let admit = || {
+        let source = ContentSource::open(&path)
+            .unwrap()
+            .admit(&manifest)
+            .unwrap();
+        [ContentMod {
+            id: "testmod".into(),
+            content: Content::read_opened(&source, &manifest).unwrap(),
+            jars: Vec::new(),
+        }]
+    };
+    let build = |mods: &[ContentMod]| resource_root_fixture(&base, &jars, mods, &cache).unwrap();
+    let fingerprint = |root, mods: &[ContentMod]| {
+        resolved_resources(&base, root, &jars, mods, cache.clone())
+            .unwrap()
+            .mod_layers()[0]
+            .fingerprint_under("data", &["custom"])
+            .unwrap()
+    };
+    fs::write(&path, archive(FIRST)).unwrap();
+    let first = admit();
+    let original_root = build(&first);
+    let original_fingerprint = fingerprint(original_root.clone(), &first);
+
+    let replacement = dir.path().join("replacement.smod");
+    fs::write(&replacement, archive(SECOND)).unwrap();
+    fs::rename(replacement, &path).unwrap();
+    assert_eq!(build(&first), original_root);
+    assert_eq!(
+        fingerprint(original_root.clone(), &first),
+        original_fingerprint
+    );
+
+    let second = admit();
+    let new_root = build(&second);
+    assert_ne!(new_root, original_root);
+    assert_ne!(fingerprint(new_root, &second), original_fingerprint);
+}
+
 /// Each game folder reaches the one set of prepared resources through its own link
 /// (`.local/sunrise-client/26.3`), and keeps its own copy of the mods.
 #[cfg(unix)]
@@ -748,9 +812,11 @@ fn block_aliases_keep_the_original_item_in_placement_context() {
                 face: Direction::Up,
                 hit: Vec3::new(f64::from(pos.x) + 0.5, 70.0, 0.5),
                 inside: false,
-                yaw: 0.0,
-                pitch: 0.0,
-                sneaking: false,
+                source: sunrise_world::level::PlacementSource::Player {
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    sneaking: false,
+                },
                 item: (*name).into(),
                 can_use_game_master_blocks: false,
             };
@@ -928,7 +994,7 @@ fn creative_tabs_keep_vanilla_items_missing_from_search() {
         names: BTreeMap::new(),
     };
     let mut doc: J = serde_json::from_str(
-        r#"{"schema":4,"item_features":{},"potion_features":{},"tabs":[{"id":"minecraft:search","type":"SEARCH","build":[],"search_metadata":[]}]}"#,
+        r#"{"schema":4,"item_features":{},"potion_features":{},"tabs":[{"id":"minecraft:search","title":"Search Items","type":"SEARCH","build":[],"search_metadata":[]}]}"#,
     )
     .unwrap();
     plan.creative_tabs(&mut doc).unwrap();
@@ -982,6 +1048,7 @@ fn block_items_patch_their_template_item() {
     let items = r##"{"minecraft:iron_block": {"minecraft:max_stack_size": 64,
         "minecraft:item_name": {"translate": "block.minecraft.iron_block"}},
         "minecraft:netherite_block": {"minecraft:damage_resistant": {"types": "#minecraft:is_fire"}}}"##;
+    fs::write(base.join("items.json"), items).unwrap();
     let block = |dir: &str, components: &str| {
         folder_mod(
             &scratch.join(dir),
@@ -1567,8 +1634,8 @@ fn content_root_loads_with_every_table() {
             independent_behaviours.facts(state).flags
         );
         assert_eq!(
-            deferred_behaviours.data(state).sounds.place,
-            independent_behaviours.data(state).sounds.place
+            deferred_behaviours.facts(state).placement_sound,
+            independent_behaviours.facts(state).placement_sound
         );
         assert_eq!(shared_facts.get(state).emission, facts.get(state).emission);
         assert_eq!(shared_facts.get(state).classes, facts.get(state).classes);
@@ -1577,8 +1644,8 @@ fn content_root_loads_with_every_table() {
             independent_behaviours.facts(state).flags,
         );
         assert_eq!(
-            shared_behaviours.data(state).sounds.place,
-            independent_behaviours.data(state).sounds.place,
+            shared_behaviours.facts(state).placement_sound,
+            independent_behaviours.facts(state).placement_sound,
         );
     }
 
@@ -1666,9 +1733,11 @@ fn content_root_loads_with_every_table() {
             face: Direction::Up,
             hit: Vec3::new(0.5, 1.0, 0.5),
             inside: false,
-            yaw: 0.0,
-            pitch: 0.0,
-            sneaking: false,
+            source: sunrise_world::level::PlacementSource::Player {
+                yaw: 0.0,
+                pitch: 0.0,
+                sneaking: false,
+            },
             item: "ruby:ruby_sword".into(),
             can_use_game_master_blocks: false,
         };
@@ -1979,8 +2048,7 @@ fn shared_behaviour_document_matches_independent_loaders() {
         assert_eq!(a.emission, b.emission);
         assert_eq!(a.dampening, b.dampening);
         assert_eq!(a.hardness, b.hardness);
-        assert_eq!(a.sounds.volume, b.sounds.volume);
-        assert_eq!(a.sounds.pitch, b.sounds.pitch);
+        assert_eq!(a.sounds, b.sounds);
     }
     let a = sunrise_world::level::Behaviours::load(assets.registry, &root).unwrap();
     for id in 0..assets.registry.len() {
@@ -2003,12 +2071,8 @@ fn shared_behaviour_document_matches_independent_loaders() {
         assert_eq!(a_state.push, b_state.push);
         assert_eq!(a_state.instrument, b_state.instrument);
         assert_eq!(a_state.shape, b_state.shape);
-        let (a_sound, b_sound) = (&a.data(state).sounds, &b.data(state).sounds);
-        assert_eq!(a_sound.volume, b_sound.volume);
-        assert_eq!(a_sound.pitch, b_sound.pitch);
-        assert_eq!(a_sound.place, b_sound.place);
-        assert_eq!(a_sound.break_, b_sound.break_);
-        assert_eq!(a_sound.fall, b_sound.fall);
+        assert_eq!(a_state.placement_sound, b_state.placement_sound);
+        assert_eq!(b_state.placement_sound, deferred_state.placement_sound);
     }
 }
 
@@ -2480,7 +2544,7 @@ fn a_superflat_world_runs_its_structure_sets_on_flat_ground() {
     );
     // The layers: bedrock, two dirt and grass from the level's minimum Y, air above.
     let mut worker = terrain.worker();
-    let chunk = terrain.finish(terrain.proto(&mut worker, 3, 3));
+    let chunk = terrain.finish(terrain.proto(&mut worker, 3, 3).unwrap());
     let name = |y| {
         let id = chunk.block(3 * 16 + 5, y, 3 * 16 + 7);
         assets.registry.state(id).unwrap().name.clone()
@@ -2549,8 +2613,11 @@ fn a_decorated_superflat_world_without_structures_grows_its_features() {
         )
         .unwrap();
         let mut worker = terrain.worker();
-        let mut region: [_; 9] =
-            std::array::from_fn(|i| terrain.proto(&mut worker, 3 + i as i32 % 3, 3 + i as i32 / 3));
+        let mut region: [_; 9] = std::array::from_fn(|i| {
+            terrain
+                .proto(&mut worker, 3 + i as i32 % 3, 3 + i as i32 / 3)
+                .unwrap()
+        });
         terrain.decorate(&mut worker, &mut region);
         let [_, _, _, _, center, ..] = region;
         let chunk = terrain.finish(center);
@@ -2643,7 +2710,7 @@ fn a_superflat_world_keeps_its_strongholds_on_every_seed_and_leaves_null_layers_
     );
     let terrain = make(1234);
     let mut worker = terrain.worker();
-    let chunk = terrain.finish(terrain.proto(&mut worker, 3, 3));
+    let chunk = terrain.finish(terrain.proto(&mut worker, 3, 3).unwrap());
     let name = |y| {
         let id = chunk.block(3 * 16 + 5, y, 3 * 16 + 7);
         assets.registry.state(id).unwrap().name.clone()
@@ -2712,6 +2779,223 @@ fn a_superflat_structure_override_naming_no_set_lets_every_set_generate() {
             .locate(&["minecraft:village_plains".to_owned()], [0, 64, 0], 12)
             .is_some()
     );
+}
+
+#[test]
+fn declared_stew_effects_generate_food_and_search_variants_and_work_in_recipes() {
+    use crate::crafting::Recipes;
+    use crate::items::ItemStack;
+    use serde_json::json;
+    use sunrise_items::creative_catalog::{Catalog, Holders, Parameters};
+    use sunrise_world::loot::PackOverlay;
+
+    let (base, _) = block_base("stew-effects", &[]);
+    let scratch = base.parent().unwrap();
+    fs::create_dir_all(base.join("assets/minecraft/blockstates")).unwrap();
+    fs::write(base.join("assets/minecraft/blockstates/test.json"), "{}").unwrap();
+    let write = |name, value: serde_json::Value| {
+        fs::write(base.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
+    };
+    let ids = [
+        "test",
+        "poppy",
+        "open_eyeblossom",
+        "bowl",
+        "brown_mushroom",
+        "red_mushroom",
+        "suspicious_stew",
+    ]
+    .map(|name| format!("minecraft:{name}"));
+    write(
+        "items.json",
+        ids.iter().map(|id| (id.clone(), json!({}))).collect(),
+    );
+    write(
+        "command-registries.json",
+        json!({"blocks":["minecraft:test"], "items": ids}),
+    );
+    write(
+        "registries.json",
+        json!({
+            "minecraft:item": {"entries":{}}, "minecraft:block": {"entries":{}},
+            "minecraft:mob_effect": {"entries": {"minecraft:luck":{"protocol_id":0}, "minecraft:speed":{"protocol_id":1}}}
+        }),
+    );
+    // The template's Block.getItem is minecraft:test, but that item places a poppy.
+    let bindings: serde_json::Map<_, _> = [
+        ("minecraft:test", "minecraft:poppy"),
+        ("minecraft:poppy", "minecraft:poppy"),
+        ("minecraft:open_eyeblossom", "minecraft:open_eyeblossom"),
+    ]
+    .into_iter()
+    .map(|(id, block)| {
+        (
+            id.to_owned(),
+            json!({"class":["BlockItem"], "fields":{"block":block}}),
+        )
+    })
+    .collect();
+    write(
+        "block-behaviours.json",
+        json!({
+            "states":[[], []], "blocks": [{"name":"minecraft:test"}], "items": bindings
+        }),
+    );
+    fs::create_dir_all(base.join("data/minecraft/recipe")).unwrap();
+    fs::create_dir_all(base.join("data/minecraft/tags/item")).unwrap();
+    write(
+        "data/minecraft/tags/item/mushrooms.json",
+        json!({"values":["minecraft:brown_mushroom", "minecraft:red_mushroom"]}),
+    );
+    let row =
+        |snbt: &str| json!({"kind":"stack", "visibility":"PARENT_AND_SEARCH_TABS", "snbt":snbt});
+    write(
+        "creative-inventory.json",
+        json!({
+            "schema":4, "item_features":{}, "potion_features":{}, "tabs":[
+                {"id":"minecraft:food_and_drinks", "title":"Food & Drinks", "type":"CATEGORY", "build":[
+                    row(r#"{id:"minecraft:rabbit_stew",count:1}"#),
+                    row(r#"{id:"minecraft:suspicious_stew",count:1,components:{"minecraft:suspicious_stew_effects":[{id:"minecraft:night_vision",duration:100}]}}"#),
+                    row(r#"{id:"minecraft:suspicious_stew",count:1,components:{"minecraft:suspicious_stew_effects":[{id:"minecraft:blindness",duration:220}]}}"#),
+                    row(r#"{id:"minecraft:milk_bucket",count:1}"#)
+                ]},
+                {"id":"minecraft:search", "title":"Search", "type":"SEARCH", "build":[]}
+            ]
+        }),
+    );
+    let recipe = r##"{"type":"minecraft:crafting_shapeless",
+        "ingredients":["testmod:amber", "minecraft:bowl", "#minecraft:mushrooms", "#minecraft:mushrooms"],
+        "result":{"id":"minecraft:suspicious_stew", "components":{"minecraft:suspicious_stew_effects":[
+            {"id":"minecraft:luck"},{"id":"minecraft:speed","duration":24}]}}}"##;
+    let m = folder_mod(
+        &scratch.join("good"),
+        &[
+            ("sunrise-mod.toml", &manifest("testmod", "")),
+            (
+                "data/testmod/sunrise/block/amber.json",
+                r#"{"template":"minecraft:test","suspicious_stew_effects":[{"id":"luck"},{"id":"minecraft:speed","duration":24}]}"#,
+            ),
+            (
+                "data/testmod/sunrise/block/copy.json",
+                r#"{"template":"minecraft:test","suspicious_stew_effects":[{"id":"minecraft:luck","duration":null},{"id":"minecraft:speed","duration":24}]}"#,
+            ),
+            (
+                "data/testmod/sunrise/block/reversed.json",
+                r#"{"template":"minecraft:test","suspicious_stew_effects":[{"id":"minecraft:speed","duration":24},{"id":"minecraft:luck"}]}"#,
+            ),
+            (
+                "data/testmod/sunrise/block/hidden.json",
+                r#"{"template":"minecraft:test","item":false,"pick_item":"minecraft:bowl","suspicious_stew_effects":[{"id":"minecraft:luck","duration":31}]}"#,
+            ),
+            ("data/testmod/recipe/amber_stew.json", recipe),
+        ],
+    );
+    let root = scratch.join("out");
+    let mods = [m];
+    build_fixture(&base, Path::new(""), &mods, &root).unwrap();
+    let resources = resolved_resources(
+        &base,
+        root.clone(),
+        Path::new(""),
+        &mods,
+        scratch.join("cache"),
+    )
+    .unwrap();
+    let files = content_files(&resources);
+    let overlay = PackOverlay::new(&files);
+    let expected_a = [("minecraft:luck", 160), ("minecraft:speed", 24)];
+    let expected_b = [("minecraft:speed", 24), ("minecraft:luck", 160)];
+    let check_stew = |stack: &ItemStack, expected: &[(&str, i32)]| {
+        assert_eq!(
+            (&*stack.item, stack.count),
+            ("minecraft:suspicious_stew", 1)
+        );
+        assert_eq!(
+            stack
+                .data()
+                .unwrap()
+                .stew_effects
+                .iter()
+                .map(|(id, ticks)| (&**id, *ticks))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    };
+    for (path, overlay, n) in [(&base, PackOverlay::NONE, 2), (&root, overlay, 4)] {
+        let defaults = sunrise_world::item_defaults::read(path).unwrap();
+        let items = Items::catalog(path, &overlay, &defaults).unwrap();
+        let catalog = Catalog::parse(
+            &serde_json::from_slice(&fs::read(path.join("creative-inventory.json")).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let params = Parameters {
+            features: &[],
+            operator: false,
+            holders: &Holders::default(),
+            items: &items,
+        };
+        let lists = catalog.build(params, None, |tab, _, before_edit| {
+            if tab.id == "minecraft:food_and_drinks" {
+                let food = &before_edit.display;
+                assert_eq!(food.len(), n + 2);
+                assert_eq!(
+                    (&*food[0].item, &*food[n + 1].item),
+                    ("minecraft:rabbit_stew", "minecraft:milk_bucket")
+                );
+                check_stew(&food[1], &[("minecraft:night_vision", 100)]);
+                check_stew(&food[2], &[("minecraft:blindness", 220)]);
+                if n == 4 {
+                    check_stew(&food[3], &expected_a);
+                    check_stew(&food[4], &expected_b);
+                }
+            }
+        });
+        assert_eq!(catalog.search_display(&lists), lists[0].display);
+        if n == 4 {
+            let recipes = Recipes::load(
+                path,
+                &items,
+                &overlay,
+                &crate::test_resources::server_load(),
+            )
+            .unwrap();
+            let grid = [
+                "testmod:amber",
+                "minecraft:bowl",
+                "minecraft:brown_mushroom",
+                "minecraft:red_mushroom",
+            ]
+            .map(|id| Some(ItemStack::new(id, 1)));
+            let (recipe, stack) = recipes
+                .find(crate::test_resources::server_loop_context(), &grid, 2)
+                .unwrap();
+            assert_eq!(recipe, "testmod:amber_stew");
+            check_stew(&stack, &expected_a);
+        }
+    }
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
+fn a_block_with_an_unknown_stew_effect_is_refused_at_content_load() {
+    let (base, mods) = block_base(
+        "unknown-stew-effect",
+        &[r#"{"template":"minecraft:test","suspicious_stew_effects":[{"id":"testmod:missing"}]}"#],
+    );
+    let scratch = base.parent().unwrap();
+    fs::write(
+        base.join("registries.json"),
+        r#"{"minecraft:mob_effect":{"entries":{}}}"#,
+    )
+    .unwrap();
+    let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("out")).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "testmod:test: suspicious_stew_effects: unknown mob effect \"testmod:missing\""
+        )
+    );
+    fs::remove_dir_all(scratch).unwrap();
 }
 
 /// A mod's mob effect gets the network id after vanilla's last, on the game
@@ -4156,7 +4440,7 @@ fn block_base_of(tag: &str, declarations: &[&str], facts: &str) -> (PathBuf, Vec
         Some(J::Arr(rows)) => rows.len(),
         _ => panic!("{tag}: facts.json has no states"),
     };
-    let rows = vec![r#"{"item":"minecraft:test"}"#; count].join(",");
+    let rows = vec![r#"{"item":"minecraft:test","sound":{"identity":"other"}}"#; count].join(",");
     fs::write(
         base.join("gameplay-facts.json"),
         format!(r#"{{"states":[{rows}]}}"#),
@@ -4978,6 +5262,40 @@ fn content_block_state_properties_are_validated() {
         Ok(_) => panic!("a shadowed template property was accepted"),
     };
     assert!(error.contains("axis is already on"), "{error}");
+    fs::remove_dir_all(&base).unwrap();
+    fs::remove_dir_all(base.parent().unwrap().join("mod0")).ok();
+
+    // A code declaration is named by its ID even in a package with block JSON.
+    let (base, mut mods) = block_base("block-code-shadow", &[r#"{"template":"minecraft:test"}"#]);
+    let block = sunrise_mod_package::content::Block {
+        id: "testmod:code".into(),
+        template: "minecraft:test".into(),
+        state_properties: [(
+            "axis".into(),
+            sunrise_mod_package::content::StateProperty::Boolean,
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let batches = BTreeMap::from([(
+        "testmod",
+        DeclaredContent {
+            blocks: vec![block.validate_local().unwrap()],
+            ..Default::default()
+        },
+    )]);
+    let mut errors = Vec::new();
+    accept_declared(&mut mods, &batches, &[], &BTreeSet::new(), &mut errors).unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    let error = match Plan::new(&base, &mods) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a shadowed template property from code was accepted"),
+    };
+    assert!(error.starts_with("testmod:code:"), "{error}");
+    assert!(
+        error.contains("state_properties.axis") && error.contains("minecraft:test"),
+        "{error}"
+    );
     fs::remove_dir_all(&base).unwrap();
     fs::remove_dir_all(base.parent().unwrap().join("mod0")).ok();
 
@@ -6073,8 +6391,11 @@ fn content_root_generates_a_biome_modifier_ore() {
         };
         let terrain = crate::vanillagen::VanillaTerrain::new(terrain_resources, 1234).unwrap();
         let mut worker = terrain.worker();
-        let mut region: [Proto; 9] =
-            std::array::from_fn(|i| terrain.proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1));
+        let mut region: [Proto; 9] = std::array::from_fn(|i| {
+            terrain
+                .proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1)
+                .unwrap()
+        });
         terrain.decorate(&mut worker, &mut region);
         let [_, _, _, _, center, ..] = region;
         let chunk = terrain.finish(center);
@@ -6158,13 +6479,25 @@ fn blocks_and_items_declared_in_code_get_ids() {
         ..Item::default()
     };
     let mut mods = vec![ruby_mod(&scratch.join("ruby"))];
-    let errors = accept_declared(
-        &mut mods,
-        &[block("ruby:ruby_log"), block("gears:shaft")],
-        &[wrench],
-        &[],
-        &known,
-    );
+    let batches = BTreeMap::from([
+        (
+            "ruby",
+            DeclaredContent {
+                blocks: vec![block("ruby:ruby_log").validate_local().unwrap()],
+                ..Default::default()
+            },
+        ),
+        (
+            "gears",
+            DeclaredContent {
+                blocks: vec![block("gears:shaft").validate_local().unwrap()],
+                items: vec![wrench.validate_local().unwrap()],
+                ..Default::default()
+            },
+        ),
+    ]);
+    let mut errors = Vec::new();
+    accept_declared(&mut mods, &batches, &[], &known, &mut errors).unwrap();
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(mods.len(), 2);
     assert!(
@@ -6176,14 +6509,18 @@ fn blocks_and_items_declared_in_code_get_ids() {
     );
     assert_eq!(mods[1].id, "gears");
     // A namespace another mod owns, and a clash with a file's block, are refused whole.
-    let refused = accept_declared(
-        &mut mods,
-        &[block("ruby:ruby_block"), block("ruby:ruby_post")],
-        &[],
-        &[],
-        &known,
-    );
-    assert_eq!(refused.len(), 1, "{refused:?}");
+    let colliding = BTreeMap::from([(
+        "ruby",
+        DeclaredContent {
+            blocks: [block("ruby:ruby_block"), block("ruby:ruby_post")]
+                .into_iter()
+                .map(|b| b.validate_local().unwrap())
+                .collect(),
+            ..Default::default()
+        },
+    )]);
+    accept_declared(&mut mods, &colliding, &[], &known, &mut errors).unwrap();
+    assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
         !mods[0]
             .content
@@ -6257,53 +6594,114 @@ fn blocks_and_items_declared_in_code_get_ids() {
 }
 
 #[test]
-fn a_file_item_whose_remainder_was_refused_takes_only_its_mod_out() {
-    use sunrise_mod_package::content::Item;
-    let item = |id: &str, remainder: Option<&str>| Item {
-        id: id.into(),
-        template: "minecraft:diamond".into(),
-        crafting_remainder: remainder.map(str::to_owned),
-        ..Item::default()
-    };
-    let make = |id: &str, items: Vec<Item>| {
-        let mut content = Content::declared(id);
-        content.items = items;
+#[ignore = "daily"]
+fn item_references_resolve_against_other_packages_registered_content() {
+    use sunrise_mod_package::{Manifest, content::Item};
+
+    let base = prepared().expect("daily test requires prepared resources");
+    let scratch = std::env::temp_dir().join(format!(
+        "sunrise-cross-item-references-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&scratch);
+    let addon = scratch.join("addon");
+    let declarations = addon.join("data/addon/sunrise/item");
+    fs::create_dir_all(&declarations).unwrap();
+    fs::write(
+        declarations.join("planter.json"),
+        r#"{"template":"minecraft:stick","block":"provider:crop","crafting_remainder":"provider:handle"}"#,
+    ).unwrap();
+    let manifest = Manifest::parse(
+        r#"
+        id = "addon"
+        name = "Planter"
+        version = "1.0.0"
+        api = "0.2"
+        side = "both"
+        capabilities = ["registries"]
+    "#,
+    )
+    .unwrap();
+    let mut addon = Content::read(&addon, &manifest).unwrap();
+    addon
+        .declare(
+            &[],
+            &[Item {
+                id: "addon:tool".into(),
+                template: "minecraft:stick".into(),
+                block: Some("provider:crop".into()),
+                crafting_remainder: Some("provider:handle".into()),
+                ..Item::default()
+            }],
+        )
+        .unwrap();
+    let mut provider = Content::declared("provider");
+    provider
+        .declare(
+            &[Block {
+                id: "provider:crop".into(),
+                template: "minecraft:glass".into(),
+                item: false,
+                ..Block::default()
+            }],
+            &[Item {
+                id: "provider:handle".into(),
+                template: "minecraft:bowl".into(),
+                ..Item::default()
+            }],
+        )
+        .unwrap();
+    let mut mods = [
         ContentMod {
-            id: id.into(),
-            content,
-            jars: Vec::new(),
-        }
-    };
-    let mut jar = make("jar", vec![item("jar:tool", Some("jar:jar"))]);
-    jar.content
-        .blocks
-        .push(sunrise_mod_package::content::Block {
-            id: "jar:jar".into(),
-            template: "minecraft:glass".into(),
-            item: true,
-            ..Default::default()
-        });
-    let mut mods = vec![
-        jar,
-        make(
-            "good",
-            vec![
-                item("good:tool", Some("good:wrench")),
-                item("good:wrench", None),
-            ],
-        ),
-        make("bad", vec![item("bad:tool", Some("bad:wrench"))]),
-        make(
-            "vanilla",
-            vec![item("vanilla:soup", Some("minecraft:bowl"))],
-        ),
+            id: "addon".into(),
+            content: addon,
+            jars: vec![],
+        },
+        ContentMod {
+            id: "provider".into(),
+            content: provider,
+            jars: vec![],
+        },
     ];
-    let dropped = drop_dangling_remainders(&mut mods);
-    assert_eq!(dropped.len(), 1, "{dropped:?}");
-    assert!(dropped[0].contains("bad"), "{dropped:?}");
-    let left: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
-    // A remainder that is the mod's own block item is kept too (`jar`).
-    assert_eq!(left, ["jar", "good", "vanilla"]);
+    let root = scratch.join("out");
+    build_fixture(&base, Path::new(""), &mods, &root).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let facts = BlockFacts::load(&root, assets.registry).unwrap();
+    let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+    let items = Items::load(
+        &root,
+        assets.registry,
+        &facts,
+        &PackOverlay::NONE,
+        &defaults,
+    )
+    .unwrap();
+    let crop = assets.registry.default_state("provider:crop").unwrap();
+    for id in ["addon:planter", "addon:tool"] {
+        let item = &items.items[id];
+        assert_eq!(item.block, Some(crop));
+        assert_eq!(item.crafting_remainder.as_deref(), Some("provider:handle"));
+    }
+
+    mods[1].content.items.clear();
+    let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("no-item")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "items.json: addon:planter: crafting_remainder \"provider:handle\" is not an item"
+    );
+    mods[0].content.items[0].crafting_remainder = Some("provider:crop".into());
+    let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("itemless")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        r#"items.json: addon:planter: crafting_remainder "provider:crop" is not an item"#,
+    );
+    mods[1].content.blocks.clear();
+    let error = build_fixture(&base, Path::new(""), &mods, &scratch.join("no-block")).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "addon:planter: block \"provider:crop\" is not a block"
+    );
+    fs::remove_dir_all(&scratch).unwrap();
 }
 
 /// A sign's four forms come from its template, whatever the blocks are named,
@@ -6718,8 +7116,11 @@ fn a_feature_gives_a_mods_sign_its_block_entity() {
             terrain.add_mod_signs(&facts);
         }
         let mut worker = terrain.worker();
-        let mut region: [Proto; 9] =
-            std::array::from_fn(|i| terrain.proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1));
+        let mut region: [Proto; 9] = std::array::from_fn(|i| {
+            terrain
+                .proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1)
+                .unwrap()
+        });
         terrain.decorate(&mut worker, &mut region);
         let [_, _, _, _, center, ..] = region;
         let chunk = terrain.finish(center);
@@ -6921,7 +7322,7 @@ fn sign_text_colors_are_the_signs_dye_ids() {
 }
 
 /// A content mod of recipes, a tag and a name, for vanilla's items: what
-/// switches live (docs/design/mod-hotload.md).
+/// switches live.
 fn glint_mod(dir: &Path) -> ContentMod {
     folder_mod(
         dir,
@@ -7505,7 +7906,10 @@ fn structure_modifiers_and_biome_modifier_reject_out_of_range_spawns() {
         let biome = format!(
             r#"{{"type":"neoforge:add_spawns","biomes":"minecraft:plains","spawners":{spawner}}}"#
         );
-        assert!(biomes::Modifier::read("zinc", "bad.json", &biome, &mut Vec::new()).is_err());
+        assert!(
+            biomes::Modifier::read("zinc", "bad.json", &biome, &|_| false, &mut Vec::new())
+                .is_err()
+        );
     }
 }
 
@@ -8044,5 +8448,264 @@ fn plain_block_properties_replace_template_facts_and_face_rule() {
             assert_eq!(row[8], J::Str("CUSTOM_HEAD".into()));
         }
         fs::remove_dir_all(base.parent().unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn accept_declared_refuses_host_duplicates_of_served_content_and_keeps_served_remainders() {
+    use sunrise_mod_package::content::{Block, Content, Item};
+    let block = |id: &str, item: bool| Block {
+        id: id.into(),
+        template: "minecraft:stone".into(),
+        item,
+        ..Block::default()
+    };
+    let item = |id: &str, remainder: Option<&str>| Item {
+        id: id.into(),
+        template: "minecraft:stick".into(),
+        crafting_remainder: remainder.map(str::to_owned),
+        ..Item::default()
+    };
+    let mut runes = Content::declared("runes");
+    runes.blocks.push(block("runes:altar", true));
+    runes.blocks.push(block("runes:crop", false));
+    runes.items.push(item("runes:stone", None));
+    runes
+        .items
+        .push(item("runes:soup", Some("runes:extra_item")));
+    runes
+        .items
+        .push(item("runes:ritual", Some("runes:extra_block")));
+    let mut plain = Content::declared("plain");
+    plain.items.push(item("plain:spoon", None));
+
+    let host_manifest = sunrise_mod_package::Manifest::parse(&format!(
+        "id='horizon_java'\nname='Horizon'\nversion='1.0.0'\napi='0.2'\nside='both'\ncapabilities=['registries']\n[native]\ngame='26.3'\nsunrise='{}'\nserves_content=true\n",
+        "a".repeat(40),
+    ))
+    .unwrap();
+    let runes_manifest = sunrise_mod_package::Manifest::parse(
+        "id='runes'\nname='Runes'\nversion='1.0.0'\napi='0.2'\nside='both'\ncapabilities=['registries']\nserved_by='horizon_java'\n",
+    )
+    .unwrap();
+    let plain_manifest = sunrise_mod_package::Manifest::parse(
+        "id='plain'\nname='Plain'\nversion='1.0.0'\napi='0.2'\nside='both'\ncapabilities=['registries']\n",
+    )
+    .unwrap();
+    let manifests = [&host_manifest, &runes_manifest, &plain_manifest];
+    let known = BTreeSet::new();
+
+    // Non-colliding host declarations in a served namespace succeed and coexist without clash.
+    // Both directions of cross-layer crafting_remainder work (served -> host item & block item,
+    // and host -> served item & block item).
+    let mut mods = vec![
+        ContentMod {
+            id: "runes".into(),
+            content: runes,
+            jars: Vec::new(),
+        },
+        ContentMod {
+            id: "plain".into(),
+            content: plain,
+            jars: Vec::new(),
+        },
+    ];
+    let valid = BTreeMap::from([(
+        "horizon_java",
+        DeclaredContent {
+            blocks: vec![block("runes:extra_block", true).validate_local().unwrap()],
+            items: vec![
+                item("runes:extra_item", None).validate_local().unwrap(),
+                // Host item using a served content item as its crafting_remainder.
+                item("runes:filled_stone", Some("runes:stone"))
+                    .validate_local()
+                    .unwrap(),
+                // Host item using a served content item-bearing block as its crafting_remainder.
+                item("horizon_java:altar_kit", Some("runes:altar"))
+                    .validate_local()
+                    .unwrap(),
+                // Same ID as a block with `item: false` is allowed.
+                item("runes:crop", None).validate_local().unwrap(),
+            ],
+            ..Default::default()
+        },
+    )]);
+    let mut errors = Vec::new();
+    accept_declared(&mut mods, &valid, &manifests, &known, &mut errors).unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(mods.len(), 3);
+    assert_eq!(mods[2].id, "horizon_java");
+    // Served and host items with valid cross-layer remainders (both items and block items) survive.
+    let base = tempfile::tempdir().unwrap();
+    std::fs::write(base.path().join("items.json"), "{}").unwrap();
+    assert!(
+        drop_dangling_remainders(base.path(), &mut mods)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(mods.len(), 3);
+    // Both directions retain the exact item keys for the combined registry lookup.
+    for (layer, id, remainder) in [
+        (0, "runes:soup", "runes:extra_item"),
+        (0, "runes:ritual", "runes:extra_block"),
+        (2, "runes:filled_stone", "runes:stone"),
+        (2, "horizon_java:altar_kit", "runes:altar"),
+    ] {
+        let item = mods[layer]
+            .content
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.crafting_remainder.as_deref(), Some(remainder));
+    }
+
+    // Host remainders in unserved namespaces and unresolved keys are both deferred to the
+    // registry. The syntactically valid references do not make the declaration batch invalid.
+    for (label, bad_item) in [
+        (
+            "unserved package remainder",
+            item("horizon_java:stolen_rem", Some("plain:spoon")),
+        ),
+        (
+            "missing remainder",
+            item("runes:missing_rem", Some("runes:nonexistent")),
+        ),
+    ] {
+        let mut errors = Vec::new();
+        let id = bad_item.id.clone();
+        let remainder = bad_item.crafting_remainder.clone();
+        let batches = BTreeMap::from([(
+            "horizon_java",
+            DeclaredContent {
+                items: vec![bad_item.validate_local().unwrap()],
+                ..Default::default()
+            },
+        )]);
+        accept_declared(&mut mods, &batches, &manifests, &known, &mut errors).unwrap();
+        assert!(errors.is_empty(), "{label}: {errors:?}");
+        let item = mods[2]
+            .content
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.crafting_remainder, remainder, "{label}");
+    }
+
+    // An itemless block never reserves an item ID in either direction across layers:
+    // (1) code itemless block + file item with the same ID, and
+    // (2) file itemless block + code item with the same ID.
+    let mut itemless_cross_runes = Content::declared("runes");
+    itemless_cross_runes
+        .blocks
+        .push(block("runes:no_item", false));
+    itemless_cross_runes.items.push(item("runes:stone", None));
+    let mut itemless_cross_mods = vec![ContentMod {
+        id: "runes".into(),
+        content: itemless_cross_runes,
+        jars: Vec::new(),
+    }];
+    let mut itemless_cross_errors = Vec::new();
+    let itemless_cross_batches = BTreeMap::from([(
+        "horizon_java",
+        DeclaredContent {
+            blocks: vec![block("runes:stone", false).validate_local().unwrap()],
+            items: vec![item("runes:no_item", None).validate_local().unwrap()],
+            ..Default::default()
+        },
+    )]);
+    accept_declared(
+        &mut itemless_cross_mods,
+        &itemless_cross_batches,
+        &manifests,
+        &known,
+        &mut itemless_cross_errors,
+    )
+    .unwrap();
+    assert!(
+        itemless_cross_errors.is_empty(),
+        "{itemless_cross_errors:?}"
+    );
+    assert!(
+        itemless_cross_mods[1]
+            .content
+            .blocks
+            .iter()
+            .any(|b| b.id == "runes:stone" && !b.item)
+    );
+    assert!(
+        itemless_cross_mods[1]
+            .content
+            .items
+            .iter()
+            .any(|i| i.id == "runes:no_item")
+    );
+
+    // Every true block/item collision against a served package refuses atomically.
+    let cases = [
+        (
+            "duplicate block",
+            DeclaredContent {
+                blocks: [block("runes:altar", true), block("runes:atomic_skip", true)]
+                    .into_iter()
+                    .map(|b| b.validate_local().unwrap())
+                    .collect(),
+                ..Default::default()
+            },
+            "runes:altar",
+        ),
+        (
+            "item-bearing block colliding with served item",
+            DeclaredContent {
+                blocks: [block("runes:stone", true), block("runes:atomic_skip", true)]
+                    .into_iter()
+                    .map(|b| b.validate_local().unwrap())
+                    .collect(),
+                ..Default::default()
+            },
+            "runes:stone",
+        ),
+        (
+            "item colliding with served block item",
+            DeclaredContent {
+                blocks: vec![block("runes:atomic_skip", true).validate_local().unwrap()],
+                items: vec![item("runes:altar", None).validate_local().unwrap()],
+                ..Default::default()
+            },
+            "runes:altar",
+        ),
+        (
+            "duplicate item",
+            DeclaredContent {
+                blocks: vec![block("runes:atomic_skip", true).validate_local().unwrap()],
+                items: vec![item("runes:stone", None).validate_local().unwrap()],
+                ..Default::default()
+            },
+            "runes:stone",
+        ),
+    ];
+    for (label, batch, conflicting_id) in cases {
+        let mut errors = Vec::new();
+        let batches = BTreeMap::from([("horizon_java", batch)]);
+        accept_declared(&mut mods, &batches, &manifests, &known, &mut errors).unwrap();
+        assert_eq!(errors.len(), 1, "{label}: {errors:?}");
+        assert!(
+            matches!(
+                &errors[0].error,
+                mod_api::DeclarationError::Rejected { id, reason }
+                    if id == conflicting_id && reason.contains("runes")
+            ),
+            "{label}: {:?}",
+            errors[0]
+        );
+        assert!(
+            !mods[2]
+                .content
+                .blocks
+                .iter()
+                .any(|b| b.id == "runes:atomic_skip"),
+            "{label}: batch must be refused atomically"
+        );
     }
 }

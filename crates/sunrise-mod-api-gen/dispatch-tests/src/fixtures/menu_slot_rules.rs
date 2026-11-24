@@ -23,7 +23,7 @@ fn pickup_refusal_is_written_back_by_dispatch() {
             slot: 0,
             container: MenuContainer::Main,
             stack: &ItemStack::default(),
-            context: &MenuSlotContext::default(),
+            context: &MenuSlotContext::new(None, None, &|_, _| None),
             may_place: &mut place,
             may_pickup: &mut pickup,
             max_stack: &mut maximum,

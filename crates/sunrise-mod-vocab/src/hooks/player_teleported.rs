@@ -1,5 +1,4 @@
 //! The `player_teleported` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0264
 
 pub trait Hooks {
     /// A server player a command teleported (NeoForge's
@@ -14,9 +13,11 @@ pub trait Hooks {
     /// have their own hooks; a spectator's teleport menu is not heard yet;
     /// portals and respawns are not teleports here.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_teleported",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "none (EntityTeleportEvent.TeleportCommand fires before the move and can cancel it; this hook is told after the move)"
     )]
-    fn player_teleported();
+    fn player_teleported(player: u128, name: &str, from: [f64; 3], to: [f64; 3], dimension: &str);
 }

@@ -213,6 +213,17 @@ pub struct PotionIngredient {
     pub potions: Option<HashSet<String>>,
 }
 impl PotionIngredient {
+    pub fn parse_potions(v: &Value) -> Option<HashSet<String>> {
+        match &v["potion_contents"]["potions"] {
+            Value::String(s) => Some([s.clone()].into_iter().collect()),
+            Value::Array(a) => Some(
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
     fn parse(v: &Value, items: &Items) -> Self {
         let mut set = HashSet::new();
         let add = |s: &str, set: &mut HashSet<String>| match s.strip_prefix('#') {
@@ -229,18 +240,9 @@ impl PotionIngredient {
                 .for_each(|s| add(s, &mut set)),
             _ => {}
         }
-        let potions = match &v["potion_contents"]["potions"] {
-            Value::String(s) => Some([s.clone()].into_iter().collect()),
-            Value::Array(a) => Some(
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_owned))
-                    .collect(),
-            ),
-            _ => None,
-        };
         Self {
             items: set,
-            potions,
+            potions: Self::parse_potions(v),
         }
     }
     pub fn test(&self, stack: &ItemStack) -> bool {
@@ -305,17 +307,29 @@ pub struct Brewing {
     pub inputs: HashSet<String>,
 }
 impl Brewing {
+    /// Build live brewing tables from already-decoded `minecraft:brewing` recipes.
+    pub fn from_recipes(recipes: Vec<BrewingRecipe>) -> Self {
+        let reagents = recipes
+            .iter()
+            .flat_map(|r| r.reagent.items.iter().cloned())
+            .collect();
+        let inputs = recipes
+            .iter()
+            .flat_map(|r| r.input.items.iter().cloned())
+            .chain(std::iter::once("minecraft:glass_bottle".to_owned()))
+            .collect();
+        Self {
+            recipes,
+            reagents,
+            inputs,
+        }
+    }
     pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
         let mut sources =
             sunrise_items::recipe_sources::sources(root, overlay).unwrap_or_else(|e| {
                 log::warn!("Sunrise: brewing recipes not loaded: {e}");
                 Vec::new()
             });
-        sources.retain(|(id, _)| {
-            let path = id.split_once(':').map_or(id.as_str(), |(_, path)| path);
-            path.strip_prefix("brewing/")
-                .is_some_and(|name| !name.contains('/'))
-        });
         for (id, _) in &mut sources {
             *id = sunrise_items::recipe_sources::qualified(id);
         }
@@ -347,20 +361,7 @@ impl Brewing {
                 output,
             });
         }
-        let reagents = recipes
-            .iter()
-            .flat_map(|r| r.reagent.items.iter().cloned())
-            .collect();
-        let inputs = recipes
-            .iter()
-            .flat_map(|r| r.input.items.iter().cloned())
-            .chain(std::iter::once("minecraft:glass_bottle".to_owned()))
-            .collect();
-        Self {
-            recipes,
-            reagents,
-            inputs,
-        }
+        Self::from_recipes(recipes)
     }
     pub fn find(&self, input: &ItemStack, reagent: &ItemStack) -> Option<&BrewingRecipe> {
         self.recipes
@@ -494,33 +495,22 @@ impl BrewingStand {
             && (self.fuel > 0 || self.items[4].is_none())
             && self.last_bottles == Some(bottles)
     }
-    /// `doBrew` once `PotionBrewEvent.Pre` asked the mods with `asked`, a
-    /// copy of the five slots, and whether they cancelled: a cancel puts the
-    /// mods' slots in and skips the brew (the caller then fires Post);
-    /// otherwise vanilla brews and the copy is dropped. Without mods (`None`)
-    /// this is `doBrew`.
-    pub fn brew_after_pre(
-        &mut self,
-        asked: Option<([Option<ItemStack>; 5], bool)>,
-        brewing: &Brewing,
-        remainder: &dyn Fn(&ItemStack) -> Option<ItemStack>,
-        out: &mut BrewTick,
-    ) {
-        match asked {
-            Some((stacks, true)) => self.items = stacks,
-            _ => self.brew(brewing, remainder, out),
-        }
-    }
-    /// `BrewingStandBlockEntity.doBrew`.
+    /// `BrewingStandBlockEntity.doBrew` without engine listeners.
     pub fn brew(
         &mut self,
         brewing: &Brewing,
         remainder: &dyn Fn(&ItemStack) -> Option<ItemStack>,
         out: &mut BrewTick,
     ) {
-        let Some(ingredient) = self.items[3].clone() else {
-            return;
-        };
+        if let Some(ingredient) = self.brew_bottles(brewing) {
+            let rest = remainder(&ingredient);
+            self.finish_brew(ingredient, rest, out);
+        }
+    }
+    /// `doBrew` through the bottle replacements, before NeoForge's `onPotionBrewed`.
+    /// Returns the captured ingredient, which is consumed after the event.
+    pub fn brew_bottles(&mut self, brewing: &Brewing) -> Option<ItemStack> {
+        let ingredient = self.items[3].clone()?;
         for slot in 0..3 {
             if let Some(input) = &self.items[slot]
                 && let Some(r) = brewing.find(input, &ingredient)
@@ -528,13 +518,29 @@ impl BrewingStand {
                 self.items[slot] = Some(r.output.clone());
             }
         }
-        let remainder = remainder(&ingredient);
-        if let Some(i) = self.items[3].as_mut() {
-            i.count -= 1;
-            if i.count == 0 {
+        Some(ingredient)
+    }
+    /// The rest of `doBrew`, using the original ingredient even when Post
+    /// replaced slot 3. Only an unchanged slot is shrunk; a remainder from an
+    /// exhausted ingredient is written to the slot as in vanilla.
+    pub fn finish_brew(
+        &mut self,
+        mut ingredient: ItemStack,
+        remainder: Option<ItemStack>,
+        out: &mut BrewTick,
+    ) {
+        let unchanged = self.items[3].as_ref() == Some(&ingredient);
+        ingredient.count -= 1;
+        if ingredient.count == 0 {
+            if unchanged || remainder.is_some() {
                 self.items[3] = remainder;
-            } else if let Some(r) = remainder {
-                out.drops.push(r);
+            }
+        } else {
+            if unchanged {
+                self.items[3] = Some(ingredient);
+            }
+            if let Some(rest) = remainder {
+                out.drops.push(rest);
             }
         }
         out.brewed = true;
@@ -972,10 +978,8 @@ mod tests {
         assert!(lines[1].0.starts_with("Сопротивление III ("), "{lines:?}");
     }
 
-    /// Cancelled pre-hook slots replace the brew without consuming an ingredient.
-    /// Uncancelled pre-hook edits are discarded before vanilla brewing runs.
     #[test]
-    fn a_cancelled_brew_takes_the_mods_slots_and_an_uncancelled_one_brews() {
+    fn post_sees_new_bottles_and_the_unconsumed_ingredient() {
         let set = |ids: &[&str]| ids.iter().map(|s| (*s).to_owned()).collect();
         let brewing = Brewing {
             reagents: set(&["minecraft:nether_wart"]),
@@ -993,41 +997,23 @@ mod tests {
                 output: ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"),
             }],
         };
-        let items = sunrise_items::items::Items::for_tests(Default::default());
         let water = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water");
         let awkward = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward");
-        let fresh = || {
-            let mut stand = BrewingStand::new();
-            stand.items[0] = Some(water.clone());
-            stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 2));
-            stand
-        };
-        for cancel in [true, false] {
-            let mut stand = fresh();
-            let mut edited = stand.items.clone();
-            edited[0] = Some(ItemStack::new("minecraft:diamond", 1));
-            let mut out = BrewTick::default();
-            stand.brew_after_pre(
-                Some((edited, cancel)),
-                &brewing,
-                &|s| data_remainder(&items, s),
-                &mut out,
-            );
-            assert_eq!(out.brewed, !cancel);
-            assert_eq!(
-                stand.items[0],
-                Some(if cancel {
-                    ItemStack::new("minecraft:diamond", 1)
-                } else {
-                    awkward.clone()
-                })
-            );
-            assert!(stand.items[1].is_none());
-            assert_eq!(
-                stand.items[3].as_ref().map(|s| s.count),
-                Some(if cancel { 2 } else { 1 })
-            );
-        }
+        let mut stand = BrewingStand::new();
+        stand.items[0] = Some(water);
+        stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 2));
+        let ingredient = stand.brew_bottles(&brewing).unwrap();
+        assert_eq!(stand.items[0], Some(awkward));
+        assert_eq!(stand.items[3].as_ref().unwrap().count, 2);
+        // A Post listener can replace the slot without shrinking the replacement.
+        let replacement = ItemStack::new("minecraft:diamond", 5);
+        stand.items[3] = Some(replacement.clone());
+        let remainder = ItemStack::new("minecraft:stick", 1);
+        let mut out = BrewTick::default();
+        stand.finish_brew(ingredient, Some(remainder.clone()), &mut out);
+        assert_eq!(stand.items[3], Some(replacement));
+        assert_eq!(out.drops, [remainder]);
+        assert!(out.brewed);
     }
 
     #[test]

@@ -5,6 +5,10 @@ pub(crate) struct Level;
 impl crate::LevelRandomHost for Level {}
 #[cfg(test)]
 impl LevelHost for Level {
+    fn block_entity_data(&self, _: crate::BlockEntityRef) -> Option<crate::Compound> {
+        None
+    }
+
     fn block_state(&self, _: [i32; 3]) -> Option<crate::BlockState> {
         None
     }

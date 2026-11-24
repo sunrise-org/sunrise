@@ -3,27 +3,13 @@
 //! `continueAttack`, `MultiPlayerGameMode` block breaking), the arm swing
 //! (`LivingEntity.SwingState`) and the first-person equip heights
 //! (`FirstPersonHandsAndItems`) with the item swap ticker they read.
-use super::{Game, Mining, Screen, minecarts::CartKind};
+use super::{Game, Mining, minecarts::CartKind};
 use sunrise_client::{
     Result,
     attack_strength::HeldStack,
     first_person::{Hand, HandWorld, Hit, SwingAnimation, UseResult, swing_duration},
-    input_queue::{ClickQueue, QueueLimits},
-    interaction_input::{Button, click_queue},
     items::ItemStack,
 };
-
-/// The local player's empty attack and use click queues, bounded as a server's client's are
-/// (`CLICK_QUEUES`).
-pub(super) const ATTACK_CLICKS: ClickQueue = click_queue(Button::Attack);
-pub(super) const USE_CLICKS: ClickQueue = click_queue(Button::Use);
-/// The clicks of one number key (`KeyMapping.clickCount`): a tick takes one, as
-/// `consumeClick` does, and 1024 wait at most.
-pub(super) const HOTBAR_CLICKS: ClickQueue = ClickQueue::new(QueueLimits {
-    name: "number keys",
-    max_len: 1024,
-    per_tick: 1,
-});
 use sunrise_core::geometry::{Aabb, Vec3};
 
 /// The point a `ServerboundInteractPacket` carries: `EntityHitResult.getLocation()
@@ -256,8 +242,6 @@ impl Game<'_> {
             error: None,
         });
         self.clicks.destroying = destroying;
-        self.attack_clicks.clear();
-        self.use_clicks.clear();
         self.request_remote_mining_stop();
         self.mining = None;
     }
@@ -320,29 +304,62 @@ impl Game<'_> {
         self.attack_ticks = 0;
         self.hand_strength.reset();
     }
-    /// Window input preparation only selects queued hotbar keys: the enclosing
-    /// client tick already picked before key handling. Simulation keeps its own ray.
+    /// The window tick already picked before key handling. Simulation keeps its own ray.
     pub(super) fn pick_tick_targets(&mut self) {
         if self.native_window() {
-            self.select_queued_hotbar();
             return;
         }
-        self.tick_hit.set(Some(self.pick()));
+        self.tick_hit.set(None);
         self.tick_mob = None;
-        let mob = match self.active_attack_range() {
-            Some(range) => self.attack_range_pick(&range),
-            None => None,
-        };
-        self.tick_mob = Some(mob.unwrap_or_else(|| self.mob_hit()));
-        self.select_queued_hotbar();
+        match self.compute_crosshair_decision() {
+            super::pick_entity::CrosshairDecision::Block(hit) => {
+                self.tick_hit.set(Some(Some(hit)));
+                self.tick_mob = Some(None);
+            }
+            super::pick_entity::CrosshairDecision::Entity(hit) => {
+                self.tick_hit.set(Some(None));
+                let mob = self.mob_index.find(&self.mobs, hit.id).map(|i| {
+                    let feet = self.mobs[i].position;
+                    (
+                        i,
+                        hit.distance_sq.sqrt(),
+                        [
+                            hit.point[0] - feet.x,
+                            hit.point[1] - feet.y,
+                            hit.point[2] - feet.z,
+                        ],
+                    )
+                });
+                self.tick_mob = Some(mob);
+            }
+            super::pick_entity::CrosshairDecision::Miss => {
+                self.tick_hit.set(Some(None));
+                self.tick_mob = Some(None);
+            }
+        }
     }
     /// `handleKeybinds`' number keys: keys 1 to 9 in that order, one click of each
     /// (`keyHotbarSlots[i].consumeClick`), so the highest key clicked this tick wins and a
     /// key's further clicks wait for the next ticks. A creative player holding the load or
     /// save toolbar key loads or saves that toolbar instead (load first when both are held).
     pub(super) fn select_queued_hotbar(&mut self) {
-        for slot in 0..self.hotbar_presses.len() {
-            if self.hotbar_presses[slot].take_tick() == 0 {
+        const HOTBAR: [&str; 9] = [
+            "key.hotbar.1",
+            "key.hotbar.2",
+            "key.hotbar.3",
+            "key.hotbar.4",
+            "key.hotbar.5",
+            "key.hotbar.6",
+            "key.hotbar.7",
+            "key.hotbar.8",
+            "key.hotbar.9",
+        ];
+        for (slot, name) in HOTBAR.into_iter().enumerate() {
+            if !self.consume_mapping_click(name) {
+                continue;
+            }
+            if self.own_player_is_spectator() {
+                self.spectator_hotbar_key(slot as i32);
                 continue;
             }
             let load = self.creative && self.mapped_key_down("key.loadToolbarActivator");
@@ -364,111 +381,142 @@ impl Game<'_> {
         let range = self
             .held()
             .and_then(|stack| self.attack_range_component(stack));
-        range.is_none_or(|r| attack_range_contains(&r, distance, self.creative))
+        range.is_none_or(|r| attack_range_contains(&r, distance, self.own_player_is_creative()))
     }
     /// `LocalPlayer.raycastHitResult`'s item (`getActiveItem`: the one in
     /// use, else the main hand's) `attack_range` component.
-    fn active_attack_range(&self) -> Option<serde_json::Value> {
+    pub(in crate::game) fn active_attack_range(&self) -> Option<serde_json::Value> {
         let active = self
             .using
             .and_then(|(slot, _)| self.inventory.get(slot).and_then(Option::as_ref))
             .or_else(|| self.held())?;
         self.attack_range_component(active)
     }
-    /// `AttackRange.getClosesetHit` against the mobs `mob_hit` can pick
-    /// (`EntitySelector.CAN_BE_PICKED`), as `raycastHitResult` reads it: the
-    /// nearest mob hit within the item's reach; no mob when the clip met a
-    /// block within the block reach (`getHitEntitiesAlong`'s block result,
-    /// kept by `filterHitResult`); `None` on a miss, where the plain pick
-    /// decides.
-    pub(super) fn attack_range_pick_entity(&self) -> Option<mod_api::CrosshairTarget> {
-        let range = self.active_attack_range()?;
-        let (i, _, location) = self.attack_range_pick(&range)??;
-        let mob = &self.mobs[i];
-        Some(mod_api::CrosshairTarget::Entity {
-            entity: mod_api::EntityRef::new(self.native_lifecycle.epoch()?, mob.id),
-            point: [
-                mob.position.x + location[0],
-                mob.position.y + location[1],
-                mob.position.z + location[2],
-            ],
-        })
-    }
 
     pub(super) fn client_pick_entity_reach(&self, direction: [f64; 3]) -> f64 {
         self.active_attack_range()
             .map_or(self.entity_reach, |range| {
-                (f64::from(attack_reach(&range, self.creative).1)
+                (f64::from(attack_reach(&range, self.own_player_is_creative()).1)
                     + self.known_player_movement().dot(v3(direction)).max(0.0))
                 .max(self.entity_reach)
             })
     }
 
-    fn attack_range_pick(
+    /// `AttackRange.getClosesetHit` plus `LocalPlayer.filterHitResult` on block hits:
+    /// preserves entity hits, in-range block hits, and misses separately so block hits
+    /// do not fall back to the plain `LocalPlayer.pick` ray.
+    pub(in crate::game) fn attack_range_pick_result(
         &self,
         range: &serde_json::Value,
-    ) -> Option<Option<(usize, f64, [f64; 3])>> {
-        let (eye, look) = match self.client_pick.ray {
-            Some((origin, direction)) => (v3(origin), v3(direction)),
-            None => (
-                v3(self.eye_position()?),
-                v3(super::view_vector(self.yaw, self.pitch)),
-            ),
+    ) -> super::pick_entity::AttackRangePickResult {
+        use super::pick_accumulator::PickCandidate;
+        use super::pick_entity::AttackRangePickResult;
+
+        let Some((partial_eye_arr, look_arr)) = self.aim() else {
+            return AttackRangePickResult::Miss;
         };
-        let reach = attack_reach(range, self.creative);
-        let camera = self.remote_camera_id();
-        // AttackRange uses getManyEntityHitResult, which does not exclude
-        // entities sharing the camera's root vehicle.
-        let boxes = (self.mobs.iter().enumerate())
-            .filter(|(_, m)| !m.removed && Some(m.id) != camera)
-            .map(|(i, m)| (i, m.bounds()));
-        let clip = |from: Vec3, to: Vec3| {
-            let length = from.distance_squared(to).sqrt();
-            let d = to.subtract(from).scale(1.0 / length);
-            (length > 0.0)
-                .then(|| self.clip_ray([from.x, from.y, from.z], [d.x, d.y, d.z], length))
-                .flatten()
+        let partial_eye = v3(partial_eye_arr);
+        let look = v3(look_arr);
+        let eye = self.camera_eye_position().map(v3).unwrap_or(partial_eye);
+        let (min, max, margin) = attack_reach(range, self.own_player_is_creative());
+        let movement = self.known_player_movement();
+        let from = eye.add_vector(look.scale(f64::from(min)));
+        let max_len = f64::from(max) + movement.dot(look).max(0.0);
+        let mut to = eye.add_vector(look.scale(max_len));
+
+        let filter_block = |hit: super::Hit| {
+            let d2 =
+                partial_eye.distance_squared(Vec3::new(hit.point[0], hit.point[1], hit.point[2]));
+            if d2 < self.block_reach * self.block_reach {
+                AttackRangePickResult::Block(hit)
+            } else {
+                AttackRangePickResult::Miss
+            }
+        };
+
+        let block_hit = (max_len > 0.0)
+            .then(|| self.clip_ray([eye.x, eye.y, eye.z], [look.x, look.y, look.z], max_len))
+            .flatten();
+        if let Some(hit) = block_hit {
+            to = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
+            if eye.distance_squared(to) < eye.distance_squared(from) {
+                return filter_block(hit);
+            }
+        }
+
+        let clip = |a: Vec3, b: Vec3| {
+            let length = a.distance_squared(b).sqrt();
+            if length <= 0.0 {
+                return None;
+            }
+            let d = b.subtract(a).scale(1.0 / length);
+            self.clip_ray([a.x, a.y, a.z], [d.x, d.y, d.z], length)
                 .map(|hit| Vec3::new(hit.point[0], hit.point[1], hit.point[2]))
         };
-        let movement = self.known_player_movement();
-        let mut nearest: Option<(usize, f64, [f64; 3])> = None;
-        sunrise_client::spear::for_each_hit_in_reach(
-            boxes,
-            eye,
-            look,
-            movement,
-            reach,
-            clip,
-            |i, at| {
-                let distance = eye.distance_squared(at).sqrt();
-                if nearest.is_none_or(|best| distance < best.1) {
-                    nearest = Some((i, distance, interact_location(at, self.mobs[i].position)));
+
+        let half = f64::from(margin) * 0.5;
+        let search_area = Aabb::new(
+            Vec3::new(from.x - half, from.y - half, from.z - half),
+            Vec3::new(from.x + half, from.y + half, from.z + half),
+        )
+        .expand_towards(to.subtract(from))
+        .inflate(Vec3::new(1.0, 1.0, 1.0));
+        let grow = Vec3::new(f64::from(margin), f64::from(margin), f64::from(margin));
+
+        let mut nearest: Option<PickCandidate> = None;
+        // AttackRange uses ProjectileUtil.getManyEntityHitResult over CAN_BE_PICKED:
+        // full pickable population, no entity pickRadius inflation, no root-vehicle exclusion.
+        self.for_each_pickable_in_bounds(search_area, |id, raw_bb, _radius| {
+            let inside = raw_bb.contains(from);
+            let hit_point = if inside {
+                Some(from)
+            } else if let Some(at) = raw_bb.clip(from, to) {
+                Some(at)
+            } else if margin > 0.0 {
+                raw_bb.inflate(grow).clip(from, to).and_then(|outside| {
+                    let centre = raw_bb.center();
+                    let toward = clip(outside, centre).unwrap_or(centre);
+                    raw_bb.clip(outside, toward)
+                })
+            } else {
+                None
+            };
+            if let Some(at) = hit_point {
+                let distance_sq = partial_eye.distance_squared(at);
+                if nearest.is_none_or(|best| distance_sq < best.distance_sq) {
+                    nearest = Some(PickCandidate {
+                        id,
+                        point: [at.x, at.y, at.z],
+                        distance_sq,
+                        inside,
+                    });
                 }
-            },
-        );
-        if nearest.is_some() {
-            return Some(nearest);
+            }
+        });
+
+        if let Some(hit) = nearest {
+            AttackRangePickResult::Entity(hit)
+        } else if let Some(hit) = block_hit {
+            filter_block(hit)
+        } else {
+            AttackRangePickResult::Miss
         }
-        let to = eye.add_vector(look.scale(f64::from(reach.1) + movement.dot(look).max(0.0)));
-        clip(eye, to)
-            .is_some_and(|block| eye.distance_squared(block) <= self.block_reach.powi(2))
-            .then_some(None)
     }
     /// The attack and use part of `Minecraft.tick` for the local player:
     /// attack clicks since the last tick and the held attack button.
     pub(super) fn tick_local_hand(&mut self) -> Result<()> {
-        if self.screen == Screen::Playing && self.title.is_none() && self.sleeping.is_none() {
-            // Up to each queue's bound; the rest act on the next ticks.
-            let attack_clicks = self.attack_clicks.take_tick();
-            let use_clicks = self.use_clicks.take_tick();
-            let mut clicks = std::mem::take(&mut self.clicks);
-            // keyAttack.isDown(); playing implies the grabbed mouse here
-            // (scripts under --control hold buttons without grabbing it).
-            let down = self.left;
-            let ticks = self.clicks.destroying.ticks;
-            // Every click and both hands share this tick's stored pick, even
-            // after a creative break changes the block at its position.
+        if !self.mod_mappings_screen_open() && self.sleeping.is_none() {
+            // Every click and both hands share this tick's stored pick.
             self.pick_tick_targets();
+            self.handle_play_keybinds();
+            let using = self.using.is_some();
+            let mut attack_clicks = 0;
+            while self.consume_mapping_click("key.attack") {
+                attack_clicks += u32::from(!using);
+            }
+            let mut clicks = std::mem::take(&mut self.clicks);
+            let down = self.mapped_key_down("key.attack") && !self.mod_mappings_screen_open();
+            let ticks = clicks.destroying.ticks;
             let mut world = GameHands {
                 game: self,
                 error: None,
@@ -483,15 +531,35 @@ impl Game<'_> {
             // Use clicks follow the attack clicks within the tick, against
             // the block the attack may just have broken.
             let mut used = Ok(());
-            for _ in 0..use_clicks {
-                if self.using.is_some() {
-                    break;
+            while self.consume_mapping_click("key.use") {
+                if using {
+                    continue;
                 }
                 used = self.use_with_hand();
                 self.use_delay = 4;
                 if used.is_err() {
                     break;
                 }
+            }
+            while self.consume_mapping_click("key.pickItem") {
+                if !using {
+                    if let Some(hit) = self.crosshair_entity_hit() {
+                        if let Some(stack) = self.entity_pick_result(hit.id) {
+                            self.pick_into_inventory(&stack, self.creative);
+                        }
+                    } else if let Some(hit) = self.pick() {
+                        let include_data = self.creative && self.has_control_down();
+                        if let Some(stack) = self.picked_stack(hit.pos, include_data) {
+                            self.pick_into_inventory(&stack, self.creative);
+                        }
+                    }
+                }
+            }
+            while !using
+                && self.own_player_is_spectator()
+                && self.consume_mapping_click("key.spectatorHotbar")
+            {
+                self.spectator_action_key();
             }
             self.release_tick_targets();
             used?;
@@ -501,21 +569,20 @@ impl Game<'_> {
             if d.active && d.ticks > ticks {
                 let (pos, first) = (d.pos, (d.ticks as u32 - 1).is_multiple_of(4));
                 let state = self.world.block(pos[0], pos[1], pos[2]);
-                if first {
-                    let face = sunrise_core::geometry::Direction::ALL[d.face as usize].normal();
-                    self.play_mining_hit_sound(state, pos, face, false);
-                }
-                if let Some(hit) = self.pick() {
-                    self.crack_particle(pos, hit.face, state);
+                if !self.res.facts().is_air(state) {
+                    if first {
+                        let face = sunrise_core::geometry::Direction::ALL[d.face as usize].normal();
+                        self.play_mining_hit_sound(state, pos, face, false);
+                    }
+                    if let Some(hit) = self.pick() {
+                        self.crack_particle(pos, hit.face, state);
+                    }
                 }
             }
         } else {
             // Minecraft.tick: a screen keeps the attack from starting, and
             // opening it released the keys (`KeyMapping.releaseAll`).
             self.clicks.miss_time = 10000;
-            self.attack_clicks.clear();
-            self.use_clicks.clear();
-            self.hotbar_presses.iter_mut().for_each(ClickQueue::clear);
         }
         let d = &self.clicks.destroying;
         self.set_client_mining(d.active.then_some(Mining {
@@ -570,6 +637,37 @@ impl Game<'_> {
     /// here: single player's, a host's for each guest, a remote client's own.
     pub(super) fn destroy_progress(&mut self, pos: [i32; 3]) -> f32 {
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        self.destroy_progress_for(pos, state)
+    }
+    /// `BlockBehaviour.getDestroyProgress` for a supplied state at `pos`: a block Part's
+    /// `destroy_progress` answer, or the game's own dig math, including the
+    /// `player_break_speed` hook. The caller checks that `state` is a known state when it
+    /// comes from a mod.
+    pub(super) fn destroy_progress_for(
+        &mut self,
+        pos: [i32; 3],
+        state: sunrise_world::registry::BlockStateId,
+    ) -> f32 {
+        // The block's own `getDestroyProgress`, which a Part's answer overrides whole. Inside
+        // that answer a query gives the game's math, as the default method below would.
+        if !DestroyProgressDispatch::running()
+            && crate::game::api_values::block_state::block_listens(
+                mod_api::HookId::DestroyProgress,
+                state,
+            )
+            && let Some(player) = if self.is_logical_server() {
+                self.native_acting_player()
+            } else {
+                self.local_player()
+            }
+        {
+            let mut answer = None;
+            let _dispatching = DestroyProgressDispatch::enter();
+            self.native_destroy_progress(player, pos, state, &mut answer);
+            if let Some(progress) = answer {
+                return progress;
+            }
+        }
         let facts = self.res.facts().get(state);
         if facts.hardness == -1.0 {
             return 0.0;
@@ -596,6 +694,7 @@ impl Game<'_> {
         let mut speed = sunrise_items::mining::destroy_speed(tool_speed, &player);
         let mut canceled = false;
         if mod_api::__private::listened(mod_api::HookId::PlayerBreakSpeed) {
+            let _dispatching = BreakSpeedDispatch::enter();
             self.native_player_break_speed(
                 self.own_entity_id() as u32,
                 pos,
@@ -667,8 +766,7 @@ impl Game<'_> {
         self.native_should_cause_block_break_reset(began, held, &mut reset);
         !reset
     }
-    /// Whether an attack would hit an entity rather than the block behind
-    /// it: the crosshair's `EntityHitResult`.
+    /// Whether an attack would hit an entity rather than the block behind it.
     pub(super) fn entity_targeted(&self) -> bool {
         if self.uses_stored_pick() {
             return matches!(
@@ -676,18 +774,7 @@ impl Game<'_> {
                 Some(mod_api::CrosshairTarget::Entity { .. })
             );
         }
-        let before = |d: Option<f64>| d.is_some_and(|d| self.before_block(d));
-        before(self.painting_hit().map(|h| h.1))
-            || before(self.frame_hit().map(|h| h.1))
-            || before(self.armor_stand_hit().map(|h| h.1))
-            || before(self.cushion_hit().map(|h| h.1))
-            || before(self.boat_hit().map(|h| h.1))
-            || before(self.cart_hit().map(|h| h.1))
-            || before(self.interaction_hit().map(|h| h.1))
-            || before(self.dragon_hit().map(|h| h.1))
-            || before(self.crystal_hit().map(|h| h.1))
-            || before(self.mob_hit().map(|h| h.1))
-            || before(self.redirectable_hit().map(|h| h.1))
+        self.crosshair_entity_hit().is_some()
     }
     /// `LocalPlayer.isHandsBusy`: paddling a boat this player controls
     /// (`getControlledVehicle`: its first passenger, on a server's client).
@@ -846,22 +933,13 @@ impl Game<'_> {
             {
                 return None;
             }
-            if self
-                .active_attack_range()
-                .is_some_and(|range| !attack_range_contains(&range, distance, self.creative))
-            {
+            if self.active_attack_range().is_some_and(|range| {
+                !attack_range_contains(&range, distance, self.own_player_is_creative())
+            }) {
                 return None;
             }
             return Some(true);
         }
-        let nearest = |hits: &[Option<f64>]| hits.iter().flatten().copied().reduce(f64::min);
-        let other = nearest(&[
-            self.painting_hit().map(|h| h.1),
-            self.frame_hit().map(|h| h.1),
-            self.boat_hit().map(|h| h.1),
-            self.cart_hit().map(|h| h.1),
-            self.dragon_hit().map(|h| h.1),
-        ]);
         let active = self
             .using
             .and_then(|(slot, _)| self.inventory.get(slot).and_then(Option::as_ref))
@@ -870,7 +948,7 @@ impl Game<'_> {
         let spear = range.as_ref().and_then(|r| {
             let eye = self.eye_position()?;
             let look = super::view_vector(self.yaw, self.pitch);
-            let reach = attack_reach(r, self.creative);
+            let reach = attack_reach(r, self.own_player_is_creative());
             let boxes = self.hittable_mob_boxes();
             let clip = |from: Vec3, to: Vec3| {
                 let length = from.distance_squared(to).sqrt();
@@ -885,55 +963,38 @@ impl Game<'_> {
         });
         let living = match spear {
             Some(distance) => distance,
-            None => nearest(&[
-                self.mob_hit().map(|h| h.1),
-                self.armor_stand_hit().map(|h| h.1),
-            ])?,
+            None => {
+                let hit = self.crosshair_entity_hit()?;
+                let uid = u32::try_from(hit.id).ok()?;
+                if !self.mobs.iter().any(|m| m.id == uid)
+                    && !self.armor_stands.iter().any(|a| a.id == uid)
+                {
+                    return None;
+                }
+                hit.distance
+            }
         };
-        if (spear.is_none() && !self.before_block(living)) || other.is_some_and(|o| o <= living) {
-            return None;
-        }
         // Hud.extractCrosshair: with an attack range, the hit must be in it.
         if let Some(range) = &range
-            && !attack_range_contains(range, living, self.creative)
+            && !attack_range_contains(range, living, self.own_player_is_creative())
         {
             return None;
         }
         // Only alive mobs are hit, so a picked living entity is alive.
         Some(true)
     }
-    /// `Hud.canRenderCrosshairForSpectator` for the nearest hit in reach: an
-    /// entity that is a `MenuProvider` (a chest or hopper minecart, a chest
-    /// boat), or a block whose `showAsInteractableInSpectatorMode` holds.
+    /// `Hud.canRenderCrosshairForSpectator`: MenuProvider entity or spectator-interactable block.
     pub(super) fn spectator_crosshair(&self) -> bool {
-        let cart = self.cart_hit().map(|(i, d)| {
-            let kind = &self.carts[i].kind;
-            (d, matches!(kind, CartKind::Chest | CartKind::Hopper))
-        });
-        let boat = self.boat_hit().map(|(i, d)| (d, self.boats[i].chest));
-        let others = [
-            self.mob_hit().map(|h| h.1),
-            self.armor_stand_hit().map(|h| h.1),
-            self.cushion_hit().map(|h| h.1),
-            self.painting_hit().map(|h| h.1),
-            self.frame_hit().map(|h| h.1),
-            self.dragon_hit().map(|h| h.1),
-        ];
-        let nearest = cart
-            .into_iter()
-            .chain(boat)
-            .chain(others.into_iter().flatten().map(|d| (d, false)))
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((distance, menu)) = nearest
-            && self.before_block(distance)
-        {
-            return menu;
+        if let Some(hit) = self.crosshair_entity_hit() {
+            return self.carts.iter().any(|c| {
+                c.id as i32 == hit.id && matches!(c.kind, CartKind::Chest | CartKind::Hopper)
+            }) || self.boats.iter().any(|b| b.id as i32 == hit.id && b.chest);
         }
         self.pick()
             .is_some_and(|hit| self.block_interactable_for_spectator(&hit))
     }
     /// `BlockBehaviour.showAsInteractableInSpectatorMode`: a block with a menu, or a portal.
-    fn block_interactable_for_spectator(&self, hit: &super::Hit) -> bool {
+    pub(in crate::game) fn block_interactable_for_spectator(&self, hit: &super::Hit) -> bool {
         let block = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         matches!(
             &*self.res.facts().get(block).name,
@@ -995,7 +1056,8 @@ impl Game<'_> {
                 .computed_value_of("minecraft:attack_speed")
             && (self.remote.is_some()
                 || !self.applied_modifiers.is_empty()
-                || !self.potions.applied.is_empty())
+                || self.potions.effects.get("haste").is_some()
+                || self.potions.effects.get("mining_fatigue").is_some())
         {
             // The computed value is already inside the attribute's bounds.
             return speed;
@@ -1116,7 +1178,7 @@ impl HandWorld for GameHands<'_, '_> {
         self.game.res.facts().get(state).name.ends_with("air")
     }
     fn creative(&self) -> bool {
-        self.game.creative
+        !self.game.has_miss_time()
     }
     fn spectator(&self) -> bool {
         self.game.spectator()
@@ -1390,6 +1452,66 @@ mod tests {
 std::thread_local! {
     /// Whether a harvest check's hooks are running on this thread.
     static HARVEST_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The break-speed hook of one dig running, given back when dropped (a panic unwinding
+/// included). A listener that asks the mods' destroy-progress query meanwhile would run the
+/// hook again without bound, so the query answers None while this is held
+/// ([`BreakSpeedDispatch::running`]).
+pub(in crate::game) struct BreakSpeedDispatch {
+    outer: bool,
+}
+
+impl BreakSpeedDispatch {
+    fn enter() -> Self {
+        Self {
+            outer: BREAK_SPEED_DISPATCH.replace(true),
+        }
+    }
+    pub(in crate::game) fn running() -> bool {
+        BREAK_SPEED_DISPATCH.get()
+    }
+}
+
+impl Drop for BreakSpeedDispatch {
+    fn drop(&mut self) {
+        BREAK_SPEED_DISPATCH.set(self.outer);
+    }
+}
+
+std::thread_local! {
+    /// Whether a dig's break-speed hook is running on this thread.
+    static BREAK_SPEED_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A block Part's `destroy_progress` answer running, given back when dropped (a panic unwinding
+/// included). A Part that mines as another block asks the destroy-progress query meanwhile;
+/// asking Parts again could run without bound, so the dig math skips them while this is held
+/// ([`DestroyProgressDispatch::running`]).
+struct DestroyProgressDispatch {
+    outer: bool,
+}
+
+impl DestroyProgressDispatch {
+    fn enter() -> Self {
+        Self {
+            outer: DESTROY_PROGRESS_DISPATCH.replace(true),
+        }
+    }
+    fn running() -> bool {
+        DESTROY_PROGRESS_DISPATCH.get()
+    }
+}
+
+impl Drop for DestroyProgressDispatch {
+    fn drop(&mut self) {
+        DESTROY_PROGRESS_DISPATCH.set(self.outer);
+    }
+}
+
+std::thread_local! {
+    /// Whether a block Part's destroy-progress answer is running on this thread.
+    static DESTROY_PROGRESS_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The harvest hooks of one `mod_harvest_check` running, given back when dropped (a panic

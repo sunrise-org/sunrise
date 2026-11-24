@@ -5,6 +5,11 @@
 extern crate self as sunrise_client;
 pub use sunrise_client_lib::carrier_store;
 pub use sunrise_client_lib::*;
+// The parity fixtures' build compiles the lib test's helpers without the tests that use most of them.
+#[cfg_attr(
+    sunrise_parity_fixtures,
+    allow(dead_code, unused_imports, unused_macros)
+)]
 #[doc(hidden)]
 pub mod entry;
 
@@ -15,7 +20,17 @@ pub mod entry;
 #[cfg(not(feature = "system-allocator"))]
 #[global_allocator]
 static ALLOCATOR: sunrise_threads::GameAllocator = sunrise_threads::GAME_ALLOCATOR;
+#[cfg_attr(
+    sunrise_parity_fixtures,
+    allow(dead_code, unused_imports, unused_macros)
+)]
 pub mod game;
 pub mod orb_limits;
 #[cfg(test)]
 mod test_game_dir;
+
+/// The parity harnesses' fixtures program: crates/sunrise-parity-fixtures compiles this file as its root.
+#[cfg(sunrise_parity_fixtures)]
+fn main() {
+    game::parity_fixtures::main();
+}

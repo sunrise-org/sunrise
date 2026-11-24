@@ -47,7 +47,9 @@ impl Game<'_> {
         let height = self.screen_height();
         let (x, y) = batch.centered_origin(image, height);
         let rect = [x + self.recipe_book_shift(batch.width), y, image, height];
-        let view = self.screen_view_at(self.screen, rect);
+        // Asked while the screen is laid out: nothing is drawn beside it yet.
+        let view =
+            super::screen_backgrounds::without_regions(&self.screen_view_at(self.screen, rect));
         // No room while the mods are asked, so a host call of theirs that lays the screen out
         // doesn't ask them again.
         let build = &self.screen_state.build;

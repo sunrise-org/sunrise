@@ -48,7 +48,7 @@ const HELP: &[&str] = &[
     "hotbar 1-9                     select a hotbar slot",
     "give ITEM [COUNT]              add items to the inventory",
     "render-distance N              chunks, 2..128",
-    "lod-distance N                 far surface chunks, 0 disables, up to1024",
+    "lod-distance N                 far surface chunks, 0 disables, up to 1024",
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
     "mobs [RADIUS]                  list mobs near the player with their AI state",
@@ -86,14 +86,50 @@ pub struct Flight {
     started: Instant,
     seconds: f64,
     /// Reply with every frame time too (`fly ... PITCH raw`).
-    raw: bool,
+    pub(super) raw: bool,
+    upload_queue_work: [usize; 2],
+    mesh_uploads: [u64; 2],
     reply: Sender<String>,
     /// The world's smoothed tick time each frame (the F3 server line): the
     /// server thread's when single player runs on one.
     tick_ms: Vec<f32>,
 }
 
+impl Flight {
+    pub(in crate::game) fn note_upload_queue_work(&mut self, work: [usize; 2]) {
+        self.upload_queue_work = work;
+    }
+
+    pub(in crate::game) fn note_mesh_uploads(&mut self, count: usize, vertex_bytes: u64) {
+        self.mesh_uploads[0] += count as u64;
+        self.mesh_uploads[1] += vertex_bytes;
+    }
+}
+
 impl Game<'_> {
+    pub(super) fn record_streaming_work(
+        &mut self,
+        rendered: bool,
+        block_entity_work: [u64; 2],
+        spans: &[sunrise_client::spans::Span],
+    ) {
+        if let Some(flight) = self.flight.as_mut().filter(|flight| flight.raw) {
+            let visited = self.world.block_entities.take_column_unload_entries();
+            let [sorted, merged] = std::mem::take(&mut flight.upload_queue_work);
+            let mesh_uploads = std::mem::take(&mut flight.mesh_uploads);
+            if rendered {
+                self.frame_stats.record_streaming_work(
+                    visited,
+                    sorted,
+                    merged,
+                    mesh_uploads,
+                    block_entity_work,
+                    spans,
+                );
+            }
+        }
+    }
+
     /// Move the camera along the running flight; reply when it ends.
     pub(super) fn advance_flight(&mut self) {
         let tick_ms = self
@@ -130,6 +166,7 @@ impl Game<'_> {
             summary["tick_ms_max"] = flight.tick_ms.iter().copied().fold(0.0, f32::max).into();
             if flight.raw {
                 self.add_raw_series(&mut summary);
+                self.frame_stats.add_flight_series(&mut summary);
             }
             let _ = flight.reply.send(summary.to_string());
         }
@@ -182,7 +219,7 @@ impl Game<'_> {
     }
 
     fn add_async_occlusion_stats(&self, summary: &mut Value) {
-        if let Some(culler) = &self.async_occlusion_culler {
+        if let Some(culler) = &self.occlusion.async_culler {
             summary["async_occlusion_culling"] = culler.stats_value();
         }
     }
@@ -206,7 +243,7 @@ impl Game<'_> {
     }
     fn reset_frame_stats(&mut self) {
         self.frame_stats.reset();
-        if let Some(culler) = &self.async_occlusion_culler {
+        if let Some(culler) = &self.occlusion.async_culler {
             culler.reset_stats();
         }
     }
@@ -270,6 +307,25 @@ impl Game<'_> {
     /// the screen takes it.
     pub(super) fn type_into_screen(&mut self, text: &str) -> Result<()> {
         if text == "\\b" {
+            let instance = self.screen_state.screen_instance;
+            if self.mounted_widget_key_pressed(
+                KeyCode::Backspace,
+                false,
+                super::glfw_modifiers(self.modifiers),
+            ) {
+                return Ok(());
+            }
+            if self.screen_state.screen_instance != instance
+                || self.screen_state.widgets.has_focus()
+            {
+                return Err("no focused editor accepted Backspace".into());
+            }
+            if self.dialog_open() && self.dialog_type(text) {
+                return Ok(());
+            }
+            if self.prompt_open() {
+                return Err("no focused editor accepted Backspace".into());
+            }
             match self.screen {
                 Screen::WorldOptions => {
                     self.world_options_text(None);
@@ -283,7 +339,7 @@ impl Game<'_> {
                     self.social_backspace();
                     return Ok(());
                 }
-                _ => {}
+                _ => return Err("no focused editor accepted Backspace".into()),
             }
         }
         self.type_chars_into_screen(text)
@@ -294,9 +350,21 @@ impl Game<'_> {
     /// Nothing here is a key — the caller drops control characters. `Err` when
     /// no text box of the screen takes them.
     pub(super) fn type_chars_into_screen(&mut self, text: &str) -> Result<()> {
-        if self.book.is_some() {
-            self.book_type(text);
+        if self.screen_state.widgets.has_focus() {
+            return Err("focused mounted widget declined character input".into());
+        }
+        if self.dialog_open() && self.dialog_type(text) {
             return Ok(());
+        }
+        if self.prompt_open() {
+            return Err("no focused editor accepted character input".into());
+        }
+        if self.book.is_some() {
+            if matches!(self.book, Some(super::books::BookScreen::Edit { .. })) {
+                self.book_type(text);
+                return Ok(());
+            }
+            return Err("the open book is not editable".into());
         }
         if self.sign_edit.is_some() {
             self.sign_input(None, Some(text));
@@ -304,21 +372,38 @@ impl Game<'_> {
         }
         // The title's screens: the world name, the seed, a server's address.
         // A screen opened over the title (Options, say) keeps its own text.
-        if title_owns_text(&self.screen, self.title.is_some())
-            && let Some(title) = &mut self.title
-        {
-            title.type_text(text);
-            return Ok(());
+        if self.preset_editor_title().is_some() {
+            return if self.preset_editor_type_text(text) {
+                Ok(())
+            } else {
+                Err("preset editor did not consume character".into())
+            };
         }
-        match self.screen {
+        if title_owns_text(&self.screen, self.title.is_some()) {
+            if self.vanilla_text_field_focused() {
+                self.title_edit(Some(text), false);
+                return Ok(());
+            }
+            return Err("the title screen has no focused editor".into());
+        }
+        let screen = self.screen;
+        match screen {
             Screen::Chat => self.chat_type(text),
             Screen::CommandBlock => self.command_block_type(text),
             Screen::Social => self.social_type(text),
-            Screen::BlockEditor => self.block_editor_type(text),
-            Screen::DebugOptions => self.debug_options_type(text),
-            Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
+            Screen::BlockEditor if self.vanilla_text_field_focused() => {
+                self.block_editor_type(text)
+            }
+            Screen::DebugOptions if self.vanilla_text_field_focused() => {
+                self.debug_options_type(text)
+            }
+            Screen::Options if self.ui.options.typing() && !self.options_waiting_for_key() => {
+                self.ui.options.type_text(&self.gui.atlas, text)
+            }
             // The port, or the game rules' search and number boxes.
-            Screen::WorldOptions => self.world_options_text(Some(text)),
+            Screen::WorldOptions if self.world_options_typing() => {
+                self.world_options_text(Some(text))
+            }
             Screen::Inventory | Screen::Creative if self.mod_browser_typing() => {
                 self.mod_browser_text(Some(text), false)
             }
@@ -345,7 +430,7 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn control_command(
+    pub(super) fn control_command(
         &mut self,
         line: &str,
         reply: &Sender<String>,
@@ -730,182 +815,101 @@ impl Game<'_> {
                     )
                     .into());
                 }
-                if arg(2)? != "up" {
+                if action != "up" {
                     self.input_keyboard_used();
                     // As a window's key press: the radial menu closes, and the key goes on.
                     self.pad_radial_cancel();
                 }
-                // The command confirmation takes the keys; none go past it.
-                if self.command_prompt.is_some() {
-                    if arg(2)? != "up" {
-                        self.command_prompt_key(key);
-                    }
-                    return ok();
+                if self.observed_screen_view().is_none()
+                    && !self.title_input_active()
+                    && !self.dialog_open()
+                    && !self.prompt_open()
+                {
+                    self.require_world()?;
                 }
-                // A server's dialog takes the keys, in configuration too.
-                if self.dialog_open() {
-                    if arg(2)? != "up" {
-                        self.dialog_key(key, None, None)?;
-                    }
-                    return ok();
-                }
-                self.require_world()?;
-                // KeyboardHandler.keyPress: the open screen's narration hears it.
-                super::narrator::narrate_key(&mut self.narration, key, arg(2)? != "up");
-                // The sign editor takes raw presses (Enter, arrows, Backspace, Escape).
-                if self.sign_edit.is_some() {
-                    if arg(2)? != "up" {
-                        self.sign_input(Some(key), None);
-                    }
-                    return ok();
-                }
-                // A held edit modifier (`key super down`) and A/C/V/X: the
-                // open book's Select All, Copy, Paste or Cut.
-                if self.book.is_some() && arg(2)? != "up" {
-                    let held = |k: [KeyCode; 2]| k.iter().any(|k| self.keys.raw(k));
-                    let edit = if cfg!(target_os = "macos") {
-                        held([KeyCode::SuperLeft, KeyCode::SuperRight])
-                    } else {
-                        held([KeyCode::ControlLeft, KeyCode::ControlRight])
-                    };
-                    let name = arg(1)?;
-                    let letter = name.chars().next().filter(|_| name.len() == 1);
-                    let shift = held([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-                    if let Some(shortcut) =
-                        sunrise_client::clipboard::edit_shortcut(letter, edit, shift, false)
-                    {
-                        self.book_shortcut(shortcut);
-                        return ok();
-                    }
-                }
+                super::narrator::narrate_key(&mut self.narration, key, action != "up");
                 // KeyboardHandler.keyPress: the debug keys see the physical key first.
                 let physical = key;
                 {
                     use sunrise_client::debug_keys::KeyAction;
-                    let action = arg(2)?;
-                    self.press_modifier_key(key, action != "up");
-                    if action != "up" {
+                    if action == "up" {
+                        self.press_modifier_key(key, false);
+                        self.physical_keys.remove(&key);
+                        self.debug_key(key, KeyAction::Release);
+                    } else {
+                        self.press_modifier_key(key, true);
                         self.physical_keys.insert(key);
                         if self.debug_key(key, KeyAction::Press) {
                             if action == "tap" {
+                                self.press_modifier_key(key, false);
                                 self.physical_keys.remove(&key);
                                 self.debug_key(key, KeyAction::Release);
                             }
                             return ok();
                         }
                     }
-                    if action == "up" {
-                        self.physical_keys.remove(&key);
-                        self.debug_key(key, KeyAction::Release);
-                    }
                 }
-                let action = arg(2)?;
-                // ScreenEvent.KeyPressed.Pre: the open screen hears of the
-                // press before it acts on it. A cancelled press goes no further.
-                if action != "up" && self.screen_key_pressed(physical, action == "repeat") {
-                    if action == "tap" {
-                        self.physical_keys.remove(&physical);
-                    }
-                    return ok();
-                }
-                self.native_panel_key_event(physical, action != "up", action == "repeat");
-                // The merchant's focused offer and the recipe book's last
-                // recipe take Enter and Space, as the window's.
-                if action != "up"
-                    && self.screen == Screen::Inventory
-                    && (self.merchant_key(physical) || self.recipe_book_key(physical))
-                {
-                    return ok();
-                }
-                // Text screens consume raw presses; releases follow key binds.
-                let typing = matches!(
-                    self.screen,
-                    Screen::Chat | Screen::Options | Screen::CommandBlock | Screen::BlockEditor
-                );
-                // ScreenEvent.KeyPressed.Post: no screen arm took the press; a
-                // cancel keeps it from the key bindings.
-                if !typing
-                    && arg(2)? != "up"
-                    && self.screen_key_post(physical, true, arg(2)? == "repeat")
-                {
-                    if arg(2)? == "tap" {
-                        self.physical_keys.remove(&physical);
-                    }
-                    return ok();
-                }
-                let key = if typing && arg(2)? != "up" {
-                    key
-                } else {
-                    match self.settings.keys.translate(key) {
-                        Some(Ok(k)) => k,
-                        Some(Err(button)) => {
-                            let action = arg(2)?;
-                            if self.screen == Screen::Playing
-                                && self.shared_default_acts(
-                                    button,
-                                    sunrise_client::keybinds::key_name(physical),
-                                )
-                            {
-                                if action != "up" {
-                                    self.mouse_mapping(button, true, Source::Agent)?;
-                                }
-                                // A repeat keeps the key held, as the window's.
-                                if action == "up" || action == "tap" {
-                                    self.mouse_mapping(button, false, Source::Agent)?;
-                                }
-                            }
-                            if action == "tap" {
-                                self.physical_keys.remove(&physical);
-                            }
-                            return ok();
+                let repeat = action == "repeat";
+                if action != "up" {
+                    if self.screenshot_shortcut(physical, repeat) {
+                        if action == "tap" {
+                            self.press_modifier_key(physical, false);
+                            self.physical_keys.remove(&physical);
+                            self.debug_key(
+                                physical,
+                                sunrise_client::debug_keys::KeyAction::Release,
+                            );
                         }
-                        None => return ok(),
+                        return ok();
                     }
-                };
-                match arg(2)? {
-                    "down" => self.control_key_down(key, physical)?,
-                    "up" => {
-                        self.control_key_up(key);
-                        self.physical_keys.remove(&key);
+                    let name = arg(1)?;
+                    let letter = name.chars().next().filter(|_| name.len() == 1);
+                    let shortcut = self.edit_shortcut_for_letter(letter);
+                    if !self.dispatch_screen_key(
+                        event_loop,
+                        physical,
+                        true,
+                        repeat,
+                        shortcut,
+                        Source::Agent,
+                    )? && !self.key_press_canceled(physical, true, repeat)
+                    {
+                        self.native_panel_key_event(physical, true, repeat);
+                        self.mapped_key_event_from(physical, true, repeat, Source::Agent)?;
                     }
-                    // The system's auto-repeat while the key is held.
-                    "repeat" => {
-                        self.physical_keys.insert(physical);
-                        self.mapped_key(key, true, true, key, Source::Agent)?;
-                    }
-                    "tap" => {
-                        self.control_key_down(key, physical)?;
-                        self.control_key_up(key);
+                }
+                if action == "up" || action == "tap" {
+                    if action == "tap" {
+                        self.settle_title_mode();
+                        self.press_modifier_key(physical, false);
                         self.physical_keys.remove(&physical);
                         self.debug_key(physical, sunrise_client::debug_keys::KeyAction::Release);
                     }
-                    _ => unreachable!("checked above"),
+                    if !self.dispatch_screen_key(
+                        event_loop,
+                        physical,
+                        false,
+                        false,
+                        None,
+                        Source::Agent,
+                    )? && !self.key_press_canceled(physical, false, false)
+                    {
+                        self.native_panel_key_event(physical, false, false);
+                        self.mapped_key_event_from(physical, false, false, Source::Agent)?;
+                        self.release_control_keyboard_standin(physical);
+                    }
                 }
                 ok()
             }
             "release" => {
-                self.keys.clear();
+                self.clear_device_keys();
                 self.physical_keys.clear();
-                self.native_input.mappings.set_all_up();
+                self.mod_keys.set_all_up();
                 self.modifiers = winit::keyboard::ModifiersState::empty();
-                // Sneak and sprint pressed through `key` live in the toggle
-                // mappings: release them as their key's release would (a
-                // toggled one stays on), or the next sync puts them back. A
-                // controller still holding one keeps it.
-                let options = [self.settings.toggle_crouch, self.settings.toggle_sprint];
-                for (slot, name) in [(0, "key.sneak"), (1, "key.sprint")] {
-                    if !self.input_holds(name) {
-                        self.toggles.key(
-                            slot,
-                            sunrise_client::keymapping::KeyAction::Release,
-                            false,
-                            options[slot],
-                        );
-                    }
-                    self.sync_toggle(slot);
-                }
-                self.left = false;
-                self.right = false;
+                let options = self.toggle_options();
+                self.vanilla_mappings.set_keys_up_on_focus_loss(options);
+                self.set_mapping_held("key.attack", false);
+                self.set_mapping_held("key.use", false);
                 ok()
             }
             "mouse" => {
@@ -934,20 +938,17 @@ impl Game<'_> {
                 if matches!(action, "up" | "click") {
                     self.mod_mappings_button(button, false);
                 }
+                let input = sunrise_client::keybinds::mouse_name(button);
                 match action {
                     "down" => {
-                        self.extras_mouse(button, true);
-                        self.mouse_mapping(button, true, Source::Agent)?
+                        self.mapped_mouse_event_from(button, &input, true, Source::Agent)?;
                     }
                     "up" => {
-                        self.extras_mouse(button, false);
-                        self.mouse_mapping(button, false, Source::Agent)?
+                        self.mapped_mouse_event_from(button, &input, false, Source::Agent)?;
                     }
                     "click" => {
-                        self.extras_mouse(button, true);
-                        self.extras_mouse(button, false);
-                        self.mouse_mapping(button, true, Source::Agent)?;
-                        self.mouse_mapping(button, false, Source::Agent)?;
+                        self.mapped_mouse_event_from(button, &input, true, Source::Agent)?;
+                        self.mapped_mouse_event_from(button, &input, false, Source::Agent)?;
                     }
                     other => {
                         return Err(
@@ -1168,28 +1169,52 @@ impl Game<'_> {
                     .unwrap_or("")
                     .strip_prefix(' ')
                     .unwrap_or("");
-                // A server's dialog, in configuration too.
-                if self.dialog_type(text) {
-                    return ok();
+                if self.observed_screen_view().is_none()
+                    && !self.dialog_open()
+                    && !self.title_input_active()
+                {
+                    self.require_world()?;
                 }
-                self.require_world()?;
-                // Typed keys: the open screen's narration hears them.
                 self.narration.keyboard_action();
-                // ScreenEvent.CharacterTyped.Pre: the open screen hears of
-                // each character before a text box takes it, as the window's
-                // key event fires it. A cancelled character is dropped, so
-                // `type` types the survivors only.
-                // `\b` is the socket's backspace sentinel, not two characters.
                 if text == "\\b" {
-                    self.type_into_screen(text)?;
+                    if self.preset_editor_title().is_some() {
+                        self.dispatch_screen_key(
+                            event_loop,
+                            KeyCode::Backspace,
+                            true,
+                            false,
+                            None,
+                            Source::Agent,
+                        )?;
+                    } else {
+                        self.type_into_screen(text)?;
+                    }
                     return ok();
                 }
                 let mut typed = Ok(());
-                self.screen_text_each(text, |game, c| {
-                    if typed.is_ok() {
-                        typed = game.type_into_screen(c);
-                    }
-                });
+                if self.observed_screen_view().is_some() {
+                    self.screen_chars_dispatch(text, |game, c| {
+                        if game.preset_editor_title().is_some() {
+                            return game.preset_editor_type_text(c);
+                        }
+                        if typed.is_err() {
+                            return false;
+                        }
+                        match game.type_into_screen(c) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                typed = Err(e);
+                                false
+                            }
+                        }
+                    });
+                } else {
+                    self.screen_text_each(text, |game, c| {
+                        if typed.is_ok() {
+                            typed = game.type_into_screen(c);
+                        }
+                    });
+                }
                 typed?;
                 ok()
             }
@@ -1197,7 +1222,8 @@ impl Game<'_> {
                 use sunrise_client::options_ui::Page;
                 let page = match words.get(1).copied().unwrap_or("main") {
                     "main" => Page::Main,
-                    // What Video Settings... opens; vanilla's own layout, which no menu opens.
+                    // `video` keeps its published target, Sunrise's graphics screen (as `graphics`);
+                    // `video-vanilla` is vanilla's Video Settings, which Video Settings... opens.
                     "video" => Page::Graphics,
                     "video-vanilla" => Page::Video,
                     "sound" => Page::Sound,
@@ -1286,6 +1312,10 @@ impl Game<'_> {
                 }
                 let n = |i: usize| -> Result<f64> { Ok(arg(i)?.parse()?) };
                 let pitch = words.get(8).map_or(Ok(10.0), |p| p.parse::<f32>())?;
+                let raw = words.get(9) == Some(&"raw");
+                if raw {
+                    self.world.block_entities.take_column_unload_entries();
+                }
                 self.reset_frame_stats();
                 self.flight = Some(Flight {
                     from: Vec3::new(n(1)?, n(2)?, n(3)?),
@@ -1293,7 +1323,9 @@ impl Game<'_> {
                     pitch,
                     started: Instant::now(),
                     seconds: n(7)?.max(0.1),
-                    raw: words.get(9) == Some(&"raw"),
+                    raw,
+                    upload_queue_work: [0; 2],
+                    mesh_uploads: [0; 2],
                     reply: reply.clone(),
                     tick_ms: Vec::new(),
                 });
@@ -1410,38 +1442,22 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn control_key_down(&mut self, key: KeyCode, raw: KeyCode) -> Result<()> {
-        self.physical_keys.insert(key);
-        // The window's shortcuts come before any screen, here too.
-        if self.screenshot_shortcut(key, false) {
-            return Ok(());
+    /// Release any untagged keyboard-standin holds on non-toggle keys bound to `physical`.
+    fn release_control_keyboard_standin(&mut self, physical: KeyCode) {
+        for key in self
+            .settings
+            .keys
+            .translate_all(physical)
+            .into_iter()
+            .flatten()
+        {
+            self.physical_keys.remove(&key);
+            if !matches!(key, KeyCode::ShiftLeft | KeyCode::ControlLeft)
+                && self.keys.held_by(&key, Source::Keyboard)
+            {
+                self.release_device_key(&key, Source::Keyboard);
+            }
         }
-        if self.screen == Screen::Chat {
-            self.chat_key_code(key, None);
-            return Ok(());
-        }
-        if self.screen == Screen::Options {
-            return self.options_key(key, None);
-        }
-        if self.screen == Screen::CommandBlock {
-            self.command_block_key_code(key, None, None);
-            return Ok(());
-        }
-        if self.screen == Screen::BlockEditor {
-            self.block_editor_key_code(key, None, None);
-            return Ok(());
-        }
-        if self.keys.press(key, Source::Agent) {
-            self.key_pressed(key, raw)?;
-        }
-        Ok(())
-    }
-
-    /// `key ... up`: the script lets go. What it pressed as the keyboard's stand-in goes with it
-    /// (a fixture's untagged press), and a controller's hold stays.
-    fn control_key_up(&mut self, key: KeyCode) {
-        self.keys.release(&key, Source::Agent);
-        self.keys.release(&key, Source::Keyboard);
     }
 
     fn screen_name(&self) -> &'static str {
@@ -1467,6 +1483,7 @@ impl Game<'_> {
             Screen::Social => "social",
             Screen::ServerLinks => "server-links",
             Screen::ConfirmLink => "confirm-link",
+            Screen::DemoIntro => "demo-intro",
             Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::BlockEditor => "block-editor",

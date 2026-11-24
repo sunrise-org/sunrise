@@ -355,6 +355,9 @@ fn aquifer_probe(line: &str, out: &mut impl Write) -> Result<(), Box<dyn std::er
             self.calls.fetch_add(1, Ordering::Relaxed);
             self.picker.compute(position)
         }
+        fn level_bound(&self, min: [i32; 2], max: [i32; 2]) -> Option<i32> {
+            self.picker.level_bound(min, max)
+        }
     }
     let args: Vec<_> = line.split_whitespace().collect();
     let sea = args[1].parse::<i32>()?;
@@ -490,6 +493,9 @@ fn noise_aquifer_probe(line: &str, out: &mut impl Write) -> Result<(), Box<dyn s
                 position[0], position[1], position[2], status.level, status.state.0
             ));
             status
+        }
+        fn level_bound(&self, min: [i32; 2], max: [i32; 2]) -> Option<i32> {
+            self.inner.level_bound(min, max)
         }
     }
     struct Blocks;

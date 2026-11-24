@@ -708,7 +708,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Class::Repeater => {
                 if dir == Direction::Down && !self.can_support_rigid_block_on(npos, nstate) {
                     air
-                } else if axis_of(dir) != axis_of(b.facing(state)) {
+                } else if !self.level.is_client_side() && axis_of(dir) != axis_of(b.facing(state)) {
                     let locked = self.diode_is_locked(pos, state);
                     table.set_bool(state, p.locked, locked)
                 } else {

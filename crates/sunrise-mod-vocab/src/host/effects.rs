@@ -15,42 +15,37 @@ pub trait EffectsClientHost {
     /// the muffle in place; `ticks` 0 ends it at once. Nothing changes while no
     /// mod calls it. False, with nothing changed, on a server, for an amount or
     /// strength outside 0 to 1, or for an exempt event that isn't
-    /// `namespace:path` or more than 64 of them. API @API:muffle_sounds@.
-    #[access(ClientSetup)]
+    /// `namespace:path`. API @API:muffle_sounds@.
     fn muffle_sounds(&mut self, amount: f32, lowpass: f32, ticks: u32, exempt: &[&str]) -> bool;
-    /// Side: client.
-    /// A small local vanilla particle; caller should rate-limit emission.
-    #[access(WorldOnly)]
-    fn flame_particle(&mut self, at: [f64; 3], soul: bool);
     /// Side: client.
     /// Plays `sound` for this player only (`SoundPlay`'s event: `minecraft:ui.button.click`,
     /// or a mod's own from its `assets/<id>/sounds.json`): nothing is sent to the server, and
     /// other players don't hear it. It takes `&self`, so a screen, key or mouse hook can play
     /// one: the sound is queued and starts at the next audio update (once a client tick),
-    /// `after` ticks counted from then (0 to 1200, a minute; `SoundEngine.playDelayed`). `SoundPlay::ui` plays it at the listener as an interface sound
-    /// (`SimpleSoundInstance.forUI`); `SoundPlay::at` at a position in the client's level,
-    /// fading with distance (`volume` past 1 carries farther, 16 blocks times the volume), as
-    /// thunder heard after the flash or a blast heard when its shock wave arrives. Its
-    /// `SoundRef` follows and controls this play: `state`, `stop` and `fade`. None, with nothing
-    /// played, on a server or for a value out of range; an event the resources don't have plays
-    /// nothing, as vanilla's, and its handle reads `Stopped` once the update has tried it.
-    #[access(ClientSetup)]
+    /// `after` unpaused sound-engine ticks from then (`SoundEngine.playDelayed`).
+    /// `SoundPlay::ui` starts at the listener (`SimpleSoundInstance.forUI`); `SoundPlay::at`
+    /// starts at a position in the client's level with distance attenuation. The sound engine
+    /// computes final volume and pitch; a volume above 1 can carry farther.
+    ///
+    /// Returns a `SoundRef` for this play, not a promise that it will be audible. Returns `None`
+    /// on a server, for a malformed namespaced sound event ID, a position that would not be finite
+    /// in the mixer's float coordinates, non-finite volume or pitch, or invalid `SoundEffects`.
+    /// An event the resources don't have plays nothing and its handle reads `Stopped` once tried.
     fn play_local_sound(&self, sound: &SoundPlay, after: u32) -> Option<SoundRef>;
     /// Side: client.
     /// The particles alive in the client's level (`ParticleEngine.countParticles`): 0 once
     /// a clear is asked, and on a server.
-    #[access(ClientSetup)]
     fn particle_count(&self) -> u32;
     /// Side: client.
     /// `ParticleEngine.clearParticles`: every particle and emitter goes before the next
     /// frame is drawn or the next particle tick runs, whichever comes first. It takes
     /// `&self`, so a screen or render hook can ask, as with `native_play_local_sound`.
     /// False on a server.
-    #[access(ClientSetup)]
     fn clear_particles(&self) -> bool;
     /// Side: client.
-    /// ClientLevel.addParticle: submits one local particle through the ordinary provider, camera-distance, setting and population limits. False without a loaded client world or for non-finite input. True means submitted, not necessarily visible.
-    #[access(WorldOnly)]
+    /// ClientLevel.addParticle: submits one local particle through the ordinary provider, camera-distance, setting and population limits. False without a loaded client world, for non-finite input or for an item crumb whose colour has a component outside 0 to 1. True means submitted, not necessarily visible.
+    /// For a registered `ParticleType`, pass `ty.options(value)`; the matching client factory
+    /// receives the value and original auxiliary inputs before the particle is queued.
     fn add_particle(&mut self, options: &ParticleOptions, at: [f64; 3], velocity: [f64; 3])
     -> bool;
     /// Side: client.
@@ -60,20 +55,16 @@ pub trait EffectsClientHost {
     /// twinkling explosion, play only when `request.audible`, as for a rocket that isn't silent.
     /// Only the picture and the sound: no entity, no damage, nothing sent to the server, and other
     /// players see nothing (a mod's server half tells each client half to draw it). True means
-    /// queued; false on a server, without a client player or world, for non-finite input or for
-    /// more than 256 explosions. API @API:client_fireworks@.
-    #[access(WorldOnly)]
+    /// queued; false on a server, without a client player or world, or for non-finite input.
+    /// API @API:client_fireworks@.
     fn create_fireworks(&mut self, request: &FireworksRequest) -> bool;
     /// Every sound event the client's resources have (`SoundManager.getAvailableSounds`).
-    #[access(ClientSetup)]
     fn sound_events(&self) -> Vec<Identifier>;
     /// Side: client.
     /// The output devices sound can play on (`SoundEngine.getAvailableSoundDevices`).
-    #[access(ClientSetup)]
     fn audio_devices(&self) -> Vec<String>;
     /// Side: client.
     /// The output device the options ask for (`Options.soundDevice`).
-    #[access(ClientSetup)]
     fn audio_device(&self) -> String;
 }
 /// The handles' client reads of the `effects` area, implemented by the game and reached through [`Backend`].
@@ -83,29 +74,24 @@ pub trait EffectsClientHost {
 pub trait EffectsClientBackend {
     /// Side: client.
     /// Where a sound `play_local_sound` started is: waiting to start, playing, or over.
-    #[access(ClientSetup)]
     fn sound_state(&self, sound: SoundRef) -> Option<SoundState>;
     /// Side: client.
     /// Stops the sound for good: a waiting one never starts and a looping one never repeats.
-    #[access(ClientSetup)]
     fn sound_stop(&self, sound: SoundRef) -> bool;
     /// Side: client.
-    /// Fades the sound's volume to a target over some unpaused ticks; a fade to 0 stops it at the
-    /// end. While the game is paused the fade waits, and an interface or music sound keeps playing.
-    #[access(ClientSetup)]
+    /// Fades the sound's volume to a finite target over unpaused ticks, or immediately for zero
+    /// ticks. A target of zero or less stops the sound at the end. While paused, the fade waits
+    /// and interface or music sounds keep playing. False for non-finite volume or a stale sound.
     fn sound_fade(&self, sound: SoundRef, volume: f32, ticks: u32) -> bool;
     /// Side: client.
     /// Moves the playing sound to `position`, in blocks of the client's level, from the next
-    /// audio update: the same instance keeps playing, with no restart, and its distance
-    /// fading follows. A sound that plays at the listener (`SoundPlay::ui`) has no position to
-    /// move. False, changing nothing, for a position that isn't finite or lies past 30 million
-    /// blocks, and for a sound that is already over.
-    #[access(ClientSetup)]
+    /// audio update, without restarting it. For a relative sound, this sets its offset from
+    /// the listener. False, changing nothing, if any coordinate would not be finite in the
+    /// mixer's float coordinates or if the sound is already over.
     fn sound_move_to(&self, sound: SoundRef, position: [f64; 3]) -> bool;
     /// Side: client.
-    /// Sets the playing sound's pitch (1.0 unchanged) from the next audio update, on the same
-    /// instance with no restart. False, changing nothing, for a pitch that isn't a number at
-    /// or above 0, as `SoundPlay`'s, and for a sound that is already over.
-    #[access(ClientSetup)]
+    /// Sets the playing sound's base pitch from the next audio update, without restarting it.
+    /// The sound engine clamps the final pitch after sound-file scaling (`SoundEngine.calculatePitch`).
+    /// False, changing nothing, for a non-finite pitch or for a sound that is already over.
     fn sound_set_pitch(&self, sound: SoundRef, pitch: f32) -> bool;
 }

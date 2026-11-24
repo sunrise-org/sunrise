@@ -1,0 +1,4 @@
+# Built against the daily run's own SDK, which only book-quickstart.yml assembles (SUNRISE_SDK_BASE): against the
+# published Nightly they would test that SDK, and fail whenever main's tool reads a newer SDK format than it.
+cargo-sunrise-mod a_failed_native_build_names_the_authors_file_and_not_the_cache_copy book-quickstart.yml manual # needs the run's own SDK in SUNRISE_SDK_BASE; book-quickstart.yml runs it
+cargo-sunrise-mod a_failed_registry_build_names_the_authors_file_and_a_good_one_still_builds book-quickstart.yml manual # needs the run's own SDK in SUNRISE_SDK_BASE; book-quickstart.yml runs it

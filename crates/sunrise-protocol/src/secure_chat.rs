@@ -652,25 +652,38 @@ impl LastSeenTracker {
     /// generateAndApplyUpdate: the window from oldest to newest, each entry
     /// acknowledged, with the offset since the last update and the checksum.
     pub fn update(&mut self) -> SeenUpdate {
-        let offset = self.take_offset();
+        let seen = self.pending_update();
+        self.apply_update();
+        seen
+    }
+
+    /// Build the acknowledgement without consuming it until the packet is queued.
+    pub fn pending_update(&self) -> SeenUpdate {
         let mut acknowledged = [0u8; 3];
         let mut last_seen = Vec::with_capacity(LAST_SEEN);
         for i in 0..LAST_SEEN {
             let index = (self.tail + i) % LAST_SEEN;
-            if let Some((signature, pending)) = &mut self.tracked[index] {
+            if let Some((signature, _)) = &self.tracked[index] {
                 acknowledged[i / 8] |= 1 << (i % 8);
                 last_seen.push(*signature);
-                *pending = false;
             }
         }
         let checksum = checksum(&last_seen);
         SeenUpdate {
             last_seen,
             update: LastSeenUpdate {
-                offset,
+                offset: self.offset,
                 acknowledged,
                 checksum,
             },
+        }
+    }
+
+    /// Consume the update just queued by the caller without changing its window.
+    pub fn apply_update(&mut self) {
+        self.offset = 0;
+        for (_, pending) in self.tracked.iter_mut().flatten() {
+            *pending = false;
         }
     }
 }

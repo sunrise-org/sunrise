@@ -1,5 +1,4 @@
 //! The `player_command` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0107
 
 pub trait Hooks {
     /// A command a player typed (NeoForge's `CommandEvent`, before
@@ -15,11 +14,20 @@ pub trait Hooks {
     /// server refuses before reading it (unsigned chat arguments, the chat
     /// rate limit) never reaches it.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_command",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "canceled",
         neoforge = "CommandEvent",
-        cancellable = true
+        cancellable = true,
+        version = 2
     )]
-    fn player_command();
+    fn player_command(
+        player: u128,
+        name: &str,
+        command: &str,
+        canceled: &mut bool,
+        replies: &mut Vec<Text>,
+    );
 }

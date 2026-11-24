@@ -110,6 +110,7 @@ pub(super) fn gameplay_has_keyboard(screen: Screen, title: bool, screen_over: bo
 }
 
 /// A dialog drops held keys and mouse buttons it does not see (#4974).
+#[cfg(test)]
 pub(super) fn drop_held_behind_dialog(
     dialog: bool,
     keys: &mut sunrise_client::held::HeldKeys,
@@ -121,11 +122,4 @@ pub(super) fn drop_held_behind_dialog(
         *left = false;
         *right = false;
     }
-}
-
-/// `AbstractContainerScreen.keyPressed` for a key bound to a mouse mapping: a press or repeat of
-/// key.pickItem's key clones the hovered slot; keys bound to key.attack and key.use do nothing
-/// there (#5378).
-pub(super) fn container_key_clones(button: MouseButton, action: KeyAction) -> bool {
-    button == MouseButton::Middle && action != KeyAction::Release
 }

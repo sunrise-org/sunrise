@@ -16,6 +16,8 @@ use {
     sunrise_world::loot::{ContainerLootContext, LootData},
 };
 
+pub(super) const DECORATED_POT: &str = "minecraft:decorated_pot";
+
 /// `DecoratedPotBlockEntity.WobbleStyle` ordinals.
 const WOBBLE_POSITIVE: i32 = 0;
 const WOBBLE_NEGATIVE: i32 = 1;
@@ -62,27 +64,36 @@ pub(super) fn unpack_loot(
     }
 }
 
+/// [`Game::pot_data`] over the world and the block facts.
+pub(in crate::game) fn pot_data_in(
+    world: &sunrise_client::world::World,
+    facts: &sunrise_client::blocks::BlockFacts,
+    pos: [i32; 3],
+) -> Option<Tag> {
+    let state = world.block(pos[0], pos[1], pos[2]);
+    if &*facts.get(state).name != "minecraft:decorated_pot" {
+        return None;
+    }
+    let mut tag = spill::saved_entity(world, pos).unwrap_or_else(|| {
+        Tag::compound([
+            ("id", Tag::String("minecraft:decorated_pot".into())),
+            ("x", Tag::Int(pos[0])),
+            ("y", Tag::Int(pos[1])),
+            ("z", Tag::Int(pos[2])),
+        ])
+    });
+    tag = sunrise_client::block_entity_nbt::canonical(&tag)?;
+    if let Tag::Compound(map) = &mut tag {
+        map.remove(&"keepPacked".into());
+    }
+    Some(tag)
+}
+
 impl Game<'_> {
     /// `DecoratedPotBlockEntity.saveAdditional` for commands: a pure view of
     /// the existing saved state. Unlike pot_tag, this never unpacks loot.
     pub(super) fn pot_data(&self, pos: [i32; 3]) -> Option<Tag> {
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        if &*self.res.facts().get(state).name != "minecraft:decorated_pot" {
-            return None;
-        }
-        let mut tag = spill::saved_entity(&self.world, pos).unwrap_or_else(|| {
-            Tag::compound([
-                ("id", Tag::String("minecraft:decorated_pot".into())),
-                ("x", Tag::Int(pos[0])),
-                ("y", Tag::Int(pos[1])),
-                ("z", Tag::Int(pos[2])),
-            ])
-        });
-        tag = sunrise_client::block_entity_nbt::canonical(&tag)?;
-        if let Tag::Compound(map) = &mut tag {
-            map.remove(&"keepPacked".into());
-        }
-        Some(tag)
+        pot_data_in(&self.world, self.res.facts(), pos)
     }
     /// `DecoratedPotBlockEntity.loadAdditional`: command edits and BlockInput
     /// loading write back to the same saved tag that live pot interactions use.
@@ -105,7 +116,7 @@ impl Game<'_> {
     }
     /// The pot's saved tag at `pos` with its loot unpacked (a new one for a
     /// pot without), or None when no pot is there.
-    fn pot_tag(&mut self, pos: [i32; 3]) -> Option<Tag> {
+    pub(super) fn pot_tag(&mut self, pos: [i32; 3]) -> Option<Tag> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         if &*self.res.facts().get(state).name != "minecraft:decorated_pot" {
             return None;
@@ -147,7 +158,7 @@ impl Game<'_> {
             if &*self.res.facts().get(current).name != "minecraft:decorated_pot" {
                 return Some(Answer::Pass);
             }
-            self.audio.play(
+            self.play_audio(
                 "minecraft:block.decorated_pot.insert_fail",
                 Some(pos.map(|v| f64::from(v) + 0.5)),
                 1.0,
@@ -194,7 +205,7 @@ impl Game<'_> {
         // The sherds and item go to the guests (BlockEntityData).
         self.mark_block_entity_updated((pos[0], pos[1], pos[2]));
         self.consume_held();
-        self.audio.play(
+        self.play_audio(
             "minecraft:block.decorated_pot.insert",
             Some(center),
             1.0,
@@ -205,7 +216,7 @@ impl Game<'_> {
         let plume = ParticleOptions::simple(ParticleType::DustPlume);
         let plume_at = [center[0], f64::from(pos[1]) + 1.2, center[2]];
         self.particles
-            .send_particles(&plume, plume_at, [0.0; 3], 0.0, 7);
+            .send_particles(&plume, plume_at, [0.0; 3], 0.0, 7, None);
         self.lan_send_particles(super::lan_particles::QueuedParticle {
             dimension: self.dim.id(),
             options: plume,

@@ -1,7 +1,6 @@
 # Prepared-resource/descriptive-ignore inventory migration for #4451.
 # PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
 sunrise-client-lib advancements::tests::index_on_vanilla_tree lib daily resources
-sunrise-client-lib animate_tick::biome_particle_tests::biome_ambient_particle_is_emitted_by_the_animate_tick lib daily resources
 sunrise-client-lib crafting::ingredient::builtin_kinds_tests::families::numeric::components_match_damage_ignore_count_and_refuse_empty lib daily resources
 sunrise-client-lib crafting::ingredient::builtin_kinds_tests::families::numeric::components_strict_counts_max_damage_default_and_custom_name lib daily resources
 sunrise-client-lib crafting::ingredient::builtin_kinds_tests::families::rest::block_tag_logs_uses_block_items_and_rejects_hash lib daily resources
@@ -33,7 +32,6 @@ sunrise-client-lib item_tooltip::tests::equipment_attributes_with_prepared_items
 sunrise-client-lib lan::data::tests::datapack_damage_registry_reload_keeps_wire_ids_and_reloads_tags_before_future_join lib daily resources
 sunrise-client-lib landing::tests::datapack_damage_landing_uses_world_armor_tags_and_exhaustion lib daily resources
 sunrise-client-lib menu::place::custom::tests::a_persistent_six_cell_grid_preserves_cooked_output_and_fuel lib daily resources
-sunrise-client-lib menu::place::custom::tests::an_interrupted_context_refuses_without_applying_even_a_missing_ingredient_clear lib daily resources
 sunrise-client-lib menu::place::custom::tests::component_distinct_stacks_never_pool_into_one_destination lib daily resources
 sunrise-client-lib menu::place::custom::tests::existing_damaged_input_is_usable_but_inventory_damaged_tools_are_not_autofilled lib daily resources
 sunrise-client-lib menu::place::custom::tests::full_inventory_refuses_unchanged_in_survival_and_defers_creative_drops lib daily resources
@@ -58,11 +56,11 @@ sunrise-client-lib mobs::ai::fall_flying_tests::the_wear_draws_once_from_the_mob
 sunrise-client-lib mobs::ai::fall_flying_tests::the_wear_of_a_glide_never_breaks_the_glider lib daily resources
 sunrise-client-lib mobs::ai::flight_effect_fall_tests::flight_effects_reset_accumulated_fall_distance_even_without_ai lib daily resources
 sunrise-client-lib mobs::ai::happy_ghast_ambient_tests::natural_happy_ghast_ambient_uses_entity_position lib daily resources
-sunrise-client-lib mobs::ai::inside_walk_tests::a_diagonal_move_walks_blocks_in_vanillas_order lib daily resources
-sunrise-client-lib mobs::ai::inside_walk_tests::a_killing_write_stops_the_mobs_flush lib daily resources
-sunrise-client-lib mobs::ai::inside_walk_tests::a_mob_without_a_part_keeps_vanilla_behavior lib daily resources
-sunrise-client-lib mobs::ai::inside_walk_tests::a_panicking_part_leaves_the_mobs_tick_restored lib daily resources
-sunrise-client-lib mobs::ai::inside_walk_tests::a_part_pushes_a_mob_once_a_block_in_walk_order lib daily resources
+sunrise-client-lib mobs::ai::inside_walk_tests::a_diagonal_move_walks_blocks_in_vanillas_order lib daily child-process
+sunrise-client-lib mobs::ai::inside_walk_tests::a_killing_write_stops_the_mobs_flush lib daily child-process
+sunrise-client-lib mobs::ai::inside_walk_tests::a_mob_without_a_part_keeps_vanilla_behavior lib daily child-process
+sunrise-client-lib mobs::ai::inside_walk_tests::a_panicking_part_leaves_the_mobs_tick_restored lib daily child-process
+sunrise-client-lib mobs::ai::inside_walk_tests::a_part_pushes_a_mob_once_a_block_in_walk_order lib daily child-process
 sunrise-client-lib mobs::ai::powder_snow_particle_tests::a_controlled_mount_uses_its_riders_known_movement lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::leather_body_armor_prevents_freezing lib daily resources
 sunrise-client-lib mobs::ai::same_vehicle_push_tests::zombie_horse_sunburn_checks_body_not_head lib daily resources
@@ -172,6 +170,5 @@ sunrise-client-lib save::tests::a_chunk_from_before_1_17_loads_the_entities_it_k
 sunrise-client-lib save::tests::loaded_chunk_uses_saved_monument_from_its_referenced_start_chunk lib daily resources
 sunrise-client-lib vanillagen::lod::tests::decorated_lod_refines_real_seed_canopies_and_all_dimensions lib daily resources
 sunrise-client-lib vanillagen::lod::tests::end_far_columns_keep_real_chorus_plants lib daily resources
-sunrise-client-lib vanillagen::lod::tests::end_small_islands_are_estimated_over_the_void lib daily resources
 sunrise-client-lib vanillagen::lod::tests::end_small_islands_from_decoration_survive_far_columns lib daily resources
 sunrise-client-lib vanillagen::saved_biome_tests::restored_proto_keeps_saved_biomes_when_saved_again_and_finished lib daily resources

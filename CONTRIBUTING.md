@@ -14,16 +14,32 @@ suggest something. A pull request for a roadmap item carries its `roadmap:<id>` 
 queue (the hub, or `/suggest` on Discord) rather than to issues, which are for bugs.
 
 **Mod-related pull requests come here too.** Sunrise is where the mod API is built: the mod API, native hooks and
-events for mods, native mods, content mods (`.smod`), mixins, wasm mods, `cargo sunrise-mod`, `sunrise-mods`, mod
-builds and the registry, and their docs ([mods](docs/mods.md), [native mods](docs/native-mods.md)). A change to the mod
+events for mods, native mods, content mods (`.smod`), mixins, `cargo sunrise-mod`, `sunrise-mods`, mod
+builds and the registry, and their docs ([modding book](docs/modding/src/introduction.md), [native mods](docs/modding/src/how-to/native-mods.md)). A change to the mod
 API follows its clean-break rules ([AGENTS.md](AGENTS.md#mod-api-the-clean-break)).
+
+When adding a native hook, keep its declaration under `crates/sunrise-mod-vocab/src/hooks/` and wire the engine
+function named by its target. Vocabulary generation does not read engine bodies, so it cannot tell whether
+those targets fire the hooks. `verify-static` runs `bash tools/ci/check_hook_wiring.sh` separately, without
+changing any sources.
+The check follows the declared Rust module to the target body, including conditional files and inline modules.
+It checks non-test `cfg` branches using supported build targets' Rust cfgs, including `cfg!` conditions, and
+does not count calls in closures that are never invoked. When a hook uses a client-library or world bridge,
+the bridge must invoke the slot and every reachable installer call must bind a callback that reaches the
+dispatcher. For slots upstream of a catalog target, the gameplay entry point must also call the bridge.
+A native render replacement slot is intentionally empty, so the check starts at the installed renderer callback.
+`cargo run -p xtask -- mod-api` fills a new game hook's placeholder during authoring; a placeholder left in the
+checkout fails the wiring check.
 
 ## Build it
 
 - **Prerequisites:** Rust (stable), Python 3.11+, JDK 25, git 2.38 or newer, and on Linux the ALSA and udev headers
   (`libasound2-dev libudev-dev`).
-- **Resources:** Sunrise never downloads the game; it prepares its resources from your own copy of Minecraft 26.3, as
-  described in [Build from source](README.md#build-from-source).
+- **Resources:** Client preparation reads your own copy of Minecraft 26.3, as in [Build from source](README.md#build-from-source).
+  Only the launcher downloads client files, for a signed-in account that owns the game. For a dedicated server,
+  `sunrise-prepare --server` and `sunrise-server init` may download Mojang's free `server.jar` and Java runtime from
+  Mojang's URLs, with SHA-1 checks, on the server owner's machine or in CI. Never commit, publish or ship Mojang's
+  files or data derived from them.
 - **Commands:**
 
   ```sh
@@ -126,7 +142,8 @@ python3 tools/pr_ready.py --base upstream/main   # or origin/main if you work on
 ```
 
 It looks at what your branch changes and runs what matters: rustfmt, clippy with warnings denied, the tests of the
-crates you touched (and the launcher's), generated files, `Cargo.lock` and the Python tests. It runs the
+crates you touched (and the launcher's), generated files, `Cargo.lock` and the Python tests (one test file per
+worker; `--serial-python` runs them in one process, as CI does). It runs the
 vanilla harnesses locally only when your branch changes a harness, an oracle, a probe or the runner; otherwise it
 lists the ones your change can affect. The daily checks the automatic harnesses after the merge. `--harnesses` runs them on your
 machine anyway, and a change to mod content, assets, blocks or items also runs the `#[ignore]`d content-root tests;
@@ -143,10 +160,9 @@ needs prepared resources, a child process or the network.
 | --- | --- | --- |
 | Push | every pull request push | `format`, `verify-static` |
 | Gate | rollup and sync pull requests, pushes to main | `lint`, `verify` (unit tests only), `verify-static` |
-| Daily | once a day on main's head | every test that boots the game or needs prepared resources, the wasm fixture, `fn-replace-check`, the SDK build and its linkage probe, the machine sample built against the mod API, and vanilla parity on the main head captured at dispatch |
+| Daily | once a day on main's head | every test that boots the game or needs prepared resources, `fn-replace-check`, the SDK build and its linkage probe, the machine sample built against the mod API, the modding book's quickstart run with the mod tool alone, and vanilla parity on the main head captured at dispatch |
 
-**A unit test** uses no prepared resources, boots no game, starts no child process, uses no network and no compiled
-wasm fixture, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
+**A unit test** uses no prepared resources, boots no game, starts no child process, uses no network, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
 `tools/ci/ignored-tests/` (the format is in that folder's README). `verify` fails a unit test that takes over 5
 seconds and `verify-static` one that boots the game.
 In Linux `verify`, test binaries run normally under an inet guard: opening, binding or connecting an IPv4/IPv6
@@ -162,8 +178,8 @@ still fails by binary name. Move a network test with `tools/ci/move_to_daily.py`
 - If a daily run fails on a test your pull request added or touched, an issue is filed that names the test, where it
   panicked and the pull requests merged since the last green daily run. The fix is an ordinary pull request.
 
-Three kinds of build: a **snapshot**, from main's head on request, needs only the gate tier and no in-game tests
-(it is published as `snapshot-<date>-<short>`, which no launcher offers, to test packages and platforms after a
+Three kinds of build: a **Dev build**, from a commit on main on request, needs only the gate tier and no in-game tests
+(it is published as `dev-<date>-<short>`, installed only by explicit tag, to test packages and platforms after a
 merge); the **nightly** is published by the daily run when every part of it is green; a **release** is cut from a
 nightly.
 
@@ -195,10 +211,10 @@ claimed whole: claim one of the issues a tracker lists, or open one for the part
 A claim with no open pull request linking the issue (`Fixes #123` in the description, or a draft) is released after
 5 days, with a comment: open a draft early. Agents claim the same way.
 
-You can hold at most 5 claimed issues that no open pull request of yours links. A sixth `/claim` is refused with a
+You can hold at most 10 claimed issues that no open pull request of yours links. An eleventh `/claim` is refused with a
 comment that gives the count; opening a pull request for one of them, or `/unclaim` on one, frees a slot. The
-repository's collaborators, and the trusted contributors listed in the repository variable `CLAIM_LIMIT_EXEMPT`, are
-not limited.
+repository's owners, members and collaborators, the council and the trusted reviewers, and the trusted contributors
+listed in the repository variable `CLAIM_LIMIT_EXEMPT`, are not limited.
 
 When your pull request changes the same functions as another open one, or closes the same issue, a bot comment names
 it (edited on every push, never repeated): talk to its author in the thread before you both finish the same work.
@@ -267,8 +283,8 @@ How Sunrise is run, and how people join the Team or lead a group: [GOVERNANCE.md
 
 ## Licence and DCO
 
-Sunrise's code is under the [PolyForm Shield licence](LICENSE), and so is what you contribute: it comes in under the same
-licence it goes out under, and you keep your copyright. There is no CLA. Instead, sign off every commit (`git commit -s`)
+Sunrise's code is under the licence in [LICENSE](LICENSE): PolyForm Shield 1.0.0 with the Sunrise Additional Terms,
+version 1.0 or later. Your contribution comes in under that same licence, and you keep your copyright. There is no CLA. Instead, sign off every commit (`git commit -s`)
 to certify the [Developer Certificate of Origin](https://developercertificate.org/): that you wrote it, or have the
 right to submit it under the project's licence. The DCO check fails a pull request with a commit that isn't signed off;
 `git rebase --signoff origin/main` fixes a branch.

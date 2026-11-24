@@ -463,7 +463,8 @@ pub fn export_record(
     }
     let id = freeze.then(new_handover_id).transpose()?;
     let g = &hub.guests[i];
-    let tag = super::playerdata::player_tag(g, &hub.encoder.items);
+    let tag = super::playerdata::try_player_tag(g, &hub.encoder.items)
+        .map_err(|error| error.to_string())?;
     let bytes = write_named(
         &NamedTag {
             name: "".into(),
@@ -986,13 +987,14 @@ mod hub_tests {
         let mut world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
         let border = crate::worldborder::WorldBorder::default();
         let mut next = 100;
-        let mut ctx = TickCtx {
+        let ctx = TickCtx {
             sea_level: 63,
             world: &mut world,
             entities: &[],
             next_entity: &mut next,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -1003,7 +1005,10 @@ mod hub_tests {
             border: &border,
             streaming: None,
         };
-        hub.place_new_player(conn, &mut ctx);
+        if let Some(i) = hub.begin_player_join(conn, &ctx) {
+            hub.send_commands(i, hub.commands_packet(hub.guests[i].permission));
+            hub.finish_player_join(i, &ctx);
+        }
     }
 
     fn tick_context<'a>(
@@ -1018,6 +1023,7 @@ mod hub_tests {
             next_entity: next,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -1222,7 +1228,7 @@ mod hub_tests {
         let (mut held_chunks, mut watcher_chunks) = (0, 0);
         let (mut held_adds, mut watcher_adds) = (Vec::new(), Vec::new());
         for _ in 0..30 {
-            hub.tick_level(&mut ctx);
+            hub.tick_level(&mut ctx, None);
             hub.end_tick();
             let mine_now = packets(&mine);
             let seen_now = packets(&seen);
@@ -1643,11 +1649,11 @@ mod hub_tests {
 
     /// The keys a vanilla server writes in every player's file, read with `javap` from the
     /// 26.3 server jar: `Player.addAdditionalSaveData` (Inventory, SelectedItemSlot,
-    /// EnderItems, XpLevel, XpP, XpTotal, XpSeed, abilities), `FoodData` (foodLevel,
+    /// EnderItems, XpLevel, XpP, XpTotal, XpSeed, Score, abilities), `FoodData` (foodLevel,
     /// foodSaturationLevel, foodExhaustionLevel, foodTickTimer), `ServerPlayer` (Dimension),
     /// `Entity.saveWithoutId` (Pos, Motion, Rotation, OnGround, Air, Fire) and
     /// `LivingEntity` (Health, AbsorptionAmount).
-    const VANILLA_PLAYER_KEYS: [&str; 21] = [
+    const VANILLA_PLAYER_KEYS: [&str; 22] = [
         "Inventory",
         "SelectedItemSlot",
         "EnderItems",
@@ -1655,6 +1661,7 @@ mod hub_tests {
         "XpP",
         "XpTotal",
         "XpSeed",
+        "Score",
         "abilities",
         "foodLevel",
         "foodSaturationLevel",
@@ -2908,6 +2915,62 @@ mod hub_tests {
         assert_eq!(
             (g.abilities.flying_speed, g.abilities.walking_speed),
             (0.2, 0.3)
+        );
+    }
+
+    #[test]
+    fn held_arrival_syncs_own_player_info_before_teleport_without_publishing_early() {
+        let (mut source, i) = exported_guest();
+        source.guests.update(i, |g| {
+            g.game_mode = 3;
+            g.abilities.update_for_mode(3);
+        });
+        let record = super::export_record(&mut source, i, true, Default::default()).unwrap();
+        let (_, mut hub, seen, mine) = held_in_a_second_hub();
+        assert_eq!(hub.guests[1].game_mode, 0);
+        import_player(
+            &mut hub,
+            UUID_N,
+            &serde_json::json!({ "record": record, "place": false }),
+        )
+        .unwrap();
+        assert!(
+            ids(&seen).is_empty(),
+            "other clients must not receive the held player's mode before placement"
+        );
+        let decoded: Vec<sunrise_protocol::packets::play::Clientbound> = packets(&mine)
+            .into_iter()
+            .filter_map(|(id, body)| {
+                sunrise_protocol::packets::play::Clientbound::decode(id, &body).ok()
+            })
+            .collect();
+        let own_info_pos = decoded.iter().position(|pkt| {
+            matches!(
+                pkt,
+                sunrise_protocol::packets::play::Clientbound::PlayerInfoUpdate(u)
+                    if u.actions == 4
+                        && u.entries.iter().any(|e| e.uuid == UUID_N && e.game_mode == Some(3))
+            )
+        });
+        let game_event_pos = decoded.iter().position(|pkt| {
+            matches!(
+                pkt,
+                sunrise_protocol::packets::play::Clientbound::GameEvent(e)
+                    if e.event == 3 && e.param == 3.0
+            )
+        });
+        let teleport_pos = decoded.iter().position(|pkt| {
+            matches!(
+                pkt,
+                sunrise_protocol::packets::play::Clientbound::PlayerPosition(_)
+            )
+        });
+        let own_info_pos = own_info_pos.expect("held arrival must sync its own PlayerInfo");
+        let game_event_pos = game_event_pos.expect("held arrival must send CHANGE_GAME_MODE");
+        let teleport_pos = teleport_pos.expect("held arrival must send teleport");
+        assert!(
+            own_info_pos < game_event_pos && game_event_pos < teleport_pos,
+            "own PlayerInfo must precede CHANGE_GAME_MODE and teleport: {decoded:?}"
         );
     }
 

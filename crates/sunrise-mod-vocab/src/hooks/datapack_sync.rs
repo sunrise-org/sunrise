@@ -1,5 +1,4 @@
 //! The `datapack_sync` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0123
 
 pub trait Hooks {
     /// Collect recipe types once the joining player exists, after admission
@@ -9,13 +8,19 @@ pub trait Hooks {
     /// hook is not asked. `player` always identifies the recipient.
     /// Configuration tags precede admission. Only this player's Sunrise
     /// client receives the selected recipes; vanilla clients receive nothing
-    /// new. An empty answer retains the client's own recipes, or restores
+    /// new. Recipes using a vanilla serializer carry the server's resolved
+    /// item candidates, not the source's ingredient definitions or bound
+    /// predicates. A mod serializer still writes its own recipe content.
+    /// An empty answer retains the client's own recipes, or restores
     /// them after an earlier nonempty answer.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_datapack_sync",
+        dispatch = "api_carrier",
         side = "server",
         contract = "collect",
         out = "recipe_types",
-        neoforge = "OnDatapackSyncEvent"
+        neoforge = "OnDatapackSyncEvent",
+        version = 2
     )]
     fn datapack_sync(player: PlayerRef, recipe_types: &mut Vec<String>);
 }

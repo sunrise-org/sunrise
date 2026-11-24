@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The picture a change leaves alone stays the same, pixel for pixel (docs/design/hdr-linear-light.md, Tests 1 and 2).
+"""The picture a change leaves alone stays the same, pixel for pixel.
 
 Pictures of the game hold Minecraft's textures and can't be committed, so this test is differential: it builds the base
 (BASE_SHA on the parity runner, else the merge-base with origin/main) and the change, draws the same fixed scenes with
@@ -691,7 +691,7 @@ def session_checks(shots, sessions):
     return problems
 
 
-# 🤖 Agent: HDR's gates (docs/design/hdr-linear-light.md, Tests 3 and 4): what a build's HDR shots must be against
+# 🤖 Agent: HDR's gates: what a build's HDR shots must be against
 # its SDR ones, whatever the base drew. The HDR shot is HDR10: BT.2020 primaries, SMPTE ST 2084 (PQ), 10 bits a
 # channel.
 

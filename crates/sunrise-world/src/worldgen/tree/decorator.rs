@@ -291,6 +291,7 @@ impl TreeDecorator {
                     leaves: &lists.leaves,
                     roots: &lists.roots,
                     positions: &positions,
+                    registry: d.run.world.block_registry(),
                 });
                 let ground = Ground {
                     decorator: provider,
@@ -609,10 +610,7 @@ impl<W: FeatureWorld + PlacementContext, R: RandomSource> Decorate<'_, '_, '_, W
         if let Some(error) = access.error {
             return Err(error);
         }
-        match state {
-            Some(state) if !self.blocks.is_state(state) => Err(FeatureExecutionError::InvalidState),
-            state => Ok(state),
-        }
+        state.map_err(|_| FeatureExecutionError::InvalidState)
     }
     fn circle(&mut self, ground: &Ground<'_>, center: [i32; 3]) -> TreeResult<(), W::Error> {
         for xx in -2i32..=2 {
@@ -955,17 +953,25 @@ mod tests {
     /// Keeps the decorator's own provider, as a mod that wraps it and changes nothing.
     struct Kept;
     impl ModGroundProvider for Kept {
-        fn state_at(&self, access: &mut dyn GroundAccess, pos: [i32; 3]) -> Option<BlockStateId> {
-            access.decorator_state(pos)
+        fn state_at(
+            &self,
+            access: &mut dyn GroundAccess,
+            pos: [i32; 3],
+        ) -> Result<Option<BlockStateId>, native_worldgen_hooks::InvalidGroundState> {
+            Ok(access.decorator_state(pos))
         }
     }
 
     /// Turns grass to stone, drawing nothing.
     struct Stone;
     impl ModGroundProvider for Stone {
-        fn state_at(&self, access: &mut dyn GroundAccess, pos: [i32; 3]) -> Option<BlockStateId> {
+        fn state_at(
+            &self,
+            access: &mut dyn GroundAccess,
+            pos: [i32; 3],
+        ) -> Result<Option<BlockStateId>, native_worldgen_hooks::InvalidGroundState> {
             let grass = access.block_state(pos) == state("minecraft:grass_block");
-            grass.then(|| state("minecraft:stone"))
+            Ok(grass.then(|| state("minecraft:stone")))
         }
     }
 
@@ -1021,8 +1027,13 @@ mod tests {
     fn a_state_the_registry_lacks_is_refused() {
         struct Unknown;
         impl ModGroundProvider for Unknown {
-            fn state_at(&self, _: &mut dyn GroundAccess, _: [i32; 3]) -> Option<BlockStateId> {
-                Some(BlockStateId(u32::MAX))
+            fn state_at(
+                &self,
+                _: &mut dyn GroundAccess,
+                _: [i32; 3],
+            ) -> Result<Option<BlockStateId>, native_worldgen_hooks::InvalidGroundState>
+            {
+                Err(native_worldgen_hooks::InvalidGroundState)
             }
         }
         assert!(matches!(

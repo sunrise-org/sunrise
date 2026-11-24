@@ -186,7 +186,9 @@ impl Run {
 /// it halfway, as bright, and holds no negative or non-finite value. Light past 1 would
 /// spill out of the optical flow's 8-bit luma without the float frame's.
 #[test]
+#[ignore = "daily"]
 fn a_made_frame_of_the_float_frame_keeps_its_light_and_lands_halfway() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut run) = Run::new() else {
         return;
     };
@@ -245,7 +247,9 @@ fn a_made_frame_of_the_float_frame_keeps_its_light_and_lands_halfway() {
 /// HDR output's last pass on a made frame gives the same nits as on a real frame with the
 /// same content: the made frame takes the frame and goes through the same passes.
 #[test]
+#[ignore = "daily"]
 fn hdr_output_shows_a_made_frame_as_the_real_one() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut run) = Run::new() else {
         return;
     };

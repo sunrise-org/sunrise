@@ -1,28 +1,93 @@
 use super::{block_entity_id, string, uuid_tag};
 use crate::{
     beehive::BeehiveExt,
+    containers::{BlockEntity, ModBlockEntity},
     mobs::{spawner::SpawnerExt, trial_spawner::TrialSpawnerExt},
 };
 use sunrise_core::nbt::{Compound, Tag};
 
-/// Save block-entity stacks against the world's loaded item prototypes.
+/// Chunk storage adds `keepPacked` after `BlockEntity.saveWithFullMetadata`.
 pub fn encode(
     p: (i32, i32, i32),
-    e: &crate::containers::BlockEntity,
+    e: &BlockEntity,
     block: &str,
     items: &crate::items::Items,
 ) -> Tag {
-    encode_with(p, e, block, items, |_, _| None)
+    encode_with(p, e, block, DataFields::default(), items, |_| None)
+}
+
+/// Encode a chunk block entity. If supplied, the edited mod payload already contains
+/// its final `Items` field. The engine then adds shapes, identity and position.
+pub fn encode_with(
+    p: (i32, i32, i32),
+    e: &BlockEntity,
+    block: &str,
+    extra: DataFields<'_>,
+    items: &crate::items::Items,
+    save_additional: impl FnOnce(&ModBlockEntity) -> Option<Compound>,
+) -> Tag {
+    let mut map = fields(e, block, extra, items, save_additional);
+    crate::block_entity_nbt::write_metadata(&mut map, block_entity_id(e, block), [p.0, p.1, p.2]);
+    if !matches!(e, BlockEntity::Mod(_)) {
+        map.insert("keepPacked".into(), Tag::Byte(0));
+    }
+    Tag::Compound(map)
+}
+
+/// Live fields stored outside the block-entity value.
+#[derive(Default)]
+pub struct DataFields<'a> {
+    pub lock: Option<&'a Tag>,
+    pub custom_name: Option<&'a Tag>,
+    pub pending: Option<&'a super::PendingContainerLoot>,
+    pub hopper_cooldown: Option<i32>,
+}
+
+/// `BlockDataAccessor.getData`: write superclass/subclass fields before
+/// `BlockEntity.saveWithoutMetadata`'s components and saveMetadata's id/position.
+pub fn data(
+    p: (i32, i32, i32),
+    e: &BlockEntity,
+    block: &str,
+    extra: DataFields<'_>,
+    items: &crate::items::Items,
+) -> Tag {
+    data_with(p, e, block, extra, items, |_| None)
+}
+
+/// The command view with the live mod payload; `keepPacked` is chunk-only.
+pub fn data_with(
+    p: (i32, i32, i32),
+    e: &BlockEntity,
+    block: &str,
+    extra: DataFields<'_>,
+    items: &crate::items::Items,
+    save_additional: impl FnOnce(&ModBlockEntity) -> Option<Compound>,
+) -> Tag {
+    let mut map = fields(e, block, extra, items, save_additional);
+    if matches!(e, BlockEntity::Mod(_)) {
+        map.remove(&"keepPacked".into());
+    }
+    crate::block_entity_nbt::write_metadata(&mut map, block_entity_id(e, block), [p.0, p.1, p.2]);
+    Tag::Compound(map)
 }
 
 /// Merge modeled stacks with saved rows the engine did not take ownership of.
-pub fn mod_items(
-    m: &crate::containers::ModBlockEntity,
-    items: &crate::items::Items,
-) -> Option<Tag> {
-    let mut entries = sunrise_items::item_nbt::encode_items_using(&m.items, |stack| {
-        sunrise_items::item_nbt::item_to_nbt(stack, items)
-    });
+pub fn mod_items(m: &ModBlockEntity, items: &crate::items::Items) -> Option<Tag> {
+    let mut entries: Vec<Tag> = m
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, stack)| {
+            let stack = stack.as_ref()?;
+            let slot = crate::block_entity_nbt::mod_item_slot_tag(i)?;
+            let mut tag = sunrise_items::item_nbt::item_to_nbt(stack, items);
+            if let Tag::Compound(fields) = &mut tag {
+                fields.insert("Slot".into(), slot);
+            }
+            Some(tag)
+        })
+        .collect();
     match m.nbt.get(&"Items".into()) {
         Some(Tag::List(raw)) => {
             entries.extend(raw.iter().cloned());
@@ -34,66 +99,79 @@ pub fn mod_items(
     }
 }
 
-/// Encode a live block entity, allowing its owner to supply the mod payload
-/// before the engine adds identity, position, item slots and published shapes.
-pub fn encode_with(
-    p: (i32, i32, i32),
+/// Restore the stored inventory, including any modeled slots, to a payload copy.
+pub fn write_mod_items(out: &mut Compound, m: &ModBlockEntity, items: &crate::items::Items) {
+    let key = "Items".into();
+    if let Some(items) = mod_items(m, items) {
+        out.insert(key, items);
+    } else {
+        out.remove(&key);
+    }
+}
+
+fn fields(
     e: &crate::containers::BlockEntity,
     block: &str,
+    DataFields {
+        lock,
+        custom_name,
+        pending,
+        hopper_cooldown,
+    }: DataFields<'_>,
     items: &crate::items::Items,
-    save_additional: impl FnOnce(&str, &Compound) -> Option<Compound>,
-) -> Tag {
+    save_additional: impl FnOnce(&ModBlockEntity) -> Option<Compound>,
+) -> Compound {
+    if let BlockEntity::Mod(m) = e {
+        let edited = save_additional(m);
+        let write_items = edited.is_none() && !m.items.is_empty();
+        let mut map = edited.unwrap_or_else(|| m.nbt.clone());
+        if let Some((key, shapes)) = m.shapes_tag() {
+            map.insert(key.into(), shapes);
+        }
+        if write_items {
+            write_mod_items(&mut map, m, items);
+        }
+        if let Some(lock) = lock {
+            map.insert("lock".into(), lock.clone());
+        }
+        if let Some(name) = custom_name {
+            map.entry("CustomName".into())
+                .or_insert_with(|| name.clone());
+        }
+        return map;
+    }
     let item_to_nbt =
         |stack: &crate::items::ItemStack| sunrise_items::item_nbt::item_to_nbt(stack, items);
-    use crate::containers::BlockEntity;
     let encode_items = |slots: &[Option<crate::items::ItemStack>]| {
         Tag::List(sunrise_items::item_nbt::encode_items_using(
             slots,
             item_to_nbt,
         ))
     };
-    if let BlockEntity::Mod(m) = e {
-        let mut map = save_additional(m.id(), &m.nbt).unwrap_or_else(|| m.nbt.clone());
-        if let Some((key, shapes)) = m.shapes_tag() {
-            map.insert(key.into(), shapes);
-        }
-        map.insert("id".into(), string(m.id()));
-        if !m.items.is_empty() {
-            let key = "Items".into();
-            if let Some(items) = mod_items(m, items) {
-                map.insert(key, items);
-            } else {
-                map.remove(&key);
-            }
-        }
-        for (key, v) in [("x", p.0), ("y", p.1), ("z", p.2)] {
-            map.insert(key.into(), Tag::Int(v));
-        }
-        return Tag::Compound(map);
-    }
+    let pending = if matches!(e, BlockEntity::Chest(_)) {
+        pending
+    } else {
+        None
+    };
     let components = match e {
         BlockEntity::Banner(b) => b.components.clone(),
         BlockEntity::CopperGolemStatue(components) => components.clone(),
         _ => Compound::new(),
     };
-    let mut entries = vec![
-        ("id", string(block_entity_id(e, block))),
-        ("x", Tag::Int(p.0)),
-        ("y", Tag::Int(p.1)),
-        ("z", Tag::Int(p.2)),
-        ("keepPacked", Tag::Byte(0)),
-        ("components", Tag::Compound(components)),
-    ];
+    let mut entries = Vec::new();
     match e {
         // EnderChestBlockEntity saves nothing of its own: the items are the player's.
         BlockEntity::Chest(_) if block == "minecraft:ender_chest" => {}
         BlockEntity::Chest(items) => {
-            let list = encode_items(items);
-            // ShulkerBoxBlockEntity.saveAdditional: `saveAllItems(.., false)`
-            // writes no list for an empty box; other containers always do.
-            let empty = matches!(&list, Tag::List(l) if l.is_empty());
-            if !(empty && block.ends_with("shulker_box")) {
-                entries.push(("Items", list));
+            // Pending loot normally suppresses Items, but preserve a live
+            // nonempty modeled inventory just as the raw inspection boundary does.
+            if pending.is_none() || items.iter().any(Option::is_some) {
+                let list = encode_items(items);
+                // ShulkerBoxBlockEntity.saveAdditional omits its empty list.
+                let empty = matches!(&list, Tag::List(l) if l.is_empty());
+                if !(empty && block.ends_with("shulker_box")) {
+                    entries.push(("Items", list));
+                }
             }
         }
         BlockEntity::Furnace(f) => {
@@ -234,17 +312,71 @@ pub fn encode_with(
                 entries.push(("Target", Tag::IntArray(uuid.to_vec())));
             }
         }
-        // Encoded above; an enchanting table's CustomName is the block name.
+        // An enchanting table's CustomName is the external block name.
         BlockEntity::DaylightDetector
         | BlockEntity::Bell
         | BlockEntity::EndPortal
         | BlockEntity::EnchantingTable
-        | BlockEntity::CopperGolemStatue(_)
-        | BlockEntity::Mod(_) => {}
+        | BlockEntity::CopperGolemStatue(_) => {}
+        BlockEntity::Mod(_) => unreachable!("mod payload encoded above"),
         // PotentSulfurBlockEntity.saveAdditional.
         BlockEntity::PotentSulfur(sulfur) => {
             entries.push(("countdown", Tag::Int(sulfur.waiting_countdown)))
         }
     }
-    Tag::compound(entries)
+    let mut map = Compound::new();
+    // BaseContainerBlockEntity.saveAdditional writes lock, then CustomName,
+    // before the subclass's inventory and other fields.
+    if let Some(lock) = lock {
+        map.insert("lock".into(), lock.clone());
+    }
+    if let Some(name) = custom_name
+        && !entries.iter().any(|(key, _)| *key == "CustomName")
+    {
+        map.entry("CustomName".into())
+            .or_insert_with(|| name.clone());
+    }
+    if let Some(pending) = pending {
+        pending.write_tags(&mut map);
+    }
+    map.extend(entries.into_iter().map(|(key, value)| (key.into(), value)));
+    if let Some(cooldown) = hopper_cooldown {
+        map.insert("TransferCooldown".into(), Tag::Int(cooldown));
+    }
+    map.insert("components".into(), Tag::Compound(components));
+    map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conduit_data_uses_actual_save_history_before_metadata() {
+        // Vanilla 26.3's observed conduit /data display: Target and components
+        // collide, and saveAdditional writes Target before the common tail.
+        let entity = BlockEntity::Conduit(Some([1, 2, 3, 4]));
+        let tag = data(
+            (4098, 300, 4098),
+            &entity,
+            "minecraft:conduit",
+            DataFields::default(),
+            &Default::default(),
+        );
+        assert_eq!(
+            sunrise_client_core::snbt::pretty(&tag).plain(),
+            r#"{Target: [I; 1, 2, 3, 4], components: {}, x: 4098, y: 300, z: 4098, id: "minecraft:conduit"}"#,
+        );
+        assert!(tag.get("keepPacked").is_none());
+        assert_eq!(
+            encode(
+                (4098, 300, 4098),
+                &entity,
+                "minecraft:conduit",
+                &Default::default()
+            )
+            .get("keepPacked"),
+            Some(&Tag::Byte(0))
+        );
+    }
 }

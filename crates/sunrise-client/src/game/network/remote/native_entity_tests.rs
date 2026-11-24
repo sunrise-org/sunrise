@@ -5,6 +5,7 @@ use crate::game::{
     Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
 };
 use mod_api::EquipmentSlot;
+use std::sync::Arc;
 use sunrise_core::nbt::Tag;
 use sunrise_protocol::entity_data::Value;
 use sunrise_protocol::item::{Component, Stack, component};
@@ -31,7 +32,6 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
     // Populate the same Parts registry epoch that the resource fixture will use.
     crate::game::api_values::register_game_keys([]);
-    crate::game::mods::register_iterated_registries(&root).unwrap();
     let settings = Settings::default();
     let loaded = load_resources(
         sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
@@ -60,13 +60,10 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
         None,
     )
     .unwrap();
-    {
-        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Setup);
-        assert_eq!(
-            mod_api::prelude::ClientViewClientHost::local_item_use(&game),
-            None
-        );
-    }
+    assert_eq!(
+        mod_api::prelude::ClientViewClientHost::local_item_use(&game),
+        None
+    );
     let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
     game.connect_local(pipe, "Steve").unwrap();
     let builtin = game.remote.as_ref().unwrap().builtin.clone();
@@ -115,7 +112,9 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     .unwrap();
     let me = game.entity(7).expect("the own player");
     assert_eq!(
-        game.entity_kind(me).map(|kind| kind.id(&game)).as_deref(),
+        game.entity_kind(me)
+            .and_then(|kind| kind.id(&game))
+            .as_deref(),
         Some("minecraft:player")
     );
     assert_eq!(game.entity_position(me), Some([0.5, 65.0, 0.5]));
@@ -144,7 +143,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     let stand = game.entity(20).expect("the stand is tracked");
     assert_eq!(
         game.entity_kind(stand)
-            .map(|kind| kind.id(&game))
+            .and_then(|kind| kind.id(&game))
             .as_deref(),
         Some("minecraft:armor_stand")
     );
@@ -171,7 +170,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     );
     // A client knows no saved data or tags, and changes nothing itself.
     assert_eq!(game.entity_nbt(stand), None);
-    assert_eq!(game.entity_tags(stand), None);
+    assert!(game.entity_tags(stand).is_none());
     assert!(!game.entity_add_tag(stand, "seen"));
     assert!(!game.entity_set_velocity(stand, [0.0, 1.0, 0.0]));
 
@@ -182,7 +181,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     let display = game.entity(21).expect("the display is tracked");
     assert_eq!(
         game.entity_kind(display)
-            .map(|kind| kind.id(&game))
+            .and_then(|kind| kind.id(&game))
             .as_deref(),
         Some("minecraft:text_display")
     );
@@ -386,6 +385,9 @@ impl super::Remote {
         let mut me = sunrise_client::tab_list::TabPlayer::new(self.profile, "SessionReadTest");
         me.latency = latency;
         self.tab_players.insert(self.profile, me);
+        self.tab_game_modes
+            .entry(self.profile)
+            .or_insert_with(|| Arc::new(std::sync::atomic::AtomicI32::new(0)));
     }
 }
 

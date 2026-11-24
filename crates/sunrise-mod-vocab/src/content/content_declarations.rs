@@ -117,12 +117,13 @@ pub enum OffsetType {
     Xyz,
 }
 
-/// PushReaction in a load-time content declaration.
-#[derive(Clone, Debug, PartialEq)]
+/// Vanilla's piston reaction for a block state or an entity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 // exhaustive: these variants are the closed content declaration vocabulary.
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum PushReaction {
-    /// Declaration option.
+    /// Vanilla's default: pistons can push and pull.
+    #[default]
     PushPull,
     /// Declaration option.
     Push,
@@ -130,7 +131,7 @@ pub enum PushReaction {
     Popped,
     /// Declaration option.
     Immoveable,
-    /// Declaration option.
+    /// Do not push this entity.
     IgnoreEntity,
 }
 
@@ -232,15 +233,16 @@ pub enum BlockStateProperty {
 }
 
 /// An unvalidated draft; `Content::declare` validates it at load.
-/// Refused drafts are reported by the content admission path as
-/// `native blocks and items of <namespace>: <reason>`, without admitting part of that namespace.
+/// Refused drafts are reported by the content admission path naming the submitting mod,
+/// without admitting part of its declarations.
 /// `Default` and [`Block::new`] leave out what a content file leaves out: every field is empty
 /// except `item`, true, as in a file.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct Block {
-    /// `<mod id>:<path>`.
+    /// Block identifier: a bare name uses the declaring mod's ID, and an explicit valid
+    /// `namespace:path` keeps its namespace.
     pub id: String,
     /// The vanilla block it copies, `minecraft:<path>`.
     pub template: String,
@@ -298,6 +300,10 @@ pub struct Block {
     /// Its item's component patch: `Some(tag)` sets a component, `None` removes it.
     /// Component names do not include the removal prefix `!`; repeated IDs are refused.
     pub components: Vec<(String, Option<crate::Tag>)>,
+    /// Suspicious stew effects this block supplies, in order, as pairs of effect ID
+    /// and duration in ticks. Its block items feed these effects to brown mooshrooms
+    /// and generate stews in Creative. `None` declares no effect source.
+    pub suspicious_stew_effects: Option<Vec<(String, i32)>>,
     /// A connecting block (template `minecraft:chorus_plant`, a `PipeBlock`
     /// without the chorus plant's rules): the block tag, without `#`, whose
     /// blocks it joins besides itself (a cable's machines).
@@ -340,13 +346,14 @@ pub enum Rarity {
 }
 
 /// An unvalidated draft; `Content::declare` validates it at load.
-/// Refused drafts are reported by the content admission path as
-/// `native blocks and items of <namespace>: <reason>`, without admitting part of that namespace.
+/// Refused drafts are reported by the content admission path naming the submitting mod,
+/// without admitting part of its declarations.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct Item {
-    /// Identifier in the declaring mod's namespace.
+    /// Item identifier: a bare name uses the declaring mod's ID, and an explicit valid
+    /// `namespace:path` keeps its namespace.
     pub id: String,
     /// The vanilla item it copies, `minecraft:<path>`.
     pub template: String,
@@ -357,11 +364,10 @@ pub struct Item {
     /// A component patch over the template: `Some(tag)` sets, `None` removes.
     /// Component names are namespaced identifiers, without a removal prefix `!`; repeated IDs are refused.
     pub components: Vec<(String, Option<crate::Tag>)>,
-    /// What it leaves in the crafting grid (`Item.Properties.craftRemainder`):
-    /// a vanilla item (`minecraft:<path>`) or one of the mod's own (a bare name is the mod's).
+    /// The registered item it leaves in the crafting grid (`Item.Properties.craftRemainder`).
+    /// A bare name uses this mod's namespace. Omit it for no remainder; `minecraft:air` is not a stack.
     pub crafting_remainder: Option<String>,
-    /// The block placed by this item, if any: one of this mod's (a bare name is this mod's)
-    /// or a vanilla one (`minecraft:<path>`).
+    /// The registered block placed by this item, if any. A bare name uses this mod's namespace.
     pub block: Option<String>,
     /// The arm pose a humanoid takes holding it, in place of vanilla's (`ArmPose`).
     pub arm_pose: Option<ArmPose>,
@@ -389,6 +395,7 @@ impl Default for Block {
             block_item: None,
             pick_item: None,
             components: Vec::new(),
+            suspicious_stew_effects: None,
             connects_to: None,
             thickness: None,
             wood_type: None,

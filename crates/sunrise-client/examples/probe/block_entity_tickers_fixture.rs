@@ -83,7 +83,7 @@ pub fn main() {
             }
             "unload" => {
                 let c = (w[1].parse::<i32>().unwrap(), w[2].parse::<i32>().unwrap());
-                entities.retain(|p, _| (p.0 >> 4, p.2 >> 4) != c);
+                entities.unload_column(c);
             }
             "tick" => {
                 out.push_str("tick");

@@ -10,7 +10,9 @@ use sunrise_client::{
     gossip::{GossipType, Gossips},
     items::{ItemStack, Items},
     menu::{Env, Input, Kind, Menu},
-    merchant::{self, Event, MerchantOffer, Session, TradeContext, TradeEnv, Trader, Trades},
+    merchant::{
+        self, Event, ItemCost, MerchantOffer, Session, TradeContext, TradeEnv, Trader, Trades,
+    },
     random_sequences::RandomSequences,
 };
 use sunrise_core::nbt::Tag;
@@ -297,6 +299,43 @@ pub fn main() -> sunrise_client::Result<()> {
                 }
                 writeln!(out, "{line}")?;
             }
+            "offer_int" => {
+                let number = |key| kv[key].parse::<i32>().unwrap();
+                let mut offer = MerchantOffer {
+                    base_cost_a: ItemCost {
+                        stack: ItemStack::new("minecraft:emerald", number("base") as u32),
+                    },
+                    cost_b: None,
+                    result: ItemStack::new("minecraft:bread", 1),
+                    uses: number("uses"),
+                    max_uses: number("max"),
+                    reward_exp: false,
+                    special_price_diff: number("special"),
+                    demand: number("demand"),
+                    price_multiplier: kv["multiplier"].parse().unwrap(),
+                    xp: number("xp"),
+                };
+                let before = offer.cost_a_count(&items);
+                offer.update_demand();
+                offer.add_special_price_diff(number("delta"));
+                let mut session = Session::new(vec![offer], true);
+                session.level = 5;
+                session.xp = number("start");
+                session.notify_trade(0, None, &items);
+                let o = &mut session.offers[0];
+                let used = o.uses;
+                o.reset_uses();
+                writeln!(
+                    out,
+                    "{name} {before} {} {} {} {used} {} {} {}",
+                    o.demand,
+                    o.special_price_diff,
+                    o.cost_a_count(&items),
+                    o.uses,
+                    o.xp,
+                    session.xp
+                )?;
+            }
             "price" => {
                 let mut m = world.merchant(&kv["v"], origin);
                 let mut gossips = Gossips::default();
@@ -500,7 +539,31 @@ fn trade(
             "close" if open_menu => {
                 menu.merchant_close(env);
                 open_menu = false;
-                session_after = Some(menu.merchant.take().ok_or("session")?);
+                let session = menu.merchant.take().ok_or("session")?;
+                // Game::merchant_closed: the mob gets the screen's offers.
+                m.trader.offers.clone_from(&session.offers);
+                session_after = Some(session);
+            }
+            "restock" if m.villager => {
+                let time: i64 = f[1].parse()?;
+                let day: i64 = f[2].parse()?;
+                // The mob's offers are the screen's (the game keeps them live):
+                // the brain restocks them, then the screen refreshes its prices.
+                if let Some(sess) = menu.merchant.as_mut() {
+                    m.trader.offers.clone_from(&sess.offers);
+                }
+                let caught = m.trader.catch_up(time, day).is_some();
+                let due = m.trader.restock_due(time);
+                if due {
+                    m.trader.restock(time);
+                }
+                if let Some(sess) = menu.merchant.as_mut()
+                    && (caught || due)
+                {
+                    sess.offers.clone_from(&m.trader.offers);
+                    sess.update_special_prices();
+                    menu.merchant_update(env);
+                }
             }
             _ => {}
         }
@@ -536,7 +599,12 @@ fn trade(
                         _ => {}
                     }
                 }
-                (sess.xp, sess.level, sess.offers.clone(), orbs)
+                let offers = if open_menu {
+                    sess.offers.clone()
+                } else {
+                    m.trader.offers.clone()
+                };
+                (sess.xp, sess.level, offers, orbs)
             }
             None => (m.trader.xp, m.level, m.trader.offers.clone(), Vec::new()),
         };
@@ -552,10 +620,11 @@ fn trade(
         for o in &offers {
             write!(
                 line,
-                " {}/{}/{}",
+                " {}/{}/{}/{}",
                 o.uses,
                 o.special_price_diff,
-                o.cost_a_count(env.items)
+                o.cost_a_count(env.items),
+                o.demand
             )?;
         }
         line.push_str(" orbs");

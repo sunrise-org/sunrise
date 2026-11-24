@@ -21,6 +21,10 @@
 use crate::game::{Creative, Game, Screen};
 use sunrise_client::{containers::BlockEntity, items::ItemStack, menu::Input};
 
+#[cfg(test)]
+#[path = "mouse_tweaks_result_tests.rs"]
+mod result_tests;
+
 #[derive(Default)]
 pub(in crate::game) struct Tweaks {
     drag: Option<Drag>,
@@ -191,8 +195,8 @@ impl Game<'_> {
         owned
     }
     /// The button went up: the drag ends.
-    pub(in crate::game) fn tweak_release(&mut self) {
-        self.tweaks.drag = None;
+    pub(in crate::game) fn tweak_release(&mut self) -> bool {
+        self.tweaks.drag.take().is_some()
     }
     /// The wheel over an inventory screen: true when the tweaks used it.
     pub(in crate::game) fn tweak_scroll(&mut self, delta: f32, slot: Option<usize>) -> bool {
@@ -232,11 +236,18 @@ impl Game<'_> {
         let own: Vec<usize> = self
             .slots()
             .into_iter()
-            .filter(|s| (300..500).contains(s) || (table && (100..109).contains(s)))
+            .filter(|&s| {
+                crate::game::inventory_slots::container_slot_index(s).is_some()
+                    || (table && (100..109).contains(&s))
+            })
             .collect();
         let player = || (0..9).rev().chain((9..36).rev());
         match slot {
-            100..109 | 300..500 => player().collect(),
+            s if (100..109).contains(&s)
+                || crate::game::inventory_slots::container_slot_index(s).is_some() =>
+            {
+                player().collect()
+            }
             0..36 if !own.is_empty() => own,
             0..9 => (9..36).collect(),
             9..36 => (0..9).collect(),

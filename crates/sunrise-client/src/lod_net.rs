@@ -22,10 +22,8 @@ use crate::{
     lod::{Column, Span, Spans},
 };
 use std::{collections::HashMap, time::Instant};
-use sunrise_protocol::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use sunrise_core::vanilla_bytes::Writer;
+use sunrise_protocol::{Error, Result, buf::Reader};
 use sunrise_world::registry::BlockStateId;
 
 mod client;

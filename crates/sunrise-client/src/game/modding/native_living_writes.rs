@@ -471,7 +471,7 @@ mod tests {
                 );
                 crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
                 game.screen = super::super::Screen::Playing;
-                game.right = true;
+                game.set_mapping_held("key.use", true);
                 let player = game.living(game.entity(20).unwrap()).unwrap();
                 test(game, &uses, player);
             });
@@ -735,7 +735,7 @@ mod tests {
     #[ignore = "daily"]
     fn a_use_with_the_button_up_is_released_on_its_next_tick() {
         with_uses(|game, uses, player| {
-            game.right = false;
+            game.set_mapping_held("key.use", false);
             game.offhand = Some(ItemStack::new("minecraft:bow", 1));
             assert!(game.living_start_using_item(player, Hand::Off));
             game.tick_using();
@@ -1008,6 +1008,9 @@ mod tests {
             for conn in [12, 13] {
                 host.hub.update_guest(conn, |g| g.ticks = 5).unwrap();
             }
+            for conn in [12, 13] {
+                game.lan_register_player_waypoint(conn);
+            }
             let waypoints = |sent: &[C]| -> Vec<(i32, String, Option<i32>)> {
                 sent.iter()
                     .filter_map(|p| match p {
@@ -1123,7 +1126,7 @@ mod tests {
                 seed: 0,
                 max_players: 2,
                 integrated: true,
-                levels: game.level_shapes,
+                levels: game.level_shapes.clone(),
                 level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
@@ -1240,7 +1243,7 @@ mod tests {
                 seed: 0,
                 max_players: 2,
                 integrated: true,
-                levels: game.level_shapes,
+                levels: game.level_shapes.clone(),
                 level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();

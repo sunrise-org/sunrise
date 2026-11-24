@@ -13,7 +13,7 @@
 //! list, the kinds whose id comes late too, so an aborted spawn just burns its id. Bolts and
 //! thrown potions have none and are kept by their lists' lengths. A traveller that arrived from
 //! another level inside the transaction is left where it arrived: travel is not journaled.
-use super::super::{Dim, Game, commands::Target};
+use super::super::{Dim, Game, commands::Target, entity::EntityHandle};
 use super::Level;
 use mod_api::EntityRef;
 use std::collections::{HashMap, HashSet};
@@ -32,8 +32,7 @@ pub(super) struct EntityJournal {
     /// Below the join number of every entity added in the transaction (`JoinSeq::upcoming` as
     /// it opened).
     mark: JoinSeq,
-    /// How many bolts and thrown potions there were as it opened.
-    bolts: usize,
+    /// How many thrown potions there were as it opened.
     potions: usize,
     /// The travellers that arrived from another level, by the ids they arrived under.
     arrivals: HashSet<u32>,
@@ -56,6 +55,8 @@ enum Removal {
         killed: bool,
     },
     Other(EntityRef),
+    /// A full Entity.kill, including its death and removal effects, not just discard.
+    Kill(EntityRef),
 }
 
 /// What mods are told of entities joining and leaving, held while a transaction is open.
@@ -67,10 +68,18 @@ pub(in crate::game) enum Announcement {
         loaded_from_disk: bool,
         through: JoinSeq,
     },
+    /// `addFreshEntity` for one row, independent of unrelated joins held by `item_toss`.
+    FreshJoin { handle: EntityHandle, id: u32 },
     /// `native_entity_left`.
     Left(u32),
     /// `native_leaves_flush`.
     Leaves,
+}
+
+impl Announcement {
+    fn is_join(self) -> bool {
+        matches!(self, Self::Joins { .. } | Self::FreshJoin { .. })
+    }
 }
 
 /// One place in a commit's queue.
@@ -83,8 +92,8 @@ enum Step {
 impl Step {
     /// A journal's steps: its joins, then its removals, then the rest of what it held.
     fn of(announcements: Vec<Announcement>, removals: Vec<Removal>) -> Vec<Step> {
-        let (joins, rest): (Vec<_>, Vec<_>) = (announcements.into_iter())
-            .partition(|announcement| matches!(announcement, Announcement::Joins { .. }));
+        let (joins, rest): (Vec<_>, Vec<_>) =
+            (announcements.into_iter()).partition(|announcement| announcement.is_join());
         let steps = joins.into_iter().map(Step::Tell);
         let steps = steps.chain([Step::Remove(removals)]);
         steps.chain(rest.into_iter().map(Step::Tell)).collect()
@@ -129,6 +138,10 @@ fn committing_in(commits: &mut [Committing], dimension: Dim) -> Option<&mut Comm
         .iter_mut()
         .rev()
         .find(|commit| commit.dimension == dimension)
+}
+
+pub(super) fn is_committing(commits: &[Committing], dimension: Dim) -> bool {
+    commits.iter().any(|commit| commit.dimension == dimension)
 }
 
 /// The innermost open transaction of `dimension`: it journals what happens in that level only,
@@ -189,7 +202,6 @@ impl EntityJournal {
 impl EntityJournal {
     pub(super) fn common_is_unchanged(&self, game: &Game<'_>) -> bool {
         self.mark == JoinSeq::upcoming()
-            && self.bolts == game.bolts.len()
             && self.potions == game.potions.thrown.len()
             && self.arrivals.is_empty()
             && self.removals.is_empty()
@@ -204,7 +216,6 @@ impl Game<'_> {
     pub(super) fn entity_journal_open(&self) -> EntityJournal {
         EntityJournal {
             mark: JoinSeq::upcoming(),
-            bolts: self.bolts.len(),
             potions: self.potions.thrown.len(),
             ..EntityJournal::default()
         }
@@ -266,11 +277,11 @@ impl Game<'_> {
     /// [`Self::removal_pending`] of the entity in `dimension`, parked or not: the transactions
     /// stay with the game when a level is swapped out.
     pub(in crate::game) fn removal_pending_in(&self, dimension: Dim, target: &Target) -> bool {
-        let id = super::super::native_entities::target_id(*target);
+        let id = self.resident_target_id(*target);
         let open = self.transactions.iter().any(|level| {
             level.dimension == Some(dimension)
                 && (level.lifetimes.removals.iter())
-                    .any(|removal| matches!(removal, Removal::Other(e) if Some(e.id()) == id))
+                    .any(|removal| matches!(removal, Removal::Other(e) | Removal::Kill(e) if Some(e.id()) == id))
         });
         // A commit's removals wait for its joins to be told: its entities read as gone until then.
         open || (self.transactions.committing.iter()).any(|commit| {
@@ -302,6 +313,15 @@ impl Game<'_> {
         }
         true
     }
+    /// Mark an admitted kill invisible now, leaving its effects to the root commit.
+    pub(in crate::game) fn journal_kill(&mut self, entity: EntityRef) -> bool {
+        let Some(level) = open_in(&mut self.transactions, self.dim) else {
+            return false;
+        };
+        level.lifetimes.removals.push(Removal::Kill(entity));
+        true
+    }
+
     /// What `journal` left for the root commit: the joins it held, then its removals, in order,
     /// then the leaves it held. An entity added and removed in it is never announced, so it never
     /// leaves. What the listeners ask for meanwhile waits in the commit's queue and is told after
@@ -317,7 +337,7 @@ impl Game<'_> {
         let removed: Vec<u32> = (journal.removals.iter())
             .map(|removal| match removal {
                 Removal::Mob { id, .. } => *id,
-                Removal::Other(entity) => entity.id(),
+                Removal::Other(entity) | Removal::Kill(entity) => entity.id(),
             })
             .collect();
         let dimension = self.dim;
@@ -351,41 +371,69 @@ impl Game<'_> {
         };
         Some((step, commit.removed.clone()))
     }
-    /// Tells the running commit's queue: every join first, as the queue grows with what the
-    /// listeners ask for, then each step in order, the joins already told skipped.
-    fn tell_commit(&mut self, frame: usize) {
+    /// Publish an item spawned by `preRemoveSideEffects` before returning to the block
+    /// write. At commit, tell the already-queued batches first, excluding pending removes.
+    pub(in crate::game) fn flush_removal_join(&mut self, watch: u32) -> bool {
+        let Some(frame) = self
+            .transactions
+            .committing
+            .iter()
+            .rposition(|commit| commit.dimension == self.dim)
+        else {
+            return self.native_joins_flush(false, watch);
+        };
+        self.tell_commit_joins(frame);
+        let removed = self.transactions.committing[frame].removed.clone();
+        self.flush_joins(false, watch, &removed, Some(JoinSeq::latest()))
+    }
+
+    fn tell_commit_joins(&mut self, frame: usize) -> usize {
         let mut next = 0;
         while let Some((step, removed)) = self.commit_step(frame, next, false) {
             next += 1;
-            if let Step::Tell(Announcement::Joins {
-                loaded_from_disk,
-                through,
-            }) = step
+            if let Step::Tell(announcement) = step
+                && announcement.is_join()
             {
-                self.flush_joins(loaded_from_disk, 0, &removed, Some(through));
+                self.tell_announcement(announcement, &removed);
             }
         }
-        let joined = next;
+        next
+    }
+
+    /// Tells every join first, as the queue grows, then the remaining steps in order.
+    fn tell_commit(&mut self, frame: usize) {
+        let joined = self.tell_commit_joins(frame);
         let mut next = 0;
         while let Some((step, removed)) = self.commit_step(frame, next, true) {
             match step {
-                Step::Tell(Announcement::Joins { .. }) if next < joined => {}
-                Step::Tell(Announcement::Joins {
-                    loaded_from_disk,
-                    through,
-                }) => {
-                    self.flush_joins(loaded_from_disk, 0, &removed, Some(through));
-                }
-                Step::Tell(Announcement::Left(id)) => self.entity_left_now(id),
-                Step::Tell(Announcement::Leaves) => {
-                    self.native_removals_flush();
-                    self.leaves_now();
-                }
+                Step::Tell(announcement) if next < joined && announcement.is_join() => {}
+                Step::Tell(announcement) => self.tell_announcement(announcement, &removed),
                 Step::Remove(removals) => self.remove_committed(removals),
             }
             next += 1;
         }
     }
+    fn tell_announcement(&mut self, announcement: Announcement, removed: &[u32]) {
+        match announcement {
+            Announcement::Joins {
+                loaded_from_disk,
+                through,
+            } => {
+                self.flush_joins(loaded_from_disk, 0, removed, Some(through));
+            }
+            Announcement::FreshJoin { handle, id } => {
+                if !removed.contains(&id) {
+                    self.admit_fresh_join(handle, id);
+                }
+            }
+            Announcement::Left(id) => self.entity_left_now(id),
+            Announcement::Leaves => {
+                self.native_removals_flush();
+                self.leaves_now();
+            }
+        }
+    }
+
     /// Marks `id` as the entity being removed in the commit of the level in place; the mark it
     /// replaced.
     fn set_removing(&mut self, id: Option<u32>) -> Option<u32> {
@@ -401,11 +449,9 @@ impl Game<'_> {
                     if killed {
                         self.mob_removal_effects(id);
                     }
-                    // As `remove_mob_now` does outside a transaction: the leave is told at
-                    // the removal, here the root commit's.
-                    self.native_entity_left(id);
+                    self.finish_mob_removal(id);
                 }
-                Removal::Other(entity) => {
+                Removal::Other(entity) | Removal::Kill(entity) => {
                     // The commit lists the entity as removed until now, so the handle resolves
                     // only while it is marked as being removed. `remove_target_now` records the
                     // removal (`persist.removals`) before any callback runs: what a callback
@@ -414,7 +460,11 @@ impl Game<'_> {
                     // this one set is put back as it was.
                     let outer = self.set_removing(Some(entity.id()));
                     if let Some(target) = self.native_entity_target(entity) {
-                        self.remove_target_now(entity, target);
+                        if matches!(removal, Removal::Kill(_)) {
+                            self.kill_target_in_level(target);
+                        } else {
+                            self.remove_target_now(entity, target);
+                        }
                     }
                     self.set_removing(outer);
                 }
@@ -429,7 +479,6 @@ impl Game<'_> {
                 mob.removed = was;
             }
         }
-        self.bolts.truncate(journal.bolts);
         self.potions.thrown.truncate(journal.potions);
         // One load when nothing joined anywhere since the transaction opened.
         if JoinSeq::latest() >= journal.mark {
@@ -472,6 +521,7 @@ impl Game<'_> {
             self.item_frames,
             self.others,
             self.breath_clouds,
+            self.bolts,
             self.fangs.list,
             self.ominous_spawners,
             self.resident_entities.knots,
@@ -520,6 +570,25 @@ impl Drop for Departure {
     }
 }
 
+fn remove_entity_attachment(
+    attachments: &mut HashMap<super::AttachmentKey, super::KeptAttachments>,
+    id: u32,
+) -> Option<super::KeptAttachments> {
+    let key = attachments
+        .keys()
+        .find(|key| {
+            matches!(
+                key,
+                super::AttachmentKey::Level(
+                    _,
+                    sunrise_mod_runtime::attachments::Holder::Entity(entity),
+                ) if *entity == id
+            )
+        })
+        .copied()?;
+    attachments.remove(&key)
+}
+
 impl Game<'_> {
     /// Entity `id` is leaving this level with `map` inside a transaction: its index rows stay
     /// until the root closes, so a snapshot inside the action sees no gap.
@@ -558,11 +627,10 @@ impl Game<'_> {
     /// slots on, so its own abort can put back what it kept, which is older.
     pub(super) fn roll_back_in_flight(&mut self, level: &mut Level) {
         for (id, slot) in std::mem::take(&mut level.in_flight) {
-            let holder = sunrise_mod_runtime::attachments::Holder::Entity(id);
             // 🤖 Agent: as in `journal_travel`, both are consumed and the travelled one, kept
             // before the entity arrived under `id`, is the older and the one put back.
             let travelled = level.travelled.remove(&id);
-            let kept = level.attachments.remove(&holder);
+            let kept = remove_entity_attachment(&mut level.attachments, id);
             if let Some(kept) = travelled.or(kept) {
                 *slot.lock().unwrap_or_else(|error| error.into_inner()) = Some(kept.contents);
             }
@@ -580,9 +648,7 @@ impl Game<'_> {
             // travelled to `source` was kept before anything kept it under `source`, so its
             // travelled entry is the older one, and the one an abort restores.
             let travelled = level.travelled.remove(&source);
-            let kept = level
-                .attachments
-                .remove(&sunrise_mod_runtime::attachments::Holder::Entity(source));
+            let kept = remove_entity_attachment(&mut level.attachments, source);
             if let Some(kept) = travelled.or(kept) {
                 level.travelled.entry(arrived).or_insert(kept);
             }

@@ -80,8 +80,8 @@ GoalSelector.goalContainsAnyFlags	inline	crates/sunrise-client/src/mobs/goals.rs
 GoalSelector.goalCanBeReplacedForAllFlags	inline	crates/sunrise-client/src/mobs/goals.rs::GoalSelector::tick	the replaceable check over the locked slots
 GoalSelector.tickRunningGoals	port	crates/sunrise-client/src/mobs/goals.rs::GoalSelector::tick_running
 GolemRandomStrollInVillageGoal	home	crates/sunrise-client/src/mobs/golem.rs	a Stroll with interval 240 and village_stroll_position that register_iron adds at 4; tick for tick with vanilla in mob_ai iron_golem_village_*
-MeleeAttackGoal.checkAndPerformAttack	inline	crates/sunrise-client/src/mobs/goals.rs::MeleeAttack::tick	reset cooldown, swing, do_hurt_target
-MeleeAttackGoal.canPerformAttack	inline	crates/sunrise-client/src/mobs/goals.rs::MeleeAttack::tick	cooldown over, within melee range, line of sight
+MeleeAttackGoal.checkAndPerformAttack	port	crates/sunrise-client/src/mobs/goals.rs::MeleeAttack::check_and_perform_attack	reset cooldown, swing, do_hurt_target
+MeleeAttackGoal.canPerformAttack	inline	crates/sunrise-client/src/mobs/goals.rs::MeleeAttack::check_and_perform_attack	cooldown over, within melee range, line of sight
 MoveBackToVillageGoal	home	crates/sunrise-client/src/mobs/golem.rs	the back Stroll register_iron adds at 2: interval 10, the outside_village gate and back_to_village_position; tick for tick with vanilla in mob_ai iron_golem_village_*
 MoveThroughVillageGoal	home	crates/sunrise-client/src/mobs/undead.rs	MoveThroughVillage in that file: zombies add it at 6; the raider's nested Raider$RaiderMoveThroughVillageGoal is the separate MoveThroughVillage in raider.rs; no tick parity check yet
 MoveToBlockGoal.moveMobToBlock	inline	crates/sunrise-client/src/mobs/goals.rs::MoveToBlock::start	nav_move_to the block centre one up

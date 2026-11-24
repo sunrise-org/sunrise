@@ -13,7 +13,7 @@ import yaml
 WORKFLOWS = [ROOT / ".github/workflows/dyna-ci.yml"]
 # The daily run's legs: called by daily.yml or dispatched by hand, never on pull requests or main pushes (owner,
 # 2026-11-12; CI tiers 2026-11-13).
-DAILY_LEGS = [ROOT / ".github/workflows" / name for name in ("wasm-mods.yml", "fn-replace-check.yml",
+DAILY_LEGS = [ROOT / ".github/workflows" / name for name in ("fn-replace-check.yml",
                                                                           "machine-sample.yml")]
 
 

@@ -1,10 +1,13 @@
 //! On-demand GUI pictures. The atlas keeps weak references; only a frame and
 //! the renderer keep decoded pixels/textures alive, so leaving the screen frees both.
+//! A mod's standalone texture (`GuiCanvas::texture`) is held instead for the atlas's
+//! resource generation, as vanilla's `TextureManager` keeps a texture until a reload.
 use super::*;
 use std::sync::{
     Weak,
     atomic::{AtomicU64, Ordering},
 };
+use sunrise_core::identifier::Identifier;
 
 pub struct Picture {
     pub(super) id: u64,
@@ -18,6 +21,14 @@ pub struct Picture {
 pub(super) struct Cache {
     roots: Vec<crate::resource_source::ResourceSource>,
     entries: HashMap<String, Option<Weak<Picture>>>,
+    /// By namespace, then path: looked up by `&str` every frame without building a key.
+    textures: HashMap<String, HashMap<String, Arc<Picture>>>,
+    missing: Option<Arc<Picture>>,
+}
+
+fn next_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Cache {
@@ -27,8 +38,63 @@ impl Cache {
     ) -> Self {
         Self {
             roots: vec![root.clone(), defaults.clone()],
-            entries: HashMap::new(),
+            ..Self::default()
         }
+    }
+    /// The standalone texture `id`, the exact resource `assets/<namespace>/<path>`, from the
+    /// first root that has it (`ResourceManager.getResource`), sampled as its `.mcmeta` says:
+    /// the topmost one from the image's root or a root above it
+    /// (`FallbackResourceManager.createStackMetadataFinder`), as the pack stack itself keeps only
+    /// a `.mcmeta` from the image's pack or above. Decoded once per resource generation; a missing
+    /// or undecodable image, or a `.mcmeta` that cannot be read or parsed
+    /// ([`TextureFlags::read_mcmeta`]), is vanilla's missing texture
+    /// (`TextureManager.loadContentsSafe`, `TextureContents.createMissing`).
+    fn texture(&mut self, id: &Identifier) -> Arc<Picture> {
+        let (namespace, path) = (id.namespace(), id.path());
+        if let Some(texture) = self.textures.get(namespace).and_then(|t| t.get(path)) {
+            return texture.clone();
+        }
+        let name = format!("assets/{namespace}/{path}");
+        let found = crate::resource_source::stays_inside(&name)
+            .then(|| self.roots.iter().position(|root| root.contains(&name)))
+            .flatten()
+            .and_then(|winner| {
+                let (width, height, pixels) = decode_resource(&self.roots[winner], &name).ok()?;
+                let meta = format!("{name}.mcmeta");
+                let flags = match self.roots[..=winner].iter().find(|r| r.contains(&meta)) {
+                    None => TextureFlags::default(),
+                    Some(root) => {
+                        let text = root.read_to_string(&meta).ok()?;
+                        TextureFlags::read_mcmeta(&text).ok()?
+                    }
+                };
+                Some(Arc::new(Picture {
+                    id: next_id(),
+                    width,
+                    height,
+                    pixels,
+                    flags,
+                }))
+            });
+        let texture = found.unwrap_or_else(|| {
+            self.missing
+                .get_or_insert_with(|| {
+                    let (width, height, pixels) = missing_image();
+                    Arc::new(Picture {
+                        id: next_id(),
+                        width,
+                        height,
+                        pixels,
+                        flags: TextureFlags::default(),
+                    })
+                })
+                .clone()
+        });
+        self.textures
+            .entry(namespace.to_owned())
+            .or_default()
+            .insert(path.to_owned(), texture.clone());
+        texture
     }
     fn get(&mut self, name: &str) -> Option<Arc<Picture>> {
         if let Some(cached) = self.entries.get(name) {
@@ -52,9 +118,8 @@ impl Cache {
                 Some((image, flags))
             })
             .map(|((width, height, pixels), flags)| {
-                static NEXT: AtomicU64 = AtomicU64::new(1);
                 Arc::new(Picture {
-                    id: NEXT.fetch_add(1, Ordering::Relaxed),
+                    id: next_id(),
                     width,
                     height,
                     pixels,
@@ -82,26 +147,73 @@ impl HudBatch {
         let Some(picture) = atlas.pictures.lock().unwrap().get(name) else {
             return;
         };
+        self.picture_quad(picture, [x, y, w, h], [0.0, 0.0, 1.0, 1.0], tint);
+    }
+
+    /// `GuiGraphicsExtractor.blit` of the standalone texture `id` (see `GuiCanvas::texture`):
+    /// `innerBlit`'s quad at `x, y, w, h`, sampling `uv / tex` to `(uv + src) / tex` unclamped,
+    /// tinted `tint` (the batch's RGBA), at its place in the HUD's ordered runs.
+    pub fn texture(
+        &mut self,
+        atlas: &HudAtlas,
+        id: &Identifier,
+        at: [f32; 4],
+        uv: [f32; 2],
+        [src, tex]: [[i32; 2]; 2],
+        tint: u32,
+    ) {
+        let picture = atlas.pictures.lock().unwrap().texture(id);
+        let (tw, th) = (tex[0] as f32, tex[1] as f32);
+        let uvs = [
+            uv[0] / tw,
+            uv[1] / th,
+            (uv[0] + src[0] as f32) / tw,
+            (uv[1] + src[1] as f32) / th,
+        ];
+        self.picture_quad(picture, at, uvs, tint);
+    }
+
+    fn picture_quad(
+        &mut self,
+        picture: Arc<Picture>,
+        [x, y, w, h]: [f32; 4],
+        [u0, v0, u1, v1]: [f32; 4],
+        tint: u32,
+    ) {
         let start = self.vertices.len();
-        self.rect_uv(
-            x,
-            y,
-            w,
-            h,
-            Rect {
-                u0: 0.0,
-                v0: 0.0,
-                u1: 1.0,
-                v1: 1.0,
-                w: picture.width,
-                h: picture.height,
-            },
-            tint,
-        );
+        let rect = Rect {
+            u0,
+            v0,
+            u1,
+            v1,
+            w: picture.width,
+            h: picture.height,
+        };
+        self.rect_uv(x, y, w, h, rect, tint);
         self.blend_since(start, Blend::Picture(picture.id));
         if !self.pictures.iter().any(|p| p.id == picture.id) {
             self.pictures.push(picture);
         }
+    }
+}
+
+/// `ReloadableTexture.setSampler`: `blur` filters linearly, else nearest; `clamp` clamps to the
+/// edge, else repeats. One level: no mipmaps.
+fn sampler(flags: TextureFlags) -> wgpu::SamplerDescriptor<'static> {
+    let filter = match flags.blur {
+        true => wgpu::FilterMode::Linear,
+        false => wgpu::FilterMode::Nearest,
+    };
+    let address = match flags.clamp {
+        true => wgpu::AddressMode::ClampToEdge,
+        false => wgpu::AddressMode::Repeat,
+    };
+    wgpu::SamplerDescriptor {
+        mag_filter: filter,
+        min_filter: filter,
+        address_mode_u: address,
+        address_mode_v: address,
+        ..Default::default()
     }
 }
 
@@ -115,7 +227,7 @@ impl HudRenderer {
     ) {
         if let Some((_, group)) = self.pictures.get(&id) {
             pass.set_bind_group(0, group, &[]);
-            pass.set_pipeline(self.pipeline.get(coverage));
+            pass.set_pipeline(self.picture_pipeline.get(coverage));
             pass.draw(range, 0..1);
             pass.set_bind_group(0, &self.group, &[]);
         }
@@ -128,8 +240,13 @@ impl HudRenderer {
         encoder: &mut wgpu::CommandEncoder,
         batch: &HudBatch,
     ) {
-        self.pictures
-            .retain(|id, _| batch.pictures.iter().any(|p| p.id == *id));
+        // A picture this frame doesn't draw keeps its texture while something besides the renderer
+        // holds it: a standalone texture, which its atlas holds until the next resource reload, so
+        // returning to its screen uploads nothing. A Realms picture, held weakly, is released as
+        // soon as no frame holds it.
+        self.pictures.retain(|id, (picture, _)| {
+            Arc::strong_count(picture) > 1 || batch.pictures.iter().any(|p| p.id == *id)
+        });
         for picture in &batch.pictures {
             if picture.width > device.limits().max_texture_dimension_2d
                 || picture.height > device.limits().max_texture_dimension_2d
@@ -159,23 +276,7 @@ impl HudRenderer {
                     &picture.pixels,
                 );
                 let view = texture.create_view(&Default::default());
-                let filter = if picture.flags.blur {
-                    wgpu::FilterMode::Linear
-                } else {
-                    wgpu::FilterMode::Nearest
-                };
-                let address = if picture.flags.clamp {
-                    wgpu::AddressMode::ClampToEdge
-                } else {
-                    wgpu::AddressMode::Repeat
-                };
-                let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                    mag_filter: filter,
-                    min_filter: filter,
-                    address_mode_u: address,
-                    address_mode_v: address,
-                    ..Default::default()
-                });
+                let sampler = device.create_sampler(&sampler(picture.flags));
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("GUI picture"),
                     layout: &self.layout,

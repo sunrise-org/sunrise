@@ -88,8 +88,8 @@ pub enum Mover {
     /// `AbstractBoat.canVehicleCollide` for a cart: the others, every living pushable mob, a
     /// shulker, every player offered; not a mob riding this cart.
     Cart { id: u32 },
-    /// The same for a boat: not a mob riding it, even through another mob.
-    Boat { id: u32 },
+    /// A boat excludes its whole riding stack, not just its own passengers.
+    Boat { id: u32, root: Option<u32> },
 }
 
 impl Mover {
@@ -156,13 +156,15 @@ impl Mover {
                     !c.removed && c.mount != Some(id) && vehicle_pushable(c)
                 }
             },
-            Mover::Boat { id } => match c.kind {
-                SolidKind::Boat => c.id != id,
-                SolidKind::Cart | SolidKind::Player => true,
-                SolidKind::Shulker | SolidKind::HappyGhast | SolidKind::Mob => {
-                    !c.removed && vehicle_pushable(c) && (c.mount.is_none() || root() != Some(id))
-                }
-            },
+            Mover::Boat { id, root: own_root } => {
+                c.id != id
+                    && !c.removed
+                    && (matches!(
+                        c.kind,
+                        SolidKind::Boat | SolidKind::Cart | SolidKind::Player
+                    ) || vehicle_pushable(c))
+                    && own_root.is_none_or(|own_root| root() != Some(own_root))
+            }
         }
     }
 }

@@ -3,6 +3,147 @@ use super::*;
 
 include!("position_load_tests.rs");
 
+mod transient_entities {
+    use super::*;
+    use crate::game::native_entity_refs::tests::{bind_local_player, with_game};
+    use mod_api::EntityRef;
+
+    fn with_server(test: impl FnOnce(&mut Game<'_>)) {
+        mod_platform::testing::with_mods(Default::default(), || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                test(game);
+            });
+        });
+    }
+
+    fn display(game: &mut Game<'_>) -> EntityRef {
+        let target = game
+            .summon_with_nbt("minecraft:text_display", [4.0, 64.0, 4.0], "{}")
+            .unwrap()
+            .unwrap();
+        game.entity(game.resident_target_id(target).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_transient_display_is_live_and_can_resume_saving_with_its_uuid() {
+        with_server(|game| {
+            let display = display(game);
+            let chunks = HashSet::from([(0, 0)]);
+            assert_eq!(display.set_persistent(game, false), Ok(true));
+            assert_eq!(display.set_persistent(game, false), Ok(true));
+            assert_eq!(game.entity(display.id()), Some(display));
+            let uuid =
+                sunrise_client::lan::playerdata::uuid_ints(game.entity_uuid(display).unwrap());
+            assert_eq!(game.entity_chunks(&chunks, false), vec![((0, 0), vec![])]);
+            let (capture, _) = game.snapshot_entity_chunks(&chunks, EntitySnapshot::Structure);
+            assert_eq!(capture[0].1.len(), 1);
+            assert_eq!(entity_nbt::uuid(&capture[0].1[0]), Some(uuid));
+
+            assert_eq!(display.set_persistent(game, true), Ok(true));
+            let restored = game.entity_chunks(&chunks, false);
+            assert_eq!(restored[0].1.len(), 1);
+            assert_eq!(entity_nbt::uuid(&restored[0].1[0]), Some(uuid));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn unloading_a_transient_display_erases_its_old_record() {
+        with_server(|game| {
+            let display = display(game);
+            game.save_entities(true).unwrap();
+            assert_eq!(game.save.load_entities(0, 0).unwrap().len(), 1);
+            assert_eq!(display.set_persistent(game, false), Ok(true));
+            assert_eq!(
+                game.save.load_entities(0, 0).unwrap().len(),
+                1,
+                "setting the flag does not rewrite an old snapshot"
+            );
+
+            let chunk = game.world.chunks.remove(&(0, 0)).unwrap();
+            let keys = HashSet::from([(0, 0)]);
+            let (records, _) = game.unloading_entity_snapshots(&keys);
+            game.save.save_entities_later(records).unwrap();
+            game.remove_unloading_entities(&keys);
+            game.save.flush().unwrap();
+            assert_eq!(game.entity(display.id()), None);
+            let records = game.save.load_entities(0, 0).unwrap();
+            assert!(records.is_empty());
+            game.world.chunks.insert((0, 0), chunk);
+            game.world.queue_entity_nbt((0, 0), records);
+            game.spawn_loaded_entities();
+            assert!(game.others.is_empty());
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn the_root_controls_chunk_and_player_vehicle_saves_but_not_logout_removal() {
+        with_server(|game| {
+            let root = game
+                .summon_with_nbt(
+                    "minecraft:pig",
+                    [4.0, 64.0, 4.0],
+                    r#"{Passengers:[{id:"minecraft:chicken",UUID:[I;0,0,0,321]}]}"#,
+                )
+                .unwrap()
+                .unwrap();
+            let root = game.entity(game.resident_target_id(root).unwrap()).unwrap();
+            let rider = game.mob_passenger_ids(root.id())[0];
+            let chunks = HashSet::from([(0, 0)]);
+            assert_eq!(
+                game.entity(rider).unwrap().set_persistent(game, false),
+                Ok(true)
+            );
+            let saved = game.entity_chunks(&chunks, false);
+            let Some(Tag::List(passengers)) = saved[0].1[0].get("Passengers") else {
+                panic!("marking the rider alone must not drop it from its vehicle");
+            };
+            assert_eq!(entity_nbt::uuid(&passengers[0]), Some([0, 0, 0, 321]));
+            let (wrapper, attach) = game.snapshot_parent_vehicle(rider, &[], false).unwrap();
+            assert_eq!(attach, [0, 0, 0, 321]);
+            assert_eq!(
+                wrapper
+                    .get("Entity")
+                    .and_then(|tree| tree.get("Passengers")),
+                Some(&Tag::List(passengers.clone()))
+            );
+
+            assert_eq!(root.set_persistent(game, false), Ok(true));
+            assert_eq!(game.entity_chunks(&chunks, false), vec![((0, 0), vec![])]);
+            assert_eq!(game.snapshot_parent_vehicle(rider, &[], false), None);
+            assert!(game.entity(root.id()).is_some());
+            assert_eq!(game.snapshot_parent_vehicle(rider, &[], true), None);
+            assert_eq!(game.entity(root.id()), None);
+            assert_eq!(game.entity(rider), None);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_persistence_write_refuses_players_stale_handles_clients_and_setup() {
+        with_server(|game| {
+            let display = display(game);
+            game.player =
+                Some(sunrise_client::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            bind_local_player(game, 100, 25);
+            let player = game.entity(100).unwrap();
+            assert_eq!(player.set_persistent(game, false), Ok(false));
+            game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+            assert_eq!(display.set_persistent(game, false), Ok(false));
+            game.options.execution_role =
+                crate::game::execution_role::ExecutionRole::IntegratedServer;
+            assert!(display.discard(game));
+            assert_eq!(display.set_persistent(game, false), Ok(false));
+        });
+    }
+}
+
 #[test]
 #[ignore = "daily"]
 fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() {
@@ -165,6 +306,10 @@ fn resident_other_and_fangs_load_tick_and_reset() {
 #[test]
 #[ignore = "daily"]
 fn comparator_and_hopper_live_state_survives_chunk_reload() {
+    run_comparator_and_hopper_live_state_survives_chunk_reload();
+}
+
+pub(in crate::game) fn run_comparator_and_hopper_live_state_survives_chunk_reload() {
     use super::super::{Audio, Options, Progress, Settings, load_resources};
     use sunrise_client::{containers::BlockEntity, items::ItemStack, save};
     fn cooldown(game: &Game<'_>) -> i32 {
@@ -586,7 +731,7 @@ fn entity_attachment_boundary_does_not_alias_equal_uuid_passengers() {
             },
         }),
         copy_on_death: false,
-        sync: false,
+        sync_codec: None,
     };
     let root_id = [1, 2, 3, 4];
     let child_id = root_id;
@@ -604,7 +749,7 @@ fn entity_attachment_boundary_does_not_alias_equal_uuid_passengers() {
             )])]),
         ),
     ]);
-    write_attachments(&mut root, 12, &maps);
+    write_attachments(&mut root, 12, &maps).unwrap();
     let Some(Tag::List(children)) = root.get("Passengers") else {
         panic!("passenger missing");
     };
@@ -635,7 +780,7 @@ fn saved_attachments_read_over_a_constructed_map_but_not_a_live_one() {
                 },
             }),
             copy_on_death: false,
-            sync: false,
+            sync_codec: None,
         }
     }
     let (saved, unsaved) = (key("saved"), key("unsaved"));
@@ -644,7 +789,7 @@ fn saved_attachments_read_over_a_constructed_map_but_not_a_live_one() {
     saved.set(&mut data, Holder::Level, 7).unwrap();
     let tag = Tag::compound([
         ("UUID", Tag::IntArray(uuid.to_vec())),
-        (ATTACHMENTS_KEY, Tag::Compound(data.to_nbt())),
+        (ATTACHMENTS_KEY, Tag::Compound(data.try_to_nbt().unwrap())),
     ]);
     let listener = || {
         let mut map = Attachments::default();
@@ -720,7 +865,7 @@ fn an_older_save_loads_its_entities_attachments_back_onto_them() {
             },
         }),
         copy_on_death: false,
-        sync: false,
+        sync_codec: None,
     };
     let mark = |n: i32| {
         Tag::compound([(
@@ -1014,4 +1159,278 @@ fn anger_at_a_mob_not_saved_yet_names_it() {
         Some(named.as_slice()),
         game.persist.uuid_of(2).as_ref().map(|u| &u[..])
     );
+}
+
+/// `Entity.saveWithoutId` writes an experience orb's live `remainingFireTicks`
+/// and `airSupply`: an orb loaded with `Fire:40s` that burned for a tick saves
+/// `39s`, not the loaded `40s`, while a field it doesn't simulate
+/// (`Invulnerable`) still comes from the loaded compound.
+#[test]
+fn an_orb_saves_its_live_fire_and_air_over_the_loaded_ones() {
+    let raw =
+        sunrise_core::nbt::parse_snbt("{Pos:[4.5d,100d,4.5d],Fire:40s,Air:300s,Invulnerable:1b}")
+            .unwrap()
+            .0;
+    let mut orb = entity_nbt::orbs_from_nbt(&raw).remove(0);
+    (orb.fire_ticks, orb.air) = (39, 299);
+    let saved = with_raw_over(entity_nbt::orb_to_nbt(&orb, [0; 4]), Some(&raw), ORB_LIVE);
+    assert_eq!(saved.get("Fire"), Some(&Tag::Short(39)));
+    assert_eq!(saved.get("Air"), Some(&Tag::Short(299)));
+    assert_eq!(saved.get("Invulnerable"), Some(&Tag::Byte(1)));
+}
+
+/// `Entity.saveWithoutId` writes the live `portalCooldown` that
+/// `processPortalCooldown` counts down, in the chunk save and in `/data get`,
+/// with the live `remainingFireTicks` and `airSupply` over the loaded ones
+/// (an orb's `Air` is only stored: nothing ticks it). One real tick — the
+/// orb's ordered tick, then the entity portal pass — turns a loaded
+/// `Fire:40s` and `PortalCooldown:20` into 39 and 19, the chunk reload reads
+/// them back, and `/data merge entity` reads `Fire` and `Air` into the live
+/// orb while an unrelated key's merge leaves them.
+#[test]
+#[ignore = "daily"]
+fn an_orb_saves_its_live_portal_cooldown() {
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::persist::tests::an_orb_saves_its_live_portal_cooldown",
+        "SUNRISE_ORB_PERSISTENCE_CHILD",
+        &["orb"],
+    ) {
+        return;
+    }
+    crate::game::native_entity_refs::tests::with_game(|game| {
+        game.world
+            .chunks
+            .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+            .unwrap();
+        game.load_orb(
+            sunrise_core::nbt::parse_snbt(
+                "{Pos:[4.5d,100d,4.5d],Value:3s,Count:1,Fire:40s,Air:299s,PortalCooldown:20}",
+            )
+            .unwrap()
+            .0,
+            Some([9, 0, 0, 1]),
+        );
+        let id = game.orbs[0].id;
+        // One tick: the orb's own (ordered) tick, then Entity.handlePortal's
+        // pass over the entities.
+        game.ordered.announced = sunrise_client::join_seq::JoinSeq::MAX;
+        game.tickets.update(None);
+        game.begin_ordered_ticks();
+        game.run_ordered_ticks(sunrise_client::join_seq::JoinSeq::MAX, false)
+            .unwrap();
+        game.handle_entity_portals();
+        assert_eq!(game.orbs[0].fire_ticks, 39, "one tick of Fire");
+        assert_eq!(game.orbs[0].air, 299, "the stored air does not tick");
+        assert_eq!(
+            game.portals.entities.get(&id).map(|p| p.cooldown),
+            Some(19),
+            "the tick's portal cooldown"
+        );
+        // The real persistence path: the chunk save takes the orb out of the
+        // level, and loading the chunk again builds it from the saved
+        // compound.
+        let written: Vec<Tag> = game
+            .entity_chunks(&HashSet::from([(0, 0)]), true)
+            .into_iter()
+            .flat_map(|(_, tags)| tags)
+            .collect();
+        assert_eq!(written.len(), 1, "the orb leaves with its chunk");
+        game.world.queue_entity_nbt((0, 0), written);
+        game.spawn_loaded_entities();
+        assert_eq!(game.orbs[0].fire_ticks, 39, "the reload keeps the fire");
+        assert_eq!(game.orbs[0].air, 299, "and the air");
+        let read = game
+            .command_target_nbt(crate::game::commands::Target::Orb(game.orbs[0].id))
+            .unwrap();
+        assert_eq!(read.get("PortalCooldown"), Some(&Tag::Int(19)));
+        assert_eq!(read.get("Fire"), Some(&Tag::Short(39)));
+        assert_eq!(read.get("Air"), Some(&Tag::Short(299)));
+        // `/data merge entity`: `Fire` and `Air` are read into the live orb,
+        // and a merge that does not name them leaves them alone.
+        game.build_registries();
+        game.set_allow_commands(true);
+        let sel = "00000009-0000-0000-0000-000000000001";
+        assert!(
+            game.run_command_quietly(&format!("data merge entity {sel} {{Fire:40s,Air:275s}}")),
+            "the merge runs"
+        );
+        let orb = &game.orbs[0];
+        assert_eq!(
+            (orb.fire_ticks, orb.air),
+            (40, 275),
+            "the merge reached the live orb"
+        );
+        assert!(
+            game.run_command_quietly(&format!("data merge entity {sel} {{Invulnerable:1b}}")),
+            "the unrelated merge runs"
+        );
+        let orb = &game.orbs[0];
+        assert_eq!(
+            (orb.fire_ticks, orb.air),
+            (40, 275),
+            "an unrelated edit preserves the live fire and air"
+        );
+        let read = game
+            .command_target_nbt(crate::game::commands::Target::Orb(game.orbs[0].id))
+            .unwrap();
+        assert_eq!(read.get("Invulnerable"), Some(&Tag::Byte(1)));
+        assert_eq!(read.get("Fire"), Some(&Tag::Short(40)));
+        assert_eq!(read.get("Air"), Some(&Tag::Short(275)));
+    });
+}
+
+/// An entity attachment that cannot encode refuses its chunk's entity record, as NeoForge's
+/// `AttachmentHolder.serializeAttachments` propagates the codec's error: the unload keeps the
+/// column and its entities loaded, and the next unload after the codec recovers saves them.
+mod refused_entity_unload {
+    use super::*;
+    use crate::game::native_entity_refs::tests::{fixture_root, with_game_at};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    use sunrise_mod_runtime::attachments::{
+        AttachmentCodec, AttachmentError, AttachmentType, Attachments, Holder,
+    };
+
+    /// Chunk (100, 100): far from the spawn, so only its ticket keeps it.
+    const CHUNK: (i32, i32) = (100, 100);
+
+    #[derive(Clone)]
+    struct Fallible {
+        value: i32,
+        fail: Arc<AtomicBool>,
+    }
+    static FALLIBLE: AttachmentType<Fallible> = AttachmentType {
+        namespace: "refusal",
+        name: "fallible",
+        default: || Fallible {
+            value: 0,
+            fail: Arc::new(AtomicBool::new(false)),
+        },
+        codec: Some(AttachmentCodec {
+            encode: |v: &Fallible| {
+                if v.fail.load(Ordering::Relaxed) {
+                    return Err(AttachmentError::Encode);
+                }
+                Ok([("value".into(), Tag::Int(v.value))].into())
+            },
+            decode: |c| match c.get(&"value".into()) {
+                Some(Tag::Int(value)) => Ok(Fallible {
+                    value: *value,
+                    fail: Arc::new(AtomicBool::new(false)),
+                }),
+                _ => Err(AttachmentError::Decode),
+            },
+        }),
+        copy_on_death: false,
+        sync_codec: None,
+    };
+
+    fn request(root: &std::path::Path) -> crate::game::world_loading::WorldRequest {
+        let rules = Arc::new(sunrise_client::gamerules::RuleRegistry::vanilla());
+        let options = sunrise_client::title::WorldOptions {
+            world_type: sunrise_client::save::WorldPreset::Flat,
+            rules: sunrise_client::gamerules::GameRules::with_registry(rules.clone(), &[]),
+            ..Default::default()
+        };
+        let mut request = crate::game::world_loading::WorldRequest::new(
+            "refusal",
+            Some("refusal"),
+            Some(1),
+            true,
+            Some(&options),
+            rules,
+        )
+        .unwrap();
+        request.save_root = root.to_owned();
+        request
+    }
+
+    /// Streams until `done` holds and nothing is on its way.
+    fn pump_until(game: &mut Game<'_>, done: impl Fn(&Game<'_>) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while !done(game) || game.streaming.busy() {
+            assert!(Instant::now() < deadline, "streaming did not settle");
+            game.streaming.wait(Duration::from_millis(5));
+            game.update_world();
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn an_unload_keeps_a_column_whose_entity_record_was_refused() {
+        let scratch = tempfile::tempdir().unwrap();
+        mod_platform::testing::with_mods(Default::default(), || {
+            with_game_at(fixture_root(), |game| {
+                game.load_world(request(&scratch.path().join("save")))
+                    .unwrap();
+                game.set_allow_commands(true);
+                assert!(game.run_command("forceload add 1600 1600"));
+                pump_until(game, |game| game.world.chunks.contains_key(&CHUNK));
+                game.tick_world(true).unwrap();
+                let target = game
+                    .summon_with_nbt(
+                        "minecraft:armor_stand",
+                        [1604.5, 100.0, 1604.5],
+                        "{NoGravity:1b}",
+                    )
+                    .unwrap()
+                    .unwrap();
+                let id = game.resident_target_id(target).unwrap();
+                // Setting a value encodes it once; the codec fails from the next encode on.
+                let fail = Arc::new(AtomicBool::new(false));
+                FALLIBLE
+                    .set(
+                        game.entity_attachments.entry(id).or_default(),
+                        Holder::Entity(id),
+                        Fallible {
+                            value: 7,
+                            fail: fail.clone(),
+                        },
+                    )
+                    .unwrap();
+                fail.store(true, Ordering::Relaxed);
+
+                // The ticket goes, but the entity record cannot be written: nothing unloads.
+                assert!(game.run_command("forceload remove 1600 1600"));
+                for _ in 0..40 {
+                    game.streaming.wait(Duration::from_millis(5));
+                    game.update_world();
+                }
+                assert!(
+                    game.world.chunks.contains_key(&CHUNK),
+                    "a refused entity record keeps its column"
+                );
+                assert!(game.entity(id).is_some(), "and the entity in it");
+                game.save.flush().unwrap();
+                assert!(
+                    game.save
+                        .load_entities(CHUNK.0, CHUNK.1)
+                        .unwrap()
+                        .is_empty(),
+                    "no partial record was written"
+                );
+
+                // Once the attachment encodes, the next unload saves the entity with it.
+                fail.store(false, Ordering::Relaxed);
+                pump_until(game, |game| !game.world.chunks.contains_key(&CHUNK));
+                assert!(game.entity(id).is_none());
+                game.save.flush().unwrap();
+                let records = game.save.load_entities(CHUNK.0, CHUNK.1).unwrap();
+                assert_eq!(records.len(), 1);
+                let Some(Tag::Compound(saved)) = records[0].get(ATTACHMENTS_KEY) else {
+                    panic!("the entity saved without its attachments");
+                };
+                let mut reloaded = Attachments::from_nbt(saved.clone());
+                assert_eq!(
+                    FALLIBLE
+                        .get_existing(&mut reloaded, Holder::Entity(id))
+                        .unwrap()
+                        .map(|v| v.value),
+                    Some(7)
+                );
+            });
+        });
+    }
 }

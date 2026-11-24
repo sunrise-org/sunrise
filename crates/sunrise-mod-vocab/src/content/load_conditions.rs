@@ -1,7 +1,9 @@
-//! Load-phase condition handlers shared by native and wasm mods.
+//! Load-phase condition handlers.
 use crate::Identifier;
+use crate::generated::HookId;
+use crate::runtime::discard_registration;
 use std::{collections::BTreeMap, sync::Arc};
-type Entries = BTreeMap<Identifier, (String, Arc<dyn LoadCondition>)>;
+type Entries = BTreeMap<Identifier, (&'static str, Arc<dyn LoadCondition>)>;
 
 /// A condition's invalid arguments or a registration refusal.
 // exhaustive: mods construct this error with a diagnostic message.
@@ -38,15 +40,21 @@ impl From<(Identifier, String)> for ConditionError {
 /// A handler that reads the condition's JSON from a borrowed raw value.
 /// Arguments are the JSON object without `type`; validate their shape and
 /// return `ConditionError` for invalid mod input, never panic while decoding it.
-/// Called before publication, after all IDs in the list (including children of
-/// `not`, `and` and `or`) have been resolved. Namespace and mod presence do not
-/// change the handling of an unknown ID. Return false to omit this entry or
-/// value without an error. An unknown ID, a returned error, or a native panic
-/// refuses registry-backed data before it is installed. A simple JSON listener
-/// or data map instead logs the error and skips the entire offending file.
-/// Handlers must not mutate published data.
+/// A loader first selects the winning file and decodes its entire condition list,
+/// including children of `not`, `and` and `or`. Only built-in registry and tag reads
+/// order the dependencies between registry files; custom arguments are just JSON.
+/// An unknown ID, malformed condition list, returned error, or native panic refuses
+/// registry-backed data before publication. A simple JSON listener or data map logs
+/// the error and skips the offending file instead. A panic is logged and queues an
+/// error toast naming the mod, and disables only that handler for the session, across
+/// loads. Evaluations that reach it report an error without calling it again. A returned
+/// `ConditionError` or an ordinary phase refusal is reported without disabling the
+/// handler. Handlers must not mutate published data.
 pub trait LoadCondition: Send + Sync + 'static {
-    /// Read and validate the raw JSON arguments for one entry.
+    /// Read and validate the raw JSON arguments when testing reaches this condition.
+    /// Return `Ok(false)` when the condition does not hold: the winner is omitted, not
+    /// replaced by a lower pack. Return `Err` for invalid arguments. Testing stops as
+    /// soon as the enclosing list, `and`, or `or` is decided.
     fn test(&self, args: &serde_json::Value) -> Result<bool, ConditionError>;
 }
 
@@ -54,6 +62,7 @@ pub trait LoadCondition: Send + Sync + 'static {
 pub trait LoadConditions {
     /// Register a handler under any namespace, independently of the dispatching mod.
     /// Built-in IDs and duplicate names are refused; duplicate diagnostics name both mods.
+    /// A completed listener's registration errors refuse preparation even if ignored.
     fn register_handler(
         &mut self,
         name: Identifier,
@@ -61,7 +70,7 @@ pub trait LoadConditions {
     ) -> Result<(), ConditionError>;
 }
 impl dyn LoadConditions + '_ {
-    /// Store a concrete handler through the shared native and wasm route.
+    /// Store a concrete load condition handler.
     pub fn register(
         &mut self,
         name: Identifier,
@@ -91,7 +100,26 @@ impl LoadConditionDeclarations {
         }
     }
 
-    /// Finish registration, refusing even errors a listener ignored.
+    /// Publish the completed listener's handlers and its preparation errors together.
+    // hidden: the engine stages one listener at a time; mods receive only the registrar trait.
+    #[doc(hidden)]
+    pub fn register_listener(&mut self, listen: &mut dyn FnMut(&mut dyn LoadConditions) -> bool) {
+        let mut pending = Self::new(self.is_reserved);
+        if listen(&mut ConditionEdits {
+            published: Some(&self.entries),
+            pending: &mut pending,
+        }) {
+            self.entries.extend(pending.entries);
+            self.errors.append(&mut pending.errors);
+        } else {
+            let owner = crate::content::crash::current_native_mod();
+            for (_, handler) in pending.entries.into_values() {
+                discard_registration(REGISTRATION, owner, handler);
+            }
+        }
+    }
+
+    /// Finish registration, refusing even errors a completed listener ignored.
     // hidden: engine preparation consumes the declaration table.
     #[doc(hidden)]
     pub fn finish(self) -> Result<Entries, ConditionError> {
@@ -101,7 +129,28 @@ impl LoadConditionDeclarations {
         Ok(self.entries)
     }
 }
+const REGISTRATION: (HookId, &str) = (HookId::RegisterLoadConditions, "register_load_conditions");
+
 impl LoadConditions for LoadConditionDeclarations {
+    fn register_handler(
+        &mut self,
+        name: Identifier,
+        condition: Arc<dyn LoadCondition>,
+    ) -> Result<(), ConditionError> {
+        ConditionEdits {
+            published: None,
+            pending: self,
+        }
+        .register_handler(name, condition)
+    }
+}
+
+struct ConditionEdits<'a> {
+    published: Option<&'a Entries>,
+    pending: &'a mut LoadConditionDeclarations,
+}
+
+impl LoadConditions for ConditionEdits<'_> {
     fn register_handler(
         &mut self,
         name: Identifier,
@@ -112,21 +161,26 @@ impl LoadConditions for LoadConditionDeclarations {
                 "cannot register condition {name} outside register_load_conditions dispatch"
             )));
         };
-        if (self.is_reserved)(&name) {
+        if (self.pending.is_reserved)(&name) {
             let error = ConditionError::new(format!(
                 "mod {owner} cannot register condition {name}: that ID is built in"
             ));
-            self.errors.push(error.clone());
+            self.pending.errors.push(error.clone());
             return Err(error);
         }
-        if let Some((previous, _)) = self.entries.get(&name) {
+        if let Some((previous, _)) = self
+            .pending
+            .entries
+            .get(&name)
+            .or_else(|| self.published.and_then(|entries| entries.get(&name)))
+        {
             let error = ConditionError {
                 message: format!("condition {name} registered by both {previous} and {owner}"),
             };
-            self.errors.push(error.clone());
+            self.pending.errors.push(error.clone());
             return Err(error);
         }
-        self.entries.insert(name, (owner.to_owned(), condition));
+        self.pending.entries.insert(name, (owner, condition));
         Ok(())
     }
 }

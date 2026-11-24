@@ -38,7 +38,7 @@ and some are waiting for Ludovic:
 | Private vulnerability reporting | **Live** (see the end of this page). |
 | Signed checksums on releases | **Live** for new releases: the `release` environment holds the key, and its public half is in `crates/sunrise-release-sign/release-keys.txt`. Releases from before then are unsigned. |
 | Signed prebuilt native-mod builds | **Being built**: sunrise-mods' `native-builds` environment (deployable from `main` only) holds `NATIVE_BUILD_SIGNING_KEY`, a key of its own, never the release key, because the registry compiles other people's code there. Its public half is in `native-build-keys.txt`. Each signature covers the build's request key (target, base commit, each mod's file SHA-256), its target and the archive's SHA-256 (`sunrise_release_sign::native_build`), so it can't pass for another set's file or for a release. `tools/ci/sign_native_build.sh` signs with OpenSSL. |
-| Launchers and servers checking signatures | **Live**: the launcher (for the game and for itself) and `sunrise-server update` check the release signature and refuse anything unsigned or signed with another key ("Signed updates", below). Only the first install with `packaging/server/install.sh` or `install.ps1` can still fall back to GitHub's SHA-256 ("What this doesn't solve", below). |
+| Launchers and servers checking signatures | **Live**: the launcher (for the game and for itself) and `sunrise-server update` check the release signature and refuse anything unsigned or signed with another key ("Signed updates", below). The first install with `packaging/server/install.sh` or `install.ps1` checks it too, with a verifier the script pins by hash ("The first install", below). |
 | Smoke test and release-blocker before publishing | **Live**: since 2026-10-23 every release is the latest at once (one channel, Ludovic's decision), so it is published only after its smoke test passed and while no `release-blocker` is open. The 6-hour beta of the old Alpha, then stable flow is gone. |
 | Reports marked suspicious | **Partly**: the scan of Discord for agents does it. Kira's issues do it once its pull request merges. |
 | Code owners' review of the pipeline | **Not yet**: `.github/CODEOWNERS` and its protection wait for the App, below. Until then pipeline changes merge like any other once `verify` passes. |
@@ -95,10 +95,16 @@ and some are waiting for Ludovic:
   `crates/sunrise-release-sign/release-keys.txt` for `sunrise-org/sunrise` only; every other
   repository (`horizon-rust/horizon` and `arismoko/horizon` included) has no trusted keys and fails
   closed. Upstream's legacy checksum pins never authorize a Sunrise archive. The real private key
-  exists only as the secret `RELEASE_SIGNING_KEY`; dry runs receive no release secrets
+  exists only as a secret of the `release` environment, `RELEASE_SIGNING_KEY` or, after a rotation retired the
+  other, `RELEASE_SIGNING_KEY_NEXT` (either name can hold the active key for the game's releases); dry runs receive no release secrets
   and sign with an ephemeral test key instead. To rotate, first ship the next public key in
-  `release-keys.txt` (and the copies in `packaging/server/install.sh` and `install.ps1`), then enable `RELEASE_SIGNING_KEY_NEXT` for overlapping signatures before
-  replacing the primary secret and eventually retiring the old public key. Nightly title,
+  `release-keys.txt` (and a new `verifier@X.Y.Z`, pinned in `packaging/server/install.sh` and `install.ps1`), with
+  its private half set as whichever of `RELEASE_SIGNING_KEY` and `RELEASE_SIGNING_KEY_NEXT` is empty
+  (`tools/ci/new_release_key.sh` sets it), so releases are signed with both; then retire the old key's secret and
+  public key and pin a verifier built without it ([release-flow.md](release-flow.md#signed-checksums), "Rotating the
+  key"). Launchers are the exception: `launcher-bridge.yml` refuses a real publish without `RELEASE_SIGNING_KEY`,
+  because launchers from before the split trust only that key, so the key in `RELEASE_SIGNING_KEY` is not retired while
+  those launchers are supported. Nightly title,
   channel and exact-version signature binding remain unchanged.
 - **Upstream release machinery needs the council.** The workflows, the release and signing tools, the update-checking code
   and the installers are listed in `.github/CODEOWNERS`. Once main's protection requires code owners' reviews, a
@@ -133,12 +139,19 @@ and some are waiting for Ludovic:
   which removes anything a pull request left in the work folder by accident, but
   not a deliberate attack. The protection is review: only agents and maintainers push to this repository, and a
   maintainer reads a fork's change before it merges.
-- **The first install** with `packaging/server/install.sh` or `install.ps1` checks the signature when OpenSSL 3 is installed: it
-  verifies `SHA256SUMS.sig` (a Nightly's `SHA256SUMS.v2.sig`, for its own version) against the release key built
-  into the script, then the archive against `SHA256SUMS`. `install.ps1` looks for OpenSSL on the PATH and in Git
-  for Windows, which ships it; Windows itself can't check Ed25519. With an older OpenSSL, LibreSSL (what macOS
-  ships) or none, the script says so and checks only the SHA-256 GitHub publishes. Every update after that checks
-  the signature.
+- **The first install** with `packaging/server/install.sh` or `install.ps1` from a GitHub release (the default)
+  trusts the script itself. The script downloads `sunrise-verify` from the `verifier@X.Y.Z` release it pins and
+  refuses it unless its SHA-256 is the one pinned in the script. The verifier then checks `SHA256SUMS.sig` (a Nightly's `SHA256SUMS.v2.sig`, for its
+  own version) against the release keys built into it, then the archive against `SHA256SUMS`. Any failure stops
+  the install with its cause; nothing falls back to GitHub's SHA-256. So the anchor is the pin on main, fetched
+  over HTTPS: it changes only by pull request, and must match what `tools/ci/pin_verifier.py` writes once
+  `gh attestation verify` has accepted `SHA256SUMS` and every binary as built by `verifier.yml` on main at the
+  dispatch commit
+  (docs/release-flow.md, "The install scripts' verifier"). The verifier binaries are not code-signed, so macOS
+  Gatekeeper and Windows SmartScreen don't vouch for them; the pin does. `--insecure-checksum-only`
+  (`-InsecureChecksumOnly`) skips the signature, with a loud warning, for CI fixtures; no install command in these
+  docs uses it. `install.sh --archive FILE` installs an archive already on the machine (a build of your own) and
+  checks nothing: checking it is up to whoever brought it.
 
 ## Reporting a security problem
 

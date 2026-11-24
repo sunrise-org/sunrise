@@ -140,8 +140,11 @@ impl Hooks for Mod {
             r.item_part(key, part.clone());
         }
     }
-    fn tags_updated(&self, host: mod_api::HostSide<'_>, _: &mut mod_api::TagsUpdatedEvent) {
-        if let mod_api::HostSide::Client(_) = host {
+    fn tags_updated(&self, _: &dyn mod_api::ReloadContext, event: &mut mod_api::TagsUpdatedEvent) {
+        if matches!(
+            event.cause,
+            mod_api::TagsUpdateCause::ClientPacketReceived { .. }
+        ) {
             for enabled in self
                 .0
                 .iter()

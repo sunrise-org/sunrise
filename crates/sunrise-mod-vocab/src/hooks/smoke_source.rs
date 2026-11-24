@@ -1,5 +1,4 @@
 //! The `smoke_source` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0216
 
 pub trait Hooks {
     /// `CampfireBlock.isSmokeSource` on both sides for the
@@ -9,6 +8,8 @@ pub trait Hooks {
     /// read-only. The client asks during placement prediction. `None` keeps
     /// vanilla's hay-bale check; `Some(false)` overrides it.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         version = 2,
         contract = "replace",
@@ -18,5 +19,5 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::base::GameLevel<'_>::native_smoke_source",
         neoforge = "none (vanilla CampfireBlock.isSmokeSource; NeoForge adds no event or extension for it)"
     )]
-    fn smoke_source();
+    fn smoke_source(dimension: LevelDimension, state: BlockState, smoke: &mut Option<bool>);
 }

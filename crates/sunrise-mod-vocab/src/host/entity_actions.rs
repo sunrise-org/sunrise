@@ -14,10 +14,13 @@ pub trait EntityActionsBackendMut {
     /// then `Commands.performPrefixedCommand`. `level` is the mod's choice, taken
     /// as given whether it is above or below the entity's own: the line is parsed
     /// and checked at it. `@s` is the entity, and the command runs from its
-    /// position and rotation in its level. A player is answered as for their own
-    /// command: its feedback and failures reach their chat, and the other
-    /// operators hear of it (`broadcastToAdmins`). Another entity's source is
-    /// silent: nothing reaches anyone (`CommandSource.NULL`). A command a mod
+    /// position and rotation in its level. With `suppress_output` false, a
+    /// player receives success and failure feedback in chat and the usual
+    /// operator notifications apply (`broadcastToAdmins`). Pass true to silence
+    /// the source (`CommandSourceStack.withSuppressedOutput`): it gives no
+    /// feedback to the player or to operators, but the command's effects (such
+    /// as `/say` broadcasting a message) still happen. Other entities already
+    /// have a silent source (`CommandSource.NULL`). A command a mod
     /// registered hears a player as `CommandSource::Player` and another entity as
     /// `CommandSource::Console`, both at `level`. A teleport to another level
     /// happens at the next tick's start, as `Commands::run_command`'s. Whether
@@ -28,24 +31,30 @@ pub trait EntityActionsBackendMut {
     /// During a guest's turn, live players (the acting one included) can run it
     /// and are reachable; displaced outer players are neither, as on
     /// `Commands::run_command`.
-    #[access(WorldOnly)]
-    fn entity_run_command(&mut self, entity: EntityRef, line: &str, level: PermissionLevel)
-    -> bool;
+    fn entity_run_command(
+        &mut self,
+        entity: EntityRef,
+        line: &str,
+        level: PermissionLevel,
+        suppress_output: bool,
+    ) -> bool;
     /// Side: server.
     /// Runs the command exactly as `EntityRef::run_command` does, at the supplied
     /// `level`, returning whether it ran and the success and failure lines its
     /// source received, in order, as plain text. The player's chat still receives
-    /// those lines and operators are notified under the same rules. Another
-    /// entity's silent source returns no lines. A stale, removed or unavailable
-    /// entity returns unsuccessful with no lines. Cross-level teleports retain
+    /// those lines and operators are notified under the same rules. Public `/say`
+    /// and `/me` announcements are not feedback; observe them with `chat_recipient`.
+    /// Use `CommandResult.success` to check execution. The feedback list is empty
+    /// with `suppress_output` true or an already silent source. A stale, removed
+    /// or unavailable entity returns unsuccessful with no lines. Cross-level teleports retain
     /// the same next-tick handling. Pass the player's permission level to run
     /// with their own authority; the supplied level is not capped to it.
-    #[access(WorldOnly)]
     fn entity_run_command_with_output(
         &mut self,
         entity: EntityRef,
         line: &str,
         level: PermissionLevel,
+        suppress_output: bool,
     ) -> CommandResult;
     /// Side: server.
     /// Drops `stack` at the entity's feet, `y_offset` above
@@ -56,7 +65,6 @@ pub trait EntityActionsBackendMut {
     /// mod kept out.
     /// Inside a transaction its join waits for the root commit, so a mod keeping the item out is not
     /// known at the call: the handle is returned and reads stale from the commit on.
-    #[access(WorldOnly)]
     fn entity_spawn_at_location(
         &mut self,
         entity: EntityRef,
@@ -68,9 +76,12 @@ pub trait EntityActionsBackendMut {
     /// the entity under its sound source, for the players within range. A
     /// silent mob plays nothing, as vanilla's check is `isSilent`; a player
     /// (`Player.playSound`) doesn't hear it themself, their own client plays
-    /// it. True means queued, not heard; false for an unknown `minecraft:`
-    /// event or a volume or pitch that isn't a finite non-negative number.
-    #[access(WorldOnly)]
+    /// it. Registered events go by ID and other valid keys by name. True means queued, not heard.
+    /// Inside an open transaction in the active level, `play_level_sound_at_position` runs
+    /// synchronously at the call. The resolved sound waits for the owning level's outermost
+    /// commit, in journal order, and is discarded on abort. Outside a transaction, a queued sound
+    /// draws its seed at the call even if a later hook cancels it. Inside one, it draws a seed only
+    /// when the resolved sound is published.
     fn entity_play_sound(
         &mut self,
         entity: EntityRef,
@@ -84,8 +95,7 @@ pub trait EntityActionsBackendMut {
     /// sensors, shriekers, wardens and allays in range hear. A player or mob
     /// is the event's source entity; other entities retain their own id.
     /// False for an event vanilla doesn't have, a dead guest and a guest while
-    /// another one acts.
-    #[access(WorldOnly)]
+    /// another one acts. An accepted game event is posted at the call even in a transaction.
     fn entity_game_event(&mut self, entity: EntityRef, event: &str) -> bool;
     /// Side: server.
     /// `Level.broadcastEntityEvent(entity, id)`: sends entity event `id` (the
@@ -93,15 +103,21 @@ pub trait EntityActionsBackendMut {
     /// death, `35` a totem...) to the players tracking the entity and to the
     /// entity itself. True means queued; false for an entity outside the
     /// level in place.
-    #[access(WorldOnly)]
+    /// Inside an open transaction, delivery waits for the outermost commit for the owning level
+    /// (the level active at the call), in journal order, and is discarded on abort.
     fn entity_broadcast_event(&mut self, entity: EntityRef, id: u8) -> bool;
     /// Side: server.
     /// `Level.playSound(null, entity, sound, source, volume, pitch)`: plays
     /// sound event `sound` bound to the entity, so that it follows it, for
     /// the players within range (16 blocks, times the volume above 1) of
     /// where it is now, the entity's own player too. True means queued, not
-    /// heard; false for an entity outside the level in place.
-    #[access(WorldOnly)]
+    /// heard; false for an unavailable entity or malformed sound key. Registered events go by ID
+    /// and other valid keys by name, with volume and pitch as supplied.
+    /// Inside an open transaction in the active level, `play_level_sound_at_entity` runs
+    /// synchronously at the call. The resolved sound waits for the owning level's outermost
+    /// commit, in journal order, and is discarded on abort. Outside a transaction, a queued sound
+    /// draws its seed at the call even if a later hook cancels it. Inside one, it draws a seed only
+    /// when the resolved sound is published.
     fn entity_play_bound_sound(
         &mut self,
         entity: EntityRef,
@@ -109,5 +125,26 @@ pub trait EntityActionsBackendMut {
         source: SoundSource,
         volume: f32,
         pitch: f32,
+    ) -> bool;
+    /// Side: server.
+    /// `ServerLevel.playSeededSound(except, entity, sound, source, volume, pitch, seed)`: plays
+    /// sound event `sound` bound to the entity as [`EntityRef::play_bound_sound`](crate::EntityRef::play_bound_sound)
+    /// does, with the seed the caller gives (the level's sound-seed stream does not move), and
+    /// leaves out `except` as [`LevelRef::play_sound`](crate::LevelRef::play_sound) does: the
+    /// player whose own client already played it (a goat horn's player), or `None` for everyone.
+    /// Draw the seed with [`LevelRef::next_sound_seed`](crate::LevelRef::next_sound_seed) to
+    /// model `Level.playSound(except, entity, ...)`. The checks, the `play_level_sound_at_entity`
+    /// hook and the transaction rules are `play_bound_sound`'s; the seed is kept through them.
+    /// True means queued, not heard; false for an entity outside the level in place and for a
+    /// stale or client-side `except`.
+    fn entity_play_seeded_bound_sound(
+        &mut self,
+        entity: EntityRef,
+        sound: &str,
+        source: SoundSource,
+        volume: f32,
+        pitch: f32,
+        except: Option<PlayerRef>,
+        seed: i64,
     ) -> bool;
 }

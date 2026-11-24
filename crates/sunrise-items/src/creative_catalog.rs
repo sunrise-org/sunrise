@@ -47,6 +47,8 @@ enum Source {
         all_levels: bool,
     },
     Horns,
+    #[serde(skip_deserializing)]
+    SuspiciousStews,
     Banner {
         #[serde(deserialize_with = "stack")]
         snbt: ItemStack,
@@ -74,6 +76,8 @@ pub struct TabRecipe {
     pub id: String,
     #[serde(rename = "type")]
     pub kind: Kind,
+    /// The English text of the tab's title: the export's, or a mod tab file's `title`.
+    pub title: String,
     build: Vec<Row>,
     operator_build: Option<Vec<Row>>,
 }
@@ -145,13 +149,40 @@ fn enabled(required: Option<&Vec<String>>, features: &[String]) -> bool {
 }
 
 impl Catalog {
+    /// `ItemStack.isItemEnabled`: the item's required feature flags from the prepared registry.
+    pub fn item_enabled(&self, stack: &ItemStack, features: &[String]) -> bool {
+        enabled(self.item_features.get(&*stack.item), features)
+    }
+
     pub fn parse(json: &serde_json::Value) -> Result<Self, String> {
-        let catalog = Self::deserialize(json).map_err(|e| e.to_string())?;
+        let mut catalog = Self::deserialize(json).map_err(|e| e.to_string())?;
         if catalog.schema != 4 {
             return Err(format!(
                 "unsupported creative inventory schema {}",
                 catalog.schema
             ));
+        }
+        if let Some(food) = catalog
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == "minecraft:food_and_drinks")
+        {
+            // The prepared rows mark where vanilla called the generator; only
+            // the position and visibility are kept, not the exported stacks.
+            for rows in std::iter::once(&mut food.build).chain(&mut food.operator_build) {
+                let mut inserted = false;
+                rows.retain_mut(|row| {
+                    if !matches!(&row.source, Source::Stack { snbt } if &*snbt.item == "minecraft:suspicious_stew") {
+                        return true;
+                    }
+                    if inserted {
+                        return false;
+                    }
+                    row.source = Source::SuspiciousStews;
+                    inserted = true;
+                    true
+                });
+            }
         }
         Ok(catalog)
     }
@@ -193,8 +224,7 @@ impl Catalog {
             let width = u16::from(p.width.get());
             (width * u16::from(p.height.get()), width)
         });
-        let admits =
-            |stack: &ItemStack| enabled(self.item_features.get(&*stack.item), params.features);
+        let admits = |stack: &ItemStack| self.item_enabled(stack, params.features);
         for category in [true, false] {
             for (i, tab) in self.tabs.iter().enumerate() {
                 if category != (tab.kind == Kind::Category) {
@@ -292,6 +322,15 @@ impl Catalog {
                         }
                     }
                 }
+                Source::SuspiciousStews => {
+                    for item in &params.items.registry_order {
+                        if let Some(effects) = params.items.suspicious_stew_effects(item) {
+                            let mut stew = ItemStack::new("minecraft:suspicious_stew", 1);
+                            stew.data_mut().stew_effects = effects.to_vec();
+                            add(stew);
+                        }
+                    }
+                }
                 Source::Horns => {
                     for horn in &holders.horns {
                         add(holder_stack(
@@ -356,7 +395,7 @@ mod tests {
         let both = "PARENT_AND_SEARCH_TABS";
         let data = json!({
             "schema": 4,
-            "tabs": [{"id":"test:catalog", "type":"CATEGORY", "build":[
+            "tabs": [{"id":"test:catalog", "title":"Catalog", "type":"CATEGORY", "build":[
                 row(json!({"kind":"stack", "snbt":"{id:\"test:behind_flag\",count:1}"}), both),
                 row(json!({"kind":"paintings", "placeable":true}), both),
                 row(json!({"kind":"potions", "item":"minecraft:potion"}), both),
@@ -429,10 +468,10 @@ mod tests {
     fn search_reads_the_current_prefix_and_previous_suffix_in_registry_order() {
         let catalog = Catalog::parse(&json!({
             "schema":4,"item_features":{},"potion_features":{},"tabs":[
-                {"id":"test:hotbar","type":"HOTBAR","build":[]},
-                {"id":"test:search","type":"SEARCH","build":[]},
-                {"id":"test:category","type":"CATEGORY","build":[]},
-                {"id":"test:inventory","type":"INVENTORY","build":[]}
+                {"id":"test:hotbar","title":"hotbar","type":"HOTBAR","build":[]},
+                {"id":"test:search","title":"search","type":"SEARCH","build":[]},
+                {"id":"test:category","title":"category","type":"CATEGORY","build":[]},
+                {"id":"test:inventory","title":"inventory","type":"INVENTORY","build":[]}
             ]
         }))
         .unwrap();

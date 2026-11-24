@@ -83,7 +83,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// `REGISTRY_PUBLIC_URL`, `REGISTRY_SESSION_KEY`, `REGISTRY_REPO`,
+    /// `REGISTRY_PUBLIC_URL`, `REGISTRY_SESSION_KEY`, `REGISTRY_REPO` (defaults to [`index::REGISTRY_REPO`]),
     /// `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_BOT_TOKEN`,
     /// `REGISTRY_UPDATE_KEY` (optional), `REGISTRY_DB` (default
     /// `/data/registry.sqlite3`).
@@ -101,8 +101,7 @@ impl Config {
             session_key: key.into_bytes(),
             github: GitHub::new(
                 github::Endpoints::default(),
-                std::env::var("REGISTRY_REPO")
-                    .unwrap_or_else(|_| "horizon-rust/horizon-mods".into()),
+                std::env::var("REGISTRY_REPO").unwrap_or_else(|_| index::REGISTRY_REPO.into()),
                 var("GITHUB_CLIENT_ID")?,
                 var("GITHUB_CLIENT_SECRET")?,
                 var("GITHUB_BOT_TOKEN")?,
@@ -933,7 +932,8 @@ pub fn publish(
     let sha256 = index::sha256_file(file).map_err(bad)?;
     let extension = kind.extension().unwrap_or("zip");
     let version = EntryVersion {
-        native_binaries: Vec::new(),
+        sunrise: None,
+        builds: Vec::new(),
         version: form.version.trim().to_owned(),
         published: date(now()),
         game: form.game.trim().to_owned(),
@@ -956,6 +956,7 @@ pub fn publish(
             Entry {
                 id: form.id.clone(),
                 repo: None,
+                nightly: None,
                 kind: kind.clone(),
                 name: form.name.trim().to_owned(),
                 summary: form.summary.trim().to_owned(),
@@ -1043,7 +1044,7 @@ pub fn publish(
     };
     let mut entry = entry;
     let writes = page::place(&mut entry, form, images).map_err(bad)?;
-    // Every check CI runs but the trial run: the file as its kind, its id and
+    // Validate the submitted kind, id and
     // version, its signature, the entry's fields. CI runs it all again.
     let files = file.parent().unwrap_or(Path::new("."));
     std::fs::copy(file, files.join(&sha256)).map_err(|e| bad(e.to_string()))?;
@@ -1060,6 +1061,9 @@ pub fn publish(
             release: index::FILE_HOST,
             site: "https://example.invalid/",
             generated: String::new(),
+            releases: None,
+            nightly: None,
+            binary_checks: None,
         },
     )
     .map_err(|errors| bad(errors.join("; ")))?;
@@ -1135,7 +1139,7 @@ pub fn publish(
         "<!-- submitted-by: {login} -->\n🤖 Submitted through [{site}]({public}/mods/submit) by @{login}. The form opens the pull request with \
          the registry's token: neither Ludovic nor a reviewer wrote it.\n\n\
          | | |\n|---|---|\n| Project | `{id}` ({kind}, {new}) |\n| Version | {version} for {game} |\n| File | `{file}`, {size} bytes, SHA-256 `{sha256}` |\n| Signed | {signed} |\n| Source | {source} |\n\n{lists}\n\n\
-         The checks below run the file's own checks again and, for a mod, a trial run in the sandbox. \
+         The checks below validate the package without running mod code. \
          Reviewers: read the source and the checks' report before you approve.",
         public = config.public_url,
         site = config
@@ -1224,16 +1228,18 @@ fn is_hex_str(s: &str, len: usize) -> bool {
     s.len() == len && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn is_target_triple(s: &str) -> bool {
-    matches!(
-        s,
+/// The native-build targets this registry builds and serves: Sunrise's platforms. Both the request and its poll
+/// refuse any other target the same way.
+fn supported_target(target: &str) -> Result<(), Refusal> {
+    match target {
         "x86_64-unknown-linux-gnu"
-            | "x86_64-pc-windows-gnu"
-            | "x86_64-pc-windows-msvc"
-            | "aarch64-pc-windows-msvc"
-            | "aarch64-apple-darwin"
-            | "x86_64-apple-darwin"
-    )
+        | "x86_64-pc-windows-gnu"
+        | "x86_64-pc-windows-msvc"
+        | "aarch64-apple-darwin" => Ok(()),
+        _ => Err(bad(format!(
+            "{target:?} is not a target Sunrise builds native mods for"
+        ))),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1276,6 +1282,7 @@ async fn request_native_build(
         ));
     }
 
+    supported_target(&payload.target)?;
     if payload.mods.is_empty() {
         return Err(bad("a native build request needs at least one mod"));
     }
@@ -1439,12 +1446,7 @@ async fn get_native_build(
             query.base
         )));
     }
-    if !is_target_triple(&query.target) {
-        return Err(bad(format!(
-            "{:?} is not a valid target triple",
-            query.target
-        )));
-    }
+    supported_target(&query.target)?;
     if !is_hex_str(&query.key, 64) {
         return Err(bad(format!(
             "{:?} is not a request key (64 hex digits)",
@@ -1641,14 +1643,80 @@ mod tests {
         assert_eq!(client_ip(&HeaderMap::new()), "anonymous");
     }
 
+    #[tokio::test]
+    async fn native_build_endpoints_refuse_removed_targets() {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = router(
+            App::new(Config {
+                public_url: "https://example.invalid".into(),
+                session_key: b"0123456789abcdef0123456789abcdef".to_vec(),
+                github: GitHub::new(
+                    // Invalid URLs cannot make a request even if validation regresses.
+                    github::Endpoints {
+                        web: String::new(),
+                        api: String::new(),
+                        uploads: String::new(),
+                    },
+                    "owner/repo".into(),
+                    "client".into(),
+                    "secret".into(),
+                    "token".into(),
+                ),
+                update_key: None,
+                scratch: PathBuf::new(),
+                database: ":memory:".into(),
+            })
+            .unwrap(),
+        );
+        const BASE: &str = "0123456789abcdef0123456789abcdef01234567";
+        const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        for target in ["x86_64-apple-darwin", "aarch64-pc-windows-msvc"] {
+            let payload = json!({
+                "target": target,
+                "base": BASE,
+                "mods": [{"id": "zoom", "version": "1.0.0", "sha256": SHA}],
+            });
+            let post = Request::post("/api/native-builds")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap();
+            let get = Request::get(format!(
+                "/api/native-builds?target={target}&base={BASE}&key={SHA}"
+            ))
+            .body(Body::empty())
+            .unwrap();
+            for request in [post, get] {
+                let method = request.method().clone();
+                let response = app.clone().oneshot(request).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{method} {target}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn native_build_query_validation() {
         assert!(is_hex_str("0123456789abcdef0123456789abcdef01234567", 40));
         assert!(!is_hex_str("0123456789abcdef", 40));
         assert!(!is_hex_str("0123456789abcdef0123456789abcdef0123456g", 40));
-        assert!(is_target_triple("x86_64-unknown-linux-gnu"));
-        assert!(is_target_triple("x86_64-pc-windows-gnu"));
-        assert!(is_target_triple("aarch64-apple-darwin"));
-        assert!(!is_target_triple("riscv64gc-unknown-linux-gnu"));
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-gnu",
+            "aarch64-apple-darwin",
+        ] {
+            assert!(supported_target(target).is_ok(), "{target}");
+        }
+        for target in [
+            "x86_64-apple-darwin",
+            "aarch64-pc-windows-msvc",
+            "riscv64gc-unknown-linux-gnu",
+        ] {
+            assert!(supported_target(target).is_err(), "{target}");
+        }
     }
 }

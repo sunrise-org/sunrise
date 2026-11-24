@@ -3,7 +3,7 @@
 //! files into the 26.x layout, then level.dat brought to the current version,
 //! and the upgrades vanilla runs as it reads each file ([`upgrade_world`]
 //! does them all at once, as a converter).
-use super::dynamic::{as_bool, as_int, as_str, int_list, remove, set, string};
+use super::dynamic::{as_bool, as_int, as_str, int_list, put, string, take};
 use super::json::{self, Json};
 use super::progress::{UpgradeProgress, UpgradeType};
 use super::schema::Ty;
@@ -209,7 +209,7 @@ fn read_level(base: &Path, version: i32) -> io::Result<Option<Tag>> {
     }))
 }
 fn write_level(base: &Path, mut data: Tag, version: i32) -> io::Result<()> {
-    set(&mut data, "DataVersion", Tag::Int(version));
+    put(&mut data, "DataVersion", Tag::Int(version));
     write_dat(&base.join("level.dat"), &Tag::compound([("Data", data)]))
 }
 /// `SavedDataNbt.write`.
@@ -361,7 +361,7 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
         base.join(format!("dimensions/minecraft/{dim}/data/minecraft/{file}"))
     };
     let extract = |content: &mut Tag, key: &str, path: PathBuf| -> io::Result<()> {
-        if let Some(tag) = remove(content, key) {
+        if let Some(tag) = take(content, key) {
             write_saved_data(&path, tag, V)?;
         }
         Ok(())
@@ -371,13 +371,13 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
         "dragon_fight",
         dim_data("the_end", "ender_dragon_fight.dat"),
     )?;
-    if let Some(mut player) = remove(&mut content, "Player") {
+    if let Some(mut player) = take(&mut content, "Player") {
         let from = data_version(&player, -1);
         update(Ty::Player, &mut player, from, V);
         let uuid = match player.get("UUID") {
             Some(u) => u.clone(),
             None => {
-                set(&mut player, "DataVersion", Tag::Int(V));
+                put(&mut player, "DataVersion", Tag::Int(V));
                 write_dat(
                     &base.join("players/data/00000000-0000-0000-0000-000000000000.dat"),
                     &player,
@@ -385,7 +385,7 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
                 int_list(&[0, 0, 0, 0])
             }
         };
-        set(&mut content, "singleplayer_uuid", uuid);
+        put(&mut content, "singleplayer_uuid", uuid);
     }
     extract(
         &mut content,
@@ -409,15 +409,15 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
             for k in ["center_x", "center_z"] {
                 if let Some(v) = b.get(k) {
                     let v = super::dynamic::as_double(Some(v), 0.0) / divider;
-                    set(&mut b, k, Tag::Double(v.to_bits()));
+                    put(&mut b, k, Tag::Double(v.to_bits()));
                 }
             }
             write_saved_data(&dim_data(dim, "world_border.dat"), b, V)?;
         }
     }
-    remove(&mut content, "world_border");
+    take(&mut content, "world_border");
     extract(&mut content, "game_rules", data.join("game_rules.dat"))?;
-    if let Some(mut settings) = remove(&mut content, "world_gen_settings") {
+    if let Some(mut settings) = take(&mut content, "world_gen_settings") {
         let from = data_version(&content, -1);
         update(Ty::WorldGenSettings, &mut settings, from, V);
         write_saved_data(&data.join("world_gen_settings.dat"), settings, V)?;
@@ -485,7 +485,7 @@ pub(crate) fn fix_1493(base: &Path) -> io::Result<()> {
                     && let Some(current) = as_str(first.get("id"))
                         .and_then(|i| LEGACY_TO_CURRENT.iter().find(|(from, _)| *from == i))
                 {
-                    set(&mut value, "id", string(current.1));
+                    put(&mut value, "id", string(current.1));
                 }
                 let Some(feature_id) = as_str(value.get("id")) else {
                     continue;
@@ -545,15 +545,15 @@ pub(crate) fn fix_1493(base: &Path) -> io::Result<()> {
                 .filter(|s| matches!(s, Tag::Compound(_)))
                 .unwrap_or_else(super::dynamic::empty_map);
             for (id, value) in &legacy.starts {
-                set(&mut starts, id, value.clone());
+                put(&mut starts, id, value.clone());
             }
             for (id, indexes) in &legacy.indexes {
-                set(&mut references, id, Tag::LongArray(indexes.clone()));
+                put(&mut references, id, Tag::LongArray(indexes.clone()));
             }
-            set(&mut structure, "Starts", starts);
-            set(&mut structure, "References", references);
-            set(&mut level, "Structures", structure);
-            set(tag, "Level", level);
+            put(&mut structure, "Starts", starts);
+            put(&mut structure, "References", references);
+            put(&mut level, "Structures", structure);
+            put(tag, "Level", level);
         })?;
     }
     Ok(())
@@ -580,7 +580,7 @@ fn fix_4899(base: &Path) -> io::Result<()> {
         let path = base.join("data/minecraft/game_rules.dat");
         if let Some(mut rules) = read_saved_data(&path, Ty::SavedGameRules, V)? {
             if rules.get("minecraft:spectators_generate_chunks").is_some() {
-                set(
+                put(
                     &mut rules,
                     "minecraft:spectators_generate_chunks",
                     Tag::Byte(1),
@@ -594,12 +594,12 @@ fn fix_4899(base: &Path) -> io::Result<()> {
 
 /// `FileFixerUpper.addVersionsToLevelData`.
 fn add_versions(data: &mut Tag) {
-    set(data, "DataVersion", Tag::Int(CURRENT));
+    put(data, "DataVersion", Tag::Int(CURRENT));
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64);
-    set(data, "LastPlayed", Tag::Long(now));
-    set(
+    put(data, "LastPlayed", Tag::Long(now));
+    put(
         data,
         "Version",
         Tag::compound([
@@ -959,7 +959,7 @@ fn upgrade_saved_data(data: &Path, progress: &Progress) -> io::Result<()> {
             && let Some(mut tag) = read_saved_dat(&file)?
         {
             super::update_saved_data(ty, &mut tag);
-            set(&mut tag, "DataVersion", Tag::Int(CURRENT));
+            put(&mut tag, "DataVersion", Tag::Int(CURRENT));
             write_dat(&file, &tag)?;
         }
         progress.progress.increment_finished_operations();
@@ -969,28 +969,62 @@ fn upgrade_saved_data(data: &Path, progress: &Progress) -> io::Result<()> {
 
 /// A JSON file of the player folders as NBT for the fixes (`JsonOps` and
 /// `NbtOps` see the same structure), booleans kept apart.
-fn json_to_tag(j: &Json) -> Tag {
+#[derive(Clone, Copy)]
+pub(super) enum AdvancementJson {
+    File,
+    Entry,
+    Criteria,
+    Other,
+}
+
+impl AdvancementJson {
+    fn child(self, key: &[u16]) -> Self {
+        match self {
+            Self::File => Self::Entry,
+            Self::Entry if key.iter().copied().eq("criteria".encode_utf16()) => Self::Criteria,
+            _ => Self::Other,
+        }
+    }
+}
+
+pub(super) fn json_to_tag(j: &Json, context: AdvancementJson) -> Tag {
+    if matches!(context, AdvancementJson::Criteria) {
+        return super::advancement_criteria::read(j);
+    }
     match j {
         Json::Bool(b) => Tag::compound([("\u{0}bool", Tag::Byte(i8::from(*b)))]),
-        Json::Arr(items) => Tag::List(items.iter().map(json_to_tag).collect()),
+        Json::Arr(items) => Tag::List(
+            items
+                .iter()
+                .map(|v| json_to_tag(v, AdvancementJson::Other))
+                .collect(),
+        ),
         Json::Obj(entries) => Tag::Compound(
             entries
                 .iter()
-                .map(|(k, v)| (JavaString(k.clone()), json_to_tag(v)))
+                .map(|(k, v)| (JavaString(k.clone()), json_to_tag(v, context.child(k))))
                 .collect(),
         ),
         other => json::to_nbt(other).unwrap_or(Tag::End),
     }
 }
-fn tag_to_json(t: &Tag) -> Json {
+pub(super) fn tag_to_json(t: &Tag, context: AdvancementJson) -> Json {
+    if matches!(context, AdvancementJson::Criteria) {
+        return super::advancement_criteria::write(t);
+    }
     match t {
         Tag::Compound(c) if c.len() == 1 && c.contains_key(&JavaString::from("\u{0}bool")) => {
             Json::Bool(as_int(t.get("\u{0}bool"), 0) != 0)
         }
-        Tag::List(items) => Json::Arr(items.iter().map(tag_to_json).collect()),
+        Tag::List(items) => Json::Arr(
+            items
+                .iter()
+                .map(|v| tag_to_json(v, AdvancementJson::Other))
+                .collect(),
+        ),
         Tag::Compound(c) => Json::Obj(
             c.iter()
-                .map(|(k, v)| (k.0.clone(), tag_to_json(v)))
+                .map(|(k, v)| (k.0.clone(), tag_to_json(v, context.child(&k.0))))
                 .collect(),
         ),
         other => json::from_nbt(other),
@@ -1006,15 +1040,20 @@ fn upgrade_json_to(path: &Path, ty: Ty, to: i32) -> io::Result<()> {
     let units: Vec<u16> = text.encode_utf16().collect();
     let parsed = json::parse_lenient(&units)
         .ok_or_else(|| invalid(format!("bad JSON in {}", path.display())))?;
-    let mut tag = json_to_tag(&parsed);
+    let context = if ty == Ty::Advancements {
+        AdvancementJson::File
+    } else {
+        AdvancementJson::Other
+    };
+    let mut tag = json_to_tag(&parsed, context);
     let from = super::dynamic::as_int(tag.get("DataVersion"), 1343);
     if ty == Ty::Advancements {
         // `PlayerAdvancements`: the version field is not part of the data.
-        remove(&mut tag, "DataVersion");
+        take(&mut tag, "DataVersion");
     }
     update(ty, &mut tag, from, to);
-    set(&mut tag, "DataVersion", Tag::Int(to));
-    let out = json::to_stable_string(&tag_to_json(&tag));
+    put(&mut tag, "DataVersion", Tag::Int(to));
+    let out = json::to_stable_string(&tag_to_json(&tag, context));
     fs::write(path, String::from_utf16_lossy(&out))
 }
 
@@ -1085,7 +1124,7 @@ pub fn upgrade_world_data_with(
         run.check()?;
         if let Some(mut tag) = read_dat(&file)? {
             super::update_player(&mut tag);
-            set(&mut tag, "DataVersion", Tag::Int(CURRENT));
+            put(&mut tag, "DataVersion", Tag::Int(CURRENT));
             write_dat(&file, &tag)?;
         }
         progress.increment_finished_operations();
@@ -1120,8 +1159,8 @@ pub fn upgrade_band(base: &Path, target: i32) -> io::Result<()> {
             .unwrap_or_else(|| Tag::Compound(Compound::new()));
         let from = data_version(&data, -1);
         update(Ty::Level, &mut data, from, target);
-        set(&mut data, "DataVersion", Tag::Int(target));
-        set(&mut root, "Data", data);
+        put(&mut data, "DataVersion", Tag::Int(target));
+        put(&mut root, "Data", data);
         write_dat(&level, &root)?;
     }
     for (folder, id) in [
@@ -1170,7 +1209,7 @@ pub fn upgrade_band(base: &Path, target: i32) -> io::Result<()> {
         if let Some(mut tag) = read_dat(&file)? {
             let from = data_version(&tag, 1343);
             update(ty, &mut tag, from, target);
-            set(&mut tag, "DataVersion", Tag::Int(target));
+            put(&mut tag, "DataVersion", Tag::Int(target));
             write_dat(&file, &tag)?;
         }
     }
@@ -1198,6 +1237,36 @@ pub fn upgrade_world_with(base: &Path, progress: &UpgradeProgress) -> io::Result
 #[cfg(test)]
 mod upgrade_tests {
     use super::*;
+
+    #[test]
+    fn advancement_biome_rename_keeps_the_last_json_criterion() {
+        // CavesAndCliffsRenames folds wooded_hills into forest at 2838.
+        for (first, second) in [("forest", "wooded_hills"), ("wooded_hills", "forest")] {
+            let advancement = "minecraft:adventure/adventuring_time";
+            let input = Json::object(vec![(
+                advancement,
+                Json::object(vec![(
+                    "criteria",
+                    Json::object(vec![
+                        (&format!("minecraft:{first}"), Json::string("first")),
+                        (&format!("minecraft:{second}"), Json::string("last")),
+                    ]),
+                )]),
+            )]);
+            let mut data = json_to_tag(&input, AdvancementJson::File);
+            update(Ty::Advancements, &mut data, 2837, 2838);
+            assert_eq!(
+                tag_to_json(&data, AdvancementJson::File),
+                Json::object(vec![(
+                    advancement,
+                    Json::object(vec![(
+                        "criteria",
+                        Json::object(vec![("minecraft:forest", Json::string("last"))])
+                    )]),
+                )])
+            );
+        }
+    }
 
     fn level_version(base: &Path) -> i32 {
         let root = read_dat(&base.join("level.dat")).unwrap().unwrap();
@@ -1416,7 +1485,7 @@ mod upgrade_tests {
         fs::create_dir_all(&dir).unwrap();
         let mut tag = old_chunk(0, 0);
         // Stored uncompressed, so the record is over 256 sectors.
-        set(&mut tag, "Big", Tag::ByteArray(vec![0; 1_100_000]));
+        put(&mut tag, "Big", Tag::ByteArray(vec![0; 1_100_000]));
         let root = NamedTag {
             name: "".into(),
             tag,
@@ -1472,7 +1541,7 @@ mod upgrade_tests {
         drop(region);
         let grow = |tag: &mut Tag| {
             fix_overworld_chunk(tag);
-            set(tag, "Big", Tag::ByteArray(vec![0; 1_100_000]));
+            put(tag, "Big", Tag::ByteArray(vec![0; 1_100_000]));
         };
         // A folder where the `.mcc` goes makes its move fail once.
         fs::create_dir_all(dir.join("c.0.0.mcc")).unwrap();
@@ -1493,7 +1562,7 @@ mod upgrade_tests {
     fn published_stub_with_staged_mcc(dir: &Path) {
         let _ = fs::remove_dir_all(dir);
         let mut tag = old_chunk(0, 0);
-        set(&mut tag, "Big", Tag::ByteArray(vec![0; 1_100_000]));
+        put(&mut tag, "Big", Tag::ByteArray(vec![0; 1_100_000]));
         let root = NamedTag {
             name: "".into(),
             tag,
@@ -1638,7 +1707,7 @@ mod upgrade_tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let mut tag = old_chunk(0, 0);
-        set(&mut tag, "Items", Tag::List(vec![Tag::Byte(1); 1_000_001]));
+        put(&mut tag, "Items", Tag::List(vec![Tag::Byte(1); 1_000_001]));
         let root = NamedTag {
             name: "".into(),
             tag,
@@ -1682,7 +1751,7 @@ mod upgrade_tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let mut tag = old_chunk(0, 0);
-        set(&mut tag, "Items", over_old_cap());
+        put(&mut tag, "Items", over_old_cap());
         let root = NamedTag {
             name: "".into(),
             tag,

@@ -1,1 +1,1 @@
-sunrise-client game::mods::runtime_files::tests::a_mod_reads_its_own_runtime_files_during_registration_and_no_other lib daily resources
+sunrise-client game::mods::runtime_files::tests::a_mod_reads_runtime_files_by_mod_id_during_registration lib daily resources

@@ -6,13 +6,14 @@
 # but this file, which calls only the runner's sha256sum and OpenSSL; the publish job then checks the result
 # with sunrise-release-sign, as launchers do.
 # EPHEMERAL=yes (dry runs) signs with a throwaway key instead and writes its public key to ephemeral.pub.
-# ALSO_FOR=<version> (Nightlies and snapshots) signs the same SHA256SUMS a second time, for
+# ALSO_FOR=<version> (Nightlies and Dev builds) signs the same SHA256SUMS a second time, for
 # "horizon release <ALSO_FOR>\n", into SHA256SUMS.v2.sig, with the same key(s): the build's own version
-# (nightly-<date>-<commit> on the nightly channel, snapshot-<date>-<commit> on the snapshot channel), which current
+# (nightly-<date>-<commit> on the nightly channel, dev-<date>-<commit> on the Dev channel), which current
 # launchers require, while SHA256SUMS.sig stays signed for the channel for launchers from before (docs/security.md).
 #   tools/ci/sign_release.sh v2026.10.19 dist/sunrise-linux-x86_64.tar.gz dist/sunrise-windows-x64.zip ...
 #   ALSO_FOR=nightly-2026-10-28-0c02067 tools/ci/sign_release.sh nightly dist/...
-#   ALSO_FOR=snapshot-2026-11-13-0c02067 tools/ci/sign_release.sh snapshot dist/...
+#   ALSO_FOR=26.3-0.1.0 tools/ci/sign_release.sh 26.3-0.1.0 dist/...   # a stable release: both files for its tag
+#   ALSO_FOR=dev-2026-11-13-0c02067 tools/ci/sign_release.sh dev dist/...
 set -euo pipefail
 tag=$1; shift
 dir=$(dirname "$1")
@@ -28,10 +29,12 @@ for file in "$@"; do
   names+=("$(basename "$file")")
 done
 also=${ALSO_FOR:-}
-# A build's version is <channel>-<date>-<commit> for the channel signed above it (nightly or snapshot), so a
-# snapshot's version is never signed beside the nightly channel, nor the reverse.
-if [[ -n "$also" && ! ( "$tag" =~ ^(nightly|snapshot)$ && "$also" =~ ^$tag-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7,40}$ ) ]]; then
-  echo "ALSO_FOR=$also: not a $tag-<date>-<commit> build of the nightly or snapshot channel" >&2; exit 1
+# A build's version is <channel>-<date>-<commit> for the channel signed above it (nightly or dev), so a
+# Dev build's version is never signed beside the nightly channel, nor the reverse. A stable tag's is the tag itself.
+stable='^[0-9]+\.[0-9]+(\.[0-9]+)?-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+if [[ -n "$also" && ! ( "$tag" =~ ^(nightly|dev)$ && "$also" =~ ^$tag-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7,40}$ ) \
+      && ! ( "$tag" =~ $stable && "$also" == "$tag" ) ]]; then
+  echo "ALSO_FOR=$also: not a $tag-<date>-<commit> build of the nightly or dev channel, nor a stable tag's own" >&2; exit 1
 fi
 # LAUNCHER_FOR=vX.Y.Z (launcher-bridge.yml, tag launcher@X.Y.Z) also signs SHA256SUMS for "sunrise-launcher release vX.Y.Z\n" into SHA256SUMS.launcher.sig.
 launcher_for=${LAUNCHER_FOR:-}

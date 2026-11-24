@@ -35,3 +35,71 @@ fn remote_clicks_find_slots_past_the_old_large_chest_cutoff() {
     assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 504), None);
     assert_eq!(Game::menu_slot_index("unknown", 0), None);
 }
+
+#[test]
+fn large_mod_menu_backing_slots_never_alias_armor_station_or_mount_slots() {
+    use crate::game::inventory_slots::{MOD_MENU_SLOT_BASE, container_slot_index};
+    use sunrise_client::containers::ModMenuType;
+
+    let with_inv = ModMenuType {
+        id: "test:large_with_inv",
+        owner: "test",
+        slots: 32_732,
+        player_inventory: true,
+        data_slots: 32_768,
+        results: Vec::new(),
+        inputs: Vec::new(),
+        crafting: None,
+        links: Default::default(),
+        owned_slots: None,
+    };
+    for s in [0usize, 199, 200, 204, 300, 400, 32_731] {
+        let internal =
+            Game::inventory_screen_slot_with_type(with_inv.id, s as i32, || Some(&with_inv))
+                .expect("backing slot");
+        assert_eq!(internal, MOD_MENU_SLOT_BASE + s);
+        assert_eq!(container_slot_index(internal), Some(s));
+        assert!(internal >= MOD_MENU_SLOT_BASE);
+    }
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(with_inv.id, 32_732, || Some(&with_inv)),
+        Some(9)
+    );
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(with_inv.id, 32_759, || Some(&with_inv)),
+        Some(0)
+    );
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(with_inv.id, 32_767, || Some(&with_inv)),
+        Some(8)
+    );
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(with_inv.id, 32_768, || Some(&with_inv)),
+        None
+    );
+
+    let without_inv = ModMenuType {
+        id: "test:large_no_inv",
+        owner: "test",
+        slots: 32_768,
+        player_inventory: false,
+        data_slots: 65_536,
+        results: Vec::new(),
+        inputs: Vec::new(),
+        crafting: None,
+        links: Default::default(),
+        owned_slots: None,
+    };
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(without_inv.id, 0, || Some(&without_inv)),
+        Some(MOD_MENU_SLOT_BASE)
+    );
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(without_inv.id, 32_767, || Some(&without_inv)),
+        Some(MOD_MENU_SLOT_BASE + 32_767)
+    );
+    assert_eq!(
+        Game::inventory_screen_slot_with_type(without_inv.id, 32_768, || Some(&without_inv)),
+        None
+    );
+}

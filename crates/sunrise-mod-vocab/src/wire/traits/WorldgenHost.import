@@ -1,1 +1,0 @@
-The view of a hook fired while a feature generates, where no game is at hand: on a worldgen worker thread, or on the server thread when a sapling grows.

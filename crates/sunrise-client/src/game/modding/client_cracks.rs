@@ -64,9 +64,13 @@ impl Game<'_> {
     }
 
     pub(super) fn reset_client_world(&mut self, seed: i64) {
+        self.install_client_world(Game::world_for_mods(self.res.facts().air, seed));
+    }
+
+    pub(super) fn install_client_world(&mut self, world: sunrise_client::world::World) {
         self.destroying.clear();
         self.mining = None;
-        self.world = Game::world_for_mods(self.res.facts().air, seed);
+        self.world = world;
     }
 }
 

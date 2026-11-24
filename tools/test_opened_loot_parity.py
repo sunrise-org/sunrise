@@ -36,6 +36,8 @@ def main():
                lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
                lab.ROOT / 'crates/sunrise-client/src/game/administration/commands/mod.rs',
                lab.ROOT / 'crates/sunrise-client/src/save.rs',
+               lab.ROOT / 'crates/sunrise-client/src/save/column.rs',
+               lab.ROOT / 'crates/sunrise-client/src/save/block_entity_decode.rs',
                lab.ROOT / 'crates/sunrise-client/src/save/loot_tests.rs',
                lab.ROOT / 'crates/sunrise-client-render/src/chunk.rs',
                lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity/VanillaOpenedLootOracle.java',

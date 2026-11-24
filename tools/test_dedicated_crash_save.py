@@ -2,10 +2,10 @@
 """A dedicated server saves connected players on save-all/stop/SIGTERM and keeps safe data after a panic.
 
 `MinecraftServer.runServer` catches what the tick throws and still stops the server. Sunrise's
-`stop_after_crash` does the same, but a panic can interrupt a guest's turn (the game holds that
-player's state swapped in) or a tick that has the hub out. `SUNRISE_CRASH_FIXTURE` makes the tick
-panic at one of those points. Each run below joins a real Sunrise client, panics the server, and
-checks, from the files the server leaves:
+`run_server_lifecycle` crash stop does the same, but a panic can interrupt a guest's turn (the game
+holds that player's state swapped in) or a tick that has the hub out. `SUNRISE_CRASH_FIXTURE` makes
+the tick panic at one of those points. Each run below joins a real Sunrise client, panics the server,
+and checks, from the files the server leaves:
 
 - Connected player: save-all writes five diamonds while the player stays joined;
   stop writes the newer inventory of twelve diamonds.

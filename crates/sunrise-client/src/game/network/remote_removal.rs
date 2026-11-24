@@ -19,8 +19,8 @@ impl Game<'_> {
             }
         };
         if let Some(r) = &self.remote {
-            for &id in r.passenger_vehicles.values() {
-                include(id);
+            for seat in r.passenger_vehicles.values() {
+                include(seat.vehicle);
             }
         }
         // Shared/server riding paths can also set these links without a
@@ -49,6 +49,8 @@ impl Game<'_> {
         {
             include(id);
         }
+        // Retain removed camera entity snapshot until SetCamera replaces it (vanilla 26.3).
+        self.detach_camera_if_matching(|cam_id| removed.contains(&(cam_id as u32)));
         // Snapshot before removing passenger keys: a removed passenger can
         // precede its vehicle, whose other seat state still needs clearing.
         for &id in ids {
@@ -58,7 +60,7 @@ impl Game<'_> {
             // SetPassengers packet preceded the vehicle's removal. Otherwise
             // mobs and other players keep their passenger pose after it is gone.
             if vehicles.contains(&(id as u32)) {
-                self.remote_set_passengers(id, &[]);
+                self.remote_clear_passengers(id);
             }
             // Before the crystals go: the dragon's beam index follows them.
             self.remove_remote_dragon(id);
@@ -67,8 +69,15 @@ impl Game<'_> {
             self.remove_remote_small_projectiles(id as u32);
             self.persist.uuids.remove(&(id as u32));
             if let Some(r) = self.remote.as_mut() {
+                Self::forget_remote_general(r, id);
+                if let Some(old_uuid) = r.level_entity_uuids.remove(&id)
+                    && r.level_uuids.get(&old_uuid) == Some(&id)
+                {
+                    r.level_uuids.remove(&old_uuid);
+                }
                 r.glowing.remove(&id);
                 r.entities.remove(&id);
+                r.synced_attributes.remove(&id);
                 r.passenger_vehicles.remove(&(id as u32));
                 r.lerps.remove(&id);
                 r.cart_lerps.remove(&id);
@@ -89,18 +98,8 @@ impl Game<'_> {
         self.dropped.retain(|d| keep(d.id));
         self.falling.retain(|f| keep(f.id));
         self.tnts.retain(|t| keep(t.id));
-        let mut camera_removed = false;
         if let Some(r) = self.remote.as_mut() {
-            r.passenger_vehicles.retain(|_, v| keep(*v));
-            if r.camera.is_some_and(|id| removed.contains(&(id as u32))) {
-                r.camera = None;
-                camera_removed = true;
-            }
-        }
-        if camera_removed {
-            // Minecraft.setCameraEntity returns to the local player when the
-            // spectated entity leaves, including clearing its post chain.
-            self.check_entity_post_effect(true);
+            r.passenger_vehicles.retain(|_, seat| keep(seat.vehicle));
         }
     }
 }
@@ -177,8 +176,8 @@ mod tests {
             }))
             .unwrap();
         }
-        game.remote_set_passengers(40, &[42]);
-        game.remote_set_passengers(41, &[43]);
+        game.remote_set_passengers(40, vec![42]);
+        game.remote_set_passengers(41, vec![43]);
         assert_eq!(game.armor_stands[0].vehicle, Some(40));
         assert_eq!(game.mobs[0].extra.mount, Some(41));
         game.handle_packet(C::RemoveEntities(play::RemoveEntities {
@@ -191,8 +190,8 @@ mod tests {
         assert_eq!(r.entities[&43].vehicle, Some(41));
         assert_eq!(game.mobs[0].extra.mount, Some(41));
         assert!(game.mobs[0].extra.passenger);
-        assert_eq!(r.passenger_vehicles.get(&42), None);
-        assert_eq!(r.passenger_vehicles.get(&43), Some(&41));
+        assert_eq!(r.passenger_vehicle(42), None);
+        assert_eq!(r.passenger_vehicle(43), Some(41));
         assert_eq!(game.falling.iter().map(|e| e.id).collect::<Vec<_>>(), [45]);
     }
 

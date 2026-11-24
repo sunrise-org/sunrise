@@ -7,38 +7,50 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelDatapacksBackend {
     /// Side: both.
-    /// The entry ids (`addon:fire`) of a datapack registry a mod declared
-    /// (`declare_datapack_registry`), sorted, as this world session last loaded them. On a client
-    /// they are the ones its server sent at the join and after each reload, and only for a
-    /// registry declared `Required` or `Optional`. None for a stale or parked level and a
-    /// registry no mod declared (or, on a client, one the server did not send). Reads nothing
-    /// from disk.
-    #[access(WorldOnly)]
-    fn level_datapack_entries(&self, level: LevelRef, registry: &str) -> Option<Vec<String>>;
+    /// Visit borrowed entry IDs (`addon:fire`) of a datapack registry in lexical order. The
+    /// published set stays pinned for the whole visit; no registry lock is held during `visit`.
+    /// Copy an ID inside `visit` to retain it. Return `ControlFlow::Break(())` to stop early
+    /// (`Ok(Break(()))`); `Continue(())` visits the next ID.
+    ///
+    /// On the logical server, both the active dimension and any loaded parked dimension are
+    /// accepted, matching vanilla `Level.registryAccess()`. On a client these are the entries the
+    /// server last sent, and a declared registry omitted from the snapshot is empty. In
+    /// `client_level_load` the entering level reads its own configuration; in `client_level_unload`
+    /// the retiring level still reads its old configuration even if the next has already arrived.
+    /// `Ok(Continue(()))` means the visit completed, including for an empty registry.
+    /// A missing set, unknown registry, or stale or unloaded level returns
+    /// [`DatapackReadError::UnknownRegistry`]. A host without a world backend
+    /// returns [`DatapackReadError::Unavailable`]. Neither calls `visit`. Reads nothing from disk.
+    fn level_visit_datapack_entries(
+        &self,
+        level: LevelRef,
+        registry: &str,
+        visit: &mut dyn FnMut(&str) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, DatapackReadError>;
     /// Side: both.
-    /// A handle to `entry` of `registry` at the generation now loaded (on a client, the one its
-    /// server last sent). A handle kept across a reload fails its next read with
-    /// `StaleGeneration`, one from an earlier world session with `WrongSession`. A stale or parked
-    /// level and a registry no mod declared are `UnknownRegistry`; an entry no pack defines is
-    /// `MissingEntry`.
-    #[access(WorldOnly)]
-    fn level_datapack_handle(
+    /// Borrow the published entry `entry` of `registry` (on a client, from the snapshot its
+    /// server last sent). The active set stays pinned for the duration of `visit`, even if its
+    /// publication is cleared or replaced. No registry lock is held while `visit` runs.
+    ///
+    /// `visit` runs exactly once on `Ok(())`. Read `entry.values` in schema order or use
+    /// [`DatapackEntry::get`] by field name. The borrow ends when `visit` returns; retain IDs
+    /// and look them up again, or clone only the fields you need as an owned snapshot.
+    ///
+    /// On the logical server, both the active dimension and any loaded parked server dimension
+    /// are accepted, matching vanilla `Level.registryAccess()`; stale epochs and unloaded
+    /// dimensions are refused. On a client, `client_level_load` reads the entering level's
+    /// configuration and `client_level_unload` reads the retiring configuration even if the next
+    /// has already arrived; the retiring client `LevelRef` stops resolving after Unload. An
+    /// unavailable set, unknown or unavailable registry, or stale or unloaded level returns
+    /// [`DatapackReadError::UnknownRegistry`]; a missing entry in the registry returns
+    /// [`DatapackReadError::MissingEntry`]. A host without a world backend returns [`DatapackReadError::Unavailable`]. No error calls `visit`.
+    fn level_datapack_read(
         &self,
         level: LevelRef,
         registry: &str,
         entry: &str,
-    ) -> Result<DatapackHandle, DatapackReadError>;
-    /// Side: both.
-    /// The decoded fields of the entry a handle names, in the registry's schema order, as plain
-    /// values: a copy, which carries no authority after the read. The handle is checked first
-    /// (session, then generation), then the entry; the errors are those of
-    /// [`level_datapack_handle`](Self::level_datapack_handle).
-    #[access(WorldOnly)]
-    fn level_datapack_read(
-        &self,
-        level: LevelRef,
-        handle: &DatapackHandle,
-    ) -> Result<Vec<(String, DatapackValue)>, DatapackReadError>;
+        visit: &mut dyn FnMut(&DatapackEntry),
+    ) -> Result<(), DatapackReadError>;
     /// Side: server.
     /// Match and assemble through the engine's recipe matcher, without consuming inputs.
     /// Covers minecraft:crafting, smelting, blasting, smoking, campfire_cooking,
@@ -47,9 +59,9 @@ pub trait LevelDatapacksBackend {
     /// mod-owned types return RecipeLookupError::NotMatchable; cache recipes_of_type once
     /// per load/reload and match those in mod memory (no per-tick host crossing).
     /// A valid input without a match returns Ok(None); invalid shapes/items and unavailable
-    /// levels are typed refusals. Crafting dimensions are 1 through 3, with row-major slots.
+    /// levels are typed refusals. Crafting inputs carry row-major slots matching `width * height`;
+    /// a zero area has no slots and is still offered to registered crafting serializers.
 
-    #[access(WorldOnly)]
     fn level_recipe_for(
         &self,
         level: LevelRef,
@@ -72,7 +84,6 @@ pub trait LevelDatapacksBackendMut {
     /// Mods' loot kinds see `origin` and this level; no `loot_drops` event, since nothing
     /// drops. None for a table that isn't there, a stale or parked handle, a client, and a
     /// stale `entity`.
-    #[access(WorldOnly)]
     fn level_roll_loot(
         &mut self,
         level: LevelRef,

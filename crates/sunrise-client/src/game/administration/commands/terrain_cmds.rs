@@ -1,13 +1,19 @@
 //! `/forceload`, `/fillbiome`, `/worldborder` and `/loot`.
 use super::{Arg, Context, Game, R, Target, err, items::Owner};
+use crate::game::world_border::BorderTarget;
 use sunrise_client::{
     command::CommandError,
     items::ItemStack,
     scoreboard_cmd::{Holder, Tracker},
     text::Text,
-    worldborder::{MAX_CENTER, MAX_SIZE},
 };
-use sunrise_core::{position::ChunkPos, random::RandomSource};
+#[cfg(test)]
+use sunrise_core::position::ChunkPos;
+use sunrise_core::random::RandomSource;
+
+// `WorldBorderCommand.setCenter` / `setSize` bounds (not the extent's bounds).
+const MAX_CENTER: f64 = 29_999_984.0;
+const MAX_SIZE: f64 = 59_999_968.0;
 
 /// `LocationCheck.test` / `BlockPredicate`: the measured loaded block-state subset.
 fn loot_location_block(
@@ -99,20 +105,18 @@ impl Game<'_> {
         let dim = Text::literal(self.dim.id());
         match id {
             "forceload.query" if ctx.get("pos").is_none() => {
-                let mut forced: Vec<(i32, i32)> =
-                    self.streaming.commanded().iter().copied().collect();
-                // ForceLoadCommand sorts its LongStream before formatting chunks.
-                forced.sort_unstable_by_key(|&(x, z)| ChunkPos::new(x, z).pack());
-                if forced.is_empty() {
+                let count = self.streaming.commanded().len();
+                if count == 0 {
                     self.command_failure(Text::translate("commands.forceload.added.none", &[dim]));
                     return Ok(0);
                 }
-                let list = forced
-                    .iter()
+                let list = self
+                    .streaming
+                    .commanded_in_order()
                     .map(|(x, z)| format!("[{x}, {z}]"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let message = if forced.len() == 1 {
+                let message = if count == 1 {
                     Text::translate(
                         "commands.forceload.list.single",
                         &[dim, Text::literal(list)],
@@ -120,11 +124,11 @@ impl Game<'_> {
                 } else {
                     Text::translate(
                         "commands.forceload.list.multiple",
-                        &[num(forced.len()), dim, Text::literal(list)],
+                        &[num(count), dim, Text::literal(list)],
                     )
                 };
                 self.feedback(message);
-                Ok(forced.len() as i32)
+                Ok(count as i32)
             }
             "forceload.query" => {
                 let [x, z] = self.column_arg(ctx, "pos")?;
@@ -364,67 +368,10 @@ impl Game<'_> {
 
     // ---- /worldborder -----------------------------------------------------------------------
 
-    /// Every tick: the size change, the wall the player cannot pass and
-    /// damage outside the border.
-    /// `BorderChangeListener.DelegateBorderChangeListener`'s packets: what
-    /// changed on the border since the guests were last told of it.
-    pub(in crate::game) fn lan_sync_border(&mut self) {
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
-        let now = sunrise_client::lan::border::Sent::of(&self.border);
-        if let Some(sent) = host.border_sent.replace(now) {
-            for packet in sent.changes(&self.border) {
-                // PlayerList$1: only the players of the border's own level.
-                host.hub.broadcast_level(&packet);
-            }
-        }
-    }
-    pub(in crate::game) fn tick_worldborder(&mut self) {
-        let remaining = self.border.remaining_ticks();
-        self.border.tick();
-        if remaining > 0
-            && self.border.remaining_ticks() == 0
-            && (self.serving.is_some() || self.options.dedicated.is_some())
-        {
-            self.native_world_border_bounds_change_finish();
-        }
-        self.player_border();
-        self.border_damage();
-    }
-    /// The player's movement collides with the border as it is now
-    /// (`CollisionGetter.borderCollision`): from inside, its walls stop it.
-    pub(in crate::game) fn player_border(&mut self) {
-        if let Some(p) = self.player.as_mut() {
-            p.border = Some(self.border.geometry().clone());
-        }
-    }
-    /// `LivingEntity.baseTick`: a player outside the border, further than
-    /// its safe zone, is hurt by the blocks beyond it. The game's player, or
-    /// a guest's in their turn (`as_guest`).
-    pub(in crate::game) fn border_damage(&mut self) {
-        let Some((px, pz, half)) = self.player.as_ref().map(|p| {
-            (
-                p.position.x,
-                p.position.z,
-                f64::from(p.dimensions.width) / 2.0,
-            )
-        }) else {
-            return;
-        };
-        let inside = self.border.contains(px - half, pz - half)
-            && self.border.contains(px + half, pz + half);
-        if inside {
-            return;
-        }
-        let dist = self.border.distance(px, pz) + self.border.safe_zone;
-        if dist < 0.0 && self.border.damage_per_block > 0.0 && self.ticks.is_multiple_of(10) {
-            let amount = (-dist * self.border.damage_per_block).floor().max(1.0) as f32;
-            self.hurt_player_by("minecraft:outside_border", amount);
-        }
-    }
     pub(super) fn cmd_worldborder(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let float2 = |v: f64| super::percent_f(v, 2);
+        let target = BorderTarget::InPlace;
+        let failed = |_| err("command.failed", &[]);
         let double = match ctx.get("distance") {
             Some(Arg::Double(d)) => *d,
             _ => 0.0,
@@ -448,9 +395,10 @@ impl Game<'_> {
                 // time, keeps a change in flight going for its remaining ticks
                 // plus the argument (`getLerpTime() + time`); `set` replaces it.
                 let (distance, ticks) = match (id, time) {
-                    ("worldborder.add", Some(t)) => {
-                        (current + double, self.border.remaining_ticks() + t)
-                    }
+                    ("worldborder.add", Some(t)) => (
+                        current + double,
+                        self.border.remaining_ticks().wrapping_add(t),
+                    ),
                     ("worldborder.add", None) => (current + double, 0),
                     (_, t) => (double, t.unwrap_or(0)),
                 };
@@ -466,9 +414,10 @@ impl Game<'_> {
                         &[&size_limit_text()],
                     ));
                 }
+                self.set_border_size(target, distance, ticks)
+                    .map_err(failed)?;
                 let shown = Text::literal(super::percent_f(distance, 1));
                 if ticks > 0 {
-                    self.border.lerp_to(distance, ticks);
                     let key = if distance > current {
                         "commands.worldborder.set.grow"
                     } else {
@@ -479,13 +428,11 @@ impl Game<'_> {
                         &[shown, Text::literal(ticks_to_seconds(ticks))],
                     ));
                 } else {
-                    self.border.set_size(distance);
                     self.feedback(Text::translate(
                         "commands.worldborder.set.immediate",
                         &[shown],
                     ));
                 }
-                self.native_world_border_bounds_changed();
                 Ok((distance - current) as i32)
             }
             "worldborder.center" => {
@@ -502,8 +449,7 @@ impl Game<'_> {
                         &[&"2.9999984E7"],
                     ));
                 }
-                self.border.set_center([x, z]);
-                self.native_world_border_center_changed();
+                self.set_border_center(target, [x, z]).map_err(failed)?;
                 self.feedback(Text::translate(
                     "commands.worldborder.center.success",
                     &[Text::literal(float2(x)), Text::literal(float2(z))],
@@ -516,12 +462,12 @@ impl Game<'_> {
                     Some(Arg::Float(v)) => f64::from(*v),
                     _ => 0.0,
                 };
-                let slot = if amount {
-                    &mut self.border.damage_per_block
+                let current = if amount {
+                    self.border.damage_per_block
                 } else {
-                    &mut self.border.safe_zone
+                    self.border.safe_zone
                 };
-                if *slot == value {
+                if current == value {
                     return Err(err(
                         if amount {
                             "commands.worldborder.damage.amount.failed"
@@ -531,7 +477,12 @@ impl Game<'_> {
                         &[],
                     ));
                 }
-                *slot = value;
+                let mut border = self.border_mut(target).map_err(failed)?;
+                if amount {
+                    Self::set_border_damage_per_block(&mut border, value);
+                } else {
+                    Self::set_border_safe_zone(&mut border, value);
+                }
                 self.feedback(Text::translate(
                     if amount {
                         "commands.worldborder.damage.amount.success"
@@ -550,7 +501,7 @@ impl Game<'_> {
                 if self.border.warning_distance == d {
                     return Err(err("commands.worldborder.warning.distance.failed", &[]));
                 }
-                self.border.warning_distance = d;
+                Self::set_border_warning_blocks(&mut self.border_mut(target).map_err(failed)?, d);
                 self.feedback(Text::translate(
                     "commands.worldborder.warning.distance.success",
                     &[num(d)],
@@ -565,7 +516,7 @@ impl Game<'_> {
                 if self.border.warning_time == ticks {
                     return Err(err("commands.worldborder.warning.time.failed", &[]));
                 }
-                self.border.warning_time = ticks;
+                Self::set_border_warning_time(&mut self.border_mut(target).map_err(failed)?, ticks);
                 self.feedback(Text::translate(
                     "commands.worldborder.warning.time.success",
                     &[Text::literal(ticks_to_seconds(i64::from(ticks)))],
@@ -597,6 +548,7 @@ impl Game<'_> {
         }
         let entity = self
             .command_source
+            .as_ref()
             .and_then(|s| s.entity)
             .unwrap_or(Target::Player);
         let slot = if ctx.has("offhand") {
@@ -624,6 +576,11 @@ impl Game<'_> {
                     let (tag, _) = sunrise_core::nbt::parse_snbt(&table)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let json = sunrise_client::scoreboard::tag_to_json(&tag);
+                    sunrise_world::loot::validate_loot_table(&json)
+                        .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+                    let prepared = world_items!(self)
+                        .prepare_inline_loot_table(&json)
+                        .map_err(|e| err("argument.nbt.invalid", &[&e.to_string()]))?;
                     // LootCommand's omitted fishing tool is EMPTY, not mainhand.
                     let held = if id == "loot.fish"
                         && (ctx.get("tool").is_some() || ctx.has("mainhand") || ctx.has("offhand"))
@@ -635,15 +592,15 @@ impl Game<'_> {
                     let drops = match json["random_sequence"].as_str() {
                         Some(sequence) => {
                             let random = self.rand_sequences.get(sequence, self.level.seed);
-                            world_items!(self).inline_loot_table_for_command(
-                                &json,
+                            world_items!(self).roll_prepared_inline_loot_table_for_command(
+                                &prepared,
                                 held.as_ref(),
                                 random,
                                 keep_empty,
                             )
                         }
-                        None => world_items!(self).inline_loot_table_for_command(
-                            &json,
+                        None => world_items!(self).roll_prepared_inline_loot_table_for_command(
+                            &prepared,
                             held.as_ref(),
                             &mut self.world.random,
                             keep_empty,
@@ -688,8 +645,7 @@ impl Game<'_> {
                 };
                 let ty = self.target_type(t);
                 // `EntityType.getDefaultLootTable`, in the type's namespace.
-                let (namespace, path) = ty.split_once(':').unwrap_or(("minecraft", ty.as_str()));
-                let table = format!("{namespace}:entities/{path}");
+                let table = sunrise_client::mobs::drops::entity_type_loot_table(&ty);
                 if t == Target::Player || !world_items!(self).has_loot_table(&table) {
                     return Err(err(
                         "commands.drop.no_loot_table.entity",
@@ -699,7 +655,7 @@ impl Game<'_> {
                 // LootCommand.dropKillLoot: the source's entity is the killer.
                 // A connected player is the last damage player, and its own
                 // stack counts; it is in place only to read that stack.
-                let guest = match self.command_source.map(|s| s.entity) {
+                let guest = match self.command_source.as_ref().map(|s| s.entity) {
                     Some(Some(Target::Guest(conn))) => self.for_player(Target::Guest(conn), |g| {
                         g.slot_get(&super::items::Slot::Inv(g.selected))
                     }),
@@ -709,7 +665,7 @@ impl Game<'_> {
                     Some(held) => (true, held),
                     None => (
                         matches!(
-                            self.command_source.map(|s| s.entity),
+                            self.command_source.as_ref().map(|s| s.entity),
                             None | Some(Some(Target::Player))
                         ),
                         self.slot_get(&super::items::Slot::Inv(self.selected)),
@@ -721,6 +677,7 @@ impl Game<'_> {
                     target: t,
                     killer: self
                         .command_source
+                        .as_ref()
                         .map(|s| s.entity)
                         .unwrap_or(Some(Target::Player)),
                     by_player,
@@ -748,7 +705,7 @@ impl Game<'_> {
                     pending.record_saved(p, &saved);
                 }
                 // LootCommand: the source's entity is `this`, if it has one.
-                let entity = match self.command_source.map(|s| s.entity) {
+                let entity = match self.command_source.as_ref().map(|s| s.entity) {
                     None | Some(Some(Target::Player)) => Some(self.native_clicker().1 as u32),
                     Some(Some(Target::Guest(conn))) => self
                         .player_entity_id_by_connection(Some(conn))

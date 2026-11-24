@@ -69,7 +69,7 @@ fn dimension_type(settings: &DimensionSettings) -> Value {
         ),
     };
     json["timelines"] = timelines;
-    if let Some(clock) = clock {
+    if let Some(clock) = settings.clock.as_deref().or(clock) {
         json["default_clock"] = json!(clock);
     }
     json
@@ -214,6 +214,7 @@ mod tests {
                 r.register_dimension("pocket", DimensionSettings::default());
                 r.register_dimension("pocket", DimensionSettings::default());
                 r.register_dimension("other:pocket", DimensionSettings::default());
+                r.register_dimension("minecraft:overworld", DimensionSettings::default());
                 r.register_dimension("", DimensionSettings::default());
                 r.register_dimension(
                     "uneven",
@@ -251,7 +252,7 @@ mod tests {
         let errors = install_parts(&[ModEntry::new("test", Box::new(Invalid))]).unwrap_err();
         assert_eq!(errors.len(), 7, "{errors:?}");
         assert!(errors[0].contains("test registered dimension test:pocket twice"));
-        assert!(errors[1].contains("namespace"));
+        assert!(errors[1].contains("minecraft:overworld, which is a vanilla level"));
         assert!(errors[2].contains("test declares invalid identifier \"test:\""));
         assert!(errors[3].contains("test:uneven"));
         assert!(errors[4].contains("test:low_ceiling"));
@@ -298,13 +299,18 @@ mod tests {
                 r.register_chunk_generator("void", Void);
                 r.register_chunk_generator("void", Void);
                 r.register_chunk_generator("other:void", Void);
+                r.register_chunk_generator("minecraft:flat", Void);
                 r.register_chunk_generator("", Void);
             }
         }
         let errors = install_parts(&[ModEntry::new("test", Box::new(Invalid))]).unwrap_err();
         assert_eq!(errors.len(), 3, "{errors:?}");
         assert!(errors[0].contains("test registered chunk generator test:void twice"));
-        assert!(errors[1].contains("test declares \"other:void\" in unowned namespace \"other\""));
+        assert!(
+            errors[1].contains(
+                "test registered chunk generator minecraft:flat, which is the game's own"
+            )
+        );
         assert!(errors[2].contains("test declares invalid identifier \"test:\""));
     }
 
@@ -372,8 +378,7 @@ mod tests {
                 let state = chunk.state(self.0);
                 assert_eq!(chunk.metadata().name(state.block()), Ok("minecraft:stone"));
                 assert!(chunk.set_block([1, chunk.min_y(), 2], state));
-                let invalid =
-                    mod_api::BlockState::from(mod_api::BlockStateRecord::new(self.0, u16::MAX));
+                let invalid = mod_api::__private::block_state_from_ordinal(self.0, u16::MAX);
                 assert!(!chunk.set_block([2, chunk.min_y(), 2], invalid));
             }
         }
@@ -659,6 +664,71 @@ mod rule_tests {
         assert!(bad.invalid_field().unwrap().contains("day_cycle"));
     }
 
+    /// A world clock a mod registers is a `minecraft:world_clock` entry, and a dimension naming it
+    /// in `clock` has it as its type's `default_clock`, over `day_cycle`'s, with `day_cycle`'s
+    /// timelines kept. A dimension naming a clock nobody registered, a vanilla clock registered
+    /// again and a clock registered twice refuse the mods at startup.
+    #[test]
+    fn a_registered_world_clock_is_a_dimensions_default_clock() {
+        use crate::game::api_values::install_parts;
+        use mod_api::{Hooks, ModEntry, Registrar};
+        use sunrise_world::dimension_type::DimensionFacts;
+        struct Clocks;
+        #[mod_api::__subscriptions]
+        impl Hooks for Clocks {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                r.register_world_clock("dungeon");
+                r.register_dimension(
+                    "crypt",
+                    DimensionSettings {
+                        clock: Some("test:dungeon".into()),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        install_parts(&[ModEntry::new("test", Box::new(Clocks))]).unwrap();
+        assert_eq!(
+            mod_api::__private::world_clock_declarations(),
+            ["test:dungeon"]
+        );
+        let crypt = installed_dimensions().pop().unwrap();
+        let facts = DimensionFacts::patched(
+            DimensionFacts::overworld(),
+            "test:crypt",
+            &serde_json::from_str(&crypt.dimension_type).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(facts.default_clock.as_deref(), Some("test:dungeon"));
+        assert!(facts.has_timeline("minecraft:day"));
+
+        struct Unknown;
+        #[mod_api::__subscriptions]
+        impl Hooks for Unknown {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                r.register_world_clock("minecraft:overworld");
+                r.register_world_clock("twice");
+                r.register_world_clock("twice");
+                r.register_dimension(
+                    "lost",
+                    DimensionSettings {
+                        clock: Some("test:nowhere".into()),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        let errors = install_parts(&[ModEntry::new("test", Box::new(Unknown))]).unwrap_err();
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("minecraft:overworld")));
+        assert!(errors.iter().any(|e| e.contains("test:twice twice")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unknown world clock \"test:nowhere\""))
+        );
+    }
+
     /// The bed rule goes into the dimension type as vanilla's `bed_rule` attribute, and the game's
     /// facts read it back from there.
     #[test]
@@ -808,12 +878,27 @@ mod biome_source_tests {
             })
             .contains("biome_preset")
         );
-        assert!(
+        assert_eq!(
             refused(|s| {
                 s.biome_source = BiomeSourceKind::End;
                 s.generator = "mymod:void".into();
-            })
-            .contains("fixed biome source")
+            }),
+            ""
+        );
+        assert_eq!(
+            refused(|s| {
+                s.biome_source = BiomeSourceKind::Checkerboard;
+                s.biomes = vec!["minecraft:plains".into(), "minecraft:desert".into()];
+                s.generator = "mymod:void".into();
+            }),
+            ""
+        );
+        assert_eq!(
+            refused(|s| {
+                s.biome_source = BiomeSourceKind::MultiNoise;
+                s.generator = "mymod:void".into();
+            }),
+            ""
         );
         assert_eq!(
             refused(|s| {
@@ -852,17 +937,16 @@ mod biome_source_tests {
         assert!(points(|p| p.offset = 1.5).contains("biome point"));
         assert!(points(|p| p.offset = -0.1).contains("biome point"));
         assert!(points(|p| p.biome.clear()).contains("biome point"));
-        // A valid points source still refuses a chunk generator of the mod's own.
-        assert!(
+        // A valid points source composes with a mod's own chunk generator as well as noise.
+        assert_eq!(
             DimensionSettings {
                 biome_source: BiomeSourceKind::Points,
                 biome_points: vec![point()],
                 generator: "mymod:void".into(),
                 ..Default::default()
             }
-            .invalid_biome_source()
-            .unwrap_or_default()
-            .contains("fixed biome source")
+            .invalid_biome_source(),
+            None
         );
     }
 }

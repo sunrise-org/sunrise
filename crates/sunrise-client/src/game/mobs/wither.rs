@@ -182,17 +182,15 @@ impl Game<'_> {
     pub(super) fn wither_skull_hit(
         &mut self,
         p: &Projectile,
-        who: Option<Who>,
+        hit: sunrise_client::projectiles::Hit,
         at: [f64; 3],
     ) -> sunrise_client::Result<()> {
-        // Projectile.getOwner: none once the owner is gone.
-        let live_owner = match p.owner {
-            Some(Who::Mob(id)) if self.mobs.iter().any(|m| m.id == id && !m.removed) => {
-                Some(Who::Mob(id))
-            }
-            Some(Who::Mob(_)) => None,
-            other => other,
+        let who = match hit {
+            sunrise_client::projectiles::Hit::Entity { who, .. } => Some(who),
+            _ => None,
         };
+        // Projectile.getOwner: none once the owner is gone.
+        let live_owner = self.resolved_projectile_owner(p.owner, p.guest);
         let owner = match live_owner {
             Some(Who::Mob(id)) => Some(id),
             _ => None,
@@ -210,39 +208,46 @@ impl Game<'_> {
                 // WitherSkull.onHitEntity's source: the wither launched
                 // it, and `magic` names no entity and no position.
                 self.combat.projectile_owner = owner;
-                // EnchantmentHelper.doPostAttackEffects runs only on a
-                // target that lived.
-                self.combat.post_attack_if_alive = true;
                 if skull.from.is_none() {
                     self.combat.projectile_direct = None;
                 }
-                let hit = self.hurt_player_from(
-                    amount,
-                    skull.from,
-                    super::creatures::damage_type(kind, false),
-                    Some(owner),
-                    false,
-                );
+                let damage_type = super::creatures::damage_type(kind, false);
+                let hit =
+                    self.hurt_player_from(amount, skull.from, damage_type, Some(owner), false);
+                // A totem that fired saves the player inside hurtServer:
+                // still alive, so run the enchantments instead of healing the owner.
+                let killed = self.player.as_ref().is_some_and(|pl| {
+                    killed(
+                        hit,
+                        pl.health.dead_or_dying(),
+                        pl.health.has_pending_protection(),
+                    )
+                });
+                if killed {
+                    self.heal_skull_owner(p, live_owner);
+                } else if hit && live_owner.is_some() {
+                    self.shot_post_attack(p, Who::Player, damage_type);
+                }
                 if hit && wither_ticks > 0 {
                     self.give_player_effect("minecraft:wither", wither_ticks, 1);
                 }
-                // A totem that fired saves the player inside hurtServer:
-                // still alive, so no heal.
-                let killed = self
-                    .player
-                    .as_ref()
-                    .is_some_and(|pl| killed(hit, pl.health.dead_or_dying(), pl.health.totem_used));
-                if killed {
-                    self.heal_skull_owner(p, live_owner);
-                }
             }
-            // EnderDragonPart.hurtServer: EnderDragon.hurt routes it by the
-            // part, a skull is no arrow a perched dragon shrugs off, and only
-            // a player's skull takes health. A part is no LivingEntity
-            // (no withering) and stays alive (no heal).
-            Some(Who::Mob(id)) if id >= super::dragon::SPECIAL => {
-                let by_player = live_owner == Some(Who::Player);
-                self.hit_special(id, amount, by_player, kind, Some(p));
+            // EnderDragonPart.hurtServer / EndCrystal.hurtServer: skull with live owner uses wither_skull, else magic.
+            Some(Who::Mob(id)) if self.is_special_target(id) => {
+                let damage_type = if live_owner.is_some() {
+                    "minecraft:wither_skull"
+                } else {
+                    "minecraft:magic"
+                };
+                self.hit_special_full(
+                    id,
+                    amount,
+                    live_owner,
+                    p.guest,
+                    kind,
+                    Some(damage_type),
+                    Some(super::dragon::DirectHit::from_projectile(p)),
+                );
             }
             Some(Who::Mob(id)) => {
                 let owner_species = owner
@@ -254,43 +259,76 @@ impl Game<'_> {
                     from: skull.from,
                     attacker_species: owner_species,
                 };
-                let plan =
-                    self.prepare_knockback_credit(id as i32, source.attacker, self.combat.attack());
-                let mut credit = plan.lend(&mut self.last_hurt_by_player);
                 let mut survived_hit = false;
-                let killed = match self.mobs.iter_mut().find(|m| m.id == id) {
-                    Some(m) => {
-                        let hit = m.damage(
+                let killed = match self.mob_index.find(&self.mobs, id) {
+                    Some(index) => {
+                        let plan = self.prepare_knockback_credit(
+                            id as i32,
+                            source.attacker,
+                            self.combat.attack(),
+                        );
+                        // The hit's causing entity, lent to its listeners beside the victim.
+                        let causing = self.causer_id(source.attacker);
+                        let decision = crate::game::entity::causer_decision!(self, causing);
+                        let mut credit = plan.lend(&mut self.last_hurt_by_player);
+                        let (victim, lend) =
+                            crate::game::entity::victim_and_causer!(self, index, causing, decision);
+                        let hit = victim.damage(
                             crate::game::entity::damage_level_of!(
                                 self,
                                 self.combat.attack(),
                                 &mut credit,
-                                None
+                                lend
                             ),
                             amount,
                             source,
                         );
-                        survived_hit = hit && m.alive();
-                        hit && !m.alive()
+                        let Some((index, hit)) = self.complete_mob_hurt(index, hit) else {
+                            return Ok(());
+                        };
+                        self.finish_mob_damage_at(index);
+                        let alive = self
+                            .mobs
+                            .get(index)
+                            .is_some_and(|m| m.id == id && m.alive());
+                        survived_hit = hit && alive;
+                        hit && !alive
                     }
-                    None => false,
+                    None => {
+                        let mut skull_p = p.clone();
+                        skull_p.owner = live_owner;
+                        let damage_type = self.projectile_damage_type(&skull_p);
+                        let info = super::creatures::ProjectileHitInfo::from_projectile(
+                            &skull_p,
+                            damage_type,
+                            amount,
+                            None,
+                        );
+                        let _ = self.projectile_hurts_non_mob(&info, id);
+                        false
+                    }
                 };
+                self.settle_mob_hurt(id);
                 if survived_hit && live_owner.is_some() {
                     self.mob_post_attack(
                         id,
                         live_owner,
-                        Some("minecraft:wither_skull"),
+                        Some((p.id, "minecraft:wither_skull")),
                         Some("minecraft:wither_skull"),
                     );
                 }
-                if survived_hit
-                    && wither_ticks > 0
-                    && let Some(m) = self
-                        .mobs
-                        .iter_mut()
-                        .find(|m| m.id == id && m.species() != Species::Wither)
-                {
-                    m.add_effect("minecraft:wither", wither_ticks, 1);
+                if survived_hit && wither_ticks > 0 {
+                    let effect_source = match live_owner {
+                        Some(Who::Mob(owner_id)) => self.entity(owner_id),
+                        Some(Who::Player) => self.entity(self.own_entity_id() as u32),
+                        None => None,
+                    }
+                    .or_else(|| self.entity(p.id));
+                    self.add_mob_effect(
+                        id,
+                        sunrise_client::effects::EffectInstance::new("wither", wither_ticks, 1),
+                        effect_source,
+                    );
                 }
                 if killed {
                     self.heal_skull_owner(p, live_owner);
@@ -298,6 +336,8 @@ impl Game<'_> {
             }
             None => {}
         }
+        // Projectile.onHit emits PROJECTILE_LAND after onHitEntity and before WitherSkull.onHit explodes.
+        self.projectile_hit_landed_event(p.id, p.owner, hit);
         self.combat.explosion_owner = owner;
         self.combat.explosion_in_water = p.touching_water;
         // The blast's source names a player owner, for the dragon's kill credit.
@@ -318,7 +358,12 @@ impl Game<'_> {
                     at,
                     1.0,
                     super::explosion::ExplosionSource::default()
-                        .with_silence(g.entity_silent(p.id)),
+                        .with_silence(g.entity_silent(p.id))
+                        .with_entity(
+                            p.id,
+                            "minecraft:wither_skull",
+                            sunrise_client::health::DirectEntity::Projectile,
+                        ),
                 )
             })
         });

@@ -1,4 +1,5 @@
 //! Engine owners of detached placement and publication use the same frozen plan.
+use super::super::Role;
 use super::{Kind, Menu, custom_plan::MenuPlacement};
 impl MenuPlacement {
     /// Physical slots whose old contents the placement operation may return.
@@ -17,13 +18,19 @@ impl MenuPlacement {
 impl Menu {
     /// Rebuild only visibility from the actual current mod menu. A cached
     /// machine may have hidden slots left over from an earlier linked view.
-    pub fn reset_mod_visibility(&mut self, hidden: &[usize]) {
+    pub fn reset_mod_visibility(&mut self, unlinked: impl IntoIterator<Item = usize>) {
+        let Kind::Mod(kind) = self.state.kind else {
+            return;
+        };
         self.touch();
-        if matches!(self.state.kind, Kind::Mod(_)) {
-            self.state.slots = Menu::new(self.state.kind).state.slots;
-            for &slot in hidden {
-                self.hide_slot(slot);
+        let layout = self.state.kind;
+        for (index, slot) in self.state.slots[..kind.slots].iter_mut().enumerate() {
+            if slot.role == Role::Hidden {
+                slot.role = layout.slot(index).unwrap().role;
             }
+        }
+        for slot in unlinked {
+            self.hide_slot(slot);
         }
     }
 }

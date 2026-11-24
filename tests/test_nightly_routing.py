@@ -11,7 +11,7 @@ import tempfile
 import textwrap
 import unittest
 
-from tests.test_ci_runners import jobs, runs_on
+from tests.test_ci_runners import jobs
 from tests.test_ci_concurrency import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,41 +23,25 @@ SMOKE = ROOT / "tools/ci/game_smoke.sh"
 # Each build leg's runner: (Blacksmith's, GitHub's with BLACKSMITH=off).
 RUNNERS = {
     "linux": ("blacksmith-16vcpu-ubuntu-2204", "ubuntu-22.04"),
-    "linux-musl": ("blacksmith-16vcpu-ubuntu-2204", "ubuntu-22.04"),
     "windows": ("blacksmith-16vcpu-windows-2025", "windows-latest"),
-    "windows-arm64": ("blacksmith-16vcpu-windows-2025", "windows-11-vs2026-arm"),
     "macos": ("blacksmith-12vcpu-macos-15", "macos-15"),
-    "macos-x64": ("blacksmith-12vcpu-macos-15", "macos-15"),
 }
 
 
 class NightlyRoutingTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node evaluates GitHub's JavaScript-style expressions")
     def test_real_matrix_routes_both_trust_levels(self):
-        text = GAME.read_text()
-        workflow_jobs = dict(jobs(text))
-        self.assertIn("needs: exporters", workflow_jobs["build"])
-        expressions = re.findall(r"^\s*runs-on:\s*\$\{\{(.*?)\}\}\s*$", text, re.M)
-        self.assertEqual(len(expressions), 3)
-        smoke = workflow_jobs["linux-smoke"]
-        smoke_if = re.search(r"^\s*if:\s*\$\{\{(.*?)\}\}\s*$", smoke, re.M).group(1)
-        block = text.split("        include:\n", 1)[1].split("    runs-on:", 1)[0]
-        rows = []
-        for line in block.splitlines():
-            found = re.match(r"\s*(- )?(\w+): ([^#]+)", line)
-            if not found:
-                continue
-            new, key, value = found.groups()
-            if new:
-                rows.append({})
-            if rows:
-                value = value.strip()
-                rows[-1][key] = {"true": True, "false": False}.get(value, value)
-        self.assertEqual({row["name"] for row in rows}, {"linux", "linux-musl", "windows", "windows-arm64", "macos", "macos-x64"})
+        game = yaml.safe_load(GAME.read_text())["jobs"]
+        expressions = {name: game[name]["runs-on"][3:-2] for name in ("exporters", "build", "linux-smoke")}
+        smoke = game["linux-smoke"]
+        smoke_if = smoke["if"][3:-2]
+        rows = game["build"]["strategy"]["matrix"]["include"]
+        self.assertEqual({row["name"] for row in rows}, RUNNERS.keys())
         linux = next(row for row in rows if row["name"] == "linux")
-        self.assertIn(f"name: {linux['asset']}", smoke, "smoke must download the hosted producer's archive")
-        self.assertIn(f"/hosted-linux/{linux['dir']}", smoke)
-        self.assertIn("needs: legs", smoke)
+        download = next(step for step in smoke["steps"] if step.get("uses", "").startswith("actions/download-artifact@"))
+        self.assertEqual(download["with"]["name"], linux["asset"], "smoke must download the hosted producer's archive")
+        self.assertIn(f"/hosted-linux/{linux['dir']}", str(smoke["steps"]))
+        self.assertEqual(smoke["needs"], "legs")
         script = """const fs = require('fs');
 const state = JSON.parse(fs.readFileSync(0, 'utf8'));
 // Actions returns an empty string for absent context properties, not undefined.
@@ -86,74 +70,70 @@ console.log(JSON.stringify(eval(expression)));
                 variables.update({"NIGHTLY_LINUX_RUNNER": '"dyna-large"', "NIGHTLY_EXPORTERS_RUNNER": '"dyna-large"', "NIGHTLY_BOOKKEEPING_RUNNER": '"dyna-small"'})
             with self.subTest(configured=configured, disabled=disabled, trusted=trusted, dyna=dyna, blacksmith=blacksmith):
                 # Exporters: Dyna's runner for an untrusted build when it is configured, else GitHub's.
-                self.assertEqual(evaluate(expressions[0], {}, trusted), "dyna-large" if override and not trusted else "ubuntu-latest")
+                self.assertEqual(evaluate(expressions["exporters"], {}, trusted), "dyna-large" if override and not trusted else "ubuntu-latest")
                 expected_bookkeeping = "dyna-small" if override else ("ubuntu-latest" if disabled else ["self-hosted", "linux", "sunrise-light"])
                 self.assertEqual(evaluate(bookkeeping, {}, trusted), expected_bookkeeping)
                 self.assertEqual(evaluate(smoke_if, {}, trusted), not trusted and override)
                 if not trusted and override:
-                    self.assertEqual(evaluate(expressions[2], {}, trusted), "dyna-large")
+                    self.assertEqual(evaluate(expressions["linux-smoke"], {}, trusted), "dyna-large")
                 for row in rows:
-                    if row["name"] in {"linux", "linux-musl"}:
+                    if row["name"] == "linux":
                         self.assertEqual(row["os"], "ubuntu-22.04", "shipped Linux binaries keep the documented libc baseline")
                     # Every leg on its Blacksmith machine, or with BLACKSMITH=off on GitHub's.
                     expected = RUNNERS[row["name"]][blacksmith == "off"]
                     with self.subTest(entry=row["name"]):
-                        self.assertEqual(evaluate(expressions[1], row, trusted), expected)
-        # A leg built for another CPU is started there, by a job on that CPU's runner that downloads its untested
-        # archive and uploads it under its own name with the leg's marker; legs waits for that job.
-        game = yaml.load(text, Loader=yaml.BaseLoader)["jobs"]
-        started = {"macos-x64": ("macos-x64-intel", "macos-15-intel"),
-                   "windows-arm64": ("windows-arm64-native", "windows-11-vs2026-arm")}
-        self.assertEqual({row["name"] for row in rows if row.get("started_elsewhere")}, set(started))
-        for row in rows:
-            if row["name"] in started:
-                job, runner = started[row["name"]]
-                with self.subTest(started_elsewhere=row["name"]):
-                    self.assertEqual(game[job]["runs-on"], runner)
-                    self.assertIn(job, game["legs"]["needs"])
-                    steps = game[job]["steps"]
-                    downloads = {s["with"]["name"] for s in steps if s.get("uses", "").startswith("actions/download-artifact@")}
-                    uploads = {s["with"]["name"] for s in steps if s.get("uses", "").startswith("actions/upload-artifact@")}
-                    self.assertEqual(downloads, {f"untested-{row['asset']}"})
-                    self.assertEqual(uploads, {row["asset"], f"leg-{row['name']}"})
-        self.assertEqual({row["name"] for row in rows if row.get("started_elsewhere")}, {"macos-x64", "windows-arm64"})
-
-        timeout = re.search(r"^\s*timeout-minutes:\s*\$\{\{(.*?)\}\}", workflow_jobs["build"], re.M).group(1)
+                        self.assertEqual(evaluate(expressions["build"], row, trusted), expected)
         for repository, trusted, row in itertools.product(["sunrise-org/sunrise", "horizon-rust/horizon"], [False, True], rows):
             with self.subTest(repository=repository, trusted=trusted, entry=row["name"]):
                 if repository == "sunrise-org/sunrise":
-                    expected = 100 if row.get("mac") or row.get("musl") else 60
+                    expected = 100 if row.get("mac") else 60
                 else:
                     expected = 60 if row.get("mac") else 40
+                timeout = game["build"]["timeout-minutes"][3:-2]
                 self.assertEqual(evaluate(timeout, row, trusted, repository), expected)
 
-    @unittest.skipUnless(shutil.which("node"), "Node evaluates GitHub's JavaScript-style expressions")
-    def test_a_missing_leg_holds_the_build_only_when_it_is_required(self):
+    def test_any_missing_leg_holds_the_build(self):
         workflow_jobs = dict(jobs(GAME.read_text()))
-        optional = re.search(r"^\s*continue-on-error:\s*\$\{\{(.*?)\}\}", workflow_jobs["build"], re.M).group(1)
         decide = workflow_jobs["legs"].split("        run: |\n", 1)[1].split("\n      # ", 1)[0].split("\n      - ", 1)[0]
         decide = textwrap.dedent(decide)
-        script = """const s = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-const matrix = s.matrix, inputs = s.inputs, github = s.github;
-console.log(JSON.stringify(Boolean(eval(s.expression))));
-"""
-        legs = {"linux": {}, "linux-musl": {}, "windows": {}, "windows-arm64": {}, "macos": {"mac": True}, "macos-x64": {"mac": True}}
-        for repository, kind in itertools.product(["sunrise-org/sunrise", "horizon-rust/horizon"], ["nightly", "snapshot", "release"]):
-            for absent in [None, *legs]:
-                if absent is None:
-                    expected = True
-                else:
-                    state = {"expression": optional, "matrix": {"name": absent, **legs[absent]}, "inputs": {"kind": kind}, "github": {"repository": repository}}
-                    expected = json.loads(subprocess.run(["node", "-e", script], input=json.dumps(state), text=True, capture_output=True, check=True).stdout)
-                with self.subTest(repository=repository, kind=kind, absent=absent), tempfile.TemporaryDirectory() as folder:
-                    for leg in legs:
-                        if leg != absent:
-                            os.makedirs(f"{folder}/legs/leg-{leg}")
-                    output = Path(folder, "output")
-                    ran = subprocess.run(["bash", "-c", decide], cwd=folder, capture_output=True, text=True,
-                                         env={**os.environ, "REPOSITORY": repository, "KIND": kind, "GITHUB_OUTPUT": str(output)})
-                    self.assertEqual(ran.returncode == 0, expected, ran.stdout)
-                    self.assertEqual(output.exists() and output.read_text() == "complete=true\n", expected)
+        legs = ("linux", "windows", "macos")
+        for absent in [None, *legs]:
+            with self.subTest(absent=absent), tempfile.TemporaryDirectory() as folder:
+                for leg in legs:
+                    if leg != absent:
+                        os.makedirs(f"{folder}/legs/leg-{leg}")
+                output = Path(folder, "output")
+                ran = subprocess.run(["bash", "-c", decide], cwd=folder, capture_output=True, text=True,
+                                     env={**os.environ, "GITHUB_OUTPUT": str(output)})
+                self.assertEqual(ran.returncode == 0, absent is None, ran.stdout)
+                self.assertEqual(output.exists() and output.read_text() == "complete=true\n", absent is None)
+
+    def test_build_timings_are_a_report_and_never_a_signed_or_released_asset(self):
+        game = yaml.safe_load(GAME.read_text())
+        steps = game["jobs"]["build"]["steps"]
+        self.assertIn("cargo build --release --locked --timings", GAME.read_text())
+        collect = next(i for i, step in enumerate(steps) if step.get("name") == "The build's timings, by leg")
+        upload = collect + 1
+        self.assertTrue(steps[upload]["uses"].startswith("actions/upload-artifact@"))
+        # Both timing steps are best-effort, and run after the marker and the keychain lock, so a stalled
+        # upload cannot keep a finished leg from counting as built.
+        for index in (collect, upload):
+            self.assertIs(steps[index]["continue-on-error"], True)
+        for name in ("This leg built", "The signing keychain, locked again"):
+            self.assertLess(next(i for i, step in enumerate(steps) if step.get("name") == name), collect)
+        self.assertLess(next(i for i, step in enumerate(steps)
+                             if step.get("with", {}).get("name") == "leg-${{ matrix.name }}"), collect)
+        name = steps[upload]["with"]["name"]
+        self.assertTrue(name.startswith("cargo-timings-"))
+        # The sign job hashes every `sunrise-*` artifact, and publish's download leaves the reports out.
+        nightly = yaml.safe_load((ROOT / ".github/workflows/nightly-build.yml").read_text())
+        self.assertEqual(next(step["with"]["pattern"] for step in nightly["jobs"]["sign"]["steps"]
+                              if step.get("uses", "").startswith("actions/download-artifact@") and "pattern" in step["with"]),
+                         "sunrise-*")
+        download = [step for step in nightly["jobs"]["publish"]["steps"]
+                    if step.get("uses", "").startswith("actions/download-artifact@")]
+        self.assertEqual([step["with"]["pattern"] for step in download],
+                         ["@(sunrise-*|signature|ephemeral.pub|nightly-notes|smoke-test.json)"])
 
     def test_every_shipped_glibc_program_is_checked_by_workflow_owned_tools(self):
         text = GAME.read_text()
@@ -169,6 +149,15 @@ console.log(JSON.stringify(Boolean(eval(s.expression))));
         for checkout in tools:
             self.assertIn("ref: ${{ github.workflow_sha }}", checkout,
                           "older build candidates may lack the new workflow's validator/smoke helpers")
+
+    def test_build_stages_the_workflows_rust_pin(self):
+        game = yaml.safe_load(GAME.read_text())["jobs"]
+        tools, = [step for step in game["build"]["steps"] if step.get("name") == "Workflow-owned validation tools"]
+        self.assertTrue(tools["uses"].startswith("actions/checkout@"))
+        self.assertNotIn("if", tools)
+        self.assertEqual(tools["with"]["ref"], "${{ github.workflow_sha }}")
+        self.assertEqual(tools["with"]["path"], ".workflow-tools")
+        self.assertIn("tools/ci/rust-version", tools["with"]["sparse-checkout"].splitlines())
 
     def test_hosted_runners_never_use_machine_specific_tool_setup(self):
         # Only the exporters can run on a self-hosted (Dyna) runner; the build legs are fresh machines and take none.
@@ -224,16 +213,20 @@ console.log(JSON.stringify(Boolean(eval(s.expression))));
                 args = sys.argv[1:]
                 report = {"frames": int(args[args.index("--world-frames") + 1]),
                           "chunks": 1, "meshed_sections": 1, "player": [0, 64, 0],
-                          "display": os.environ.get("DISPLAY"), "wayland": os.environ.get("WAYLAND_DISPLAY")}
+                          "display": os.environ.get("DISPLAY"), "wayland": os.environ.get("WAYLAND_DISPLAY"),
+                          "stack_override": os.environ.get("RUST_MIN_STACK")}
                 pathlib.Path(args[args.index("--smoke-report") + 1]).write_text(json.dumps(report))
             '''))
             binary.chmod(0o755)
-            result = subprocess.run(["bash", str(SMOKE)], cwd=ROOT, env={**os.environ, "BIN": folder, "RUNNER_TEMP": folder, "RUNNER_OS": "Linux", "DISPLAY": ":invalid", "WAYLAND_DISPLAY": "invalid"}, text=True, capture_output=True)
+            env = {**os.environ, "BIN": folder, "RUNNER_TEMP": folder, "RUNNER_OS": "Linux",
+                   "DISPLAY": ":invalid", "WAYLAND_DISPLAY": "invalid", "RUST_MIN_STACK": "16777216"}
+            result = subprocess.run(["bash", str(SMOKE)], cwd=ROOT, env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             report = json.loads((root / "smoke-test.json").read_text())
             self.assertEqual(report["frames"], 1500)
             self.assertRegex(report["display"], r"^:[0-9]+$")
             self.assertIsNone(report["wayland"])
+            self.assertIsNone(report["stack_override"], "the integrated server must start at its own stack floor")
 
     @unittest.skipUnless(os.name == "posix", "The signing gate runs in Bash on Linux")
     def test_fork_dry_run_cannot_pass_without_real_smoke_report(self):

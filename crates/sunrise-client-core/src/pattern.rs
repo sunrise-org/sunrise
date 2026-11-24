@@ -3,7 +3,7 @@
 //! literals, `.`, classes `[a-z_]`/`[^..]`, escapes, `* + ?` quantifiers,
 //! `^`/`$` and top-level alternation with `|`.
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Atom {
     Any,
     Lit(char),
@@ -11,13 +11,13 @@ enum Atom {
     Start,
     End,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Item {
     atom: Atom,
     min: usize,
     max: usize,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pattern(Vec<Vec<Item>>);
 
 impl Pattern {

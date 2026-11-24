@@ -4,8 +4,9 @@
 //! `game/modding/native_shaders.rs`. The programs of the current dimension's folder are loaded when the
 //! dimension changes (spec 1.2).
 
+use super::remote_camera::CameraFogEffects;
 use sunrise_client::camera::CameraFluid;
-use sunrise_client::gfx::pack_uniforms::{PackInputs, PlayerStatus};
+use sunrise_client::gfx::pack_uniforms::{PackInputs, PlayerStatus, ViewEntity};
 use sunrise_client::mod_list::ModList;
 use sunrise_client::shader_options::ShaderOptions;
 use sunrise_client::text::Text;
@@ -13,7 +14,7 @@ use sunrise_shader_api::Api;
 use sunrise_shaders::{BlockIds, Macros, Pack, Properties, dimension_folder_named, load_post};
 
 use super::native_shaders::{fingerprint, outcome, refused, remember};
-use super::{Dim, Game};
+use super::{Dim, Game, Screen};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use sunrise_client_render::render_geometry::EntitySpan;
@@ -91,6 +92,70 @@ pub(super) fn picked_pack(settings: &sunrise_client::settings::Settings) -> &str
     )
 }
 
+/// What the toggle key decided: the pack it turned off or asked for, a hint when there is
+/// nothing (or nothing left) to resume, or nothing when the developer override wins.
+/// Announcing "on" is the selection request: the loader still has to accept the pack (its
+/// refusal path reports that), and a pack whose owning mod is off never starts.
+pub(super) enum TogglePlan {
+    /// Turned `name` off; the chat names it.
+    Off(String),
+    /// Asked for `name`; the chat names it.
+    On(String),
+    /// The last pick's owning mod is off: hint with its name, change nothing.
+    HintModOff(String),
+    /// Nothing to resume: clear `last` (a pack removed after it was turned off) and hint.
+    HintClearLast,
+    /// Nothing to resume; hint.
+    Hint,
+    /// The developer override wins; do nothing.
+    Noop,
+}
+
+/// The toggle key's decision on the pick, without touching the game: `dev_override` is
+/// `dev_pack()` (the `SUNRISE_SHADER_PACK` override wins over the pick), `present` says
+/// whether the last pick is still installed, and `active` whether its owning mod lets it
+/// run (`active_pack`). Pure so tests cover every branch without a game.
+pub(super) fn plan_shader_toggle(
+    pick: &str,
+    last: &str,
+    dev_override: bool,
+    present: impl FnOnce(&str) -> bool,
+    active: impl FnOnce(&str) -> bool,
+) -> TogglePlan {
+    if dev_override {
+        return TogglePlan::Noop;
+    }
+    if !pick.is_empty() {
+        return TogglePlan::Off(pick.to_owned());
+    }
+    if last.is_empty() {
+        return TogglePlan::Hint;
+    }
+    if !present(last) {
+        return TogglePlan::HintClearLast;
+    }
+    if !active(last) {
+        return TogglePlan::HintModOff(last.to_owned());
+    }
+    TogglePlan::On(last.to_owned())
+}
+
+/// The Extras page's shader pack key, by identity: the translated key's vanilla name against
+/// the bound one, so a rebind never becomes another mapping's default (Replay Studio's
+/// camera-keyframe shortcut stays physical K's).
+impl Game<'_> {
+    pub(super) fn shader_pack_key_press(&mut self, name: &str) -> bool {
+        if self.screen != Screen::Playing
+            || name == "key.keyboard.unknown"
+            || self.settings.extras.shader_pack_key != name
+        {
+            return false;
+        }
+        self.toggle_shader_pack();
+        true
+    }
+}
+
 /// What a renderer readies for the pick, unless it was refused, is missing or its owner is off.
 #[derive(Clone, Copy)]
 pub(crate) struct PickedPack {
@@ -102,8 +167,7 @@ pub(crate) struct PickedPack {
     /// the frame is float.
     pub linear: Option<sunrise_shader_api::Blend>,
     /// Under `SUNRISE_HDR_FRAME=float`, with no pack available or a 0.2 one: the frame is the
-    /// layered float one where HDR output is on (docs/design/hdr-linear-light.md, The HUD and
-    /// menus; the renderer decides, `FrameRequest::hdr_float`).
+    /// layered float one where HDR output is on (the renderer decides, `FrameRequest::hdr_float`).
     pub hdr_float: bool,
 }
 impl PickedPack {
@@ -221,12 +285,26 @@ pub(super) struct PackIds {
     pub(super) separate_ao: bool,
 }
 
+#[cfg(test)]
+impl PackIds {
+    pub(super) fn with_entity_ids<'a>(ids: impl IntoIterator<Item = (&'a str, i32)>) -> Self {
+        Self {
+            entities: ids
+                .into_iter()
+                .map(|(name, id)| (name.into(), id))
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
 impl Game<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
     pub(super) fn shader_pack_inputs(
         &mut self,
         camera: glam::DVec3,
+        eye: glam::DVec3,
         partial: f32,
         sky: &sunrise_client::environment::Sky,
     ) -> PackInputs {
@@ -242,6 +320,10 @@ impl Game<'_> {
         if self.streaming.shader_pack != shader_pack {
             self.streaming.shader_pack = shader_pack;
             self.all_sections_changed();
+        }
+        // The renderer keeps the meshes' sources while they carry them, and frees them after.
+        if let Some(renderer) = &mut self.renderer {
+            renderer.keep_pack_sources(shader_pack);
         }
         let separate_ao = self.pack_ids.as_ref().is_some_and(|ids| ids.separate_ao);
         if self.streaming.separate_ao != separate_ao {
@@ -341,9 +423,7 @@ impl Game<'_> {
                                 note.message
                             );
                         }
-                        let separate_ao = properties
-                            .get("separateAo")
-                            .is_some_and(|v| v.trim() == "true");
+                        let separate_ao = properties.separate_ao();
                         renderer.set_separate_ao(separate_ao);
                         // Lava's faces draw with the solid terrain's program.
                         renderer.set_pack_lava_layers(
@@ -356,6 +436,11 @@ impl Game<'_> {
                                 .collect(),
                         );
                         let folder = dimension_folder_named(&pack, self.dim.id(), dimension);
+                        // Its terrain programs read the section arena's pages, or else the
+                        // normal stream, where they still fit the vertex stage with them.
+                        renderer.set_pack_terrain_bindings(
+                            sunrise_client::gfx::pack_atlas::TerrainBindings::of(&properties),
+                        );
                         let inputs = renderer.pack_inputs();
                         let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
                         // Textures that name one of the game's: from the resource packs over
@@ -494,7 +579,7 @@ impl Game<'_> {
             has_skylight: self.world.shape.sky_light,
             has_ceiling: self.world.shape.has_ceiling,
             elytra_flying: self.player.as_ref().is_some_and(|p| p.fall_flying),
-            cloud_height: sunrise_client::gfx::pack_uniforms::cloud_height(sky),
+            cloud_height: sunrise_client::gfx::pack_uniforms::cloud_height(sky.cloud_height),
             // Vanilla's drift in float, times its 0.030000001F blocks a tick.
             cloud_time: sunrise_client::clouds::drift(
                 self.world.game_time,
@@ -507,18 +592,63 @@ impl Game<'_> {
             end_flash,
             end_flash_direction,
             ambient_light: dimension.map_or(0.0, |d| d.ambient_light),
-            mood: self.ambience.moodiness,
+            view: self.pack_view_entity(eye, partial),
             still_ticks: self.clock.still().then(|| self.visual_ticks()),
             frame_timing: None,
         }
     }
 
-    /// The local player's state for Iris's status uniforms, read as the HUD reads it.
+    /// The camera entity's (`Minecraft.getCameraEntity`, [`Self::camera_subject`]) values for
+    /// the uniforms tied to the view (#3948), at `eye`, the entity's eye
+    /// `Camera.alignWithEntity` placed (the frame's `eyePosition`). The local player's are the
+    /// ones the lightmap, the HUD and the cave ambience have; another living entity's are the
+    /// effects the server sent for it (its `CameraFogEffects`, the same the fog reads); an
+    /// entity that isn't living has none and looks nowhere.
+    pub(super) fn pack_view_entity(&self, eye: glam::DVec3, partial: f32) -> ViewEntity {
+        let at = eye.floor().as_ivec3();
+        let light = self.world.light(at.x, at.y, at.z);
+        let eye_light = [i32::from(light & 15), i32::from(light >> 4)];
+        let other = self.camera_subject().filter(|c| !c.is_local_player);
+        let (living, effects, night_vision, mood) = match &other {
+            Some(c) => {
+                let fx = c.fog_effects;
+                let night_vision = fx.night_vision.map_or(0.0, |duration| {
+                    super::sculk::night_vision_scale(duration, partial)
+                });
+                (c.camera.living.is_some(), fx, night_vision, 0.0)
+            }
+            None => (
+                true,
+                CameraFogEffects::from_effects(&self.potions.effects, self.sculk.darkness),
+                self.night_vision_intensity(partial),
+                self.ambience.moodiness,
+            ),
+        };
+        // LivingEntity.getEffectBlendFactor: the fade only while the instance is there.
+        let darkness = effects
+            .darkness_blend
+            .map_or(0.0, |blend| super::sculk::darkness_blend_at(blend, partial));
+        ViewEntity {
+            living,
+            blindness: f32::from(u8::from(effects.blindness.is_some())),
+            night_vision,
+            darkness: darkness * self.darkness_effect_scale(),
+            mood,
+            eye_light,
+        }
+    }
+
+    /// The window's player's state for the player booleans and the status uniforms: the six
+    /// Iris also gives programs and the vitals read as the HUD reads them, and the eight only
+    /// custom uniforms read (D-2 in `docs/cleanroom/decisions.md`), each as its vanilla method
+    /// answers on a client. Asked only while a pack is picked ([`Self::shader_pack_inputs`]
+    /// returns before it otherwise).
     fn pack_player_status(&mut self) -> PlayerStatus {
         let spectator = self.spectator();
         let survival = !self.creative && !spectator;
         let invisible = self.own_invisible();
         let riding = self.riding.is_some();
+        let (glowing, ridden, wet) = self.pack_player_booleans();
         let Some(p) = &mut self.player else {
             return PlayerStatus::default();
         };
@@ -541,7 +671,36 @@ impl Game<'_> {
             invisible,
             sneaking: p.pose == sunrise_client::pose::Pose::Crouching,
             sprinting: p.sprinting,
+            // `LivingEntity.isAlive`: the window's player is never removed while it is the
+            // camera.
+            alive: p.health.health() > 0.0,
+            glowing,
+            in_lava: p.is_in_lava(),
+            ridden,
+            wet,
         }
+    }
+
+    /// `Entity.isCurrentlyGlowing`, `Entity.isVehicle` and `Entity.isInWaterOrRain` of the
+    /// window's player, as a client answers them, read without changing anything.
+    fn pack_player_booleans(&self) -> (bool, bool, bool) {
+        let id = self.own_entity_id() as u32;
+        // `Entity.isCurrentlyGlowing` on a client: shared flag 6 from a server, else the
+        // Glowing effect `LivingEntity.isCurrentlyGlowing` sets it from.
+        let glowing = self
+            .remote_glowing(id)
+            .unwrap_or_else(|| self.potions.effects.get("glowing").is_some());
+        // `Entity.isVehicle`: the server's passenger list, else the passengers here.
+        let ridden = match &self.remote {
+            Some(r) => r.has_passengers(id),
+            None => self.has_seated_passengers(id),
+        };
+        // `Entity.isInWaterOrRain`: `isInWater`, else `isInRain`.
+        let wet = self.player.as_ref().is_some_and(|p| {
+            p.fluids.was_touching_water
+                || self.rain_falls_on(p.position, p.bounds().max_position().y)
+        });
+        (glowing, ridden, wet)
     }
 
     /// The Shader Options page opened: the picked pack's options, screens and names.
@@ -644,6 +803,17 @@ impl Game<'_> {
     }
 
     fn mark_entity_part(&self, start: usize, name: &str, translucent: bool) {
+        if let Some(span) = self.entity_part_span(start, name, translucent) {
+            self.push_entity_span(span);
+        }
+    }
+
+    pub(super) fn entity_part_span(
+        &self,
+        start: usize,
+        name: &str,
+        translucent: bool,
+    ) -> Option<EntitySpan> {
         let id = match &self.pack_ids {
             Some(ids) => ids
                 .entities
@@ -651,15 +821,15 @@ impl Game<'_> {
                 .copied()
                 .unwrap_or(ids.missing_entity),
             None if native_spans() => name_id(name),
-            None => return,
+            None => return None,
         };
-        self.push_span(start, "ENTITIES", id);
-        if let Some(last) = self.entity_spans.borrow_mut().last_mut() {
-            last.translucent = translucent;
-            if let Some(gpu) = self.skin_frame.borrow_mut().spans.last_mut() {
-                gpu.translucent = translucent;
-            }
-        }
+        Some(EntitySpan {
+            start: start as u32,
+            stage: sunrise_shaders::render_stage("ENTITIES"),
+            id,
+            translucent,
+            ..Default::default()
+        })
     }
 
     /// Starts a span for the block entity of block state `state`.
@@ -701,10 +871,13 @@ impl Game<'_> {
     /// Starts a span for mod model copies (`WorldDrawContext::draw_model_instances`) under a
     /// pack: block entities, as `BlockEntityDrawContext::model` draws the same model, with the
     /// id of a block the pack doesn't list, since no block owns them. Nothing without a pack.
-    pub(super) fn mark_model_copies(&self, start: usize) {
-        if let Some(ids) = &self.pack_ids {
-            self.push_span(start, "BLOCK_ENTITIES", ids.missing_block);
-        }
+    pub(super) fn model_copy_span(&self, start: usize) -> Option<EntitySpan> {
+        Some(EntitySpan {
+            start: start as u32,
+            stage: sunrise_shaders::render_stage("BLOCK_ENTITIES"),
+            id: self.pack_ids.as_ref()?.missing_block,
+            ..Default::default()
+        })
     }
 
     /// Starts the span of the local player's model; `hidden` in first person, where only a
@@ -737,13 +910,16 @@ impl Game<'_> {
     }
 
     fn push_span(&self, start: usize, stage: &str, id: i32) {
-        let mut spans = self.entity_spans.borrow_mut();
-        let span = EntitySpan {
+        self.push_entity_span(EntitySpan {
             start: start as u32,
             stage: sunrise_shaders::render_stage(stage),
             id,
             ..Default::default()
-        };
+        });
+    }
+
+    fn push_entity_span(&self, span: EntitySpan) {
+        let mut spans = self.entity_spans.borrow_mut();
         if self.pack_ids.is_some() && self.skinning() {
             let mut skin = self.skin_frame.borrow_mut();
             let gpu = EntitySpan {
@@ -1224,5 +1400,509 @@ mod native_pack_tests {
         assert_eq!(active_pack("golden_hour", &mods), "golden_hour");
         mods.installed[0].native = None;
         assert_eq!(active_pack(owned, &mods), owned);
+    }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "daily"]
+fn projectile_body_uses_its_own_shader_entity_id() {
+    use sunrise_client::projectiles::{Projectile, ProjectileKind};
+
+    super::native_entity_refs::tests::with_client_game(|game| {
+        game.pack_ids = Some(PackIds::with_entity_ids([
+            ("minecraft:snowball", 41),
+            ("minecraft:ominous_item_spawner", 42),
+            ("minecraft:arrow", 43),
+            ("minecraft:spectral_arrow", 44),
+        ]));
+        let arrow = |effect| ProjectileKind::Arrow {
+            base_damage: 2.0,
+            critical: false,
+            effect,
+        };
+        for kind in [
+            ProjectileKind::Snowball,
+            arrow(None),
+            arrow(Some(("minecraft:glowing", 200))),
+        ] {
+            game.creatures.projectiles.push(Projectile::new(
+                kind,
+                sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
+                None,
+            ));
+        }
+        game.entity_geometry(
+            glam::DVec3::new(0.5, 64.0, -4.5),
+            1.0,
+            None,
+            Vec::new(),
+            &mut Vec::new(),
+        );
+        let ids: Vec<_> = game
+            .entity_spans
+            .borrow()
+            .windows(2)
+            .filter(|span| span[0].start < span[1].start && (41..=44).contains(&span[0].id))
+            .map(|span| span[0].id)
+            .collect();
+        assert_eq!(ids, [41, 43, 44]);
+    });
+}
+
+#[cfg(test)]
+mod toggle_tests {
+    use super::{TogglePlan, plan_shader_toggle};
+    use sunrise_client::settings::Settings;
+
+    fn plan(pick: &str, last: &str, present: bool, active: bool) -> String {
+        match plan_shader_toggle(pick, last, false, |_| present, |_| active) {
+            TogglePlan::Off(name) => format!("off {name}"),
+            TogglePlan::On(name) => format!("on {name}"),
+            TogglePlan::HintModOff(name) => format!("mod-off {name}"),
+            TogglePlan::HintClearLast => "hint-clear".into(),
+            TogglePlan::Hint => "hint".into(),
+            TogglePlan::Noop => "noop".into(),
+        }
+    }
+
+    /// The key turns the picked pack off and remembers it, resumes it, and hints when there
+    /// is nothing to resume; a removed pack clears the memory instead of failing, and a pack
+    /// whose owning mod is off is reported instead of announced.
+    #[test]
+    fn the_toggle_turns_off_resumes_and_hints() {
+        assert_eq!(plan("A.zip", "", true, true), "off A.zip");
+        assert_eq!(plan("", "A.zip", true, true), "on A.zip");
+        assert_eq!(plan("", "", true, true), "hint");
+        assert_eq!(plan("", "A.zip", false, true), "hint-clear");
+        assert_eq!(
+            plan("", "native-frame_owner", true, false),
+            "mod-off native-frame_owner"
+        );
+    }
+
+    /// The developer override wins over the pick: the key does nothing.
+    #[test]
+    fn the_developer_override_makes_the_toggle_a_noop() {
+        for (pick, last) in [("A.zip", ""), ("", "A.zip"), ("", "")] {
+            assert!(
+                matches!(
+                    plan_shader_toggle(pick, last, true, |_| true, |_| true),
+                    TogglePlan::Noop
+                ),
+                "pick {pick:?}, last {last:?}"
+            );
+        }
+    }
+
+    /// One shared pick: the menu's choice and the key's write the same fields, so turning
+    /// off by either keeps the last non-empty pick for the key to resume.
+    #[test]
+    fn picking_and_unpicking_share_the_picks_memory() {
+        let mut s = Settings::default();
+        let pick_of = |s: &Settings| {
+            (
+                s.sunrise.shader_pack.clone(),
+                s.extras.last_shader_pack.clone(),
+            )
+        };
+        s.set_shader_pick("A.zip");
+        assert_eq!(pick_of(&s), ("A.zip".into(), "A.zip".into()));
+        // Picking another pack while turned off by the key forgets the older one.
+        s.set_shader_pick("");
+        s.set_shader_pick("B.zip");
+        assert_eq!(pick_of(&s), ("B.zip".into(), "B.zip".into()));
+        // Unpicking by hand keeps the memory, as the key's turning off does.
+        s.set_shader_pick("");
+        assert_eq!(pick_of(&s), ("".into(), "B.zip".into()));
+    }
+
+    /// A rapid double press ends where a single one does: off keeps the memory, on takes it
+    /// back, and the loader (not the key) owns reinstalling the pack.
+    #[test]
+    fn a_rapid_double_press_restores_the_pick() {
+        let mut s = Settings::default();
+        s.set_shader_pick("sunrise:warm");
+        s.set_shader_pick("");
+        assert_eq!(
+            (
+                s.sunrise.shader_pack.as_str(),
+                s.extras.last_shader_pack.as_str()
+            ),
+            ("", "sunrise:warm")
+        );
+        s.set_shader_pick(&s.extras.last_shader_pack.clone());
+        assert_eq!(
+            (
+                s.sunrise.shader_pack.as_str(),
+                s.extras.last_shader_pack.as_str()
+            ),
+            ("sunrise:warm", "sunrise:warm")
+        );
+    }
+}
+
+#[cfg(test)]
+mod player_status_tests {
+    use super::Game;
+    use std::sync::Arc;
+    use sunrise_client::{
+        chunk::Chunk,
+        effects::EffectInstance,
+        motion::{MotionWorld, PlayerMotion},
+    };
+    use sunrise_core::geometry::Vec3;
+
+    /// The window's player standing at (0.5, 64, 0.5) on the empty chunks around it
+    /// (`EntityFluidInteraction.update` needs the chunks around the box loaded as well).
+    fn stand_player(game: &mut Game<'_>) {
+        for chunk in [(-1, -1), (-1, 0), (0, -1), (0, 0)] {
+            game.world
+                .chunks
+                .insert(chunk, Arc::new(Chunk::empty(chunk.0, chunk.1)));
+        }
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    }
+
+    /// Plains in every quart `BiomeManager.getBiome` can pick for the player's feet and head
+    /// blocks, (0, 64, 0) and (0, 65, 0): the eight corners of the quart around (block - 2),
+    /// (-1, 15, -1), which reach into the three neighbouring chunks. Then rain starts (`true`)
+    /// or stops.
+    fn rain_on_the_player(game: &mut Game<'_>, raining: bool) {
+        let plains = game.res.biomes().id("minecraft:plains");
+        let bottom = game.world.bottom_y() >> 2;
+        for x in [-1, 0] {
+            for y in [15, 16] {
+                for z in [-1, 0] {
+                    let chunk = game.world.chunks.get_mut(&(x >> 2, z >> 2)).unwrap();
+                    Arc::make_mut(chunk).set_biome_cell(x, y - bottom, z, plains);
+                }
+            }
+        }
+        game.world.weather.raining = raining;
+        game.world.weather.settle_levels();
+    }
+
+    /// The player booleans only custom uniforms read follow the window's player (spec 3.4):
+    /// `LivingEntity.isAlive`, `Entity.isCurrentlyGlowing` (the Glowing effect),
+    /// `Entity.isInLava`, `Entity.isVehicle` and `Entity.isInWaterOrRain`.
+    #[test]
+    #[ignore = "daily"]
+    fn pack_status_follows_the_player() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            stand_player(game);
+            crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
+            game.install_live_features();
+
+            let status = game.pack_player_status();
+            assert!(status.alive);
+            assert!(!status.glowing && !status.in_lava && !status.ridden && !status.wet);
+
+            // Rain over the player's open plains column, and none once it stops.
+            rain_on_the_player(game, true);
+            assert!(game.pack_player_status().wet, "rain");
+            rain_on_the_player(game, false);
+            assert!(!game.pack_player_status().wet);
+            game.player.as_mut().unwrap().fluids.was_touching_water = true;
+            assert!(game.pack_player_status().wet, "water");
+            game.player.as_mut().unwrap().fluids.was_touching_water = false;
+
+            game.potions
+                .effects
+                .add(EffectInstance::new("glowing", 200, 0));
+            assert!(game.pack_player_status().glowing);
+
+            let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let mut rider = sunrise_client::mobs::Mob::new(42, pig, Vec3::new(0.5, 65.8, 0.5), 0.0);
+            rider.extra.mount = Some(20);
+            game.mobs.push(rider);
+            assert!(game.pack_player_status().ridden);
+            // `LivingEntity.die` doesn't dismount: a dying rider rides until it is removed.
+            game.mobs[0].health = 0.0;
+            assert!(
+                game.pack_player_status().ridden,
+                "a dying rider still rides"
+            );
+            game.mobs[0].removed = true;
+            assert!(!game.pack_player_status().ridden, "a removed rider is gone");
+
+            let lava = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:lava")
+                .unwrap();
+            assert!(game.world.set_stored(0, 64, 0, lava));
+            let side = game_side!(game);
+            let mut world = MotionWorld {
+                side: &side,
+                entities: &[],
+                player: game.player.as_mut().unwrap(),
+                scene: &mut game.world,
+                assets: &game.pack.assets,
+                collision_binding: game.collision,
+                resources: game.motion,
+                health: &game.health_resources,
+                tag_items: None,
+                loop_context: &game.loop_context,
+                damage_hooks: &game.damage_hooks,
+                block_registries: None,
+            };
+            world.fluid_base_tick().unwrap();
+            assert!(game.pack_player_status().in_lava);
+
+            game.player
+                .as_mut()
+                .unwrap()
+                .set_health(0.0, false)
+                .unwrap();
+            assert!(!game.pack_player_status().alive);
+        });
+    }
+
+    /// A frame's player booleans only read the level: on a LAN host in the rain, the particles,
+    /// sounds and spill queued for the next level access stay queued.
+    #[test]
+    #[ignore = "daily"]
+    fn pack_status_leaves_queued_effects_alone() {
+        use sunrise_client::particles::{ParticleOptions, ParticleType};
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            stand_player(game);
+            crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
+            game.install_live_features();
+            let (hub, _near, _far) =
+                crate::game::lan_particles::tests::test_hub("PackStatusTest", Vec::new(), None);
+            game.lan = Some(crate::game::lan::LanHost::for_test(hub));
+            let at = [0.5, 64.0, 0.5];
+            game.creatures
+                .lan_particles
+                .push(crate::game::lan_particles::QueuedParticle {
+                    dimension: "minecraft:overworld",
+                    options: ParticleOptions::simple(ParticleType::Flame),
+                    state: None,
+                    at,
+                    spread: [0.0; 3],
+                    speed: [0.0; 3],
+                    count: 1,
+                    randomization: 0,
+                });
+            game.creatures
+                .lan_sounds
+                .push(crate::game::creatures::NativeSound {
+                    dimension: "minecraft:overworld",
+                    sound: "minecraft:entity.pig.ambient".into(),
+                    inline_range: None,
+                    at,
+                    source: 0,
+                    volume: 1.0,
+                    pitch: 1.0,
+                    seed: 0,
+                    except: None,
+                    entity: None,
+                    skip_hooks: false,
+                });
+            game.spill.orbs.push((at, 1, 0));
+            rain_on_the_player(game, true);
+
+            assert!(game.pack_player_status().wet, "rain");
+            assert_eq!(game.creatures.lan_particles.len(), 1, "particles");
+            assert_eq!(game.creatures.lan_sounds.len(), 1, "sounds");
+            assert_eq!(game.spill.orbs.len(), 1, "spill");
+            game.lan = None;
+        });
+    }
+
+    /// On a server's client the player booleans follow what the server sent:
+    /// `Entity.isCurrentlyGlowing` is shared flag 6 alone (a client never asks the Glowing
+    /// effect), `Entity.isVehicle` the passenger list of `SetPassengers`, and the rain the
+    /// chunks and weather it was sent.
+    #[test]
+    #[ignore = "daily"]
+    fn pack_status_on_a_server_follows_what_it_sent() {
+        use crate::game::{
+            native_client_session::tests::logged_client,
+            native_entity_refs::tests::with_client_game,
+        };
+        use sunrise_protocol::{
+            entity_data::{Value, serializer},
+            packets::play::{self, Clientbound as C},
+        };
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            let own = game.remote.as_ref().unwrap().entity_id;
+            stand_player(game);
+            let flags = |game: &mut Game<'_>, flags: i8| {
+                game.handle_packet(C::SetEntityData(play::SetEntityData {
+                    id: own,
+                    values: vec![(0, serializer::BYTE, Value::Byte(flags))],
+                }))
+                .unwrap();
+            };
+            assert!(!game.pack_player_status().glowing);
+            flags(game, 0x40);
+            assert!(game.pack_player_status().glowing, "flag 6");
+            flags(game, 0);
+            game.potions
+                .effects
+                .add(EffectInstance::new("glowing", 200, 0));
+            assert!(
+                !game.pack_player_status().glowing,
+                "the effect without flag 6"
+            );
+            flags(game, 0x40);
+            assert!(game.pack_player_status().glowing);
+            flags(game, 0);
+            assert!(!game.pack_player_status().glowing, "flag 6 cleared");
+
+            let kind = |game: &Game<'_>, name: &str| {
+                let remote = game.remote.as_ref().unwrap();
+                let types = remote.builtin.get("minecraft:entity_type").unwrap();
+                types.id(name).unwrap()
+            };
+            // A pig, which the client seats as well, and a text display, which servers hang
+            // over a player's head and only the server's list holds.
+            for (id, name) in [(77, "minecraft:pig"), (78, "minecraft:text_display")] {
+                let kind = kind(game, name);
+                game.handle_packet(C::AddEntity(play::AddEntity {
+                    id,
+                    uuid: id as u128,
+                    kind,
+                    position: [0.5, 65.8, 0.5],
+                    velocity: [0.0; 3],
+                    pitch: 0,
+                    yaw: 0,
+                    head_yaw: 0,
+                    data: 0,
+                }))
+                .unwrap();
+                assert!(!game.pack_player_status().ridden);
+                game.handle_packet(C::SetPassengers(play::SetPassengers {
+                    vehicle: own,
+                    passengers: vec![id],
+                }))
+                .unwrap();
+                assert!(game.pack_player_status().ridden, "{name} listed");
+                game.handle_packet(C::SetPassengers(play::SetPassengers {
+                    vehicle: own,
+                    passengers: Vec::new(),
+                }))
+                .unwrap();
+                assert!(!game.pack_player_status().ridden, "an empty list");
+            }
+
+            assert!(!game.pack_player_status().wet);
+            rain_on_the_player(game, true);
+            assert!(game.pack_player_status().wet, "rain");
+            rain_on_the_player(game, false);
+            assert!(!game.pack_player_status().wet);
+        });
+    }
+
+    /// A new `LocalPlayer` starts with default shared flags: after a login, and after a respawn
+    /// without `KEEP_ENTITY_DATA`, `Entity.isCurrentlyGlowing` is false until the server sets
+    /// flag 6 again; a respawn that keeps the data keeps it. `LivingEntity.isAlive` follows the
+    /// health the server sent, and the new player is alive.
+    #[test]
+    #[ignore = "daily"]
+    fn pack_status_starts_over_with_a_new_local_player() {
+        use crate::game::game_tests::tests::server_game;
+        use sunrise_protocol::{
+            entity_data::{Value, serializer},
+            packets::play::{self, Clientbound as C},
+        };
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+        let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+        game.connect_local(pipe, "Steve").unwrap();
+        let spawn = || play::SpawnInfo {
+            dimension_type: 0,
+            dimension: "minecraft:overworld".into(),
+            seed: 1,
+            game_type: 0,
+            previous_game_type: None,
+            debug: false,
+            flat: false,
+            last_death: None,
+            portal_cooldown: 0,
+            sea_level: 63,
+        };
+        let login = |game: &mut Game<'_>| {
+            game.handle_packet(C::Login(play::Login {
+                player_id: 7,
+                hardcore: false,
+                levels: vec!["minecraft:overworld".into()],
+                max_players: 20,
+                chunk_radius: 8,
+                simulation_distance: 8,
+                reduced_debug_info: false,
+                show_death_screen: true,
+                limited_crafting: false,
+                spawn: spawn(),
+                online_mode: false,
+                enforces_secure_chat: false,
+            }))
+            .unwrap();
+        };
+        let mut teleport = 0;
+        let mut place = |game: &mut Game<'_>| {
+            teleport += 1;
+            game.handle_packet(C::PlayerPosition(play::PlayerPosition {
+                teleport,
+                position: [0.5, 65.0, 0.5],
+                delta: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                relatives: 0,
+            }))
+            .unwrap();
+        };
+        let glow = |game: &mut Game<'_>| {
+            game.handle_packet(C::SetEntityData(play::SetEntityData {
+                id: 7,
+                values: vec![(0, serializer::BYTE, Value::Byte(0x40))],
+            }))
+            .unwrap();
+        };
+        let respawn = |game: &mut Game<'_>, keep| {
+            game.handle_packet(C::Respawn(play::Respawn {
+                spawn: spawn(),
+                keep,
+            }))
+            .unwrap();
+        };
+        login(&mut game);
+        place(&mut game);
+        let status = game.pack_player_status();
+        assert!(status.alive && !status.glowing, "{status:?}");
+        glow(&mut game);
+        assert!(game.pack_player_status().glowing, "flag 6");
+
+        respawn(&mut game, 2);
+        place(&mut game);
+        assert!(
+            game.pack_player_status().glowing,
+            "KEEP_ENTITY_DATA keeps flag 6"
+        );
+
+        game.handle_packet(C::SetHealth(play::SetHealth {
+            health: 0.0,
+            food: 20,
+            saturation: 5.0,
+        }))
+        .unwrap();
+        assert!(!game.pack_player_status().alive, "dead");
+        respawn(&mut game, 0);
+        place(&mut game);
+        let status = game.pack_player_status();
+        assert!(!status.glowing, "a respawn without the data resets flag 6");
+        assert!(status.alive, "the new player is alive");
+
+        glow(&mut game);
+        login(&mut game);
+        place(&mut game);
+        assert!(!game.pack_player_status().glowing, "a login resets flag 6");
     }
 }

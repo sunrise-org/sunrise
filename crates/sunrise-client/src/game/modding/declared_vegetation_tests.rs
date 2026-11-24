@@ -63,12 +63,14 @@ impl Hooks for Garden {
         {
             let mut block = mod_api::Block::new(id, template);
             block.properties.vegetation = true;
-            event.blocks.push(block);
+            event.register(block).unwrap();
         }
-        event.blocks.push(mod_api::Block::new(
-            "garden:ordinary_glass",
-            "minecraft:glass",
-        ));
+        event
+            .register(mod_api::Block::new(
+                "garden:ordinary_glass",
+                "minecraft:glass",
+            ))
+            .unwrap();
     }
 }
 
@@ -121,9 +123,11 @@ fn declared_vegetation_places_and_breaks_independently_of_its_template() {
                         face: Direction::Up,
                         hit: Vec3::new(5.5, 65.0, 5.5),
                         inside: false,
-                        yaw: 0.0,
-                        pitch: 0.0,
-                        sneaking: false,
+                        source: sunrise_world::level::PlacementSource::Player {
+                            yaw: 0.0,
+                            pitch: 0.0,
+                            sneaking: false,
+                        },
                         item: plant.into(),
                         can_use_game_master_blocks: false,
                     };
@@ -183,7 +187,7 @@ fn declared_vegetation_places_and_breaks_independently_of_its_template() {
                     .chunks
                     .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
                 game.sync_tick_chunks();
-                game.set_mode_id(0);
+                game.set_local_mode(sunrise_client::command::args::GameMode::Survival);
                 let hit = crate::game::Hit {
                     pos: [5, 64, 5],
                     face: [0, 1, 0],

@@ -29,7 +29,7 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
             .unwrap()
             .clone();
         let mut zombie = Mob::new(12, kind, Vec3::new(3.5, 65.0, 3.5), 270.0);
-        zombie.on_ground = true;
+        zombie.ground.on_ground = true;
         game.mobs.push(zombie);
         let mob = game.mob(game.entity(12).unwrap()).unwrap();
         assert_eq!(

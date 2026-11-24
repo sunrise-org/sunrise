@@ -1,15 +1,20 @@
 //! Named timings (wall and thread CPU) of a frame or tick, on with `SUNRISE_SPIKES` or while a capture records; the slow ones go to the slow ring, not as span lists to the log.
 use std::{
     cell::{Cell, RefCell},
+    marker::PhantomData,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+const ONGOING: u8 = 1;
+const FRAME: u8 = 2;
 thread_local! {
     static SPANS: RefCell<Vec<Span>> = const { RefCell::new(Vec::new()) };
-    /// Spans recorded on this thread alone, wall time only ([`record_here`]).
-    static HERE: Cell<bool> = const { Cell::new(false) };
+    /// Wall-only recording on this thread: the ongoing setting and the scoped frame override.
+    static HERE: Cell<u8> = const { Cell::new(0) };
+    /// Block-entity load writes and item-render entity visits in this raw-flight frame.
+    static BLOCK_ENTITY_WORK: Cell<[u64; 2]> = const { Cell::new([0; 2]) };
     /// How many timed spans the thread is inside: the next span's [`Span::depth`].
     static DEPTH: Cell<u8> = const { Cell::new(0) };
     /// What this thread's slowest steps were busy with since it last took them ([`note`]).
@@ -47,12 +52,74 @@ pub fn enabled() -> bool {
 /// what the render thread's slow frames spent their time in. The thread takes them every
 /// frame ([`take`]).
 pub fn record_here(on: bool) {
-    HERE.with(|h| h.set(on));
+    HERE.with(|h| {
+        h.set(if on {
+            h.get() | ONGOING
+        } else {
+            h.get() & !ONGOING
+        })
+    });
 }
-/// Whether this thread records spans: all of them on, or [`record_here`].
+
+/// Record wall time during a measured frame without changing the ongoing setting.
+pub fn record_frame() -> FrameRecording {
+    let previous = HERE.with(|h| h.replace(h.get() | FRAME) & FRAME);
+    if previous == 0 {
+        BLOCK_ENTITY_WORK.set([0; 2]);
+    }
+    FrameRecording {
+        previous,
+        _thread: PhantomData,
+    }
+}
+
+#[must_use = "frame recording ends when the guard is dropped"]
+pub struct FrameRecording {
+    previous: u8,
+    _thread: PhantomData<*const ()>,
+}
+
+impl FrameRecording {
+    /// Load writes and item-render entity visits recorded since the frame started.
+    pub fn block_entity_work(&self) -> [u64; 2] {
+        BLOCK_ENTITY_WORK.get()
+    }
+}
+
+/// Time a span only within a scoped recording for a raw flight.
+#[inline]
+pub fn raw_flight_guard(name: &'static str) -> Option<Guard> {
+    (HERE.get() & FRAME != 0).then(|| guard(name))
+}
+
+/// Count actual inserts or replacements during a column load, not incoming tag entries.
+#[inline]
+pub fn note_block_entity_loads(count: usize) {
+    if HERE.get() & FRAME != 0 {
+        let [loads, probes] = BLOCK_ENTITY_WORK.get();
+        BLOCK_ENTITY_WORK.set([loads + count as u64, probes]);
+    }
+}
+
+/// Count block entities visited in an item-render scan.
+#[inline]
+pub fn note_block_entity_item_visits(count: impl FnOnce() -> u64) {
+    if HERE.get() & FRAME != 0 {
+        let [loads, probes] = BLOCK_ENTITY_WORK.get();
+        BLOCK_ENTITY_WORK.set([loads, probes + count()]);
+    }
+}
+
+impl Drop for FrameRecording {
+    fn drop(&mut self) {
+        HERE.with(|h| h.set((h.get() & !FRAME) | self.previous));
+    }
+}
+
+/// Whether this thread records spans: globally, here, or for a timeline capture.
 #[inline]
 pub fn recording_here() -> bool {
-    ENABLED.load(Ordering::Relaxed) || HERE.with(Cell::get) || timeline::on()
+    ENABLED.load(Ordering::Relaxed) || timeline::on() || HERE.with(Cell::get) != 0
 }
 /// The thread's CPU time when spans are on for every thread (`SUNRISE_SPIKES`): spans recorded
 /// by `record_here` alone keep wall time only.
@@ -209,6 +276,42 @@ impl Laps {
         (*started, *cpu, *mark) = (now, now_cpu, recorded());
     }
 }
+/// Sum a repeated phase into one span for the tick breakdown.
+#[derive(Clone, Default)]
+pub struct SpanTotal {
+    wall: Duration,
+    cpu: Duration,
+    depth: Option<u8>,
+}
+
+impl SpanTotal {
+    pub fn start() -> Option<(Instant, Option<Duration>)> {
+        recording_here().then(|| (Instant::now(), cpu_if_enabled()))
+    }
+
+    pub fn add(&mut self, sample: Option<(Instant, Option<Duration>)>) {
+        if let Some((started, cpu)) = sample {
+            let elapsed = started.elapsed();
+            self.wall += elapsed;
+            self.cpu += cpu
+                .zip(cpu_if_enabled())
+                .map_or(elapsed, |(start, end)| end - start);
+            self.depth = Some(DEPTH.with(Cell::get));
+        }
+    }
+
+    pub fn record(self, name: &'static str) {
+        if let Some(depth) = self.depth {
+            push(Span {
+                name,
+                ms: self.wall.as_secs_f32() * 1000.0,
+                cpu_ms: self.cpu.as_secs_f32() * 1000.0,
+                depth,
+            });
+        }
+    }
+}
+
 /// The CPU time this thread has used, where the platform tells it: a tick
 /// with more wall time than CPU time waited (for a lock, or for a core on a
 /// busy machine).
@@ -733,6 +836,55 @@ mod tests {
         let names: Vec<&str> = notes.iter().map(|(_, w)| w.as_str()).collect();
         assert_eq!(names, ["b", "e", "c"]);
         assert!(super::take_notes().is_empty(), "taking them clears them");
+    }
+
+    #[test]
+    fn recording_one_frame_does_not_change_ongoing_recording() {
+        let _switch = spans_switch();
+        super::time("before", || ());
+        {
+            let _frame = super::record_frame();
+            super::time("frame", || ());
+        }
+        super::time("after", || ());
+        {
+            let _frame = super::record_frame();
+            super::record_here(true);
+        }
+        super::time("ongoing", || ());
+        super::record_here(false);
+        let names: Vec<_> = super::take_raw()
+            .into_iter()
+            .map(|span| span.name)
+            .collect();
+        assert_eq!(names, ["frame", "ongoing"]);
+    }
+
+    #[test]
+    fn block_entity_work_and_spans_are_scoped_to_raw_flight_frames() {
+        let _switch = spans_switch();
+        super::record_here(true);
+        assert!(super::raw_flight_guard("outside_flight").is_none());
+        super::note_block_entity_loads(19);
+        super::note_block_entity_item_visits(|| panic!("must not count outside a raw flight"));
+        {
+            let frame = super::record_frame();
+            {
+                let _load = super::raw_flight_guard("load_block_entities");
+                super::note_block_entity_loads(1);
+                super::note_block_entity_loads(3);
+            }
+            super::note_block_entity_item_visits(|| 64);
+            super::note_block_entity_item_visits(|| 81);
+            assert_eq!(frame.block_entity_work(), [4, 145]);
+        }
+        super::record_here(false);
+        assert_eq!(super::record_frame().block_entity_work(), [0; 2]);
+        let names: Vec<_> = super::take_raw()
+            .into_iter()
+            .map(|span| span.name)
+            .collect();
+        assert_eq!(names, ["load_block_entities"]);
     }
 
     /// Spans of one name add up, the slowest first; a span that waited keeps its small CPU time.

@@ -14,7 +14,6 @@ impl Game<'_> {
         self.lod_source_attempted = false;
         self.lod_observe.clear();
         self.lod_blue_map = None;
-        self.far_beacons.clear();
         self.lod_covered_at = None;
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_lods();
@@ -74,26 +73,18 @@ impl Game<'_> {
                 let root = home.join("server-terrain");
                 let dir = terrain::level_dir(&root, address, remote.hashed_seed, &remote.level);
                 self.lod_level = Some(remote.level.clone());
-                // Past them, the server's BlueMap, if the player named it or
-                // lets Sunrise look for it (on the BlueMap worker).
+                // Past them, the server's BlueMap, if the player named it.
                 let maps = root.join(terrain::server_folder(address)).join("BlueMap");
                 let settings = &self.settings.sunrise.blue_map;
-                let blue_map = sunrise_client::bluemap_detect::source(
-                    settings,
-                    address,
-                    &maps,
-                    std::time::SystemTime::now(),
-                )
-                .map(|source| {
-                    use sunrise_client::{bluemap, bluemap_detect::Source};
+                let blue_map = settings.server(address).map(|server| {
+                    use sunrise_client::bluemap;
                     // The map's address only at debug: logs land in crash reports.
                     log::info!("Sunrise: far terrain also draws {}'s BlueMap", remote.level);
-                    if let Source::Url { url, .. } = &source {
-                        log::debug!("Sunrise: BlueMap at {url}");
-                    }
-                    let map = Arc::new(bluemap::BlueMap::from_source(
-                        source,
+                    log::debug!("Sunrise: BlueMap at {}", server.url);
+                    let map = Arc::new(bluemap::BlueMap::new(
+                        &server.url,
                         &remote.level,
+                        server.maps.clone(),
                         maps,
                         settings.radius_blocks(),
                         bluemap::Palette::from_game(self.pack.assets.registry, self.res.biomes()),
@@ -102,35 +93,7 @@ impl Game<'_> {
                     map
                 });
                 self.lod_blue_map = blue_map.clone();
-                // And the player's Bobby cache of the level, only read.
-                let bobby = terrain::bobby_level_dir(
-                    &terrain::minecraft_dir().join(".bobby"),
-                    address,
-                    remote.hashed_seed,
-                    &remote.level,
-                )
-                .map(|bobby| {
-                    log::info!(
-                        "Sunrise: far terrain also reads Bobby's chunks of {}",
-                        remote.level
-                    );
-                    let registry = self.pack.assets.registry;
-                    let biomes = self.res.biomes().clone();
-                    let dimension = &remote.dimension;
-                    let layout = sunrise_client::chunk::ColumnLayout::of_level(
-                        dimension.min_y,
-                        dimension.height,
-                    );
-                    let sky_light = dimension.has_skylight;
-                    let decode: terrain::DecodeChunk =
-                        Box::new(move |root: &sunrise_core::nbt::NamedTag| {
-                            sunrise_client::save::decode_lit(
-                                root, registry, &biomes, layout, sky_light,
-                            )
-                        });
-                    terrain::Bobby::new(bobby, decode, self.res.facts())
-                });
-                terrain::ServerTerrain::with_bobby(dir, blue_map, bobby) as _
+                terrain::ServerTerrain::new(dir, blue_map) as _
             }),
             _ => Some(self.streaming.lod_source()),
         };
@@ -140,15 +103,21 @@ impl Game<'_> {
         }
     }
     pub(super) fn update_world(&mut self) {
-        if self.live_world_session_failed() {
-            return;
+        if let Err(e) = self.update_world_with_eviction(false) {
+            log::warn!("Sunrise: failed to save unloaded chunks or entities: {e}");
         }
+    }
+
+    /// A forced idle sweep waits for its writes before removing resident data.
+    pub(super) fn update_world_with_eviction(&mut self, wait: bool) -> Result<()> {
+        self.admit_live_world_session()?;
         if let Err(e) = sunrise_client::spans::time("poll_remote", || self.poll_remote()) {
             log::warn!("Sunrise: {e}");
         }
         if let Err(e) = self.advance_studio_replay() {
             log::warn!("Sunrise Studio replay: {e}");
         }
+        self.poll_remote_light();
         // The renderer laid translucent quads out again (a shader pack's flat terrain came
         // or went) and dropped every section and far tile: meshed again, as for a new one.
         if self
@@ -175,19 +144,17 @@ impl Game<'_> {
             }
         }
         self.observe_light_edits();
-        self.ask_edited_light_emission();
-        if let (Some(map), Some(p), Some(lod)) = (&self.lod_blue_map, &self.player, &mut self.lod) {
-            map.set_center(p.position.x.floor() as i32, p.position.z.floor() as i32);
+        self.ask_edited_light_emission(self.dim);
+        let camera_pos = self.visual_camera_position();
+        if let (Some(map), Some(pos), Some(lod)) = (&self.lod_blue_map, camera_pos, &mut self.lod) {
+            map.set_center(pos[0].floor() as i32, pos[2].floor() as i32);
             for change in map.take_changed() {
                 lod.refresh(change.area, change.widths);
             }
         }
-        if let Some(p) = &self.player {
-            self.streaming.center = (
-                (p.position.x.floor() as i32) >> 4,
-                (p.position.z.floor() as i32) >> 4,
-            );
-            self.streaming.center_y = p.position.y.floor() as i32;
+        if let Some(pos) = camera_pos {
+            self.streaming.center = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+            self.streaming.center_y = pos[1].floor() as i32;
         }
         sunrise_client::spans::time("tick_pregen", || self.tick_pregen());
         // A headless game has nothing to draw sections with: like a server's, they aren't
@@ -196,40 +163,148 @@ impl Game<'_> {
             self.streaming.mesh = self.renderer.is_some();
         }
         if self.defer_chunk_disk_save() {
-            return;
+            return if wait {
+                self.admit_level_save()
+            } else {
+                Ok(())
+            };
+        }
+        if self.is_logical_server() {
+            self.prune_disabled_async_chunk_requests();
         }
         let areas = self.streaming.extra.len();
+        // The configuration connection is not a guest and owns no player area.
+        // `extra` finishes chunks through radius + 1, even with no players.
+        self.streaming.extra.extend(
+            self.tickets
+                .spawn_areas()
+                .map(|(center, radius)| (center, radius - 1)),
+        );
+        let dim = self.dim;
+        if let Some(host) = &self.lan {
+            self.streaming.extra.extend(
+                host.hub
+                    .lan
+                    .configuration_tasks
+                    .loading_spawns(dim.id())
+                    .filter(|&center| !self.tickets.holds_player_spawn(center))
+                    .map(|center| {
+                        (
+                            center,
+                            sunrise_client::ticket_levels::PLAYER_SPAWN_RADIUS - 1,
+                        )
+                    }),
+            );
+        }
+        self.streaming.extra.extend(
+            self.server_trips
+                .iter()
+                .flat_map(|trip| trip.spawn_destination_areas(dim)),
+        );
         let waiting = std::mem::take(&mut self.spawn_wait);
         self.streaming
             .extra
             .extend(waiting.into_iter().map(|chunk| (chunk, 0)));
+        // `Level.getChunk`'s tickets keep their columns until they expire.
+        self.streaming.hold_unknown_tickets();
         self.streaming.upload_backlog = self.pending_uploads.len();
-        let plan = sunrise_client::spans::time("streaming_plan", || {
+        let mut plan = sunrise_client::spans::time("streaming_plan", || {
             let mut step = self.streaming.begin_plan_update(&mut self.world);
             loop {
                 match step {
                     sunrise_client::streaming::PlanStep::Ready(plan) => break plan,
                     sunrise_client::streaming::PlanStep::Save { chunk, resume } => {
-                        self.native_late_full_chunk_snapshot(&chunk);
-                        self.streaming.save_finished(chunk);
+                        self.save_late_full_chunk(chunk);
                         step = self.streaming.resume_plan_update(&mut self.world, resume);
                     }
                 }
             }
         });
-        let (commit, protos) = if self.save.live_world_barrier_required() {
-            match self.checkpoint_live_world_streaming(plan) {
-                Ok(admitted) => admitted,
-                Err(plan) => self.streaming.prepare_commit(&mut self.world, plan),
-            }
+        if wait {
+            // Like PersistentEntitySectionManager.storeChunkSections, a pending load must
+            // complete before its live entities can replace the stored ones.
+            plan.retain_unloading_columns(|key| !self.world.entities_pending.contains(key));
+        }
+        let (commit, protos, saved, unloaded_columns) = if self.save.live_world_barrier_required()
+        {
+            let (entities, refused) = if plan.unloading_columns().is_empty() {
+                (Vec::new(), HashSet::new())
+            } else {
+                self.unloading_entity_snapshots(plan.unloading_columns())
+            };
+            plan.retain_unloading_columns(|key| {
+                !refused.contains(key) && !self.world.entities_pending.contains(key)
+            });
+            let (commit, protos, columns) = match self.checkpoint_live_world_streaming(plan, wait) {
+                Ok((commit, protos)) => {
+                    let columns = commit.unloaded_columns().collect();
+                    (commit, protos, columns)
+                }
+                Err(mut plan) => {
+                    let (commit, protos) =
+                        self.streaming.prepare_commit(&mut self.world, &mut plan);
+                    (commit, protos, plan.unloading_columns().clone())
+                }
+            };
+            let counts = if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
+                entities.into_iter().map(|(key, rows)| (key, rows.len())).collect()
+            } else {
+                Vec::new()
+            };
+            (commit, protos, Ok(counts), columns)
         } else {
-            self.streaming.prepare_commit(&mut self.world, plan)
+            let saved = (|| -> Result<_> {
+                let keys = plan.unloading_columns();
+                if keys.is_empty() {
+                    return Ok(Vec::new());
+                }
+                self.admit_level_save()?;
+                let chunks = self.with_entities(
+                    keys.iter()
+                        .filter(|key| self.world.modified.contains(key))
+                        .filter_map(|key| self.world.chunks.get(key)),
+                );
+                let (entities, refused_entities) = self.unloading_entity_snapshots(keys);
+                let mut counts = Vec::new();
+                if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
+                    counts.extend(entities.iter().map(|(key, rows)| (*key, rows.len())));
+                }
+                if wait {
+                    let refused = self.save.save_eviction(
+                        &chunks,
+                        self.pack.assets.registry,
+                        world_biomes!(self),
+                        entities,
+                    )?;
+                    plan.retain_unloading_columns(|key| {
+                        !refused.contains(key) && !refused_entities.contains(key)
+                    });
+                } else {
+                    if !chunks.is_empty() {
+                        self.save.save_later(
+                            &chunks,
+                            self.pack.assets.registry,
+                            world_biomes!(self),
+                        )?;
+                    }
+                    self.save.save_entities_later(entities)?;
+                    plan.retain_unloading_columns(|key| !refused_entities.contains(key));
+                }
+                Ok(counts)
+            })();
+            if saved.is_err() {
+                plan.keep_columns();
+                self.streaming.force_unload_sweep();
+            }
+            let (commit, protos) = self.streaming.prepare_commit(&mut self.world, &mut plan);
+            (commit, protos, saved, plan.unloading_columns().clone())
         };
-        self.native_proto_snapshots(&protos);
         self.streaming.submit_protos(protos);
-        let (uploads, unloaded) = sunrise_client::spans::time("streaming", || {
+        let (mut uploads, unloaded) = sunrise_client::spans::time("streaming", || {
             self.streaming.complete_commit(&mut self.world, commit)
         });
+        // Sections chosen to mesh wait for the mods' `section_visibility` (none without a mod).
+        self.prepare_section_visibility();
         self.streaming.extra.truncate(areas);
         // The viewed levels' meshing, queued after the player's level's (nothing while no view
         // names one).
@@ -241,40 +316,19 @@ impl Game<'_> {
                 .viewed
                 .mesh_frame(|| streaming.viewed_mesh_source(), std::time::Instant::now());
         }
-        let dirty: Vec<_> = unloaded
-            .iter()
-            .filter(|c| self.world.modified.contains(&(c.x, c.z)))
-            .cloned()
-            .collect();
-        let modified = sunrise_client::spans::time("with_entities", || self.with_entities(&dirty));
-        self.native_full_chunk_snapshots(&modified);
-        if !modified.is_empty() {
-            match sunrise_client::spans::time("save_chunks", || {
-                self.save
-                    .save_later(&modified, self.pack.assets.registry, world_biomes!(self))
-            }) {
-                // The writer's pending snapshots now hold the dirty data until sync.
-                Ok(_) => {
-                    for chunk in &dirty {
-                        self.world.modified.remove(&(chunk.x, chunk.z));
-                    }
-                }
-                Err(e) => log::warn!("Sunrise: failed to save unloaded chunks: {e}"),
-            }
-        }
         sunrise_client::spans::time("spawn_fresh_chunks", || self.spawn_fresh_chunks());
-        self.ask_loaded_light_emission();
+        self.ask_loaded_light_emission(0);
         // Vanilla saves the chunk before its unload hook and drops its block entities afterwards.
         sunrise_client::spans::time("mods_chunks_changed", || {
             self.native_chunks_loaded();
             self.native_chunks_unloaded(&unloaded);
         });
-        for chunk in &unloaded {
-            self.world.modified.unloaded(&(chunk.x, chunk.z));
+        if self.is_logical_server() {
+            self.process_async_chunk_requests();
         }
         if let Some(lod) = &mut self.lod {
             self.lod_observe
-                .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
+                .extend(uploads.iter().map(|upload| (upload.key.0, upload.key.2)));
             for chunk in &unloaded {
                 self.lod_observe.remove(&(chunk.x, chunk.z));
             }
@@ -295,20 +349,27 @@ impl Game<'_> {
                 }
             });
         }
-        for chunk in &unloaded {
-            self.world.modified.unloaded(&(chunk.x, chunk.z));
+        for key in &unloaded_columns {
+            self.world.modified.remove(key);
+            self.world.modified.unloaded(key);
         }
-        sunrise_client::spans::time("unload_entities", || self.unload_entities(&unloaded));
-        if !unloaded.is_empty() {
-            let _span = sunrise_client::spans::guard("unload_block_entities");
-            let gone: sunrise_client::fast_hash::FxHashSet<(i32, i32)> =
-                unloaded.iter().map(|c| (c.x, c.z)).collect();
-            self.world
-                .block_entities
-                .unload(|p| gone.contains(&(p.0 >> 4, p.2 >> 4)));
+        if !unloaded_columns.is_empty() {
+            self.remove_unloading_entities(&unloaded_columns);
+            if let Ok(counts) = &saved {
+                for &(chunk, count) in counts {
+                    if unloaded_columns.contains(&chunk) {
+                        self.native_entities_unload(self.dim.id(), [chunk.0, chunk.1], count);
+                    }
+                }
+            }
+            sunrise_client::spans::time("unload_block_entities", || {
+                for &column in &unloaded_columns {
+                    self.world.block_entities.unload_column(column);
+                }
+            });
             self.world
                 .block_names
-                .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
+                .retain(|p, _| !unloaded_columns.contains(&(p.0 >> 4, p.2 >> 4)));
         }
         // LevelChunk.registerTickContainerInLevel: a chunk that became
         // resident has its tick containers before a command can schedule into
@@ -337,20 +398,27 @@ impl Game<'_> {
         // `self.renderer.as_mut()` below borrows self mutably for the rest of
         // this function. Cheap: trigonometry on one angle, or None when the
         // view is not zoomed.
-        let lod_aim = self
-            .player
-            .as_ref()
-            .map(|p| [p.position.x, p.position.y, p.position.z])
-            .and_then(|camera| self.lod_aim(camera));
+        let lod_aim = camera_pos.and_then(|camera| self.lod_aim(camera));
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.sunrise;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
+            let mut raw_flight = self.flight.as_mut().filter(|flight| flight.raw);
+            let vertex_bytes = |mesh: &sunrise_client::mesher::SectionMesh| {
+                ((mesh.solid.len() + mesh.translucent.len())
+                    * std::mem::size_of::<sunrise_client::mesher::TerrainVertex>())
+                    as u64
+            };
             // The meshes, once copied, are freed by a worker (`Streaming::free`).
             if !budgeted && self.pending_uploads.is_empty() && uploads.len() <= AUTO_UPLOADS_AT_ONCE
             {
                 sunrise_client::spans::time("upload", || {
-                    for (key, mesh) in &uploads {
-                        renderer.upload(*key, mesh);
+                    for upload in &uploads {
+                        if self.streaming.can_publish_mesh(&self.world, upload) {
+                            renderer.upload(upload.key, &upload.mesh);
+                            if let Some(flight) = raw_flight.as_deref_mut() {
+                                flight.note_mesh_uploads(1, vertex_bytes(&upload.mesh));
+                            }
+                        }
                     }
                 });
                 self.streaming.free(uploads);
@@ -360,31 +428,38 @@ impl Game<'_> {
                 // mesh of a waiting section replaces it, and sections of
                 // chunks no longer loaded are dropped.
                 let pending = &mut self.pending_uploads;
+                let order_span = sunrise_client::spans::guard("order_uploads");
                 let fresh: sunrise_client::fast_hash::FxHashSet<(i32, i32, i32)> =
-                    uploads.iter().map(|(k, _)| *k).collect();
-                let chunks = &self.world.chunks;
-                let loaded = |k: &(i32, i32, i32)| chunks.contains_key(&(k.0, k.2));
+                    uploads.iter().map(|upload| upload.key).collect();
+                let current = |upload: &sunrise_client::streaming::MeshUpload| {
+                    self.world
+                        .chunks
+                        .contains_key(&(upload.key.0, upload.key.2))
+                        && self.streaming.can_publish_mesh(&self.world, upload)
+                };
+                // Filtering leaves the surviving waiting run in the same order.
                 let mut spent: Vec<_> = pending
-                    .extract_if(.., |(k, _)| fresh.contains(k) || !loaded(k))
+                    .extract_if(.., |upload| fresh.contains(&upload.key) || !current(upload))
                     .collect();
-                for upload in uploads {
-                    if loaded(&upload.0) {
-                        pending.push(upload);
-                    } else {
-                        spent.push(upload);
-                    }
-                }
+                spent.extend(uploads.extract_if(.., |upload| !current(upload)));
                 let centre = self.streaming.center;
                 // Section keys count from the world's bottom (`origin`'s min_y + y * 16).
                 let bottom = f64::from(self.world.bottom_y());
-                let cam_y = self
-                    .player
-                    .as_ref()
-                    .map_or(4, |p| ((p.position.y - bottom) / 16.0).floor() as i32);
-                let far = |k: &(i32, i32, i32)| {
-                    (k.0 - centre.0).pow(2) + (k.1 - cam_y).pow(2) + (k.2 - centre.1).pow(2)
+                let cam_y = camera_pos.map_or(4, |pos| ((pos[1] - bottom) / 16.0).floor() as i32);
+                let far = |k: &(i32, i32, i32)| section_distance_sq(*k, centre, cam_y);
+                let order = Some((centre, cam_y));
+                let priority = |upload: &sunrise_client::streaming::MeshUpload| {
+                    std::cmp::Reverse(far(&upload.key))
                 };
-                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                let work = order_uploads(
+                    pending,
+                    &mut uploads,
+                    &mut self.pending_uploads_merge,
+                    self.pending_uploads_order == order,
+                    priority,
+                );
+                self.pending_uploads_order = order;
+                drop(order_span);
                 let (limit, budget) = if budgeted {
                     (
                         g.chunk_updates as usize,
@@ -401,25 +476,28 @@ impl Game<'_> {
                 let auto = (!budgeted).then(|| self.upload_pace.budget(pending.len(), arriving));
                 let started = Instant::now();
                 let upload_span = sunrise_client::spans::guard("upload_queue");
-                while let Some((_, mesh)) = pending.last() {
+                while let Some(upload) = pending.last() {
+                    let mesh = &upload.mesh;
                     if auto.is_some_and(|time| count > 0 && started.elapsed() >= time) {
                         break;
                     }
-                    let size = ((mesh.solid.len() + mesh.translucent.len())
-                        * std::mem::size_of::<sunrise_client::mesher::TerrainVertex>())
-                        as u64;
+                    let size = vertex_bytes(mesh);
                     if (limit > 0 && count >= limit)
                         || (budget > 0 && bytes > 0 && bytes + size > budget)
                     {
                         break;
                     }
-                    let (key, mesh) = pending.pop().expect("checked above");
-                    renderer.upload(key, &mesh);
-                    spent.push((key, mesh));
+                    let upload = pending.pop().expect("checked above");
+                    renderer.upload(upload.key, &upload.mesh);
+                    spent.push(upload);
                     count += 1;
                     bytes += size;
                 }
                 drop(upload_span);
+                if let Some(flight) = raw_flight {
+                    flight.note_upload_queue_work(work);
+                    flight.note_mesh_uploads(count, bytes);
+                }
                 self.streaming.free(spent);
             }
             renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
@@ -459,7 +537,8 @@ impl Game<'_> {
                 let detail = self.remote.as_ref().map_or(self.streaming.radius, |r| {
                     self.streaming.radius.min(r.sent_radius())
                 });
-                let camera = [player.position.x, player.position.y, player.position.z];
+                let camera =
+                    camera_pos.unwrap_or([player.position.x, player.position.y, player.position.z]);
                 let meshes = sunrise_client::spans::time("lod_update", || {
                     lod.update(camera, detail, lod_distance, covered, lod_aim)
                 });
@@ -471,5 +550,106 @@ impl Game<'_> {
                 });
             }
         }
+        saved.map(|_| ())
+    }
+}
+
+/// Farthest first (the uploader pops from the back). Returns the number of
+/// elements passed to a sort and to the merge, respectively.
+fn order_uploads<T, K: Ord>(
+    waiting: &mut Vec<T>,
+    fresh: &mut Vec<T>,
+    scratch: &mut Vec<T>,
+    same_section: bool,
+    priority: impl Fn(&T) -> K,
+) -> [usize; 2] {
+    if !same_section {
+        waiting.append(fresh);
+        if waiting.len() < 2 {
+            return [0, 0];
+        }
+        waiting.sort_unstable_by_key(priority);
+        return [waiting.len(), 0];
+    }
+    let sorted = if fresh.len() > 1 {
+        fresh.sort_unstable_by_key(&priority);
+        fresh.len()
+    } else {
+        0
+    };
+    if waiting
+        .last()
+        .zip(fresh.first())
+        .is_none_or(|(old, new)| priority(old) <= priority(new))
+    {
+        waiting.append(fresh);
+        return [sorted, 0];
+    }
+
+    // At equal distance, write the waiting mesh first so the fresh mesh is
+    // popped first.
+    let merged = waiting.len() + fresh.len();
+    scratch.reserve(merged);
+    let mut old = waiting.drain(..).peekable();
+    let mut new = fresh.drain(..).peekable();
+    while let (Some(a), Some(b)) = (old.peek(), new.peek()) {
+        scratch.extend(if priority(a) <= priority(b) {
+            old.next()
+        } else {
+            new.next()
+        });
+    }
+    scratch.extend(old);
+    scratch.extend(new);
+    std::mem::swap(waiting, scratch);
+    [sorted, merged]
+}
+
+/// Squared section-grid distance in `i128` so extreme camera coordinates cannot overflow.
+fn section_distance_sq(key: (i32, i32, i32), centre: (i32, i32), cam_y: i32) -> i128 {
+    let dx = i128::from(key.0) - i128::from(centre.0);
+    let dy = i128::from(key.1) - i128::from(cam_y);
+    let dz = i128::from(key.2) - i128::from(centre.1);
+    dx * dx + dy * dy + dz * dz
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{order_uploads, section_distance_sq};
+    use std::cmp::Reverse;
+
+    #[test]
+    fn section_distance_sq_handles_extreme_coordinates_without_overflow() {
+        let far = section_distance_sq(
+            (i32::MAX, i32::MAX, i32::MAX),
+            (i32::MIN, i32::MIN),
+            i32::MIN,
+        );
+        let near = section_distance_sq(
+            (i32::MIN, i32::MIN, i32::MIN),
+            (i32::MIN, i32::MIN),
+            i32::MIN,
+        );
+        assert_eq!(near, 0);
+        assert!(far > near);
+    }
+
+    #[test]
+    fn stationary_upload_budget_gives_fresh_meshes_priority_on_ties() {
+        let mut waiting = vec![(20, "far"), (4, "waiting")];
+        let mut fresh = vec![(1, "nearest"), (9, "middle"), (4, "fresh")];
+        let mut scratch = Vec::new();
+        let priority = |&(distance, _): &(i32, &str)| Reverse(distance);
+        order_uploads(&mut waiting, &mut fresh, &mut scratch, true, priority);
+        // Pin the stationary queue's fresh-first tie policy: two uploads leave
+        // the waiting mesh first in line next frame. The old sort_unstable_by_key
+        // did not guarantee this tie order.
+        let selected: Vec<_> = std::iter::from_fn(|| waiting.pop().map(|(_, name)| name))
+            .take(2)
+            .collect();
+        assert_eq!(selected, ["nearest", "fresh"]);
+        assert_eq!(waiting.pop(), Some((4, "waiting")));
+        assert_eq!(waiting.pop(), Some((9, "middle")));
+        assert_eq!(waiting.pop(), Some((20, "far")));
     }
 }

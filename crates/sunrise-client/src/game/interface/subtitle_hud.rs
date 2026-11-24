@@ -3,7 +3,7 @@
 //! renders it (which starts or stops the listening as the "Show Subtitles"
 //! option says).
 use super::Game;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use sunrise_client::{
     hud::HudBatch,
     hud_layout,
@@ -13,6 +13,7 @@ use sunrise_client::{
 #[derive(Default)]
 pub(super) struct SubtitleState {
     overlay: RefCell<SubtitleOverlay>,
+    pub(super) deferred: Cell<bool>,
 }
 impl Game<'_> {
     /// Feed the sounds the engine reported since the last tick
@@ -31,11 +32,14 @@ impl Game<'_> {
             overlay.on_play(Some(&h.subtitle), at, h.range, h.looping, now);
         }
     }
-    pub(super) fn draw_subtitles(&self, batch: &mut HudBatch) {
-        // Hud.extractRenderState: hidden with the rest of the HUD (F1).
-        if self.ui.hide_gui {
-            return;
+    /// Consume a paint scheduled by the original subtitle layer, without dispatching it again.
+    pub(super) fn draw_deferred_subtitles(&self, batch: &mut HudBatch) {
+        if self.subtitles.deferred.take() {
+            self.draw_subtitles(batch);
         }
+    }
+
+    pub(super) fn draw_subtitles(&self, batch: &mut HudBatch) {
         let v = &self.view;
         let frame = SubtitleFrame {
             show: self.settings.show_subtitles,

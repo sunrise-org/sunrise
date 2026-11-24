@@ -1,4 +1,5 @@
-use mod_api::__private::game::RegistrationContextNew;
+use crate::game::native_entity_refs::tests::run_fresh_cases;
+use mod_api::__private::{game::RegistrationContextNew, reload::ReloadStageError};
 use mod_api::{
     ConditionError, Hooks, Identifier, LoadCondition, ModEntry, RegisterLoadConditionsEvent,
     RegistrationContext,
@@ -49,7 +50,6 @@ impl Hooks for Registrant {
         let yes = match self.mode.load(Ordering::SeqCst) {
             1 => json!({"type":"testmod:nope"}),
             2 => json!({"type":"testmod:flag","value":"bad"}),
-            3 => json!({"type":"testmod:flag","value":"panic"}),
             _ => json!({"type":"testmod:flag","value":true}),
         };
         if self.mode.load(Ordering::SeqCst) == 5 {
@@ -142,6 +142,13 @@ fn malformed_known_recipe_stops_dedicated_world_startup() {
 #[test]
 #[ignore = "daily"]
 fn load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes() {
+    if run_fresh_cases(
+        "game::load_conditions::tests::load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes",
+        "SUNRISE_LOAD_CONDITIONS_RELOAD_CHILD",
+        &["reload"],
+    ) {
+        return;
+    }
     let scratch = tempfile::tempdir().unwrap();
     let count = Arc::new(AtomicUsize::new(0));
     let mode = Arc::new(AtomicUsize::new(0));
@@ -246,28 +253,30 @@ fn load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes()
                 for (bad, expected) in [
                     (1, "testmod:nope"),
                     (2, "value must be a boolean"),
-                    (3, "handler panicked"),
                     (6, "invalid result"),
                     (7, "ingredient kind testmod:unregistered"),
-                    (8, "invalid ingredients or required fields"),
+                    (8, "invalid ingredient: 42"),
                 ] {
                     mode.store(bad, Ordering::SeqCst);
-                    let error = format!(
-                        "{:?}",
-                        game.reload_datapacks(true, &game.level.enabled_features.clone())
-                            .err()
-                            .unwrap()
-                    );
+                    let error = game
+                        .reload_datapacks(true, &game.level.enabled_features.clone())
+                        .err()
+                        .unwrap();
+                    let error = match (bad, error) {
+                        (8, ReloadStageError::DataSource(message)) => message,
+                        (8, other) => panic!("expected a recipe data-source error, got {other:?}"),
+                        (_, other) => format!("{other:?}"),
+                    };
                     assert!(
                         error.contains("data/testmod/recipe/enabled.json"),
                         "{error}"
                     );
                     assert!(error.contains(expected), "{error}");
-                    if bad == 2 || bad == 3 {
-                        assert!(error.contains("testmod:flag"), "{error}");
-                    }
-                    if bad == 3 {
-                        assert!(error.contains("mod testmod"), "{error}");
+                    if bad == 2 {
+                        assert!(
+                            error.contains("condition testmod:flag: mod testmod"),
+                            "{error}"
+                        );
                     }
                     assert_eq!(
                         game.recipes()
@@ -359,13 +368,15 @@ fn load_conditions_registration_allows_shared_namespaces() {
             let mut registrar = mod_api::LoadConditionDeclarations::new(
                 sunrise_world::conditions::is_builtin_condition,
             );
-            mod_api::dispatch_register_load_conditions(&RegistrationContext::new(), &mut registrar);
+            mod_api::dispatch_register_load_conditions(&RegistrationContext::new(), |listen| {
+                registrar.register_listener(listen)
+            });
             let entries = registrar.finish().unwrap();
             assert_eq!(entries.len(), 2);
             for (name, owner, value) in [("a:y", "a", true), ("a:x", "b", false)] {
                 let (registered_owner, handler) =
                     entries.get(&Identifier::parse(name).unwrap()).unwrap();
-                assert_eq!(registered_owner, owner);
+                assert_eq!(*registered_owner, owner);
                 assert_eq!(handler.test(&json!({"value": value})), Ok(value));
             }
         },
@@ -384,10 +395,72 @@ fn load_conditions_registration_refuses_duplicate_ids_even_if_ignored() {
             let mut registrar = mod_api::LoadConditionDeclarations::new(
                 sunrise_world::conditions::is_builtin_condition,
             );
-            mod_api::dispatch_register_load_conditions(&RegistrationContext::new(), &mut registrar);
+            mod_api::dispatch_register_load_conditions(&RegistrationContext::new(), |listen| {
+                registrar.register_listener(listen)
+            });
             let error = registrar.finish().err().unwrap().message;
             assert!(error.contains("condition a:x"), "{error}");
             assert!(error.contains("both a and b"), "{error}");
+        },
+    );
+}
+
+#[test]
+fn a_panicking_load_condition_registrar_leaves_neither_handlers_nor_errors() {
+    use std::sync::atomic::AtomicBool;
+
+    struct Failing(Arc<AtomicBool>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Failing {
+        fn register_load_conditions(
+            &self,
+            _: &RegistrationContext,
+            event: &mut RegisterLoadConditionsEvent<'_>,
+        ) {
+            let handler = || Flag(Arc::default(), Arc::default());
+            let shared = Identifier::parse("a:shared").unwrap();
+            event
+                .conditions
+                .register(shared.clone(), handler())
+                .unwrap();
+            event
+                .conditions
+                .register(Identifier::parse("a:leaked").unwrap(), handler())
+                .unwrap();
+            assert_eq!(
+                event
+                    .conditions
+                    .register(shared, handler())
+                    .unwrap_err()
+                    .message,
+                "condition a:shared registered by both a and a",
+            );
+            self.0.store(true, Ordering::Relaxed);
+            panic!("load condition registrar fixture failed");
+        }
+    }
+
+    let reached = Arc::new(AtomicBool::new(false));
+    mod_platform::testing::with_mods(
+        vec![
+            ModEntry::new("a", Box::new(Failing(reached.clone()))),
+            ModEntry::new("b", Box::new(NamedCondition("a:shared"))),
+        ]
+        .into(),
+        || {
+            let mut registrar = mod_api::LoadConditionDeclarations::new(
+                sunrise_world::conditions::is_builtin_condition,
+            );
+            super::Game::native_register_load_conditions(
+                &RegistrationContext::new(),
+                &mut registrar,
+            );
+            assert!(reached.load(Ordering::Relaxed));
+            let entries = registrar.finish().unwrap();
+            assert_eq!(entries.len(), 1);
+            let (owner, handler) = &entries[&Identifier::parse("a:shared").unwrap()];
+            assert_eq!(*owner, "b");
+            assert_eq!(handler.test(&json!({"value": false})), Ok(false));
         },
     );
 }
@@ -481,109 +554,324 @@ fn load_conditions_disabled_owner_does_not_execute_registered_handler() {
     );
 }
 
-/// `neoforge:registered` reads the candidate's registries: the built-in entries the prepared root
-/// exports and what this load's packs add, so a new pack entry counts on its first load and one
-/// a pack dropped stops counting, whatever an earlier load put in the game's registries.
 #[test]
-fn registered_reads_the_candidate_packs_not_the_last_load() {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("command-registries.json"),
-        json!({"by_registry": {
-            "minecraft:item": {"ids": ["minecraft:stone"]},
-            "minecraft:worldgen/biome": {"ids": ["minecraft:plains"]}
-        }})
-        .to_string(),
-    )
-    .unwrap();
-    let pack = |keys: &[&str]| -> Vec<(String, Vec<Vec<u8>>)> {
-        keys.iter()
-            .map(|key| ((*key).to_owned(), vec![b"{}".to_vec()]))
-            .collect()
-    };
-    let registered = |registry: &str, value: &str| {
-        json!({"neoforge:conditions": [
-            {"type": "neoforge:registered", "registry": registry, "value": value}
-        ]})
-    };
-    let dunes = registered("minecraft:worldgen/biome", "test:dunes");
-    let admission = sunrise_world::conditions::LoadConditions::new([]);
-    let mut files = pack(&["worldgen/biome/test:dunes", "recipe/test:a/b"]);
-    // An entry its own conditions turn off is not in the registry.
-    files.push((
-        "worldgen/biome/test:off".into(),
-        vec![br#"{"neoforge:conditions":[{"type":"neoforge:never"}]}"#.to_vec()],
-    ));
-    let first = super::candidate_registries(root.path(), &files, &admission);
-    let first = sunrise_world::conditions::LoadConditions::new([]).with_registries(
-        first
-            .iter()
-            .map(|(registry, ids)| (registry.as_str(), ids.iter().map(String::as_str))),
-    );
-    assert!(
-        first.allows(&dunes),
-        "a pack's new biome counts on its first load"
-    );
-    assert!(first.allows(&registered("minecraft:worldgen/biome", "minecraft:plains")));
-    assert!(!first.allows(&registered("minecraft:worldgen/biome", "test:off")));
-    assert!(first.allows(&registered("minecraft:item", "minecraft:stone")));
-    let next = super::candidate_registries(root.path(), &pack(&[]), &admission);
-    let next = sunrise_world::conditions::LoadConditions::new([]).with_registries(
-        next.iter()
-            .map(|(registry, ids)| (registry.as_str(), ids.iter().map(String::as_str))),
-    );
-    assert!(
-        !next.allows(&dunes),
-        "the pack no longer has it: not registered"
-    );
-    assert!(next.allows(&registered("minecraft:worldgen/biome", "minecraft:plains")));
-}
+fn load_condition_panic_disables_only_that_handler_across_generations() {
+    use mod_api::__private::{HookPanicReport, take_hook_panics};
 
-/// A handler that reads the world through the Host. Read in a load phase, it is a named refusal.
-struct Gated;
-impl LoadCondition for Gated {
-    fn test(&self, _: &Value) -> std::result::Result<bool, ConditionError> {
-        mod_api::__private::check_access("level", mod_api::__private::LoadAccess::WorldOnly);
-        Ok(true)
+    struct Pair(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Pair {
+        fn register_load_conditions(
+            &self,
+            _: &RegistrationContext,
+            event: &mut RegisterLoadConditionsEvent<'_>,
+        ) {
+            for (id, count) in [
+                ("foreign:faulty", self.0.clone()),
+                ("foreign:healthy", Arc::default()),
+            ] {
+                event
+                    .conditions
+                    .register(Identifier::parse(id).unwrap(), Flag(count, Arc::default()))
+                    .unwrap();
+            }
+        }
     }
-}
-struct GatedRegistrant;
-#[mod_api::__subscriptions]
-impl Hooks for GatedRegistrant {
-    fn register_load_conditions(
-        &self,
-        _: &RegistrationContext,
-        event: &mut RegisterLoadConditionsEvent<'_>,
-    ) {
-        event
-            .conditions
-            .register(Identifier::parse("testmod:gated").unwrap(), Gated)
-            .unwrap();
-    }
-}
 
-/// A Host call the load phase refuses is a refusal of that condition, named, and no panic: the
-/// arm of the client's catch sites that reads `PhaseRefusal`.
-#[test]
-fn a_handler_refused_by_the_load_phase_is_a_named_refusal_not_a_panic() {
-    mod_platform::__private::initialize().unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
     mod_platform::testing::with_mods(
-        vec![ModEntry::new("testmod", Box::new(GatedRegistrant))].into(),
+        vec![ModEntry::new(
+            "condition_pair",
+            Box::new(Pair(count.clone())),
+        )]
+        .into(),
         || {
             let sources = crate::game::mods::ModsState::default();
             let inventory = sunrise_mod_package::enabled::EnabledMods::default();
-            let conditions = super::conditions_for_mods(&sources, &inventory).unwrap();
-            let file = json!({"neoforge:conditions":[{"type":"testmod:gated"}]});
-            let _setup = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Setup);
-            let error = conditions
-                .allows_file_isolated(&file, "gated.json")
-                .unwrap_err();
+            let load = super::conditions_for_mods(&sources, &inventory).unwrap();
+            let faulty = json!({"neoforge:conditions":[{"type":"foreign:faulty","value":"panic"}]});
+            let path = "data/foreign/recipe/faulty.json";
+            assert!(!load.allows_file(&faulty, path));
+            let error = load.check_errors().unwrap_err();
             assert!(
-                error.contains("testmod")
-                    && error.contains("refused")
-                    && error.contains("mod API level is unavailable during Setup"),
+                error.contains("data/foreign/recipe/faulty.json: condition foreign:faulty: mod condition_pair: load condition callback panicked")
+                    && error.contains("fixture panic"),
                 "{error}"
+            );
+            assert_eq!(
+                take_hook_panics(),
+                [HookPanicReport {
+                    mod_id: "condition_pair",
+                    hook: "test_load_condition",
+                }]
+            );
+
+            let next = super::conditions_for_mods(&sources, &inventory).unwrap();
+            let error = next.allows_file_isolated(&faulty, path).unwrap_err();
+            assert_eq!(
+                error,
+                "condition foreign:faulty: mod condition_pair: load condition owner is disabled"
+            );
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            assert!(take_hook_panics().is_empty());
+
+            let healthy = json!({"neoforge:conditions":[{"type":"foreign:healthy","value":true}]});
+            assert_eq!(
+                next.allows_file_isolated(&healthy, "healthy.json"),
+                Ok(true)
             );
         },
     );
+}
+
+/// Only decoded holders (not file names or the previous load's IDs) count.
+#[test]
+fn registered_reads_the_candidate_packs_not_the_last_load() {
+    use super::{RegistryView, admit_datapack_registries};
+    use mod_api::{
+        DatapackField, DatapackFieldKind, DatapackRegistryDeclaration, DatapackRegistrySync,
+    };
+    use sunrise_assets::resource_source::ResourceSource;
+    use sunrise_client::datapack::{DataPack, DataStore, RegistryFiles, registry_files};
+    use sunrise_world::{conditions::LoadConditions, loot::PackOverlay};
+
+    let root = tempfile::tempdir().unwrap();
+    let keys = [
+        "test:a_downstream",
+        "test:b_right",
+        "test:c_left",
+        "test:d_first",
+        "test:e_later",
+    ];
+    let declarations = keys.map(|key| DatapackRegistryDeclaration {
+        mod_id: "test".into(),
+        key: key.into(),
+        fields: vec![DatapackField::required("enabled", DatapackFieldKind::Bool)],
+        sync: DatapackRegistrySync::ServerOnly,
+    });
+    let registered = |registry: &str, value: &str| json!({"type": "neoforge:registered", "registry": registry, "value": value});
+    let bound = json!({"type":"neoforge:tag_empty","registry":"test:b_right","tag":"test:bound"});
+    let write = |layer: &str, file: &str, json: Value| {
+        let path = root.path().join(layer).join("data/test").join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, json.to_string()).unwrap();
+    };
+    write(
+        "base",
+        "test/a_downstream/off.json",
+        json!({"enabled":true}),
+    );
+    write(
+        "top",
+        "test/a_downstream/off.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[{"type":"neoforge:never"}]
+        }),
+    );
+    write(
+        "top",
+        "test/a_downstream/answer.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[
+                registered("test:c_left", "test:seed"),
+                {"type":"neoforge:not","value":bound.clone()},
+                registered("minecraft:item", "minecraft:stone")
+            ]
+        }),
+    );
+    write(
+        "top",
+        "test/c_left/seed.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[bound]
+        }),
+    );
+    write(
+        "top",
+        "test/c_left/self.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[registered("test:c_left", "test:seed")]
+        }),
+    );
+    write(
+        "top",
+        "test/b_right/edge.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[registered("test:c_left", "test:seed")]
+        }),
+    );
+    write("top", "test/b_right/holder.json", json!({"enabled":true}));
+    write(
+        "top",
+        "tags/test/b_right/bound.json",
+        json!({"values":["test:holder"]}),
+    );
+    write(
+        "top",
+        "test/d_first/first.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[{"type":"neoforge:or", "values":[
+                {"type":"neoforge:always"}, registered("test:e_later", "test:later")
+            ]}]
+        }),
+    );
+    write(
+        "top",
+        "test/e_later/later.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[
+                {"type":"test:counter"}, registered("test:d_first", "test:first")
+            ]
+        }),
+    );
+    let packs = ["base", "top"].map(|layer| {
+        DataPack::from_source(
+            format!("file/{layer}"),
+            ResourceSource::directory(root.path().join(layer)),
+        )
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let base = LoadConditions::new([])
+        .with_features(["minecraft:vanilla"])
+        .with_lookup([("test:counter", move |_: &Value| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        })]);
+    let tags: Vec<_> = DataStore::load(&[&packs[0], &packs[1]])
+        .files
+        .into_iter()
+        .collect();
+    let overlay = PackOverlay {
+        conditions: &base,
+        files: &tags,
+        ..PackOverlay::default()
+    };
+    let view = || RegistryView {
+        ids: [("minecraft:item".into(), ["minecraft:stone".into()].into())].into(),
+        ..RegistryView::default()
+    };
+    let mut first = view();
+    let winners = registry_files(&[&packs[0], &packs[1]], &keys).unwrap();
+    let admitted =
+        admit_datapack_registries(root.path(), &overlay, &mut first, &declarations, &winners)
+            .unwrap();
+    assert_eq!(admitted.entries("test:c_left").unwrap(), ["test:seed"]);
+    assert_eq!(admitted.entries("test:b_right").unwrap(), ["test:holder"]);
+    assert_eq!(admitted.entries("test:d_first").unwrap(), ["test:first"]);
+    assert_eq!(admitted.entries("test:e_later").unwrap(), ["test:later"]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        admitted.entries("test:a_downstream").unwrap(),
+        ["test:answer"]
+    );
+
+    let test = |registry, value| json!({"neoforge:conditions":[registered(registry, value)]});
+    assert!(
+        first
+            .conditions(&base)
+            .allows(&test("test:a_downstream", "test:answer"))
+    );
+    let mut next = view();
+    admit_datapack_registries(
+        root.path(),
+        &overlay,
+        &mut next,
+        &declarations,
+        &RegistryFiles::new(),
+    )
+    .unwrap();
+    let next = next.conditions(&base);
+    assert!(!next.allows(&test("test:a_downstream", "test:answer")));
+    assert!(next.allows(&test("minecraft:item", "minecraft:stone")));
+
+    // Changing only the top file to an unknown condition is an owning-loader
+    // error, never permission to restore the valid lower file.
+    write(
+        "top",
+        "test/a_downstream/off.json",
+        json!({
+            "enabled":true, "neoforge:conditions":[{"type":"test:unknown"}]
+        }),
+    );
+    let winners = registry_files(&[&packs[0], &packs[1]], &keys).unwrap();
+    let mut refused = view();
+    let error =
+        admit_datapack_registries(root.path(), &overlay, &mut refused, &declarations, &winners)
+            .unwrap_err();
+    assert!(
+        error.contains("pack file/top, file data/test/test/a_downstream/off.json"),
+        "{error}"
+    );
+    assert!(error.contains("test:unknown"), "{error}");
+    assert!(
+        !refused
+            .conditions(&base)
+            .allows(&test("test:a_downstream", "test:off"))
+    );
+}
+
+#[test]
+fn unsynced_registry_admits_conditional_payloads_and_tags_without_worldgen_limit() {
+    use mod_api::{
+        DatapackField, DatapackFieldKind, DatapackRegistryDeclaration, DatapackRegistrySet,
+        DatapackRegistrySync, DatapackValue,
+    };
+    use sunrise_world::loot::PackOverlay;
+    let root = tempfile::tempdir().unwrap();
+    let declaration = DatapackRegistryDeclaration {
+        mod_id: "test".into(),
+        key: "test:spell".into(),
+        sync: DatapackRegistrySync::ServerOnly,
+        fields: vec![
+            DatapackField::required("enabled", DatapackFieldKind::Bool),
+            DatapackField::with_default(
+                "neoforge:conditions",
+                DatapackFieldKind::Bool,
+                DatapackValue::Bool(true),
+            ),
+        ],
+    };
+    assert!(
+        declaration
+            .decode_entry(r#"{"neoforge:value":{"enabled":true}}"#)
+            .is_err()
+    );
+    let winners = [
+        ("inline", br#"{"enabled":true,"neoforge:conditions":[{"type":"neoforge:always"}]}"#.as_slice()),
+        ("wrapped", br#"{"neoforge:value":{"enabled":false,"neoforge:conditions":false},"neoforge:conditions":[]}"#.as_slice()),
+    ].into_iter().map(|(id, bytes)| (format!("data/test/test/spell/{id}.json"), ("top".to_owned(), bytes.to_vec()))).collect();
+    let tagged = (0..8193)
+        .map(|index| {
+            (
+                format!("tags/test:test/spell/t{index}"),
+                vec![br#"{"values":["test:inline"]}"#.to_vec()],
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut view = super::RegistryView::default();
+    let admitted = super::admit_datapack_registries(
+        root.path(),
+        &PackOverlay::new(&tagged),
+        &mut view,
+        &[declaration],
+        &winners,
+    )
+    .unwrap();
+    let set = DatapackRegistrySet::from_candidate(admitted);
+    assert_eq!(
+        set.get("test:spell", "test:inline")
+            .unwrap()
+            .get("neoforge:conditions"),
+        Some(&DatapackValue::Bool(true))
+    );
+    assert_eq!(
+        set.get("test:spell", "test:wrapped").unwrap().values,
+        [
+            ("enabled".into(), DatapackValue::Bool(false)),
+            ("neoforge:conditions".into(), DatapackValue::Bool(false)),
+        ]
+    );
+    assert_eq!(view.tags["test:spell"].len(), 8193);
+    assert!(view.tags["test:spell"].contains("test:t8192"));
 }

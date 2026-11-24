@@ -286,6 +286,51 @@ fn unopened_loot_tags_round_trip_with_zero_seed_omitted() {
 }
 
 #[test]
+fn retained_loot_and_live_items_are_written_before_chunk_metadata() {
+    let (registry, biomes) = fixture();
+    let pos = (1, 64, 2);
+    let mut chunk = Chunk::empty(0, 0);
+    chunk.set(pos.0, pos.1, pos.2, 1);
+    let mut slots = vec![None; 27];
+    slots[0] = Some(crate::items::ItemStack::new("minecraft:gold_ingot", 1));
+    chunk
+        .block_entities
+        .push((pos, crate::containers::BlockEntity::Chest(slots)));
+    chunk.saved = Some(Arc::new(ChunkExtras {
+        pending_loot: [(
+            pos,
+            PendingContainerLoot {
+                table: string("minecraft:chests/simple_dungeon"),
+                seed: Some(Tag::Long(37)),
+            },
+        )]
+        .into(),
+        ..Default::default()
+    }));
+
+    let limits = Limits::default();
+    let encoded = encode(&chunk, &registry, &biomes, &Default::default());
+    let bytes = nbt::write_named(&encoded, limits).unwrap();
+    let (read, _) = nbt::read_named(&bytes, limits).unwrap();
+    let Some(Tag::List(entities)) = read.tag.get("block_entities") else {
+        panic!("missing block entities");
+    };
+    let Tag::Compound(chest) = &entities[0] else {
+        panic!("missing chest compound");
+    };
+    // The Java spread hashes of `Items` and `z` share bucket 10 in this
+    // default-sized table. Appending Items after normalization would put z first.
+    let collision: Vec<_> = chest
+        .keys()
+        .map(|key| key.to_string().unwrap())
+        .filter(|key| matches!(key.as_str(), "Items" | "z"))
+        .collect();
+    assert_eq!(collision, ["Items", "z"]);
+    assert_eq!(entities[0].get("LootTableSeed"), Some(&Tag::Long(37)));
+    assert!(matches!(entities[0].get("Items"), Some(Tag::List(items)) if items.len() == 1));
+}
+
+#[test]
 #[ignore = "run by tools/test_opened_loot_parity.py"]
 fn opened_loot_parity_fixture() {
     use std::io::Write;
@@ -352,8 +397,8 @@ fn eager_save_edits_reach_disk_during_ticks_and_again_after_cooldown() {
         dirty.save_eagerly(
             now + Duration::from_millis(tick * 50),
             || save.active_chunk_writes() < 128,
-            |_| true,
-            |_| {
+            |_| Some(true),
+            |_, _| {
                 save.save_later(&[Arc::new(chunk.clone())], registry, &biomes)
                     .unwrap();
                 true
@@ -451,7 +496,9 @@ fn generated_structure_chest_stays_pending_after_save_and_reload() {
     .unwrap();
     let mut worker = generator.worker();
     let mut region: [Proto; 9] = std::array::from_fn(|i| {
-        generator.proto(&mut worker, 43 + i as i32 % 3 - 1, 21 + i as i32 / 3 - 1)
+        generator
+            .proto(&mut worker, 43 + i as i32 % 3 - 1, 21 + i as i32 / 3 - 1)
+            .unwrap()
     });
     generator.decorate(&mut worker, &mut region);
     let chunk = generator.finish(region.into_iter().nth(4).unwrap());

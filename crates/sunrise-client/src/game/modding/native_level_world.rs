@@ -3,13 +3,14 @@
 //! difficulty and game rules on the server, and weather on both sides.
 //! Stale handles return `None`.
 use super::{Dim, Game};
+use core::ops::ControlFlow;
 use mod_api::{
     BoolGameRuleKey, FeatureFlags, LevelDimensionShape, LevelDimensionType, LevelReadError,
     LevelRef,
 };
 use std::sync::Arc;
 use sunrise_client::command::vanilla::DIFFICULTIES;
-use sunrise_client::world::World;
+use sunrise_client::world::{World, weather_flags};
 use sunrise_client_core::gamerules::Value as GameRuleValue;
 use sunrise_core::position::BlockPos;
 use sunrise_core::random::LegacyRandom;
@@ -21,20 +22,35 @@ fn weather_for_level(
     is_end: bool,
     levels: (f32, f32),
 ) -> (f32, f32) {
-    if shape.sky_light && !shape.has_ceiling && !is_end {
+    if shape.can_have_weather(is_end) {
         levels
     } else {
         (0.0, 0.0)
     }
 }
 
-fn weather_for_world(world: &World, is_end: bool) -> (f32, f32) {
+pub(super) fn weather_for_world(world: &World, is_end: bool) -> (f32, f32) {
     weather_for_level(world.shape, is_end, world.weather.levels(1.0))
 }
 
-/// `Level.isRaining` and `isThundering` from the rain and thunder levels.
-fn weather_flags((rain, thunder): (f32, f32)) -> (bool, bool) {
-    (rain > 0.2, thunder > 0.9)
+/// `Level.isRainingAt` over `world`, the column of the level in dimension `dim`.
+pub(super) fn rain_at(
+    world: &World,
+    facts: &sunrise_client::blocks::BlockFacts,
+    biomes: &sunrise_client::biome::Biomes,
+    behaviours: &sunrise_world::level::Behaviours,
+    dim: Dim,
+    pos: BlockPos,
+) -> bool {
+    let view = RainView {
+        world,
+        facts,
+        biomes,
+        dimension: dim.level(),
+        raining: weather_flags(weather_for_world(world, dim == Dim::End)).0,
+        random: LegacyRandom::new(0),
+    };
+    behaviours.is_raining_at(&view, pos)
 }
 
 /// A read-only view of one level's column for `Level.isRainingAt`, so a level parked
@@ -94,11 +110,13 @@ impl LevelAccess for RainView<'_> {
 impl Game<'_> {
     /// `Level.getSkyDarken`: the same dimension, time and weather calculation used by gameplay.
     pub(super) fn sky_darken_in(&self, world: &World, dimension: Dim) -> i32 {
-        // A client of a server has the environment its server's type made for a mod's level.
+        // A client of a server has the environment its server's type made for the level it is
+        // in; a parked level keeps the client's own for its dimension.
         let environment = match self
             .remote
             .as_ref()
-            .and_then(|r| r.level_environment.as_ref())
+            .and_then(|r| r.level_environment.as_deref())
+            .filter(|_| dimension == self.dim)
         {
             Some(own) => own,
             None => match dimension {
@@ -129,12 +147,13 @@ impl Game<'_> {
         Some(self.sky_darken_in(world, Dim::from_id(level.dimension_id())))
     }
 
-    /// The enabled feature flags as this side knows them: a client's are the server's, sent at
-    /// join; a server's are its world's `enabled_features`.
-    pub(super) fn enabled_feature_ids(&self) -> &Arc<[String]> {
+    /// The effective flags are set by the server's world or received by the client at join.
+    pub(in crate::game) fn enabled_feature_ids(&self) -> &Arc<[String]> {
         self.remote
             .as_ref()
-            .map_or(&self.level.enabled_features, |remote| &remote.features)
+            .map_or(self.level.enabled_features.as_arc(), |remote| {
+                &remote.features
+            })
     }
     /// Dimension shape of a loaded server level, including parked levels.
     pub(super) fn level_dimension_shape(&self, level: LevelRef) -> Option<LevelDimensionShape> {
@@ -149,14 +168,24 @@ impl Game<'_> {
     }
 
     /// The level's dimension type with its gameplay attributes, from the facts the game uses.
-    pub(super) fn level_dimension_type(&self, level: LevelRef) -> Option<LevelDimensionType> {
+    pub(super) fn level_dimension_type(&self, level: LevelRef) -> Option<LevelDimensionType<'_>> {
         use sunrise_world::dimension_type::{CardinalLight, Skybox};
         use sunrise_world::worldgen::value_provider::IntProvider;
         self.native_level_read_world(level)?;
         let key = sunrise_core::LevelKey::parse(level.dimension_id()).ok()?;
-        let facts = self.dimension_facts_for(key);
+        let facts = if let Some(constructing) = self
+            .remote
+            .as_ref()
+            .and_then(|remote| remote.constructing(level))
+        {
+            constructing.facts.as_deref().unwrap_or_else(|| {
+                sunrise_world::dimension_type::DimensionFacts::of_builtin_level(key)
+            })
+        } else {
+            self.dimension_facts_for(key)
+        };
         Some(LevelDimensionType {
-            id: facts.id.clone(),
+            id: &facts.id,
             min_y: facts.height.min_y,
             height: facts.height.height,
             logical_height: facts.height.logical_height,
@@ -166,7 +195,7 @@ impl Game<'_> {
             has_ender_dragon_fight: facts.has_ender_dragon_fight,
             coordinate_scale: facts.coordinate_scale,
             ambient_light: facts.ambient_light,
-            infiniburn: facts.infiniburn.clone(),
+            infiniburn: &facts.infiniburn,
             monster_spawn_light_level: match facts.monster_spawn_light_level {
                 IntProvider::Constant(n) => Some((n, n)),
                 IntProvider::Uniform { min, max } => Some((min, max)),
@@ -174,13 +203,13 @@ impl Game<'_> {
             },
             monster_spawn_block_light_limit: facts.monster_spawn_block_light_limit,
             skybox: match facts.skybox {
-                Skybox::None => "none".to_owned(),
-                Skybox::Overworld => "overworld".to_owned(),
-                Skybox::End => "end".to_owned(),
+                Skybox::None => "none",
+                Skybox::Overworld => "overworld",
+                Skybox::End => "end",
             },
             cardinal_light: match facts.cardinal_light {
-                CardinalLight::Default => "default".to_owned(),
-                CardinalLight::Nether => "nether".to_owned(),
+                CardinalLight::Default => "default",
+                CardinalLight::Nether => "nether",
             },
             water_evaporates: facts.water_evaporates,
             fast_lava: facts.fast_lava,
@@ -190,14 +219,14 @@ impl Game<'_> {
             snow_golem_melts: facts.snow_golem_melts,
             can_start_raid: facts.can_start_raid,
             sky_light_level: facts.sky_light_level,
-            timelines: facts.timelines.clone(),
-            default_clock: facts.default_clock.clone(),
-            bed_can_sleep: facts.bed_rule.can_sleep.name().to_owned(),
-            bed_can_set_spawn: facts.bed_rule.can_set_spawn.name().to_owned(),
+            timelines: &facts.timelines,
+            default_clock: facts.default_clock.as_deref(),
+            bed_can_sleep: facts.bed_rule.can_sleep.name(),
+            bed_can_set_spawn: facts.bed_rule.can_set_spawn.name(),
             bed_destroy_on_use: facts.bed_rule.destroy_on_use,
             bed_destroy_on_leave: facts.bed_rule.destroy_on_leave,
-            straw_bed_can_sleep: facts.straw_bed_rule.can_sleep.name().to_owned(),
-            straw_bed_can_set_spawn: facts.straw_bed_rule.can_set_spawn.name().to_owned(),
+            straw_bed_can_sleep: facts.straw_bed_rule.can_sleep.name(),
+            straw_bed_can_set_spawn: facts.straw_bed_rule.can_set_spawn.name(),
             straw_bed_destroy_on_use: facts.straw_bed_rule.destroy_on_use,
             straw_bed_destroy_on_leave: facts.straw_bed_rule.destroy_on_leave,
         })
@@ -312,19 +341,69 @@ impl Game<'_> {
         self.command_clock_state(&clock).partial = 0.0;
         true
     }
-    /// Every game rule the world has (`GameRules`) with its current value, by `minecraft:` id
-    /// (`max_minecart_speed` only with minecart improvements): None for a stale handle and on
-    /// a client.
-    pub(super) fn level_game_rules(
+    /// `DimensionType.defaultClock` of a level the server has open, as a handle.
+    pub(super) fn level_clock(&self, level: LevelRef) -> Option<mod_api::WorldClockRef> {
+        self.world_clock_name(mod_api::WorldClockRef::new(level))
+            .map(|_| mod_api::WorldClockRef::new(level))
+    }
+    /// The `minecraft:world_clock` id a clock handle names now: its level's default clock.
+    fn world_clock_name(&self, clock: mod_api::WorldClockRef) -> Option<String> {
+        let level = clock.level();
+        self.native_level_world(level)?;
+        let dim = Dim::from_id(level.dimension_id());
+        self.dimension_type_of(dim).default_clock.clone()
+    }
+    /// `ServerClockManager.setTotalTicks`: the total, its fraction of a tick restarted.
+    pub(super) fn world_clock_set_total_ticks(
+        &mut self,
+        clock: mod_api::WorldClockRef,
+        ticks: i64,
+    ) -> bool {
+        let Some(name) = self.world_clock_name(clock).filter(|_| ticks >= 0) else {
+            return false;
+        };
+        self.set_command_clock_time(&name, ticks);
+        self.command_clock_state(&name).partial = 0.0;
+        self.sync_hub_clocks();
+        true
+    }
+    /// `ServerClockManager.setRate`.
+    pub(super) fn world_clock_set_rate(
+        &mut self,
+        clock: mod_api::WorldClockRef,
+        rate: f32,
+    ) -> bool {
+        let Some(name) = self
+            .world_clock_name(clock)
+            .filter(|_| rate.is_finite() && rate >= 0.0)
+        else {
+            return false;
+        };
+        self.command_clock_state(&name).rate = rate;
+        self.sync_hub_clocks();
+        true
+    }
+    /// `ServerClockManager.setPaused`.
+    pub(super) fn world_clock_set_paused(
+        &mut self,
+        clock: mod_api::WorldClockRef,
+        paused: bool,
+    ) -> bool {
+        let Some(name) = self.world_clock_name(clock) else {
+            return false;
+        };
+        self.command_clock_state(&name).paused = paused;
+        self.sync_hub_clocks();
+        true
+    }
+    /// Visit the server's available game rules once the named level resolves.
+    pub(super) fn level_visit_game_rules(
         &self,
         level: LevelRef,
-    ) -> Result<Vec<(String, GameRuleValue)>, LevelReadError> {
+        visit: &mut dyn FnMut(&str, mod_api::GameRuleValue) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, LevelReadError> {
         self.native_level_world_result(level)?;
-        let rules = &self.ui.rules;
-        Ok(rules
-            .available_rules()
-            .filter_map(|r| Some((r.name.clone(), rules.get(&r.name)?)))
-            .collect())
+        Ok(self.visit_available_game_rules(visit))
     }
     /// The rain and thunder levels, each 0.0 to 1.0 (`Level.getRainLevel`,
     /// `getThunderLevel` at partial tick 1.0): both 0 in a level with no weather.
@@ -336,6 +415,11 @@ impl Game<'_> {
             world,
             level.dimension() == Dim::End.key(),
         ))
+    }
+    /// `Level.isRaining` on either side: a client reads the weather its server synced, as
+    /// [`Self::level_get_sky_darken`] reads the darkening.
+    pub(super) fn level_read_is_raining(&self, level: LevelRef) -> Option<bool> {
+        Some(weather_flags(self.level_weather(level)?).0)
     }
     /// Whether it rains (`Level.isRaining`: a rain level above 0.2).
     pub(super) fn level_is_raining(&self, level: LevelRef) -> Option<bool> {
@@ -357,19 +441,15 @@ impl Game<'_> {
         if !world.is_loaded_at(pos[0], pos[1], pos[2]) {
             return None;
         }
-        let view = RainView {
+        self.level_is_raining(level)?;
+        Some(rain_at(
             world,
-            facts: self.res.facts(),
-            biomes: world_biomes!(self),
-            dimension: Dim::from_id(level.dimension_id()).level(),
-            raining: self.level_is_raining(level)?,
-            random: LegacyRandom::new(0),
-        };
-        Some(
-            self.res
-                .behaviours()
-                .is_raining_at(&view, BlockPos::new(pos[0], pos[1], pos[2])),
-        )
+            self.res.facts(),
+            world_biomes!(self),
+            self.res.behaviours(),
+            Dim::from_id(level.dimension_id()),
+            BlockPos::new(pos[0], pos[1], pos[2]),
+        ))
     }
     /// `LevelReader.enabledFeatures` of the level a handle names. Every level of a world shares
     /// the world's flags. None for a stale handle and on a client.
@@ -393,9 +473,8 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
-    use mod_api::{
-        FeatureFlags, GameRuleChangedEvent, GameRuleValue, Hooks, LevelHost, ModEntry, ServerHost,
-    };
+    use core::ops::ControlFlow;
+    use mod_api::{GameRuleChangedEvent, GameRuleValue, Hooks, LevelHost, ModEntry, ServerHost};
     use mod_platform::testing::with_mods;
     use std::sync::{Arc, Mutex};
     use sunrise_client::chunk::Chunk;
@@ -424,7 +503,7 @@ mod tests {
                 Some(LevelDimensionShape::new(0, 256, 128, false, true))
             );
             game.native_lifecycle
-                .begin_open(Authority::IntegratedServer);
+                .begin_open(Some(Authority::IntegratedServer));
             let host: &dyn Host = game;
             assert_eq!(overworld.dimension_shape(host), None);
             assert_eq!(nether.dimension_shape(host), None);
@@ -483,17 +562,65 @@ mod tests {
             assert_eq!(game.level_is_raining_at(level, unloaded), None);
             assert_eq!(game.level_is_raining_at(level, [1, 4000, 1]), None);
             game.with_level(|_, host, _| {
+                // The level's own weather, wherever a position is (`Level.isRaining`).
+                assert_eq!(mod_api::LevelHost::is_raining(&*host), Some(true));
                 assert!(host.is_raining_at(plains));
                 assert!(!host.is_raining_at(roofed));
                 assert!(!host.is_raining_at(desert));
                 assert!(!host.is_raining_at(snowy));
                 assert!(!host.is_raining_at(unloaded));
             });
+            // The side a motion tick is lent answers the same, so a friction part sees it.
+            let side = game_side!(game);
+            for (pos, rains) in [
+                (plains, true),
+                (roofed, false),
+                (desert, false),
+                (snowy, false),
+                (unloaded, false),
+            ] {
+                let at = sunrise_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                assert_eq!(
+                    sunrise_client::motion::SideLevel::is_raining_at(&side, &game.world, at),
+                    rains,
+                    "{pos:?}"
+                );
+            }
+
+            let server_view = |game: &super::Game<'_>| {
+                let view = super::super::native_level_signals::ReadLevel { game, level };
+                mod_api::LevelHost::is_raining(&view)
+            };
+            // The level view a block part's callback gets (`ReadLevel`) answers too.
+            assert_eq!(server_view(game), Some(true));
 
             game.world.weather.rain_level = (0.0, 0.0);
             assert_eq!(game.level_is_raining_at(level, plains), Some(false));
-            game.with_level(|_, host, _| assert!(!host.is_raining_at(plains)));
+            game.with_level(|_, host, _| {
+                assert_eq!(mod_api::LevelHost::is_raining(&*host), Some(false));
+                assert!(!host.is_raining_at(plains));
+            });
+            assert_eq!(server_view(game), Some(false));
             assert_eq!(game.world.chunks.len(), chunks, "nothing was loaded");
+
+            // A logged-in client reads the weather its server synced through the same view.
+            game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+            game.options.dedicated = None;
+            let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+            game.connect_local(pipe, "WeatherReadTest").unwrap();
+            game.remote.as_mut().unwrap().logged_in = true;
+            let client = game.level("minecraft:overworld").unwrap();
+            let client_view = |game: &super::Game<'_>| {
+                let view = super::super::native_level_signals::ReadLevel {
+                    game,
+                    level: client,
+                };
+                mod_api::LevelHost::is_raining(&view)
+            };
+            game.world.weather.rain_level = (1.0, 1.0);
+            assert_eq!(client_view(game), Some(true));
+            game.world.weather.rain_level = (0.0, 0.0);
+            assert_eq!(client_view(game), Some(false));
         });
     }
 
@@ -514,10 +641,6 @@ mod tests {
             let flags = game.level_enabled_features(level).unwrap();
             assert!(flags.contains("minecraft:redstone_experiments"));
             assert_eq!(flags.iter().count(), 2);
-            assert_eq!(
-                FeatureFlags::new(Arc::default()).iter().collect::<Vec<_>>(),
-                ["minecraft:vanilla"]
-            );
             let ids: Vec<String> = flags.iter().map(str::to_owned).collect();
             game.with_level(|_, host, _| {
                 assert_eq!(host.enabled_features().iter().collect::<Vec<_>>(), ids);
@@ -619,17 +742,26 @@ mod tests {
             host: &mut dyn ServerHost,
             event: &mut GameRuleChangedEvent<'_>,
         ) {
-            let rules = host
-                .level("minecraft:overworld")
-                .and_then(|level| level.game_rules(host).ok())
-                .unwrap_or_default();
-            let value = |id: &str| rules.iter().find(|(rule, _)| rule == id).map(|(_, v)| *v);
+            let (mut inventory, mut tick_speed, mut count) = (None, None, 0);
+            let level = host.level("minecraft:overworld").unwrap();
+            assert_eq!(
+                level.visit_game_rules(host, &mut |id, value| {
+                    count += 1;
+                    match id {
+                        "minecraft:keep_inventory" => inventory = Some(value),
+                        "minecraft:random_tick_speed" => tick_speed = Some(value),
+                        _ => {}
+                    }
+                    ControlFlow::Continue(())
+                }),
+                Ok(ControlFlow::Continue(()))
+            );
             self.0.lock().unwrap().push((
                 event.rule.to_owned(),
                 event.actor.is_some(),
-                value("minecraft:keep_inventory"),
-                value("minecraft:random_tick_speed"),
-                rules.len(),
+                inventory,
+                tick_speed,
+                count,
             ));
         }
     }
@@ -720,6 +852,64 @@ mod tests {
                 "keep_inventory",
                 gamerules::Value::Bool(false)
             ));
+        });
+    }
+
+    /// Two levels that follow clocks of their own keep their own times through the clock
+    /// handles' writes (`ServerClockManager`'s `setTotalTicks`, `setRate` and `setPaused`): the
+    /// Overworld's clock paused at 6000 is a fixed time, and the End's set to 100 at a rate of 2.5
+    /// counts 10 in 4 ticks. A clock a mod registered and nothing touched counts too, from 0, as
+    /// `ServerClockManager.tick` advances every clock of the registry.
+    #[test]
+    #[ignore = "daily"]
+    fn two_levels_with_clocks_of_their_own_keep_their_own_times() {
+        use mod_api::Registrar;
+        struct Clocks;
+        #[mod_api::__subscriptions]
+        impl Hooks for Clocks {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                r.register_world_clock("dungeon");
+            }
+        }
+        let mods: mod_api::Mods = vec![ModEntry::new("clocks", Box::new(Clocks))].into();
+        with_mods(mods.clone(), || {
+            crate::game::api_values::install_parts(&mods).unwrap();
+            with_game(|game| {
+                let back = game.dim;
+                game.enter_level(super::Dim::End).unwrap();
+                game.enter_level(back).unwrap();
+                let overworld = game.level(super::Dim::Overworld.id()).unwrap();
+                let end = game.level(super::Dim::End.id()).unwrap();
+                let host: &mut dyn ServerHost = game;
+                let fixed = overworld.clock(&*host).unwrap();
+                let running = end.clock(&*host).unwrap();
+                assert_ne!(fixed, running);
+                assert!(fixed.set_total_ticks(host, 6_000));
+                assert!(fixed.set_paused(host, true));
+                assert!(running.set_total_ticks(host, 100));
+                assert!(running.set_rate(host, 2.5));
+                assert!(!running.set_rate(host, f32::NAN));
+                assert!(!running.set_rate(host, -1.0));
+                assert!(!fixed.set_total_ticks(host, -1));
+                for _ in 0..4 {
+                    game.advance_clock();
+                }
+                assert_eq!(
+                    game.level_clock_time(overworld),
+                    Some(6_000),
+                    "a fixed time"
+                );
+                assert_eq!(
+                    game.level_clock_time(end),
+                    Some(110),
+                    "100 and 4 ticks at 2.5"
+                );
+                assert_eq!(
+                    game.command_clock_time("clocks:dungeon"),
+                    4,
+                    "an untouched registered clock counts"
+                );
+            });
         });
     }
 
@@ -834,8 +1024,53 @@ mod tests {
                 level.game_rule(game, "random_tick_speed"),
                 Ok(Some(GameRuleValue::Int(7)))
             );
-            let rules = level.game_rules(game).unwrap();
-            assert!(rules.contains(&("minecraft:random_tick_speed".into(), GameRuleValue::Int(7))));
+            let mut tick_speed = None;
+            assert_eq!(
+                level.visit_game_rules(game, &mut |id, value| {
+                    assert_ne!(id, "minecraft:max_minecart_speed");
+                    if id == "minecraft:random_tick_speed" {
+                        tick_speed = Some(value);
+                    }
+                    ControlFlow::Continue(())
+                }),
+                Ok(ControlFlow::Continue(()))
+            );
+            assert_eq!(tick_speed, Some(GameRuleValue::Int(7)));
+
+            game.ui.rules = game
+                .ui
+                .rules
+                .copy_with_features(&[gamerules::MINECART_IMPROVEMENTS.to_owned()]);
+            let mut first = Vec::new();
+            assert_eq!(
+                level.visit_game_rules(game, &mut |id, value| {
+                    first.push((id.to_owned(), value));
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(
+                first,
+                [(
+                    "minecraft:advance_time".to_owned(),
+                    GameRuleValue::Bool(true)
+                )]
+            );
+
+            let server: &dyn ServerHost = game;
+            let mut minecart_speed = None;
+            assert_eq!(
+                server.visit_game_rules(&mut |id, value| {
+                    if id == "minecraft:max_minecart_speed" {
+                        minecart_speed = Some(value);
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(minecart_speed, Some(GameRuleValue::Int(8)));
             let stale =
                 mod_api::LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
             let gone = mod_api::LevelRef::new(
@@ -847,24 +1082,21 @@ mod tests {
                     handle.game_rule(game, "keep_inventory"),
                     Err(LevelReadError::Stale)
                 );
-                assert_eq!(handle.game_rules(game), Err(LevelReadError::Stale));
-                assert!(game.native_level_world(handle).is_none());
-            }
-            {
-                let _scope =
-                    mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Setup);
                 assert_eq!(
-                    level.game_rule(game, "keep_inventory"),
-                    Err(LevelReadError::Unavailable)
+                    handle.visit_game_rules(game, &mut |_, _| panic!("refused rule visit")),
+                    Err(LevelReadError::Stale)
                 );
-                assert_eq!(level.game_rules(game), Err(LevelReadError::Unavailable));
+                assert!(game.native_level_world(handle).is_none());
             }
             game.options.execution_role = ExecutionRole::Client;
             assert_eq!(
                 level.game_rule(game, "keep_inventory"),
                 Err(LevelReadError::Unavailable)
             );
-            assert_eq!(level.game_rules(game), Err(LevelReadError::Unavailable));
+            assert_eq!(
+                level.visit_game_rules(game, &mut |_, _| panic!("refused rule visit")),
+                Err(LevelReadError::Unavailable)
+            );
             assert!(game.native_level_world(level).is_none());
         });
     }
@@ -939,8 +1171,11 @@ mod tests {
 
     #[test]
     fn rain_and_thunder_start_above_vanillas_thresholds() {
-        assert_eq!(super::weather_flags((0.2, 0.0)), (false, false));
-        assert_eq!(super::weather_flags((0.21, 0.9)), (true, false));
+        assert_eq!(
+            super::weather_flags((0.2_f32.next_down(), 0.0)),
+            (false, false)
+        );
+        assert_eq!(super::weather_flags((0.2, 0.9)), (true, false));
         assert_eq!(super::weather_flags((1.0, 0.95)), (true, true));
     }
 }

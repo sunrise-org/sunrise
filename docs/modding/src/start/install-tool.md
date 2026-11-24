@@ -57,6 +57,7 @@ The `export` lasts for this shell. Add `export PATH="$HOME/.local/bin:$PATH"` to
 
 ### macOS (Apple silicon)
 
+<!-- quickstart-test: skip, another computer's block -->
 ```sh
 (
   set -eu
@@ -146,7 +147,7 @@ cargo sunrise-mod --help
 ```
 
 It prints a short list of the everyday commands, which shows it is installed (`cargo sunrise-mod help all`
-lists every command's usage, and `cargo sunrise-mod <command> --help` says one command's):
+lists the author-facing commands, and `cargo sunrise-mod <command> --help` shows the usage for one command):
 
 ```text
 usage: cargo sunrise-mod <command> [options]
@@ -159,8 +160,6 @@ A tool built before `--help` existed prints the same usage after `error:` and ex
 
 The tool checks every SDK it fetches against Sunrise's release signature before it uses it, whatever the tool's own
 origin.
-
-To move to a newer tool later, run the same block again.
 
 ## Newest tool from main
 
@@ -179,24 +178,53 @@ Which to take:
   usage instead of a commit, that tool cannot yet `build` or `run` a native mod on its own, so take `mod-tool` for
   [Your first native mod](first-mod.md). The project still pins the Nightly's SDK either way. It builds against a
   pinned SDK as long as that SDK has what the tool needs; when it does not, `build` stops and names both ways out:
-  `cargo sunrise-mod update --sunrise nightly`, or the tool in that SDK's own release.
+  `cargo sunrise-mod pin nightly`, or the tool in that SDK's own release.
 
-`cargo sunrise-mod --version` prints the commit a tool is built from; a tool older than that option answers with its
-usage instead. The newest tool's commit is `commit` in
+`cargo sunrise-mod --version` prints the commit a tool is built from, or `commit local` for a tool you built yourself without
+naming one (`cargo install`); a tool older than that option answers with its usage instead. The newest tool's commit is `commit` in
 [`tool.json`](https://github.com/sunrise-org/sunrise/releases/download/mod-tool/tool.json).
+
+[`cargo sunrise-mod release`](../how-to/publish.md#releasing) pushes a tag that runs the registry's shared
+release workflow. Your own tool needs the `release` command, which a Nightly's tool may lack: take `mod-tool` then.
+The workflow installs the signed `mod-tool` itself and checks it against the signed sums. The mod's SDK is a
+separate pin.
+
+## Updating the tool
+
+<!-- quickstart-test: skip, the installed Nightly tool may predate this command; the signed update is tested separately -->
+```sh
+cargo sunrise-mod self-update
+```
+
+This replaces a standalone copy of the rolling `mod-tool` release, installed by the "Newest tool from main" block
+in `~/.local/bin` (Linux and macOS) or `%USERPROFILE%\.sunrise\bin` (Windows), with that release's newest build. It verifies Sunrise's signature and
+the checksum of the release's commit metadata before deciding whether the tool is current. If it installs an
+update, it also verifies the archive's checksum and prints the old and new commits. It never changes a mod's
+pinned SDK. On Windows, the previous executable is kept as `.cargo-sunrise-mod.exe.old` beside the new one and can
+be deleted once the command exits.
+
+On `new`, `build`, `run`, `check` and `pin`, such a copy checks the signed rolling release for a newer build once
+per day at most. It prints a reminder when one is available but never installs it automatically. The check is off
+in CI and when `CARGO_NET_OFFLINE` is set to anything but `false`.
+
+A copy installed from an SDK follows that SDK and is never replaced by `self-update`. If your copy does not know
+`self-update` yet, or you want to switch between an SDK's tool and the rolling release, rerun the appropriate
+install block above. Copies run from an SDK folder or managed by `cargo install` or
+another package manager are not replaced in place; update them through their own install method.
 
 ## With `cargo install`
 
 If no prebuilt tool fits your computer, build it from source:
 
+<!-- quickstart-test: skip, the prebuilt tool is the one under test -->
 ```sh
 cargo install --locked --git https://github.com/sunrise-org/sunrise cargo-sunrise-mod
 ```
 
 This compiles the tool and the crates it needs from the game repository, and puts it in
 `~/.cargo/bin`, where `cargo` finds it. It builds the tool from the repository's newest commit, which can be newer
-than the Nightly. A mod pinned to the Nightly still builds against the Nightly's SDK, and `new` and `update` write
-the pins from that SDK, not from the tool.
+than the Nightly. A mod pinned to the Nightly still builds against the Nightly's SDK, and `new` and `pin` write
+the build pin from that SDK, not from the tool.
 
 ## On NixOS
 
@@ -208,4 +236,3 @@ runs `cargo`, so Rust has to be installed in the same environment.
 
 - [Your first native mod](first-mod.md)
 - [Your first content mod](first-content-mod.md)
-- [Your first WebAssembly mod](first-wasm-mod.md)

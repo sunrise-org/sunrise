@@ -596,7 +596,7 @@ Villages and fights behaving as in vanilla: iron golems defending villages, vill
 
 <details><summary>Technical</summary>
 
-Villages: iron golem village goals, villager memories across saves, villager age, job-site claiming on dedicated servers, flower offers ([#1639](https://github.com/horizon-rust/horizon/issues/1639) is one report). Combat: the mobs' `attack_knockback` attribute, mace smash logic, the hit knockback source on the host, the fire burnout biome tag. Each is checked against vanilla by a harness ([docs/rust-parity.md](docs/rust-parity.md)).
+Villages: iron golem village goals, villager memories across saves, villager age, job-site claiming on dedicated servers, flower offers ([#1639](https://github.com/horizon-rust/horizon/issues/1639) is one report). Combat: the mobs' `attack_knockback` attribute, mace smash logic, the hit knockback source on the host, the fire burnout biome tag. Each is checked against vanilla by a harness ([docs/status.md](docs/status.md)).
 
 </details>
 
@@ -708,7 +708,7 @@ On a system Sunrise has no download for, such as FreeBSD, the launcher offers to
 
 Issue [#4354](https://github.com/horizon-rust/horizon/issues/4354): when no release asset matches the platform, the launcher fetches the tagged source and runs the same pinned-toolchain `cargo build --locked` its native-mod builds use, with a warning about the time it takes. The build is unsigned, so the launcher marks the version as built locally.
 
-More: [docs/native-mods.md](docs/native-mods.md)
+More: [docs/modding/src/how-to/native-mods.md](docs/modding/src/how-to/native-mods.md)
 
 </details>
 
@@ -718,7 +718,7 @@ A native Sunrise for Windows on ARM computers, such as Snapdragon laptops.
 
 <details><summary>Technical</summary>
 
-Releases are x64 for Windows and Linux and arm64 for macOS. Needs an aarch64-pc-windows-msvc build in the release workflow and a machine to test on.
+Releases are x64 for Windows and Linux and arm64 for macOS, the SDK's three platforms. Windows ARM64 returns only with its own SDK ([https://github.com/sunrise-org/sunrise/issues/4556](https://github.com/sunrise-org/sunrise/issues/4556)): a game build, the SDK's slices and a machine to test on.
 
 More: [docs/release-flow.md](docs/release-flow.md)
 
@@ -742,7 +742,7 @@ Builds of the game and the launcher for Macs with an Intel processor.
 
 <details><summary>Technical</summary>
 
-x86_64 game and launcher builds, picked per processor ([#1171](https://github.com/horizon-rust/horizon/issues/1171)). Before it ships it needs a run on a real Intel Mac: Rosetta on Apple Silicon only proves the CPU code. Requests: [#1161](https://github.com/horizon-rust/horizon/issues/1161), [#1792](https://github.com/horizon-rust/horizon/issues/1792).
+x86_64 game builds return only with their own SDK ([https://github.com/sunrise-org/sunrise/issues/4556](https://github.com/sunrise-org/sunrise/issues/4556)), and need a run on a real Intel Mac: Rosetta on Apple Silicon only proves the CPU code. Requests: [#1161](https://github.com/horizon-rust/horizon/issues/1161), [#1792](https://github.com/horizon-rust/horizon/issues/1792).
 
 </details>
 

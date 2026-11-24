@@ -1333,11 +1333,11 @@ impl Game<'_> {
 
     /// Let go of everything a replay (or a person) held.
     fn release_replay_inputs(&mut self) {
-        self.keys.clear();
+        self.clear_device_keys();
         self.physical_keys.clear();
         self.physical_buttons.clear();
-        self.left = false;
-        self.right = false;
+        self.set_mapping_held("key.attack", false);
+        self.set_mapping_held("key.use", false);
         self.modifiers = winit::keyboard::ModifiersState::empty();
         self.debug_keys.modifier_down = false;
         self.pad.clear_injected();

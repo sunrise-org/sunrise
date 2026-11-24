@@ -44,3 +44,9 @@ let _ = player.set_chunk_areas(host, &[]);
   | `LoadedPerLevel` | `max_viewed_loaded_chunks_per_level`, every player together | 16384 |
   | `TickingPerLevel` | `max_viewed_ticking_chunks_per_level`, every player together | 3528 |
 - **Cost.** With no area on the server, a level pass costs one integer compare.
+
+To read what is actually resident after the tickets take effect, use
+`level.visit_loaded_chunks(host, &mut visit)`. To see who watches a resident chunk,
+use `chunk.visit_watchers(host, &mut visit)`. Neither read loads chunks or changes
+areas. See [players, structures and chunk watchers](../world/dimension-shape.md#players-structures-and-chunk-watchers)
+for order and refusals.

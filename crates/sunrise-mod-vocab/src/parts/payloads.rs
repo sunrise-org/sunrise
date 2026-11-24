@@ -34,6 +34,35 @@ pub struct Payloads {
     /// The load these declarations belong to, never 0 (a refused registration's); tokens of
     /// another load are stale.
     pub(crate) load: u64,
+    /// The drop counters of each `Droppable` channel, shared by every copy of this table.
+    pub(crate) drops: HashMap<String, Arc<DropCounters>>,
+}
+
+// no wire: engine-internal atomics, read by mods only through `PayloadDropCounts`.
+/// Why `Droppable` sends of one channel were dropped, counted by the engine's queues.
+#[derive(Default)]
+#[non_exhaustive]
+pub struct DropCounters {
+    /// Waited past the stale limit.
+    pub stale: std::sync::atomic::AtomicU64,
+    /// Pushed out past the queue's byte watermark.
+    pub watermark: std::sync::atomic::AtomicU64,
+    /// Over the byte budget.
+    pub budget: std::sync::atomic::AtomicU64,
+    /// Still waiting at the switch to play or the end of the connection.
+    pub switch: std::sync::atomic::AtomicU64,
+}
+impl DropCounters {
+    /// The counts so far.
+    pub fn read(&self) -> crate::PayloadDropCounts {
+        use std::sync::atomic::Ordering::Relaxed;
+        crate::PayloadDropCounts {
+            stale: self.stale.load(Relaxed),
+            watermark: self.watermark.load(Relaxed),
+            budget: self.budget.load(Relaxed),
+            switch: self.switch.load(Relaxed),
+        }
+    }
 }
 
 /// What a typed token must match: its declaration as registered, before protocol splitting.
@@ -75,33 +104,64 @@ impl PayloadReceiver {
     pub fn owner(&self) -> &'static str {
         self.owner
     }
-    /// Recheck the owner without scanning registrations or resolving the id again: off when
-    /// its mod is off or this callback panicked.
-    pub fn enabled(&self) -> bool {
+    /// Whether the mod itself is enabled. A poisoned receiver remains a declared
+    /// channel; dispatch skips its callback without turning the packet into a refusal.
+    pub fn owner_enabled(&self) -> bool {
         crate::mod_index_on(self.owner_index)
-            && !self.panicked.load(std::sync::atomic::Ordering::Acquire)
     }
-    /// Invoke only this owner. The caller owns the root transaction and handles
-    /// a native panic as `Failed`, never as retryable contention. A panic disables
-    /// this callback for every connection; later calls refuse without running it.
+    /// Whether a panic already disabled this callback, independently of its owner's state.
+    pub fn poisoned(&self) -> bool {
+        self.panicked.load(std::sync::atomic::Ordering::Acquire)
+    }
+    /// Whether the mod and this callback are both still enabled.
+    pub fn enabled(&self) -> bool {
+        crate::callback_owner::enabled(self.owner_index, &self.panicked)
+    }
+    /// Invoke only this owner. The caller owns the root transaction; the shared
+    /// boundary disables and reports a panicking callback, not its connection.
     pub fn handle(
         &self,
         bytes: crate::PayloadBytes,
         context: &mut dyn crate::IPayloadContext,
-    ) -> Result<(), crate::PayloadHandleError> {
-        self.call("payload", || self.handler.handle(bytes, context))
-            .map_err(crate::PayloadHandleError::Failed)?
+    ) -> Result<(), crate::callback_owner::CallbackFailure> {
+        self.call("payload", || self.handler.handle(bytes, context))?
+            .map_err(|crate::PayloadHandleError::Failed(error)| {
+                crate::callback_owner::CallbackFailure::Refused(error)
+            })
     }
-    /// Scheduled work retains its original receiving owner and enable guard.
+    /// Run and then dispose of call-owned work under its receiving owner's panic policy.
+    /// Contain run and disposal separately so both may panic without a double unwind.
     pub fn run_work(
         &self,
-        work: &dyn crate::PayloadWork,
+        work: Arc<dyn crate::PayloadWork>,
         context: &mut dyn crate::IPayloadContext,
-    ) -> Result<(), String> {
-        self.call("payload work", || work.run(context))?
+    ) -> Result<(), crate::callback_owner::CallbackFailure> {
+        let result = self
+            .call("payload work", || work.run(context))
+            .and_then(|result| result.map_err(crate::callback_owner::CallbackFailure::Refused));
+        // A destructor panic must not turn into a protocol failure if `run` refused.
+        self.dispose_work(work).and(result)
     }
-    fn call<T>(&self, operation: &'static str, call: impl FnOnce() -> T) -> Result<T, String> {
-        crate::callback_owner::call(
+    /// Dispose of call-owned work under the same registration even if it is quarantined.
+    pub fn dispose_work(
+        &self,
+        work: Arc<dyn crate::PayloadWork>,
+    ) -> Result<(), crate::callback_owner::CallbackFailure> {
+        crate::callback_owner::dispose_typed(
+            self.owner,
+            self.owner_index,
+            &self.panicked,
+            "payload",
+            "payload work drop",
+            work,
+        )
+    }
+    fn call<T>(
+        &self,
+        operation: &'static str,
+        call: impl FnOnce() -> T,
+    ) -> Result<T, crate::callback_owner::CallbackFailure> {
+        crate::callback_owner::call_typed(
             self.owner,
             self.owner_index,
             &self.panicked,
@@ -178,6 +238,10 @@ impl Payloads {
             Err(PayloadSendError::StaleToken(token.id.clone()))
         }
     }
+    /// The drop counters of `Droppable` channel `id`, which the engine's queues increment.
+    pub fn drop_counters(&self, id: &str) -> Option<&Arc<DropCounters>> {
+        self.drops.get(id)
+    }
     /// The raw play channels an enabled mod declared, by exact id.
     pub fn raw_channels(&self) -> impl Iterator<Item = &str> {
         self.raw
@@ -242,6 +306,16 @@ pub fn installed_payloads() -> Option<Arc<Payloads>> {
     installed().and_then(|installed| installed.keys.payloads.clone())
 }
 
+/// The drop counts of `Droppable` channel `id`, which `payload_drop_counts` answers; `None` for
+/// any other channel.
+// hidden: engine read exported only through __private::game.
+#[doc(hidden)]
+pub fn payload_drop_counts(id: &PayloadId) -> Option<crate::PayloadDropCounts> {
+    installed_payloads()?
+        .drop_counters(&id.0)
+        .map(|counters| counters.read())
+}
+
 /// Check `token` against the installed load: what the host runs before every typed send.
 /// With no payloads installed, every token is stale.
 // hidden: engine send check exported only through __private::game.
@@ -272,18 +346,20 @@ pub trait PayloadsRegistrar {
         handler: Arc<dyn IPayloadHandler>,
     );
     /// Register a typed declaration: `declaration` carries the mod's own version, to which
-    /// the registrar appends `schema`. Refused like [`add_payload`](Self::add_payload). The
-    /// token names the declaration's slot and this load; a refused one names load 0, so every
+    /// the registrar appends `schema`. No schema means a form unavailable in typed payloads,
+    /// refused like [`add_payload`](Self::add_payload). The token names the declaration's slot
+    /// and this load; a refused one names load 0, so every
     /// send with it is stale.
     fn add_typed_payload(
         &mut self,
         declaration: PayloadDeclaration,
-        schema: u64,
+        schema: Option<u64>,
         server: Option<Arc<dyn IPayloadHandler>>,
         client: Option<Arc<dyn IPayloadHandler>>,
     ) -> PayloadToken;
     /// Declare a raw play channel by exact id, with an optional server receiver.
-    /// Reserved namespaces, a second declaration by the same mod and an id a
-    /// typed payload uses refuse startup, naming the mods involved.
+    /// The `minecraft` namespace, built-in engine `sunrise:` channels, a second
+    /// declaration by the same mod and an id a typed payload uses refuse startup,
+    /// naming the mods involved.
     fn add_raw_payload(&mut self, id: PayloadId, server: Option<Arc<dyn IPayloadHandler>>);
 }

@@ -1,3 +1,0 @@
-sunrise-client game::block_entity_ticks::slot_guard_tests::a_loop_slot_outside_the_world_is_refused_not_a_panic lib daily resources
-sunrise-client game::payload_transport::phase_refusal_tests::a_payload_handler_outside_the_world_is_refused_not_a_panic lib daily resources
-sunrise-client game::point_phase_refusal_tests::a_point_outside_the_world_skips_the_listener_not_a_panic lib daily resources

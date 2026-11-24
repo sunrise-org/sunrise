@@ -61,38 +61,147 @@ fn code_types_join_package_and_code_blocks_before_planning() {
     let base = base("merge");
     let mut mods = vec![declared_mod()];
     let blocks = [Block {
-        id: "test:c".into(),
+        id: "minecraft:custom_block".into(),
         template: "minecraft:stone".into(),
         ..Block::default()
     }];
-    let types = [kind("test:machine", &["test:b", "test:c"])];
-    let errors = accept_declared(&mut mods, &blocks, &[], &types, &BTreeSet::new());
+    let batches = BTreeMap::from([(
+        "test",
+        DeclaredContent {
+            blocks: blocks
+                .into_iter()
+                .map(|b| b.validate_local().unwrap())
+                .collect(),
+            types: vec![kind(
+                "minecraft:custom_type",
+                &["test:b", "minecraft:custom_block"],
+            )],
+            ..Default::default()
+        },
+    )]);
+    let mut errors = Vec::new();
+    accept_declared(&mut mods, &batches, &[], &BTreeSet::new(), &mut errors).unwrap();
     assert!(errors.is_empty(), "{errors:?}");
     let plan = Plan::new(&base, &mods).unwrap();
     assert_eq!(plan.block_entity_types.len(), 1);
     assert_eq!(
         plan.block_entity_factories.get("test:b"),
-        Some(&"test:machine")
+        Some(&"minecraft:custom_type")
     );
     assert_eq!(
-        plan.block_entity_factories.get("test:c"),
-        Some(&"test:machine")
+        plan.block_entity_factories.get("minecraft:custom_block"),
+        Some(&"minecraft:custom_type")
     );
     assert!(!plan.block_entity_factories.contains_key("test:a"));
     drop(plan);
     // A type-only code namespace is not skipped by the content merge.
-    assert!(
-        accept_declared(
-            &mut mods,
-            &[],
-            &[],
-            &[kind("other:empty", &[])],
-            &BTreeSet::new()
-        )
-        .is_empty()
-    );
+    let type_only = BTreeMap::from([(
+        "other",
+        DeclaredContent {
+            types: vec![kind("other:empty", &[])],
+            ..Default::default()
+        },
+    )]);
+    accept_declared(&mut mods, &type_only, &[], &BTreeSet::new(), &mut errors).unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(mods[1].content.block_entity_types[0].id, "other:empty");
     assert_eq!(Plan::new(&base, &mods).unwrap().block_entity_types.len(), 2);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn cross_namespace_declarations_do_not_replace_existing_block_or_item_keys() {
+    let base = base("duplicate-keys");
+    fs::write(base.join("items.json"), r#"{"minecraft:stone":{}}"#).unwrap();
+    let block = Block {
+        id: "test:a".into(),
+        template: "minecraft:stone".into(),
+        ..Block::default()
+    };
+    let item = Item {
+        id: "test:b".into(),
+        template: "minecraft:stone".into(),
+        ..Item::default()
+    };
+    let conflict = |kind, id: &str, reason: &str| {
+        DeclarationRefusal::new(
+            "other",
+            kind,
+            DeclarationError::Rejected {
+                id: id.into(),
+                reason: reason.into(),
+            },
+        )
+    };
+    for (batch, expected) in [
+        (
+            DeclaredContent {
+                blocks: vec![block.validate_local().unwrap()],
+                ..Default::default()
+            },
+            Ok(conflict(
+                DeclarationKind::Block,
+                "test:a",
+                "declared twice (already declared by mod test)",
+            )),
+        ),
+        (
+            DeclaredContent {
+                items: vec![item.clone().validate_local().unwrap()],
+                ..Default::default()
+            },
+            Ok(conflict(
+                DeclarationKind::Item,
+                "test:b",
+                "declared twice, or is also a block's item (already declared by mod test)",
+            )),
+        ),
+        (
+            DeclaredContent {
+                items: vec![
+                    Item {
+                        id: "minecraft:stone".into(),
+                        ..item
+                    }
+                    .validate_local()
+                    .unwrap(),
+                ],
+                ..Default::default()
+            },
+            Err("other: minecraft:stone is already an item"),
+        ),
+    ] {
+        let mut mods = vec![declared_mod()];
+        mods[0]
+            .content
+            .blocks
+            .iter_mut()
+            .find(|block| block.id == "test:b")
+            .unwrap()
+            .item = true;
+        let mut refusals = Vec::new();
+        accept_declared(
+            &mut mods,
+            &BTreeMap::from([("other", batch)]),
+            &[],
+            &BTreeSet::new(),
+            &mut refusals,
+        )
+        .unwrap();
+        match expected {
+            Ok(refusal) => {
+                // A second package's duplicate is caught while joining the batch.
+                assert_eq!(refusals, [refusal]);
+                assert_eq!(mods.len(), 1);
+                assert_eq!(mods[0].id, "test");
+            }
+            Err(expected) => {
+                // The prepared base item registry is first consulted by the plan.
+                assert!(refusals.is_empty(), "{refusals:?}");
+                assert_eq!(Plan::new(&base, &mods).err().unwrap().to_string(), expected);
+            }
+        }
+    }
     fs::remove_dir_all(base).unwrap();
 }
 
@@ -100,15 +209,6 @@ fn code_types_join_package_and_code_blocks_before_planning() {
 fn validates_declared_type_ids_and_exclusive_known_mod_block_membership() {
     let base = base("validation");
     let mut mods = [declared_mod()];
-    mods[0].content.block_entity_types = vec![kind("minecraft:custom", &["test:a"])];
-    let error = Plan::new(&base, &mods).err().unwrap();
-    assert_eq!(
-        error
-            .downcast_ref::<ReservedBlockEntityNamespace>()
-            .unwrap()
-            .kind,
-        "minecraft:custom"
-    );
     for (types, error) in [
         (
             vec![
@@ -119,7 +219,7 @@ fn validates_declared_type_ids_and_exclusive_known_mod_block_membership() {
         ),
         (
             vec![kind("minecraft:sign", &["test:a"])],
-            "block entity type minecraft:sign cannot use the minecraft namespace",
+            "block entity type minecraft:sign is already declared",
         ),
         (
             vec![kind("test:machine", &["test:a", "test:a"])],
@@ -237,13 +337,10 @@ fn code_declared_types_build_a_root_and_membership_changes_invalidate_its_cache(
 
 #[test]
 fn code_items_can_reference_both_owned_namespaces_in_one_batch() {
-    let mut content = Content::declared("porter");
-    content.namespaces.push("legacy".into());
-    let mut mods = vec![ContentMod {
-        id: "porter".into(),
-        content,
-        jars: vec![],
-    }];
+    let manifest = sunrise_mod_package::Manifest::parse(
+        "id='porter'\nname='Porter'\nversion='1'\napi='0.2'\ncapabilities=['registries']\nnamespaces=['legacy']"
+    ).unwrap();
+    let mut mods = Vec::new();
     let items = [
         ("legacy:wrench", "porter:spoon"),
         ("porter:spoon", "legacy:wrench"),
@@ -254,11 +351,52 @@ fn code_items_can_reference_both_owned_namespaces_in_one_batch() {
         crafting_remainder: Some(remainder.into()),
         ..sunrise_mod_package::content::Item::default()
     });
-    let errors = accept_declared(&mut mods, &[], &items, &[], &BTreeSet::new());
+    let mut batches = BTreeMap::from([(
+        "porter",
+        DeclaredContent {
+            items: items
+                .iter()
+                .cloned()
+                .map(|i| i.validate_local().unwrap())
+                .collect(),
+            ..Default::default()
+        },
+    )]);
+    let mut errors = Vec::new();
+    accept_declared(
+        &mut mods,
+        &batches,
+        &[&manifest],
+        &BTreeSet::new(),
+        &mut errors,
+    )
+    .unwrap();
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(mods.len(), 1);
     assert_eq!(mods[0].id, "porter");
+    assert_eq!(mods[0].content.namespaces, ["porter", "legacy"]);
     assert_eq!(mods[0].content.items, items);
+
+    // No file row to infer an owner from, and neither namespace installs on refusal.
+    let mut broken = items[0].clone();
+    broken
+        .components
+        .insert("legacy:unknown".into(), serde_json::json!(1));
+    batches.get_mut("porter").unwrap().items[0] = broken.validate_local().unwrap();
+    mods.clear();
+    accept_declared(
+        &mut mods,
+        &batches,
+        &[&manifest],
+        &BTreeSet::new(),
+        &mut errors,
+    )
+    .unwrap();
+    assert!(mods.is_empty());
+    assert!(matches!(errors.as_slice(), [refusal]
+        if refusal.mod_id == "porter" && refusal.kind == DeclarationKind::Item
+        && matches!(&refusal.error, DeclarationError::Rejected { id, reason }
+            if id == "legacy:wrench" && reason.contains("legacy:unknown"))));
 }
 
 #[test]
@@ -276,8 +414,19 @@ fn code_declarations_join_the_manifest_owner_of_a_secondary_namespace() {
         template: "minecraft:stone".into(),
         ..Block::default()
     }];
-    let types = [kind("legacy:pot_type", &["legacy:pot"])];
-    let errors = accept_declared(&mut mods, &blocks, &[], &types, &BTreeSet::new());
+    let batches = BTreeMap::from([(
+        "porter",
+        DeclaredContent {
+            blocks: blocks
+                .into_iter()
+                .map(|b| b.validate_local().unwrap())
+                .collect(),
+            types: vec![kind("legacy:pot_type", &["legacy:pot"])],
+            ..Default::default()
+        },
+    )]);
+    let mut errors = Vec::new();
+    accept_declared(&mut mods, &batches, &[], &BTreeSet::new(), &mut errors).unwrap();
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(
         mods.len(),

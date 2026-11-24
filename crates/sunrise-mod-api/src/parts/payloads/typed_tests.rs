@@ -1,8 +1,9 @@
 use super::*;
+use crate::__private::game::CallbackFailure;
 use crate::{
-    IPayloadContext, PayloadAccepted, PayloadBytes, PayloadCodec, PayloadContextError,
-    PayloadHandleError, PayloadSendError, PayloadToken, PayloadWork, PayloadWorkStatus, PlayerRef,
-    Text, VarInt, payload_schema, typed_payload_version,
+    IPayloadContext, PayloadAccepted, PayloadBytes, PayloadContextError, PayloadHandleError,
+    PayloadSendError, PayloadToken, PayloadWork, PayloadWorkStatus, PlayerRef, Text, Wire,
+    payload_schema, typed_payload_version,
 };
 use std::sync::Mutex;
 
@@ -17,12 +18,12 @@ fn frozen(registrar: &PartRegistrar) -> mod_vocab::__private::game::Payloads {
         .into()
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Counter {
-    counter: VarInt,
+    counter: u8,
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Other {
     counter: i32,
 }
@@ -167,6 +168,20 @@ impl IPayloadContext for Unreached {
     fn check_payload_token(&self, _: &PayloadToken) -> Result<(), PayloadSendError> {
         unreachable!()
     }
+    fn send_to(
+        &mut self,
+        _: &[PlayerRef],
+        _: &PayloadId,
+        _: PayloadBytes,
+    ) -> Result<u32, PayloadSendError> {
+        unreachable!()
+    }
+    fn finish_configuration_task(
+        &mut self,
+        _: &crate::Identifier,
+    ) -> Result<(), crate::ConfigurationTaskError> {
+        Err(crate::ConfigurationTaskError::WrongContext)
+    }
     fn disconnect(&mut self, _: Text) {
         unreachable!()
     }
@@ -178,70 +193,125 @@ impl IPayloadContext for Unreached {
     }
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Labelled {
-    counter: VarInt,
+    counter: i32,
     labels: Vec<String>,
     chain: Chain,
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Chain(Option<Box<Chain>>);
 
 #[test]
-fn a_malformed_body_is_refused_by_name_before_the_handler_runs() {
-    static SEEN: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+fn valid_and_malformed_wire_bodies_are_handled_in_both_directions() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let clients = seen.clone();
+    let servers = seen.clone();
     let mut registrar = PartRegistrar::new("test");
     (&mut registrar as &mut dyn Registrar)
         .payload_handlers()
         .registrar("1")
-        .play_to_server_typed(
+        .play_bidirectional_typed(
             PayloadId("test:labelled".into()),
-            |value: Labelled, _: &mut dyn IPayloadContext| {
-                SEEN.lock().unwrap().push(value.counter.0);
+            move |value: Labelled, _| {
+                servers
+                    .lock()
+                    .unwrap()
+                    .push((PayloadDirection::ToServer, value));
+                Ok(())
+            },
+            move |value: Labelled, _| {
+                clients
+                    .lock()
+                    .unwrap()
+                    .push((PayloadDirection::ToClient, value));
                 Ok(())
             },
         );
-    let receiver = frozen(&registrar)
-        .handler(
-            "test:labelled",
-            PayloadProtocol::Play,
-            PayloadDirection::ToServer,
-        )
-        .unwrap();
+    let table = frozen(&registrar);
+    // Little-endian i32 7, one length-prefixed UTF-8 label, no recursive child.
+    let valid = [7, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, b'a', 0];
     let nested = |levels: usize| {
-        let mut body = vec![7, 0];
+        let mut body = vec![7, 0, 0, 0, 0, 0, 0, 0];
         body.extend(std::iter::repeat_n(1, levels));
         body.push(0);
         body
     };
-    for (body, error) in [
-        // A label count of -1.
-        (vec![7, 0xff, 0xff, 0xff, 0xff, 0x0f], "NegativeLength"),
-        // 4097 labels, one past the list bound, before any is reserved.
-        (vec![7, 0x81, 0x20], "LengthOverLimit"),
-        // 33 boxed options: nesting level 65.
-        (nested(33), "TooDeep"),
-        (vec![7, 0, 0, 0xaa], "Trailing"),
-    ] {
-        let refused = receiver
-            .handle(PayloadBytes(body), &mut Unreached)
-            .unwrap_err();
-        let PayloadHandleError::Failed(refused) = refused else {
-            panic!("expected a failed decode, got {refused:?}");
+    for direction in [PayloadDirection::ToServer, PayloadDirection::ToClient] {
+        let receiver = table
+            .handler("test:labelled", PayloadProtocol::Play, direction)
+            .unwrap();
+        for body in [
+            // 4097 labels, one past the list bound.
+            vec![7, 0, 0, 0, 1, 0x10, 0, 0],
+            // Each next link adds an option and a box to the depth.
+            nested(33),
+            [valid.as_slice(), &[0xaa]].concat(),
+            valid[..5].to_vec(),
+        ] {
+            let CallbackFailure::Refused(refused) = receiver
+                .handle(PayloadBytes(body), &mut Unreached)
+                .unwrap_err()
+            else {
+                panic!("malformed typed payload did not produce a codec refusal");
+            };
+            assert!(refused.contains("test:labelled"), "{refused}");
+        }
+        assert!(seen.lock().unwrap().is_empty());
+        receiver
+            .handle(PayloadBytes(valid.to_vec()), &mut Unreached)
+            .unwrap();
+        let expected = Labelled {
+            counter: 7,
+            labels: vec!["a".into()],
+            chain: Chain(None),
         };
-        assert!(refused.contains("test:labelled"), "{refused}");
-        assert!(refused.contains(error), "{refused}");
+        assert_eq!(&*seen.lock().unwrap(), &[(direction, expected)]);
+        seen.lock().unwrap().clear();
     }
-    assert!(SEEN.lock().unwrap().is_empty());
-    // Level 64 is the deepest a value goes.
-    receiver
-        .handle(PayloadBytes(nested(32)), &mut Unreached)
-        .unwrap();
-    receiver
-        .handle(PayloadBytes(vec![7, 0, 0]), &mut Unreached)
-        .unwrap();
-    assert_eq!(*SEEN.lock().unwrap(), [7, 7]);
+}
+
+#[test]
+fn ordinary_only_wire_forms_refuse_registration_before_a_channel_exists() {
+    fn refused<T: crate::wire::Wire + 'static>(
+        view: &mut crate::PayloadRegistrar<'_>,
+        id: &'static str,
+    ) -> &'static str {
+        let channel = view.play_to_server_typed::<T>(PayloadId(id.into()), ignore);
+        let token = channel.token();
+        assert_eq!(token.id.0, id);
+        assert_eq!(token.load, 0, "{id}");
+        id
+    }
+
+    let mut registrar = PartRegistrar::new("test");
+    let mut payloads = (&mut registrar as &mut dyn Registrar).payload_handlers();
+    let mut view = payloads.registrar("1");
+    let ids = [
+        refused::<Option<serde_json::Value>>(&mut view, "test:json"),
+        refused::<crate::LegacyRandomSource>(&mut view, "test:converted"),
+        refused::<crate::LevelKey>(&mut view, "test:level_key"),
+        refused::<crate::LevelDimension>(&mut view, "test:dimension"),
+    ];
+    drop(view);
+    assert!(registrar.parts.payloads.is_none());
+    assert_eq!(registrar.refused.len(), ids.len());
+    for (refused, id) in registrar.refused.iter().zip(ids) {
+        assert!(refused.contains(id), "{refused}");
+    }
+}
+
+#[test]
+fn text_is_admitted_in_typed_payload_registration() {
+    let mut registrar = PartRegistrar::new("test");
+    let mut payloads = (&mut registrar as &mut dyn Registrar).payload_handlers();
+    let mut view = payloads.registrar("1");
+    let channel = view.play_to_server_typed::<crate::Text>(PayloadId("test:text".into()), ignore);
+    assert_ne!(channel.token().load, 0);
+    drop(view);
+    assert!(registrar.refused.is_empty());
+    assert!(registrar.parts.payloads.is_some());
 }
 
 #[test]
@@ -308,22 +378,89 @@ fn a_callback_that_panicked_is_never_invoked_again() {
     };
     let first = receiver();
     assert!(first.enabled());
-    let error = first
-        .handle(PayloadBytes(vec![7]), &mut Unreached)
-        .unwrap_err();
-    let PayloadHandleError::Failed(error) = error else {
-        panic!("expected a failed callback, got {error:?}");
-    };
-    assert!(error.contains("panicked"), "{error}");
+    assert!(matches!(
+        first.handle(PayloadBytes(vec![7]), &mut Unreached),
+        Err(CallbackFailure::Panicked)
+    ));
     // Disabled for this connection and for one that resolves the callback later.
     for receiver in [first, receiver()] {
         assert!(!receiver.enabled());
-        assert_eq!(
+        assert!(matches!(
             receiver.handle(PayloadBytes(vec![7]), &mut Unreached),
-            Err(PayloadHandleError::Failed(
-                "payload owner is disabled".into()
-            ))
-        );
+            Err(CallbackFailure::Poisoned)
+        ));
     }
     assert_eq!(*CALLS.lock().unwrap(), 1);
+}
+
+#[test]
+fn call_owned_work_is_disposed_under_the_receiving_registration() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Work {
+        panic_run: bool,
+        ran: Arc<AtomicBool>,
+        attributed_drop: Arc<AtomicBool>,
+    }
+    impl PayloadWork for Work {
+        fn run(&self, _: &mut dyn IPayloadContext) -> Result<(), String> {
+            self.ran.store(true, Ordering::Relaxed);
+            if self.panic_run {
+                panic!("work run panicked");
+            }
+            Err("work refused before its destructor panicked".into())
+        }
+    }
+    impl Drop for Work {
+        fn drop(&mut self) {
+            self.attributed_drop.store(
+                mod_vocab::__private::game::retained_callback_active(),
+                Ordering::Relaxed,
+            );
+            panic!("work drop panicked");
+        }
+    }
+
+    for panic_run in [false, true] {
+        let mut registrar = PartRegistrar::new("payload_work_disposal");
+        (&mut registrar as &mut dyn Registrar)
+            .payload_handlers()
+            .registrar("1")
+            .play_to_server_typed::<Counter>(PayloadId("test:work".into()), ignore);
+        let table = frozen(&registrar);
+        let receiver = table
+            .handler(
+                "test:work",
+                PayloadProtocol::Play,
+                PayloadDirection::ToServer,
+            )
+            .unwrap();
+        let make = || {
+            let ran = Arc::new(AtomicBool::new(false));
+            let attributed_drop = Arc::new(AtomicBool::new(false));
+            let work = Arc::new(Work {
+                panic_run,
+                ran: ran.clone(),
+                attributed_drop: attributed_drop.clone(),
+            });
+            (work, ran, attributed_drop)
+        };
+        let (work, ran, attributed_drop) = make();
+        assert!(matches!(
+            receiver.run_work(work, &mut Unreached),
+            Err(CallbackFailure::Panicked)
+        ));
+        assert!(ran.load(Ordering::Relaxed));
+        assert!(attributed_drop.load(Ordering::Relaxed));
+        assert!(receiver.poisoned());
+
+        // A quarantined registration still disposes of call-owned work without running it.
+        let (work, ran, attributed_drop) = make();
+        assert!(matches!(
+            receiver.run_work(work, &mut Unreached),
+            Err(CallbackFailure::Panicked)
+        ));
+        assert!(!ran.load(Ordering::Relaxed));
+        assert!(attributed_drop.load(Ordering::Relaxed));
+    }
 }

@@ -1,6 +1,7 @@
 //! Engine particle provider options, independent of API registry keys.
 use super::ParticleType;
 use mod_api::client::particles::PositionSource;
+use sunrise_world::particle_options::ParticleOptions as PersistentOptions;
 /// `ParticleOptions` with the parameters of the option classes used here.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods use the constructors
@@ -34,16 +35,48 @@ pub struct ParticleOptions {
     /// `SimpleParticleType` plus the provider `particles/<name>.json` names.
     /// API requests borrow the immutable load table; native file input can own its name.
     pub mod_particle: Option<std::borrow::Cow<'static, str>>,
-    /// Pre-1.20.5 entity-effect providers use spawn velocity as RGB; true is ambient.
-    pub legacy_entity_effect: Option<bool>,
-    /// A pre-1.21.4 trail, which had no duration: TrailParticle.Provider chose
-    /// `nextInt(40) + 10` after constructing the particle. Set only through the mod API,
-    /// never read from the wire.
-    pub legacy_trail_lifetime: bool,
+    /// A registered type's owned options and its `overrideLimiter` flag.
+    pub typed_particle: Option<(mod_api::__private::TypedParticleOptions, bool)>,
     pub source: Option<std::sync::Arc<str>>,
     pub polytone_seed: Option<std::sync::Arc<super::polytone::Seed>>,
 }
 impl ParticleOptions {
+    /// Persistent options that don't need a model lookup or a special renderer.
+    pub fn from_persistent(options: &PersistentOptions) -> Option<Self> {
+        use PersistentOptions as P;
+        let rgb = |color: i32| [16, 8, 0].map(|s| ((color >> s) & 255) as f32 / 255.0);
+        Some(match *options {
+            P::Simple(ty) => Self::simple(ty),
+            P::Dust(color, scale) => Self::dust(rgb(color), scale),
+            P::DustTransition(from, to, scale) => Self::dust_transition(rgb(from), rgb(to), scale),
+            P::Color(ty, color) => {
+                let [r, g, b] = rgb(color);
+                Self::colored(ty, [r, g, b, ((color >> 24) & 255) as f32 / 255.0])
+            }
+            P::Spell(ty, color, scale) => {
+                let [r, g, b] = rgb(color);
+                Self {
+                    scale,
+                    ..Self::colored(ty, [r, g, b, 1.0])
+                }
+            }
+            P::Power(scale) => Self {
+                scale,
+                ..Self::simple(ParticleType::DragonBreath)
+            },
+            P::Charge(roll) => Self::sculk_charge(roll),
+            P::Shriek(delay) => Self::shriek(delay),
+            P::Geyser(ty, water, base) => Self::geyser_base(ty, water, base.unwrap_or(0.0)),
+            P::Trail(pos, color, ticks) => Self::trail(pos, color as u32, ticks),
+            P::Vibration(pos, ticks) => Self::vibration(
+                PositionSource::Block(pos),
+                pos.map(|v| f64::from(v) + 0.5),
+                ticks,
+            ),
+            P::Item(_) | P::Block(..) | P::ElderGuardian => return None,
+        })
+    }
+
     pub fn simple(ty: ParticleType) -> Self {
         Self {
             ty,
@@ -57,8 +90,7 @@ impl ParticleOptions {
             geyser: None,
             vibration: None,
             mod_particle: None,
-            legacy_entity_effect: None,
-            legacy_trail_lifetime: false,
+            typed_particle: None,
             polytone_seed: None,
             source: None,
         }
@@ -70,6 +102,15 @@ impl ParticleOptions {
             mod_particle: Some(std::borrow::Cow::Owned(name.into())),
             ..Self::simple(ParticleType::Smoke)
         }
+    }
+    /// Resolve the registered metadata once, when making a spawn request.
+    pub fn typed(value: mod_api::__private::TypedParticleOptions) -> Option<Self> {
+        let key = value.key();
+        Some(Self {
+            mod_particle: Some(mod_api::__private::particle_name(key)?.into()),
+            typed_particle: Some((value, mod_api::__private::particle_override_limiter(key)?)),
+            ..Self::simple(ParticleType::Smoke)
+        })
     }
     /// `GeyserParticleOptions(type, waterBlocks)`.
     pub fn geyser(ty: ParticleType, water_blocks: i32) -> Self {

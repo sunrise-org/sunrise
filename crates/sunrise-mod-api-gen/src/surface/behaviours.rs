@@ -3,22 +3,40 @@
 //!
 //! ```toml
 //! version = 1
+//! handle = "handle:SomeRef::action" # optional: include this version in the handle's contract hash
 //! doc = "What the engine promises, stated so that a test could check it."
 //! tests = ["crates/sunrise-client/src/some_tests.rs::the_test_that_pins_it"]
 //! ```
 //!
 //! [`read`] refuses an unreadable folder or file, bad TOML, an unknown key (by name), a missing or
-//! mistyped key, a file name that is not an id, no tests, and a test whose file has no `fn` of
-//! that name, each with a typed [`BehaviourError`] that names the file.
-use mod_surface::{Behaviour, BehaviourContract};
-use std::path::Path;
+//! mistyped key, a file name that is not an id, or missing or malformed test references, each
+//! with a typed [`BehaviourError`] that names the declaration. A separate test validates the
+//! references against the source tree; export does not open the proof files.
+use mod_surface::{Behaviour, BehaviourContract, Function, contract_hash};
+use std::collections::BTreeMap;
+use std::path::{Component, Path};
+
+const DIRECTORY: &str = "crates/sunrise-mod-vocab/behaviours";
+
+#[derive(Debug)]
+struct Declaration {
+    name: String,
+    doc: String,
+    contract: BehaviourContract,
+    handle: Option<String>,
+    tests: Vec<Proof>,
+}
+
+#[derive(Debug)]
+struct Proof {
+    path: String,
+    function: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BehaviourError {
     /// The folder or a file could not be read.
     Read { file: String, error: String },
-    /// A test's file is not Rust.
-    Unparsable { file: String, error: String },
     /// Not TOML.
     Toml { file: String, error: String },
     /// A key a behaviour does not have.
@@ -35,23 +53,20 @@ pub enum BehaviourError {
     NotAnId { file: String },
     /// `tests` lists nothing.
     NoTests { file: String },
-    /// A test that is not `<file path>::<fn name>`.
+    /// A test that is not `<repo-relative path>::<Rust function name>`.
     BadTest { file: String, test: String },
-    /// A test whose file has no `fn` of that name.
-    NoSuchTest { file: String, test: String },
+    /// `handle` does not name an exported inherent item.
+    UnknownHandle { file: String, handle: String },
 }
 
 impl std::fmt::Display for BehaviourError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Read { file, error } => write!(f, "behaviour {file}: {error}"),
-            Self::Unparsable { file, error } => {
-                write!(f, "behaviour test file {file} is not Rust: {error}")
-            }
             Self::Toml { file, error } => write!(f, "behaviour {file} is not TOML: {error}"),
             Self::UnknownKey { file, key } => write!(
                 f,
-                "behaviour {file} has the unknown key `{key}` (a behaviour has `version`, `doc` and `tests`)"
+                "behaviour {file} has the unknown key `{key}` (a behaviour has `version`, `doc`, `tests` and optional `handle`)"
             ),
             Self::Missing { file, key } => write!(f, "behaviour {file} has no `{key}`"),
             Self::WrongType {
@@ -66,10 +81,13 @@ impl std::fmt::Display for BehaviourError {
             Self::NoTests { file } => write!(f, "behaviour {file} names no tests"),
             Self::BadTest { file, test } => write!(
                 f,
-                "behaviour {file}: test `{test}` must be `<file path>::<fn name>`"
+                "behaviour {file}: test `{test}` must be `<repo-relative path>::<Rust function name>`"
             ),
-            Self::NoSuchTest { file, test } => {
-                write!(f, "behaviour {file}: no `fn` for test `{test}`")
+            Self::UnknownHandle { file, handle } => {
+                write!(
+                    f,
+                    "behaviour {file}: `{handle}` is not an exported handle id"
+                )
             }
         }
     }
@@ -77,13 +95,8 @@ impl std::fmt::Display for BehaviourError {
 
 impl std::error::Error for BehaviourError {}
 
-/// Reads one behaviour: `file` is its file name (`<name>.toml`) and `text` its contents.
-/// `exists` says whether a test's file has a `fn` of its name.
-pub fn parse(
-    file: &str,
-    text: &str,
-    exists: impl Fn(&str, &str) -> Result<bool, BehaviourError>,
-) -> Result<Behaviour, BehaviourError> {
+/// Reads one declaration: `file` is its file name (`<name>.toml`) and `text` its contents.
+fn parse(file: &str, text: &str) -> Result<Declaration, BehaviourError> {
     let name = file.strip_suffix(".toml").unwrap_or(file);
     if !name.starts_with(|c: char| c.is_ascii_lowercase())
         || !name
@@ -100,7 +113,7 @@ pub fn parse(
         })?;
     if let Some(key) = table
         .keys()
-        .find(|k| !["version", "doc", "tests"].contains(&k.as_str()))
+        .find(|k| !["version", "doc", "tests", "handle"].contains(&k.as_str()))
     {
         return Err(BehaviourError::UnknownKey {
             file: file.into(),
@@ -127,55 +140,90 @@ pub fn parse(
         .as_str()
         .ok_or_else(|| wrong("doc", "text"))?
         .to_owned();
-    let tests: Vec<String> = get("tests")?
+    let handle = table
+        .get("handle")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| wrong("handle", "an exported handle id"))
+        })
+        .transpose()?;
+    let references = get("tests")?
         .as_array()
-        .ok_or_else(|| wrong("tests", "a list of tests"))?
-        .iter()
-        .map(|test| test.as_str().map(str::to_owned))
-        .collect::<Option<_>>()
         .ok_or_else(|| wrong("tests", "a list of tests"))?;
-    if tests.is_empty() {
+    if references.is_empty() {
         return Err(BehaviourError::NoTests { file: file.into() });
     }
-    for test in &tests {
-        let bad = || BehaviourError::BadTest {
-            file: file.into(),
-            test: test.clone(),
-        };
-        let (path, function) = test.rsplit_once("::").ok_or_else(bad)?;
-        if path.is_empty() || function.is_empty() {
-            return Err(bad());
-        }
-        if !exists(path, function)? {
-            return Err(BehaviourError::NoSuchTest {
+    let mut tests = Vec::with_capacity(references.len());
+    for reference in references {
+        let test = reference
+            .as_str()
+            .ok_or_else(|| wrong("tests", "a list of tests"))?;
+        let (path, function) = test
+            .rsplit_once("::")
+            .filter(|(path, function)| {
+                !path.is_empty()
+                    && !path.contains(['\\', ':', '\0'])
+                    && Path::new(path)
+                        .components()
+                        .all(|part| matches!(part, Component::Normal(_)))
+                    && syn::parse_str::<syn::Ident>(function).is_ok_and(|ident| ident == *function)
+            })
+            .ok_or_else(|| BehaviourError::BadTest {
                 file: file.into(),
-                test: test.clone(),
-            });
-        }
+                test: test.into(),
+            })?;
+        tests.push(Proof {
+            path: path.into(),
+            function: function.into(),
+        });
     }
-    Ok(Behaviour::new(
-        format!("behaviour:{name}"),
+    Ok(Declaration {
+        name: name.into(),
         doc,
+        contract: BehaviourContract { version },
+        handle,
         tests,
-        BehaviourContract { version },
-    ))
-}
-
-/// Whether `items` hold a function called `name`, in an inline module too.
-fn declares(items: &[syn::Item], name: &str) -> bool {
-    items.iter().any(|item| match item {
-        syn::Item::Fn(function) => function.sig.ident == name,
-        syn::Item::Mod(module) => module
-            .content
-            .as_ref()
-            .is_some_and(|(_, items)| declares(items, name)),
-        _ => false,
     })
 }
 
-/// Every behaviour of `dir` by file name; none when the folder is absent. A test's file is read
-/// from the tree at `root`.
-pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
+/// Every behaviour of the vocabulary by file name; none when the folder is absent.
+/// A behaviour tied to a handle also seals its version into that handle's contract.
+pub(crate) fn read(
+    root: &Path,
+    handles: &mut BTreeMap<String, Function>,
+) -> Result<Vec<Behaviour>, BehaviourError> {
+    let mut behaviours = Vec::new();
+    for decl in declarations(&root.join(DIRECTORY))? {
+        let id = format!("behaviour:{}", decl.name);
+        if let Some(handle) = decl.handle {
+            let record = handles
+                .get_mut(&handle)
+                .ok_or_else(|| BehaviourError::UnknownHandle {
+                    file: format!("{}.toml", decl.name),
+                    handle,
+                })?;
+            record
+                .contract
+                .behaviour_versions
+                .insert(id.clone(), decl.contract.version);
+            record.hash = contract_hash(&record.contract);
+        }
+        behaviours.push(Behaviour::new(
+            id,
+            decl.doc,
+            decl.tests
+                .into_iter()
+                .map(|proof| format!("{}::{}", proof.path, proof.function))
+                .collect(),
+            decl.contract,
+        ));
+    }
+    Ok(behaviours)
+}
+
+fn declarations(dir: &Path) -> Result<Vec<Declaration>, BehaviourError> {
     let error = |file: &Path, e: std::io::Error| BehaviourError::Read {
         file: file.display().to_string(),
         error: e.to_string(),
@@ -193,18 +241,6 @@ pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
         }
     }
     paths.sort();
-    let exists = |behaviour: &str, path: &str, name: &str| {
-        let file = root.join(path);
-        let text = std::fs::read_to_string(&file).map_err(|e| BehaviourError::Read {
-            file: behaviour.to_owned(),
-            error: format!("its test file {}: {e}", file.display()),
-        })?;
-        let parsed = syn::parse_file(&text).map_err(|e| BehaviourError::Unparsable {
-            file: file.display().to_string(),
-            error: e.to_string(),
-        })?;
-        Ok(declares(&parsed.items, name))
-    };
     paths
         .iter()
         .map(|path| {
@@ -213,7 +249,7 @@ pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let text = std::fs::read_to_string(path).map_err(|e| error(path, e))?;
-            parse(&file, &text, |path, name| exists(&file, path, name))
+            parse(&file, &text)
         })
         .collect()
 }
@@ -222,20 +258,46 @@ pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
 mod tests {
     use super::*;
 
-    fn found(_: &str, _: &str) -> Result<bool, BehaviourError> {
-        Ok(true)
-    }
-
     const GOOD: &str =
         "version = 2\ndoc = \"It holds.\"\ntests = [\"a/b.rs::holds\", \"c.rs::also\"]\n";
 
+    /// Whether `items` hold a function called `name`, in an inline module too.
+    fn declares(items: &[syn::Item], name: &str) -> bool {
+        items.iter().any(|item| match item {
+            syn::Item::Fn(function) => function.sig.ident == name,
+            syn::Item::Mod(module) => module
+                .content
+                .as_ref()
+                .is_some_and(|(_, items)| declares(items, name)),
+            _ => false,
+        })
+    }
+
+    /// Validate links published in the behaviour records. This intentionally reads engine files.
+    fn check_proofs(root: &Path) -> Result<(), String> {
+        for decl in declarations(&root.join(DIRECTORY)).map_err(|e| e.to_string())? {
+            for proof in decl.tests {
+                let file = root.join(&proof.path);
+                let context = format!(
+                    "behaviour {}.toml: {}::{}",
+                    decl.name, proof.path, proof.function
+                );
+                let text = std::fs::read_to_string(&file)
+                    .map_err(|e| format!("{context}: cannot read test file: {e}"))?;
+                let parsed = syn::parse_file(&text)
+                    .map_err(|e| format!("{context}: test file is not Rust: {e}"))?;
+                if !declares(&parsed.items, &proof.function) {
+                    return Err(format!("{context}: no `fn` for test"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[test]
-    fn a_behaviour_reads_its_id_version_text_and_tests() {
-        let behaviour = parse("pool_merging.toml", GOOD, found).unwrap();
-        assert_eq!(behaviour.id, "behaviour:pool_merging");
-        assert_eq!(behaviour.contract.version, 2);
-        assert_eq!(behaviour.doc, "It holds.");
-        assert_eq!(behaviour.tests, ["a/b.rs::holds", "c.rs::also"]);
+    fn published_behaviour_proofs_exist() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        check_proofs(&root).unwrap();
     }
 
     #[test]
@@ -328,20 +390,53 @@ mod tests {
                     test: "just_a_name".into(),
                 },
             ),
+            (
+                "b.toml",
+                "version = 1\ndoc = \"d\"\ntests = [\"/a.rs::pins\"]\n",
+                BehaviourError::BadTest {
+                    file: file(),
+                    test: "/a.rs::pins".into(),
+                },
+            ),
+            (
+                "b.toml",
+                "version = 1\ndoc = \"d\"\ntests = [\"dir/../../a.rs::pins\"]\n",
+                BehaviourError::BadTest {
+                    file: file(),
+                    test: "dir/../../a.rs::pins".into(),
+                },
+            ),
+            (
+                "b.toml",
+                "version = 1\ndoc = \"d\"\ntests = [\"C:/a.rs::pins\"]\n",
+                BehaviourError::BadTest {
+                    file: file(),
+                    test: "C:/a.rs::pins".into(),
+                },
+            ),
+            (
+                "b.toml",
+                "version = 1\ndoc = \"d\"\ntests = [\"a\\u0000.rs::pins\"]\n",
+                BehaviourError::BadTest {
+                    file: file(),
+                    test: "a\0.rs::pins".into(),
+                },
+            ),
+            (
+                "b.toml",
+                "version = 1\ndoc = \"d\"\ntests = [\"a.rs::not a function\"]\n",
+                BehaviourError::BadTest {
+                    file: file(),
+                    test: "a.rs::not a function".into(),
+                },
+            ),
         ] {
-            assert_eq!(parse(name, text, found), Err(expected), "{name}: {text}");
+            assert_eq!(parse(name, text).unwrap_err(), expected, "{name}: {text}");
         }
         assert!(matches!(
-            parse("b.toml", "version = ", found),
+            parse("b.toml", "version = "),
             Err(BehaviourError::Toml { .. })
         ));
-        assert_eq!(
-            parse("b.toml", GOOD, |_, name| Ok(name != "also")),
-            Err(BehaviourError::NoSuchTest {
-                file: file(),
-                test: "c.rs::also".into()
-            })
-        );
     }
 
     #[test]
@@ -357,54 +452,33 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_is_read_by_name_and_its_tests_are_looked_up_in_the_tree() {
+    fn export_keeps_the_proof_links_without_reading_the_tree() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("behaviours");
+        let root = dir.path();
+        let mut handles = BTreeMap::new();
+        assert!(read(root, &mut handles).unwrap().is_empty());
+
+        let folder = root.join(DIRECTORY);
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(dir.path().join("t.rs"), "#[test]\nfn pins_it() {}\n").unwrap();
-        let write = |name: &str, test: &str| {
-            std::fs::write(
-                folder.join(name),
-                format!("version = 1\ndoc = \"d\"\ntests = [\"{test}\"]\n"),
-            )
-            .unwrap();
-        };
-        write("zeta.toml", "t.rs::pins_it");
-        write("alpha.toml", "t.rs::pins_it");
+        std::fs::write(folder.join("zeta.toml"), GOOD).unwrap();
+        std::fs::write(folder.join("alpha.toml"), GOOD).unwrap();
         std::fs::write(folder.join("README.md"), "not a behaviour").unwrap();
-        let ids: Vec<String> = read(dir.path(), &folder)
-            .unwrap()
-            .into_iter()
-            .map(|b| b.id)
-            .collect();
+        let behaviours = read(root, &mut handles).unwrap();
+        let ids: Vec<_> = behaviours.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(ids, ["behaviour:alpha", "behaviour:zeta"]);
-        write("zeta.toml", "t.rs::gone");
-        assert_eq!(
-            read(dir.path(), &folder),
-            Err(BehaviourError::NoSuchTest {
-                file: "zeta.toml".into(),
-                test: "t.rs::gone".into()
-            })
-        );
-        std::fs::write(dir.path().join("bad.rs"), "fn (").unwrap();
-        write("zeta.toml", "bad.rs::pins_it");
-        assert!(matches!(
-            read(dir.path(), &folder),
-            Err(BehaviourError::Unparsable { .. })
-        ));
-        write("zeta.toml", "missing.rs::pins_it");
-        let Err(BehaviourError::Read { file, error }) = read(dir.path(), &folder) else {
-            panic!("a missing test file is a read error");
-        };
-        assert_eq!(file, "zeta.toml");
-        assert!(
-            error.starts_with("its test file ") && error.contains("missing.rs"),
-            "{error}"
-        );
-        assert!(
-            read(dir.path(), &dir.path().join("none"))
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(behaviours[0].contract.version, 2);
+        assert_eq!(behaviours[0].doc, "It holds.");
+        assert_eq!(behaviours[0].tests, ["a/b.rs::holds", "c.rs::also"]);
+
+        // Keep one proof valid so each refusal is due to the other one, not a later proof.
+        std::fs::write(root.join("c.rs"), "mod tests { fn also() {} }").unwrap();
+        assert!(check_proofs(root).is_err());
+        std::fs::create_dir(root.join("a")).unwrap();
+        std::fs::write(root.join("a/b.rs"), "fn (").unwrap();
+        assert!(check_proofs(root).is_err());
+        std::fs::write(root.join("a/b.rs"), "fn holds_for_all() {}").unwrap();
+        assert!(check_proofs(root).is_err());
+        std::fs::write(root.join("a/b.rs"), "fn holds() {}").unwrap();
+        check_proofs(root).unwrap();
     }
 }

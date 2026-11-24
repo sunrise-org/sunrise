@@ -7,22 +7,35 @@ fn inventory_label_default_follows_image_height_not_inventory_slots() {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
             game.connect_local(pipe, "labels").unwrap();
+            let generation = seed_native_menu(game, 1, "test:menu");
             game.screen = Screen::Inventory;
             game.container = Some((1, 2, 3));
             game.mod_screen = Some(OpenNativeScreen {
+                menu: OpenNativeMenu {
+                    key: (1, 2, 3),
+                    window: 1,
+                    generation,
+                    name: "test:menu".into(),
+                    title: None,
+                    block: Some("test:block".into()),
+                    pos: None,
+                    mod_type: None,
+                    data: Vec::new(),
+                },
                 layout_revision: 0,
                 slot_moves: Default::default(),
-                key: (1, 2, 3),
-                window: 1,
-                menu: "test:menu".into(),
-                block: Some("test:block".into()),
-                screen: mod_api::Screen {
-                    width: 176.0,
-                    own_background: true,
-                    ..Default::default()
-                },
-                data: Vec::new(),
-                extra: None,
+                shown: true,
+                detached: false,
+                screen: mod_api::__private::OwnedMenuScreen::new(
+                    "test",
+                    0,
+                    mod_api::MenuScreen::new(mod_api::MenuScreenLayout {
+                        width: 176.0,
+                        height: 166.0,
+                        own_background: true,
+                        ..Default::default()
+                    }),
+                ),
             });
             let (ox, oy) = (17.0, 23.0);
             for (height, inventory_y, label_y) in [
@@ -32,7 +45,7 @@ fn inventory_label_default_follows_image_height_not_inventory_slots() {
                 (167.0, 84.0, 73.0), // Shulker box.
                 (166.0, 30.0, 72.0), // Moving slots does not move the label.
             ] {
-                let screen = &mut game.mod_screen.as_mut().unwrap().screen;
+                let screen = game.mod_screen.as_mut().unwrap().layout_mut();
                 screen.height = height;
                 screen.inventory_y = inventory_y;
                 let mut actual = HudBatch::scratch([512, 512]);
@@ -74,7 +87,7 @@ fn inventory_label_default_follows_image_height_not_inventory_slots() {
                     true,
                 ),
             ] {
-                let screen = &mut game.mod_screen.as_mut().unwrap().screen;
+                let screen = game.mod_screen.as_mut().unwrap().layout_mut();
                 screen.title_label = title_at;
                 screen.inventory_label = inventory_at;
                 screen.own_labels = own_labels;

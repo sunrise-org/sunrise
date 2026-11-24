@@ -291,7 +291,7 @@ pub fn normalize_quaternion(q: [f32; 4]) -> [f32; 4] {
 }
 /// JOML `Math.sin(float)` without fast math.
 pub fn joml_sin(rad: f32) -> f32 {
-    f64::from(rad).sin() as f32
+    sunrise_core::jmath::sin(f64::from(rad)) as f32
 }
 /// JOML `Math.cosFromSin(float, float)` without fast math: the magnitude from
 /// the sine, the sign from the angle's quadrant (exact zeros at right angles).

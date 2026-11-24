@@ -16,8 +16,8 @@ use super::{
     nav::NavKind,
     path::PathType,
 };
-use crate::beehive::BeehiveExt;
-use std::collections::HashMap;
+use crate::{beehive::BeehiveExt, health::DamageLevel};
+use std::{collections::HashMap, ops::ControlFlow};
 use sunrise_core::random::{LegacyRandom, RandomSource};
 
 const FLAG_ROLL: u8 = 2;
@@ -94,7 +94,7 @@ impl Default for Bee {
     }
 }
 
-fn st(m: &mut Mob) -> &mut Bee {
+pub(crate) fn st(m: &mut Mob) -> &mut Bee {
     m.extra.bee.get_or_insert_with(Default::default)
 }
 pub fn get(m: &Mob) -> Option<&Bee> {
@@ -214,7 +214,7 @@ pub fn draw_cooldowns(m: &mut Mob) {
 
 /// `NeutralMob.isAngry`.
 pub fn angry(m: &Mob, w: &MobWorld) -> bool {
-    get(m).is_some_and(|b| b.anger_end > 0 && b.anger_end - w.game_time > 0)
+    get(m).is_some_and(|b| b.anger_end > 0 && b.anger_end > w.game_time)
 }
 /// `NeutralMob.stopBeingAngry`.
 pub fn stop_being_angry(m: &mut Mob) {
@@ -327,34 +327,68 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
         st(m).hive = None;
     }
 }
-/// `Bee.customServerAiStep`: drowning, the sting's slow death, the time
-/// without nectar and the anger.
-pub fn server_ai_step(m: &mut Mob, cx: &mut Cx) {
-    let stung = has_stung(m);
-    let in_water = m.fluids.in_water;
-    let b = st(m);
-    b.under_water = if in_water { b.under_water + 1 } else { 0 };
-    if b.under_water > 20 {
-        m.damage(cx.level, 1.0, Damage::of(DamageKind::Drown));
+/// The remaining work in `Bee.customServerAiStep` after an owning-level hurt.
+#[derive(Debug)]
+pub(super) enum ServerAiStage {
+    Start,
+    AfterDrowning { stung: bool },
+    AfterStingerExpiry,
+}
+
+/// Finish each hurt before the next part of `Bee.customServerAiStep` runs.
+pub(super) fn server_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    mut stage: ServerAiStage,
+) -> ControlFlow<ServerAiStage> {
+    loop {
+        stage = match stage {
+            ServerAiStage::Start => {
+                // Vanilla reads hasStung before drowning, not again after the hurt.
+                let next = ServerAiStage::AfterDrowning {
+                    stung: has_stung(m),
+                };
+                let in_water = m.fluids.in_water;
+                let b = st(m);
+                b.under_water = if in_water { b.under_water + 1 } else { 0 };
+                if b.under_water > 20 {
+                    m.damage(level, 1.0, Damage::of(DamageKind::Drown));
+                    if m.damage_completion.is_some() {
+                        return ControlFlow::Break(next);
+                    }
+                }
+                next
+            }
+            ServerAiStage::AfterDrowning { stung } => {
+                if stung {
+                    let b = st(m);
+                    b.time_since_sting += 1;
+                    let t = b.time_since_sting;
+                    if t % 5 == 0
+                        && m.random
+                            .next_int_bound((1200 - t).clamp(1, 1200))
+                            .unwrap_or(1)
+                            == 0
+                    {
+                        let health = m.health;
+                        m.damage(level, health, Damage::of(DamageKind::Generic));
+                        if m.damage_completion.is_some() {
+                            return ControlFlow::Break(ServerAiStage::AfterStingerExpiry);
+                        }
+                    }
+                }
+                ServerAiStage::AfterStingerExpiry
+            }
+            ServerAiStage::AfterStingerExpiry => {
+                if !has_nectar(m) {
+                    st(m).ticks_without_nectar += 1;
+                }
+                update_persistent_anger(m, w);
+                return ControlFlow::Continue(());
+            }
+        };
     }
-    if stung {
-        let b = st(m);
-        b.time_since_sting += 1;
-        let t = b.time_since_sting;
-        if t % 5 == 0
-            && m.random
-                .next_int_bound((1200 - t).clamp(1, 1200))
-                .unwrap_or(1)
-                == 0
-        {
-            let health = m.health;
-            m.damage(cx.level, health, Damage::of(DamageKind::Generic));
-        }
-    }
-    if !has_nectar(m) {
-        st(m).ticks_without_nectar += 1;
-    }
-    update_persistent_anger(m, cx.w);
 }
 /// `Bee.hurtServer`: a hit ends pollinating.
 pub fn hurt(m: &mut Mob) {
@@ -437,7 +471,7 @@ fn block_pos(m: &Mob) -> [i32; 3] {
 /// `Bee.closerThan`: `Vec3i.closerThan` from the bee's block.
 fn closer_than(m: &Mob, p: [i32; 3], dist: i32) -> bool {
     let b = block_pos(m);
-    let d = |i: usize| f64::from(p[i] - b[i]);
+    let d = |i: usize| f64::from(p[i]) - f64::from(b[i]);
     d(0) * d(0) + d(1) * d(1) + d(2) * d(2) < f64::from(dist * dist)
 }
 fn too_far(m: &Mob, p: [i32; 3]) -> bool {
@@ -1262,7 +1296,7 @@ pub fn stable_destination(w: &MobWorld, p: [i32; 3]) -> bool {
 /// `Bee.addAdditionalSaveData` (and NeutralMob's `anger_end_time`).
 pub fn to_nbt(
     m: &Mob,
-    map: &mut sunrise_core::nbt::Compound,
+    map: &mut crate::entity_nbt::EntityTagWriter,
     uuid_of: &mut impl FnMut(u32) -> Option<[i32; 4]>,
 ) {
     use sunrise_core::nbt::Tag;

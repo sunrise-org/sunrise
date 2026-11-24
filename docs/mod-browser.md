@@ -73,9 +73,8 @@ start); the hedge places and its recipe crafts 4.
 
 - The file must come, over HTTPS, from Modrinth's or CurseForge's file servers (`cdn.modrinth.com`,
   `edge.forgecdn.net`, `mediafilez.forgecdn.net`) or, for Sunrise's registry, from its release assets
-  (`sunrise_mods::index::FILE_HOST`; the same files at the address they had before the move to the horizon-rust
-  organisation; and the release assets of the repository a registry entry names:
-  `browser::download::github_release_asset`).
+  in `sunrise-org/sunrise-mods` (`sunrise_mod_package::index::FILE_HOST`) or from the release assets of the
+  repository a registry entry names (`browser::download::github_release_asset`).
 - Its name must be one plain file name (no folders, `..`, hidden names or reserved characters).
 - It is written as `.<name>.part`, hashed as it arrives, and renamed into place only when its size and checksum match
   what the source lists: SHA-512 on Modrinth, SHA-1 on CurseForge (the strongest hash CurseForge publishes). Anything
@@ -104,7 +103,7 @@ file and the checksum they were checked against, with **Update to …** when a n
 (asked twice). **Update all (N)** above the list updates every pack a newer version was found for, of every kind,
 one after the other; one that fails is named and doesn't stop the others.
 
-**Automatic updates** run at launcher start and before Play for eligible content packages from Sunrise's registry, when enabled in Settings. They never update a modpack's pinned files or native and wasm code packages. Updates that remove content used by worlds wait for an explicit update on the Mods page. Native and wasm updates are explicit too: Play never rebuilds code mods or repins their game revision. The replaced file is retained for recovery if an update is interrupted; recovery runs before checking the automatic-update setting or fetching the registry, even when updates are disabled or the registry is offline. Failed recovery keeps the backup for retry.
+**Automatic updates** run at launcher start and before Play for eligible content packages from Sunrise's registry, when enabled in Settings. They never update a modpack's pinned files or native code packages. Updates that remove content used by worlds wait for an explicit update on the Mods page. Native updates are explicit too: Play never rebuilds code mods or repins their game revision. The replaced file is retained for recovery if an update is interrupted; recovery runs before checking the automatic-update setting or fetching the registry, even when updates are disabled or the registry is offline. Failed recovery keeps the backup for retry.
 
 ### Project pages, filters and icons
 
@@ -155,7 +154,10 @@ in text ("from Modrinth") until Rinth, Inc. agrees. CurseForge support, and so i
 
 `mod-browser.json` beside `options.txt` lists every file the browser installed: its source, project, version, file
 and the checksum it was checked against. The browser replaces or removes only the files it lists; a file of the
-same name the player put there is never overwritten.
+same name the player put there is never overwritten. When installing a registry mod in the game, the browser follows
+directory links but refuses a link at the destination file. The download and destination must be on the same
+filesystem for atomic replacement. If ownership is ambiguous, the browser leaves the archive, manifest and any
+pending install journal unchanged, even if the new archive has not appeared yet.
 
 - **Install** picks the newest version that runs, then its required dependencies, checked before any download: a
   dependency that isn't a pack Sunrise loads (a Java mod) stops the install. Dependencies go in first. A resource
@@ -186,7 +188,7 @@ sunrise-launcher mods remove faithful-32x
 ## Sources
 
 **Sunrise's registry.** Content mods (`.smod`), native mods (`.smod`), modpacks (`.spack`), resource packs and shader packs (`.sshader`) made for Sunrise, reviewed as pull requests in
-[horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods) ([modding/src/reference/registry-index.md](modding/src/reference/registry-index.md)). The
+[sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods) ([modding/src/reference/registry-index.md](modding/src/reference/registry-index.md)). The
 launcher reads its `index.json` (`browser/sunrise.rs`; `SUNRISE_MOD_INDEX=<file or https address>` reads a test
 registry instead, whose files may then be on disk) at most every ten minutes, and keeps the last copy in
 `mod-browser/sunrise-index.json`. Before a result is installed it shows whether its files are signed and, for a mod,

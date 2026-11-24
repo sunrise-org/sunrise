@@ -1,6 +1,5 @@
-//! A content mod's living type on `minecraft:skeleton` and `minecraft:drowned`
-//! is a mob of that class: built through the real content pipeline
-//! (`mod_content::resource_root`), then ticked in a mob world.
+//! Living content types built through `mod_content::resource_root` and ticked
+//! in a mob world: class behaviour follows the template, tags follow the type id.
 use super::world::test_player;
 use super::{Mob, MobEvent, MobTypes, MobWorld, Species, Who};
 use mod_api::Side;
@@ -8,9 +7,9 @@ use std::{path::PathBuf, sync::Arc};
 use sunrise_core::geometry::Vec3;
 use sunrise_mod_package::{Package, content::Content, enabled::EnabledMods};
 
-/// The mod `ruby` with an `archer` on the skeleton and a `diver` on the drowned,
-/// in a world whose chunks hold `build`'s blocks.
+/// Load the mod `ruby` with these files in a world whose chunks hold `build`'s blocks.
 fn fixture(
+    files: &[(&str, &[u8])],
     build: impl FnOnce(&mut crate::world::World, &sunrise_world::registry::BlockRegistry),
     run: impl FnOnce(&MobWorld, &MobTypes),
 ) {
@@ -26,24 +25,7 @@ fn fixture(
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ruby.smod");
     let manifest = "id = \"ruby\"\nname = \"Ruby\"\nversion = \"1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n";
-    std::fs::write(
-        &path,
-        Package::write_files(
-            manifest,
-            &[
-                (
-                    "data/ruby/sunrise/entity_type/archer.json",
-                    br#"{"template":"minecraft:skeleton"}"#,
-                ),
-                (
-                    "data/ruby/sunrise/entity_type/diver.json",
-                    br#"{"template":"minecraft:drowned"}"#,
-                ),
-            ],
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    std::fs::write(&path, Package::write_files(manifest, files).unwrap()).unwrap();
     let package = Package::read(&path).unwrap();
     let mods = [crate::mod_content::ContentMod {
         id: "ruby".into(),
@@ -88,7 +70,7 @@ fn arena(
 
 fn mob(types: &MobTypes, id: &str, at: Vec3) -> Mob {
     let mut mob = Mob::new(1, Arc::new(types.types[id].clone()), at, 0.0);
-    mob.on_ground = true;
+    mob.ground.on_ground = true;
     mob
 }
 
@@ -103,6 +85,10 @@ fn goal_names(m: &Mob, names: &[&str]) -> Vec<bool> {
 #[ignore = "daily"]
 fn a_mod_type_on_the_skeleton_draws_and_shoots_an_arrow() {
     fixture(
+        &[(
+            "data/ruby/sunrise/entity_type/archer.json",
+            br#"{"template":"minecraft:skeleton"}"#,
+        )],
         |world, registry| {
             arena(world, registry, |_, y, _| match y {
                 ..=63 => "minecraft:stone",
@@ -166,6 +152,10 @@ fn a_mod_type_on_the_skeleton_draws_and_shoots_an_arrow() {
 #[ignore = "daily"]
 fn a_mod_type_on_the_drowned_swims_and_fights_in_water() {
     fixture(
+        &[(
+            "data/ruby/sunrise/entity_type/diver.json",
+            br#"{"template":"minecraft:drowned"}"#,
+        )],
         |world, registry| {
             arena(world, registry, |x, y, z| match y {
                 ..=55 => "minecraft:stone",
@@ -188,7 +178,7 @@ fn a_mod_type_on_the_drowned_swims_and_fights_in_water() {
             w.player = Some(test_player(player));
             let run = |id: &str| {
                 let mut m = mob(types, id, Vec3::new(5.5, 58.0, 5.5));
-                m.on_ground = false;
+                m.ground.on_ground = false;
                 let mut test_level = crate::health::TestLevel::new(0);
                 let level = &mut test_level.level();
                 let mut swam = false;
@@ -218,6 +208,66 @@ fn a_mod_type_on_the_drowned_swims_and_fights_in_water() {
                 "DrownedSwimUpGoal",
             ];
             assert_eq!(goal_names(&m, &names), vec![true; names.len()]);
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn sunlight_ignition_follows_entity_type_tags() {
+    fixture(
+        &[
+            (
+                "data/ruby/sunrise/entity_type/untagged.json",
+                br#"{"template":"minecraft:zombie"}"#,
+            ),
+            (
+                "data/ruby/sunrise/entity_type/tagged.json",
+                br#"{"template":"minecraft:zombie"}"#,
+            ),
+            (
+                "data/minecraft/tags/entity_type/burn_in_daylight.json",
+                br#"{"values":["ruby:tagged"]}"#,
+            ),
+        ],
+        |world, registry| {
+            arena(world, registry, |_, y, _| match y {
+                ..=63 => "minecraft:stone",
+                _ => "minecraft:air",
+            });
+        },
+        |w, types| {
+            let mut day = w.clone();
+            day.day_time = 6000;
+            day.monsters_burn = true;
+            for (id, burns) in [
+                ("ruby:untagged", false),
+                ("ruby:tagged", true),
+                ("minecraft:zombie", true),
+                ("minecraft:skeleton", true),
+                ("minecraft:husk", false),
+            ] {
+                let mut m = mob(types, id, Vec3::new(8.5, 64.0, 8.5));
+                m.no_ai = true;
+                m.random = sunrise_core::random::LegacyRandom::new(3);
+                let mut test_level = crate::health::TestLevel::new(0);
+                let level = &mut test_level.level();
+                let mut events = Vec::new();
+                let ignited = (0..500).any(|_| {
+                    m.tick(&day, level, &mut events);
+                    m.is_on_fire()
+                });
+                assert_eq!(ignited, burns, "daylight ignition of {id}");
+
+                if id == "ruby:untagged" {
+                    let health = m.health;
+                    m.ignite_for_ticks(20);
+                    assert!(m.fire_ticks > 0);
+                    m.tick(&day, level, &mut events);
+                    assert!(m.is_on_fire());
+                    assert!(m.health < health, "ordinary fire still damages {id}");
+                }
+            }
         },
     );
 }

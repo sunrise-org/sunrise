@@ -85,6 +85,7 @@ mod tests {
     fn orb(id: u32, at: [f64; 3]) -> ExperienceOrb {
         let at = Vec3::new(at[0], at[1], at[2]);
         ExperienceOrb {
+            size_answer: None,
             fire_ticks: 0,
             attachment_lifetime: Default::default(),
             fall_distance: 0.0,
@@ -97,7 +98,7 @@ mod tests {
             velocity: Vec3::new(0.0, 0.0, 0.0),
             value: 1,
             age: 0,
-            on_ground: false,
+            ground: Default::default(),
             count: 1,
             ticks: 0,
             air: 300,

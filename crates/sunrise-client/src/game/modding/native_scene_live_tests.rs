@@ -427,7 +427,7 @@ fn two_mods_scenes_of_the_same_id_keep_their_own_state() {
         let as_mod = |game: &mut super::Game<'_>, id: &'static str, ticks: Vec<u64>| {
             let _guard = enter_native_mod(ModCall {
                 id,
-                hook: "screen_draw",
+                hook: "menu_screen_draw",
                 part: None,
             });
             run(game, &scene, ticks);

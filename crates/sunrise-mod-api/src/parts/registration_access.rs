@@ -26,6 +26,7 @@ fn names(
         RegistrationKeyKind::Item => &keys.items,
         RegistrationKeyKind::Fluid => &keys.fluids,
         RegistrationKeyKind::Effect => &keys.effects,
+        RegistrationKeyKind::DamageType => &keys.damage_types,
         RegistrationKeyKind::BlockEntityType => &keys.block_entity_types,
         RegistrationKeyKind::EntityType => &keys.entity_types,
         RegistrationKeyKind::GameEvent => &keys.game_events,
@@ -40,9 +41,7 @@ pub(crate) const REGISTRATION_ACCESS: RegistrationAccess = RegistrationAccess {
         with_registering_keys(|keys| keys.map(|keys| names(keys, kind).id(slot).is_some()))
     },
     name: |kind, slot| {
-        with_registering_keys(|keys| {
-            keys.and_then(|keys| names(keys, kind).id(slot).map(str::to_owned))
-        })
+        with_registering_keys(|keys| registry_name_snapshot(names(keys?, kind), slot))
     },
     in_scope: || REGISTERING_KEYS.with_borrow(Option::is_some),
     install: install_parts,

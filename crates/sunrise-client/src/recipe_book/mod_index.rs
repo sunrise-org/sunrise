@@ -52,10 +52,10 @@ pub struct ModBookIndex {
 }
 impl ModBookIndex {
     pub fn build(
-        mut declarations: Vec<RecipeBookCategory>,
+        declarations: Vec<RecipeBookCategory>,
         resources: &dyn DisplayResources,
     ) -> Result<Self, DisplayLoadError> {
-        placement::validate_batch(&mut declarations, resources)?;
+        placement::validate_batch(&declarations, resources)?;
         let mut index = Self::default();
         for menu in mod_api::RecipeBookLayout::registered_menus() {
             let Some((_, recipe_type, layout)) = mod_api::RecipeBookLayout::registered(&menu)
@@ -77,7 +77,9 @@ impl ModBookIndex {
         let mut recipe_ids = BTreeSet::new();
         for category in declarations {
             for id in [&category.id, &category.recipe_type, &category.search_group] {
-                if !super::custom_books::valid_book_id(id) || id.starts_with("minecraft:") {
+                if mod_api::Identifier::parse_namespaced(id).is_none()
+                    || id.starts_with("minecraft:")
+                {
                     return Err(DisplayLoadError::InvalidId(id.clone()));
                 }
             }
@@ -87,7 +89,7 @@ impl ModBookIndex {
             if !resources.book(&category.book) {
                 return Err(unknown("book", category.book.as_str()));
             }
-            if !super::custom_books::valid_book_id(&category.target_menu) {
+            if mod_api::Identifier::parse_namespaced(&category.target_menu).is_none() {
                 return Err(DisplayLoadError::InvalidId(category.target_menu));
             }
             if !resources.menu(&category.target_menu) {

@@ -8,16 +8,13 @@ pub trait FluidsHost {
     /// Side: both.
     /// Contents registered for `block`, or none if absent or no table has been built.
     /// Reads the current resource generation, including after reload.
-    #[access(WorldOnly)]
     fn cauldron_content_for_block(&self, block: BlockKey) -> Option<CauldronContent>;
     /// Side: both.
     /// Contents registered for `fluid`, or none if absent or no table has been built.
-    #[access(WorldOnly)]
     fn cauldron_content_for_fluid(&self, fluid: FluidKey) -> Option<CauldronContent>;
     /// Side: both.
     /// Current level of `state`, or none without registered contents or a built table.
     /// Always-full contents answer their maximum level.
-    #[access(WorldOnly)]
     fn cauldron_level(&self, state: BlockState) -> Option<u32>;
 }
 /// The server host's methods of the `fluids` area, implemented by the game and reached through [`ServerHost`].
@@ -34,7 +31,6 @@ pub trait FluidsServerHost {
     /// no world, fires no `fluid_place_block` and plays no fizz. A liquid checks its five
     /// neighbours in vanilla's order, above, north, south, west, east (never below), and the
     /// first that answers wins: loop over them in that order to ask the same.
-    #[access(WorldOnly)]
     fn fluid_interaction_result(
         &self,
         source: FluidState,

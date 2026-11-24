@@ -1,5 +1,4 @@
 //! The `right_click_block` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0039
 
 pub trait Hooks {
     /// A player right clicks a block (NeoForge's
@@ -37,11 +36,19 @@ pub trait Hooks {
     /// fire `item_used_on_block` in addition to the game mode's trigger.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_right_click_block",
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
         neoforge = "PlayerInteractEvent.RightClickBlock",
         cancellable = true
     )]
-    fn right_click_block();
+    fn right_click_block(
+        click: &BlockClick<'_>,
+        use_block: &mut TriState,
+        use_item: &mut TriState,
+        cancellation_result: &mut mod_api::InteractionResult,
+        canceled: &mut bool,
+    );
 }

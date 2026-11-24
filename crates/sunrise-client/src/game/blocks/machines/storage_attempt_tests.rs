@@ -23,6 +23,7 @@ type Trace = Arc<Mutex<Vec<String>>>;
 #[derive(Default)]
 struct Rules {
     slots: Option<usize>,
+    zero_capacity_slot: Option<usize>,
     accept: Option<&'static str>,
     notify: bool,
     release_first: bool,
@@ -72,28 +73,33 @@ impl ResourceHandler<ItemResource> for Storage {
     fn amount(&self, host: &mut dyn ServerHost, slot: usize) -> u32 {
         self.stack(host, slot).map_or(0, |stack| stack.count())
     }
-    fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &ItemResource) -> u32 {
-        64
+    fn capacity(&self, _: &mut dyn ServerHost, slot: usize, _: Option<&ItemResource>) -> u32 {
+        if self.probe.rules.lock().unwrap().zero_capacity_slot == Some(slot) {
+            0
+        } else {
+            64
+        }
     }
-    fn insert(
+    fn insert_at(
         &self,
         _: &mut dyn ServerHost,
-        _: &Transaction,
+        _: &TransactionContext,
         _: usize,
         _: &ItemResource,
         _: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         panic!("automation must use the storage's indexless insertion")
     }
-    fn insert_any(
+    fn insert(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         assert_eq!(amount, 1);
-        assert_eq!(host.transaction_depth(tx), Some(0));
+        assert_eq!(tx.depth(), 0);
+        assert!(host.transaction_matches(Some(tx)));
         let item = mod_api::__private::item_key_id(resource.as_stack().item()).unwrap();
         self.probe
             .trace
@@ -118,7 +124,7 @@ impl ResourceHandler<ItemResource> for Storage {
         };
         if accept && forward {
             let sink = self.at.level.capability(host, &ITEMS, SINK, None).unwrap();
-            return sink.insert_any(host, tx, resource, amount);
+            return sink.insert(host, tx, resource, amount);
         }
         let entity = self.entity(host);
         if accept {
@@ -131,18 +137,19 @@ impl ResourceHandler<ItemResource> for Storage {
         if notify {
             entity.set_changed(host).unwrap();
         }
-        u32::from(accept)
+        Ok(u32::from(accept))
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         slot: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         assert_eq!(amount, 1);
-        assert_eq!(host.transaction_depth(tx), Some(0));
+        assert_eq!(tx.depth(), 0);
+        assert!(host.transaction_matches(Some(tx)));
         self.probe
             .trace
             .lock()
@@ -158,10 +165,10 @@ impl ResourceHandler<ItemResource> for Storage {
             )
         };
         if refuse {
-            return 0;
+            return Ok(0);
         }
         let Some(stack) = self.stack(host, slot) else {
-            return 0;
+            return Ok(0);
         };
         assert_eq!(ItemResource::of(&stack), *resource);
         let remaining = stack.shrink(1);
@@ -180,12 +187,12 @@ impl ResourceHandler<ItemResource> for Storage {
                 .capability(host, &ITEMS, [8, 64, 8], None)
                 .unwrap();
             let held = hopper.resource(host, 0).unwrap();
-            assert_eq!(hopper.extract(host, tx, 0, &held, 63), 63);
+            assert_eq!(hopper.extract_at(host, tx, 0, &held, 63), Ok(63));
         }
         if notify {
             entity.set_changed(host).unwrap();
         }
-        1
+        Ok(1)
     }
 }
 
@@ -223,8 +230,8 @@ impl BlockPart for Probe {
                 let sink = event.level.capability(host, &ITEMS, OTHER, None).unwrap();
                 host.transaction(|host, tx| {
                     if let Some(resource) = source.resource(host, 0) {
-                        let taken = source.extract(host, tx, 0, &resource, 1);
-                        assert_eq!(sink.insert_any(host, tx, &resource, taken), taken);
+                        let taken = source.extract_at(host, tx, 0, &resource, 1).unwrap();
+                        assert_eq!(sink.insert(host, tx, &resource, taken), Ok(taken));
                     }
                     if self.rules.lock().unwrap().replace_source_on_notice {
                         let stick = ItemResource::of(
@@ -234,8 +241,8 @@ impl BlockPart for Probe {
                             )
                             .unwrap(),
                         );
-                        assert_eq!(sink.extract(host, tx, 0, &stick, 1), 1);
-                        assert_eq!(source.insert(host, tx, 0, &stick, 1), 1);
+                        assert_eq!(sink.extract_at(host, tx, 0, &stick, 1), Ok(1));
+                        assert_eq!(source.insert_at(host, tx, 0, &stick, 1), Ok(1));
                     }
                     Ok::<_, ()>(())
                 })
@@ -278,8 +285,8 @@ impl BlockPart for CommitMover {
         if let Some(resource) = source.resource(host, 0) {
             let other = event.level.capability(host, &ITEMS, OTHER, None).unwrap();
             host.transaction(|host, tx| {
-                assert_eq!(source.extract(host, tx, 0, &resource, 1), 1);
-                assert_eq!(other.insert_any(host, tx, &resource, 1), 1);
+                assert_eq!(source.extract_at(host, tx, 0, &resource, 1), Ok(1));
+                assert_eq!(other.insert(host, tx, &resource, 1), Ok(1));
                 Ok::<_, ()>(())
             })
             .unwrap();
@@ -298,19 +305,21 @@ impl Hooks for Probe {
         ] {
             let key = r.block_key(block);
             let probe = self.clone();
-            r.block_capability_before_game(&ITEMS, &key, move |_, at, _, _| {
+            r.block_capability_before_game(&ITEMS, &key, move |_, at, _, _, offer| {
                 if at.pos == SINK || at.pos == OTHER {
-                    return None;
+                    return;
                 }
-                probe
-                    .trace
-                    .lock()
-                    .unwrap()
-                    .push(format!("face:{:?}", at.side.unwrap()));
-                Some(Box::new(Storage {
-                    probe: probe.clone(),
-                    at,
-                }))
+                offer.offer(|| {
+                    probe
+                        .trace
+                        .lock()
+                        .unwrap()
+                        .push(format!("face:{:?}", at.side.unwrap()));
+                    Box::new(Storage {
+                        probe: probe.clone(),
+                        at,
+                    })
+                });
             });
         }
         for block in ["minecraft:barrel", "minecraft:hopper"] {
@@ -399,6 +408,488 @@ fn default_fixture(name: &str, test: impl FnOnce(&mut Game<'_>)) {
 fn place(game: &mut Game<'_>, pos: Pos, block: &str) {
     let state = game.pack.assets.registry.default_state(block).unwrap();
     game.world.set(pos.0, pos.1, pos.2, state).unwrap();
+}
+
+#[test]
+#[ignore = "daily"]
+fn item_capability_presence_does_not_open_loot_or_load_chunks() {
+    use crate::game::{
+        execution_role::ExecutionRole,
+        native_entity_refs::tests::{fixture_root, with_game_role},
+        spill,
+    };
+    use sunrise_core::nbt::Tag;
+
+    if run_fresh_cases(
+        "game::machines::native_items::storage_attempt_tests::item_capability_presence_does_not_open_loot_or_load_chunks",
+        "SUNRISE_ITEM_PRESENCE_CHILD",
+        &["server", "client"],
+    ) {
+        return;
+    }
+    let client = std::env::var("SUNRISE_ITEM_PRESENCE_CHILD").unwrap() == "client";
+    let role = if client {
+        ExecutionRole::Client
+    } else {
+        ExecutionRole::IntegratedServer
+    };
+    with_game_role(fixture_root(), role, |game| {
+        if client {
+            let (pipe, _peer) = sunrise_protocol::connection::Pipe::pair();
+            game.connect_local(pipe, "StorageContents").unwrap();
+            game.remote.as_mut().unwrap().logged_in = true;
+        } else {
+            game.options.dedicated = Some(Vec::new());
+        }
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.sync_tick_chunks();
+        let chest = [1, 64, 0];
+        let pot = [4, 64, 0];
+        let composter = [5, 64, 0];
+        place(game, (1, 64, 0), "minecraft:chest");
+        game.world
+            .block_entities
+            .insert((1, 64, 0), BlockEntity::Chest(vec![None; 27]));
+        place(game, (1, 65, 0), "minecraft:stone");
+        place(game, (3, 64, 0), "minecraft:campfire");
+        game.world
+            .block_entities
+            .insert((3, 64, 0), BlockEntity::Campfire(Box::default()));
+        place(game, (4, 64, 0), "minecraft:decorated_pot");
+        place(game, (5, 64, 0), "minecraft:composter");
+        let pending = Tag::compound([
+            ("id", Tag::String("minecraft:decorated_pot".into())),
+            ("x", Tag::Int(pot[0])),
+            ("y", Tag::Int(pot[1])),
+            ("z", Tag::Int(pot[2])),
+            (
+                "LootTable",
+                Tag::String("minecraft:chests/simple_dungeon".into()),
+            ),
+        ]);
+        spill::put_saved_entity(&mut game.world, pot, pending.clone());
+        game.world.block_log = Some(Vec::new());
+        let before = (
+            game.world.modified.clone(),
+            game.world.random.state(),
+            game.world.chunks.len(),
+        );
+        let level = game.level(game.dim.id()).unwrap();
+        for (pos, side, expected) in [
+            (chest, None, Some(true)),
+            ([1, 65, 0], None, Some(false)),
+            ([3, 64, 0], None, Some(false)),
+            (pot, None, Some(true)),
+            (composter, None, Some(false)),
+            (composter, Some(Direction::North), Some(false)),
+            (composter, Some(Direction::Up), Some(true)),
+            (composter, Some(Direction::Down), Some(true)),
+            ([16, 64, 0], None, None),
+            ([0, game.world.top_y(), 0], None, None),
+        ] {
+            game.with_level(|_, world, ticks| {
+                assert_eq!(
+                    world.view(ticks).has_item_capability(pos, side),
+                    expected,
+                    "{pos:?} {side:?}"
+                );
+            });
+            if !client {
+                assert_eq!(
+                    level.capability(game, &ITEMS, pos, side).is_some(),
+                    expected == Some(true)
+                );
+            }
+        }
+        assert_eq!(spill::saved_entity(&game.world, pot), Some(pending));
+        assert_eq!(
+            (
+                game.world.modified.clone(),
+                game.world.random.state(),
+                game.world.chunks.len()
+            ),
+            before
+        );
+        assert!(game.world.block_log.as_ref().unwrap().is_empty());
+
+        if !client {
+            // The real handler uses the saved slot; aborting a parent also restores a
+            // newly created tag written by its committed child.
+            let empty_pot = [6, 64, 0];
+            place(game, (6, 64, 0), "minecraft:decorated_pot");
+            let cap = level.capability(game, &ITEMS, empty_pot, None).unwrap();
+            let stick = ItemResource::of(
+                &mod_api::ItemStack::new(
+                    game.item_key(&Identifier::parse("minecraft:stick").unwrap())
+                        .unwrap(),
+                    1,
+                )
+                .unwrap(),
+            );
+            let aborted: Result<(), ()> = game.storage_transaction(|game, _| {
+                game.storage_transaction(|game, tx| {
+                    assert_eq!(cap.insert_at(game, tx, 0, &stick, 3), Ok(3));
+                    assert_eq!(cap.amount(game, 0), 3);
+                    Ok(())
+                })?;
+                Err(())
+            });
+            assert_eq!(aborted, Err(()));
+            assert!(spill::saved_entity(&game.world, empty_pot).is_none());
+            game.storage_transaction(|game, tx| {
+                assert_eq!(cap.insert_at(game, tx, 0, &stick, 3), Ok(3));
+                assert_eq!(cap.extract_at(game, tx, 0, &stick, 2), Ok(2));
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(cap.amount(game, 0), 1);
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_committed_pot_write_in_another_level_survives_the_parent_abort() {
+    use crate::game::{
+        Dim,
+        execution_role::ExecutionRole,
+        native_entity_refs::tests::{fixture_root, with_game_role},
+        spill,
+    };
+    use sunrise_core::nbt::Tag;
+
+    if run_fresh_cases(
+        "game::machines::native_items::storage_attempt_tests::a_committed_pot_write_in_another_level_survives_the_parent_abort",
+        "SUNRISE_CROSS_LEVEL_SAVED_POT_CHILD",
+        &["server"],
+    ) {
+        return;
+    }
+
+    let pos = [4, 64, 0];
+    with_game_role(fixture_root(), ExecutionRole::IntegratedServer, |game| {
+        let mut setup = |dim, item| {
+            game.enter_level(dim).unwrap();
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.sync_tick_chunks();
+            place(game, (pos[0], pos[1], pos[2]), "minecraft:decorated_pot");
+            let tag = Tag::compound([
+                ("id", Tag::String("minecraft:decorated_pot".into())),
+                ("x", Tag::Int(pos[0])),
+                ("y", Tag::Int(pos[1])),
+                ("z", Tag::Int(pos[2])),
+                (
+                    "item",
+                    sunrise_client::save::item_to_nbt(
+                        &ItemStack::new(item, 3),
+                        &Default::default(),
+                    ),
+                ),
+            ]);
+            spill::put_saved_entity(&mut game.world, pos, tag.clone());
+            tag
+        };
+        setup(Dim::Nether, "minecraft:stone");
+        let overworld_pot = setup(Dim::Overworld, "minecraft:stick");
+        let stone = ItemResource::of(
+            &mod_api::ItemStack::new(
+                game.item_key(&Identifier::parse("minecraft:stone").unwrap())
+                    .unwrap(),
+                1,
+            )
+            .unwrap(),
+        );
+
+        let aborted: Result<(), ()> = game.storage_transaction(|game, _| {
+            game.enter_level(Dim::Nether).unwrap();
+            let level = game.level(game.dim.id()).unwrap();
+            let pot = level.capability(game, &ITEMS, pos, None).unwrap();
+            game.storage_transaction(|game, tx| {
+                assert_eq!(pot.extract_at(game, tx, 0, &stone, 1), Ok(1));
+                Ok(())
+            })?;
+            game.enter_level(Dim::Overworld).unwrap();
+            Err(())
+        });
+        assert_eq!(aborted, Err(()));
+        assert_eq!(spill::saved_entity(&game.world, pos), Some(overworld_pot));
+        game.enter_level(Dim::Nether).unwrap();
+        let tag = spill::saved_entity(&game.world, pos).unwrap();
+        assert_eq!(
+            sunrise_client::save::item_from_nbt(tag.get("item").unwrap()),
+            Some(ItemStack::new("minecraft:stone", 2))
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn block_capabilities_contain_panics_under_the_provider_owner() {
+    use crate::game::{
+        execution_role::ExecutionRole,
+        native_entity_refs::tests::{fixture_root, with_game_role},
+    };
+    use mod_api::content::crash::current_native_mod;
+    use sunrise_client::crash;
+
+    const FLAG: &str = "SUNRISE_CAPABILITY_PROVIDER_OWNER_CHILD";
+    const DISCOVERY: [i32; 3] = [1, 64, 0];
+    const CONSTRUCTION: [i32; 3] = [2, 64, 0];
+    if run_fresh_cases(
+        "game::machines::native_items::storage_attempt_tests::block_capabilities_contain_panics_under_the_provider_owner",
+        FLAG,
+        &["client", "server"],
+    ) {
+        return;
+    }
+
+    type Calls = Arc<Mutex<Vec<(&'static str, Option<&'static str>)>>>;
+    struct Providers {
+        fail: bool,
+        calls: Calls,
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Providers {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            for (name, discovery) in [("minecraft:barrel", true), ("minecraft:chest", false)] {
+                let key = r.block_key(name);
+                let calls = self.calls.clone();
+                let fail = self.fail;
+                r.block_capability_before_game(&ITEMS, &key, move |_, at, _, _, offer| {
+                    let step = if discovery {
+                        "discover barrel"
+                    } else {
+                        "discover chest"
+                    };
+                    calls.lock().unwrap().push((step, current_native_mod()));
+                    if fail && discovery {
+                        panic!("provider discovery panic");
+                    }
+                    offer.offer(|| {
+                        calls
+                            .lock()
+                            .unwrap()
+                            .push(("construct", current_native_mod()));
+                        if fail {
+                            panic!("provider construction panic");
+                        }
+                        Box::new(Storage {
+                            probe: Probe {
+                                trace: Arc::default(),
+                                rules: Arc::default(),
+                            },
+                            at,
+                        })
+                    });
+                });
+            }
+        }
+    }
+
+    let client = std::env::var(FLAG).unwrap() == "client";
+    let role = if client {
+        ExecutionRole::Client
+    } else {
+        ExecutionRole::IntegratedServer
+    };
+    let calls: Calls = Arc::default();
+    let mods: Mods = [("bad_provider", true), ("healthy_provider", false)]
+        .into_iter()
+        .map(|(id, fail)| {
+            ModEntry::new(
+                id,
+                Box::new(Providers {
+                    fail,
+                    calls: calls.clone(),
+                }),
+            )
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let exercise = move || {
+        mod_platform::testing::with_mods(mods, || {
+            with_game_role(fixture_root(), role, |game| {
+                if client {
+                    let (pipe, _peer) = sunrise_protocol::connection::Pipe::pair();
+                    game.connect_local(pipe, "ProviderOwner").unwrap();
+                    game.remote.as_mut().unwrap().logged_in = true;
+                } else {
+                    game.options.dedicated = Some(Vec::new());
+                }
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                place(game, (1, 64, 0), "minecraft:barrel");
+                place(game, (2, 64, 0), "minecraft:chest");
+
+                let outer = current_native_mod();
+                let query = mod_api::__private::enter("querying_mod", "test");
+                let bad = Some("bad_provider");
+                let healthy = Some("healthy_provider");
+                game.with_level(|_, world, ticks| {
+                    let view = world.view(ticks);
+                    assert_eq!(view.has_item_capability(DISCOVERY, None), Some(true));
+                    assert_eq!(view.has_item_capability(DISCOVERY, None), Some(true));
+                    assert_eq!(view.has_item_capability(CONSTRUCTION, None), Some(true));
+                });
+                assert_eq!(current_native_mod(), Some("querying_mod"));
+                assert_eq!(
+                    std::mem::take(&mut *calls.lock().unwrap()),
+                    [
+                        ("discover barrel", bad),
+                        ("discover barrel", healthy),
+                        ("discover barrel", healthy),
+                        ("discover chest", bad),
+                    ],
+                    "discovery poisons only one registration; presence never constructs",
+                );
+
+                if !client {
+                    let level = game.level(game.dim.id()).unwrap();
+                    for pos in [CONSTRUCTION, CONSTRUCTION, DISCOVERY] {
+                        let capability = level.capability(game, &ITEMS, pos, None).unwrap();
+                        assert_eq!(capability.owner(), "healthy_provider");
+                        assert_eq!(current_native_mod(), Some("querying_mod"));
+                    }
+                    assert_eq!(
+                        *calls.lock().unwrap(),
+                        [
+                            ("discover chest", bad),
+                            ("construct", bad),
+                            ("discover chest", healthy),
+                            ("construct", healthy),
+                            ("discover chest", healthy),
+                            ("construct", healthy),
+                            ("discover barrel", healthy),
+                            ("construct", healthy),
+                        ],
+                    );
+                }
+                drop(query);
+                assert_eq!(current_native_mod(), outer);
+            });
+        })
+    };
+    // This fixture has a fresh process. An uncontained panic on either game's thread
+    // writes a report; on the integrated server it also marks the server fatal.
+    let home = tempfile::tempdir().unwrap();
+    crash::install(home.path().to_owned(), "client", || None);
+    let name = if client {
+        "main"
+    } else {
+        crash::INTEGRATED_SERVER_THREAD
+    };
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(exercise)
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(!crash::server_crashed());
+    assert!(!home.path().join("crash-reports").exists());
+}
+
+#[test]
+#[ignore = "daily"]
+fn aborting_a_pot_insert_restores_its_named_loot_sequence() {
+    use crate::game::spill;
+    use sunrise_core::nbt::Tag;
+    use sunrise_world::loot::{LootData, PackOverlay};
+
+    default_fixture(
+        "game::machines::native_items::storage_attempt_tests::aborting_a_pot_insert_restores_its_named_loot_sequence",
+        |game| {
+            const TABLE: &str = "test:pot";
+            const SEQUENCE: &str = "test:pot_storage";
+            let files = [(
+                format!("loot_table/{TABLE}"),
+                vec![
+                    serde_json::to_vec(&serde_json::json!({
+                        "random_sequence": SEQUENCE,
+                        "pools": [{
+                            "rolls": 1,
+                            "entries": [{
+                                "type": "minecraft:item",
+                                "name": "minecraft:stick",
+                                "modifier": {
+                                    "type": "minecraft:set_count",
+                                    "count": {"type": "minecraft:uniform", "min": 2, "max": 9}
+                                }
+                            }]
+                        }]
+                    }))
+                    .unwrap(),
+                ],
+            )];
+            let loot = LootData::load(
+                &game.options.resources,
+                &PackOverlay {
+                    files: &files,
+                    ..PackOverlay::default()
+                },
+                game.res.item_defaults(),
+            )
+            .unwrap();
+            assert_eq!(loot.random_sequence(TABLE), Some(SEQUENCE));
+            game.server_loot.set(Some(Arc::new(loot)));
+
+            let pos = [4, 64, 0];
+            place(game, (4, 64, 0), "minecraft:decorated_pot");
+            let tag = Tag::compound([
+                ("id", Tag::String("minecraft:decorated_pot".into())),
+                ("x", Tag::Int(pos[0])),
+                ("y", Tag::Int(pos[1])),
+                ("z", Tag::Int(pos[2])),
+                ("LootTable", Tag::String(TABLE.into())),
+            ]);
+            spill::put_saved_entity(&mut game.world, pos, tag.clone());
+            // The named sequence already exists: this tests restoration of its actual
+            // position, not merely removal of a newly created sequence.
+            game.rand_sequences.get(SEQUENCE, game.level.seed);
+            let before = game.rand_sequences.to_nbt();
+            let level_before = game.world.random.state();
+            let level = game.level(game.dim.id()).unwrap();
+            let items = level.capability(game, &ITEMS, pos, None).unwrap();
+            use crate::game::api_values::TryIntoApi;
+            let stick =
+                ItemResource::of(&ItemStack::new("minecraft:stick", 1).try_into_api().unwrap());
+            let insert = |game: &mut Game<'_>, tx: &TransactionContext| {
+                assert_eq!(items.insert_at(game, tx, 0, &stick, 1), Ok(1));
+                let amount = items.amount(game, 0);
+                assert!(
+                    (3..=10).contains(&amount),
+                    "rolled loot plus insertion: {amount}"
+                );
+                let materialized = spill::saved_entity(&game.world, pos).unwrap();
+                assert!(materialized.get("LootTable").is_none());
+                assert_eq!(game.world.random.state(), level_before);
+                let after = game.rand_sequences.to_nbt();
+                assert_ne!(after, before);
+                (materialized, after)
+            };
+            let tentative = game
+                .storage_transaction(|game, _| {
+                    let tentative = game
+                        .storage_transaction(|game, tx| Ok::<_, ()>(insert(game, tx)))
+                        .unwrap();
+                    Err::<(), _>(tentative)
+                })
+                .unwrap_err();
+            assert_eq!(spill::saved_entity(&game.world, pos), Some(tag));
+            assert_eq!(game.rand_sequences.to_nbt(), before);
+            assert_eq!(game.world.random.state(), level_before);
+
+            assert_eq!(
+                game.storage_transaction(|game, tx| Ok::<_, ()>(insert(game, tx))),
+                Ok(tentative)
+            );
+        },
+    );
 }
 
 #[test]
@@ -551,12 +1042,16 @@ fn blocked_pull_ticks_extract_abort_restore_without_hopper_mark_or_cooldown() {
                         "face:Down",
                         "open",
                         "extract:0",
+                        "open",
                         "notice:1:Open",
+                        "commit",
                         "abort",
                         "restore:8,65,8:0",
                         "open",
                         "extract:1",
+                        "open",
                         "notice:1:Open",
+                        "commit",
                         "abort",
                         "restore:8,65,8:1"
                     ]
@@ -592,7 +1087,7 @@ fn blocked_push_ticks_share_one_abort_and_restore_refused_source_slots() {
                 game.world.game_time = time;
                 game.tick_hopper(HOPPER);
                 let mut seen = trace(&probe);
-                let mut restored = seen.split_off(7);
+                let mut restored = seen.split_off(11);
                 restored.sort();
                 assert_eq!(
                     seen,
@@ -600,9 +1095,13 @@ fn blocked_push_ticks_share_one_abort_and_restore_refused_source_slots() {
                         "face:Up",
                         "open",
                         "insert:minecraft:diamond",
+                        "open",
                         "notice:0:Open",
+                        "commit",
                         "insert:minecraft:gold_ingot",
+                        "open",
                         "notice:0:Open",
+                        "commit",
                         "abort"
                     ]
                 );
@@ -622,11 +1121,17 @@ fn blocked_push_ticks_share_one_abort_and_restore_refused_source_slots() {
                     "face:Up",
                     "open",
                     "insert:minecraft:diamond",
+                    "open",
                     "notice:0:Open",
+                    "commit",
                     "insert:minecraft:gold_ingot",
+                    "open",
                     "notice:1:Open",
                     "commit",
-                    "mark:hopper:None"
+                    "commit",
+                    "open",
+                    "mark:hopper:Open",
+                    "commit"
                 ]
             );
             assert_eq!((count(game, HOPPER, 0), count(game, HOPPER, 1)), (1, 0));
@@ -661,9 +1166,13 @@ fn push_then_pull_commit_in_one_tick_with_only_the_ordered_hopper_marks() {
                     "face:Down",
                     "open",
                     "extract:0",
+                    "open",
                     "mark:hopper:Open",
                     "commit",
-                    "mark:hopper:None"
+                    "commit",
+                    "open",
+                    "mark:hopper:Open",
+                    "commit"
                 ]
             );
             assert_eq!(game.hopper_cooldown(HOPPER), 8);
@@ -691,7 +1200,9 @@ fn push_then_pull_commit_in_one_tick_with_only_the_ordered_hopper_marks() {
                     "insert:minecraft:stone",
                     "commit",
                     "face:Down",
-                    "mark:hopper:None"
+                    "open",
+                    "mark:hopper:Open",
+                    "commit"
                 ]
             );
         },
@@ -719,10 +1230,16 @@ fn pull_chooses_the_first_slot_after_extract_and_not_an_existing_stack() {
                     "face:Down",
                     "open",
                     "extract:0",
+                    "open",
                     "mark:hopper:Open",
                     "commit",
+                    "commit",
+                    "open",
                     "mark:hopper:RootClosing",
-                    "mark:hopper:None"
+                    "commit",
+                    "open",
+                    "mark:hopper:Open",
+                    "commit"
                 ]
             );
             assert_eq!(count(game, HOPPER, 0), 1);
@@ -778,6 +1295,18 @@ fn full_storage_and_fully_stacked_hopper_are_the_only_capacity_shortcuts() {
             game.tick_hopper(HOPPER);
             assert_eq!(trace(&probe), ["face:Up"]);
             assert_eq!(game.hopper_cooldown(HOPPER), 0);
+
+            // An empty index with no capacity is full too, so there is still no push.
+            probe.rules.lock().unwrap().zero_capacity_slot = Some(1);
+            game.world
+                .block_entities
+                .get_mut(&BELOW)
+                .unwrap()
+                .slots_mut()[1] = None;
+            probe.trace.lock().unwrap().clear();
+            game.tick_hopper(HOPPER);
+            assert_eq!(trace(&probe), ["face:Up"]);
+            assert_eq!(game.hopper_cooldown(HOPPER), 0);
         },
     );
 }
@@ -820,7 +1349,9 @@ fn dropper_commits_refused_insertion_and_its_storage_notifications() {
                     "face:Up",
                     "open",
                     "insert:minecraft:diamond",
+                    "open",
                     "notice:0:Open",
+                    "commit",
                     "commit"
                 ]
             );
@@ -836,7 +1367,9 @@ fn dropper_commits_refused_insertion_and_its_storage_notifications() {
                     "face:Up",
                     "open",
                     "insert:minecraft:diamond",
+                    "open",
                     "notice:1:Open",
+                    "commit",
                     "commit"
                 ]
             );
@@ -882,11 +1415,13 @@ fn vanilla_container_provider_and_entity_never_ask_their_storage() {
                 }
                 game.tick_hopper(HOPPER);
                 assert_eq!(count(game, HOPPER, 0), 1, "{target}");
-                assert_eq!(
-                    trace(&probe),
-                    ["mark:hopper:None", "mark:hopper:None"],
-                    "{target}"
-                );
+                let mut expected = vec!["open", "mark:hopper:Open", "commit"];
+                if target == "minecraft:chest" {
+                    // The source's notice runs CommitMover without emitting a trace message.
+                    expected.extend(["open", "commit"]);
+                }
+                expected.extend(["open", "mark:hopper:Open", "commit"]);
+                assert_eq!(trace(&probe), expected, "{target}");
             }
         },
     );
@@ -1041,7 +1576,9 @@ fn extract_notifications_cross_signal_each_tick_and_comparator_ticks_every_secon
                         "face:Down",
                         "open",
                         "extract:0",
+                        "open",
                         "notice:63:Open",
+                        "commit",
                         "abort",
                         "restore:8,65,8:0"
                     ]
@@ -1093,9 +1630,13 @@ fn a_blocked_pull_slot_aborts_before_the_next_slot_commits() {
                     "restore:8,65,8:0",
                     "open",
                     "extract:1",
+                    "open",
                     "mark:hopper:Open",
                     "commit",
-                    "mark:hopper:None"
+                    "commit",
+                    "open",
+                    "mark:hopper:Open",
+                    "commit"
                 ]
             );
             assert_eq!(
@@ -1149,7 +1690,9 @@ fn pushes_use_only_the_opposite_face_for_each_hopper_facing() {
                         "open",
                         "insert:minecraft:stone",
                         "commit",
-                        "mark:hopper:None"
+                        "open",
+                        "mark:hopper:Open",
+                        "commit"
                     ]
                 );
                 assert_eq!(count(game, target, 0), 1);
@@ -1188,7 +1731,9 @@ fn refused_push_callback_journals_source_without_losing_the_restored_item() {
                     "face:Up",
                     "open",
                     "insert:minecraft:diamond",
+                    "open",
                     "notice:0:Open",
+                    "commit",
                     "abort",
                     "restore:8,64,8:0"
                 ]
@@ -1242,14 +1787,20 @@ fn dropper_removes_accepted_source_before_a_real_root_commit_callback() {
                 rules.forward_to_vanilla = true;
             }
             game.dispense_from(BlockPos::new(8, 64, 8), state).unwrap();
+            // The forwarded slot-less insert owns a nested journal. Its commit must not
+            // notify the sink before the root closes with the reserved source already gone.
             assert_eq!(
                 trace(&probe),
                 [
                     "face:Up",
                     "open",
                     "insert:minecraft:diamond",
+                    "open",
                     "commit",
-                    "sink-source:0:RootClosing"
+                    "commit",
+                    "open",
+                    "sink-source:0:RootClosing",
+                    "commit"
                 ]
             );
             assert_eq!(count(game, HOPPER, 0), 0);

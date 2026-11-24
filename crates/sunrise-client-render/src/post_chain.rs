@@ -41,6 +41,14 @@ fn normalise(id: &str) -> String {
     }
 }
 
+fn normalise_cow(id: &str) -> std::borrow::Cow<'_, str> {
+    if id.contains(':') {
+        std::borrow::Cow::Borrowed(id)
+    } else {
+        std::borrow::Cow::Owned(format!("minecraft:{id}"))
+    }
+}
+
 /// One uniform of a block (`UniformValue`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Uniform {
@@ -387,6 +395,8 @@ enum Block {
     Custom(wgpu::Buffer),
     /// A block the request sets every frame (`Extras::blocks`), by name.
     Dynamic(String, wgpu::Buffer),
+    /// `PolyGlobals`, the game's ([`Request::poly_globals`]), written every draw.
+    PolyGlobals(wgpu::Buffer),
 }
 
 /// A pass running the resources' own GLSL, translated by `post_glsl`.
@@ -401,11 +411,178 @@ struct Translated {
     samplers: Vec<(u32, usize)>,
 }
 
-impl Translated {
-    fn ensure_pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if self.pipelines.contains_key(&format) {
-            return;
+/// Why a translated pass is refused: one rule, whether the translator, the pass's configuration
+/// or the device (its modules, layout or pipeline) refuses it. A pass naming vanilla's shaders
+/// then runs on the built-in stand-ins; any other refuses its effect, named in the log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PassRefusal {
+    /// More `what` than the device binds: declared by both stages (`stage` none, checked before
+    /// any analysis) or read by one stage.
+    OverLimit {
+        what: &'static str,
+        stage: Option<wgpu::ShaderStages>,
+        count: usize,
+        limit: usize,
+    },
+    /// A `PolyGlobals` declaration the one rule refuses (`expression_blocks::check_poly_globals`).
+    Globals(crate::gfx::expression_blocks::GlobalsRefusal),
+    /// Its `uniforms` give `PolyGlobals`, the game's block.
+    GlobalsGiven,
+    /// The shader translator's refusal or fault.
+    Translator(String),
+    /// What the device refuses in the shader modules, the layout or the pipeline.
+    Pipeline(String),
+    /// The pass's own configuration (a missing target, input or uniform block).
+    Config(String),
+}
+
+impl From<crate::post_glsl::Refused> for PassRefusal {
+    fn from(refused: crate::post_glsl::Refused) -> Self {
+        match refused {
+            crate::post_glsl::Refused::Declares {
+                what,
+                declared,
+                limit,
+            } => Self::OverLimit {
+                what,
+                stage: None,
+                count: declared,
+                limit,
+            },
+            other => Self::Translator(other.to_string()),
         }
+    }
+}
+
+impl std::fmt::Display for PassRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OverLimit {
+                what,
+                stage: None,
+                count,
+                limit,
+            } => write!(
+                f,
+                "it declares {count} {what}, past the {limit} the device binds"
+            ),
+            Self::OverLimit {
+                what,
+                stage: Some(stage),
+                count,
+                limit,
+            } => write!(
+                f,
+                "its {stage:?} stage reads {count} {what}, past the device's {limit}"
+            ),
+            Self::Globals(refusal) => refusal.fmt(f),
+            Self::GlobalsGiven => write!(
+                f,
+                "its uniforms give {}, which the game fills",
+                sunrise_polytone::globals::BLOCK
+            ),
+            Self::Translator(e) | Self::Pipeline(e) | Self::Config(e) => f.write_str(e),
+        }
+    }
+}
+
+/// Why a chain doesn't load: one of its passes, or the chain itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LoadError {
+    Pass(usize, PassRefusal),
+    Chain(String),
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pass(n, refusal) => write!(f, "pass {n}: {refusal}"),
+            Self::Chain(e) => f.write_str(e),
+        }
+    }
+}
+
+impl From<String> for LoadError {
+    fn from(e: String) -> Self {
+        Self::Chain(e)
+    }
+}
+
+impl From<&str> for LoadError {
+    fn from(e: &str) -> Self {
+        Self::Chain(e.to_owned())
+    }
+}
+
+/// Whether a pass's bindings fit the device's limits for each stage (uniform blocks, sampled
+/// textures, samplers), before the layout is made: the refusal names the stage.
+fn within_limits(
+    entries: &[wgpu::BindGroupLayoutEntry],
+    limits: &wgpu::Limits,
+) -> Result<(), PassRefusal> {
+    for stage in [wgpu::ShaderStages::VERTEX, wgpu::ShaderStages::FRAGMENT] {
+        let count = |kind: fn(&wgpu::BindingType) -> bool| {
+            (entries.iter())
+                .filter(|e| e.visibility.contains(stage) && kind(&e.ty))
+                .count()
+        };
+        for (what, count, limit) in [
+            (
+                "uniform blocks",
+                count(|t| matches!(t, wgpu::BindingType::Buffer { .. })),
+                limits.max_uniform_buffers_per_shader_stage,
+            ),
+            (
+                "textures",
+                count(|t| matches!(t, wgpu::BindingType::Texture { .. })),
+                limits.max_sampled_textures_per_shader_stage,
+            ),
+            (
+                "samplers",
+                count(|t| matches!(t, wgpu::BindingType::Sampler(_))),
+                limits.max_samplers_per_shader_stage,
+            ),
+        ] {
+            if count > limit as usize {
+                return Err(PassRefusal::OverLimit {
+                    what,
+                    stage: Some(stage),
+                    count,
+                    limit: limit as usize,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The error scopes a pack pass's GPU objects are made in: validation and internal errors, as the
+/// packs' core shader pipelines have them.
+fn gpu_scopes(device: &wgpu::Device) -> [wgpu::ErrorScopeGuard; 2] {
+    [
+        device.push_error_scope(wgpu::ErrorFilter::Validation),
+        device.push_error_scope(wgpu::ErrorFilter::Internal),
+    ]
+}
+
+/// What [`gpu_scopes`] caught, innermost first.
+fn gpu_refusal([validation, internal]: [wgpu::ErrorScopeGuard; 2]) -> Option<String> {
+    let internal = pollster::block_on(internal.pop());
+    let validation = pollster::block_on(validation.pop());
+    internal.or(validation).map(|e| e.to_string())
+}
+
+impl Translated {
+    /// The pipeline for `format`, made once; a pipeline the device refuses is the refusal.
+    fn ensure_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> Result<(), String> {
+        if self.pipelines.contains_key(&format) {
+            return Ok(());
+        }
+        let scopes = gpu_scopes(device);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Post effect"),
             bind_group_layouts: &[Some(&self.layout)],
@@ -433,7 +610,11 @@ impl Translated {
             multiview_mask: None,
             cache: None,
         });
+        if let Some(e) = gpu_refusal(scopes) {
+            return Err(e);
+        }
         self.pipelines.insert(format, pipeline);
+        Ok(())
     }
 }
 
@@ -449,6 +630,46 @@ struct Pass {
     info: wgpu::Buffer,
     vs_block: wgpu::Buffer,
     fs_block: wgpu::Buffer,
+    /// For a translated pass naming vanilla's shaders: the built-in stand-in it falls back to
+    /// when the device refuses its pipeline, as a pass the translator refuses does.
+    fallback: Option<Box<Pass>>,
+}
+
+impl Chain {
+    /// `PostChain.closePersistentTargets`: drop persistent target buffers while keeping
+    /// the compiled chain cached.
+    fn close_persistent_targets(&mut self) {
+        if self.targets.iter().skip(1).any(|(_, t)| t.persistent) {
+            self.textures.clear();
+            self.depths.clear();
+            self.size = [0, 0];
+        }
+    }
+
+    /// Each translated pass's pipeline for `format`. A pass whose pipeline the device refuses
+    /// is replaced by its built-in stand-in when it has one; else the refusal, named.
+    fn ensure_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> Result<(), LoadError> {
+        for (n, pass) in self.passes.iter_mut().enumerate() {
+            let Some(translated) = &mut pass.translated else {
+                continue;
+            };
+            let Err(e) = translated.ensure_pipeline(device, format) else {
+                continue;
+            };
+            match pass.fallback.take() {
+                Some(standin) => {
+                    log::debug!("post effect pass {n} uses the built-in shaders: {e}");
+                    *pass = *standin;
+                }
+                None => return Err(LoadError::Pass(n, PassRefusal::Pipeline(e))),
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A loaded chain (`PostChain`): its targets are 0 = the frame, then the internal
@@ -478,6 +699,10 @@ pub struct Request<'a> {
     pub globals: Globals,
     /// What resource packs' Polytone post chains add, when a pack has some.
     pub extras: Option<&'a Extras>,
+    /// Builds the game's `PolyGlobals` for this frame: called at most once, and only when an
+    /// applied effect has a pass reading the block (whichever effect it is in). Without it such
+    /// a pass reads zeros.
+    pub poly_globals: Option<&'a dyn Fn() -> crate::gfx::expression_blocks::PolyGlobalsBytes>,
 }
 
 /// What resource packs' Polytone post chains add to every chain (#11486, wiki "Shaders"): their
@@ -485,7 +710,8 @@ pub struct Request<'a> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extras {
     pub targets: BTreeMap<String, InternalTarget>,
-    /// Each block's std140 bytes, by its name (`PolyGlobals`, an expression uniform's).
+    /// Each block's std140 bytes, by its name (an expression uniform's). `PolyGlobals` isn't one:
+    /// every pass reading it is given the game's ([`Request::poly_globals`]).
     pub blocks: BTreeMap<String, Vec<u8>>,
 }
 
@@ -502,22 +728,38 @@ pub struct Globals {
 }
 
 impl Globals {
-    /// The std140 block: `ivec3, float, vec3, float, vec2, int, int`.
+    /// The std140 block: `ivec3, float, vec3, float, vec2, int, int`, written in place (no
+    /// allocation: the pack pipelines ask for it every frame).
     pub(crate) fn bytes(&self, size: [u32; 2], menu_blur_radius: i32) -> [u8; 48] {
-        let mut out = Vec::with_capacity(48);
-        for v in self.camera_block_pos {
-            out.extend_from_slice(&v.to_le_bytes());
+        let [x, y, z] = self.camera_block_pos.map(i32::to_le_bytes);
+        let [ox, oy, oz] = self.camera_offset.map(f32::to_le_bytes);
+        let words: [[u8; 4]; 12] = [
+            x,
+            y,
+            z,
+            self.glint_alpha.to_le_bytes(),
+            ox,
+            oy,
+            oz,
+            self.game_time.to_le_bytes(),
+            (size[0] as f32).to_le_bytes(),
+            (size[1] as f32).to_le_bytes(),
+            menu_blur_radius.to_le_bytes(),
+            i32::from(self.use_rgss).to_le_bytes(),
+        ];
+        let mut out = [0; 48];
+        for (slot, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+            *slot = word;
         }
-        out.extend_from_slice(&self.glint_alpha.to_le_bytes());
-        for v in self.camera_offset {
-            out.extend_from_slice(&v.to_le_bytes());
-        }
-        out.extend_from_slice(&self.game_time.to_le_bytes());
-        out.extend_from_slice(&(size[0] as f32).to_le_bytes());
-        out.extend_from_slice(&(size[1] as f32).to_le_bytes());
-        out.extend_from_slice(&menu_blur_radius.to_le_bytes());
-        out.extend_from_slice(&i32::from(self.use_rgss).to_le_bytes());
-        out.try_into().expect("48 bytes")
+        out
+    }
+}
+
+impl PostEffects {
+    /// Whether the last frame's effects were given the game's `PolyGlobals`: only when one of
+    /// them has a pass reading the block.
+    pub fn gave_poly_globals(&self) -> bool {
+        self.poly_globals.is_some()
     }
 }
 
@@ -530,8 +772,14 @@ impl<'a> Request<'a> {
             menu_blur_radius: 0.0,
             globals: Globals::default(),
             extras: None,
+            poly_globals: None,
         }
     }
+}
+
+struct ChainSlot {
+    id: String,
+    chain: Option<Chain>,
 }
 
 /// Every chain, the pipelines and the frame copy they work on.
@@ -541,10 +789,18 @@ pub struct PostEffects {
     pipelines: HashMap<(&'static str, &'static str, wgpu::TextureFormat), wgpu::RenderPipeline>,
     nearest: wgpu::Sampler,
     bilinear: wgpu::Sampler,
-    /// `ShaderManager`'s chains by id; `None` when the file is missing.
-    chains: HashMap<String, Option<Chain>>,
+    /// `ShaderManager`'s chains in dense slots; `None` when the file is missing or failed.
+    chains: Vec<ChainSlot>,
+    /// Lookup from normalised chain id to its dense slot in `chains`.
+    chain_ids: HashMap<String, usize>,
     /// `GameRenderer.failedPostEffects`.
     failed: HashSet<String>,
+    /// Reused execution-order slot list for this frame's applied chains (preserves repeats).
+    applied: Vec<usize>,
+    /// Parallel flags for `chains`: whether each slot ran on the current frame.
+    active_chains: Vec<bool>,
+    /// Parallel flags for `chains`: whether each slot ran on the previous frame.
+    prev_active_chains: Vec<bool>,
     root: ResourceSource,
     /// The frame as the chains see `minecraft:main`.
     work: Option<(wgpu::Texture, wgpu::TextureView)>,
@@ -562,6 +818,9 @@ pub struct PostEffects {
     pending: HashSet<String>,
     /// This frame's `Extras::blocks`.
     extra_blocks: BTreeMap<String, Vec<u8>>,
+    /// This frame's `PolyGlobals` ([`Request::poly_globals`]), built only when an applied
+    /// effect's pass reads them.
+    poly_globals: Option<crate::gfx::expression_blocks::PolyGlobalsBytes>,
     /// The frame's depth with GL's rows, for the passes that read `minecraft:main`'s: the
     /// pipeline, and the texture at the frame's size.
     gl_depth: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
@@ -604,7 +863,7 @@ const GL_DEPTH_WGSL: &str = r#"
 "#;
 
 /// A chain [`PostEffects::preload`] loaded, by id.
-type Preloaded = (String, Result<Option<Chain>, String>);
+type Preloaded = (String, Result<Option<Chain>, LoadError>);
 
 fn empty_source() -> &'static ResourceSource {
     static EMPTY: std::sync::OnceLock<ResourceSource> = std::sync::OnceLock::new();
@@ -697,14 +956,19 @@ impl PostEffects {
             pipelines: HashMap::new(),
             nearest: make(wgpu::FilterMode::Nearest),
             bilinear: make(wgpu::FilterMode::Linear),
-            chains: HashMap::new(),
+            chains: Vec::new(),
+            chain_ids: HashMap::new(),
             failed: HashSet::new(),
+            applied: Vec::new(),
+            active_chains: Vec::new(),
+            prev_active_chains: Vec::new(),
             preloading: None,
             #[cfg(test)]
             test_workers: Vec::new(),
             pending: HashSet::new(),
             root: empty_source().clone(),
             extra_blocks: BTreeMap::new(),
+            poly_globals: None,
             gl_depth: None,
             gl_depth_target: None,
             work: None,
@@ -719,15 +983,71 @@ impl PostEffects {
         }
     }
 
+    fn store_chain(&mut self, id: String, chain: Option<Chain>) -> usize {
+        if let Some(&slot) = self.chain_ids.get(&id) {
+            self.chains[slot].chain = chain;
+            return slot;
+        }
+        let slot = self.chains.len();
+        self.chain_ids.insert(id.clone(), slot);
+        self.chains.push(ChainSlot { id, chain });
+        self.active_chains.push(false);
+        self.prev_active_chains.push(false);
+        slot
+    }
+
+    #[cfg(test)]
+    fn chain(&self, id: &str) -> Option<&Chain> {
+        self.chain_ids
+            .get(id)
+            .and_then(|&slot| self.chains[slot].chain.as_ref())
+    }
+
     /// `GameRenderer.reloadPostEffects`-alike: forget chains loaded from another
     /// root, and the failures with them (`shouldResetFailedPostEffects`).
     fn use_root(&mut self, root: &ResourceSource) {
         if !self.root.same_generation(root) {
             self.root = root.to_owned();
             self.chains.clear();
+            self.chain_ids.clear();
             self.failed.clear();
+            self.active_chains.clear();
+            self.prev_active_chains.clear();
             self.preloading = None;
             self.pending.clear();
+        }
+    }
+
+    /// `GameRenderer.preparePostEffects(Collections.emptyList())`: reload on pack generation
+    /// change and retire persistent targets of chains active on the previous frame.
+    pub fn clear_active(&mut self, root: &ResourceSource) {
+        self.use_root(root);
+        for (slot, active) in self.active_chains.iter_mut().enumerate() {
+            if *active {
+                *active = false;
+                if let Some(chain) = self.chains[slot].chain.as_mut() {
+                    chain.close_persistent_targets();
+                }
+            }
+        }
+    }
+
+    /// Retire persistent targets of chains active last frame that did not apply this frame.
+    fn retire_inactive_persistent_targets(&mut self) {
+        std::mem::swap(&mut self.prev_active_chains, &mut self.active_chains);
+        self.active_chains.fill(false);
+        for &slot in &self.applied {
+            self.active_chains[slot] = true;
+        }
+        for (slot, was_active) in self.prev_active_chains.iter_mut().enumerate() {
+            if *was_active {
+                *was_active = false;
+                if !self.active_chains[slot]
+                    && let Some(chain) = self.chains[slot].chain.as_mut()
+                {
+                    chain.close_persistent_targets();
+                }
+            }
         }
     }
 
@@ -748,7 +1068,7 @@ impl PostEffects {
         }
         let ids: Vec<String> = ids
             .into_iter()
-            .filter(|id| !self.chains.contains_key(*id) && !self.failed.contains(*id))
+            .filter(|id| !self.chain_ids.contains_key(*id) && !self.failed.contains(*id))
             .map(normalise)
             .collect();
         if ids.is_empty() {
@@ -764,12 +1084,10 @@ impl PostEffects {
                 move || {
                     for id in ids {
                         let mut chain = Self::load(&root, &device, &queue, &id, &Extras::default());
-                        if let Ok(Some(chain)) = &mut chain {
-                            for pass in &mut chain.passes {
-                                if let Some(translated) = &mut pass.translated {
-                                    translated.ensure_pipeline(&device, format);
-                                }
-                            }
+                        if let Ok(Some(loaded)) = &mut chain
+                            && let Err(e) = loaded.ensure_pipelines(&device, format)
+                        {
+                            chain = Err(e);
                         }
                         if tx.send((id, chain)).is_err() {
                             return;
@@ -789,7 +1107,7 @@ impl PostEffects {
 
     /// Takes the chains `preload` has finished.
     fn collect_preloaded(&mut self) {
-        let Some((root, rx)) = &self.preloading else {
+        let Some((root, _)) = &self.preloading else {
             return;
         };
         if !root.same_generation(&self.root) {
@@ -798,6 +1116,9 @@ impl PostEffects {
             return;
         }
         loop {
+            let Some((_, rx)) = &self.preloading else {
+                return;
+            };
             match rx.try_recv() {
                 Ok((id, loaded)) => {
                     self.pending.remove(&id);
@@ -806,7 +1127,7 @@ impl PostEffects {
                         self.failed.insert(id.clone());
                         None
                     });
-                    self.chains.insert(id, loaded);
+                    self.store_chain(id, loaded);
                 }
                 Err(mpsc::TryRecvError::Empty) => return,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -868,7 +1189,7 @@ impl PostEffects {
         queue: &wgpu::Queue,
         id: &str,
         extras: &Extras,
-    ) -> Result<Option<Chain>, String> {
+    ) -> Result<Option<Chain>, LoadError> {
         let Some(text) = read_chain(root, id, crate::spectator_shaders::table())? else {
             return Ok(None);
         };
@@ -884,7 +1205,8 @@ impl PostEffects {
         if let Some(bad) = config.external_targets().into_iter().find(|t| *t != MAIN) {
             return Err(format!(
                 "Referenced external targets are not available in this context: [{bad}]"
-            ));
+            )
+            .into());
         }
         let targets: Vec<(String, InternalTarget)> = std::iter::once((
             MAIN.to_owned(),
@@ -906,20 +1228,25 @@ impl PostEffects {
                 root,
                 device,
                 queue,
-                n,
                 p,
                 output,
                 &index,
                 &mut images,
                 extras,
             ) {
-                Ok(pass) => pass,
+                Ok(mut pass) => {
+                    // What a pipeline the device refuses falls back to, as below.
+                    pass.fallback = (Self::standin_pass(device, queue, n, p, output, &index))
+                        .ok()
+                        .map(Box::new);
+                    pass
+                }
                 Err(e) => match Self::standin_pass(device, queue, n, p, output, &index) {
                     Ok(pass) => {
                         log::debug!("post effect {id} pass {n} uses the built-in shaders: {e}");
                         pass
                     }
-                    Err(_) => return Err(e),
+                    Err(_) => return Err(LoadError::Pass(n, e)),
                 },
             };
             passes.push(pass);
@@ -940,21 +1267,36 @@ impl PostEffects {
         root: &ResourceSource,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        n: usize,
         p: &PassConfig,
         output: usize,
         index: &dyn Fn(&str) -> Option<usize>,
         images: &mut Vec<(wgpu::Texture, wgpu::TextureView, [u32; 2])>,
         extras: &Extras,
-    ) -> Result<Pass, String> {
-        let program = crate::post_glsl::translate(root, &p.vertex, &p.fragment)?;
+    ) -> Result<Pass, PassRefusal> {
+        let globals = sunrise_polytone::globals::BLOCK;
+        if p.uniforms.contains_key(globals) {
+            return Err(PassRefusal::GlobalsGiven);
+        }
+        let limits = device.limits();
+        // A pack's GLSL is untrusted: a fault the translator meets refuses the pass. Declaring
+        // more than the device binds refuses it before any analysis.
+        let declarable = crate::post_glsl::Declarable::of(&limits);
+        let program = crate::crash::contain(|| {
+            crate::post_glsl::translate(root, &p.vertex, &p.fragment, declarable)
+        })
+        .map_err(|e| PassRefusal::Translator(format!("the shader translator failed: {e}")))?
+        .map_err(PassRefusal::from)?;
+        let modules = [&program.vertex, &program.fragment];
+        // What each stage reads, from the translator's validation of each stage.
+        let read = &program.read;
+        let config = PassRefusal::Config;
         let mut refs = Vec::new();
         for input in &p.inputs {
             let src = match &input.source {
                 Source::Target { id, depth } => {
-                    let target = index(id).ok_or("a target is missing")?;
+                    let target = index(id).ok_or(config("a target is missing".into()))?;
                     if target == output && !depth {
-                        return Err(format!("pass {n}: reads the target it writes"));
+                        return Err(config("it reads the target it writes".into()));
                     }
                     Src::Target {
                         index: target,
@@ -962,7 +1304,7 @@ impl PostEffects {
                     }
                 }
                 Source::Texture { location } => {
-                    images.push(Self::image(root, device, queue, location)?);
+                    images.push(Self::image(root, device, queue, location).map_err(config)?);
                     Src::Image(images.len() - 1)
                 }
             };
@@ -975,9 +1317,29 @@ impl PostEffects {
         let mut entries = Vec::new();
         let mut blocks = Vec::new();
         for (name, binding) in &program.blocks {
+            if name == globals {
+                crate::gfx::expression_blocks::check_poly_globals(modules, *binding)
+                    .map_err(PassRefusal::Globals)?;
+            }
+            // Bound only to the stages that read it: one only declared (an imported block the
+            // shader doesn't use) binds nothing.
+            let stages = sunrise_glsl::stages_reading(read, *binding);
+            if stages.is_empty() {
+                continue;
+            }
             let block = match name.as_str() {
                 "SamplerInfo" => Block::Info,
                 "Globals" => Block::Globals,
+                // The game's, written every draw ([`Request::poly_globals`]), whichever effect
+                // the pass is in: never a pass's own values.
+                other if other == globals => {
+                    Block::PolyGlobals(device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Post effect PolyGlobals"),
+                        size: UNIFORM_BYTES,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }))
+                }
                 other if !p.uniforms.contains_key(other) && extras.blocks.contains_key(other) => {
                     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("Post effect pack uniforms"),
@@ -988,23 +1350,21 @@ impl PostEffects {
                     Block::Dynamic(other.to_owned(), buffer)
                 }
                 other => {
-                    let values = p
-                        .uniforms
-                        .get(other)
-                        .ok_or(format!("pass {n}: the uniform block {other} is missing"))?;
+                    let values = (p.uniforms.get(other))
+                        .ok_or_else(|| config(format!("the uniform block {other} is missing")))?;
                     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("Post effect uniforms"),
                         size: UNIFORM_BYTES,
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     });
-                    queue.write_buffer(&buffer, 0, &pack_block(values)?);
+                    queue.write_buffer(&buffer, 0, &pack_block(values).map_err(config)?);
                     Block::Custom(buffer)
                 }
             };
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: *binding,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: stages,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -1017,16 +1377,18 @@ impl PostEffects {
         let mut samplers = Vec::new();
         for (name, texture) in &program.samplers {
             let input = name.strip_suffix("Sampler").unwrap_or(name);
-            let slot = p
-                .inputs
-                .iter()
+            let slot = (p.inputs.iter())
                 .position(|i| i.sampler == input)
-                .ok_or(format!("pass {n}: no input for the sampler {name}"))?;
+                .ok_or_else(|| config(format!("no input for the sampler {name}")))?;
+            let stages = sunrise_glsl::stages_reading(read, *texture);
+            if stages.is_empty() {
+                continue;
+            }
             // A depth buffer is read unfiltered.
             let depth = matches!(refs[slot].src, Src::Target { depth: true, .. });
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: *texture,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: stages,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: !depth },
                     view_dimension: wgpu::TextureViewDimension::D2,
@@ -1036,7 +1398,7 @@ impl PostEffects {
             });
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: texture + 1,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: stages,
                 ty: wgpu::BindingType::Sampler(if depth {
                     wgpu::SamplerBindingType::NonFiltering
                 } else {
@@ -1052,8 +1414,10 @@ impl PostEffects {
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
             })
         };
-        pass.refs = refs;
-        pass.translated = Some(Translated {
+        within_limits(&entries, &limits)?;
+        // Anything else the device refuses in the modules or the layout refuses the pass too.
+        let scopes = gpu_scopes(device);
+        let translated = Translated {
             layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Post effect bindings"),
                 entries: &entries,
@@ -1063,7 +1427,10 @@ impl PostEffects {
             pipelines: HashMap::new(),
             blocks,
             samplers,
-        });
+        };
+        gpu_refusal(scopes).map_or(Ok(()), |e| Err(PassRefusal::Pipeline(e)))?;
+        pass.refs = refs;
+        pass.translated = Some(translated);
         Ok(pass)
     }
 
@@ -1251,34 +1618,69 @@ impl PostEffects {
         self.use_root(req.root);
         self.collect_preloaded();
         self.extra_blocks = req.extras.map(|e| e.blocks.clone()).unwrap_or_default();
-        let mut applied = Vec::new();
+        self.poly_globals = None;
+        self.applied.clear();
         for effect in req.effects {
-            let id = normalise(effect);
+            let id = normalise_cow(effect);
             // A chain still compiling on `preload`'s thread waits for it.
-            if self.failed.contains(&id) || applied.contains(&id) || self.pending.contains(&id) {
+            if self.failed.contains(id.as_ref()) || self.pending.contains(id.as_ref()) {
                 continue;
             }
-            if !self.chains.contains_key(&id) {
+            let slot = if let Some(&slot) = self.chain_ids.get(id.as_ref()) {
+                slot
+            } else {
+                let owned = id.into_owned();
                 let empty = Extras::default();
                 let extras = req.extras.unwrap_or(&empty);
-                let loaded = match Self::load(&self.root, device, queue, &id, extras) {
+                let loaded = match Self::load(&self.root, device, queue, &owned, extras) {
                     Ok(chain) => chain,
                     Err(e) => {
-                        log::warn!("Failed to load post effect {id}: {e}");
-                        self.failed.insert(id.clone());
+                        log::warn!("Failed to load post effect {owned}: {e}");
+                        self.failed.insert(owned.clone());
                         None
                     }
                 };
-                self.chains.insert(id.clone(), loaded);
+                self.store_chain(owned, loaded)
+            };
+            if self.chains[slot].chain.is_some() {
+                self.applied.push(slot);
             }
-            if matches!(self.chains.get(&id), Some(Some(_))) {
-                applied.push(id);
-            }
-        }
-        if applied.is_empty() {
-            return false;
         }
         let format = frame.format().remove_srgb_suffix();
+        // A pass whose pipeline the device refuses refuses its effect, named, which is skipped.
+        let mut applied = std::mem::take(&mut self.applied);
+        applied.retain(|&slot| {
+            let Some(chain) = self.chains[slot].chain.as_mut() else {
+                return false;
+            };
+            let Err(e) = chain.ensure_pipelines(device, format) else {
+                return true;
+            };
+            let id = self.chains[slot].id.clone();
+            log::warn!("Failed to load post effect {id}: {e}");
+            self.failed.insert(id);
+            self.chains[slot].chain = None;
+            false
+        });
+        self.applied = applied;
+        self.retire_inactive_persistent_targets();
+        if self.applied.is_empty() {
+            return false;
+        }
+        let reads_globals = |chain: &Chain| {
+            (chain.passes.iter().filter_map(|p| p.translated.as_ref())).any(|t| {
+                t.blocks
+                    .iter()
+                    .any(|(_, b)| matches!(b, Block::PolyGlobals(_)))
+            })
+        };
+        if self
+            .applied
+            .iter()
+            .any(|&slot| self.chains[slot].chain.as_ref().is_some_and(reads_globals))
+        {
+            self.poly_globals = req.poly_globals.map(|build| build());
+        }
         if self.work.as_ref().is_none_or(|(t, _)| {
             t.size().width != size[0] || t.size().height != size[1] || t.format() != format
         }) {
@@ -1335,8 +1737,9 @@ impl PostEffects {
         }
         let gl_depth = self.gl_depth_target.take();
         let depth = depth.and(gl_depth.as_ref().map(|(_, v)| v));
-        for id in &applied {
-            let mut chain = self.chains.remove(id).flatten().expect("loaded above");
+        let applied = std::mem::take(&mut self.applied);
+        for &slot in &applied {
+            let mut chain = self.chains[slot].chain.take().expect("loaded above");
             self.run_chain(
                 device,
                 queue,
@@ -1349,8 +1752,9 @@ impl PostEffects {
                 format,
                 timing.as_deref_mut(),
             );
-            self.chains.insert(id.clone(), Some(chain));
+            self.chains[slot].chain = Some(chain);
         }
+        self.applied = applied;
         // The frame, as the chains left it.
         self.run_pass(
             device,
@@ -1490,11 +1894,6 @@ impl PostEffects {
         format: wgpu::TextureFormat,
         mut timing: Option<&mut crate::gfx::pack_timing::PassTiming>,
     ) {
-        for pass in &mut chain.passes {
-            if let Some(translated) = &mut pass.translated {
-                translated.ensure_pipeline(device, format);
-            }
-        }
         let sizes: Vec<[u32; 2]> = chain
             .targets
             .iter()
@@ -1674,6 +2073,11 @@ impl PostEffects {
                 Block::Info => &pass.info,
                 Block::Globals => &self.globals,
                 Block::Custom(buffer) => buffer,
+                Block::PolyGlobals(buffer) => {
+                    let zeros = [0; sunrise_polytone::globals::BLOCK_SIZE];
+                    queue.write_buffer(buffer, 0, self.poly_globals.as_ref().unwrap_or(&zeros));
+                    buffer
+                }
                 Block::Dynamic(name, buffer) => {
                     if let Some(bytes) = self.extra_blocks.get(name) {
                         let n = bytes.len().min(UNIFORM_BYTES as usize) & !3;
@@ -1844,6 +2248,7 @@ impl Pass {
             fs_block: buffer("Post effect fragment uniforms", BLOCK_BYTES as u64),
             refs: Vec::new(),
             translated: None,
+            fallback: None,
         }
     }
 }
@@ -1868,6 +2273,29 @@ mod tests {
               "uniforms": { "BlitConfig": [ { "name": "ColorModulate", "type": "vec4", "value": [1.0, 0.0, 0.5, 1.0] } ] } }
         ]
     }"#;
+
+    /// `Globals::bytes` lays the block out in std140 order, each value little-endian in its own
+    /// four bytes.
+    #[test]
+    fn globals_lay_out_their_block() {
+        let globals = Globals {
+            camera_block_pos: [1, -2, 3],
+            glint_alpha: 0.375,
+            camera_offset: [0.25, 0.5, 0.75],
+            game_time: 0.125,
+            use_rgss: true,
+        };
+        let expected: [u8; 48] = [
+            0x01, 0x00, 0x00, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, // ivec3
+            0x00, 0x00, 0xc0, 0x3e, // glint alpha 0.375
+            0x00, 0x00, 0x80, 0x3e, 0x00, 0x00, 0x00, 0x3f, 0x00, 0x00, 0x40, 0x3f, // vec3
+            0x00, 0x00, 0x00, 0x3e, // game time 0.125
+            0x00, 0x00, 0x20, 0x44, 0x00, 0x00, 0xf0, 0x43, // vec2 640, 480
+            0x07, 0x00, 0x00, 0x00, // menu blur radius 7
+            0x01, 0x00, 0x00, 0x00, // rgss on
+        ];
+        assert_eq!(globals.bytes([640, 480], 7), expected);
+    }
 
     #[test]
     fn shaders_validate() {
@@ -2024,12 +2452,11 @@ mod tests {
     fn device_where(
         supported: impl Fn(&wgpu::Adapter) -> bool,
     ) -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::gfx::test_gpu::instance();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
+        let adapter = crate::gfx::test_gpu::adapter()?;
         if !supported(&adapter) {
             return None;
         }
-        let pair = pollster::block_on(adapter.request_device(&Default::default())).ok()?;
+        let pair = crate::gfx::test_gpu::optional_device_with(&adapter, &Default::default())?;
         eprintln!("post-effect GPU: {:?}", adapter.get_info());
         Some(pair)
     }
@@ -2050,6 +2477,20 @@ mod tests {
         root: &ResourceSource,
         names: &[String],
     ) -> (bool, [u8; 4]) {
+        run_with(device, queue, effects, root, names, None, None)
+    }
+
+    /// [`run`] with what the packs' Polytone post chains add (`extras`).
+    fn run_with(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        effects: &mut PostEffects,
+        root: &ResourceSource,
+        names: &[String],
+        extras: Option<&Extras>,
+        poly_globals: Option<crate::gfx::expression_blocks::PolyGlobalsBytes>,
+    ) -> (bool, [u8; 4]) {
+        let build = poly_globals.map(|bytes| move || bytes);
         let frame = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -2099,7 +2540,8 @@ mod tests {
                 root,
                 menu_blur_radius: 5.0,
                 globals: Globals::default(),
-                extras: None,
+                extras,
+                poly_globals: build.as_ref().map(|b| b as _),
             },
             None,
         );
@@ -2117,6 +2559,7 @@ mod tests {
     /// The chain runs over the frame and the result lands on it: invert into
     /// `swap`, then a blit modulated by (1, 0, 0.5, 1) back onto the frame.
     #[test]
+    #[ignore = "daily"]
     fn a_chain_draws_onto_the_frame() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -2154,6 +2597,543 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
+    fn repeated_effects_run_in_order() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        const INVERT: &str = r#"{
+            "targets": { "swap": {} },
+            "passes": [
+                { "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "minecraft:post/invert",
+                  "inputs": [ { "sampler_name": "In", "target": "minecraft:main" } ],
+                  "output": "swap",
+                  "uniforms": { "InvertConfig": [ { "name": "InverseAmount", "type": "float", "value": 1.0 } ] } },
+                { "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "minecraft:post/blit",
+                  "inputs": [ { "sampler_name": "In", "target": "swap" } ],
+                  "output": "minecraft:main",
+                  "uniforms": { "BlitConfig": [ { "name": "ColorModulate", "type": "vec4", "value": [1.0, 1.0, 1.0, 1.0] } ] } }
+            ]
+        }"#;
+        let root = scratch("repeated_invert", INVERT);
+        let source = ResourceSource::directory(root.clone());
+        let mut effects = PostEffects::new(&device);
+        let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+
+        let once = ["minecraft:repeated_invert".to_owned()];
+        let (ran, px_once) = run(&device, &queue, &mut effects, &source, &once);
+        assert!(ran);
+        assert!(
+            near(px_once[0], 204) && near(px_once[1], 153) && near(px_once[2], 102),
+            "single invert: {px_once:?}"
+        );
+
+        let twice = [
+            "minecraft:repeated_invert".to_owned(),
+            "minecraft:repeated_invert".to_owned(),
+        ];
+        let id_ptr_before = effects.chains[0].id.as_ptr();
+        let (ran, px_twice) = run(&device, &queue, &mut effects, &source, &twice);
+        assert!(ran);
+        assert!(
+            near(px_twice[0], 51) && near(px_twice[1], 102) && near(px_twice[2], 153),
+            "double invert must restore original colour: {px_twice:?}"
+        );
+        assert_eq!(effects.chains.len(), 1);
+        assert_eq!(effects.applied, [0, 0]);
+        assert_eq!(effects.chains[0].id.as_ptr(), id_ptr_before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn inactive_persistent_targets_retire_without_dropping_compiled_chain() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        const PERSIST: &str = r#"{
+            "targets": {
+                "prev": { "persistent": true, "clear_color": 4278255360 },
+                "saved": {}
+            },
+            "passes": [
+                { "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "minecraft:post/blit",
+                  "inputs": [ { "sampler_name": "In", "target": "minecraft:main" } ],
+                  "output": "saved",
+                  "uniforms": { "BlitConfig": [ { "name": "ColorModulate", "type": "vec4", "value": [1.0, 0.0, 0.0, 1.0] } ] } },
+                { "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "minecraft:post/blit",
+                  "inputs": [ { "sampler_name": "In", "target": "prev" } ],
+                  "output": "minecraft:main",
+                  "uniforms": { "BlitConfig": [ { "name": "ColorModulate", "type": "vec4", "value": [1.0, 1.0, 1.0, 1.0] } ] } },
+                { "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "minecraft:post/blit",
+                  "inputs": [ { "sampler_name": "In", "target": "saved" } ],
+                  "output": "prev",
+                  "uniforms": { "BlitConfig": [ { "name": "ColorModulate", "type": "vec4", "value": [1.0, 1.0, 1.0, 1.0] } ] } }
+            ]
+        }"#;
+        let root = scratch("persist_retire", PERSIST);
+        let source = ResourceSource::directory(root.clone());
+        let mut effects = PostEffects::new(&device);
+        let names = ["minecraft:persist_retire".to_owned()];
+        let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+
+        // Frame 1: fresh persistent target starts at green clear colour.
+        let (ran, px1) = run(&device, &queue, &mut effects, &source, &names);
+        assert!(ran);
+        assert!(
+            near(px1[0], 0) && near(px1[1], 255) && near(px1[2], 0),
+            "{px1:?}"
+        );
+
+        // Frame 2: stays active, resumes the red pixels written on frame 1.
+        let (_, px2) = run(&device, &queue, &mut effects, &source, &names);
+        assert!(
+            near(px2[0], 51) && near(px2[1], 0) && near(px2[2], 0),
+            "{px2:?}"
+        );
+
+        // Frame 3: removed (empty list) retires persistent targets while keeping the compiled chain.
+        let (ran, _) = run(&device, &queue, &mut effects, &source, &[]);
+        assert!(!ran);
+        let chain = effects
+            .chain("minecraft:persist_retire")
+            .expect("compiled chain stays cached");
+        assert!(chain.textures.is_empty(), "persistent target must retire");
+
+        // Frame 4: re-added at the same size starts freshly cleared to green.
+        let (ran, px4) = run(&device, &queue, &mut effects, &source, &names);
+        assert!(ran);
+        assert!(
+            near(px4[0], 0) && near(px4[1], 255) && near(px4[2], 0),
+            "{px4:?}"
+        );
+
+        // Frame 5: active again, then a no-world/title frame calls clear_active.
+        let (_, px5) = run(&device, &queue, &mut effects, &source, &names);
+        assert!(
+            near(px5[0], 51) && near(px5[1], 0) && near(px5[2], 0),
+            "{px5:?}"
+        );
+        effects.clear_active(&source);
+        assert!(
+            effects
+                .chain("minecraft:persist_retire")
+                .expect("compiled chain stays cached across clear_active")
+                .textures
+                .is_empty()
+        );
+        let (_, px7) = run(&device, &queue, &mut effects, &source, &names);
+        assert!(
+            near(px7[0], 0) && near(px7[1], 255) && near(px7[2], 0),
+            "{px7:?}"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn failed_effect_recovers_on_resource_reload() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let root = scratch("reload_recover", "{not valid json");
+        let source1 = ResourceSource::directory(root.clone());
+        let mut effects = PostEffects::new(&device);
+        let names = ["minecraft:reload_recover".to_owned()];
+
+        let (ran, _) = run(&device, &queue, &mut effects, &source1, &names);
+        assert!(!ran);
+        assert!(effects.failed.contains("minecraft:reload_recover"));
+
+        // Resource reload with valid JSON clears failedPostEffects without resending PostEffects.
+        std::fs::write(
+            root.join("assets/minecraft/post_effect/reload_recover.json"),
+            INVERT_THEN_BLIT,
+        )
+        .unwrap();
+        let source2 = ResourceSource::directory(root.clone());
+        let (ran, px) = run(&device, &queue, &mut effects, &source2, &names);
+        assert!(ran);
+        assert!(effects.failed.is_empty());
+        let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+        assert!(
+            near(px[0], 204) && px[1] == 0 && near(px[2], 51) && px[3] == 255,
+            "{px:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A scratch root with one single-pass chain per `(name, fragment shader)`, each drawing its
+    /// fragment shader over the frame (`pass uniforms` given as JSON), and a full-screen vertex
+    /// shader.
+    fn one_pass_chains(name: &str, chains: &[(&str, String, &str)]) -> PathBuf {
+        let root = scratch(name, "{}");
+        let shaders = root.join("assets/minecraft/shaders");
+        std::fs::create_dir_all(shaders.join("post")).unwrap();
+        std::fs::write(
+            shaders.join("post/full.vsh"),
+            "#version 330\nvoid main() {\n  vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n\
+               gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);\n}\n",
+        )
+        .unwrap();
+        for (chain, fsh, uniforms) in chains {
+            std::fs::write(shaders.join(format!("post/{chain}.fsh")), fsh).unwrap();
+            std::fs::write(
+                root.join(format!("assets/minecraft/post_effect/{chain}.json")),
+                format!(
+                    r#"{{"passes":[{{"vertex_shader":"minecraft:post/full",
+                        "fragment_shader":"minecraft:post/{chain}","inputs":[],
+                        "output":"minecraft:main","uniforms":{{{uniforms}}}}}]}}"#
+                ),
+            )
+            .unwrap();
+        }
+        root
+    }
+
+    /// A pack post shader reads the `PolyGlobals` the frame gives (`Request::poly_globals`) in any
+    /// effect, not only a Polytone chain's: the block's bytes as given, zeros on a frame without
+    /// them, and the built-in include's two helpers. Expected values worked out by hand from the
+    /// helpers' math: the player at (3.5, 64.25, -7.75) is block (3, 64, -8) less the offset
+    /// (-0.5, -0.25, -0.25); a projection scaling x and y by 2 and a model-view moving by
+    /// (1, 2, 3) take screen point (0.75, 0.25) at depth 0.5 to NDC (0.5, -0.5, 0.5), view
+    /// (0.25, -0.25, 0.5) and world (-0.75, -2.25, -2.5); and with the game's reverse-Z
+    /// projection, a point's depth back to the point (the geometric hit).
+    #[test]
+    #[ignore = "daily"]
+    fn a_post_pass_reads_the_games_poly_globals() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let fsh = |color: &str| {
+            format!(
+                "#version 330\n#moj_import <polytone_globals.glsl>\n\
+                 layout(location = 0) out vec4 fragColor;\n\
+                 void main() {{\n  {color}\n}}\n"
+            )
+        };
+        let root = one_pass_chains(
+            "poly_globals",
+            &[
+                (
+                    "raw",
+                    fsh(
+                        "fragColor = vec4(float(PolyPlayerBlockPos.y) / 255.0, PolySunAngle, \
+                         PolyDayTime / 255.0, 1.0);",
+                    ),
+                    "",
+                ),
+                (
+                    "player",
+                    fsh(
+                        "vec3 p = polyPlayerPos();\n  fragColor = vec4(p.x * 2.0 / 255.0, \
+                         (p.y - 60.0) * 4.0 / 255.0, -p.z * 4.0 / 255.0, 1.0);",
+                    ),
+                    "",
+                ),
+                (
+                    "hit",
+                    fsh(
+                        "vec3 w = polyPositionFromDepth(vec2(0.75, 0.25), 2.45 / 99.95);\n  \
+                         fragColor = vec4((w + vec3(1.0, 4.0, 6.0)) * 100.0 / 255.0, 1.0);",
+                    ),
+                    "",
+                ),
+                (
+                    "depth",
+                    fsh("vec3 w = polyPositionFromDepth(vec2(0.75, 0.25), 0.5);\n  \
+                         fragColor = vec4((w + vec3(1.0, 3.0, 3.0)) * 100.0 / 255.0, 1.0);"),
+                    "",
+                ),
+            ],
+        );
+        let mut projection = [0.0; 16];
+        (projection[0], projection[5], projection[10], projection[15]) = (2.0, 2.0, 1.0, 1.0);
+        let mut model_view = [0.0; 16];
+        (model_view[0], model_view[5], model_view[10], model_view[15]) = (1.0, 1.0, 1.0, 1.0);
+        model_view[12..15].copy_from_slice(&[1.0, 2.0, 3.0]);
+        let globals = sunrise_polytone::globals::Globals {
+            projection,
+            model_view,
+            sun_angle: 0.2,
+            day_time: 153.0,
+            delta_time: 0.0,
+            player: [3.5, 64.25, -7.75],
+        };
+        let bytes = globals.std140();
+        let source = ResourceSource::directory(root.clone());
+        let mut effects = PostEffects::new(&device);
+        // Plain effects (no Polytone chain, no extras): the pass reads the game's block.
+        let mut drawn = |chain: &str, given| {
+            let names = [format!("minecraft:{chain}")];
+            let (ran, px) = run_with(&device, &queue, &mut effects, &source, &names, None, given);
+            assert!(ran, "{chain}");
+            px
+        };
+        // Block height 64, sun angle 0.2 (51), day time 153.
+        assert_eq!(drawn("raw", Some(bytes)), [64, 51, 153, 255]);
+        // A frame without them: zeros, never the last frame's bytes.
+        assert_eq!(drawn("raw", None), [0, 0, 0, 255]);
+        // polyPlayerPos() (3.5, 64.25, -7.75): 3.5 * 2 = 7, 4.25 * 4 = 17, 7.75 * 4 = 31.
+        assert_eq!(drawn("player", Some(bytes)), [7, 17, 31, 255]);
+        // (-0.75, -2.25, -2.5) + (1, 3, 3) = (0.25, 0.75, 0.5), times 100.
+        assert_eq!(drawn("depth", Some(bytes)), [25, 75, 50, 255]);
+        // The game's own projection form: reverse-Z, `perspective_rh(90 degrees, 1, far 100,
+        // near 0.05)`, so r = 0.05 / 99.95 and a view point (x, y, z) has device depth
+        // (100 + z) r / -z. The point (1, -1, -2) (seen at uv (0.75, 0.25)) has depth 98 r / 2 =
+        // 2.45 / 99.95, and the model-view's move by (1, 2, 3) puts it at (0, -3, -5); plus
+        // (1, 4, 6), times 100. The depth taken as OpenGL's (depth * 2 - 1, as Polytone 6.11 on
+        // 26.2 does) would put it about 0.05 blocks behind the camera instead.
+        let r = 0.05f32 / 99.95;
+        let mut reverse_z = [0.0; 16];
+        (
+            reverse_z[0],
+            reverse_z[5],
+            reverse_z[10],
+            reverse_z[11],
+            reverse_z[14],
+        ) = (1.0, 1.0, r, -1.0, 100.0 * r);
+        let hit = sunrise_polytone::globals::Globals {
+            projection: reverse_z,
+            ..globals
+        }
+        .std140();
+        assert_eq!(drawn("hit", Some(hit)), [100, 100, 100, 255]);
+        assert!(effects.failed.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A post pass binds only the blocks its stages read: twelve read beside an imported, unused
+    /// `PolyGlobals`, or beside twelve only declared, fit the device's twelve per stage and run.
+    /// Refused, each for its own reason, and skipped: 25 declared (before any analysis),
+    /// thirteen read, a pass whose uniforms give `PolyGlobals` (the game's), one declaring it
+    /// other than its layout, and one whose pipeline the device refuses (its fragment stage
+    /// reads an input the vertex stage doesn't write), loaded in a frame or preloaded.
+    #[test]
+    #[ignore = "daily"]
+    fn a_post_pass_binds_what_it_reads_and_is_refused_past_the_limits() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        assert_eq!(device.limits().max_uniform_buffers_per_shader_stage, 12);
+        // `n` blocks read, then `unused` only declared.
+        let blocks_with = |n: usize, unused: usize, import: bool| {
+            let declared: String = (0..n + unused)
+                .map(|i| format!("layout(std140) uniform B{i} {{ float b{i}; }};\n"))
+                .collect();
+            let read: String = (0..n).map(|i| format!(" + b{i}")).collect();
+            let import = if import {
+                "#moj_import <polytone_globals.glsl>\n"
+            } else {
+                ""
+            };
+            let fsh = format!(
+                "#version 330\n{import}{declared}layout(location = 0) out vec4 fragColor;\n\
+                 void main() {{\n  fragColor = vec4(0.0{read}, 0.0, 0.0, 1.0);\n}}\n"
+            );
+            let uniforms: Vec<String> = (0..n)
+                .map(|i| format!(r#""B{i}":[{{"name":"b{i}","type":"float","value":0.0}}]"#))
+                .collect();
+            (fsh, uniforms.join(","))
+        };
+        let blocks = |n, import| blocks_with(n, 0, import);
+        let (twelve, twelve_uniforms) = blocks(12, true);
+        // Declared by both stages: up to twice the per-stage limit, read or not, is fine; one
+        // more is refused before any analysis.
+        let (wide, wide_uniforms) = blocks_with(12, 12, false);
+        let (crowded, crowded_uniforms) = blocks_with(1, 24, false);
+        let (thirteen, thirteen_uniforms) = blocks(13, false);
+        let (one, _) = blocks(1, true);
+        let taken = r#""B0":[{"name":"b0","type":"float","value":0.0}],
+            "PolyGlobals":[{"name":"PolySunAngle","type":"float","value":1.0}]"#;
+        let short = "#version 330\nlayout(std140) uniform PolyGlobals { float PolySunAngle; };\n\
+            layout(location = 0) out vec4 fragColor;\n\
+            void main() {\n  fragColor = vec4(PolySunAngle);\n}\n"
+            .to_owned();
+        let unmatched = "#version 330\nlayout(location = 0) in vec2 texCoord;\n\
+            layout(location = 0) out vec4 fragColor;\n\
+            void main() {\n  fragColor = vec4(texCoord, 0.0, 1.0);\n}\n"
+            .to_owned();
+        let root = one_pass_chains(
+            "limits",
+            &[
+                ("twelve", twelve, &twelve_uniforms),
+                ("wide", wide, &wide_uniforms),
+                ("crowded", crowded, &crowded_uniforms),
+                ("thirteen", thirteen, &thirteen_uniforms),
+                ("taken", one, taken),
+                ("short", short, ""),
+                ("unmatched", unmatched, ""),
+            ],
+        );
+        let source = ResourceSource::directory(root.clone());
+        // Why each is refused.
+        let load = |chain: &str| {
+            let id = format!("minecraft:{chain}");
+            let loaded = PostEffects::load(&source, &device, &queue, &id, &Extras::default());
+            let mut chain = loaded?.expect("the chain");
+            chain.ensure_pipelines(&device, wgpu::TextureFormat::Rgba8Unorm)
+        };
+        assert_eq!(load("twelve"), Ok(()));
+        assert_eq!(load("wide"), Ok(()));
+        let fragment = Some(wgpu::ShaderStages::FRAGMENT);
+        let blocks_past = |stage, count, limit| {
+            Err(LoadError::Pass(
+                0,
+                PassRefusal::OverLimit {
+                    what: "uniform blocks",
+                    stage,
+                    count,
+                    limit,
+                },
+            ))
+        };
+        assert_eq!(load("crowded"), blocks_past(None, 25, 24));
+        assert_eq!(load("thirteen"), blocks_past(fragment, 13, 12));
+        assert_eq!(
+            load("taken"),
+            Err(LoadError::Pass(0, PassRefusal::GlobalsGiven))
+        );
+        assert!(matches!(
+            load("short"),
+            Err(LoadError::Pass(
+                0,
+                PassRefusal::Globals(crate::gfx::expression_blocks::GlobalsRefusal::Member {
+                    index: 0,
+                    ..
+                })
+            ))
+        ));
+        assert!(matches!(
+            load("unmatched"),
+            Err(LoadError::Pass(0, PassRefusal::Pipeline(_)))
+        ));
+        // In a frame: the refused ones are named in the log and skipped.
+        let mut effects = PostEffects::new(&device);
+        let mut ran = |chain: &str| {
+            let names = [format!("minecraft:{chain}")];
+            run(&device, &queue, &mut effects, &source, &names).0
+        };
+        for chain in ["twelve", "wide"] {
+            assert!(ran(chain), "{chain}");
+        }
+        for chain in ["crowded", "thirteen", "taken", "short", "unmatched"] {
+            assert!(!ran(chain), "{chain}");
+        }
+        let mut failed: Vec<&String> = effects.failed.iter().collect();
+        failed.sort();
+        assert_eq!(
+            failed,
+            [
+                "minecraft:crowded",
+                "minecraft:short",
+                "minecraft:taken",
+                "minecraft:thirteen",
+                "minecraft:unmatched"
+            ]
+        );
+        // A preloaded chain whose pipeline the device refuses arrives refused, named, too.
+        let mut effects = PostEffects::new(&device);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        effects.preload(&device, &queue, &source, ["minecraft:unmatched"], format);
+        let started = std::time::Instant::now();
+        while !effects.pending.is_empty() {
+            assert!(started.elapsed().as_secs() < 60, "the chain never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            effects.collect_preloaded();
+        }
+        assert!(effects.failed.contains("minecraft:unmatched"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// One rule for a refused pass: a pass naming vanilla's shaders whose pipeline the device
+    /// refuses (the pack's `blit.fsh` reads an input its `screenquad.vsh` doesn't write) runs on
+    /// the built-in stand-ins, as one the translator refuses does, and the effect runs: the
+    /// frame (0.2, 0.4, 0.6) times (1, 0, 1). The same pass naming no vanilla shader is refused
+    /// with its effect (the limits test's `unmatched`).
+    #[test]
+    #[ignore = "daily"]
+    fn a_pass_whose_pipeline_is_refused_falls_back_to_the_stand_in() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let blit = |from: &str, to: &str, modulate: &str| {
+            format!(
+                r#"{{"vertex_shader":"minecraft:core/screenquad","fragment_shader":"minecraft:post/blit",
+                    "inputs":[{{"sampler_name":"In","target":"{from}"}}],"output":"{to}",
+                    "uniforms":{{"BlitConfig":[{{"name":"ColorModulate","type":"vec4","value":{modulate}}}]}}}}"#
+            )
+        };
+        let root = scratch(
+            "refused_blit",
+            &format!(
+                r#"{{"targets":{{"swap":{{}}}},"passes":[{},{}]}}"#,
+                blit("minecraft:main", "swap", "[1.0, 0.0, 1.0, 1.0]"),
+                blit("swap", "minecraft:main", "[1.0, 1.0, 1.0, 1.0]")
+            ),
+        );
+        let shaders = root.join("assets/minecraft/shaders");
+        std::fs::create_dir_all(shaders.join("core")).unwrap();
+        std::fs::create_dir_all(shaders.join("post")).unwrap();
+        std::fs::write(
+            shaders.join("core/screenquad.vsh"),
+            "#version 330\nvoid main() {\n  vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n\
+               gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            shaders.join("post/blit.fsh"),
+            "#version 330\nuniform sampler2D InSampler;\n\
+             layout(std140) uniform BlitConfig { vec4 ColorModulate; };\n\
+             layout(location = 0) in vec2 texCoord;\nlayout(location = 0) out vec4 fragColor;\n\
+             void main() {\n  fragColor = texture(InSampler, texCoord) * ColorModulate;\n}\n",
+        )
+        .unwrap();
+        let source = ResourceSource::directory(root.clone());
+        // It loads translated, with its stand-in kept for the pipeline the device refuses.
+        let mut chain = PostEffects::load(
+            &source,
+            &device,
+            &queue,
+            "minecraft:refused_blit",
+            &Extras::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            chain
+                .passes
+                .iter()
+                .all(|p| p.translated.is_some() && p.fallback.is_some())
+        );
+        assert_eq!(
+            chain.ensure_pipelines(&device, wgpu::TextureFormat::Rgba8Unorm),
+            Ok(())
+        );
+        assert!(chain.passes.iter().all(|p| p.translated.is_none()));
+        let mut effects = PostEffects::new(&device);
+        let names = ["minecraft:refused_blit".to_owned()];
+        let (ran, px) = run(&device, &queue, &mut effects, &source, &names);
+        assert!(ran);
+        assert_eq!(px, [51, 0, 153, 255]);
+        assert!(effects.failed.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn a_chain_naming_an_unknown_shader_fails_once() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -2236,6 +3216,7 @@ mod tests {
                 menu_blur_radius: 0.0,
                 globals: Globals::default(),
                 extras: None,
+                poly_globals: None,
             },
             None,
         ));
@@ -2256,6 +3237,7 @@ mod tests {
 
     /// Frame orientation survives a chain through an intermediate target.
     #[test]
+    #[ignore = "daily"]
     fn a_chain_keeps_the_frame_upright() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -2288,6 +3270,7 @@ mod tests {
     /// A chain with its own GLSL, a target read twice, a depth input and a
     /// `textures/effect` image: nothing here is one of vanilla's shaders.
     #[test]
+    #[ignore = "daily"]
     fn a_chain_runs_its_own_glsl() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = depth_device() else {
@@ -2331,6 +3314,7 @@ mod tests {
     /// The frame's depth reaches a pass as 26.3 keeps it, reverse-Z (the sky 0, a near pixel
     /// close to 1), not as GL's window depth.
     #[test]
+    #[ignore = "daily"]
     fn a_pass_reads_the_frame_depth_as_it_is() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = depth_device() else {
@@ -2408,6 +3392,7 @@ mod tests {
                 menu_blur_radius: 0.0,
                 globals: Globals::default(),
                 extras: None,
+                poly_globals: None,
             },
             None,
         );
@@ -2459,6 +3444,7 @@ mod tests {
     /// A chain `preload` loaded arrives with its pipelines compiled on the loading
     /// thread, and runs as one loaded in its frame does.
     #[test]
+    #[ignore = "daily"]
     fn a_preloaded_archive_chain_arrives_compiled() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = depth_device() else {
@@ -2504,9 +3490,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
             effects.collect_preloaded();
         }
-        let chain = effects.chains["minecraft:preloaded"]
-            .as_ref()
-            .expect("loaded");
+        let chain = effects.chain("minecraft:preloaded").expect("loaded");
         assert!(chain.passes.iter().all(|pass| {
             pass.translated
                 .as_ref()
@@ -2523,32 +3507,45 @@ mod tests {
         assert!(near(top[0], 32) && top[1] == 0 && top[3] == 255, "{top:?}");
         assert!(bottom[0] == 0 && near(bottom[1], 128), "{bottom:?}");
         effects.use_root(&source.clone());
-        assert!(effects.chains.contains_key("minecraft:preloaded"));
+        assert!(effects.chain_ids.contains_key("minecraft:preloaded"));
         // Reopening the same pack creates a new generation, even at the same path.
         effects.use_root(&ResourceSource::archive(&jar).unwrap());
         assert!(effects.chains.is_empty());
+        assert!(effects.chain_ids.is_empty());
         assert!(effects.pending.is_empty());
         assert!(!root.join("assets").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Vanilla's own chains run on the GPU without a validation error (skipped
-    /// without the prepared resources).
+    const VANILLA_CHAINS: [&str; 4] = ["blur", "creeper", "invert", "spider"];
+
+    fn vanilla_source(effects: impl IntoIterator<Item = &'static str>) -> ResourceSource {
+        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
+            });
+        for name in effects {
+            let path = root.join(resource_path(name));
+            assert!(
+                path.is_file(),
+                "missing prepared post-effect file: {}",
+                path.display()
+            );
+        }
+        ResourceSource::directory(root)
+    }
+
+    /// Vanilla's own prepared chains run on the GPU without a validation error.
     #[test]
+    #[ignore = "daily"]
     fn vanilla_chains_run() {
         let _gpu = crate::gfx::test_gpu::lock();
+        let source = vanilla_source(VANILLA_CHAINS);
         let Some((device, queue)) = device() else {
             return;
         };
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3");
-        let source = ResourceSource::directory(root.clone());
-        if !root
-            .join("assets/minecraft/post_effect/invert.json")
-            .exists()
-        {
-            return;
-        }
-        for name in ["blur", "creeper", "invert", "spider"] {
+        for name in VANILLA_CHAINS {
             let mut effects = PostEffects::new(&device);
             run_halves(
                 &device,
@@ -2559,9 +3556,7 @@ mod tests {
             );
             assert!(effects.failed.is_empty(), "{name}");
             // The chain ran on the resources' own GLSL, not the stand-ins.
-            let chain = effects.chains[&format!("minecraft:{name}")]
-                .as_ref()
-                .unwrap();
+            let chain = effects.chain(&format!("minecraft:{name}")).unwrap();
             assert!(
                 chain.passes.iter().all(|p| p.translated.is_some()),
                 "{name}"
@@ -2570,20 +3565,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn vanilla_chains_load() {
         let _gpu = crate::gfx::test_gpu::lock();
+        let source = vanilla_source(VANILLA_CHAINS.into_iter().chain(["entity_outline"]));
         let Some((device, queue)) = device() else {
             return;
         };
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3");
-        let source = ResourceSource::directory(root.clone());
-        if !root
-            .join("assets/minecraft/post_effect/invert.json")
-            .exists()
-        {
-            return;
-        }
-        for name in ["blur", "creeper", "invert", "spider"] {
+        for name in VANILLA_CHAINS {
             let id = format!("minecraft:{name}");
             assert!(
                 PostEffects::load(&source, &device, &queue, &id, &Extras::default())

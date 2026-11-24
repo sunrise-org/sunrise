@@ -46,7 +46,14 @@ impl Game<'_> {
         let mut paths: Vec<&str> = ENTRIES
             .iter()
             .map(|e| e.path)
-            .filter(|path| self.debug_entries.enabled(path, self.debug, reduced))
+            .filter(|path| {
+                self.debug_entries.enabled(
+                    &self.registered_debug_entries,
+                    path,
+                    self.debug,
+                    reduced,
+                )
+            })
             .collect();
         paths.sort_unstable();
         let server = self.server_debug(paths.iter().any(|p| SERVER_ENTRIES.contains(p)));
@@ -93,7 +100,10 @@ impl Game<'_> {
                         if path == "looking_at_entity" {
                             vec![format!("{}Targeted Entity", overlay::UNDERLINE), kind]
                         } else {
-                            overlay::tag_lines(&self.res.mob_data().entity_tags, &kind)
+                            overlay::tag_lines(
+                                self.items().entity_type_tags.members().iter(),
+                                &kind,
+                            )
                         }
                     });
                     d.group("looking_at_entity", lines);
@@ -109,11 +119,11 @@ impl Game<'_> {
                 }
                 "particle_render_stats" => d.line(format!("P: {}", self.particles.len())),
                 "player_position" | "player_section_position" => {
-                    if let Some(p) = self.player.as_ref() {
+                    if let Some(cam) = self.camera_subject() {
                         let mut lines = overlay::position(
-                            [p.position.x, p.position.y, p.position.z],
-                            self.yaw,
-                            self.pitch,
+                            cam.camera.position,
+                            cam.camera.y_rot,
+                            cam.camera.x_rot,
                             self.dim.id(),
                             self.streaming.forced.len(),
                         );
@@ -195,19 +205,11 @@ impl Game<'_> {
                 // DebugEntryChunkGeneration, where the world is generated
                 // here: the window's server thread publishes its generators.
                 "chunk_generation_stats" => {
-                    if let Some(p) = self.player.as_ref() {
+                    if let Some(feet) = self.debug_feet() {
                         let terrain = self
                             .integrated
                             .as_ref()
                             .and_then(|server| server.terrain(self.dim.id()));
-                        // `DebugEntryChunkGeneration.display`: the feet block
-                        // decides whether the line is sampled again; otherwise
-                        // the last result is drawn.
-                        let feet = [
-                            p.position.x.floor() as i32,
-                            p.position.y.floor() as i32,
-                            p.position.z.floor() as i32,
-                        ];
                         let dim = self.dim.id();
                         let mut cache = self.debug_density.borrow_mut();
                         let line = cache.line(
@@ -227,18 +229,20 @@ impl Game<'_> {
         }
         // A native mod's entries come after vanilla's, in registration order.
         for (group, lines) in debug_entries::mod_lines(
-            debug_entries::registered(),
-            |id| self.debug_entries.enabled(id, self.debug, reduced),
-            |id, lines| self.native_debug_entry_lines(id, lines),
+            &self.registered_debug_entries,
+            self,
+            &self.debug_entries,
+            self.debug,
+            reduced,
         ) {
-            d.group(debug_entries::group_key(group), lines);
+            d.group(group, lines);
         }
     }
 
     /// The camera's feet (`Entity.blockPosition`).
     fn debug_feet(&self) -> Option<[i32; 3]> {
-        let p = self.player.as_ref()?;
-        Some([p.position.x, p.position.y, p.position.z].map(|v| v.floor() as i32))
+        let pos = self.camera_entity_position()?;
+        Some(pos.map(|v| v.floor() as i32))
     }
 
     /// The integrated server's lines when an entry wants them; the request

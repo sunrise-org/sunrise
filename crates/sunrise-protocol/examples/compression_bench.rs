@@ -2,7 +2,7 @@
 //! compression on one thread, not actual server throughput or network latency.
 use flate2::{Compress, Compression, FlushCompress, Status};
 use std::{error::Error, time::Instant};
-use sunrise_protocol::buf::write_varint;
+use sunrise_core::vanilla_bytes::write_varint;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = std::env::args()

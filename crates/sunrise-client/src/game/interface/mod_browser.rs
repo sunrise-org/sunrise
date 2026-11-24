@@ -1,4 +1,4 @@
-//! Options > Mods > Browse mods (docs/design/mod-hotload.md): reading the
+//! Options > Mods > Browse mods: reading the
 //! registry's index and installing a content mod run on a worker
 //! (`sunrise_client::mod_registry`); each frame takes what it finished into the
 //! options screen's `mod_browser`. The window's game and the startup menu each

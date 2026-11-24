@@ -2,6 +2,31 @@
 
 use crate::java_character;
 
+/// `ChatFormatting` colours by legacy code index 0..=15, also named by `TextColor`.
+pub const CHAT_COLORS: [(char, &str, u32); 16] = [
+    ('0', "black", 0x000000),
+    ('1', "dark_blue", 0x0000AA),
+    ('2', "dark_green", 0x00AA00),
+    ('3', "dark_aqua", 0x00AAAA),
+    ('4', "dark_red", 0xAA0000),
+    ('5', "dark_purple", 0xAA00AA),
+    ('6', "gold", 0xFFAA00),
+    ('7', "gray", 0xAAAAAA),
+    ('8', "dark_gray", 0x555555),
+    ('9', "blue", 0x5555FF),
+    ('a', "green", 0x55FF55),
+    ('b', "aqua", 0x55FFFF),
+    ('c', "red", 0xFF5555),
+    ('d', "light_purple", 0xFF55FF),
+    ('e', "yellow", 0xFFFF55),
+    ('f', "white", 0xFFFFFF),
+];
+
+/// The RGB value of a named `TextColor`.
+pub fn named_color(name: &str) -> Option<u32> {
+    CHAT_COLORS.iter().find(|c| c.1 == name).map(|c| c.2)
+}
+
 /// JDK 25 Integer.parseInt decimal semantics, including BMP decimal digits.
 #[inline]
 pub fn parse_java_integer(text: &str) -> Option<i32> {
@@ -117,6 +142,123 @@ pub fn parse_java_uuid(name: &str) -> Option<u128> {
         ((values[0] & 0xffff_ffff) << 32) | ((values[1] & 0xffff) << 16) | (values[2] & 0xffff);
     let least = ((values[3] & 0xffff) << 48) | (values[4] & 0xffff_ffff_ffff);
     Some((u128::from(most) << 64) | u128::from(least))
+}
+
+/// ExtraCodecs.UNTRUSTED_URI / Util.parseAndValidateUntrustedUri: http and
+/// https only, scheme case-insensitive. Every `open_url` a server sends must
+/// pass it: anything else (`file:`, a UNC path, a custom protocol handler)
+/// could start a program through the system's URL handler.
+pub fn untrusted_http_url(url: &str) -> bool {
+    // java.net.URI uses the RFC 2396 character classes (with IPv6 literals),
+    // not the WHATWG URL parser, which repairs malformed strings and requires a host.
+    fn valid(mut part: &str, reserved: &str) -> bool {
+        while let Some(c) = part.chars().next() {
+            part = &part[c.len_utf8()..];
+            if c == '%' {
+                let Some(hex) = part.as_bytes().get(..2) else {
+                    return false;
+                };
+                if !hex.iter().all(u8::is_ascii_hexdigit) {
+                    return false;
+                }
+                part = &part[2..];
+            } else if !(c.is_ascii_alphanumeric()
+                || "-_.!~*'()".contains(c)
+                || reserved.contains(c)
+                || (!c.is_ascii() && !c.is_whitespace() && !c.is_control()))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    const URIC: &str = ";/?:@&=+$,[]";
+    let (main, fragment) = rest
+        .split_once('#')
+        .map_or((rest, None), |(main, frag)| (main, Some(frag)));
+    if main.is_empty() || fragment.is_some_and(|frag| !valid(frag, URIC)) {
+        return false;
+    }
+    if !main.starts_with('/') {
+        return valid(main, URIC); // Opaque scheme-specific part.
+    }
+    let (path, query) = main
+        .split_once('?')
+        .map_or((main, None), |(path, query)| (path, Some(query)));
+    let path = if let Some(suffix) = path.strip_prefix("//") {
+        let end = suffix.find('/').unwrap_or(suffix.len());
+        let (authority, path) = suffix.split_at(end);
+        if authority.is_empty() && path.is_empty() && query.is_none() && fragment.is_none() {
+            return false;
+        }
+        if let Some((prefix, literal)) = authority.split_once('[') {
+            // Brackets are allowed only around an IPv6 server address, with
+            // optional user info, scope ID and decimal port.
+            let Some((ip, port)) = literal.split_once(']') else {
+                return false;
+            };
+            let (address, scope) = ip
+                .split_once('%')
+                .map_or((ip, None), |(ip, scope)| (ip, Some(scope)));
+            let valid_address = if let Some((prefix, tail)) = address
+                .rsplit_once(':')
+                .filter(|(_, tail)| tail.contains('.'))
+            {
+                // java.net.URI also allows leading zeroes in a decimal IPv4 tail.
+                let mut octets = tail.split('.');
+                let mut next = || {
+                    let octet = octets.next()?;
+                    octet.bytes().all(|b| b.is_ascii_digit()).then_some(())?;
+                    octet.parse::<u8>().ok()
+                };
+                match (next(), next(), next(), next(), octets.next()) {
+                    (Some(a), Some(b), Some(c), Some(d), None) => format!(
+                        "{prefix}:{:x}:{:x}",
+                        u16::from_be_bytes([a, b]),
+                        u16::from_be_bytes([c, d]),
+                    )
+                    .parse::<std::net::Ipv6Addr>()
+                    .is_ok(),
+                    _ => false,
+                }
+            } else {
+                address.parse::<std::net::Ipv6Addr>().is_ok()
+            };
+            if (!prefix.is_empty()
+                && !prefix
+                    .strip_suffix('@')
+                    .is_some_and(|user| valid(user, ";:&=+$,")))
+                || !valid_address
+                || scope.is_some_and(|id| {
+                    id.is_empty()
+                        || !id
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
+                })
+                || (!port.is_empty()
+                    && !port.strip_prefix(':').is_some_and(|port| {
+                        port.is_empty()
+                            || (port.bytes().all(|b| b.is_ascii_digit())
+                                && port.parse::<i32>().is_ok())
+                    }))
+            {
+                return false;
+            }
+        } else if !valid(authority, "$,;:@&=+") {
+            return false;
+        }
+        path
+    } else {
+        path
+    };
+    valid(path, "/;:@&=+$,") && query.is_none_or(|query| valid(query, URIC))
 }
 
 #[cfg(test)]

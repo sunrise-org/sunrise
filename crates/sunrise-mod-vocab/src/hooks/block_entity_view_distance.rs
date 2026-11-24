@@ -9,12 +9,15 @@ pub trait Hooks {
     /// that isn't finite and above 0 is ignored. Beyond NeoForge: the renderer's own method,
     /// no event.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "distance",
         scope = "block_entity",
         key = "block",
-        neoforge = "none (vanilla BlockEntityRenderer.getViewDistance; NeoForge adds no event or extension for it)"
+        neoforge = "none (vanilla BlockEntityRenderer.getViewDistance; NeoForge adds no event or extension for it)",
+        version = 2
     )]
-    fn block_entity_view_distance();
+    fn block_entity_view_distance(block: &str, distance: &mut f64);
 }

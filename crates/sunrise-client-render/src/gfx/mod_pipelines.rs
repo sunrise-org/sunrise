@@ -6,11 +6,11 @@
 //! never while quads are being submitted, so a required pipeline the GPU refuses fails that
 //! load's renderer and the reload with it.
 
-use super::world_primitives::Upload;
+use super::world_primitives::{Upload, VertexPages};
 use crate::mod_pipelines::{Built, BuiltTexture, Pipelines};
 use glam::Mat4;
 use mod_api::{PipelineBlend, WorldDepth};
-use sunrise_shader_api::mod_pipeline::{FRAGMENT_ENTRY, VERTEX_ENTRY};
+use sunrise_mod_pipeline::{FRAGMENT_ENTRY, VERTEX_ENTRY};
 
 /// One corner of a pipeline quad, camera-relative.
 #[repr(C)]
@@ -22,12 +22,27 @@ pub struct PipelineVertex {
     pub color: u32,
 }
 
+impl PipelineVertex {
+    /// Vertex attributes matching `PipelineVertex` (`pos`, `uv`, `color`).
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Unorm8x4];
+
+    /// Vertex buffer layout shared by `ModPipelines` and translated shader-pack mod passes.
+    pub const fn buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 /// Quads that follow each other in a frame's vertices and draw with one pipeline at one stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PipelineRun {
     /// The pipeline's slot in the frame's [`Pipelines`].
     pub slot: u32,
-    /// The stage it draws at (`RenderLevelStage::ALL`'s index).
+    /// The stage it draws at (`STAGE_AFTER_OPAQUE_BLOCKS..=STAGE_CUSTOM_GEOMETRY`).
     pub stage: u32,
     pub quads: u32,
 }
@@ -68,8 +83,36 @@ pub struct TextureSources<'a> {
     pub sprite: &'a dyn Fn(&str) -> Option<[f32; 4]>,
 }
 
-/// A built pipeline, with its texture's bind group (group 1) when it is textured.
-type Compiled = (wgpu::RenderPipeline, Option<wgpu::BindGroup>);
+/// Clip-space transform from Sunrise's world target (screen rows, reversed-Z `[1..0]`) to a
+/// shader pack's `colortex0` + `depthtex0` (GL rows, GL `[0..1]` depth): maps `(x, y, z, w)`
+/// to `(x, -y, w - z, w)` so `ndc_y' = -ndc_y` and `ndc_z' = 1 - ndc_z`.
+fn pack_clip_matrix(view_proj: Mat4) -> Mat4 {
+    let adapt = Mat4::from_cols_array(&[
+        1.0, 0.0, 0.0, 0.0, //
+        0.0, -1.0, 0.0, 0.0, //
+        0.0, 0.0, -1.0, 0.0, //
+        0.0, 0.0, 1.0, 1.0,
+    ]);
+    adapt * view_proj
+}
+
+/// Target attachment and depth-compare state for [`ModPipelines::build_render_pipeline`].
+#[derive(Clone, Copy)]
+struct TargetState {
+    color_format: wgpu::TextureFormat,
+    depth_compare: wgpu::CompareFunction,
+    write_mask: wgpu::ColorWrites,
+}
+
+/// A built pipeline, with its texture's bind group (group 1) when it is textured, plus the
+/// shader module and fixed state needed to lazily compile a shader-pack target variant.
+struct Compiled {
+    pipeline: wgpu::RenderPipeline,
+    texture: Option<wgpu::BindGroup>,
+    shader: wgpu::ShaderModule,
+    blend: PipelineBlend,
+    depth: WorldDepth,
+}
 
 /// The pipelines and the buffer that draw a [`Batch`].
 pub struct ModPipelines {
@@ -81,13 +124,20 @@ pub struct ModPipelines {
     /// The atlas's one sampler binding; `pipeline_texture` loads integer texels itself.
     sampler: wgpu::Sampler,
     group: wgpu::BindGroup,
+    pack_group: wgpu::BindGroup,
     view: wgpu::Buffer,
+    pack_view: wgpu::Buffer,
     frame: wgpu::Buffer,
-    vertices: wgpu::Buffer,
+    vertices: VertexPages,
     /// The load `pipelines` was built from; 0 before any.
     generation: u64,
     /// By slot; `None` for a pipeline the load refused.
     pipelines: Vec<Option<Compiled>>,
+    /// Lazily built for a shader pack's `(colortex0 format, rgb_only)` + GL `[0..1]` depth.
+    pack_pipelines: Option<(
+        (wgpu::TextureFormat, bool),
+        Vec<Option<wgpu::RenderPipeline>>,
+    )>,
     runs: Vec<Run>,
 }
 
@@ -156,25 +206,30 @@ impl ModPipelines {
             })
         };
         let view = buffer("Mod pipeline view", 64, wgpu::BufferUsages::UNIFORM);
+        let pack_view = buffer("Mod pipeline pack view", 64, wgpu::BufferUsages::UNIFORM);
         let frame = buffer(
             "Mod pipeline frame",
             std::mem::size_of::<FrameUniform>() as u64,
             wgpu::BufferUsages::UNIFORM,
         );
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Mod pipelines"),
-            layout: &group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: view.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: frame.as_entire_binding(),
-                },
-            ],
-        });
+        let make_group = |label, view_buf: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: view_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: frame.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let group = make_group("Mod pipelines", &view);
+        let pack_group = make_group("Mod pipelines (pack)", &pack_view);
         Self {
             color_format,
             layout,
@@ -182,13 +237,87 @@ impl ModPipelines {
             texture_layout,
             sampler,
             group,
+            pack_group,
             view,
+            pack_view,
             frame,
-            vertices: buffer("Mod pipeline quads", 0, wgpu::BufferUsages::VERTEX),
+            vertices: VertexPages::default(),
             generation: 0,
             pipelines: Vec::new(),
+            pack_pipelines: None,
             runs: Vec::new(),
         }
+    }
+
+    fn build_render_pipeline(
+        &self,
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        textured: bool,
+        blend: PipelineBlend,
+        depth: WorldDepth,
+        target: TargetState,
+    ) -> wgpu::RenderPipeline {
+        // Blending happens in the frame's storage, as every vanilla draw's does. Neither mode
+        // writes the frame's alpha past what covering it means.
+        let blend_state = match blend {
+            PipelineBlend::Additive => wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+            _ => wgpu::BlendState::ALPHA_BLENDING,
+        };
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Mod pipeline"),
+            layout: Some(if textured {
+                &self.textured_layout
+            } else {
+                &self.layout
+            }),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some(VERTEX_ENTRY),
+                compilation_options: Default::default(),
+                buffers: &[Some(PipelineVertex::buffer_layout())],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                // Two-sided, as world quads are.
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(match depth {
+                    WorldDepth::ThroughWalls => wgpu::CompareFunction::Always,
+                    _ => target.depth_compare,
+                }),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(FRAGMENT_ENTRY),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target.color_format,
+                    blend: Some(blend_state),
+                    write_mask: target.write_mask,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     /// One load's pipeline: its checked shader with the fixed state it registered, and its
@@ -214,78 +343,87 @@ impl ModPipelines {
             label: Some("Mod pipeline"),
             source: wgpu::ShaderSource::Wgsl(built.shader.as_str().into()),
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Unorm8x4];
-        // Blending happens in the frame's storage, as every vanilla draw's does. Neither mode
-        // writes the frame's alpha past what covering it means.
-        let blend = match built.blend {
-            PipelineBlend::Additive => wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::Zero,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                },
+        let pipeline = self.build_render_pipeline(
+            device,
+            &shader,
+            texture.is_some(),
+            built.blend,
+            built.depth,
+            TargetState {
+                color_format: self.color_format,
+                depth_compare: wgpu::CompareFunction::GreaterEqual,
+                write_mask: wgpu::ColorWrites::ALL,
             },
-            _ => wgpu::BlendState::ALPHA_BLENDING,
-        };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Mod pipeline"),
-            layout: Some(if texture.is_some() {
-                &self.textured_layout
-            } else {
-                &self.layout
-            }),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some(VERTEX_ENTRY),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<PipelineVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                // Two-sided, as world quads are.
-                cull_mode: None,
-                ..Default::default()
-            },
-            // No depth is written. Reversed depth: nearer is greater.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(match built.depth {
-                    WorldDepth::ThroughWalls => wgpu::CompareFunction::Always,
-                    _ => wgpu::CompareFunction::GreaterEqual,
-                }),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(FRAGMENT_ENTRY),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: self.color_format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
         let internal = pollster::block_on(internal.pop());
         let validation = pollster::block_on(validation.pop());
         match internal.or(validation) {
-            None => Ok((pipeline, texture)),
+            None => Ok(Compiled {
+                pipeline,
+                texture,
+                shader,
+                blend: built.blend,
+                depth: built.depth,
+            }),
             Some(error) => Err(error.to_string()),
         }
+    }
+
+    /// Ensure pack-target variants (`colortex0` format + GL `[0..1]` `LessEqual` depth) exist
+    /// for all loaded mod pipelines.
+    pub fn ensure_pack_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        rgb: bool,
+    ) {
+        let key = (format, rgb);
+        if self
+            .pack_pipelines
+            .as_ref()
+            .is_some_and(|(prev, list)| *prev == key && list.len() == self.pipelines.len())
+        {
+            return;
+        }
+        let target = TargetState {
+            color_format: format,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            write_mask: if rgb {
+                wgpu::ColorWrites::COLOR
+            } else {
+                wgpu::ColorWrites::ALL
+            },
+        };
+        let compiled = self
+            .pipelines
+            .iter()
+            .enumerate()
+            .map(|(slot, entry)| {
+                let c = entry.as_ref()?;
+                let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+                let pipeline = self.build_render_pipeline(
+                    device,
+                    &c.shader,
+                    c.texture.is_some(),
+                    c.blend,
+                    c.depth,
+                    target,
+                );
+                let internal = pollster::block_on(internal.pop());
+                let validation = pollster::block_on(validation.pop());
+                match internal.or(validation) {
+                    None => Some(pipeline),
+                    Some(error) => {
+                        log::warn!(
+                            "Sunrise: mod pipeline slot {slot} refused for shader-pack target {format:?}: {error}"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        self.pack_pipelines = Some((key, compiled));
     }
 
     /// The bind group of a pipeline's texture: the atlas and its sprite's rect. Made when the
@@ -340,7 +478,7 @@ impl ModPipelines {
     /// refuses is the error, by id, and leaves this renderer and `set` as they were; an optional
     /// one is logged once, draws nothing and resolves invalid.
     /// A textured pipeline whose texture can't be bound (`textures`) is refused the same way.
-    fn build(
+    pub(super) fn build(
         &mut self,
         device: &wgpu::Device,
         set: &Pipelines,
@@ -389,12 +527,11 @@ impl ModPipelines {
         }
         self.generation = set.generation();
         self.pipelines = pipelines;
+        self.pack_pipelines = None;
         Ok(())
     }
 
-    /// Uploads the frame's quads, drawn with `view_proj` into a frame `viewport` pixels big. The
-    /// number of quads to draw: the caller's quad indices must reach that far. A set this
-    /// renderer was not built with draws nothing.
+    /// Upload the frame's quads and return the number of indices needed for its largest page.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -431,17 +568,19 @@ impl ModPipelines {
             return 0;
         };
         let quads = last.quads.end;
-        let bytes: &[u8] = bytemuck::cast_slice(&batch.vertices[..quads as usize * 4]);
-        if self.vertices.size() < bytes.len() as u64 {
-            self.vertices = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Mod pipeline quads"),
-                size: (bytes.len() as u64).next_power_of_two(),
-                usage: self.vertices.usage(),
-                mapped_at_creation: false,
-            });
-        }
-        upload(&self.vertices, bytes);
+        self.vertices.upload(
+            device,
+            upload,
+            "Mod pipeline quads",
+            bytemuck::cast_slice(&batch.vertices[..quads as usize * 4]),
+            4 * std::mem::size_of::<PipelineVertex>() as u64,
+            0,
+        );
         upload(&self.view, bytemuck::cast_slice(&view_proj.to_cols_array()));
+        upload(
+            &self.pack_view,
+            bytemuck::cast_slice(&pack_clip_matrix(view_proj).to_cols_array()),
+        );
         upload(
             &self.frame,
             bytemuck::bytes_of(&FrameUniform {
@@ -450,39 +589,138 @@ impl ModPipelines {
                 _pad: 0.0,
             }),
         );
-        quads
+        self.vertices.index_quads(quads)
+    }
+
+    /// Whether any prepared runs fall in stages `first..=last`.
+    pub fn has_runs(&self, first: usize, last: usize) -> bool {
+        self.runs
+            .iter()
+            .any(|run| first <= run.stage && run.stage <= last)
+    }
+
+    /// Whether any prepared runs fall in stages `first..=last` for slots not in `bound_slots`.
+    pub fn has_unbound_runs(&self, first: usize, last: usize, bound_slots: &[usize]) -> bool {
+        self.runs
+            .iter()
+            .any(|run| first <= run.stage && run.stage <= last && !bound_slots.contains(&run.slot))
+    }
+
+    /// Append uploaded vertex chunks for prepared runs whose slot is bound to `PackPost` into
+    /// `out`, reusing `out`'s existing allocation.
+    pub fn pack_bound_chunks_into(
+        &self,
+        indices: &wgpu::Buffer,
+        bound_slots: &[usize],
+        out: &mut Vec<super::pack_post::ModDrawChunk>,
+    ) {
+        if self.runs.is_empty() || bound_slots.is_empty() {
+            return;
+        }
+        for run in &self.runs {
+            if !bound_slots.contains(&run.slot) {
+                continue;
+            }
+            for (buffer, quads) in self.vertices.ranges(0, run.quads.clone()) {
+                out.push(super::pack_post::ModDrawChunk {
+                    slot: run.slot,
+                    vertices: buffer.clone(),
+                    indices: indices.clone(),
+                    quads,
+                });
+            }
+        }
     }
 
     /// Draws the prepared runs of stages `first..=last` in the order queued, with `indices`
-    /// (6 a quad, `u32`). Leaves the pass with its own pipeline, bind group 0 and buffers, and
+    /// (6 a quad, `u32`), skipping slots in `skip_slots` (e.g. slots bound to a shader pack's
+    /// translated mod pass). Leaves the pass with its own pipeline, bind group 0 and buffers, and
     /// bind group 1 after a textured pipeline.
-    pub fn draw(
+    pub fn draw_excluding(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         indices: &wgpu::Buffer,
         first: usize,
         last: usize,
+        skip_slots: &[usize],
     ) {
+        self.draw_runs(
+            pass,
+            indices,
+            false,
+            self.runs
+                .iter()
+                .filter(|run| {
+                    first <= run.stage && run.stage <= last && !skip_slots.contains(&run.slot)
+                })
+                .map(|run| (run, run.quads.clone())),
+        );
+    }
+
+    /// Same as [`Self::draw`], targeting a shader pack's `colortex0` + `depthtex0` prepared
+    /// with [`Self::ensure_pack_pipelines`], skipping slots bound to translated pack programs.
+    pub fn draw_pack(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indices: &wgpu::Buffer,
+        first: usize,
+        last: usize,
+        bound_slots: &[usize],
+    ) {
+        self.draw_runs(
+            pass,
+            indices,
+            true,
+            self.runs
+                .iter()
+                .filter(|run| {
+                    first <= run.stage && run.stage <= last && !bound_slots.contains(&run.slot)
+                })
+                .map(|run| (run, run.quads.clone())),
+        );
+    }
+
+    fn draw_runs<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indices: &wgpu::Buffer,
+        pack: bool,
+        runs: impl Iterator<Item = (&'a Run, std::ops::Range<u32>)>,
+    ) {
+        let pack_list = if pack {
+            let Some((_, list)) = &self.pack_pipelines else {
+                return;
+            };
+            Some(list)
+        } else {
+            None
+        };
         let mut bound = false;
-        for run in &self.runs {
-            if run.stage < first || run.stage > last {
+        for (run, range) in runs {
+            let Some(Some(compiled)) = self.pipelines.get(run.slot) else {
                 continue;
-            }
-            let Some(Some((pipeline, texture))) = self.pipelines.get(run.slot) else {
-                continue;
+            };
+            let pipeline = match pack_list {
+                Some(list) => match list.get(run.slot) {
+                    Some(Some(p)) => p,
+                    _ => continue,
+                },
+                None => &compiled.pipeline,
             };
             if !bound {
                 bound = true;
-                pass.set_bind_group(0, &self.group, &[]);
-                pass.set_vertex_buffer(0, self.vertices.slice(..));
+                pass.set_bind_group(0, if pack { &self.pack_group } else { &self.group }, &[]);
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             }
             pass.set_pipeline(pipeline);
             // Only a textured pipeline has group 1; the others draw as they did before it.
-            if let Some(texture) = texture {
+            if let Some(texture) = &compiled.texture {
                 pass.set_bind_group(1, texture, &[]);
             }
-            pass.draw_indexed(run.quads.start * 6..run.quads.end * 6, 0, 0..1);
+            for (buffer, range) in self.vertices.ranges(0, range) {
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw_indexed(range.start * 6..range.end * 6, 0, 0..1);
+            }
         }
     }
 }
@@ -509,6 +747,8 @@ impl super::Renderer {
             sprite,
         };
         self.world_primitives
+            .as_mut()
+            .expect("world primitives")
             .pipelines
             .build(&self.device, set, Some(textures))
     }
@@ -525,6 +765,27 @@ mod tests {
     /// The frame before any quad: a quarter grey, stored as 64 in 8 bits.
     const CLEAR: f64 = 64.0 / 255.0;
 
+    #[test]
+    fn pack_clip_matrix_flips_y_and_inverts_reversed_z_depth() {
+        // Independent clip-space transform check: given a clip vector `(x, y, z, w)` produced by
+        // `view_proj`, `pack_clip_matrix(view_proj)` must yield `(x, -y, w - z, w)` so NDC y flips
+        // for GL row order and reversed-Z `[1..0]` becomes GL depth `[0..1]`.
+        let proj = Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_2, 1.5, 0.05);
+        let adapted = pack_clip_matrix(proj);
+        for p in [
+            glam::Vec4::new(0.0, 0.0, -0.05, 1.0), // near plane: z_ndc = 1 -> 0
+            glam::Vec4::new(0.25, 0.5, -4.0, 1.0), // upper-right mid-distance
+            glam::Vec4::new(-1.5, -0.75, -20.0, 1.0), // lower-left far-distance
+        ] {
+            let orig = proj * p;
+            let got = adapted * p;
+            assert_eq!(got.x, orig.x);
+            assert_eq!(got.y, -orig.y);
+            assert_eq!(got.z, orig.w - orig.z);
+            assert_eq!(got.w, orig.w);
+        }
+    }
+
     const PASS: &str =
         "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return input.color; }";
     const HALF: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return vec4<f32>(vec3<f32>(0.5), 1.0); }";
@@ -533,9 +794,8 @@ mod tests {
 }";
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::gfx::test_gpu::instance();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        let (_, device, queue) = crate::gfx::test_gpu::optional_device()?;
+        Some((device, queue))
     }
 
     /// The load of `generation` with one optional pipeline for each shader, in slot order.
@@ -725,6 +985,7 @@ mod tests {
     /// are vanilla's 2.2 encoding worked out by hand: linear 0.5 is 0.5^(1/2.2) = 0.7297,
     /// stored as 186.
     #[test]
+    #[ignore = "daily"]
     fn gpu_validation_failure_is_contained_and_invalidates_handle() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = device() else {
@@ -751,6 +1012,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn optional_gpu_refusal_is_published_only_once() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = device() else {
@@ -776,6 +1038,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_later_successful_build_makes_a_refused_slot_usable_again() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = device() else {
@@ -800,6 +1063,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn required_gpu_failure_does_not_publish_and_mixed_success_does() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = device() else {
@@ -835,7 +1099,10 @@ mod tests {
         assert_eq!(renderer.generation, 41);
         assert_eq!(renderer.pipelines.len(), 1);
         assert_eq!(next.slot(handle), Ok(0));
-        assert!(next.resolve(&Identifier::parse("test:p1").unwrap()).is_ok());
+        assert!(
+            next.resolve(&Identifier::parse("test:p1").unwrap(),)
+                .is_ok()
+        );
         renderer.build(&device, &next, None).unwrap();
         assert_eq!(renderer.generation, 42);
         assert_eq!(renderer.pipelines.len(), 2);
@@ -843,6 +1110,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn pipelines_convert_colour_both_ways_and_keep_their_blend_depth_and_stage() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some(gpu) = device() else {
@@ -946,6 +1214,7 @@ mod tests {
     /// In a float frame light above white survives, stored as vanilla encodes it (linear 2.0
     /// is 2^(1/2.2) = 1.37035), and a new load's shader replaces the old one's pipeline.
     #[test]
+    #[ignore = "daily"]
     fn a_float_frame_keeps_light_above_white_and_a_reload_builds_the_new_shader() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some(gpu) = device() else {
@@ -994,6 +1263,7 @@ mod tests {
     /// atlas lacks refuses the optional pipeline, and an untextured one in the same load still
     /// draws as before. Expected bytes: stored red and green stay 255 through decode and encode.
     #[test]
+    #[ignore = "daily"]
     fn textured_pipelines_sample_their_file_or_their_sprite() {
         use mod_api::PipelineTexture;
         use wgpu::util::DeviceExt;
@@ -1071,14 +1341,14 @@ mod tests {
             primitives.pipelines.pipelines[0]
                 .as_ref()
                 .unwrap()
-                .1
+                .texture
                 .is_some()
         );
         assert!(
             primitives.pipelines.pipelines[3]
                 .as_ref()
                 .unwrap()
-                .1
+                .texture
                 .is_none()
         );
         let mut vertices = Vec::new();
@@ -1113,5 +1383,81 @@ mod tests {
         assert_near(pixel(8, 24), green, 1.0, "the sprite, not the atlas's red");
         assert_near(pixel(40, 24), green, 1.0, "the sprite repeated");
         assert_near(pixel(8, 40), [255.0; 4], 1.0, "the untextured pipeline");
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pipeline_quads_chunk_across_small_max_buffer_size_and_preserve_order() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+        // A non-power-of-two limit that still fits the 64 × 64 RGBA readback.
+        let limit = 20 * 1024;
+        let gpu = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits {
+                max_buffer_size: limit,
+                max_uniform_buffer_binding_size: limit,
+                max_storage_buffer_binding_size: limit,
+                ..wgpu::Limits::default()
+            },
+            ..Default::default()
+        }))
+        .expect("GPU device with small max_buffer_size");
+        let set = load(
+            77,
+            &[(PASS, PipelineBlend::Translucent, WorldDepth::Tested)],
+        );
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut primitives = WorldPrimitives::new(&gpu.0, (format, false));
+        let quad_bytes = 4 * std::mem::size_of::<PipelineVertex>() as u64;
+        let max_quads = world_primitives::VertexPages::limit(limit, quad_bytes);
+        assert!(max_quads > 0);
+        // More than one full page in a single run, followed by a second run at a later stage.
+        let first_count = max_quads + 20;
+        let mut vertices = Vec::with_capacity((first_count as usize + 1) * 4);
+        for _ in 0..first_count {
+            vertices.extend_from_slice(&quad([0.0, 0.0, 64.0, 64.0], 2.0, [255, 0, 0, 255]));
+        }
+        vertices.extend_from_slice(&quad([32.0, 0.0, 64.0, 64.0], 2.0, [0, 255, 0, 255]));
+        let runs = [
+            PipelineRun {
+                slot: 0,
+                stage: 0,
+                quads: first_count,
+            },
+            PipelineRun {
+                slot: 0,
+                stage: (STAGES - 1) as u32,
+                quads: 1,
+            },
+        ];
+        let at = render(
+            &gpu,
+            &mut primitives,
+            format,
+            Batch {
+                set: Some(&set),
+                vertices: &vertices,
+                runs: &runs,
+                time: 0.0,
+            },
+            STAGES - 1,
+        );
+        assert!(primitives.pipelines.vertices.buffers.len() >= 2);
+        assert!(
+            primitives
+                .pipelines
+                .vertices
+                .buffers
+                .iter()
+                .all(|buffer| buffer.size() <= limit)
+        );
+        assert_eq!(at(16, 32), [255.0, 0.0, 0.0, 255.0], "earlier stage");
+        assert_eq!(
+            at(48, 32),
+            [0.0, 255.0, 0.0, 255.0],
+            "later stage over earlier stage"
+        );
     }
 }

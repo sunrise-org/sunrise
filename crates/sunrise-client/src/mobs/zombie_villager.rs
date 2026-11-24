@@ -3,7 +3,7 @@
 //! the saved fields. Turning villagers into zombie villagers and back is done
 //! by the game (`game/mobs/zombie_villagers.rs`), which owns entity creation.
 use super::{Mob, MobEvent, MobWorld, Species, goals::Cx, villager};
-use sunrise_core::nbt::{Compound, Tag};
+use sunrise_core::nbt::Tag;
 use sunrise_core::random::RandomSource;
 
 /// `VILLAGER_CONVERSION_WAIT_MIN` and the width of the random range.
@@ -121,7 +121,7 @@ pub fn step(m: &mut Mob, cx: &mut Cx) {
 }
 
 /// `ConversionTime` (-1: not converting) and `ConversionPlayer`.
-fn put_cure(map: &mut Compound, cure: Option<Cure>) {
+fn put_cure(map: &mut crate::entity_nbt::EntityTagWriter, cure: Option<Cure>) {
     map.insert(
         "ConversionTime".into(),
         Tag::Int(cure.map_or(-1, |c| c.time)),
@@ -159,20 +159,29 @@ pub fn constructor_draws(m: &mut Mob) {
             super::villager::ProfessionState::from_index(constructor_profession(m));
     }
     let _yaw = m.random.next_float();
+    // `LivingEntity.<init>` makes the brain right after the yaw.
+    super::piglin::brain_sensor_draws(m);
 }
-/// The saved fields: the finalized flag, the cure and the gossip.
-pub fn write_nbt(m: &Mob, map: &mut Compound) {
+/// The subclass fields after `Zombie.addAdditionalSaveData` and `VillagerData`.
+pub fn write_nbt(
+    m: &Mob,
+    map: &mut crate::entity_nbt::EntityTagWriter,
+    items: &crate::items::Items,
+) {
     let finalized = villager::ext(m).is_some_and(|e| e.data_finalized);
     map.insert(
         "VillagerDataFinalized".into(),
         Tag::Byte(i8::from(finalized)),
     );
-    put_cure(map, cure(m).copied());
+    crate::entity_nbt::put_offers(map, m, items);
     if let Some(e) = villager::ext(m)
         && !e.gossips.is_empty()
     {
         map.insert("Gossips".into(), e.gossips.to_nbt());
     }
+    put_cure(map, cure(m).copied());
+    let xp = m.extra.trade.as_deref().map_or(0, |t| t.xp);
+    map.insert("Xp".into(), Tag::Int(xp));
 }
 /// `ZombieVillager.readAdditionalSaveData`: a save with neither
 /// `VillagerDataFinalized` nor `VillagerData` keeps the constructor's random
@@ -269,7 +278,7 @@ mod tests {
     fn loading_a_cure_starts_converting() {
         let mut m = zombie_villager();
         m.add_effect("minecraft:weakness", 400, 0);
-        let mut map = Compound::new();
+        let mut map = sunrise_core::nbt::Compound::new();
         map.insert("ConversionTime".into(), Tag::Int(7));
         read_nbt(&mut m, &Tag::Compound(map));
         assert!(is_converting(&m));
@@ -287,9 +296,9 @@ mod tests {
             time: 4200,
             starter: Some([1, 2, 3, 4]),
         };
-        let mut map = Compound::new();
+        let mut map = crate::entity_nbt::EntityTagWriter::new(None);
         put_cure(&mut map, Some(cure));
-        assert_eq!(parse_cure(&Tag::Compound(map)), Some(cure));
+        assert_eq!(parse_cure(&map.finish()), Some(cure));
     }
     /// `ZombieVillager.tick` counts the cure down before `Zombie.tick`,
     /// whatever the AI: a `NoAI` zombie villager finishes curing too (#3429).
@@ -309,8 +318,10 @@ mod tests {
         let motion = crate::motion::MotionResources::load(&root, &assets).unwrap();
         let data = super::super::MobData::load(
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-            &facts,
-        );
+            facts.states.len(),
+            false,
+        )
+        .unwrap();
         let types = super::super::MobTypes::load(&root).unwrap();
         let biomes = crate::biome::Biomes::load(
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
@@ -332,6 +343,7 @@ mod tests {
         let world = crate::world::World::new(air, 0);
         let lid_openers = std::collections::HashMap::new();
         let w = MobWorld {
+            side: sunrise_client::motion::dry_side(),
             mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             goal_host: None,
             live_mobs: None,
@@ -354,6 +366,7 @@ mod tests {
             nearest_player: None,
             others: &[],
             dragon: None,
+            armor_stands: &[],
             leash_boats: &[],
             who_lookup: None,
             others_grid: None,
@@ -374,6 +387,7 @@ mod tests {
             biomes: &biomes,
             mob_griefing: true,
             universal_anger: false,
+            pvp: false,
             mob_drops: true,
             max_entity_cramming: 24,
             difficulty: super::super::spawning::LocalDifficulty::new(2, 18000, 0, 0.0),
@@ -389,6 +403,7 @@ mod tests {
             asks_baby_spawn: false,
             border: None,
             section_writer: None,
+            trading_players: None,
         };
         for no_ai in [false, true] {
             let kind = std::sync::Arc::new(types.types["minecraft:zombie_villager"].clone());
@@ -423,10 +438,11 @@ mod tests {
     }
     #[test]
     fn no_cure_saves_minus_one() {
-        let mut map = Compound::new();
+        let mut map = crate::entity_nbt::EntityTagWriter::new(None);
         put_cure(&mut map, None);
-        assert_eq!(map.get(&"ConversionTime".into()), Some(&Tag::Int(-1)));
-        assert_eq!(parse_cure(&Tag::Compound(map)), None);
+        let tag = map.finish();
+        assert_eq!(tag.get("ConversionTime"), Some(&Tag::Int(-1)));
+        assert_eq!(parse_cure(&tag), None);
     }
 
     #[test]

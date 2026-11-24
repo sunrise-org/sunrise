@@ -1,10 +1,7 @@
 /// The native engine's process-lifetime selection for `sin`, `cos`, `tan`,
 /// `exp`, `log`, `log10` and `pow`, read through [`crate::Host`].
 ///
-/// This describes algorithms, not machine identity. It does not execute guest
-/// math: [`crate::java_math`] remains native-only. A wasm guest must supply any
-/// required platform libm, correctly rounded or fused-multiply-add implementation
-/// itself, or report that it cannot reproduce the selected profile.
+/// This describes the algorithms [`crate::java_math`] uses, not machine identity.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 pub enum MathProfile {

@@ -1,23 +1,16 @@
 # Entity parts and mob goals
 
-Entity Parts run in native mods in full. A wasm mod may also register one with `r.entity_part`, but
-the part's `general_entity_tick` and client-side `can_rider_interact` cross. The goal, behavior, spawn-size and shear methods
-(`register_goals`, `register_behaviors`, `spawn_cluster_size`, `is_shearable`, `on_sheared`) are native-only.
-A wasm part that overrides one of them is refused at load by name, as
-`EntityPart::<method>: a wasm entity part cannot override native-only methods`, instead of the
-override being silently never called.
-
-On wasm each general row keeps its own attachments, so two rows of one type share the part but not
-their state. A trap in a row's tick rolls that row's writes back and stops the mod's dependency group (the
-mod and the mods linked to it); the game keeps it stopped, and mods outside that group go on ticking.
+Register an `EntityPart` with `r.entity_part` to attach code to an entity type. Individual
+entities of that type share the part, not their attachments.
 
 ## Picking while riding
 
 `can_rider_interact` mirrors NeoForge's `IEntityExtension.canRiderInteract`. Attach an
 `EntityPart` to the candidate's entity type and set `event.allowed = true` to let a
 rider pick it like an unrelated entity. The output starts false; parts run in
-dependency order and the last write wins. The hook has version 1 and exposes
-`event.entity: EntityRef` and a writable `event.allowed: bool` with a `ClientHost`.
+dependency order and the last write wins. The hook exposes `event.subject: EntityClientScope<'_>`
+(borrow the candidate's read-only `EntityClientView` with `with_view`, or `&mut dyn ClientHost`
+sequentially with `host()`) and a writable `event.allowed: bool`.
 
 The ordinary client pick excludes entities sharing the camera's root vehicle,
 including other passengers, not just the directly ridden entity. The shared
@@ -33,6 +26,25 @@ and never ask this hook. Server interaction checks remain reach-only.
 The existing family traversal order is retained; exact vanilla section and
 within-section insertion ordering is a separate engine correction.
 
+## Entity tags
+
+On the server, `entity.tags(host)` lends an `EntityTags<'_>` view of the entity's scoreboard
+tags (`Entity.entityTags()`), not its entity-type registry tags. A live entity without tags
+gives an empty view (`tags.is_empty()`); a stale handle, client or snapshot without live tags
+gives `None`. A goal can read its own mob's tags and the tags of other live mobs lent to the tick.
+
+Use `entity.tags(host).is_some_and(|tags| tags.contains("mymod:marked"))` for an exact match
+without allocating. View equality compares exact UTF-16 tag membership, ignoring order and
+repeated entries. `tags.iter_utf16()` still yields tags in saved order, so use
+`a.iter_utf16().eq(b.iter_utf16())` when the order matters. To keep the old `Vec<String>`
+equality, including replacement characters for unpaired surrogates, compare
+`a.iter_utf16().map(String::from_utf16_lossy).eq(b.iter_utf16().map(String::from_utf16_lossy))`.
+
+Use `String::from_utf16(units)` to reject unpaired surrogates, `String::from_utf16_lossy(units)`
+for the same replacement characters as `/tag ... list`, or `units.to_vec()` to keep the exact
+units after the host borrow ends. For the old replacement-character membership check, use
+`tags.iter_utf16().any(|units| String::from_utf16_lossy(units) == name)`.
+
 ## Goals
 
 `r.entity_part("minecraft:zombie", ZombieGoals)` attaches an `EntityPart` to one entity type, a mod's
@@ -44,10 +56,14 @@ mob's two selectors beside the species' own, with the same priorities, flag lock
 struct ZombieGoals;
 #[mod_api::sunrise_part]
 impl EntityPart for ZombieGoals {
-    fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-        // goals.mob().id() is "minecraft:zombie": branch as per-species code does.
-        goals.add_goal(7, Stare::default());
-        goals.add_target_goal(3, Remember::default());
+    fn register_goals(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut RegisterGoalsEvent<'_, '_>,
+    ) {
+        // event.goals.mob().id() is "minecraft:zombie": branch as per-species code does.
+        event.goals.add_goal(7, Stare::default());
+        event.goals.add_target_goal(3, Remember::default());
     }
 }
 ```
@@ -70,8 +86,9 @@ mob itself through the engine's own paths: `move_to(pos, speed)` and `stop_navig
 It returns `Result<(), MoveToPathError>`: `NotFinite` for a non-finite speed or coordinate,
 `Unavailable` when no navigable mob is available, and `Empty` when no node remains after trimming.
 `NotFinite` and `Unavailable` preserve navigation; `Empty` leaves no path in progress.
-The engine classifies and trims every supplied node, follows the path as given, and drops it on a
-block change or the stuck check instead of searching again. Unloaded and out-of-world positions
+The engine classifies and trims every supplied node and follows the path as given. As in vanilla,
+a block change on the path re-searches to the target the navigation last searched for (with none,
+the path is kept), and the stuck check drops it. Unloaded and out-of-world positions
 are classified using void air without loading chunks; finite positions are not refused for their
 size. Submission, classification and trimming take linear work and allocate per-node storage.
 Optional per-node type overrides are not supported: the engine supplies every classification.
@@ -84,6 +101,12 @@ Clearing a fox's target ends defending without changing its trusted entities. An
 target controls its creepy flag and attacking speed modifier; clearing it also clears its stared-at
 flag. A zombified piglin schedules its first anger sound and next alert when it acquires a target
 from none, not when switching between targets. Targeting a player does not count as player damage.
+A goal moves its own mob with `set_delta_movement([x, y, z])` and `add_delta_movement([x, y, z])`
+(`Entity.setDeltaMovement` and `addDeltaMovement`, in blocks a tick), and reads the current value with
+`delta_movement()`, as `LeapAtTargetGoal` and `DolphinJumpGoal` do. The write applies at once, inside the
+mob's AI step, so the travel that follows in the same tick uses it, and clients see it through ordinary motion
+tracking. A component that is not finite (in the delta or the sum) answers false and leaves the velocity
+unchanged; nothing is clamped.
 
 
 ## Part state
@@ -95,20 +118,31 @@ attachment codec and kept by transactions, through the same calls and rules as
 [block entity Part state](block-entity-types.md#part-state).
 
 ```rust,ignore
+struct Robot {
+    charge: AttachmentKey<u32>,
+}
 impl EntityPartState for Robot {
     type Data = u32;
-    const DATA: &'static AttachmentType<u32> = &CHARGE;
+    fn state_key(&self) -> &AttachmentKey<u32> {
+        &self.charge
+    }
 }
-r.entity_part_with_state("mymod:robot", Robot)?;
+// Inside Hooks::register(&self, r: &mut dyn Registrar, _) (returns `()`):
+if let Ok(charge) = r.register_attachment_type(
+    AttachmentDescriptor::new("mymod:charge", || 0).serialize(CHARGE_CODEC),
+) {
+    let _ = r.entity_part_with_state("mymod:robot", Robot { charge });
+}
 
-let full = Robot::edit_state(host, robot, |_, charge| {
+let full = self.edit_state(host, robot, |_, _tx, charge| {
     *charge += 1;
     *charge >= 100
 })?;
 ```
 
-- `state` and `state_existing` read a snapshot and insert nothing; `edit_state` runs in a nested
-  transaction of its own, as for block entities.
+- `state` and `state_existing` lend a snapshot value and insert nothing. `edit_state` lends the
+  mutable draft and transaction context in a nested transaction, as for block entities. If the transaction cannot open, it returns
+  `PartStateError::Unavailable` without calling the edit closure.
 - Every call checks the handle first:
   - a handle of another world open, or of an entity that was removed (or whose removal waits for
     the root commit), unloaded or moved under a new id, gives `PartStateError::Stale`, and
@@ -128,12 +162,13 @@ let full = Robot::edit_state(host, robot, |_, charge| {
   `minecraft:player` (a player's respawn identity is not decided yet), every other vanilla family
   (boats, minecarts, items, projectiles, armor stands...) and an unknown id refuse the load with
   `PartStateRefusal::EntityKind`, naming the type. `entity_part` itself checks no type.
-- The declaration is refused at the call as for block entities, copying on death included. Like
-  `entity_part`, `entity_part_with_state` is native-only; Part state is server-side for now.
+- The declaration is refused at the call as for block entities, copying on death included. Part
+  state is server-side. Its registration errors, residency checks and state errors are
+  local values; only the attachment's state value is saved through its codec.
 
 ## Brain behaviors
 
-`EntityPart::register_behaviors` receives a `BehaviorRegistrar` whenever a brain-driven species builds or rebuilds its brain. Use `add(activity, priority, min_duration, max_duration, requirements, behavior)` to join a fresh `Behavior` to the species' supported activity. Registration returns a `BehaviorRefusal` for an unsupported activity or invalid duration. Behaviors start and stop in vanilla `Brain.tick` order: priority, activity bucket, then insertion order, with mod behaviors after vanilla behaviors in the same bucket. Their state is not saved. `BehaviorCx` provides the mob, host, random source and typed brain memory access; each species refuses memories it does not support.
+`EntityPart::register_behaviors` receives a `RegisterBehaviorsEvent` carrying `event.behaviors: &mut BehaviorRegistrar<'_>` whenever a brain-driven species builds or rebuilds its brain. Use `event.behaviors.add(activity, priority, min_duration, max_duration, requirements, behavior)` to join a fresh `Behavior` to the species' supported activity. Registration returns a `BehaviorRefusal` for an unsupported activity or invalid duration. Behaviors start and stop in vanilla `Brain.tick` order: priority, activity bucket, then insertion order, with mod behaviors after vanilla behaviors in the same bucket. Their state is not saved. `BehaviorCx` provides the mob, host, random source and typed brain memory access; each species refuses memories it does not support.
 
 ## Spawn groups and shearing
 
@@ -142,9 +177,12 @@ The part's `spawn_cluster_size` changes how large a natural spawn group of the t
 shows it.
 
 `is_shearable` and `on_sheared` make the type shearable, as NeoForge's `IShearable` does: shears in a player's
-hand and a dispenser's ask `is_shearable` first, and the part that says `Some(true)` shears the entity in
-`on_sheared` and returns the drops, which the game spawns before damaging the shears. `Some(false)` keeps the
-entity unsheared, and `None` leaves it to the species (a sheep keeps shearing as vanilla's does).
+hand and a dispenser's ask `is_shearable` first with an `IsShearableEvent` carrying `event.entity`,
+`event.player` and a lazy `event.shears: ItemStackView<'_>`, and the part that says `Some(true)` shears the
+entity in `on_sheared` by pushing drops into `event.drops: &mut Vec<ItemStack>`, which the game spawns before
+damaging the shears. `Some(false)` keeps the entity unsheared, and `None` leaves it to the species (a sheep
+keeps shearing as vanilla's does).
+Both hooks run on both sides, as `ShearsItem.interactLivingEntity` does: their first parameter is a `HostSide`, a client predicting a player's click answers `is_shearable` and runs `on_sheared` on its copy of the mob, and the drops, the shears' damage and a dispenser's shearing stay the server's.
 
 ## Equipped durability
 

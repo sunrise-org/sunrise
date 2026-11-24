@@ -1,29 +1,29 @@
 //! Item predicate matching shared by filtered loot functions in both evaluators.
-use super::{LootStack, custom_data_matches, int_bounds};
+use super::{LootStackAccess, custom_data_matches, int_bounds};
 use serde_json::Value;
 use sunrise_core::nbt::Tag;
 
 /// Match the predicate against a candidate, borrowing the evaluator's authoritative tags.
 pub fn matches(
     predicate: &Value,
-    stack: &LootStack,
+    stack: &dyn LootStackAccess,
     contains_tag: impl Fn(&str, &str, &str) -> bool,
 ) -> bool {
     if !predicate["items"].is_null()
-        && !in_set("item", &predicate["items"], &stack.item, &contains_tag)
+        && !in_set("item", &predicate["items"], stack.item_id(), &contains_tag)
     {
         return false;
     }
-    if !int_bounds(&predicate["count"], stack.count) {
+    if !int_bounds(&predicate["count"], stack.count()) {
         return false;
     }
     let predicates = &predicate["predicates"];
-    if predicates.get("minecraft:map_id").is_some() && !stack.map {
+    if predicates.get("minecraft:map_id").is_some() && !stack.map() {
         return false;
     }
     if let Some(pattern) = predicates.get("minecraft:custom_data") {
         let data = stack
-            .components
+            .components()
             .iter()
             .rev()
             .find(|(id, _)| id == "minecraft:custom_data")
@@ -36,19 +36,22 @@ pub fn matches(
             return false;
         }
     }
+    let enchantments = stack.enchantments();
     predicates["minecraft:enchantments"]
         .as_array()
         .into_iter()
         .flatten()
         .all(|entry| {
             if entry["enchantments"].is_null() {
-                stack
-                    .enchantments
+                enchantments
                     .iter()
                     .any(|(_, level)| int_bounds(&entry["levels"], *level))
             } else {
-                stack.enchantments.iter().any(|(id, _)| {
-                    let level = super::item_level(stack, id);
+                enchantments.iter().any(|(id, _)| {
+                    let level = enchantments
+                        .iter()
+                        .find(|(name, _)| name == id)
+                        .map_or(0, |(_, level)| *level);
                     level != 0
                         && in_set("enchantment", &entry["enchantments"], id, &contains_tag)
                         && int_bounds(&entry["levels"], level)

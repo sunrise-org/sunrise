@@ -23,12 +23,16 @@ fn a_falling_part_hears_each_airborne_tick_and_not_the_landing() {
         let sand = registry.default_state("minecraft:sand").unwrap();
         let at = Vec3::new(0.5, 70.0, 0.5);
         game.falling.push(FallingBlock {
-            on_ground: false,
+            size_answer: None,
+            ground: Default::default(),
+            fire_ticks: 0,
+            sync_velocity: false,
             attachment_lifetime: Default::default(),
             rotation: [0.0; 2],
             join: Default::default(),
             id: 71,
             state: sand,
+            blocks_building: true,
             start_pos: BlockPos::new(0, 70, 0),
             position: at,
             previous: at,
@@ -89,12 +93,16 @@ fn sand_at(game: &mut crate::game::Game<'_>, id: u32) {
         .unwrap();
     let at = Vec3::new(0.5, 70.0, 0.5);
     game.falling.push(FallingBlock {
-        on_ground: false,
+        size_answer: None,
+        ground: Default::default(),
+        fire_ticks: 0,
+        sync_velocity: false,
         attachment_lifetime: Default::default(),
         rotation: [0.0; 2],
         join: Default::default(),
         id,
         state: sand,
+        blocks_building: true,
         start_pos: BlockPos::new(0, 70, 0),
         position: at,
         previous: at,

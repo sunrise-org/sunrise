@@ -105,7 +105,7 @@ fn flint_and_steel_use_on_ends_the_click() {
         inside: false,
     });
 
-    let done = game.remote_use_block(Hand::Main);
+    let done = game.remote_use_block(Hand::Main, mod_api::InteractionAttempt::Press, None);
     assert!(done, "flint and steel useOn must end the click");
 }
 
@@ -125,7 +125,7 @@ fn an_end_crystal_click_on_a_block_ends_there() {
         let (mut peer, _writer) = connect_menu_test(game);
         peer.set_read_timeout(Some(std::time::Duration::from_millis(50)))
             .unwrap();
-        game.set_mode_id(0);
+        game.set_local_mode(sunrise_client::command::args::GameMode::Survival);
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
         game.world
             .chunks
@@ -174,6 +174,6 @@ fn an_end_crystal_click_on_a_block_ends_there() {
         game.cooldowns
             .add(sunrise_client::cooldowns::group(&crystal, None), 20);
         aim(game, 2);
-        assert!(!game.remote_use_block(Hand::Main));
+        assert!(!game.remote_use_block(Hand::Main, mod_api::InteractionAttempt::Press, None));
     });
 }

@@ -1,8 +1,9 @@
 use super::*;
 
-/// entity.wgsl after the OverlayTexture constants it reads.
+/// entity.wgsl after the OverlayTexture constants and the particle overlay marker it reads.
 pub(super) fn entity_shader() -> String {
     crate::overlay::wgsl_constants()
+        + &format!("const EXPLICIT_PARTICLE_OVERLAY: u32 = {EXPLICIT_PARTICLE_OVERLAY}u;\n")
         + include_str!("../hdr_light.wgsl")
         + include_str!("../entity.wgsl")
 }
@@ -81,7 +82,8 @@ pub(super) fn entity_binding_entries() -> [wgpu::BindGroupLayoutEntry; 8] {
 
 pub(super) const ENTITY_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
 
-pub(super) struct EntityPipelineOptions<'a> {
+#[derive(Clone, Copy)]
+pub(crate) struct EntityPipelineOptions<'a> {
     pub(super) label: &'a str,
     pub(super) cull_mode: Option<wgpu::Face>,
     pub(super) depth_write: bool,
@@ -190,6 +192,16 @@ impl Renderer {
         Ok(())
     }
 
+    /// Move a validated upload out of a candidate renderer until model apply.
+    pub fn take_prepared_models(&mut self) -> Option<PreparedModels> {
+        self.prepared_models.take()
+    }
+
+    /// Publish the already validated model buffer after the atlas is visible.
+    pub fn publish_prepared_models(&mut self, models: Option<PreparedModels>) {
+        self.prepared_models = models;
+    }
+
     /// The uploaded generation, when a prepared buffer is resident.
     pub fn prepared_generation(&self) -> Option<u64> {
         self.prepared_models
@@ -212,18 +224,50 @@ impl Renderer {
         )
     }
 
+    /// Device-derived vertex and index byte capacities for the combined entity batch.
+    pub fn entity_quad_capacity(&self) -> EntityQuadCapacity {
+        EntityQuadCapacity::from_limits(&self.device.limits(), self.entity_skin.is_some())
+    }
+
+    /// Whether frame generation is enabled (duplicating first-person hand geometry in the batch).
+    pub fn frame_generation_on(&self) -> bool {
+        self.frame_gen.on
+    }
+
     pub(super) fn finish_prepared_frame(&mut self) {
         prepared_model::finish_staged(&mut self.prepared_draws);
         self.prepared_cuts.clear();
         self.prepared_ranges.clear();
     }
 
-    pub(super) fn draw_hand(&self, pass: &mut wgpu::RenderPass<'_>, quads: u32, first: u32) {
-        pass.set_pipeline(&self.entity_pipeline);
+    pub(super) fn draw_hand(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        hand: &[Vertex],
+        quads: u32,
+        first: u32,
+    ) {
         pass.set_bind_group(0, &self.hand_group, &[]);
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-        pass.draw_indexed(0..quads * 6, (first * 4) as i32, 0..1);
+        let hand_kind = |layer: u32| match layer & 0xffff {
+            BANNER_PATTERN_OVERLAY => 1u8,
+            GLINT_ONLY_OVERLAY => 2u8,
+            _ => 0u8,
+        };
+        let mut at = 0;
+        for run in hand.as_chunks::<4>().0[..quads as usize]
+            .chunk_by(|a, b| hand_kind(a[0].layer) == hand_kind(b[0].layer))
+        {
+            let end = at + run.len() as u32;
+            pass.set_pipeline(match hand_kind(run[0][0].layer) {
+                1 => &self.banner_pattern_pipeline,
+                2 => &self.glint_only_pipeline,
+                _ => &self.entity_pipeline,
+            });
+            pass.draw_indexed(at * 6..end * 6, (first * 4) as i32, 0..1);
+            at = end;
+        }
         if light_marks(self.output.frame.format, self.hdr.is_some()) {
             // Drawn into the world: the light sources it holds are marked as the world's are.
             pass.set_pipeline(&self.hdr_entity_mark_pipeline);

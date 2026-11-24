@@ -3,7 +3,7 @@ use super::*;
 impl Game<'_> {
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
     /// the click ends there, as far as this client can tell (`use_ends_click`).
-    pub(super) fn remote_use_item(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_item(&mut self, hand: Hand) -> bool {
         // MultiPlayerGameMode.useItem: spectators pass before sending or predicting.
         if self.spectator() {
             return false;
@@ -11,10 +11,6 @@ impl Game<'_> {
         let Some(held) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
         };
-        // Client-owned input items use mod_use_start instead of server item use.
-        if self.native_input.claimant(&held.item).is_some() {
-            return false;
-        }
         let seq = self.next_sequence();
         self.send(S::UseItem(play::UseItem {
             hand: hand_id(hand),
@@ -68,7 +64,9 @@ impl Game<'_> {
         // SpawnEggItem.use on the client succeeds after a SOURCE_ONLY block
         // hit; the server alone tests LiquidBlock and the placement permission.
         if held.item.ends_with("_spawn_egg") {
-            let succeeded = self.spawn_egg_allowed(&held.item) && self.bucket_hit().is_some();
+            let succeeded = self.bucket_hit().is_some()
+                && sunrise_client::block_entity_item::item_entity_data(&held, self.res.items())
+                    .is_some_and(|data| self.spawn_egg_allowed(&data.kind));
             if succeeded {
                 self.with_hand(hand, Game::swing_arm);
             }
@@ -146,5 +144,105 @@ impl Game<'_> {
             self.with_hand(hand, Game::swing_arm);
         }
         ends
+    }
+    /// `LivingEntity.updatingUsingItem` on a server client: an item held in
+    /// use (`held_until_released`), and a consumable's eating animation and
+    /// its crumbs until the server's USE_ITEM_COMPLETE. The server sends the
+    /// stack, its hunger and the sounds.
+    pub(in crate::game) fn remote_tick_using(&mut self) {
+        self.tick_client_item_use();
+        let Some((slot, ticks)) = self.using else {
+            return;
+        };
+        // The may-still-use check (`ItemStack.isSameItem`, then a part's
+        // `canContinueUsing`) reads the active hand, even when that hand is now
+        // holding a different hotbar slot.
+        let offhand = slot == crate::game::shield::OFFHAND_SLOT;
+        let (hand_slot, hand) = if offhand {
+            (slot, Hand::Off)
+        } else {
+            (self.selected, Hand::Main)
+        };
+        let held = self.stack_in(hand_slot).cloned();
+        let began = self.use_start.item.clone();
+        let goes_on = began
+            .as_ref()
+            .zip(held.as_ref())
+            .is_some_and(|(began, held)| self.can_continue_using(began, held, None, hand));
+        let Some(stack) = held.filter(|_| goes_on) else {
+            self.using = None;
+            self.use_start = Default::default();
+            // Another item stops the use (`stopUsingItem`); an emptied hand is used up.
+            if let Some(began) = began.filter(|_| self.stack_in(hand_slot).is_some()) {
+                let time_left = ticks_left(self.use_duration, ticks);
+                self.stopped_using(&began, None, hand, time_left);
+            }
+            return;
+        };
+        self.use_start.item = Some(stack.clone());
+        self.using = Some((hand_slot, ticks));
+        // A client cancel skips this tick's effects; the countdown and release continue.
+        if !self.use_item_ticked(&stack, ticks) {
+            self.using = Some((hand_slot, ticks.saturating_add(1)));
+            return;
+        }
+        // BrushItem.onUseTick: with no block aimed the use ends (the server
+        // ends it too); a stroke shows its dust. Its sounds are the server's.
+        if &*stack.item == "minecraft:brush" {
+            let elapsed = 201i32.wrapping_sub(ticks_left(self.use_duration, ticks));
+            let hit = self.pick();
+            if let Some(hit) = &hit
+                && elapsed % 10 == 5
+            {
+                self.brush_dust(hit, offhand);
+            }
+            if hit.is_none() {
+                self.send_action(6);
+            }
+            self.using = hit.and(Some((hand_slot, ticks + 1)));
+            return;
+        }
+        // A bundle's 200-tick use ends with the server's entity event 9, not here.
+        if self.items().get(&stack.item).is_some_and(|i| i.bundle) {
+            self.using = Some((hand_slot, ticks + 1));
+            return;
+        }
+        // A drawn bow, a charging crossbow, a raised shield...: held until
+        // the button lets go.
+        if self.held_until_released(&stack) {
+            if self.mod_use(&stack) || self.blocks_attacks(&stack).is_some() {
+                self.item_on_use_tick(&stack, ticks);
+            }
+            self.using = Some((hand_slot, ticks + 1));
+            return;
+        }
+        // A goat horn is held up for its instrument's use duration.
+        if self.res.items().instrument(&stack).is_some() {
+            self.using = Some((hand_slot, ticks + 1));
+            return;
+        }
+        let Some(consumable) = self.consumable(&stack) else {
+            self.using = None;
+            return;
+        };
+        // Consumable.startConsuming eats one with no use time at once, without
+        // a use (nor a USE_ITEM_COMPLETE).
+        if consumable.ticks() <= 0 {
+            self.using = None;
+            return;
+        }
+        // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item. The
+        // countdown goes on past zero (LivingEntity.updateUsingItem completes
+        // only on the server) until the server's USE_ITEM_COMPLETE.
+        // getUseItemRemainingTicks: the duration this use started with.
+        let remaining = self.use_duration - ticks as i32;
+        if remaining > 0 && consumable.should_emit(remaining) {
+            // `emit_consume` plays the eat sound and spawns the bites (when the
+            // item has consume particles), as `tick_used_item` does on the
+            // player's own server.
+            self.emit_consume(&consumable, &stack, 5);
+        }
+        self.item_on_use_tick(&stack, ticks);
+        self.using = Some((hand_slot, ticks + 1));
     }
 }

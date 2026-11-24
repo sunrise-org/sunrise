@@ -3,28 +3,46 @@
 //! breaks use, `Game::acting_can_harvest`).
 use super::Game;
 use mod_api::{LevelRef, PlayerRef};
-use sunrise_client::items::ItemStack;
 use sunrise_world::registry::BlockStateId;
 
 impl Game<'_> {
-    /// `ItemStack.isCorrectToolForDrops(state)`: the stack's own tool rules, with no block
-    /// requirement, player, position or hook. None for an unknown state.
-    pub(super) fn block_state_correct_tool_for_drops(
-        &self,
-        stack: &ItemStack,
+    /// `BlockBehaviour.getDestroyProgress(state, player, level, pos)` for a supplied state:
+    /// the same math as the game's own dig, including the `can_harvest_block`,
+    /// `player_harvest_check` and `player_break_speed` hooks. A server asks a connected or
+    /// fake player (their state swapped in); a client only its local player. None for a stale
+    /// handle, an unknown state, a dead player, a level other than the one in place, or a call
+    /// from inside one of those hooks, which would run it again without bound.
+    pub(super) fn player_destroy_progress(
+        &mut self,
+        player: PlayerRef,
+        level: LevelRef,
+        pos: [i32; 3],
         state: BlockStateId,
-    ) -> Option<bool> {
+    ) -> Option<f32> {
         self.pack.assets.registry.state(state)?;
-        Some(
-            self.items()
-                .correct_for_drops(Some(stack), &self.res.facts().get(state).name),
-        )
+        if crate::game::hand::BreakSpeedDispatch::running()
+            || crate::game::hand::HarvestDispatch::running()
+        {
+            return None;
+        }
+        if self.native_level_read_world(level).is_none() || level.dimension() != self.dim.key() {
+            return None;
+        }
+        let mut answer = None;
+        if self.is_logical_server() {
+            self.native_as_player_handle(player, |game| {
+                answer = Some(game.destroy_progress_for(pos, state));
+            });
+        } else if self.local_player() == Some(player) {
+            answer = Some(self.destroy_progress_for(pos, state));
+        }
+        answer
     }
 
     /// `Player.hasCorrectToolForDrops(state, level, pos)` and `canHarvestBlock`: the player's
     /// selected slot against `state`, then the mods' `can_harvest_block` and
-    /// `player_harvest_check`. A server asks any online player (their state swapped in); a
-    /// client only its local player. None for a stale handle, an unknown state, a dead player,
+    /// `player_harvest_check`. A server asks a connected or fake player (their state swapped
+    /// in); a client only its local player. None for a stale handle, an unknown state, a dead player,
     /// a level other than the one in place, or a call from inside a harvest hook
     /// (`can_harvest_block`, `player_harvest_check`), which would recurse.
     pub(super) fn player_has_correct_tool_for_drops(
@@ -56,9 +74,13 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::native_block_tables::BlockTables;
     use super::super::native_guest_turn_tests::with_guests;
     use mod_api::__private::game::*;
-    use mod_api::{Hooks, HostSide, PlayerHarvestCheckEvent};
+    use mod_api::{
+        CanHarvestBlockEvent, Flow, Hooks, HostSide, PlayerBreakSpeedEvent,
+        PlayerHarvestCheckEvent, PlayerRef,
+    };
     use std::sync::{Arc, Mutex};
     use sunrise_client::items::ItemStack;
 
@@ -74,26 +96,26 @@ mod tests {
             let shovel = ItemStack::new("minecraft:iron_shovel", 1);
             // The stack alone: dirt needs no tool, yet a pickaxe is not its correct tool.
             assert_eq!(
-                game.block_state_correct_tool_for_drops(&pickaxe, stone),
+                BlockTables::of(game).block_state_correct_tool_for_drops(&pickaxe, stone),
                 Some(true)
             );
             assert_eq!(
-                game.block_state_correct_tool_for_drops(&shovel, stone),
+                BlockTables::of(game).block_state_correct_tool_for_drops(&shovel, stone),
                 Some(false)
             );
             assert_eq!(
-                game.block_state_correct_tool_for_drops(&pickaxe, dirt),
+                BlockTables::of(game).block_state_correct_tool_for_drops(&pickaxe, dirt),
                 Some(false)
             );
             assert_eq!(
-                game.block_state_correct_tool_for_drops(
+                BlockTables::of(game).block_state_correct_tool_for_drops(
                     &ItemStack::new("minecraft:stick", 1),
                     stone
                 ),
                 Some(false)
             );
             assert_eq!(
-                game.block_state_correct_tool_for_drops(
+                BlockTables::of(game).block_state_correct_tool_for_drops(
                     &pickaxe,
                     sunrise_world::registry::BlockStateId(u32::MAX)
                 ),
@@ -143,8 +165,50 @@ mod tests {
         });
     }
 
-    /// Asks the player query from a `player_harvest_check` listener, recording the answer.
-    struct Asker(Arc<Mutex<Vec<Option<bool>>>>);
+    /// A supplied state answers the dig's own math for that state, not the block at the
+    /// position, and an unknown state asks nothing.
+    #[test]
+    #[ignore = "daily"]
+    fn the_destroy_progress_query_uses_the_supplied_state() {
+        with_guests(|game| {
+            let (stone, dirt) = {
+                let host = &*game as &dyn mod_api::Host;
+                (
+                    host.block_state_id("minecraft:stone").unwrap(),
+                    host.block_state_id("minecraft:dirt").unwrap(),
+                )
+            };
+            let player = game.player(12).unwrap();
+            let level = player.level(&*game).unwrap();
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(12, |guest| {
+                    guest.on_ground = true;
+                    guest.inventory[guest.selected] =
+                        Some(ItemStack::new("minecraft:iron_pickaxe", 1));
+                })
+                .unwrap();
+            let (rock, soil) = (6.0 / 1.5 / 30.0, 1.0 / 0.5 / 30.0);
+            assert_eq!(
+                player.destroy_progress(game, level, [0, 64, 0], stone),
+                Some(rock)
+            );
+            assert_eq!(
+                player.destroy_progress(game, level, [0, 64, 0], dirt),
+                Some(soil)
+            );
+            let unknown = mod_api::__private::block_state_from_ordinal(stone.block(), u16::MAX);
+            assert_eq!(
+                player.destroy_progress(game, level, [0, 64, 0], unknown),
+                None
+            );
+        })
+    }
+
+    /// Asks the player query for a different state from a `player_harvest_check` listener.
+    struct Asker(Arc<Mutex<Vec<(PlayerRef, Option<bool>)>>>);
 
     #[mod_api::__subscriptions]
     impl Hooks for Asker {
@@ -152,14 +216,14 @@ mod tests {
             let HostSide::Server(host) = host else { return };
             let player = host.players().acting_player().unwrap();
             let level = player.level(&*host).unwrap();
-            let stone = host.block_state_id("minecraft:stone").unwrap();
-            let asked = player.has_correct_tool_for_drops(host, level, [0, 64, 0], stone);
-            self.0.lock().unwrap().push(asked);
+            let dirt = host.block_state_id("minecraft:dirt").unwrap();
+            let asked = player.has_correct_tool_for_drops(host, level, [0, 64, 0], dirt);
+            self.0.lock().unwrap().push((player, asked));
         }
     }
 
-    /// A listener that asks the query while the harvest hooks run gets None instead of
-    /// recursing; the same call outside the hooks answers, before and after.
+    /// Two fake players answer from their own selected slots and run the ordinary hooks.
+    /// From inside those hooks the query refuses even a different state.
     #[test]
     #[ignore = "daily"]
     fn the_query_from_inside_a_harvest_hook_answers_none() {
@@ -171,14 +235,113 @@ mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             with_guests(|game| {
-                let stone = game
-                    .pack
-                    .assets
-                    .registry
-                    .default_state("minecraft:stone")
+                let level = game.level(game.dim.id()).unwrap();
+                let stone = (game as &dyn mod_api::Host)
+                    .block_state_id("minecraft:stone")
                     .unwrap();
-                let a = game.player(12).unwrap();
-                let level = a.level(&*game).unwrap();
+                game.next_entity = 100;
+                let fakes = [
+                    (1234, "pickaxe", "minecraft:iron_pickaxe", true),
+                    (5678, "shovel", "minecraft:iron_shovel", false),
+                ]
+                .map(|(uuid, name, item, expected)| {
+                    let player = game.fake_player(level, uuid, name).unwrap();
+                    let hub = &mut game.lan.as_mut().unwrap().hub;
+                    let index = hub
+                        .guests
+                        .identity_index(uuid, player.entity().id())
+                        .unwrap();
+                    hub.guests.update(index, |guest| {
+                        guest.selected = 4;
+                        guest.inventory[4] = Some(ItemStack::new(item, 1));
+                        guest.offhand = Some(ItemStack::new("minecraft:iron_pickaxe", 1));
+                    });
+                    (player, expected)
+                });
+                for (player, expected) in fakes {
+                    assert_eq!(
+                        player.has_correct_tool_for_drops(game, level, [0, 64, 0], stone),
+                        Some(expected)
+                    );
+                    assert_eq!(
+                        std::mem::take(&mut *inner.lock().unwrap()),
+                        [(player, None)]
+                    );
+                }
+            });
+        });
+    }
+
+    /// Asks the destroy-progress query from inside each hook the query runs, and records the
+    /// answer: every one is None, so the hook cannot run itself again without bound.
+    fn ask_recursively(
+        host: &mut dyn mod_api::ServerHost,
+        seen: &Mutex<Vec<(&'static str, Option<f32>)>>,
+        hook: &'static str,
+    ) {
+        let Some(player) = host.players().acting_player() else {
+            return;
+        };
+        let Some(level) = player.level(host) else {
+            return;
+        };
+        let stone = host.block_state_id("minecraft:stone").unwrap();
+        let asked = player.destroy_progress(host, level, [0, 64, 0], stone);
+        seen.lock().unwrap().push((hook, asked));
+    }
+
+    /// The per-block half of `can_harvest_block`, on stone.
+    struct RecursivePart(Arc<Mutex<Vec<(&'static str, Option<f32>)>>>);
+
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockPart for RecursivePart {
+        fn can_harvest_block(&self, host: HostSide<'_>, _: &mut CanHarvestBlockEvent) {
+            if let HostSide::Server(host) = host {
+                ask_recursively(host, &self.0, "can_harvest_block");
+            }
+        }
+    }
+
+    /// The global half: the harvest check and the break speed, and the stone part above.
+    #[derive(Default)]
+    struct RecursiveAsker(Arc<Mutex<Vec<(&'static str, Option<f32>)>>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for RecursiveAsker {
+        fn player_harvest_check(&self, host: HostSide<'_>, _: &mut PlayerHarvestCheckEvent) {
+            if let HostSide::Server(host) = host {
+                ask_recursively(host, &self.0, "player_harvest_check");
+            }
+        }
+
+        fn player_break_speed(&self, host: HostSide<'_>, _: &mut PlayerBreakSpeedEvent) -> Flow {
+            if let HostSide::Server(host) = host {
+                ask_recursively(host, &self.0, "player_break_speed");
+            }
+            Flow::Continue
+        }
+
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let stone = r.block_key("minecraft:stone");
+            r.block_part(stone, RecursivePart(Arc::clone(&self.0)));
+        }
+    }
+
+    /// The query refuses from every hook it would otherwise run again: the two harvest hooks
+    /// and the break-speed hook.
+    #[test]
+    #[ignore = "daily"]
+    fn the_destroy_progress_query_from_inside_any_of_its_hooks_answers_none() {
+        let asker = RecursiveAsker::default();
+        let seen = Arc::clone(&asker.0);
+        let mods = vec![mod_api::ModEntry::new("recursive", Box::new(asker))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_guests(|game| {
+                let player = game.player(12).unwrap();
+                let level = player.level(&*game).unwrap();
+                let stone = (game as &dyn mod_api::Host)
+                    .block_state_id("minecraft:stone")
+                    .unwrap();
                 game.lan
                     .as_mut()
                     .unwrap()
@@ -188,12 +351,138 @@ mod tests {
                             Some(ItemStack::new("minecraft:iron_pickaxe", 1));
                     })
                     .unwrap();
-                for _ in 0..2 {
+                // The outer query runs all three hooks; each inner query answers None.
+                assert!(
+                    player
+                        .destroy_progress(game, level, [0, 64, 0], stone)
+                        .is_some()
+                );
+                assert_eq!(
+                    std::mem::take(&mut *seen.lock().unwrap()),
+                    [
+                        ("can_harvest_block", None),
+                        ("player_harvest_check", None),
+                        ("player_break_speed", None),
+                    ]
+                );
+            });
+        });
+    }
+
+    /// A torch that mines as the block below it, through the query, as a block overriding
+    /// `getDestroyProgress` does; and dirt that answers a progress of its own.
+    struct MinesAsBelow;
+
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockPart for MinesAsBelow {
+        fn destroy_progress(
+            &self,
+            host: HostSide<'_>,
+            event: &mut mod_api::DestroyProgressEvent,
+        ) -> Option<f32> {
+            let HostSide::Server(host) = host else {
+                return None;
+            };
+            let level = event.player.level(host)?;
+            let below = [event.pos[0], event.pos[1] - 1, event.pos[2]];
+            let pedestal = level.block_state(host, below)?;
+            event.player.destroy_progress(host, level, below, pedestal)
+        }
+    }
+
+    struct Soft;
+
+    #[mod_api::sunrise_part]
+    impl mod_api::BlockPart for Soft {
+        fn destroy_progress(
+            &self,
+            _: HostSide<'_>,
+            _: &mut mod_api::DestroyProgressEvent,
+        ) -> Option<f32> {
+            Some(0.25)
+        }
+    }
+
+    struct PartsMod;
+
+    #[mod_api::__subscriptions]
+    impl Hooks for PartsMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let torch = r.block_key("minecraft:torch");
+            r.block_part(torch, MinesAsBelow);
+            let dirt = r.block_key("minecraft:dirt");
+            r.block_part(dirt, Soft);
+        }
+    }
+
+    /// A block Part's answer is the dig's progress and the query's: dirt answers its own 0.25,
+    /// and a torch mines as the block below it, through the query, which inside the answer is
+    /// the game's math and asks no Part: on stone as stone, on dirt as dirt with no Part (not
+    /// 0.25), on air as air and on another torch as that torch (hardness 0, at once).
+    #[test]
+    #[ignore = "daily"]
+    fn a_block_part_answers_the_destroy_progress() {
+        let mods = vec![mod_api::ModEntry::new("parts", Box::new(PartsMod))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_guests(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                let state = |game: &super::super::Game<'_>, name: &str| {
+                    game.pack.assets.registry.default_state(name).unwrap()
+                };
+                for (x, below) in [
+                    (0, "minecraft:stone"),
+                    (1, "minecraft:dirt"),
+                    (2, "minecraft:air"),
+                    (3, "minecraft:torch"),
+                ] {
+                    let below = state(game, below);
+                    game.world.set(x, 64, 0, below).unwrap();
+                    let torch = state(game, "minecraft:torch");
+                    game.world.set(x, 65, 0, torch).unwrap();
+                }
+                game.lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .update_guest(12, |guest| {
+                        guest.on_ground = true;
+                        guest.inventory[guest.selected] =
+                            Some(ItemStack::new("minecraft:iron_pickaxe", 1));
+                    })
+                    .unwrap();
+                let player = game.player(12).unwrap();
+                let level = player.level(&*game).unwrap();
+                let torch = (game as &dyn mod_api::Host)
+                    .block_state_id("minecraft:torch")
+                    .unwrap();
+                let dirt = (game as &dyn mod_api::Host)
+                    .block_state_id("minecraft:dirt")
+                    .unwrap();
+                let at = [1, 64, 0];
+                assert_eq!(player.destroy_progress(game, level, at, dirt), Some(0.25));
+                assert_eq!(
+                    game.as_guest(12, |game| game.destroy_progress(at)),
+                    Some(0.25)
+                );
+                // An iron pickaxe on stone (hardness 1.5, the correct tool) and on dirt
+                // (hardness 0.5, speed 1, still harvestable); air and a torch have hardness 0.
+                let rock = 6.0 / 1.5 / 30.0;
+                let soil = 1.0 / 0.5 / 30.0;
+                let expected = [rock, soil, f32::INFINITY, f32::INFINITY];
+                for (x, expected) in expected.into_iter().enumerate() {
+                    let pos = [x as i32, 65, 0];
                     assert_eq!(
-                        game.player_has_correct_tool_for_drops(a, level, [0, 64, 0], stone),
-                        Some(true)
+                        player.destroy_progress(game, level, pos, torch),
+                        Some(expected),
+                        "query at {pos:?}"
                     );
-                    assert_eq!(std::mem::take(&mut *inner.lock().unwrap()), [None]);
+                    assert_eq!(
+                        game.as_guest(12, |game| game.destroy_progress(pos)),
+                        Some(expected),
+                        "dig at {pos:?}"
+                    );
                 }
             });
         });

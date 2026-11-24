@@ -41,7 +41,6 @@ pub fn path(api: Api) -> &'static str {
 const RULES_0_2: &str = "\
 **Experimental** ([stability.md](stability.md)): `sunrise-shader check` takes 0.2 packs, the game draws them only
 with `SUNRISE_HDR_FRAME=float` set, the registry doesn't list them, and anything here may change in any release.
-The design: [hdr-linear-light.md](../design/hdr-linear-light.md).
 
 ## Colour
 
@@ -92,8 +91,8 @@ vanilla's. `blend = \"linear\"` stores linear light, so see-through draws blend 
 stages' results as they are and decodes its own draws (entities, particles, clouds, weather, the stages a pack leaves
 out), so a solid surface looks as under `\"gamma\"`. A stage sees the same values either way. Where the device can't
 draw a float frame the pack draws on an 8-bit one, in gamma. Under `\"linear\"` resource packs' `core/sky`,
-`core/stars` and `core/rendertype_lines` shaders, which write gamma, give way to Sunrise's own sky, stars and block
-outline. A resource pack's `core/lightmap` is kept: it draws the light texture, not the frame.
+`core/stars`, `core/rendertype_lines` and `core/clouds` shaders, which write gamma, give way to Sunrise's own sky,
+stars, block outline and clouds. A resource pack's `core/lightmap` is kept: it draws the light texture, not the frame.
 
 ## `[frame] primaries`
 

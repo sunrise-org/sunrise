@@ -13,9 +13,9 @@ pub enum Heightmap {
 }
 /// A run: `height` blocks up a column from `y` (from the column's `surface` height when one is
 /// given), set to palette entry `block`, only where filter `only` matches when one is given.
+// no wire: a run indexes the same in-process bulk edit's palette and filters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct BlockRun {
     pub x: i32,
     pub z: i32,
@@ -26,26 +26,16 @@ pub struct BlockRun {
     pub only: Option<u32>,
 }
 /// A bulk edit of complete typed states and partial predicates, named by run indices; NBT is not supported.
+// no wire: bulk edits use native block states and predicates directly.
 #[derive(Clone, Debug, PartialEq, Default)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct BlockEdit {
     /// Complete states to write; properties are never parsed from command strings.
     pub palette: Vec<BlockState>,
-    /// Partial block or tag predicates; omitted properties are wildcards.
+    /// Validated block or tag predicates; omitted properties are wildcards. A run can address
+    /// any existing filter at its `only` index.
     pub filters: Vec<StatePredicate>,
     pub runs: Vec<BlockRun>,
-}
-/// The camera shake native mods ask for (`camera_shake`): turns in
-/// degrees, and an offset in blocks along the camera's right, up and back.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Shake {
-    pub pitch: f32,
-    pub yaw: f32,
-    pub roll: f32,
-    pub offset: [f32; 3],
 }
 /// `PlayerSpawnPhantomsEvent.Result`: whether the phantom spawner tries a spawn near a player.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,11 +71,9 @@ pub struct Clock {
     /// it modulo 24000 for the hour; `/time set` can make it negative.
     pub day_time: i64,
 }
-/// Maximum number of columns in one generator surface query.
-pub const MAX_TERRAIN_COLUMNS: usize = 4096;
 
 /// The generator's undecorated surface, without slope rules or chunk allocation.
-/// Created only by the game; identical on native and wasm.
+/// Created only by the game.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -100,29 +88,69 @@ pub struct TerrainColumn {
     pub biome: String,
 }
 
-/// What `read_columns` read: the blocks round each column's height (`bases`, none where it isn't loaded),
-/// as indexes into `palette`, a column after another, and three biome tints a column (grass, foliage, water).
-#[derive(Clone, Debug, PartialEq, Default)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ColumnBlocks {
-    /// Distinct complete states, including separate entries for different property combinations.
-    pub palette: Vec<BlockState>,
-    pub bases: Vec<Option<i32>>,
-    pub blocks: Vec<u16>,
-    pub tints: Vec<u32>,
+/// One loaded column's heightmap base, blocks and biome water colour, borrowed for the
+/// duration of a [`LevelRef::visit_columns`] callback.
+///
+/// Colormap-derived grass and foliage tints are client-side only: read blended tints with
+/// [`BlockAndTintGetter::block_tint`] inside block tint callbacks or `ClientHost::biome_tint`
+/// in other client hooks.
+// no wire: borrowed call-scoped view of a streamed column read; never encoded over the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ColumnSlice<'a> {
+    /// One above the highest block on the requested heightmap.
+    pub base: i32,
+    /// Complete block states from `base - below` up to `base + above - 1`, bottom first
+    /// (air outside the chunk's vertical range).
+    pub blocks: &'a [BlockState],
+    /// Server-side biome JSON water colour (`BiomeSpecialEffects.waterColor`, `0xRRGGBB`) at
+    /// the column's top block (`base - 1`).
+    pub water_color: u32,
 }
-/// Why `upgrade_block_entity_nbt` or `upgrade_entity_nbt` gave no upgraded value. Depth is counted as the data is
-/// encoded (the root compound at 0): the compound the NBT writer puts around an element of a mixed list is a level
-/// of its own. There is no size refusal.
+
+impl<'a> ColumnSlice<'a> {
+    /// Construct a borrowed column slice for a streamed read callback.
+    pub const fn new(base: i32, blocks: &'a [BlockState], water_color: u32) -> Self {
+        Self {
+            base,
+            blocks,
+            water_color,
+        }
+    }
+}
+/// The vanilla data type of the root compound passed to `Host::upgrade_nbt`.
+// exhaustive: only these vanilla root types are exposed by the standalone upgrader.
+// no wire: selects an in-process data fixer, not a field of the saved data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NbtDataType {
+    /// `References.ITEM_STACK`: one item stack, including its saved components.
+    ItemStack,
+    /// `References.BLOCK_STATE`: one block name and its saved state properties.
+    BlockState,
+    /// `References.BLOCK_ENTITY`: one block entity, including its saved contents.
+    BlockEntity,
+    /// `References.ENTITY`: one entity, not its riding tree.
+    Entity,
+    /// `References.ENTITY_TREE`: an entity and the riders or passengers saved with it.
+    EntityTree,
+}
+
+/// Why `Host::upgrade_nbt` returned no upgraded value. Depth is counted as the data is
+/// encoded (the root compound at 0): the compound the NBT writer puts around an element
+/// of a mixed list is a level of its own. There is no size refusal.
+// no wire: returned locally by the NBT upgrade API, not encoded with the NBT.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum NbtUpgradeError {
-    /// The data version is below zero. Refused before any fix runs.
-    NegativeVersion(i32),
     /// The data version is newer than the game's: the fixes only go forward. Refused before any fix runs.
     FutureVersion(i32),
+    /// The compound lacks the selected type's readable `id`, or the fixers cannot read it.
+    /// A block state names its block in `Name` when saved before data version 5006 and in
+    /// `id` from 5006 on, where vanilla's `BlockStateFieldNamesFix` renames the field. This
+    /// is not a registry check.
+    MalformedCompound,
+    /// The legacy fixers' tables could not be read from the prepared game resources.
+    LegacyTablesUnavailable,
     /// The data given has a list or compound 512 levels deep or more, the depth cap of every NBT read. Refused
     /// before any fix runs.
     TooDeep,
@@ -134,8 +162,11 @@ pub enum NbtUpgradeError {
 impl std::fmt::Display for NbtUpgradeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NegativeVersion(v) => write!(f, "data version {v} is negative"),
             Self::FutureVersion(v) => write!(f, "data version {v} is newer than the game's"),
+            Self::MalformedCompound => f.write_str("malformed saved compound"),
+            Self::LegacyTablesUnavailable => {
+                f.write_str("could not load the legacy datafix tables")
+            }
             Self::TooDeep => f.write_str("the data nests 512 levels deep or more"),
             Self::UpgradedTooDeep => f.write_str("the upgraded data nests 512 levels deep or more"),
         }
@@ -143,9 +174,9 @@ impl std::fmt::Display for NbtUpgradeError {
 }
 impl std::error::Error for NbtUpgradeError {}
 /// Which side reads a config and when (NeoForge's `ModConfig.Type`).
+// no wire: the in-process config loader uses this to select a file and timing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum ConfigKind {
     /// The window only, when the game starts.
     Client,
@@ -160,7 +191,7 @@ pub enum ConfigKind {
 }
 impl ConfigKind {
     /// The default file name's suffix, as NeoForge's.
-    fn suffix(self) -> &'static str {
+    pub(crate) fn suffix(self) -> &'static str {
         match self {
             Self::Client => "client",
             Self::Common => "common",
@@ -168,53 +199,13 @@ impl ConfigKind {
         }
     }
 }
-/// A config a mod registers: its kind, its file in `config/` and the text
-/// written there when the file is missing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Config {
-    pub mod_id: String,
-    pub kind: ConfigKind,
-    /// A path relative to `config/`: `<mod id>-<kind>.toml` unless named.
-    pub file: String,
-    pub default: String,
-}
-impl Config {
-    /// `config/<mod_id>-<kind>.toml`, `default` when missing.
-    pub fn new(mod_id: &str, kind: ConfigKind, default: &str) -> Self {
-        Self {
-            mod_id: mod_id.to_owned(),
-            kind,
-            file: format!("{mod_id}-{}.toml", kind.suffix()),
-            default: default.to_owned(),
-        }
-    }
-    /// The same in another file of `config/`, such as `mymod/machines.toml`.
-    pub fn file(mut self, file: &str) -> Self {
-        file.clone_into(&mut self.file);
-        self
-    }
-}
-/// A config's file as the game read it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ConfigFile {
-    pub mod_id: String,
-    pub kind: ConfigKind,
-    /// The registered name, relative to `config/` (or to a world's
-    /// `serverconfig/`, where that copy was read).
-    pub file: String,
-    pub text: String,
-}
 /// A data map type a mod registers (`RegisterDataMapTypesEvent`).
+// no wire: local registration metadata, not the data map's file contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct DataMapType {
-    /// `mod_id:name`: not in the `minecraft` namespace. Its files are
-    /// `data/<mod_id>/data_maps/<registry folder>/<name>.json`, the
+    /// A namespaced identifier (`namespace:path`). Its files are
+    /// `data/<namespace>/data_maps/<registry folder>/<path>.json`, the
     /// registry's own path for a `minecraft` registry, `<namespace>/<path>`
     /// otherwise.
     pub id: String,
@@ -223,9 +214,9 @@ pub struct DataMapType {
 }
 /// A mod the world was saved with that differs from the loaded mods
 /// (`ModMismatchEvent`'s `MismatchedVersionInfo`).
+// no wire: a local report from comparing saved and loaded mod versions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct ModMismatch {
     /// The mod's `[mod] id`.
     pub mod_id: String,
@@ -233,20 +224,6 @@ pub struct ModMismatch {
     pub saved_version: String,
     /// Its version now; `None` when the mod is no longer loaded.
     pub current_version: Option<String>,
-}
-/// An experience orb as a server mod reads it (`experience_orbs`).
-/// Read by mods only.
-#[derive(Clone, Debug)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ExperienceOrb {
-    /// The entity's ID, as `entity_join_level` names it.
-    pub id: u32,
-    pub position: [f64; 3],
-    /// `ExperienceOrb.value`: the signed points value saved by vanilla.
-    pub value: i32,
-    /// `ExperienceOrb.count`: orbs merged into this one, each worth `value`.
-    pub count: u32,
 }
 /// What a mod's falling block does when it lands and when it hits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,20 +245,6 @@ impl Default for Falling {
         }
     }
 }
-/// A stack as a client mod's use events carry it.
-#[derive(Clone, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct HeldItemSlot {
-    pub id: ItemKey,
-    pub count: u32,
-    /// The inventory slot: 0 to 8, the hotbar (a mod use is the main hand's).
-    pub slot: u32,
-    /// `minecraft:custom_name` as SNBT, when the stack has one.
-    pub custom_name: Option<String>,
-    /// `minecraft:custom_data` as SNBT, when the stack has some.
-    pub custom_data: Option<String>,
-}
 /// The block a ray along the view meets.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
@@ -296,18 +259,6 @@ pub struct Hit {
     pub z: f64,
     /// The block's resolved identity, without state properties.
     pub block: BlockKey,
-}
-/// What happened to a mod's claimed item, oldest first.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum ModEvent {
-    /// A right-click with the item began its use: the stack, and 0 ticks.
-    UseStart(HeldItemSlot, u32),
-    /// The use ended: the stack it began with, and the ticks it was held. It
-    /// ends when the button comes up, the hand's item changes or leaves the
-    /// claim, the player respawns, or the game joins a server.
-    UseStop(HeldItemSlot, u32),
 }
 // no wire: borrowed call-scoped view; transport uses owned snapshots rather than serializing references.
 /// A map as a native mod sees it when `map_decorations` is asked.
@@ -442,33 +393,9 @@ pub(crate) mod built {
             }
         }
     }
-    // exhaustive: the game builds it with a literal; mods only read it
-    #[derive(sunrise_mod_api_macros::Wire)]
-    pub struct ConfigFile {
-        pub mod_id: String,
-        pub kind: ConfigKind,
-        pub file: String,
-        pub text: String,
-    }
-    impl From<ConfigFile> for super::ConfigFile {
-        fn from(v: ConfigFile) -> Self {
-            let ConfigFile {
-                mod_id,
-                kind,
-                file,
-                text,
-            } = v;
-            Self {
-                mod_id,
-                kind,
-                file,
-                text,
-            }
-        }
-    }
 }
 
-/// Saved-world resolution records and listener-boundary attribution.
+/// Saved-world resolution records and scoped `ModMismatchEvent` operations.
 #[path = "mismatch_resolution.rs"]
-pub mod mismatch_resolution;
+mod mismatch_resolution;
 pub use mismatch_resolution::ModMismatchResolution;

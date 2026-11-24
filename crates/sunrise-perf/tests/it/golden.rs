@@ -70,6 +70,14 @@ fn client_fields() -> Vec<Field> {
             max_players: Some(20),
             network_compression_threshold: Some(-1),
         }),
+        client_settings: Some(ClientSettings {
+            view_distance: Some(128),
+            loaded_view_distance: Some(128),
+            simulation_distance: Some(12),
+            far_terrain_distance: Some(0),
+            far_terrain_active: Some(false),
+            graphics_preset: "fancy".into(),
+        }),
         mods: vec![
             Mod {
                 id: "alpha".into(),

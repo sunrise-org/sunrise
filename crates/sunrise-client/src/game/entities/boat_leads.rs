@@ -197,14 +197,25 @@ impl Game<'_> {
     }
 
     /// `AbstractBoat.remove`: a boat that is destroyed drops its lead.
+    pub(super) fn drop_removed_boat_lead(&mut self, i: usize) {
+        let (holder, id, at) = self.boats.update(i, |b| {
+            let holder = b.leash;
+            let had_pending = b.leash_pending.take().is_some();
+            let at = Self::take_boat_leash(b, true)
+                .or_else(|| had_pending.then(|| b.position.components()));
+            (holder, b.id, at)
+        });
+        self.notify_knot_leashee_removed(holder, id);
+        if let Some(at) = at {
+            self.drop_lead_item(at);
+        }
+    }
+
+    /// Release a boat already extracted by a fixture.
     pub(super) fn boat_removed(&mut self, b: &Boat) {
         self.notify_knot_leashee_removed(b.leash, b.id);
-        let mut b = b.clone();
-        let pending = b.leash_pending.take().is_some();
-        if b.leash.is_some() || pending {
-            let at = [b.position.x, b.position.y, b.position.z];
-            b.leash = None;
-            self.drop_lead_item(at);
+        if b.leash.is_some() || b.leash_pending.is_some() {
+            self.drop_lead_item(b.position.components());
         }
     }
 
@@ -273,7 +284,7 @@ impl Game<'_> {
 
     /// `Leashable.angularFriction`.
     fn boat_angular_friction(&self, b: &Boat) -> f32 {
-        if b.on_ground {
+        if b.ground.on_ground {
             let (x, z) = (b.position.x.floor() as i32, b.position.z.floor() as i32);
             let y = (b.position.y - 0.500_001).floor() as i32;
             let state = self.world.block(x, y, z);
@@ -312,10 +323,12 @@ impl Game<'_> {
         if let Some((holder, player)) = found {
             // The boat is out of the list while it ticks: its own knot is
             // made here, not found by `lead_fences`.
-            if let Holder::Knot(fence) = holder {
+            b.leash_knot_id = if let Holder::Knot(fence) = holder {
                 self.forget_untied_knots();
-                self.tie_knot(fence);
-            }
+                Some(self.tie_knot(fence))
+            } else {
+                None
+            };
             b.leash = Some(holder);
             b.leash_player = player;
             b.leash_pending = None;
@@ -417,6 +430,10 @@ impl Game<'_> {
     /// sneak click on a mob, `LeadItem.bindPlayerMobs`, the knot's
     /// `interact`), the ones in reach of `at`. Whether any did.
     pub(super) fn tie_player_boats(&mut self, at: glam::DVec3, to: Holder) -> bool {
+        let knot_id = match to {
+            Holder::Knot(fence) => self.knot_ids.get(&fence).copied(),
+            _ => None,
+        };
         let mut any = false;
         for i in self.player_led_boats(at) {
             // Leashable.setLeashedTo: `this != holder`.
@@ -424,8 +441,11 @@ impl Game<'_> {
                 continue;
             }
             if self.boat_can_attach(i, at) {
-                self.boats.update(i, |b| b.leash = Some(to));
-                self.boats.update(i, |b| b.leash_player = None);
+                self.boats.update(i, |b| {
+                    b.leash = Some(to);
+                    b.leash_knot_id = knot_id;
+                    b.leash_player = None;
+                });
                 any = true;
             }
         }
@@ -468,7 +488,7 @@ impl Game<'_> {
         let id = self.boats[i].id;
         // The sneak branch: the player's mobs and boats on leads are re-tied
         // to this boat.
-        let sneaking = self.keys.held(Action::Sneak);
+        let sneaking = self.held_mapping(Action::Sneak);
         if sneaking
             && self.tie_player_leads(glam::DVec3::new(c.x, c.y, c.z), Holder::Boat(id), None)
         {
@@ -478,7 +498,7 @@ impl Game<'_> {
         }
         // Entity.shearOffAllLeashConnections: its own lead and every one
         // hanging on it.
-        if item.as_deref() == Some("minecraft:shears") {
+        if self.held_shears(super::item_abilities::ability::SHEARS_HARVEST) {
             let held_mobs: Vec<u32> = self
                 .mobs
                 .iter()
@@ -495,8 +515,7 @@ impl Game<'_> {
                 }
                 self.drop_boat_leashes(&held_boats);
                 self.lead_game_event("minecraft:shear", at);
-                self.audio
-                    .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
+                self.play_audio("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
                 self.damage_held_tool();
                 return true;
             }
@@ -526,12 +545,7 @@ impl Game<'_> {
                 });
                 self.lead_sound("tied", at);
                 // The lead is always used up.
-                if let Some(stack) = self.held_mut().as_mut() {
-                    stack.count -= 1;
-                    if stack.count == 0 {
-                        *self.held_mut() = None;
-                    }
-                }
+                self.consume_player_slot(self.held_slot(), 1);
                 return true;
             }
         }

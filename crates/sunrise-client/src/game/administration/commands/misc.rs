@@ -80,9 +80,7 @@ impl Game<'_> {
                     Some(Arg::Float(v)) => *v,
                     _ => 20.0,
                 };
-                // MinecraftServer.setTickRate: the autosave wait already
-                // running is shortened when the new rate asks for less.
-                self.apply_tick_rate(rate);
+                self.set_tick_rate(rate);
                 self.feedback(t(
                     "commands.tick.rate.success",
                     &[lit(format_fixed(f64::from(rate), 1))],
@@ -317,7 +315,7 @@ impl Game<'_> {
     }
     /// `/teammsg`: the executor's team hears the message.
     pub(super) fn cmd_teammsg(&mut self, ctx: &Context) -> R<i32> {
-        let entity = match self.command_source {
+        let entity = match &self.command_source {
             Some(s) => s.entity,
             None => Some(Target::Player),
         };

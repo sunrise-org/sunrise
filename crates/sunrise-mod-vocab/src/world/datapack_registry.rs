@@ -1,9 +1,10 @@
 //! Datapack registries a native mod declares: a registry
 //! of the mod's own, whose entries are JSON files in data packs. The mod
-//! declares a flat record schema once at startup; the game decodes every
-//! entry against it, so a decoder never runs mod code and a native and a wasm
-//! mod see the same bounds. See `docs/design/mod-api/mod-datapack-registries.md`.
+//! declares a record schema once at startup (scalars, and lists, maps and
+//! records of them, nested as deep as the schema says); the game decodes every
+//! admitted entry against it without running mod code.
 use serde_json::Value;
+use std::borrow::Cow;
 use sunrise_core::identifier::Identifier;
 
 /// How a registry's entries reach joining clients.
@@ -11,16 +12,23 @@ use sunrise_core::identifier::Identifier;
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum DatapackRegistrySync {
-    /// Entries stay on the server; a client needs nothing of the mod for them.
+    /// Entries and tags stay on the server; they do not require clients to install the mod.
     #[default]
     ServerOnly,
-    /// Clients receive the entries, and a client without the mod is refused.
+    /// A joining client must offer the registry with the same schema to receive
+    /// it and join. The declaring package must be both-side.
     Required,
-    /// Clients with the mod receive the entries; others join without them.
+    /// Send entries and tags only to clients that offer the registry with the same schema.
+    /// This declaration does not require clients to install the mod.
     Optional,
 }
 
 /// What a schema field holds, with the bounds the game enforces.
+///
+/// Recursive over the Wire (with [`DatapackField`], [`DatapackFieldKind`] and [`DatapackValue`]):
+/// the generic envelope's depth limit of 32 bounds it, on encode and decode alike, and a schema
+/// or value nested past it does not cross (`wire/depth_tests.rs`). A data pack's own JSON is
+/// bounded first, by the parser's recursion limit.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -55,10 +63,103 @@ pub enum DatapackFieldKind {
         /// The registry the id names an entry of (`example:spell`).
         registry: String,
     },
+    /// A JSON array of `of` values (`Codec.list`, `sizeLimitedListOf`): at least `min_len`
+    /// items, with a per-list count limit only when the schema sets `max_len`. The entry and
+    /// snapshot budgets still apply.
+    List {
+        /// What each item holds.
+        of: Box<DatapackFieldKind>,
+        /// The fewest items accepted.
+        min_len: u32,
+        /// The most items accepted, if any.
+        max_len: Option<u32>,
+    },
+    /// A JSON object whose keys are `key` and whose values are `value` (`Codec.unboundedMap`),
+    /// with the file's pairs in file order (a default's in its declared order), preserved on the
+    /// server and on clients.
+    Map {
+        /// What each key is.
+        key: DatapackKeyKind,
+        /// What each value holds.
+        value: Box<DatapackFieldKind>,
+    },
+    /// A JSON object with these fields (a nested `RecordCodecBuilder`): required, defaulted and
+    /// optional fields follow the same rules as the entry's own.
+    Record {
+        /// The fields, in the order the decoded record lists them.
+        fields: Vec<DatapackField>,
+    },
+    /// A field that may be left out with no default (`optionalFieldOf(name)`): built by
+    /// [`DatapackField::optional`]. An absent one decodes to [`DatapackValue::Absent`], which
+    /// `get` reports as `None`.
+    Optional {
+        /// What the field holds when it is present.
+        of: Box<DatapackFieldKind>,
+    },
+    /// A JSON object whose `key` field names one of `variants`, with that variant's fields beside
+    /// it (vanilla's `Codec.dispatch`, `KeyDispatchCodec`). The id reads as `byNameCodec` reads
+    /// one (`growing` is `minecraft:growing`); an id no variant declares, or an absent key, fails
+    /// the entry. The variants are the declaring mod's alone: a dispatch other mods extend is a
+    /// custom registry of variant types, as vanilla's `BLOCK_PREDICATE_TYPE` is.
+    Dispatch {
+        /// The key naming the variant (`type`).
+        key: String,
+        /// The variants, each an id and the fields that follow it.
+        variants: Vec<DatapackVariant>,
+    },
+}
+
+/// One variant of a [`DatapackFieldKind::Dispatch`]: the id its key names and the record of
+/// fields beside the key, with the rules of [`DatapackFieldKind::Record`]'s fields.
+///
+/// Recursive over the Wire with [`DatapackField`], bounded as [`DatapackFieldKind`] is.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: a variant is its id and fields; a mod builds it directly
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct DatapackVariant {
+    /// The variant's namespaced id (`example:growing_plant`).
+    pub id: String,
+    /// The fields beside the key, in the order the decoded variant lists them.
+    pub fields: Vec<DatapackField>,
+}
+
+impl DatapackVariant {
+    /// The variant `id` with `fields`.
+    pub fn new(id: &str, fields: Vec<DatapackField>) -> Self {
+        Self {
+            id: id.to_owned(),
+            fields,
+        }
+    }
+}
+
+/// What a [`DatapackFieldKind::Map`]'s keys are.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum DatapackKeyKind {
+    /// A string of at most `max_len` bytes. A zero limit admits only the empty key.
+    Text {
+        /// The most bytes accepted.
+        max_len: u32,
+    },
+    /// A resource id (`minecraft:` when it names no namespace), normalised to `namespace:path`.
+    Identifier,
+    /// An id naming an entry of the registry `registry`, resolved like a
+    /// [`DatapackFieldKind::Reference`].
+    Reference {
+        /// The registry the id names an entry of (`example:spell`).
+        registry: String,
+    },
 }
 
 /// A decoded field value. Ids and references are `Text`, normalised to
 /// `namespace:path`.
+///
+/// Recursive over the Wire (with [`DatapackField`], [`DatapackFieldKind`] and [`DatapackValue`]):
+/// the generic envelope's depth limit of 32 bounds it, on encode and decode alike, and a schema
+/// or value nested past it does not cross (`wire/depth_tests.rs`). A data pack's own JSON is
+/// bounded first, by the parser's recursion limit.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -72,9 +173,103 @@ pub enum DatapackValue {
     /// A [`DatapackFieldKind::Text`], [`DatapackFieldKind::Identifier`] or
     /// [`DatapackFieldKind::Reference`].
     Text(String),
+    /// A [`DatapackFieldKind::List`], in file order.
+    List(Vec<DatapackValue>),
+    /// A [`DatapackFieldKind::Map`]: `(key, value)` in file order (a default's in its declared order),
+    /// keys normalised as their kind says.
+    Map(Vec<(String, DatapackValue)>),
+    /// A [`DatapackFieldKind::Record`]: `(field name, value)` in schema order.
+    Record(Vec<(String, DatapackValue)>),
+    /// A [`DatapackFieldKind::Optional`] field the entry left out; `get` reports it as `None`.
+    Absent,
+    /// A [`DatapackFieldKind::Dispatch`]: the variant's id, normalised to `namespace:path`, and
+    /// its fields' `(field name, value)` in the variant's schema order.
+    Variant {
+        /// The variant's id.
+        id: String,
+        /// The variant's fields.
+        fields: Vec<(String, DatapackValue)>,
+    },
+}
+
+impl DatapackValue {
+    /// The items of a list.
+    pub fn as_list(&self) -> Option<&[DatapackValue]> {
+        match self {
+            Self::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// The `(key, value)` pairs of a map: the file's pairs in file order, or a default's in its
+    /// declared order when the file leaves the field out.
+    pub fn as_map(&self) -> Option<&[(String, DatapackValue)]> {
+        match self {
+            Self::Map(pairs) => Some(pairs),
+            _ => None,
+        }
+    }
+
+    /// The id of a [`DatapackFieldKind::Dispatch`]'s variant.
+    pub fn variant_id(&self) -> Option<&str> {
+        match self {
+            Self::Variant { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The field `name` of a record or a variant, or a map's value at the key `name`; `None`
+    /// for anything else, and for an optional field the entry left out.
+    pub fn get(&self, name: &str) -> Option<&DatapackValue> {
+        match self {
+            Self::Record(pairs) | Self::Map(pairs) | Self::Variant { fields: pairs, .. } => pairs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value)
+                .filter(|value| **value != Self::Absent),
+            _ => None,
+        }
+    }
+
+    /// The boolean of a [`DatapackFieldKind::Bool`].
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// The integer of a [`DatapackFieldKind::Int`].
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Self::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// The number of a [`DatapackFieldKind::Float`].
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            Self::Float(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// The text of a [`DatapackFieldKind::Text`], an id or a reference.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(v) => Some(v),
+            _ => None,
+        }
+    }
 }
 
 /// One field of a registry's entry record.
+///
+/// Recursive over the Wire (with [`DatapackField`], [`DatapackFieldKind`] and [`DatapackValue`]):
+/// the generic envelope's depth limit of 32 bounds it, on encode and decode alike, and a schema
+/// or value nested past it does not cross (`wire/depth_tests.rs`). A data pack's own JSON is
+/// bounded first, by the parser's recursion limit.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: a field is its name, kind and default; a mod builds it directly
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -83,7 +278,8 @@ pub struct DatapackField {
     pub name: String,
     /// What the field holds.
     pub kind: DatapackFieldKind,
-    /// The value of an absent field; `None` makes the field required.
+    /// The value of an absent field. With `None`, an optional kind gives [`DatapackValue::Absent`]
+    /// and any other kind requires the field.
     pub default: Option<DatapackValue>,
 }
 
@@ -105,6 +301,16 @@ impl DatapackField {
             default: Some(default),
         }
     }
+
+    /// A field an entry may leave out with no default (`optionalFieldOf(name)`): `get` is
+    /// `None` when it is absent.
+    pub fn optional(name: &str, kind: DatapackFieldKind) -> Self {
+        Self {
+            name: name.to_owned(),
+            kind: DatapackFieldKind::Optional { of: Box::new(kind) },
+            default: None,
+        }
+    }
 }
 
 /// Why a mod's datapack registry declaration was refused
@@ -113,20 +319,25 @@ impl DatapackField {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum DatapackRegistrationError {
-    /// Only both-side packages may declare datapack registries.
+    /// A client-only package cannot declare a datapack registry, and a both-side
+    /// package cannot declare a required registry for a server-only namespace it serves.
     WrongSide,
-    /// The registry's key is malformed, empty or in a namespace the
-    /// declaring mod does not own (a vanilla registry's included).
+    /// The registry's key is malformed or empty.
     InvalidKey,
-    /// Another declaration already covers the registry key.
+    /// A built-in registry or another declaration already covers the registry key.
     Duplicate,
-    /// A field name is empty or repeated.
+    /// A field name is empty or repeated, or a dispatch variant's field is named like the
+    /// dispatch's key.
     InvalidFieldName,
     /// A field's kind is unusable: bounds that are not finite or `min > max`,
-    /// a `max_len` of 0, or a reference to a malformed registry key.
+    /// a scalar text field's `max_len` of 0, a list's `min_len` over its `max_len`, an
+    /// optional kind nested in another, a reference to a malformed registry key, or a dispatch
+    /// with an empty key, no variants, or a variant id that is malformed or repeated, at any depth.
     InvalidFieldKind,
     /// A default is not a value of its field's kind, or is out of its bounds.
     InvalidDefault,
+    /// A default's map has two keys naming the same key once ids are normalised.
+    DuplicateKey,
 }
 
 /// A registry the mod declared, as the game reads it.
@@ -144,7 +355,12 @@ pub struct DatapackRegistryDeclaration {
     pub sync: DatapackRegistrySync,
 }
 
-/// Why an entry file did not decode. `field` names the offending JSON key.
+/// Why an entry file did not decode. `field` is the path of the offending value: the key of a
+/// top-level field (`power`), then `.key` into a record or map and `[n]` into a list
+/// (`drops[3].item`, `tiers.basic.data_per_kill`), as vanilla's `DataResult` errors name it. A
+/// key with any character but ASCII letters, digits, `_`, `:`, `/` and `-` (a `.` or `[`, or an
+/// empty key) is written as a quoted JSON string in brackets instead
+/// (`tiers["basic.data_per_kill"]`), as the file spells it, so every path reads one way.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // no wire: decoding runs in the game; mods read decoded values, never failures
 #[non_exhaustive]
@@ -185,6 +401,24 @@ pub enum DatapackDecodeError {
         /// The key.
         field: String,
     },
+    /// A list with fewer items than its `min_len` or more than its `max_len`.
+    WrongLength {
+        /// The list's path.
+        field: String,
+    },
+    /// A map key naming the same key as an earlier one of its map once ids are normalised
+    /// (`zombie` after `minecraft:zombie`).
+    DuplicateKey {
+        /// The repeated key's path, as the file spells it.
+        field: String,
+    },
+    /// A dispatch key naming no variant the schema declares.
+    UnknownVariant {
+        /// The key's path (`behavior.type`).
+        field: String,
+        /// The id it names, normalised.
+        id: String,
+    },
 }
 
 /// A decoded entry: one value per schema field, in the schema's order.
@@ -197,17 +431,18 @@ pub struct DatapackEntry {
 }
 
 impl DatapackEntry {
-    /// The value of the field `name`.
+    /// The value of the field `name`; `None` for an optional field the entry left out.
     pub fn get(&self, name: &str) -> Option<&DatapackValue> {
         self.values
             .iter()
             .find(|(field, _)| field == name)
             .map(|(_, value)| value)
+            .filter(|value| **value != DatapackValue::Absent)
     }
 }
 
 /// Whether `text` is a lowercase `namespace:path` id the way registrations name theirs.
-pub(crate) fn valid_namespaced(text: &str) -> bool {
+pub fn valid_namespaced(text: &str) -> bool {
     let Some((namespace, path)) = text.split_once(':') else {
         return false;
     };
@@ -222,19 +457,86 @@ fn finite_bounds(min: f64, max: f64) -> bool {
     min.is_finite() && max.is_finite() && min <= max
 }
 
-impl DatapackFieldKind {
-    /// Whether the kind itself is usable (`Err` is a [`DatapackRegistrationError::InvalidFieldKind`]).
+fn canonical_id(v: &str) -> bool {
+    Identifier::parse(v).is_ok_and(|id| id.to_string() == *v)
+}
+
+impl DatapackKeyKind {
     fn check(&self) -> bool {
         match self {
+            // `max_len: 0` is a schema's own choice: only the empty key.
+            Self::Text { .. } | Self::Identifier => true,
+            Self::Reference { registry } => valid_namespaced(registry),
+        }
+    }
+
+    fn accepts(&self, key: &str) -> bool {
+        match self {
+            Self::Text { max_len } => key.len() <= *max_len as usize,
+            Self::Identifier | Self::Reference { .. } => canonical_id(key),
+        }
+    }
+}
+
+impl DatapackFieldKind {
+    /// Whether the kind itself is usable, at every depth (`Err` is a
+    /// [`DatapackRegistrationError::InvalidFieldKind`], or the nested record's own error).
+    fn check(&self) -> Result<(), DatapackRegistrationError> {
+        let ok = match self {
             Self::Bool | Self::Identifier => true,
             Self::Int { min, max } => min <= max,
             Self::Float { min, max } => finite_bounds(*min, *max),
             Self::Text { max_len } => *max_len > 0,
             Self::Reference { registry } => valid_namespaced(registry),
+            Self::List {
+                of,
+                min_len,
+                max_len,
+            } => {
+                of.check_nested()?;
+                max_len.is_none_or(|max| *min_len <= max)
+            }
+            Self::Map { key, value } => {
+                value.check_nested()?;
+                key.check()
+            }
+            Self::Record { fields } => return check_schema(fields),
+            Self::Optional { of } => {
+                of.check_nested()?;
+                true
+            }
+            Self::Dispatch { key, variants } => {
+                for (index, variant) in variants.iter().enumerate() {
+                    if !canonical_id(&variant.id)
+                        || variants[..index].iter().any(|seen| seen.id == variant.id)
+                    {
+                        return Err(DatapackRegistrationError::InvalidFieldKind);
+                    }
+                    if variant.fields.iter().any(|field| field.name == *key) {
+                        return Err(DatapackRegistrationError::InvalidFieldName);
+                    }
+                    check_schema(&variant.fields)?;
+                }
+                !key.is_empty() && !variants.is_empty()
+            }
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(DatapackRegistrationError::InvalidFieldKind)
         }
     }
 
-    /// Whether `value` is a value of this kind inside its bounds.
+    /// [`Self::check`] for a kind inside a list, a map or an optional field: an optional kind
+    /// only stands for a whole field.
+    fn check_nested(&self) -> Result<(), DatapackRegistrationError> {
+        if matches!(self, Self::Optional { .. }) {
+            return Err(DatapackRegistrationError::InvalidFieldKind);
+        }
+        self.check()
+    }
+
+    /// Whether `value` is a value of this kind inside its bounds, at every depth.
     pub(super) fn accepts(&self, value: &DatapackValue) -> bool {
         match (self, value) {
             (Self::Bool, DatapackValue::Bool(_)) => true,
@@ -243,9 +545,34 @@ impl DatapackFieldKind {
                 v.is_finite() && (min..=max).contains(&v)
             }
             (Self::Text { max_len }, DatapackValue::Text(v)) => v.len() <= *max_len as usize,
-            (Self::Identifier | Self::Reference { .. }, DatapackValue::Text(v)) => {
-                Identifier::parse(v).is_ok_and(|id| id.to_string() == *v)
+            (Self::Identifier | Self::Reference { .. }, DatapackValue::Text(v)) => canonical_id(v),
+            (
+                Self::List {
+                    of,
+                    min_len,
+                    max_len,
+                },
+                DatapackValue::List(items),
+            ) => {
+                items.len() >= *min_len as usize
+                    && max_len.is_none_or(|max| items.len() <= max as usize)
+                    && items.iter().all(|item| of.accepts(item))
             }
+            (Self::Map { key, value }, DatapackValue::Map(pairs)) => {
+                let mut seen = std::collections::BTreeSet::new();
+                pairs
+                    .iter()
+                    .all(|(k, v)| key.accepts(k) && seen.insert(k.as_str()) && value.accepts(v))
+            }
+            (Self::Record { fields }, DatapackValue::Record(pairs)) => {
+                record_accepts(fields, pairs)
+            }
+            (Self::Optional { .. }, DatapackValue::Absent) => true,
+            (Self::Optional { of }, value) => of.accepts(value),
+            (Self::Dispatch { variants, .. }, DatapackValue::Variant { id, fields }) => variants
+                .iter()
+                .find(|variant| variant.id == *id)
+                .is_some_and(|variant| record_accepts(&variant.fields, fields)),
             _ => false,
         }
     }
@@ -257,18 +584,79 @@ impl DatapackFieldKind {
             Self::Float { .. } => "number",
             Self::Text { .. } => "string",
             Self::Identifier | Self::Reference { .. } => "identifier string",
+            Self::List { .. } => "array",
+            Self::Map { .. } | Self::Record { .. } | Self::Dispatch { .. } => "object",
+            Self::Optional { of } => of.expected(),
         }
     }
 }
 
-/// Checks a schema at registration: field count and names, kinds and defaults.
+/// Whether `pairs` are a record of `fields`: each field's value, by name and in schema order.
+fn record_accepts(fields: &[DatapackField], pairs: &[(String, DatapackValue)]) -> bool {
+    pairs.len() == fields.len()
+        && fields
+            .iter()
+            .zip(pairs)
+            .all(|(field, (name, v))| *name == field.name && field.kind.accepts(v))
+}
+
+/// Every reference in `value` of `kind`: `(path, registry, target)`, at any depth, so a nested
+/// reference resolves against the whole candidate set as a top-level one does.
+pub(super) fn references<'v>(
+    kind: &'v DatapackFieldKind,
+    value: &'v DatapackValue,
+    path: &str,
+    out: &mut Vec<(String, &'v str, &'v str)>,
+) {
+    match (kind, value) {
+        (DatapackFieldKind::Reference { registry }, DatapackValue::Text(target)) => {
+            out.push((path.to_owned(), registry, target));
+        }
+        (DatapackFieldKind::Optional { of }, value) => references(of, value, path, out),
+        (DatapackFieldKind::List { of, .. }, DatapackValue::List(items)) => {
+            for (n, item) in items.iter().enumerate() {
+                references(of, item, &format!("{path}[{n}]"), out);
+            }
+        }
+        (DatapackFieldKind::Map { key, value }, DatapackValue::Map(pairs)) => {
+            for (k, v) in pairs {
+                let at = joined(path, k);
+                if let DatapackKeyKind::Reference { registry } = key {
+                    out.push((at.clone(), registry, k));
+                }
+                references(value, v, &at, out);
+            }
+        }
+        (DatapackFieldKind::Record { fields }, DatapackValue::Record(pairs)) => {
+            for (field, (_, v)) in fields.iter().zip(pairs) {
+                references(&field.kind, v, &joined(path, &field.name), out);
+            }
+        }
+        (DatapackFieldKind::Dispatch { variants, .. }, DatapackValue::Variant { id, fields }) => {
+            let Some(variant) = variants.iter().find(|variant| variant.id == *id) else {
+                return;
+            };
+            for (field, (_, v)) in variant.fields.iter().zip(fields) {
+                references(&field.kind, v, &joined(path, &field.name), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Checks a schema at registration: field count and names, kinds and defaults, at every depth.
 pub(crate) fn check_schema(fields: &[DatapackField]) -> Result<(), DatapackRegistrationError> {
     for (index, field) in fields.iter().enumerate() {
         if field.name.is_empty() || fields[..index].iter().any(|seen| seen.name == field.name) {
             return Err(DatapackRegistrationError::InvalidFieldName);
         }
-        if !field.kind.check() {
-            return Err(DatapackRegistrationError::InvalidFieldKind);
+        field.kind.check()?;
+        if matches!(field.kind, DatapackFieldKind::Optional { .. }) && field.default.is_some() {
+            // An optional field has no default: `with_default` is the field with one.
+            return Err(DatapackRegistrationError::InvalidDefault);
+        }
+        if field.default.as_ref().is_some_and(repeats_a_key) {
+            return Err(DatapackRegistrationError::DuplicateKey);
         }
         if field
             .default
@@ -281,74 +669,393 @@ pub(crate) fn check_schema(fields: &[DatapackField]) -> Result<(), DatapackRegis
     Ok(())
 }
 
+/// Whether a map anywhere in `value` has a key twice.
+fn repeats_a_key(value: &DatapackValue) -> bool {
+    match value {
+        DatapackValue::List(items) => items.iter().any(repeats_a_key),
+        DatapackValue::Record(pairs) | DatapackValue::Variant { fields: pairs, .. } => {
+            pairs.iter().any(|(_, v)| repeats_a_key(v))
+        }
+        DatapackValue::Map(pairs) => {
+            let mut seen = std::collections::BTreeSet::new();
+            pairs
+                .iter()
+                .any(|(k, v)| !seen.insert(k.as_str()) || repeats_a_key(v))
+        }
+        _ => false,
+    }
+}
+
+/// Normalises the schema's id and reference defaults at every depth, as `Identifier.parse`
+/// reads them (`stone` is `minecraft:stone`): a default's own value, the items of a list, a
+/// record's fields, a map's id and reference keys and its values, and the defaults of nested
+/// records' fields. A default that is no id is an `InvalidDefault`; a default that does not fit
+/// its kind is left for [`check_schema`].
+pub(crate) fn normalize_defaults(
+    fields: &mut [DatapackField],
+) -> Result<(), DatapackRegistrationError> {
+    for field in fields {
+        normalize_kind(&mut field.kind)?;
+        if let Some(default) = &mut field.default {
+            normalize_value(&field.kind, default)?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_kind(kind: &mut DatapackFieldKind) -> Result<(), DatapackRegistrationError> {
+    match kind {
+        DatapackFieldKind::List { of, .. } | DatapackFieldKind::Optional { of } => {
+            normalize_kind(of)
+        }
+        DatapackFieldKind::Map { value, .. } => normalize_kind(value),
+        DatapackFieldKind::Record { fields } => normalize_defaults(fields),
+        DatapackFieldKind::Dispatch { variants, .. } => variants
+            .iter_mut()
+            .try_for_each(|variant| normalize_defaults(&mut variant.fields)),
+        _ => Ok(()),
+    }
+}
+
+fn normalize_id(value: &mut String) -> Result<(), DatapackRegistrationError> {
+    *value = Identifier::parse(value)
+        .map_err(|_| DatapackRegistrationError::InvalidDefault)?
+        .to_string();
+    Ok(())
+}
+
+fn normalize_value(
+    kind: &DatapackFieldKind,
+    value: &mut DatapackValue,
+) -> Result<(), DatapackRegistrationError> {
+    match (kind, value) {
+        (
+            DatapackFieldKind::Identifier | DatapackFieldKind::Reference { .. },
+            DatapackValue::Text(id),
+        ) => normalize_id(id),
+        (DatapackFieldKind::List { of, .. }, DatapackValue::List(items)) => items
+            .iter_mut()
+            .try_for_each(|item| normalize_value(of, item)),
+        (DatapackFieldKind::Map { key, value }, DatapackValue::Map(pairs)) => {
+            pairs.iter_mut().try_for_each(|(k, v)| {
+                if !matches!(key, DatapackKeyKind::Text { .. }) {
+                    normalize_id(k)?;
+                }
+                normalize_value(value, v)
+            })
+        }
+        (DatapackFieldKind::Record { fields }, DatapackValue::Record(pairs)) => fields
+            .iter()
+            .zip(pairs.iter_mut())
+            .try_for_each(|(field, (_, v))| normalize_value(&field.kind, v)),
+        (DatapackFieldKind::Optional { .. }, DatapackValue::Absent) => Ok(()),
+        (DatapackFieldKind::Optional { of }, value) => normalize_value(of, value),
+        (DatapackFieldKind::Dispatch { variants, .. }, DatapackValue::Variant { id, fields }) => {
+            normalize_id(id)?;
+            let Some(variant) = variants.iter().find(|variant| variant.id == *id) else {
+                return Ok(());
+            };
+            variant
+                .fields
+                .iter()
+                .zip(fields.iter_mut())
+                .try_for_each(|(field, (_, v))| normalize_value(&field.kind, v))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// NeoForge's `Registries.registryDirPath` (`CommonHooks.prefixNamespace`),
+/// relative to the entry's namespace directory.
+pub fn datapack_registry_directory(registry: &str) -> Option<Cow<'_, str>> {
+    let (namespace, path) = registry.split_once(':')?;
+    Some(if namespace == "minecraft" {
+        Cow::Borrowed(path)
+    } else {
+        Cow::Owned(format!("{namespace}/{path}"))
+    })
+}
+
 impl DatapackRegistryDeclaration {
-    /// The file an entry `entry` (`addon:fire`) of this registry (`example:spell`)
-    /// sits in, inside a data pack: `data/addon/example/spell/fire.json`.
+    /// The file an entry (`addon:fire`) sits in, inside a data pack. For
+    /// `example:spell` it is `data/addon/example/spell/fire.json`; for
+    /// `minecraft:spell` it is `data/addon/spell/fire.json`. Tags use the same
+    /// registry directory under `tags/`, and nested paths keep their subfolders.
     pub fn entry_file(&self, entry: &str) -> Option<String> {
         let (entry_namespace, entry_path) = entry.split_once(':')?;
-        let (registry_namespace, registry_path) = self.key.split_once(':')?;
+        let directory = datapack_registry_directory(&self.key)?;
         Some(format!(
-            "data/{entry_namespace}/{registry_namespace}/{registry_path}/{entry_path}.json"
+            "data/{entry_namespace}/{directory}/{entry_path}.json"
         ))
     }
 
     /// Decodes one entry file against the schema. A key the schema does not
     /// declare, a missing required key, a wrong type or an out-of-range value
-    /// fails the whole entry, and no default stands in for invalid data.
-    /// Nothing here runs mod code. Nesting is bounded by the JSON parser's
-    /// recursion limit; the file's size is bounded before this, by
-    /// [`DatapackCandidate::build`](super::datapack_registry_set::DatapackCandidate::build).
+    /// fails the whole entry, at any depth, and no default stands in for invalid
+    /// data. The error names the value's full path.
+    /// Pass the bare schema object, without load condition metadata. This method neither
+    /// runs mod code nor applies a network snapshot limit. Map pairs keep their file order.
     pub fn decode_entry(&self, text: &str) -> Result<DatapackEntry, DatapackDecodeError> {
-        // serde_json's own recursion limit (128) bounds nesting before any value is built.
-        let json: Value = serde_json::from_str(text)
+        let json: Json = serde_json::from_str(text)
             .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
-        let Value::Object(object) = json else {
-            return Err(DatapackDecodeError::NotAnObject);
-        };
-        decode_record(&self.fields, &object, &[])
+        let object = json.as_object().ok_or(DatapackDecodeError::NotAnObject)?;
+        decode_fields(&self.fields, object, RecordMetadata::None, "")
+            .map(|values| DatapackEntry { values })
     }
 }
 
-/// Decodes a JSON object against a flat record schema, the same way for every user of it (a
-/// datapack registry's entries, a mod feature type's configs): an undeclared key (other than
-/// the `ignored` ones the caller owns, a configured feature's `type`), a missing required key, a
-/// wrong type or an out-of-range value fails the whole record. Nothing here runs mod code.
+/// `key` of the value at `path`, as [`DatapackDecodeError`]'s paths write it: `.key`, or
+/// `["key"]` for a key with any other character than `[A-Za-z0-9_:/-]` (or none).
+pub(super) fn joined(path: &str, key: &str) -> String {
+    let plain = !key.is_empty()
+        && key
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_:/-".contains(&c));
+    match (plain, path.is_empty()) {
+        (true, true) => key.to_owned(),
+        (true, false) => format!("{path}.{key}"),
+        (false, _) => format!("{path}[{}]", Value::String(key.to_owned())),
+    }
+}
+
+/// A JSON value as the file wrote it. An object keeps its keys in file order, as Gson's
+/// `JsonObject` does: a key written twice keeps its first place and its last value.
+#[derive(Clone, Debug)]
+enum Json {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<Json>),
+    Object(Vec<(String, Json)>),
+}
+
+impl Json {
+    /// A parsed `serde_json` value (a configured feature's), its objects in key order.
+    fn of(value: &Value) -> Self {
+        match value {
+            Value::Null => Self::Null,
+            Value::Bool(b) => Self::Bool(*b),
+            Value::Number(n) => Self::Number(n.clone()),
+            Value::String(s) => Self::String(s.clone()),
+            Value::Array(items) => Self::Array(items.iter().map(Self::of).collect()),
+            Value::Object(object) => Self::Object(
+                object
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::of(v)))
+                    .collect(),
+            ),
+        }
+    }
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            Self::Number(n) => n.as_i64(),
+            _ => None,
+        }
+    }
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::Number(n) => n.as_f64(),
+            _ => None,
+        }
+    }
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn as_array(&self) -> Option<&[Json]> {
+        match self {
+            Self::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+    fn as_object(&self) -> Option<&[(String, Json)]> {
+        match self {
+            Self::Object(pairs) => Some(pairs),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Json {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Json;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON value")
+            }
+            fn visit_unit<E>(self) -> Result<Json, E> {
+                Ok(Json::Null)
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<Json, E> {
+                Ok(Json::Bool(v))
+            }
+            fn visit_i64<E>(self, v: i64) -> Result<Json, E> {
+                Ok(Json::Number(v.into()))
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<Json, E> {
+                Ok(Json::Number(v.into()))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Json, E> {
+                serde_json::Number::from_f64(v)
+                    .map(Json::Number)
+                    .ok_or_else(|| E::custom("a number that is not finite"))
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Json, E> {
+                Ok(Json::String(v.to_owned()))
+            }
+            fn visit_string<E>(self, v: String) -> Result<Json, E> {
+                Ok(Json::String(v))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Json, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element()? {
+                    items.push(item);
+                }
+                Ok(Json::Array(items))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
+                let mut pairs: Vec<(String, Json)> = Vec::new();
+                let mut at: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                while let Some((key, value)) = map.next_entry::<String, Json>()? {
+                    match at.get(&key) {
+                        Some(&n) => pairs[n].1 = value,
+                        None => {
+                            at.insert(key.clone(), pairs.len());
+                            pairs.push((key, value));
+                        }
+                    }
+                }
+                Ok(Json::Object(pairs))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+/// Decode a resource whose load conditions have already passed, following
+/// ConditionalDecoder: unwrap `neoforge:value` or hide the outer conditions key.
+pub fn decode_datapack_entry(
+    declaration: &DatapackRegistryDeclaration,
+    text: &str,
+) -> Result<DatapackEntry, DatapackDecodeError> {
+    let json: Json = serde_json::from_str(text)
+        .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
+    let object = json.as_object().ok_or(DatapackDecodeError::NotAnObject)?;
+    let (object, metadata) = if !object.iter().any(|(key, _)| key == "neoforge:conditions") {
+        (object, RecordMetadata::None)
+    } else if let Some((_, inner)) = object.iter().find(|(key, _)| key == "neoforge:value") {
+        (
+            inner.as_object().ok_or(DatapackDecodeError::NotAnObject)?,
+            RecordMetadata::None,
+        )
+    } else {
+        (object, RecordMetadata::DatapackConditions)
+    };
+    decode_fields(&declaration.fields, object, metadata, "").map(|values| DatapackEntry { values })
+}
+
+pub(crate) enum RecordMetadata<'a> {
+    None,
+    /// The feature dispatch key is allowed, and a schema can also read it.
+    FeatureType,
+    /// The inlined condition wrapper's key is not part of the schema input.
+    DatapackConditions,
+    /// A dispatched variant's fields sit beside the key that named the variant.
+    DispatchKey(&'a str),
+}
+
+/// Decodes a JSON object against a flat record schema. An undeclared key (other than
+/// the caller's metadata), a missing required key, a wrong type or an out-of-range
+/// value fails the whole record. Nothing here runs mod code.
 pub(crate) fn decode_record(
     fields: &[DatapackField],
     object: &serde_json::Map<String, Value>,
-    ignored: &[&str],
+    metadata: RecordMetadata<'_>,
 ) -> Result<DatapackEntry, DatapackDecodeError> {
-    if let Some(unknown) = object.keys().find(|key| {
-        !ignored.contains(&key.as_str()) && !fields.iter().any(|field| &field.name == *key)
+    let object: Vec<_> = object
+        .iter()
+        .map(|(k, v)| (k.clone(), Json::of(v)))
+        .collect();
+    decode_fields(fields, &object, metadata, "").map(|values| DatapackEntry { values })
+}
+
+/// A record's fields at `path` (empty for an entry's own).
+fn decode_fields(
+    fields: &[DatapackField],
+    object: &[(String, Json)],
+    metadata: RecordMetadata<'_>,
+    path: &str,
+) -> Result<Vec<(String, DatapackValue)>, DatapackDecodeError> {
+    let (extra, hidden) = match metadata {
+        RecordMetadata::None => (None, None),
+        RecordMetadata::FeatureType => (Some("type"), None),
+        RecordMetadata::DatapackConditions => {
+            (Some("neoforge:conditions"), Some("neoforge:conditions"))
+        }
+        RecordMetadata::DispatchKey(key) => (Some(key), None),
+    };
+    if let Some((unknown, _)) = object.iter().find(|(key, _)| {
+        Some(key.as_str()) != extra && !fields.iter().any(|field| field.name == *key)
     }) {
         return Err(DatapackDecodeError::UnknownField {
-            field: unknown.clone(),
+            field: joined(path, unknown),
         });
     }
     let mut values = Vec::with_capacity(fields.len());
     for field in fields {
-        let value = match object.get(&field.name) {
-            Some(json) => decode_value(field, json)?,
-            None => field
+        let at = joined(path, &field.name);
+        let json = object.iter().find_map(|(key, json)| {
+            (*key == field.name && Some(key.as_str()) != hidden).then_some(json)
+        });
+        let value = match (json, &field.kind) {
+            (Some(json), kind) => decode_value(kind, json, &at)?,
+            (None, DatapackFieldKind::Optional { .. }) => DatapackValue::Absent,
+            (None, _) => field
                 .default
                 .clone()
-                .ok_or_else(|| DatapackDecodeError::MissingField {
-                    field: field.name.clone(),
-                })?,
+                .ok_or(DatapackDecodeError::MissingField { field: at })?,
         };
         values.push((field.name.clone(), value));
     }
-    Ok(DatapackEntry { values })
+    Ok(values)
 }
 
-fn decode_value(field: &DatapackField, json: &Value) -> Result<DatapackValue, DatapackDecodeError> {
-    let name = || field.name.clone();
+/// A map's key `key`, at `at` (the key's own path, as the file spells it).
+fn decode_key(kind: &DatapackKeyKind, key: &str, at: &str) -> Result<String, DatapackDecodeError> {
+    match kind {
+        DatapackKeyKind::Text { max_len } if key.len() > *max_len as usize => {
+            Err(DatapackDecodeError::TooLong { field: at.into() })
+        }
+        DatapackKeyKind::Text { .. } => Ok(key.to_owned()),
+        DatapackKeyKind::Identifier | DatapackKeyKind::Reference { .. } => Identifier::parse(key)
+            .map(|id| id.to_string())
+            .map_err(|_| DatapackDecodeError::InvalidIdentifier { field: at.into() }),
+    }
+}
+
+fn decode_value(
+    kind: &DatapackFieldKind,
+    json: &Json,
+    path: &str,
+) -> Result<DatapackValue, DatapackDecodeError> {
+    let name = || path.to_owned();
     let wrong = || DatapackDecodeError::WrongType {
         field: name(),
-        expected: field.kind.expected(),
+        expected: kind.expected(),
     };
     let out_of_range = || DatapackDecodeError::OutOfRange { field: name() };
-    match &field.kind {
+    match kind {
         DatapackFieldKind::Bool => json.as_bool().map(DatapackValue::Bool).ok_or_else(wrong),
         DatapackFieldKind::Int { min, max } => {
             // `as_i64` refuses 3.0 and anything past i64: vanilla's integer codec does too.
@@ -381,11 +1088,77 @@ fn decode_value(field: &DatapackField, json: &Value) -> Result<DatapackValue, Da
                 .map(|id| DatapackValue::Text(id.to_string()))
                 .map_err(|_| DatapackDecodeError::InvalidIdentifier { field: name() })
         }
+        DatapackFieldKind::List {
+            of,
+            min_len,
+            max_len,
+        } => {
+            let items = json.as_array().ok_or_else(wrong)?;
+            if items.len() < *min_len as usize
+                || max_len.is_some_and(|max| items.len() > max as usize)
+            {
+                return Err(DatapackDecodeError::WrongLength { field: name() });
+            }
+            items
+                .iter()
+                .enumerate()
+                .map(|(n, item)| decode_value(of, item, &format!("{path}[{n}]")))
+                .collect::<Result<_, _>>()
+                .map(DatapackValue::List)
+        }
+        DatapackFieldKind::Map { key, value } => {
+            let object = json.as_object().ok_or_else(wrong)?;
+            // The pairs in file order; ids normalise (`fire` is `minecraft:fire`), and two keys
+            // naming the same one are a duplicate.
+            let mut pairs = Vec::with_capacity(object.len());
+            let mut seen = std::collections::BTreeSet::new();
+            for (raw, v) in object {
+                let at = joined(path, raw);
+                let k = decode_key(key, raw, &at)?;
+                if !seen.insert(k.clone()) {
+                    return Err(DatapackDecodeError::DuplicateKey { field: at });
+                }
+                pairs.push((k, decode_value(value, v, &at)?));
+            }
+            Ok(DatapackValue::Map(pairs))
+        }
+        DatapackFieldKind::Record { fields } => {
+            let object = json.as_object().ok_or_else(wrong)?;
+            decode_fields(fields, object, RecordMetadata::None, path).map(DatapackValue::Record)
+        }
+        DatapackFieldKind::Optional { of } => decode_value(of, json, path),
+        DatapackFieldKind::Dispatch { key, variants } => {
+            let object = json.as_object().ok_or_else(wrong)?;
+            let at = joined(path, key);
+            let named = object
+                .iter()
+                .find_map(|(k, v)| (k == key).then_some(v))
+                .ok_or_else(|| DatapackDecodeError::MissingField { field: at.clone() })?;
+            let named = named
+                .as_str()
+                .ok_or_else(|| DatapackDecodeError::WrongType {
+                    field: at.clone(),
+                    expected: "identifier string",
+                })?;
+            let id = Identifier::parse(named)
+                .map_err(|_| DatapackDecodeError::InvalidIdentifier { field: at.clone() })?
+                .to_string();
+            let Some(variant) = variants.iter().find(|variant| variant.id == id) else {
+                return Err(DatapackDecodeError::UnknownVariant { field: at, id });
+            };
+            let fields = decode_fields(
+                &variant.fields,
+                object,
+                RecordMetadata::DispatchKey(key),
+                path,
+            )?;
+            Ok(DatapackValue::Variant { id, fields })
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// `example:spell`: `{power: integer 0..100, element: id, chain: reference, silent: bool = false}`.
@@ -417,15 +1190,19 @@ mod tests {
         }
     }
 
-    /// NeoForge's rule for a datapack registry outside `minecraft` (its Registries guide, "Datapack
-    /// Registries"): `data/<entry namespace>/<registry namespace>/<registry path>/<entry>.json`.
-    /// It is not vanilla's, which uses the registry's path only; registration refuses a
-    /// `minecraft` key, so no vanilla-path case exists.
     #[test]
     fn entry_files_follow_neoforges_namespaced_registry_folder() {
         assert_eq!(
             spell().entry_file("addon:fire").as_deref(),
             Some("data/addon/example/spell/fire.json")
+        );
+        let vanilla = DatapackRegistryDeclaration {
+            key: "minecraft:magic/spell".into(),
+            ..spell()
+        };
+        assert_eq!(
+            vanilla.entry_file("addon:nested/fire").as_deref(),
+            Some("data/addon/magic/spell/nested/fire.json")
         );
         assert_eq!(spell().entry_file("nocolon"), None);
     }
@@ -523,8 +1300,42 @@ mod tests {
     }
 
     #[test]
+    fn wrapper_metadata_and_configured_feature_dispatch_have_distinct_visibility() {
+        use crate::world::feature_type::decode_feature_config;
+        use serde_json::json;
+
+        let declaration = DatapackRegistryDeclaration {
+            fields: vec![DatapackField::with_default(
+                "neoforge:conditions",
+                DatapackFieldKind::Bool,
+                DatapackValue::Bool(false),
+            )],
+            ..spell()
+        };
+        let wrapped = json!({"neoforge:conditions":[{"type":"neoforge:always"}]});
+        assert_eq!(
+            decode_datapack_entry(&declaration, &wrapped.to_string())
+                .unwrap()
+                .get("neoforge:conditions"),
+            Some(&DatapackValue::Bool(false))
+        );
+
+        let feature = json!({"type":"example:crystal"});
+        assert!(decode_feature_config(&[], &feature).is_ok());
+        let schema = [DatapackField::required(
+            "type",
+            DatapackFieldKind::Identifier,
+        )];
+        assert_eq!(
+            decode_feature_config(&schema, &feature)
+                .unwrap()
+                .get("type"),
+            Some(&DatapackValue::Text("example:crystal".into()))
+        );
+    }
+
+    #[test]
     fn nesting_is_bounded_by_the_json_parser() {
-        // Size is the candidate's limit (`datapack_registry_set` tests), not the decoder's.
         let decl = spell();
         let deep = format!("{}1{}", "[".repeat(65), "]".repeat(65));
         assert!(matches!(
@@ -631,6 +1442,699 @@ mod tests {
         );
         assert_eq!(
             check_schema(&default(DatapackValue::Bool(true))),
+            Err(E::InvalidDefault)
+        );
+    }
+
+    /// `example:model`, a small data model: a list of drop records, a map of tier records, and
+    /// an optional field.
+    pub(crate) fn model() -> DatapackRegistryDeclaration {
+        let int = |min, max| DatapackFieldKind::Int { min, max };
+        DatapackRegistryDeclaration {
+            mod_id: "example".into(),
+            key: "example:model".into(),
+            fields: vec![
+                DatapackField::required("entity", DatapackFieldKind::Identifier),
+                DatapackField::required(
+                    "drops",
+                    DatapackFieldKind::List {
+                        of: Box::new(DatapackFieldKind::Record {
+                            fields: vec![
+                                DatapackField::required("item", DatapackFieldKind::Identifier),
+                                DatapackField::with_default(
+                                    "count",
+                                    int(1, 64),
+                                    DatapackValue::Int(1),
+                                ),
+                            ],
+                        }),
+                        min_len: 1,
+                        max_len: Some(4),
+                    },
+                ),
+                DatapackField::with_default(
+                    "tiers",
+                    DatapackFieldKind::Map {
+                        key: DatapackKeyKind::Text { max_len: 16 },
+                        value: Box::new(DatapackFieldKind::Record {
+                            fields: vec![DatapackField::required("data_per_kill", int(0, 1000))],
+                        }),
+                    },
+                    DatapackValue::Map(Vec::new()),
+                ),
+                DatapackField::optional("color", DatapackFieldKind::Text { max_len: 7 }),
+            ],
+            sync: DatapackRegistrySync::Required,
+        }
+    }
+
+    #[test]
+    fn a_nested_entry_decodes_and_reads_back() {
+        let entry = model()
+            .decode_entry(
+                r#"{"entity": "zombie",
+                    "drops": [{"item": "rotten_flesh", "count": 3}, {"item": "iron_ingot"}],
+                    "tiers": {"superior": {"data_per_kill": 10}, "basic": {"data_per_kill": 1}}}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            entry.get("entity").and_then(DatapackValue::as_text),
+            Some("minecraft:zombie")
+        );
+        let drops = entry.get("drops").and_then(DatapackValue::as_list).unwrap();
+        assert_eq!(drops.len(), 2);
+        assert_eq!(
+            drops[0].get("item").and_then(DatapackValue::as_text),
+            Some("minecraft:rotten_flesh")
+        );
+        assert_eq!(
+            drops[0].get("count").and_then(DatapackValue::as_int),
+            Some(3)
+        );
+        // A nested default stands in as a top-level one does.
+        assert_eq!(
+            drops[1].get("count").and_then(DatapackValue::as_int),
+            Some(1)
+        );
+        // Map pairs are in the file's order (Gson's `JsonObject` keeps it).
+        let tiers = entry.get("tiers").unwrap();
+        let keys: Vec<_> = tiers
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, ["superior", "basic"]);
+        assert_eq!(
+            tiers
+                .get("superior")
+                .and_then(|t| t.get("data_per_kill"))
+                .and_then(DatapackValue::as_int),
+            Some(10)
+        );
+        // An optional field left out is `None`, not a value.
+        assert_eq!(entry.get("color"), None);
+        assert_eq!(entry.values[3].1, DatapackValue::Absent);
+        let colored = model()
+            .decode_entry(r#"{"entity": "a", "drops": [{"item": "b"}], "color": "red"}"#)
+            .unwrap();
+        assert_eq!(
+            colored.get("color").and_then(DatapackValue::as_text),
+            Some("red")
+        );
+        // Every decoded value is one its kind accepts, as a client checks a snapshot.
+        let decl = model();
+        for (field, (_, value)) in decl.fields.iter().zip(&entry.values) {
+            assert!(field.kind.accepts(value), "{}", field.name);
+        }
+    }
+
+    #[test]
+    fn nested_errors_name_the_full_path() {
+        let decl = model();
+        let err = |text: &str| decl.decode_entry(text).unwrap_err();
+        assert_eq!(
+            err(r#"{"entity": "a", "drops": []}"#),
+            DatapackDecodeError::WrongLength {
+                field: "drops".into()
+            }
+        );
+        let five = r#"{"item": "b"}, "#.repeat(4) + r#"{"item": "b"}"#;
+        assert_eq!(
+            err(&format!(r#"{{"entity": "a", "drops": [{five}]}}"#)),
+            DatapackDecodeError::WrongLength {
+                field: "drops".into()
+            }
+        );
+        assert_eq!(
+            err(r#"{"entity": "a", "drops": [{"item": "b"}, {"item": "c", "count": 65}]}"#),
+            DatapackDecodeError::OutOfRange {
+                field: "drops[1].count".into()
+            }
+        );
+        assert_eq!(
+            err(r#"{"entity": "a", "drops": [{"item": "b"}, {"count": 2}]}"#),
+            DatapackDecodeError::MissingField {
+                field: "drops[1].item".into()
+            }
+        );
+        assert_eq!(
+            err(r#"{"entity": "a", "drops": [{"item": "b", "extra": 1}]}"#),
+            DatapackDecodeError::UnknownField {
+                field: "drops[0].extra".into()
+            }
+        );
+        assert_eq!(
+            err(
+                r#"{"entity": "a", "drops": [{"item": "b"}], "tiers": {"basic": {"data_per_kill": "x"}}}"#
+            ),
+            DatapackDecodeError::WrongType {
+                field: "tiers.basic.data_per_kill".into(),
+                expected: "integer"
+            }
+        );
+        assert_eq!(
+            err(r#"{"entity": "a", "drops": {"item": "b"}}"#),
+            DatapackDecodeError::WrongType {
+                field: "drops".into(),
+                expected: "array"
+            }
+        );
+        assert_eq!(
+            err(
+                r#"{"entity": "a", "drops": [{"item": "b"}], "tiers": {"a_very_long_tier_name": {"data_per_kill": 1}}}"#
+            ),
+            DatapackDecodeError::TooLong {
+                field: "tiers.a_very_long_tier_name".into()
+            }
+        );
+        assert_eq!(
+            err(r#"{"entity": "a", "drops": [{"item": "b"}], "color": 3}"#),
+            DatapackDecodeError::WrongType {
+                field: "color".into(),
+                expected: "string"
+            }
+        );
+    }
+
+    #[test]
+    fn id_keys_normalise_and_may_not_repeat() {
+        let decl = DatapackRegistryDeclaration {
+            mod_id: "example".into(),
+            key: "example:weights".into(),
+            fields: vec![DatapackField::required(
+                "by_mob",
+                DatapackFieldKind::Map {
+                    key: DatapackKeyKind::Identifier,
+                    value: Box::new(DatapackFieldKind::Int { min: 0, max: 9 }),
+                },
+            )],
+            sync: DatapackRegistrySync::ServerOnly,
+        };
+        let entry = decl
+            .decode_entry(r#"{"by_mob": {"zombie": 1, "a:b": 2}}"#)
+            .unwrap();
+        let keys: Vec<_> = entry
+            .get("by_mob")
+            .unwrap()
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect();
+        // The file's order, not the keys' (`Codec.unboundedMap` over Gson's `JsonObject`).
+        assert_eq!(keys, ["minecraft:zombie", "a:b"]);
+        let order = |text| -> Vec<String> {
+            decl.decode_entry(text)
+                .unwrap()
+                .get("by_mob")
+                .unwrap()
+                .as_map()
+                .unwrap()
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        assert_eq!(
+            order(r#"{"by_mob": {"z:z": 1, "a:a": 2, "m:m": 3}}"#),
+            ["z:z", "a:a", "m:m"]
+        );
+        // A key written twice keeps its first place and its last value, as Gson's object does.
+        let twice = decl
+            .decode_entry(r#"{"by_mob": {"z:z": 1, "a:a": 2, "z:z": 3}}"#)
+            .unwrap();
+        assert_eq!(
+            twice.get("by_mob").unwrap().as_map().unwrap(),
+            [
+                ("z:z".to_string(), DatapackValue::Int(3)),
+                ("a:a".to_string(), DatapackValue::Int(2))
+            ]
+        );
+        // Two spellings of one id are a duplicate, named as the file spells the second.
+        assert_eq!(
+            decl.decode_entry(r#"{"by_mob": {"minecraft:zombie": 1, "zombie": 2}}"#)
+                .unwrap_err(),
+            DatapackDecodeError::DuplicateKey {
+                field: "by_mob.zombie".into()
+            }
+        );
+        assert_eq!(
+            decl.decode_entry(r#"{"by_mob": {"Not An Id": 1}}"#)
+                .unwrap_err(),
+            DatapackDecodeError::InvalidIdentifier {
+                field: r#"by_mob["Not An Id"]"#.into()
+            }
+        );
+    }
+
+    /// A key with a `.`, a bracket, a quote or nothing in it is written as a quoted JSON string
+    /// in brackets, so `tiers["basic.data_per_kill"]` and `tiers.basic.data_per_kill` are two
+    /// paths; a top-level `neoforge:conditions` is the engine's, and skipping it keeps the order.
+    #[test]
+    fn error_paths_quote_keys_that_could_read_two_ways() {
+        let decl = DatapackRegistryDeclaration {
+            mod_id: "example".into(),
+            key: "example:tiers".into(),
+            fields: vec![DatapackField::required(
+                "tiers",
+                DatapackFieldKind::Map {
+                    key: DatapackKeyKind::Text { max_len: 32 },
+                    value: Box::new(DatapackFieldKind::Record {
+                        fields: vec![DatapackField::required(
+                            "data_per_kill",
+                            DatapackFieldKind::Int { min: 0, max: 9 },
+                        )],
+                    }),
+                },
+            )],
+            sync: DatapackRegistrySync::ServerOnly,
+        };
+        let error = |text| decl.decode_entry(text).unwrap_err();
+        assert_eq!(
+            error(r#"{"tiers": {"basic.data_per_kill": {"data_per_kill": 10}}}"#),
+            DatapackDecodeError::OutOfRange {
+                field: r#"tiers["basic.data_per_kill"].data_per_kill"#.into()
+            }
+        );
+        assert_eq!(
+            error(r#"{"tiers": {"basic": {"data_per_kill": 10}}}"#),
+            DatapackDecodeError::OutOfRange {
+                field: "tiers.basic.data_per_kill".into()
+            }
+        );
+        assert_eq!(
+            error(r#"{"tiers": {"a\"]b": {"data_per_kill": 10}}}"#),
+            DatapackDecodeError::OutOfRange {
+                field: r#"tiers["a\"]b"].data_per_kill"#.into()
+            }
+        );
+        assert_eq!(
+            error(r#"{"tiers": {"": {"data_per_kill": 10}}}"#),
+            DatapackDecodeError::OutOfRange {
+                field: r#"tiers[""].data_per_kill"#.into()
+            }
+        );
+        let entry = decode_datapack_entry(
+            &decl,
+            r#"{"neoforge:conditions": [], "tiers": {"z": {"data_per_kill": 1}, "a": {"data_per_kill": 2}}}"#,
+        ).unwrap();
+        let keys: Vec<_> = entry
+            .get("tiers")
+            .unwrap()
+            .as_map()
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(keys, ["z", "a"]);
+        assert_eq!(
+            decl.decode_entry(r#"{"neoforge:conditions": [], "tiers": {}}"#)
+                .unwrap_err(),
+            DatapackDecodeError::UnknownField {
+                field: "neoforge:conditions".into()
+            }
+        );
+
+        let mut overlapping = decl;
+        overlapping.fields.push(DatapackField::with_default(
+            "neoforge:conditions",
+            DatapackFieldKind::Bool,
+            DatapackValue::Bool(true),
+        ));
+        let entry =
+            decode_datapack_entry(&overlapping, r#"{"neoforge:conditions": [], "tiers": {}}"#)
+                .unwrap();
+        assert_eq!(
+            entry.get("neoforge:conditions"),
+            Some(&DatapackValue::Bool(true))
+        );
+    }
+
+    /// Defaults are normalised at every depth as at the top, map keys included, and a default
+    /// whose map names one key twice is refused as a duplicate.
+    #[test]
+    fn nested_defaults_normalise_and_may_not_repeat_a_key() {
+        use DatapackRegistrationError as E;
+        let ids = || DatapackFieldKind::Map {
+            key: DatapackKeyKind::Identifier,
+            value: Box::new(DatapackFieldKind::Identifier),
+        };
+        let mut fields = vec![DatapackField::required(
+            "drop",
+            DatapackFieldKind::Record {
+                fields: vec![
+                    DatapackField::with_default(
+                        "item",
+                        DatapackFieldKind::Identifier,
+                        DatapackValue::Text("stone".into()),
+                    ),
+                    DatapackField::with_default(
+                        "by_mob",
+                        ids(),
+                        DatapackValue::Map(vec![(
+                            "zombie".into(),
+                            DatapackValue::Text("rotten_flesh".into()),
+                        )]),
+                    ),
+                ],
+            },
+        )];
+        assert_eq!(normalize_defaults(&mut fields), Ok(()));
+        assert_eq!(check_schema(&fields), Ok(()));
+        let DatapackFieldKind::Record { fields: inner } = &fields[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            inner[0].default,
+            Some(DatapackValue::Text("minecraft:stone".into()))
+        );
+        assert_eq!(
+            inner[1].default,
+            Some(DatapackValue::Map(vec![(
+                "minecraft:zombie".into(),
+                DatapackValue::Text("minecraft:rotten_flesh".into())
+            )]))
+        );
+        let mut twice = vec![DatapackField::with_default(
+            "by_mob",
+            ids(),
+            DatapackValue::Map(vec![
+                ("zombie".into(), DatapackValue::Text("a".into())),
+                ("minecraft:zombie".into(), DatapackValue::Text("b".into())),
+            ]),
+        )];
+        assert_eq!(normalize_defaults(&mut twice), Ok(()));
+        assert_eq!(check_schema(&twice), Err(E::DuplicateKey));
+        let mut bad = vec![DatapackField::with_default(
+            "item",
+            DatapackFieldKind::List {
+                of: Box::new(DatapackFieldKind::Identifier),
+                min_len: 0,
+                max_len: None,
+            },
+            DatapackValue::List(vec![DatapackValue::Text("Not An Id".into())]),
+        )];
+        assert_eq!(normalize_defaults(&mut bad), Err(E::InvalidDefault));
+    }
+
+    #[test]
+    fn nested_schemas_are_checked_at_registration() {
+        use DatapackRegistrationError as E;
+        let int = || Box::new(DatapackFieldKind::Int { min: 0, max: 1 });
+        let one = |kind| vec![DatapackField::required("a", kind)];
+        assert_eq!(check_schema(&model().fields), Ok(()));
+        let list = |min_len, max_len| DatapackFieldKind::List {
+            of: int(),
+            min_len,
+            max_len,
+        };
+        assert_eq!(
+            check_schema(&one(list(2, Some(1)))),
+            Err(E::InvalidFieldKind)
+        );
+        assert_eq!(check_schema(&one(list(2, None))), Ok(()));
+        // A bad kind deep inside is refused as at the top.
+        assert_eq!(
+            check_schema(&one(DatapackFieldKind::List {
+                of: Box::new(DatapackFieldKind::Int { min: 2, max: 1 }),
+                min_len: 0,
+                max_len: None
+            })),
+            Err(E::InvalidFieldKind)
+        );
+        // A text key of at most 0 bytes is the schema's choice: only the empty key.
+        let empty_key = DatapackRegistryDeclaration {
+            fields: one(DatapackFieldKind::Map {
+                key: DatapackKeyKind::Text { max_len: 0 },
+                value: int(),
+            }),
+            ..spell()
+        };
+        assert_eq!(check_schema(&empty_key.fields), Ok(()));
+        let entry = empty_key.decode_entry(r#"{"a":{"":1}}"#).unwrap();
+        assert_eq!(
+            entry.get("a").unwrap().get(""),
+            Some(&DatapackValue::Int(1))
+        );
+        assert_eq!(
+            empty_key.decode_entry(r#"{"a":{"x":1}}"#).unwrap_err(),
+            DatapackDecodeError::TooLong {
+                field: "a.x".into()
+            }
+        );
+        assert_eq!(
+            check_schema(&one(DatapackFieldKind::Record {
+                fields: vec![
+                    DatapackField::required("x", DatapackFieldKind::Bool),
+                    DatapackField::required("x", DatapackFieldKind::Bool)
+                ]
+            })),
+            Err(E::InvalidFieldName)
+        );
+        // An optional kind stands only for a whole field, and has no default.
+        assert_eq!(
+            check_schema(&one(DatapackFieldKind::List {
+                of: Box::new(DatapackFieldKind::Optional { of: int() }),
+                min_len: 0,
+                max_len: None
+            })),
+            Err(E::InvalidFieldKind)
+        );
+        assert_eq!(
+            check_schema(&[DatapackField {
+                name: "a".into(),
+                kind: DatapackFieldKind::Optional { of: int() },
+                default: Some(DatapackValue::Int(0)),
+            }]),
+            Err(E::InvalidDefault)
+        );
+        // A nested default must fit its kind.
+        assert_eq!(
+            check_schema(&[DatapackField::with_default(
+                "a",
+                DatapackFieldKind::List {
+                    of: int(),
+                    min_len: 1,
+                    max_len: None
+                },
+                DatapackValue::List(Vec::new())
+            )]),
+            Err(E::InvalidDefault)
+        );
+    }
+
+    /// `example:behavior`: a `behavior` field dispatched on `type` (`Codec.dispatch`), as Universal
+    /// Bone Meal's growth rules are: `growing_plant` with an int and a reference, `random_tick`
+    /// with a defaulted int.
+    fn behaviors() -> DatapackRegistryDeclaration {
+        DatapackRegistryDeclaration {
+            fields: vec![DatapackField::required(
+                "behavior",
+                DatapackFieldKind::Dispatch {
+                    key: "type".into(),
+                    variants: vec![
+                        DatapackVariant::new(
+                            "example:growing_plant",
+                            vec![
+                                DatapackField::required(
+                                    "max_height",
+                                    DatapackFieldKind::Int { min: 1, max: 64 },
+                                ),
+                                DatapackField::required(
+                                    "next",
+                                    DatapackFieldKind::Reference {
+                                        registry: "example:spell".into(),
+                                    },
+                                ),
+                            ],
+                        ),
+                        DatapackVariant::new(
+                            "example:random_tick",
+                            vec![DatapackField::with_default(
+                                "growth_attempts",
+                                DatapackFieldKind::Int { min: 1, max: 16 },
+                                DatapackValue::Int(1),
+                            )],
+                        ),
+                    ],
+                },
+            )],
+            ..spell()
+        }
+    }
+
+    #[test]
+    fn a_dispatched_field_decodes_the_variant_its_key_names() {
+        let schema = behaviors();
+        assert_eq!(check_schema(&schema.fields), Ok(()));
+        let entry = schema
+            .decode_entry(
+                r#"{"behavior":{"type":"example:growing_plant","max_height":16,"next":"fire"}}"#,
+            )
+            .unwrap();
+        let behavior = entry.get("behavior").unwrap();
+        assert_eq!(behavior.variant_id(), Some("example:growing_plant"));
+        assert_eq!(behavior.get("max_height"), Some(&DatapackValue::Int(16)));
+        assert_eq!(
+            behavior.get("next"),
+            Some(&DatapackValue::Text("minecraft:fire".into()))
+        );
+        let mut refs = Vec::new();
+        references(&schema.fields[0].kind, behavior, "behavior", &mut refs);
+        assert_eq!(
+            refs,
+            [(
+                "behavior.next".to_owned(),
+                "example:spell",
+                "minecraft:fire"
+            )]
+        );
+        // The other variant, its field defaulted.
+        let entry = schema
+            .decode_entry(r#"{"behavior":{"type":"example:random_tick"}}"#)
+            .unwrap();
+        let behavior = entry.get("behavior").unwrap();
+        assert_eq!(behavior.variant_id(), Some("example:random_tick"));
+        assert_eq!(
+            behavior.get("growth_attempts"),
+            Some(&DatapackValue::Int(1))
+        );
+        assert!(schema.fields[0].kind.accepts(behavior));
+    }
+
+    #[test]
+    fn a_dispatch_refuses_unknown_missing_and_foreign_keys() {
+        let schema = behaviors();
+        let fails = |json: &str| schema.decode_entry(json).unwrap_err();
+        assert_eq!(
+            fails(r#"{"behavior":{"type":"example:wither","max_height":1}}"#),
+            DatapackDecodeError::UnknownVariant {
+                field: "behavior.type".into(),
+                id: "example:wither".into()
+            }
+        );
+        // `byNameCodec` reads a bare id in `minecraft`, which declares no variant here.
+        assert_eq!(
+            fails(r#"{"behavior":{"type":"random_tick"}}"#),
+            DatapackDecodeError::UnknownVariant {
+                field: "behavior.type".into(),
+                id: "minecraft:random_tick".into()
+            }
+        );
+        assert_eq!(
+            fails(r#"{"behavior":{"growth_attempts":2}}"#),
+            DatapackDecodeError::MissingField {
+                field: "behavior.type".into()
+            }
+        );
+        assert_eq!(
+            fails(r#"{"behavior":{"type":3}}"#),
+            DatapackDecodeError::WrongType {
+                field: "behavior.type".into(),
+                expected: "identifier string"
+            }
+        );
+        // A field of the other variant is not this one's.
+        assert_eq!(
+            fails(r#"{"behavior":{"type":"example:random_tick","max_height":1}}"#),
+            DatapackDecodeError::UnknownField {
+                field: "behavior.max_height".into()
+            }
+        );
+        assert_eq!(
+            fails(r#"{"behavior":{"type":"example:growing_plant","max_height":99,"next":"a"}}"#),
+            DatapackDecodeError::OutOfRange {
+                field: "behavior.max_height".into()
+            }
+        );
+    }
+
+    #[test]
+    fn dispatch_schemas_are_checked_at_registration() {
+        use DatapackRegistrationError as E;
+        let dispatch = |key: &str, variants| {
+            vec![DatapackField::required(
+                "a",
+                DatapackFieldKind::Dispatch {
+                    key: key.into(),
+                    variants,
+                },
+            )]
+        };
+        let bool_field = || vec![DatapackField::required("x", DatapackFieldKind::Bool)];
+        assert_eq!(
+            check_schema(&dispatch("type", Vec::new())),
+            Err(E::InvalidFieldKind)
+        );
+        assert_eq!(
+            check_schema(&dispatch(
+                "",
+                vec![DatapackVariant::new("example:a", bool_field())]
+            )),
+            Err(E::InvalidFieldKind)
+        );
+        assert_eq!(
+            check_schema(&dispatch(
+                "type",
+                vec![
+                    DatapackVariant::new("example:a", bool_field()),
+                    DatapackVariant::new("example:a", Vec::new()),
+                ]
+            )),
+            Err(E::InvalidFieldKind)
+        );
+        assert_eq!(
+            check_schema(&dispatch(
+                "type",
+                vec![DatapackVariant::new("a", bool_field())]
+            )),
+            Err(E::InvalidFieldKind)
+        );
+        // A variant field named like the key could never be read.
+        assert_eq!(
+            check_schema(&dispatch(
+                "x",
+                vec![DatapackVariant::new("example:a", bool_field())]
+            )),
+            Err(E::InvalidFieldName)
+        );
+        // A variant's own schema is checked as a record's.
+        assert_eq!(
+            check_schema(&dispatch(
+                "type",
+                vec![DatapackVariant::new(
+                    "example:a",
+                    vec![DatapackField::required(
+                        "x",
+                        DatapackFieldKind::Int { min: 2, max: 1 }
+                    )]
+                )]
+            )),
+            Err(E::InvalidFieldKind)
+        );
+        // A default must name a declared variant with fitting fields.
+        let defaulted = |default| {
+            vec![DatapackField::with_default(
+                "a",
+                DatapackFieldKind::Dispatch {
+                    key: "type".into(),
+                    variants: vec![DatapackVariant::new("example:a", bool_field())],
+                },
+                default,
+            )]
+        };
+        assert_eq!(
+            check_schema(&defaulted(DatapackValue::Variant {
+                id: "example:a".into(),
+                fields: vec![("x".into(), DatapackValue::Bool(true))],
+            })),
+            Ok(())
+        );
+        assert_eq!(
+            check_schema(&defaulted(DatapackValue::Variant {
+                id: "example:b".into(),
+                fields: vec![("x".into(), DatapackValue::Bool(true))],
+            })),
             Err(E::InvalidDefault)
         );
     }

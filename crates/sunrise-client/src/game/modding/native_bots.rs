@@ -1,24 +1,17 @@
-//! Server-side player bots for mods (docs/native-mods.md, "Server hooks for plugin ports: player
+//! Server-side player bots for mods (docs/modding/src/how-to/native-mods.md, "Server hooks for plugin ports: player
 //! bots"): a mod that drives a server player itself (a fake client sending its own moves) asks
 //! where the player's movement code would take them in one tick, and which block shapes are in
 //! a box. Nothing runs unless a mod calls it, and neither changes the player or the level.
 use super::{Game, glide_wear, shield, worn_boots};
-use mod_api::{PlayerInput, SimulatedMove};
-use std::io;
+use mod_api::{__private::voxel_shape_from_core, PlayerInput, SimulatedMove, VoxelShape};
 use std::ops::ControlFlow;
 use sunrise_client::collisions::SceneCollisions;
 use sunrise_client::items::ItemStack;
 use sunrise_client::motion::{MotionWorld, PlayerMotion};
 use sunrise_client::sprint::Keys;
-use sunrise_core::geometry::{Aabb, Vec3, VoxelShape};
-use sunrise_core::position::{BlockPos, ChunkPos};
-use sunrise_world::block_collision_scan::{
-    BlockCollisionScan, BlockCollisionWorld, CollisionBlock,
-};
+use sunrise_core::geometry::{Aabb, Vec3};
+use sunrise_world::block_collision_scan::BlockCollisionScan;
 use sunrise_world::collision_context::CollisionContext;
-
-/// The most block cells `native_collision_boxes` looks at: a box of about 100 blocks a side.
-const COLLISION_CELLS: usize = 1_000_000;
 
 /// The keys a bot's input presses: the direction flags by sign (sprint and the server's input
 /// packet read them), and the exact move vector when it isn't a key's (a stick's).
@@ -38,7 +31,6 @@ fn input_keys(input: &PlayerInput) -> Option<Keys> {
         shift: input.sneak,
         sprint: input.sprint,
         analog: (!key(forward) || !key(strafe)).then_some([strafe, forward]),
-        ..Keys::default()
     })
 }
 
@@ -51,11 +43,6 @@ fn sprints(input: &PlayerInput) -> bool {
 fn aabb_of(b: [f64; 6]) -> Option<Aabb> {
     (b.iter().all(|v| v.is_finite()) && b[0] <= b[3] && b[1] <= b[4] && b[2] <= b[5])
         .then(|| Aabb::new(Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5])))
-}
-
-fn corners(b: Aabb) -> [f64; 6] {
-    let (lo, hi) = (b.min_position(), b.max_position());
-    [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]
 }
 
 // Native mods use these; nothing in Sunrise does.
@@ -91,13 +78,13 @@ impl Game<'_> {
         }
         let keys = input_keys(&input)?;
         self.player_name(player)?;
-        let mut body = self.native_bot_body(player.uuid())?;
+        let (mut body, unswapped) = self.native_bot_body(player.uuid())?;
         body.yaw = input.yaw;
         body.pitch = input.pitch.clamp(-90.0, 90.0);
         if let Some([x, y, z]) = input.velocity {
             body.velocity = Vec3::new(x, y, z);
         }
-        // Game.sync_player_body's part that depends on the blocks, as the replay does.
+        // Game.sync_player_body's part that depends on the blocks.
         body.nudge = crate::game::closest_space_nudge(
             &body,
             &self.world,
@@ -105,7 +92,13 @@ impl Game<'_> {
             self.level_suffocation(),
         );
         let sprinting = sprints(&input) && !body.item_use_slows_sprint;
+        let mut side = game_side!(self);
+        if let Some(conn) = unswapped {
+            let guest = self.lan.as_ref()?.hub.guest(conn)?;
+            side.player_equipment = acting_equipment!(guest);
+        }
         MotionWorld {
+            side: &side,
             entities: &[],
             player: &mut body,
             scene: &mut self.world,
@@ -130,9 +123,9 @@ impl Game<'_> {
         Some(result)
     }
 
-    /// A copy of the body of server player `uuid` in the level in place, as it stands now: the
-    /// acting player's swapped in, or a guest's as `lan_actions` swaps it in.
-    fn native_bot_body(&self, uuid: u128) -> Option<PlayerMotion> {
+    /// A copy of server player `uuid`'s body in the level in place, and the connection to lend
+    /// equipment from if the guest's state has not been swapped into Game.
+    fn native_bot_body(&self, uuid: u128) -> Option<(PlayerMotion, Option<u32>)> {
         if self.lan_acting_uuid == Some(uuid) {
             self.lan_acting?;
             let p = self.player.as_ref()?;
@@ -142,7 +135,7 @@ impl Game<'_> {
             body.leather_boots = worn_boots::leather_boots(&self.armor);
             let using = self.using.and_then(|(slot, _)| self.stack_in(slot));
             self.set_bot_item_use(&mut body, using);
-            return Some(body);
+            return Some((body, None));
         }
         if self.lan_acting.is_some() {
             return None;
@@ -187,7 +180,7 @@ impl Game<'_> {
                 }
             });
         self.set_bot_item_use(&mut body, using);
-        Some(body)
+        Some((body, Some(g.conn)))
     }
 
     /// A simulated copy reads the current stack rather than inheriting an earlier use.
@@ -197,139 +190,57 @@ impl Game<'_> {
         body.item_use_slows_sprint = item.is_some_and(|item| !item.can_sprint);
     }
 
-    /// The block collision boxes in `aabb` (`[min_x, min_y, min_z, max_x, max_y, max_z]`) of the
-    /// level `dimension`, as `Level.getBlockCollisions(null, aabb)` gives them: each block's
-    /// collision shape that shares volume with the box, as world-space boxes (a stair gives two,
-    /// a fence its post), under the empty collision context (no entity: scaffolding and powder
-    /// snow as for nothing standing on them). Entities and the world border are not in it. For a
-    /// bot's own collision checks and pathfinding. None as for `scan_block_collisions`: on a
-    /// server another level than the one in place, on a client a level it neither shows nor
-    /// views, a box that isn't a box (not numbers, or min past max), and one over about a
-    /// million blocks. API @API:player_bots@.
-    pub(super) fn level_collision_boxes(
+    /// `CollisionGetter.getBlockCollisions` with an empty context: no entities or border.
+    /// The shared `BlockCollisions` cursor skips missing chunks without loading them.
+    pub(super) fn level_visit_block_collisions(
         &self,
         level: mod_api::LevelRef,
         aabb: [f64; 6],
-    ) -> Option<Vec<[f64; 6]>> {
-        let mut boxes = Vec::new();
-        self.scan_block_collisions(level, aabb, |found| {
-            boxes.extend(found.iter().copied().map(corners));
-            ControlFlow::Continue(())
-        })?;
-        Some(boxes)
+        visit: &mut dyn FnMut(&VoxelShape) -> ControlFlow<()>,
+    ) -> Option<ControlFlow<()>> {
+        let bounds = aabb_of(aabb)?;
+        let mut scene = SceneCollisions {
+            world: self.native_level_view_world(level)?,
+            binding: self.collision,
+            subject: None,
+        };
+        let scan = BlockCollisionScan::new(
+            &mut scene,
+            CollisionContext::empty(false),
+            bounds,
+            false,
+            usize::MAX,
+        )
+        .ok()?;
+        for hit in scan {
+            let shape = voxel_shape_from_core(hit.ok()?.shape);
+            if let ControlFlow::Break(()) = visit(&shape) {
+                return Some(ControlFlow::Break(()));
+            }
+        }
+        Some(ControlFlow::Continue(()))
     }
 
-    /// Whether any block collision shape is in `aabb`, the block half of
-    /// `CollisionGetter.noCollision` negated: `level_collision_boxes`'s walk, stopped at the
-    /// first shape. None as for that.
+    /// `CollisionGetter.noBlockCollision(null, aabb)` negated, without moving full cubes.
     pub(super) fn level_has_collisions(
         &self,
         level: mod_api::LevelRef,
         aabb: [f64; 6],
     ) -> Option<bool> {
-        let mut any = false;
-        self.scan_block_collisions(level, aabb, |found| {
-            any = !found.is_empty();
-            if any {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        })?;
-        Some(any)
-    }
-
-    /// `Level.getBlockCollisions(null, aabb)`'s walk, each block's world-space boxes to `visit`
-    /// until it breaks. None for a box that isn't one, one over `COLLISION_CELLS` and a read
-    /// error; on a server for another level than the one in place, on a client for a level
-    /// `client_view_world` doesn't name and a walk that reaches a column the client doesn't
-    /// hold (vanilla's walk passes a missing chunk as empty).
-    fn scan_block_collisions(
-        &self,
-        level: mod_api::LevelRef,
-        aabb: [f64; 6],
-        mut visit: impl FnMut(&[Aabb]) -> ControlFlow<()>,
-    ) -> Option<()> {
         let bounds = aabb_of(aabb)?;
-        let (world, refuse_missing) = if self.is_logical_server() {
-            (self.level_in_place(level).then_some(&self.world)?, false)
-        } else {
-            (self.client_view_world(level)?, true)
+        let mut scene = SceneCollisions {
+            world: self.native_level_view_world(level)?,
+            binding: self.collision,
+            subject: None,
         };
-        let mut scene = ScanColumns {
-            scene: SceneCollisions {
-                world,
-                binding: self.collision,
-                subject: None,
-            },
-            refuse_missing,
-        };
-        let Ok(scan) = BlockCollisionScan::new(
+        BlockCollisionScan::any_collision(
             &mut scene,
             CollisionContext::empty(false),
             bounds,
             false,
-            COLLISION_CELLS,
-        ) else {
-            return None;
-        };
-        for hit in scan {
-            let Ok(hit) = hit else {
-                return None;
-            };
-            if visit(hit.shape.boxes()).is_break() {
-                break;
-            }
-        }
-        Some(())
-    }
-}
-
-/// The world a collision scan walks: a client's columns refuse the walk where one is missing,
-/// since the client cannot know what the server holds there.
-struct ScanColumns<'w, 'r> {
-    scene: SceneCollisions<'w, 'r>,
-    refuse_missing: bool,
-}
-
-impl<'w> BlockCollisionWorld for ScanColumns<'w, '_> {
-    type Error = io::Error;
-    type Chunk = &'w sunrise_client::chunk::Chunk;
-    fn collision_chunk(&mut self, p: ChunkPos) -> io::Result<Option<Self::Chunk>> {
-        match self.scene.collision_chunk(p)? {
-            None if self.refuse_missing => Err(io::Error::other(
-                "collision scan reached a column the client does not hold",
-            )),
-            chunk => Ok(chunk),
-        }
-    }
-    fn collision_block(&mut self, chunk: Self::Chunk, p: BlockPos) -> io::Result<CollisionBlock> {
-        self.scene.collision_block(chunk, p)
-    }
-    fn is_suffocating(
-        &mut self,
-        chunk: Self::Chunk,
-        block: CollisionBlock,
-        p: BlockPos,
-    ) -> io::Result<bool> {
-        self.scene.is_suffocating(chunk, block, p)
-    }
-    fn context_shape(
-        &mut self,
-        block: CollisionBlock,
-        p: BlockPos,
-        context: &CollisionContext<'_>,
-    ) -> io::Result<VoxelShape> {
-        self.scene.context_shape(block, p, context)
-    }
-    fn may_reach_out(&mut self, chunk: Self::Chunk, section_y: i32) -> io::Result<bool> {
-        self.scene.may_reach_out(chunk, section_y)
-    }
-    fn section_is_empty(&mut self, chunk: Self::Chunk, section_y: i32) -> io::Result<bool> {
-        self.scene.section_is_empty(chunk, section_y)
-    }
-    fn missing_chunks_stay_missing(&self) -> bool {
-        self.scene.missing_chunks_stay_missing()
+            usize::MAX,
+        )
+        .ok()
     }
 }
 
@@ -460,9 +371,87 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
+    fn guest_movement_preview_uses_the_guests_damage_immunity() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use crate::game::native_item_places::tests::{guest, open_to_lan};
+        use std::cell::Cell;
+        use sunrise_client::{chunk::Chunk, health::DamageHooks};
+
+        // The movement result doesn't expose health. Observe committed damage to the
+        // simulated body through its game-owned hook table, not through the live guest.
+        thread_local! {
+            static HITS: Cell<u32> = const { Cell::new(0) };
+        }
+        crate::game::in_own_process(
+            "game::native_bots::tests::guest_movement_preview_uses_the_guests_damage_immunity",
+            || {
+                with_game(|game| {
+                    open_to_lan(game);
+                    // The fixture hasn't opened a world to bind its item predicates to the
+                    // level's damage types yet.
+                    let mut items = world_items!(game).clone();
+                    std::sync::Arc::make_mut(&mut items.enchantments)
+                        .bind_damage_catalog(&game.health_resources.damage);
+                    game.server_items = Some(std::sync::Arc::new(items));
+                    game.streaming
+                        .insert_remote(&mut game.world, Chunk::empty(0, 0));
+                    let magma = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:magma_block")
+                        .unwrap();
+                    game.world.set(1, 63, 1, magma).unwrap();
+                    let at = Vec3::new(1.5, 64.0, 1.5);
+                    let mut guest = guest(1);
+                    guest.position = [at.x, at.y, at.z];
+                    guest.on_ground = true;
+                    guest.loaded = true;
+                    let mut body = PlayerMotion::new(game.motion, at).unwrap();
+                    body.entity_id = guest.entity_id;
+                    guest.motion = Some(Box::new(body));
+                    let uuid = guest.uuid;
+                    game.lan.as_mut().unwrap().hub.guests.push(guest);
+                    let player = game.player(uuid).unwrap();
+                    game.damage_hooks = DamageHooks {
+                        post: Some(|_, _, _| HITS.with(|hits| hits.set(hits.get() + 1))),
+                        ..DamageHooks::NONE
+                    };
+                    let preview = |game: &mut Game<'_>| {
+                        let mut falling = input(0.0, 0.0);
+                        falling.velocity = Some([0.0, -0.08, 0.0]);
+                        let preview = game.player_simulate_move(player, falling).unwrap();
+                        assert!(preview.on_ground);
+                        HITS.replace(0)
+                    };
+                    assert_eq!(preview(game), 1, "magma hurts the unprotected preview");
+
+                    let mut boots = ItemStack::new("minecraft:leather_boots", 1);
+                    boots.enchant("minecraft:frost_walker", 1);
+                    game.lan
+                        .as_mut()
+                        .unwrap()
+                        .hub
+                        .update_guest(1, |guest| guest.armor[3] = Some(boots))
+                        .unwrap();
+                    assert_eq!(game.lan_acting, None);
+                    assert_eq!(
+                        preview(game),
+                        0,
+                        "only the unswapped guest wears Frost Walker"
+                    );
+                })
+            },
+        );
+    }
+
+    #[test]
     fn boxes_round_trip_and_bad_boxes_are_refused() {
         let b = [0.0, 1.0, 2.0, 3.0, 4.5, 6.0];
-        assert_eq!(corners(aabb_of(b).unwrap()), b);
+        let bounds = aabb_of(b).unwrap();
+        assert_eq!(bounds.min_position().components(), [0.0, 1.0, 2.0]);
+        assert_eq!(bounds.max_position().components(), [3.0, 4.5, 6.0]);
         assert!(aabb_of([1.0, 0.0, 0.0, 0.0, 1.0, 1.0]).is_none());
         assert!(aabb_of([0.0, f64::NAN, 0.0, 1.0, 1.0, 1.0]).is_none());
     }

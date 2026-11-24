@@ -1,4 +1,4 @@
-use crate::game::remote::open_hash_order;
+use crate::game::remote::inventory::open_hash_order;
 
 /// The vanilla 26.3 client's ServerboundContainerClickPacket for a shift-click from hotbar slot 37
 /// into slot 10 listed 37 first (wire stream harness, `inventory`). The key 0 always leads.

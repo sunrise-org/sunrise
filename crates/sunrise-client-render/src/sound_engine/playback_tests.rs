@@ -71,6 +71,22 @@ fn delayed_and_manually_looped_plays_do_not_compound_edits() {
 }
 
 #[test]
+fn a_delay_can_cross_the_signed_tick_boundary() {
+    let (mut engine, mut backend) = setup();
+    let id = engine.add(instance(), false);
+    engine.tick_count = 7;
+    engine.play_delayed(id, i64::from(u32::MAX));
+    engine.tick_count = 4_294_967_300; // Two ticks before the sound is due.
+    let ctx = TickContext::default();
+    engine.tick(false, &ctx, &mut backend);
+    assert_eq!(engine.mod_sound_state(id), mod_api::SoundState::Waiting);
+    engine.tick(true, &ctx, &mut backend);
+    assert_eq!(engine.mod_sound_state(id), mod_api::SoundState::Waiting);
+    engine.tick(false, &ctx, &mut backend);
+    assert_eq!(engine.mod_sound_state(id), mod_api::SoundState::Playing);
+}
+
+#[test]
 fn tickable_and_category_updates_keep_transient_edits_and_can_cancel() {
     let (mut engine, mut backend) = setup();
     engine.set_test_playback_hook(adjust);
@@ -102,22 +118,33 @@ fn tickable_and_category_updates_keep_transient_edits_and_can_cancel() {
 }
 
 #[test]
-fn cancellation_and_invalid_edits_never_allocate_or_notify() {
-    let edits: [PlaybackHook; 6] = [
-        |_, _, _, cancel| *cancel = true,
-        |_, volume, _, _| *volume = f32::NAN,
-        |_, volume, _, _| *volume = f32::INFINITY,
-        |_, volume, _, _| *volume = -1.0,
-        |_, _, pitch, _| *pitch = 0.0,
-        |_, _, pitch, _| *pitch = f32::NEG_INFINITY,
-    ];
-    for hook in edits {
-        let (mut engine, mut backend) = setup();
-        engine.set_test_playback_hook(hook);
-        let (_, result) = engine.play_new(instance(), false, &mut backend);
-        assert_eq!(result, PlayResult::NotStarted);
-        assert!(backend.stopped.is_empty() && engine.notifications.is_empty());
-    }
+fn cancellation_never_allocates_or_notifies() {
+    let (mut engine, mut backend) = setup();
+    engine.set_test_playback_hook(|_, _, _, cancel| *cancel = true);
+    let (_, result) = engine.play_new(instance(), false, &mut backend);
+    assert_eq!(result, PlayResult::NotStarted);
+    assert!(backend.stopped.is_empty() && engine.notifications.is_empty());
+}
+
+/// A replacement's infinite pitch or volume goes through the engine's own clamps, as any
+/// replacement instance does, at a start and at a refresh.
+#[test]
+fn infinite_replacement_pitch_and_volume_take_the_engines_calculations() {
+    let (mut engine, mut backend) = setup();
+    engine.set_test_playback_hook(|_, volume, pitch, _| {
+        *volume = f32::INFINITY;
+        *pitch = f32::INFINITY;
+    });
+    let (id, result) = engine.play_new(instance(), true, &mut backend);
+    assert_eq!(result, PlayResult::Started);
+    let channel = engine.channel(id).unwrap();
+    assert_eq!(backend.pitch[&channel], SoundEngine::calculate_pitch(2.0));
+    let full = backend.volume[&channel];
+    assert!(full.is_finite() && full > 0.0, "clamped, not refused");
+    engine.set_test_playback_hook(|_, _, pitch, _| *pitch = f32::NEG_INFINITY);
+    engine.update_category_volume(4, 0.5, &mut backend);
+    assert!(!backend.stopped(channel), "a refresh is not stopped for it");
+    assert_eq!(backend.pitch[&channel], SoundEngine::calculate_pitch(0.5));
 }
 
 #[test]

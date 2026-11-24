@@ -28,7 +28,13 @@ fn terrain_vertex_reads_renderer_fade_without_a_pack_declaration() {
         attributes: vec![("mc_chunkFade".into(), "0.375".into())],
         ..Default::default()
     };
-    let result = translate_gbuffers(&vertex, &fragment, Target::Buffers, &inputs);
+    let result = translate_gbuffers(
+        &vertex,
+        &fragment,
+        Target::Buffers,
+        &inputs,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+    );
     assert!(
         result.is_ok(),
         "terrain fade translation: {:?}",
@@ -51,11 +57,20 @@ fn missing_terrain_value_is_an_error_instead_of_an_invented_fade() {
             &vertex,
             &fragment,
             Target::Buffers,
-            &GbuffersInputs::default()
+            &GbuffersInputs::default(),
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT
         )
         .is_err()
     );
-    assert!(translate_composite(&vertex, &fragment, Target::Buffers).is_err());
+    assert!(
+        translate_composite(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT
+        )
+        .is_err()
+    );
     let supplied = GbuffersInputs {
         attributes: vec![("mc_chunkFade".into(), "0.25".into())],
         ..Default::default()
@@ -68,7 +83,16 @@ fn missing_terrain_value_is_an_error_instead_of_an_invented_fade() {
         code: "void main() { gl_Position = gl_Vertex; }".into(),
         ..Default::default()
     };
-    assert!(translate_gbuffers(&vertex, &fragment, Target::Buffers, &supplied).is_err());
+    assert!(
+        translate_gbuffers(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            &supplied,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -89,7 +113,14 @@ fn authored_fade_globals_keep_their_own_meaning() {
             code: format!("{declaration}\nvoid main() {{ gl_Position = vec4(mc_chunkFade); }}"),
             ..Default::default()
         };
-        let program = translate_gbuffers(&vertex, &fragment, Target::Buffers, &inputs).unwrap();
+        let program = translate_gbuffers(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            &inputs,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+        )
+        .unwrap();
         assert_eq!(
             program
                 .interface
@@ -142,11 +173,27 @@ fn geometry_vertex_reads_the_provided_fade_and_requires_its_provider() {
         index: "@".into(),
         ..Default::default()
     };
-    let (_, count) = translate_geometry(&vertex, &geometry, &fragment, &inputs).unwrap();
+    let (_, count) = translate_geometry(
+        &vertex,
+        &geometry,
+        &fragment,
+        &inputs,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+    )
+    .unwrap();
     assert_eq!(count, 1);
     inputs.inputs.attributes.clear();
     geometry.code = geometry.code.replace("mc_chunkFade", "stage_bias");
-    assert!(translate_geometry(&vertex, &geometry, &fragment, &inputs).is_err());
+    assert!(
+        translate_geometry(
+            &vertex,
+            &geometry,
+            &fragment,
+            &inputs,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -165,7 +212,14 @@ fn geometry_vertex_keeps_authored_fade_globals() {
     ] {
         let [vertex, mut geometry, fragment] = geometry_probe(declaration);
         geometry.code = geometry.code.replace("mc_chunkFade", "stage_bias");
-        let (program, _) = translate_geometry(&vertex, &geometry, &fragment, &inputs).unwrap();
+        let (program, _) = translate_geometry(
+            &vertex,
+            &geometry,
+            &fragment,
+            &inputs,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+        )
+        .unwrap();
         assert_eq!(
             program
                 .interface

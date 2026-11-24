@@ -17,17 +17,55 @@ except ImportError:
 
 POS = 'Pos:[0.0d,64.0d,0.0d],Motion:[0.0d,0.0d,0.0d],Rotation:[0.0f,0.0f]'
 BONUS = '{id:"test:bonus",amount:0.5d,operation:"add_multiplied_base"}'
+LEADER_BONUS = '{id:"minecraft:leader_zombie_bonus",amount:10.0d,operation:"add_value"}'
 
 
-def case(name, entity, attributes, equip=None, then=None, read=()):
-    snbt = f'{{id:"{entity}",{POS},Health:20.0f'
+def case(name, entity, attributes, equip=None, then=None, read=(), health='20.0f', extra='', check_health=False, reload=False):
+    parts = [f'id:"{entity}"', POS]
+    if health is not None:
+        parts.append(f'Health:{health}')
+    if extra:
+        parts.append(extra)
     if attributes:
-        snbt += f',attributes:[{",".join(attributes)}]'
-    return dict(name=name, entity=entity, snbt=snbt + '}', equip=equip or {}, then=then or {}, read=list(read))
+        parts.append(f'attributes:[{",".join(attributes)}]')
+    out = dict(name=name, entity=entity, snbt='{' + ','.join(parts) + '}', equip=equip or {}, then=then or {}, read=list(read))
+    if check_health:
+        out['health'] = True
+    if reload:
+        out['reload'] = True
+    return out
 
 
 ZOMBIE, STAND = 'minecraft:zombie', 'minecraft:armor_stand'
-CASES = [
+SLIME, MAGMA_CUBE = 'minecraft:slime', 'minecraft:magma_cube'
+LOADED_HEALTH_CASES = [
+    # Loaded Health clamped to [0, getMaxHealth()] after attributes and cube sizing (vanilla 26.3, #2360).
+    case('loaded_health_endermite_over_max', 'minecraft:endermite', [], health='20.0f', check_health=True),
+    case('loaded_health_parched_over_max', 'minecraft:parched', [], health='20.0f', check_health=True),
+    case('loaded_health_zombie_bonus_kept', ZOMBIE,
+         [f'{{id:"minecraft:max_health",base:20.0d,modifiers:[{LEADER_BONUS}]}}'],
+         health='25.0f', check_health=True),
+    case('loaded_health_zombie_bonus_over_max', ZOMBIE,
+         [f'{{id:"minecraft:max_health",base:20.0d,modifiers:[{LEADER_BONUS}]}}'],
+         health='40.0f', check_health=True),
+    case('loaded_health_pig_negative', 'minecraft:pig', [], health='-3.0f', check_health=True),
+    case('loaded_health_pig_absent', 'minecraft:pig', [], health=None, check_health=True),
+    case('loaded_health_endermite_below_max', 'minecraft:endermite', [], health='3.5f', check_health=True),
+    case('loaded_health_slime_size1_over_max', 'minecraft:slime', [], health='20.0f', extra='Size:1', check_health=True),
+    case('loaded_health_magma_cube_size0_over_max', 'minecraft:magma_cube', [], health='20.0f', extra='Size:0', check_health=True),
+    case('loaded_health_sulfur_cube_size0_over_max', 'minecraft:sulfur_cube', [], health='20.0f', extra='Size:0', check_health=True),
+    case('loaded_health_sulfur_cube_size1_bonus_kept', 'minecraft:sulfur_cube',
+         ['{id:"minecraft:max_health",base:8.0d,modifiers:[{id:"test:boost",amount:6.0d,operation:"add_value"}]}'],
+         health='12.0f', extra='Size:1', check_health=True),
+    # A cube sizes before the saved attributes load, so a raised or default-valued saved base wins.
+    case('loaded_health_slime_size1_raised_base_kept', 'minecraft:slime',
+         ['{id:"minecraft:max_health",base:50.0d}'], health='30.0f', extra='Size:1', check_health=True),
+    case('loaded_health_magma_cube_size0_raised_base_over_max', 'minecraft:magma_cube',
+         ['{id:"minecraft:max_health",base:10.0d}'], health='20.0f', extra='Size:0', check_health=True),
+    case('loaded_health_slime_size0_default_base_kept', 'minecraft:slime',
+         ['{id:"minecraft:max_health",base:20.0d}'], health='15.0f', extra='Size:0', check_health=True),
+]
+ATTRIBUTE_CASES = [
     case('zombie_defaults', ZOMBIE, [], read=['minecraft:max_health', 'minecraft:attack_damage', 'minecraft:armor']),
     # A base override and a non-transient modifier with an id on a modelled attribute, a base and a
     # modifier on one the game does not model (step_height), and an attribute the type lacks (luck).
@@ -54,18 +92,75 @@ CASES = [
         f'{{id:"minecraft:max_health",base:30.0d,modifiers:[{BONUS}]}}',
         '{id:"minecraft:movement_speed",base:0.25d}',
     ], equip={'head': 'minecraft:diamond_helmet'}, read=['minecraft:max_health', 'minecraft:armor', 'minecraft:movement_speed']),
+    # Cube mobs set bases past the attribute bounds (AbstractCubeMob.setSize / MagmaCube.setSize) and keep them across reload.
+    case('slime_size_39', SLIME, [], extra='NoAI:1b,Size:39', health=None, reload=True,
+         read=['minecraft:max_health', 'minecraft:movement_speed', 'minecraft:attack_damage']),
+    case('magma_cube_size_199', MAGMA_CUBE, [], extra='NoAI:1b,Size:199', health=None, reload=True,
+         read=['minecraft:max_health', 'minecraft:movement_speed', 'minecraft:attack_damage', 'minecraft:armor']),
+    case('magma_cube_size_neg5', MAGMA_CUBE, [], extra='NoAI:1b,Size:-5', health=None, reload=True,
+         read=['minecraft:max_health', 'minecraft:movement_speed', 'minecraft:attack_damage', 'minecraft:armor']),
 ]
+CASES = [*ATTRIBUTE_CASES, *LOADED_HEALTH_CASES]
+
+
+def format_loaded_health_witness(version, vanilla_lines):
+    by_name = {}
+    for line in vanilla_lines:
+        parts = line.split('\t')
+        if any(p.startswith('FAIL ') for p in parts[1:]):
+            raise SystemExit(f'Java oracle failed: {line}')
+        by_name[parts[0]] = parts[1:]
+    rows = [
+        f'# Vanilla {version} mob loaded Health witness (recorded by tools/test_mob_attribute_nbt_parity.py).',
+        '# Columns: name\tentity\tdefault_max_health_bits\tloaded_max_health_bits\tloaded_health_bits\tsaved_health_bits\tsnbt',
+    ]
+    for c in LOADED_HEALTH_CASES:
+        tokens = by_name[c['name']]
+        health_tok = next((t for t in tokens if t.startswith('health ')), None)
+        if health_tok is None:
+            raise SystemExit(f'Missing health output for {c["name"]}: {tokens}')
+        _, loaded_health, loaded_max, saved_health, default_max = health_tok.split(' ')
+        rows.append('\t'.join([c['name'], c['entity'], default_max, loaded_max, loaded_health, saved_health, c['snbt']]))
+    return '\n'.join(rows) + '\n'
+
+
+def format_witness(version, vanilla):
+    header = [
+        f'# Vanilla {version} mob attribute NBT witness (exact IEEE-754 double bits).',
+        '# Recorded by: tools/test_mob_attribute_nbt_parity.py',
+        '# Oracle: VanillaMobAttributeNbtOracle',
+        '# Columns: name<TAB>entity<TAB>snbt<TAB>tokens...',
+    ]
+    if len(vanilla) != len(CASES):
+        raise AssertionError(f'vanilla has {len(vanilla)} lines for {len(CASES)} cases')
+    rows = []
+    for entry, line in zip(ATTRIBUTE_CASES, vanilla[:len(ATTRIBUTE_CASES)]):
+        parts = line.split('\t')
+        if parts[0] != entry['name']:
+            raise AssertionError(f'case order mismatch: expected {entry["name"]}, got {parts[0]}')
+        if any(tok.startswith('FAIL ') for tok in parts[1:]):
+            raise AssertionError(f'oracle failed for {entry["name"]}: {line}')
+        rows.append('\t'.join([entry['name'], entry['entity'], entry['snbt'], *parts[1:]]))
+    return '\n'.join(header + rows) + '\n'
+
+
+def java_version_string():
+    result = subprocess.run(['java', '-version'], capture_output=True, text=True, check=True)
+    return (result.stderr or result.stdout).strip().splitlines()[0]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prepare', action='store_true')
+    parser.add_argument('--record', '--record-only', dest='record', action='store_true',
+                        help='Record the vanilla witnesses into .local from the Java oracle only')
     args = parser.parse_args()
     build = lab.LOCAL / 'rust-mob-attribute-nbt-parity'
     build.mkdir(parents=True, exist_ok=True)
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = base.verify_artifacts()
+    version = lock['minecraft']['version']
     oracle = lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity/VanillaMobAttributeNbtOracle.java'
     classes = build / 'classes'
     classes.mkdir(exist_ok=True)
@@ -77,11 +172,46 @@ def main():
         with (build / (name + '.log')).open('w', encoding='utf-8') as log:
             subprocess.run(list(map(str, cmd)), cwd=lab.ROOT, check=True, timeout=3600, stdout=log, stderr=subprocess.STDOUT)
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
-    run(['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]), 'dev.sunriselab.parity.VanillaMobAttributeNbtOracle', cases, build / 'vanilla.txt'], 'java')
+    oracle_cmd = ['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]),
+                  'dev.sunriselab.parity.VanillaMobAttributeNbtOracle', cases, build / 'vanilla.txt']
+    run(oracle_cmd, 'java')
+    vanilla = build.joinpath('vanilla.txt').read_text(encoding='utf-8').splitlines()
+    # Recorded witnesses stay in .local; the Rust tests read them from SUNRISE_MOB_ATTRIBUTE_NBT_WITNESS and SUNRISE_MOB_LOADED_HEALTH_WITNESS.
+    witness_dir = lab.LOCAL / 'witness' / version / 'mob_attribute_nbt'
+    witness_dir.mkdir(parents=True, exist_ok=True)
+    attribute_witness = witness_dir / 'mob_attribute_nbt.tsv'
+    attribute_witness.write_text(format_witness(version, vanilla), encoding='utf-8')
+    loaded_health_witness = witness_dir / 'mob_loaded_health.tsv'
+    loaded_health_witness.write_text(format_loaded_health_witness(version, vanilla), encoding='utf-8')
+    lab.write_json(witness_dir / 'meta.json', {
+        'game_version': version,
+        'java_major': lock['minecraft']['java_major'],
+        'java_version': java_version_string(),
+        'harness': 'tools/test_mob_attribute_nbt_parity.py',
+        'command': [str(part) for part in oracle_cmd],
+        'input_hashes': {
+            'research-lock.json': lab.digest(lab.LOCK, 'sha256'),
+            'server.jar': lab.digest(jars['server'], 'sha256'),
+            oracle.relative_to(lab.ROOT).as_posix(): lab.digest(oracle, 'sha256'),
+            'cases.jsonl': lab.digest(cases, 'sha256'),
+        },
+        'outputs': {
+            'mob_attribute_nbt.tsv': {
+                'sha256': lab.digest(attribute_witness, 'sha256'),
+                'bytes': attribute_witness.stat().st_size,
+            },
+            'mob_loaded_health.tsv': {
+                'sha256': lab.digest(loaded_health_witness, 'sha256'),
+                'bytes': loaded_health_witness.stat().st_size,
+            },
+        },
+    })
+    if args.record:
+        print(f'Recorded {len(ATTRIBUTE_CASES)} attribute and {len(LOADED_HEALTH_CASES)} loaded-health cases to {witness_dir}')
+        return
     run(['cargo', 'build', '--profile', 'fast', '-p', 'sunrise-client-lib', '--example', 'client_probe'], 'compile-rust')
     binary = lab.cargo_target() / 'fast/examples/client_probe'
     run([binary, 'mob_attribute_nbt_fixture', lab.RESOURCES, cases, build / 'rust.txt'], 'rust')
-    vanilla = build.joinpath('vanilla.txt').read_text(encoding='utf-8').splitlines()
     rust = build.joinpath('rust.txt').read_text(encoding='utf-8').splitlines()
     problems = []
     for v, r in zip(vanilla, rust):
@@ -96,7 +226,26 @@ def main():
     if problems:
         print('\n'.join(problems))
         raise SystemExit('mob attribute NBT divergences')
-    print(f'Mob attribute NBT parity passed ({len(CASES)} cases)')
+    witness_tests = [
+        'mobs::finalize::load_tests::a_loaded_health_is_clamped_to_the_loaded_max_health',
+        'mobs::cube::own_base_tests::a_cube_keeps_the_bases_its_own_size_set',
+    ]
+    test_env = {
+        **os.environ,
+        'SUNRISE_MOB_LOADED_HEALTH_WITNESS': str(loaded_health_witness),
+        'SUNRISE_MOB_ATTRIBUTE_NBT_WITNESS': str(attribute_witness),
+        'SUNRISE_TEST_RESOURCES': os.environ.get('SUNRISE_TEST_RESOURCES', str(lab.RESOURCES)),
+    }
+    test_log = build / 'witness-tests.log'
+    with test_log.open('w', encoding='utf-8') as log:
+        result = subprocess.run(
+            ['cargo', 'test', '-p', 'sunrise-client-lib', '--lib', '--', '--ignored', '--exact', *witness_tests],
+            cwd=lab.ROOT, timeout=3600, stdout=log, stderr=subprocess.STDOUT, env=test_env,
+        )
+    expected_summary = f'{len(witness_tests)} passed; 0 failed'
+    if result.returncode != 0 or expected_summary not in test_log.read_text(encoding='utf-8', errors='replace'):
+        raise SystemExit(f'mob attribute NBT witness tests failed against {witness_dir}; see {test_log}')
+    print(f'Mob attribute NBT parity passed ({len(CASES)} cases, {len(witness_tests)} witness tests against {witness_dir})')
 
 
 if __name__ == '__main__':

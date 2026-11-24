@@ -22,6 +22,8 @@ pub trait Hooks {
     /// a component-dependent answer is not supported by this hook or its
     /// `is_primary_item_for` pair.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "both",
         contract = "replace",
         out = "answer",
@@ -30,5 +32,5 @@ pub trait Hooks {
         host = "read",
         neoforge = "IItemExtension.supportsEnchantment"
     )]
-    fn supports_enchantment();
+    fn supports_enchantment(stack: &ItemStack, enchantment: &str, answer: &mut Option<bool>);
 }

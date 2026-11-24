@@ -272,7 +272,7 @@ impl<'r> BlockCollisionRegistry<'r> {
     ) -> Result<VoxelShape, CollisionQueryError<W::Error>> {
         if self.publishes_shapes(state)
             && let Some(shape) = world
-                .published_collision_shape(position)
+                .published_collision_shape(position, state)
                 .map_err(|e| CollisionQueryError::Dynamic(DynamicSupportError::World(e)))?
         {
             return Ok(shape);
@@ -338,7 +338,7 @@ impl<'r> BlockCollisionRegistry<'r> {
         // A published shape stands over every declared one, whatever the entity.
         if self.publishes_shapes(state)
             && let Some(shape) = world
-                .published_collision_shape([position.x, position.y, position.z])
+                .published_collision_shape([position.x, position.y, position.z], state)
                 .map_err(|e| CollisionQueryError::Dynamic(DynamicSupportError::World(e)))?
         {
             return Ok(shape);

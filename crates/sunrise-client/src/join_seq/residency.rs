@@ -39,6 +39,7 @@ pub enum Kind {
     Trident,
     Spawner,
     Cloud,
+    Bolt,
     Cushion,
     Knot,
     Player,
@@ -128,6 +129,9 @@ impl Identity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
     Install(Identity),
+    /// A zero-id entity was given its id. It was added to the level when it
+    /// joined its storage (`addFreshEntity`), so that join is its admission.
+    Spawned(Identity),
     Remove(Identity),
     Extract(Identity),
     PutBack(Identity),
@@ -369,9 +373,7 @@ impl<T> Binding<T> {
             ));
             if let Some((kind, count, uuid)) = self.children {
                 for offset in 0..count {
-                    let Some(child) = id
-                        .checked_add(u32::from(offset) + 1)
-                        .and_then(|id| Identity::new(id, join))
+                    let Some(child) = Identity::new(id.wrapping_add(u32::from(offset) + 1), join)
                     else {
                         continue;
                     };

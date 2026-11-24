@@ -1,6 +1,6 @@
 //! Ordinary player turns in a transformed source context. The physical player body stays put.
 use super::*;
-use crate::game::{Dim, GuestUse, Hit};
+use crate::game::{Dim, GuestUse, Hit, transactions::StorageSettlement};
 use mod_api::{Hand, PlayerRef};
 
 #[derive(Clone, Copy)]
@@ -338,7 +338,7 @@ impl Game<'_> {
         hit: LiveWorldHit,
         into_inventory: bool,
     ) -> Result<bool, Error> {
-        if self.transaction_current().is_some() {
+        if self.has_open_transaction() {
             return Err(Error::Busy);
         }
         self.projection_entry(handle)?;
@@ -353,22 +353,24 @@ impl Game<'_> {
         into_inventory: bool,
     ) -> Result<bool, Error> {
         self.with_projected_actor(handle, player, hit, |game, hit| {
-            let seal = game.transaction_open();
-            let writes = game.transactions.writes();
-            game.live_worlds
+            let scope = game.storage_scope_guard(true);
+            let writes = scope.game.transactions.writes();
+            scope
+                .game
+                .live_worlds
                 .get_mut()
                 .action
                 .as_mut()
                 .expect("scoped action")
                 .break_writes = Some(writes);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                game.player_destroy_block(player, hit.pos, into_inventory)
-            }));
-            game.transaction_close(&seal, result.as_ref().is_ok_and(|removed| *removed));
-            match result {
-                Ok(removed) => Ok(removed),
-                Err(panic) => std::panic::resume_unwind(panic),
+            let removed = scope
+                .game
+                .player_destroy_block(player, hit.pos, into_inventory);
+            let settled = scope.close(removed);
+            if removed && !matches!(settled, Some(StorageSettlement::Committed(_))) {
+                return Err(Error::Unavailable);
             }
+            Ok(removed)
         })
     }
 
@@ -392,14 +394,14 @@ impl Game<'_> {
     ) -> Result<bool, Error> {
         // Ordinary menu screens are published by this operation's own source turn. A caller's
         // outer savepoint could later abort after that publication, so refuse before any effect.
-        if self.transaction_current().is_some() {
+        if self.has_open_transaction() {
             return Err(Error::Busy);
         }
         self.with_projected_actor(handle, player, hit, |game, hit| {
             let old_hand = game.hand;
             let old_use = game.guest_use;
             game.hand = hand;
-            game.guest_use = Some(GuestUse::OnBlock(hand));
+            game.guest_use = Some(GuestUse::on_block(hand));
             let target = game.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
             let name = &game.res.facts().get(target).name;
             let menu = matches!(
@@ -434,35 +436,33 @@ impl Game<'_> {
                 game.guest_use = old_use;
                 return Err(Error::Unsupported);
             }
-            let seal = game.transaction_open();
+            let scope = game.storage_scope_guard(true);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                game.use_hand(Some(&hit))
+                scope.game.use_hand(Some(&hit))
             }));
-            let menu_fresh = game.container.is_none() || game.projection_menu_effect_fresh();
-            if !menu_fresh {
-                game.use_failed = true;
+            if scope.game.container.is_some() && !scope.game.projection_menu_effect_fresh() {
+                scope.game.use_failed = true;
             }
+            let denied = scope.game.use_failed;
             let accepted = result
                 .as_ref()
                 .is_ok_and(|result| result.as_ref().is_ok_and(|used| *used))
-                && !game.use_failed;
+                && !denied;
             if !accepted {
-                game.close_ender_chest();
-                if let Some(pos) = game.container.take() {
-                    game.container_openers_changed(pos, false);
-                }
+                scope.game.close_ender_chest();
+                scope.game.container = None;
             }
-            game.transaction_close(&seal, accepted);
+            let settled = scope.close(accepted);
             game.hand = old_hand;
             game.guest_use = old_use;
+            if accepted && !matches!(settled, Some(StorageSettlement::Committed(_))) {
+                game.close_ender_chest();
+                game.container = None;
+                return Err(Error::Unavailable);
+            }
             match result {
-                Ok(result) => result.map_err(|_| Error::Unavailable).and_then(|used| {
-                    if game.use_failed {
-                        Err(Error::Denied)
-                    } else {
-                        Ok(used)
-                    }
-                }),
+                Ok(Ok(_)) if denied => Err(Error::Denied),
+                Ok(result) => result.map_err(|_| Error::Unavailable),
                 Err(panic) => std::panic::resume_unwind(panic),
             }
         })

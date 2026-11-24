@@ -51,7 +51,7 @@ fn horse(seed: i64, types: &crate::mobs::MobTypes) -> Mob {
         0.0,
         LegacyRandom::new(seed),
     );
-    m.on_ground = true;
+    m.ground.on_ground = true;
     // `isVehicle`: a mob's back is enough to bolt.
     m.extra.rider = Some(9);
     m

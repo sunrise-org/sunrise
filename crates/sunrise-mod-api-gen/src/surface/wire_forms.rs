@@ -1,7 +1,9 @@
-//! How each API type crosses the WebAssembly boundary, read from the code that makes it cross:
+//! How each API type implements `Wire`, read from the code that defines the encoding:
 //! the `Wire` derive (with `#[wire(via = T)]`), a hand-written `impl Wire` (its
-//! `layout_fields!` list, or a `layout_via!` naming the type it crosses as), including the impls the
-//! API's own macros write once expanded.
+//! `layout_fields!` list, or a `layout_via!` naming its encoded form), including the impls the
+//! API's own macros write once expanded. A type's presence in the API does not give it a
+//! form. The exporter can inspect arbitrary checkout revisions without compiling or loading
+//! their vocabulary; `Wire::describe` computes a fingerprint for a compiled type instead.
 use crate::index::{Found, Index, ItemId};
 pub(super) use mod_source::layouts::WireForm;
 use std::collections::HashMap;
@@ -46,16 +48,24 @@ fn layout_fields(tokens: proc_macro2::TokenStream) -> Option<Vec<(String, Type)>
             Ok(Self(name.value(), input.parse()?))
         }
     }
-    let pairs = syn::parse::Parser::parse2(
-        syn::punctuated::Punctuated::<Pair, syn::Token![,]>::parse_terminated,
-        tokens,
-    )
-    .ok()?;
+    let fields = |input: syn::parse::ParseStream| {
+        // A contract prefix affects admission or versioning, not the ordinary encoded fields.
+        if input.peek(syn::Ident) {
+            input.parse::<syn::Ident>()?;
+            input.parse::<syn::LitStr>()?;
+            input.parse::<syn::Token![;]>()?;
+        } else if input.peek(syn::LitStr) && input.peek2(syn::Token![;]) {
+            input.parse::<syn::LitStr>()?;
+            input.parse::<syn::Token![;]>()?;
+        }
+        syn::punctuated::Punctuated::<Pair, syn::Token![,]>::parse_terminated(input)
+    };
+    let pairs = syn::parse::Parser::parse2(fields, tokens).ok()?;
     Some(pairs.into_iter().map(|Pair(n, t)| (n, t)).collect())
 }
 
 /// What a hand-written impl's items declare: `layout_fields!("a" => T, …)`, or `layout_via!(T)`
-/// when it crosses as `T`.
+/// when it crosses as `T`. A `layout_via!` decoder-contract label does not change that layout.
 fn impl_form(items: &[syn::ImplItem], module: usize) -> WireForm {
     for item in items {
         let syn::ImplItem::Macro(mac) = item else {
@@ -69,7 +79,19 @@ fn impl_form(items: &[syn::ImplItem], module: usize) -> WireForm {
                 };
             }
             Some(name) if name.ident == "layout_via" => {
-                return match syn::parse2::<Type>(mac.mac.tokens.clone()) {
+                let via = |input: syn::parse::ParseStream| -> syn::Result<Type> {
+                    let ty = input.parse()?;
+                    if !input.is_empty() {
+                        input.parse::<syn::Token![,]>()?;
+                        input.parse::<syn::LitStr>()?;
+                        if !input.is_empty() {
+                            input.parse::<syn::Token![,]>()?;
+                            input.parse::<syn::Ident>()?;
+                        }
+                    }
+                    Ok(ty)
+                };
+                return match syn::parse::Parser::parse2(via, mac.mac.tokens.clone()) {
                     Ok(ty) => WireForm::Via(ty, module),
                     Err(_) => WireForm::Manual,
                 };

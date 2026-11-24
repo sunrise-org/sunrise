@@ -21,6 +21,11 @@ impl Ttl {
     pub fn present(self) -> bool {
         self.0 > 0
     }
+    /// The time to live left while the memory is present (`MemorySlot.timeToLive`),
+    /// 0 on its last tick.
+    pub fn left(self) -> Option<i32> {
+        (self.0 > 0).then(|| self.0 - 1)
+    }
     /// `Brain.forgetOutdatedMemories`, once at the start of each tick.
     pub fn tick(&mut self) {
         if self.0 > 0 {
@@ -216,7 +221,7 @@ pub fn put_brain(map: &mut Compound, m: &Mob, dimension: &str) {
 /// `Frog`'s brain memory `IS_PREGNANT`, which `Brain.Packed` writes beside the
 /// other memories and `mob_from_nbt` reads back into the frog's memories. The
 /// memory is a `Unit`: its value is an empty compound, with no TTL.
-pub fn write_frog(m: &Mob, map: &mut Compound) {
+pub fn write_frog(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     let brain = map
         .entry("Brain".into())
         .or_insert_with(|| Tag::Compound(Compound::new()));

@@ -96,7 +96,7 @@ pub fn inherited_step_sound(
         _ => {
             // Entity.playStepSound: the block's sound type, as its parts answer.
             let sounds = w.block_sound_type(m, pos, state, mod_api::BlockSoundCause::Step);
-            let step = Cow::Owned(sounds.step.to_string());
+            let step = Cow::Owned(sounds.step.as_str().to_owned());
             Some((step, sounds.volume * 0.15, sounds.pitch))
         }
     }

@@ -218,8 +218,8 @@ impl TimelineUi {
         let panel_y = screen_h - panel_h;
         let panel_rect = [0.0, panel_y, screen_w, panel_h];
 
-        // 1. Draw glass background panel
-        style::panel(batch, atlas, panel_rect);
+        // 1. The panel, over the replay's world
+        style::panel(batch, atlas, panel_rect, true);
 
         // 2. Transport & Action Header Bar
         let header_y = panel_y + 3.0;
@@ -396,7 +396,7 @@ impl TimelineUi {
         w: f32,
     ) {
         let ruler_rect = [start_x, y, w, 16.0];
-        style::well(batch, atlas, ruler_rect);
+        style::well(batch, atlas, ruler_rect, false);
 
         // Draw second tick marks and labels
         let sec_step = 1.0; // 1s ticks

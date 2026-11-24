@@ -72,27 +72,21 @@ impl Game<'_> {
         }
         self.award_stat("used", &stack.item, 1);
     }
-    pub(super) fn consume_held(&mut self) {
-        if self.creative {
-            return;
-        }
-        self.edit_block_use_stack(|cell| {
-            if let Some(s) = cell.as_mut() {
-                s.count = s.count.saturating_sub(1);
-                if s.count == 0 {
-                    *cell = None;
-                }
-            }
-        });
-    }
     /// `BlockItem.place`'s shrink of the stack it placed, and
     /// `SolidBucketItem.useOn`'s `BucketItem.getEmptySuccessItem`: a placed
     /// powder snow bucket leaves an empty bucket in that hand, unless the player
     /// has infinite materials. The client predicts the same as the server does.
     pub(super) fn consume_placed(&mut self, placed: &ItemStack) {
-        self.consume_held();
-        if &*placed.item == "minecraft:powder_snow_bucket" && !self.creative {
-            *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
+        if self.creative {
+            return;
+        }
+        let slot = self.held_slot();
+        let last = self.stack_in(slot).is_some_and(|stack| stack.count == 1);
+        self.consume_player_slot(slot, 1);
+        if &*placed.item == "minecraft:powder_snow_bucket"
+            && (!last || self.stack_in(slot).is_none())
+        {
+            *self.stack_in_mut(slot) = Some(ItemStack::new("minecraft:bucket", 1));
         }
     }
     pub(super) fn tick_using(&mut self) {
@@ -113,15 +107,18 @@ impl Game<'_> {
             self.use_start = Default::default();
             return;
         };
-        // `isSameItem(getItemInHand(hand), useItem)`: another item stops the use
-        // of the stack it began with, without a release. The same item goes on;
-        // only the item is compared, so the start's stack is kept as it was.
-        if let Some(item) = self.use_start.item.take_if(|item| item.item != stack.item) {
-            self.stop_using_item(&item);
-            return;
+        // The may-still-use check (`isSameItem`, then a part's `canContinueUsing`):
+        // a refused use stops for the stack it began with, without a release;
+        // one that goes on takes the hand's stack as its own (`useItem = held`).
+        if let Some(began) = self.use_start.item.take() {
+            if !self.can_continue_using(&began, &stack, None, self.hand) {
+                self.stop_using_item(&began);
+                return;
+            }
+            self.use_start.item = Some(stack.clone());
         }
         let hand_changed = self.use_hand_changed(slot);
-        if !self.right || hand_changed || self.screen != Screen::Playing {
+        if !self.mapped_key_down("key.use") || hand_changed || self.screen != Screen::Playing {
             self.using = None;
             self.release_used_item(&stack, ticks, hand_changed);
             return;
@@ -266,7 +263,8 @@ impl Game<'_> {
         if release {
             self.mod_release_using(stack, ticks);
         }
-        self.stop_using_item(stack);
+        let time_left = item_use::ticks_left(self.use_duration, ticks);
+        self.end_use(stack, self.hand, time_left);
     }
     /// Ends the current use through [`Self::stop_using_item`]. With no stack left in
     /// the use's slot there is nothing to vibrate, but the use still ends.
@@ -303,14 +301,54 @@ impl Game<'_> {
         }
     }
 
+    /// `LivingEntity.updatingUsingItem`'s may-still-use check, one rule for both
+    /// sides: `ItemStack.isSameItem(held, began)`, then the parts of `began`'s
+    /// item (`IItemExtension.canContinueUsing`) may answer either way.
+    pub(in crate::game) fn can_continue_using(
+        &self,
+        began: &ItemStack,
+        held: &ItemStack,
+        entity: Option<i32>,
+        hand: Hand,
+    ) -> bool {
+        let mut can_continue = began.item == held.item;
+        if mod_api::__private::item_listens(mod_api::HookId::CanContinueUsing, &began.item) {
+            self.native_can_continue_using(began, held, entity, hand, &mut can_continue);
+        }
+        can_continue
+    }
     /// `LivingEntity.stopUsingItem`: the use of `stack` is over (`useItem` and
     /// its remaining ticks are cleared), and when the use effects of the stack
     /// ask for it, `ItemStack.causeUseVibration` sends an `ITEM_INTERACT_FINISH`
     /// game event from the player, at its feet.
+    /// Then the parts of `stack`'s item hear `on_stop_using`.
     pub(super) fn stop_using_item(&mut self, stack: &ItemStack) {
+        let hand = item_use::hand_of(self.using).unwrap_or(self.hand);
+        let time_left = self.using.map_or(0, |(_, ticks)| {
+            item_use::ticks_left(self.use_duration, ticks)
+        });
+        self.end_use(stack, hand, time_left);
+    }
+    /// [`Self::stop_using_item`] for a use in `hand` stopped with `time_left` ticks left.
+    fn end_use(&mut self, stack: &ItemStack, hand: Hand, time_left: i32) {
         self.using = None;
         self.use_start = Default::default();
         self.use_vibration(stack, "minecraft:item_interact_finish");
+        self.stopped_using(stack, None, hand, time_left);
+    }
+    /// `IItemExtension.onStopUsing` of `stack`, its use by `entity` (`None` for
+    /// the player) in `hand` cleared `time_left` ticks before its end (0 for a
+    /// finished use): only the parts of its item hear it.
+    pub(in crate::game) fn stopped_using(
+        &mut self,
+        stack: &ItemStack,
+        entity: Option<i32>,
+        hand: Hand,
+        time_left: i32,
+    ) {
+        if mod_api::__private::item_listens(mod_api::HookId::OnStopUsing, &stack.item) {
+            self.native_on_stop_using(stack, entity, hand, time_left);
+        }
     }
     /// `ItemStack.causeUseVibration` for `stack` used by the player: the
     /// `event` game event (`ITEM_INTERACT_START` when the use begins,

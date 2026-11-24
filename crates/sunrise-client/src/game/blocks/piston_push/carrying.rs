@@ -9,8 +9,11 @@
 //! A body's support is the one collider box under it: the highest top, a tie to the lower
 //! collider entity id. The supports form a forest, and it is carried from the roots: a collider
 //! that stands on another collider is carried first, and the bodies on it use its whole
-//! displacement. A body that rides something is not carried; it follows its vehicle. The server
-//! carries what it simulates, each client its own player.
+//! displacement. Then a translating collider shoves nearby bodies in the path of its boxes.
+//! A body that rides something follows its vehicle. The server moves what it simulates, each
+//! client its own player.
+#[path = "shoving.rs"]
+mod shoving;
 use super::*;
 use sunrise_client_render::moving_colliders::{self, Prepared};
 use sunrise_core::geometry::oriented::OrientedCollider;
@@ -130,25 +133,49 @@ impl Game<'_> {
         }
     }
 
-    /// Carries the bodies standing on the colliders of the level that moved this tick.
-    /// `start` is the colliders as the tick began, where the bodies stood. A tick where no
-    /// collider moved does nothing; the bodies are found through the level's collider index.
+    /// Carries bodies on colliders that moved this tick, then shoves bodies in the path of a
+    /// translating collider. `start` is the colliders as the tick began. A tick where none
+    /// moved does nothing.
     pub(in crate::game) fn carry_pass(&mut self, start: &Prepared) {
-        if start.is_empty() || !self.any_collider_moved(start) {
-            return;
+        // The client handles entity movement packets before its tick (Minecraft.runTick).
+        // Keep the last tick's placement for a shove instead of sweeping from the pose that
+        // already includes those packets. The existing support and carry pass is unchanged.
+        let last = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.collider_shove_start.take())
+            .filter(|(level, _)| *level == self.dim);
+        let carry = self.any_collider_moved(start);
+        let shove = last
+            .as_ref()
+            .map_or(carry, |(_, placed)| self.any_collider_moved(placed));
+        if carry || shove {
+            let mut scratch = SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+            let steps = self.push_step_heights();
+            scratch.riders.clear();
+            if carry {
+                self.collider_riders(start, &steps, &mut scratch);
+                if !scratch.riders.is_empty() {
+                    self.carry_in_order(start, &steps, &mut scratch);
+                    // A passenger that owns a collider moves with its vehicle too.
+                    self.position_riders();
+                }
+            }
+            if shove {
+                let before = last.as_ref().map_or(start, |(_, placed)| placed);
+                self.shove_pass(before, &steps, &scratch.riders);
+            }
+            SCRATCH.with(|cell| *cell.borrow_mut() = scratch);
         }
-        let mut scratch = SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
-        let steps = self.push_step_heights();
-        self.collider_riders(start, &steps, &mut scratch);
-        let carried = !scratch.riders.is_empty();
-        if carried {
-            self.carry_in_order(start, &steps, &mut scratch);
-        }
-        SCRATCH.with(|cell| *cell.borrow_mut() = scratch);
-        if carried {
-            // A carried vehicle's passengers follow it now, through the one rider positioning
-            // the tick uses (`Entity.positionRider`), nested passengers in order.
-            self.position_riders();
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|r| !r.colliders.is_empty())
+        {
+            let now = self.placed_moving_colliders();
+            if let Some(remote) = self.remote.as_mut() {
+                remote.collider_shove_start = Some((self.dim, now));
+            }
         }
     }
 
@@ -190,7 +217,8 @@ impl Game<'_> {
             // The carried moves meet the colliders where they stand now.
             wave = wave.max(scratch.order[at].0);
             let now = self.placed_moving_colliders();
-            moving_colliders::in_level(now.clone(), || {
+            {
+                let _scope = moving_colliders::Scope::enter_level(self.collider_level(), now.clone());
                 while at < scratch.order.len() && scratch.order[at].0 <= wave {
                     let collider = scratch.order[at].1;
                     let first = scratch.riders.partition_point(|r| r.support < collider);
@@ -209,7 +237,7 @@ impl Game<'_> {
                     );
                     at += 1;
                 }
-            });
+            }
             wave += 1;
         }
     }
@@ -319,7 +347,6 @@ impl Game<'_> {
             if carried.length_squared() >= 1.0e-18
                 && !self.move_pushed_body(
                     MoverType::Carried,
-                    None,
                     rider.target,
                     body,
                     carried,

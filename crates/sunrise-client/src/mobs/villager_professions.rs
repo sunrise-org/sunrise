@@ -22,7 +22,7 @@ pub struct Profession {
 #[derive(Debug)]
 pub struct ResolvedProfessions {
     entries: Vec<Profession>,
-    by_name: std::collections::HashMap<String, usize>,
+    by_name: std::collections::BTreeMap<String, usize>,
     custom_poi: std::collections::HashMap<String, usize>,
     by_poi: [Option<u8>; 13],
     pub pois: sunrise_world::poi::PoiSnapshot,
@@ -98,7 +98,7 @@ impl ResolvedProfessions {
     pub fn entries(&self) -> &[Profession] {
         &self.entries
     }
-    /// Canonical identities in this world's accepted profession table.
+    /// Canonical identities in this world's accepted profession table, in lexical order.
     pub fn registry_ids(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)
     }

@@ -27,16 +27,16 @@ fn read(
 #[ignore = "daily"]
 fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let instance = crate::gfx::test_gpu::instance();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
-        .expect("GPU control requires an adapter");
+    let adapter = crate::gfx::test_gpu::adapter().expect("GPU control requires an adapter");
     eprintln!("TERRAIN_SOURCE_ARENA_ADAPTER {:?}", adapter.get_info());
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mut arena = Arena::new(&device, 24, GRAIN, true);
+    arena.read_sources(true);
     arena.page_limit = GRAIN * 2;
     let mut encoder = device.create_command_encoder(&Default::default());
     let mut uploads = super::super::upload::Uploads::new(&device);
     let first = arena.alloc(&device, &mut encoder, 4).unwrap();
+    assert_eq!(arena.bytes(), GRAIN * 24);
     assert!(
         arena.sources(first.0).is_none(),
         "default geometry allocates no source buffer"
@@ -53,15 +53,18 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         &device,
         &mut encoder,
         &mut uploads,
-        first.0,
-        first.1,
-        4,
+        (first.0, first.1, 4),
+        QuadSlots::vertices(4),
         &[source],
     );
+    let bytes_per_vertex = 24 + 8;
+    assert_eq!(arena.bytes(), GRAIN * bytes_per_vertex);
     let second = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
     assert_eq!(second, (first.0, GRAIN), "grew the first page");
+    assert_eq!(arena.bytes(), 2 * GRAIN * bytes_per_vertex);
     let third = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
     assert_ne!(third.0, first.0, "move crosses pages");
+    assert_eq!(arena.bytes(), 4 * GRAIN * bytes_per_vertex);
     arena.copy(&mut encoder, first, third, 4);
     arena.release(first.0, first.1, 4);
     let reused = arena.alloc_existing(4).unwrap();
@@ -70,9 +73,8 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         &device,
         &mut encoder,
         &mut uploads,
-        reused.0,
-        reused.1,
-        4,
+        (reused.0, reused.1, 4),
+        QuadSlots::vertices(4),
         &[],
     );
     uploads.finish(&encoder);
@@ -82,7 +84,7 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
             &device,
             &queue,
             arena.sources(third.0).unwrap(),
-            third.1 / 4 * 8,
+            third.1 * 8,
             8
         ),
         bytemuck::bytes_of(&source)
@@ -92,7 +94,7 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
             &device,
             &queue,
             arena.sources(first.0).unwrap(),
-            first.1 / 4 * 8,
+            first.1 * 8,
             8
         ),
         [0; 8]
@@ -114,6 +116,7 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
     }))
     .unwrap();
     let mut arena = Arena::translucent(&device, 24, GRAIN);
+    arena.read_sources(true);
     let mut encoder = device.create_command_encoder(&Default::default());
     let mut uploads = super::super::upload::Uploads::new(&device);
     let at = arena.alloc(&device, &mut encoder, 4).unwrap();
@@ -127,15 +130,15 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         &device,
         &mut encoder,
         &mut uploads,
-        at.0,
-        at.1,
-        4,
+        (at.0, at.1, 4),
+        QuadSlots::vertices(4),
         &[source],
     );
     assert!(
         arena.sources(at.0).is_none(),
         "sidecar refused without losing vertices"
     );
+    assert_eq!(arena.bytes(), GRAIN * 24);
     assert!(super::super::pack_post::block_ids(&device, &queue, &[0; 128], &[0, 1]).is_none());
     uploads.finish(&encoder);
     queue.submit([encoder.finish()]);
@@ -143,4 +146,126 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         read(&device, &queue, arena.buffer(at.0), at.1 * 24, 96),
         bytemuck::cast_slice::<_, u8>(&geometry)
     );
+}
+
+/// A compact range's sources (five records, then padding and one quad kept as vertices) move
+/// and recycle slot by slot at starts past slot 0; the arena keeps sources only while they
+/// are read, and an arena nothing reads them from (the translucent one) never keeps any.
+#[test]
+#[ignore = "daily"]
+fn terrain_sources_move_recycle_and_live_only_while_read() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let adapter = crate::gfx::test_gpu::adapter().expect("GPU control requires an adapter");
+    eprintln!("TERRAIN_SOURCE_LIFE_ADAPTER {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let sources: Vec<_> = (0..5)
+        .map(|q| TerrainSource::new(11 + 7 * q, [q as i32, 2, 3], q as u8, false))
+        .collect();
+    let slots = 12;
+    let mut expected = vec![0u8; slots as usize * 8];
+    expected[..40].copy_from_slice(bytemuck::cast_slice(&sources));
+
+    let mut arena = Arena::new(&device, 24, GRAIN, true);
+    arena.read_sources(true);
+    arena.page_limit = GRAIN * 2;
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut uploads = super::super::upload::Uploads::new(&device);
+    // A range past slot 0 of the first page, and its move to one past slot 0 of the second.
+    let filler = arena.alloc(&device, &mut encoder, slots).unwrap();
+    let from = arena.alloc(&device, &mut encoder, slots).unwrap();
+    let other = arena.alloc(&device, &mut encoder, slots).unwrap();
+    let to = arena.alloc(&device, &mut encoder, slots).unwrap();
+    assert_eq!(
+        [filler, from, other, to],
+        [(0, 0), (0, GRAIN), (1, 0), (1, GRAIN)]
+    );
+    arena.write_sources(
+        &device,
+        &mut encoder,
+        &mut uploads,
+        (from.0, from.1, slots),
+        QuadSlots::records(5),
+        &sources,
+    );
+    arena.copy(&mut encoder, from, to, slots);
+    // The range recycled for a mesh whose sources don't match its quads: every slot unknown.
+    arena.release(from.0, from.1, slots);
+    let reused = arena.alloc_existing(slots).unwrap();
+    assert_eq!(reused, from);
+    arena.write_sources(
+        &device,
+        &mut encoder,
+        &mut uploads,
+        (reused.0, reused.1, slots),
+        QuadSlots::records(5),
+        &sources[..3],
+    );
+    uploads.finish(&encoder);
+    queue.submit([encoder.finish()]);
+    let sidecar = |arena: &Arena, (page, start): (u32, u64)| {
+        read(
+            &device,
+            &queue,
+            arena.sources(page).unwrap(),
+            start * 8,
+            slots * 8,
+        )
+    };
+    assert_eq!(sidecar(&arena, to), expected, "moved slot by slot");
+    assert_eq!(
+        sidecar(&arena, reused),
+        vec![0; slots as usize * 8],
+        "recycled"
+    );
+
+    // The pack is dropped: every sidecar goes, and its meshes still on their way add none.
+    let released = arena.read_sources(false);
+    assert_eq!(released.len(), 2);
+    assert!(arena.sources(0).is_none() && arena.sources(1).is_none());
+    assert_eq!(arena.bytes(), 4 * GRAIN * 24);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut uploads = super::super::upload::Uploads::new(&device);
+    arena.write_sources(
+        &device,
+        &mut encoder,
+        &mut uploads,
+        (to.0, to.1, slots),
+        QuadSlots::records(5),
+        &sources,
+    );
+    let fresh = arena.alloc(&device, &mut encoder, slots).unwrap();
+    assert_eq!(fresh.0, 2, "a new page");
+    assert!(arena.sources(0).is_none() && arena.sources(1).is_none() && arena.sources(2).is_none());
+    // A pack loaded again keeps the sources of the meshes it brings.
+    arena.read_sources(true);
+    arena.write_sources(
+        &device,
+        &mut encoder,
+        &mut uploads,
+        (fresh.0, fresh.1, slots),
+        QuadSlots::records(5),
+        &sources,
+    );
+    assert!(arena.sources(2).is_some());
+    uploads.finish(&encoder);
+    queue.submit([encoder.finish()]);
+    assert_eq!(sidecar(&arena, fresh), expected, "kept after the reload");
+
+    // No draw reads the translucent arena's sources: it keeps none.
+    let mut translucent = Arena::translucent(&device, 24, GRAIN);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut uploads = super::super::upload::Uploads::new(&device);
+    let at = translucent.alloc(&device, &mut encoder, 4).unwrap();
+    translucent.write_sources(
+        &device,
+        &mut encoder,
+        &mut uploads,
+        (at.0, at.1, 4),
+        QuadSlots::vertices(4),
+        &sources[..1],
+    );
+    assert!(translucent.sources(at.0).is_none());
+    assert_eq!(translucent.bytes(), GRAIN * 24);
+    uploads.finish(&encoder);
+    queue.submit([encoder.finish()]);
 }

@@ -1,5 +1,5 @@
-//! A mod's recipes shown in its item panel's place (`native_panel_recipes`,
-//! or `browser.set-recipes` of a WebAssembly mod, docs/modding/src/how-to/content-mods.md), laid out by the game with its own slots, arrows and
+//! A mod's recipes shown in its item panel's place (`native_panel_recipes`),
+//! laid out by the game with its own slots, arrows and
 //! buttons, paged to the panel's height, under a title and a back button.
 //! The mod hears clicks on their slots, their action buttons, the back
 //! button and page turns.
@@ -303,7 +303,7 @@ struct Well {
 
 impl Well {
     fn new(fluid: &mod_api::FluidStack) -> Self {
-        let id = mod_api::__private::fluid_identity_name(fluid.fluid);
+        let id = mod_api::__private::fluid_identity_name(&fluid.fluid);
         let look = sunrise_client::mod_content::fluid_look(&id);
         let tint = fluid_tint(&id, look.as_ref().and_then(|l| l.tint));
         let amount = format!("{} mB", fluid.amount);
@@ -469,9 +469,9 @@ impl Game<'_> {
         let hover = inside(cursor, back);
         sunrise_client::widgets::declare_action(sunrise_client::widgets::Action::Back, back, true);
         let sprite = if hover {
-            "gui/sprites/widget/button_highlighted"
+            "widget/button_highlighted"
         } else {
-            "gui/sprites/widget/button"
+            "widget/button"
         };
         sunrise_client::ui::nine_slice(
             batch,
@@ -524,12 +524,7 @@ impl Game<'_> {
                 } else {
                     ""
                 };
-                batch.sprite(
-                    atlas,
-                    &format!("gui/sprites/recipe_book/{name}{suffix}"),
-                    x,
-                    y,
-                );
+                batch.sprite(atlas, &format!("recipe_book/{name}{suffix}"), x, y);
                 sunrise_client::widgets::record(label, [x, y, 12.0, 17.0], true);
             }
             let text = format!("{}/{pages_n}", page + 1);
@@ -549,19 +544,19 @@ impl Game<'_> {
             let (wells_in, wells_out, wells_h) = r.fluid_places(layout.width());
             let atlas = &self.gui.atlas;
             for &(sx, sy) in at.iter().filter(|p| p.0.is_finite()) {
-                batch.sprite(atlas, "gui/sprites/container/slot", x + sx, y + sy);
+                batch.sprite(atlas, "container/slot", x + sx, y + sy);
             }
             if cooking {
                 batch.sprite(
                     atlas,
-                    "gui/sprites/container/furnace/lit_progress",
+                    "container/furnace/lit_progress",
                     x + 2.0,
                     y + SLOT + 2.0,
                 );
             }
             batch.sprite(
                 atlas,
-                "gui/sprites/container/furnace/burn_progress",
+                "container/furnace/burn_progress",
                 x + arrow.0,
                 y + arrow.1,
             );
@@ -570,9 +565,9 @@ impl Game<'_> {
             {
                 let rect = [x + action.0, y + action.1, 12.0, 12.0];
                 let sprite = match (enabled, inside(cursor, rect)) {
-                    (false, _) => "gui/sprites/widget/button_disabled",
-                    (true, true) => "gui/sprites/widget/button_highlighted",
-                    (true, false) => "gui/sprites/widget/button",
+                    (false, _) => "widget/button_disabled",
+                    (true, true) => "widget/button_highlighted",
+                    (true, false) => "widget/button",
                 };
                 sunrise_client::ui::nine_slice(
                     batch,
@@ -652,15 +647,9 @@ impl Game<'_> {
                 sunrise_client::text::Text::literal(warning.clone()).resolve_legacy(),
                 rgba(255, 100, 100, 255),
             )];
-            let (x, y, w, h) = Self::tooltip_geometry(
-                &self.gui.atlas,
-                &lines,
-                cursor,
-                (batch.width, batch.height),
-                [0.0; 2],
-            );
-            sunrise_client::widgets::record(&warning, [x, y, w, h], false);
-            self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
+            if let Some(rect) = self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1) {
+                sunrise_client::widgets::record(&warning, rect, false);
+            }
         }
     }
 
@@ -668,7 +657,7 @@ impl Game<'_> {
     /// its amount under it.
     fn draw_fluid_well(&self, batch: &mut HudBatch, well: &Well, x: f32, y: f32) {
         let atlas = &self.gui.atlas;
-        batch.sprite(atlas, "gui/sprites/container/slot", x, y);
+        batch.sprite(atlas, "container/slot", x, y);
         let dst = [x + 1.0, y + 1.0, 16.0, 16.0];
         let sprite = well
             .sprite
@@ -715,7 +704,7 @@ impl Game<'_> {
         let selected = pages.tab;
         for (i, (&(x, y), stack)) in places.iter().zip(tabs).enumerate() {
             let atlas = &self.gui.atlas;
-            batch.sprite(atlas, "gui/sprites/container/slot", x, y);
+            batch.sprite(atlas, "container/slot", x, y);
             let Some(stack) = stack else {
                 continue;
             };
@@ -794,20 +783,17 @@ impl Game<'_> {
             if let Some(p) = self.panel.recipes.as_mut() {
                 p.page = to;
             }
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
             self.panel_event(owner, BrowserEvent::Page(starts[to] as u32));
             return true;
         }
         if let Some((tab, _, _)) = self.recipe_tab_hovered(layout) {
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
             self.panel_event(owner, BrowserEvent::Tab(tab as u32));
             return true;
         }
         if inside(cursor, self.back_button(layout).0) {
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
             self.panel_event(owner, BrowserEvent::Back);
             return true;
         }
@@ -830,8 +816,7 @@ impl Game<'_> {
         });
         if let Some((i, _)) = action {
             if pages.recipes[i].action == Some(true) {
-                self.audio
-                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
                 self.panel_event(owner, BrowserEvent::Action(i as u32));
             }
             return true;
@@ -964,10 +949,8 @@ mod tests {
 
     #[test]
     fn an_unresolved_fluid_uses_the_unknown_label() {
-        mod_platform::__private::initialize().unwrap();
-        let handle = mod_api::__private::intern_unresolved_fluid("missing:panel_fluid").unwrap();
         let well = Well::new(&mod_api::FluidStack {
-            fluid: mod_api::FluidIdentity::Unresolved(handle),
+            fluid: mod_api::FluidIdentity::of_name("missing:panel_fluid").unwrap(),
             amount: 250,
             components: None,
         });

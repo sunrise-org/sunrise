@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dev-only exact-build Rust dylib probe. Build SDK with prebuilt_game.py first.
 
-Uses SDK metadata only: never rebuilds mod_api, mod_points or the game.
+Uses SDK metadata only: never rebuilds mod_api or the game.
 All compiler commands and native dependency inspection are retained in --output.
 """
 import argparse
@@ -101,57 +101,6 @@ def preflight(sdk, compiler):
     return identity
 
 
-def phase_fixtures(sdk, identity, output, route_flags, extern, run, windows):
-    """The folders `phase.rs` loads through the game's loader (#3123): each holds one real library and its
-    native-mods.json. A Setup-phase hook that calls a world method (the good mod); a `-C panic=abort` library
-    (it cannot link the dynamic std the route shares, so it carries its own); a library built with a
-    panic=abort identity; a library with a `#[global_allocator]`."""
-    prefix, extension = ("", ".dll") if windows else ("lib", ".so" if sys.platform != "darwin" else ".dylib")
-    release = next(line.split(": ", 1)[1] for line in (output / "rustc.txt").read_text().splitlines() if line.startswith("release: "))
-    template = (sdk / sdk_tools.NATIVE_MODS_TEMPLATE).read_text()
-    root = output / "phase"
-    folders = {}
-
-    def record(name, library, mod_id):
-        folder = root / name
-        folder.mkdir(parents=True, exist_ok=True)
-        target = folder / library.name
-        target.write_bytes(library.read_bytes())
-        (folder / "native-mods.json").write_text(json.dumps({"libraries": [{
-            "file": library.name, "sha256": sdk_tools.sha256(target), "mod": mod_id,
-            "identity": f"{identity['commit']} {mod_id} 0.1.0 {release} unwind"}]}))
-        folders[name] = folder
-
-    def mod_library(name, mod_id, source_extra="", entry=template):
-        work = root / f"{name}-build"
-        work.mkdir(parents=True, exist_ok=True)
-        (work / "mod_0.rs").write_text((FIXTURES / "phase_mod.rs").read_text() + source_extra)
-        (work / "main.rs").write_text(entry.replace("/* MOD_ENTRIES */", f'        "{mod_id}" => mod_0::hooks,\n').replace(
-            "/* BUILT_MODS */",
-            f'    mod_api::__private::native::BuiltMod {{ id: "{mod_id}", version: "0.1.0", side: mod_api::Side::Both }},\n').replace(
-            "/* NATIVE_BUILD */", f"{identity['commit']} {mod_id} 0.1.0 {release}"))
-        base = [*route_flags, "-L", f"dependency={work}"]
-        run([*base, "--crate-type", "rlib", "--crate-name", "mod_0", *extern("mod_api"), "-o", str(work / "libmod_0.rlib"),
-             str(work / "mod_0.rs")])
-        library = work / f"{prefix}phase_{name}{extension}"
-        run([*base, "--crate-type", "dylib", "--crate-name", f"phase_{name}", *extern("mod_api"),
-             "--extern", f"mod_0={work / 'libmod_0.rlib'}", "-o", str(library), str(work / "main.rs")])
-        record(name, library, mod_id)
-
-    mod_library("ok", "phase_ok")
-    # No real library can say `abort` with the shared std (rustc refuses the build), so the entry module of this
-    # one reports the strategy a `-C panic=abort` build would: it is loaded far enough to read its identity.
-    mod_library("abort_identity", "phase_abort_identity", entry=template.replace('cfg!(panic = "unwind")', "false"))
-    mod_library("allocator", "phase_allocator", source_extra=(FIXTURES / "own_allocator.rs").read_text())
-    work = root / "abort-build"
-    work.mkdir(parents=True, exist_ok=True)
-    library = work / f"{prefix}phase_abort{extension}"
-    subprocess.run(["rustc", "--edition=2024", "-C", "panic=abort", "--crate-type", "dylib", "-o", str(library),
-                    str(FIXTURES / "abort_static.rs")], check=True)
-    record("abort", library, "phase_abort")
-    return [folders[name] for name in ("ok", "abort", "abort_identity", "allocator")]
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", required=True, type=Path)
@@ -190,9 +139,6 @@ def main():
             copied = output / (source.parent.name + "-" + source.name)
             copied.write_text("".join(lines))
             command[index] = str(copied)
-            # The executable's `mod phase;` is read from beside its copy.
-            if (source.parent / "phase.rs").is_file():
-                (output / "phase.rs").write_text((source.parent / "phase.rs").read_text())
             command.extend(extern("sunrise_mod_host"))
         with (output / "commands.log").open("a") as log:
             log.write(json.dumps(list(map(str, command))) + "\n")
@@ -250,8 +196,7 @@ def main():
         '    mod_api::__private::native::BuiltMod { id: "probe", version: "0.1.0", side: mod_api::Side::Both },\n'))
     shipped_exe = shipped / ("sunrise-client.exe" if windows else "sunrise-client")
     subprocess.run([*route, "--crate-type", "bin", "--crate-name", "sunrise_native_game",
-                    *(flag for arg in identity["link_args"] for flag in ("-C", f"link-arg={arg}")),
-                    *extern("sunrise_client"), *extern("sunrise_mod_host"), *extern("mod_api"), *extern("mod_points"), *extern("sunrise_mod_package"),
+                    *extern("sunrise_client"), *extern("sunrise_mod_host"), *extern("mod_api"), *extern("sunrise_mod_package"),
                     *sdk_tools.official_externs(deps),
                     "--extern", f"mod_0={shipped / 'libmod_0.rlib'}", "-o", str(shipped_exe), str(shipped / "main.rs")], check=True)
     if windows:
@@ -259,7 +204,7 @@ def main():
         exported, _ = pe_symbols(std_runtime[0])
         names = {kind: next(n for n in exported if n.endswith(f"___rust_{kind}")) for kind in ("alloc", "dealloc")}
         try:
-            # Every image of the route, the wasm runtime DLL included: none may export or import a second allocator.
+            # Every image of the route: none may export or import a second allocator.
             windows_allocator([shipped_exe, *deps.glob("*.dll"), *std_runtime], game, shipped / "allocator-imports.json")
         except ValueError as error:
             failures.append(f"shipped route: {error}")
@@ -267,7 +212,6 @@ def main():
         # 3. At run time, which heap each allocator draws from (classified, never freed across).
         heap_exe = shipped / "route_heap.exe"
         run([*route, "--crate-name=route_heap", *extern("sunrise_client"), *extern("mod_api"),
-             *(flag for arg in identity["link_args"] for flag in ("-C", f"link-arg={arg}")),
              str(FIXTURES / "route_heap.rs"), "-o", str(heap_exe)])
         heap = subprocess.run([str(heap_exe), game.name, std_runtime[0].name, *names.values()],
                               env=runtime_env(shipped), capture_output=True, text=True)
@@ -280,18 +224,16 @@ def main():
               "-L", f"dependency={sdk / 'host'}", "-L", f"native={sdk / 'native'}", "-L", f"dependency={output}"]
     for crate, source in [("probe_shared", "shared.rs"), ("probe_a", "mod.rs"), ("probe_b", "mod.rs")]:
         extra = [] if crate == "probe_shared" else ["--extern", f"probe_shared={output / (prefix + 'probe_shared' + extension)}"]
-        run([*common, "--crate-type=dylib", "--crate-name", crate, *extern("sunrise_client"), *extern("mod_api"), *extern("mod_points"),
+        run([*common, "--crate-type=dylib", "--crate-name", crate, *extern("sunrise_client"), *extern("mod_api"),
              *extra, str(FIXTURES / source), "-o", str(output / (prefix + crate + extension))])
-    phase_folders = phase_fixtures(sdk, identity, output, route_flags=common, extern=extern, run=run, windows=windows)
     executable = output / ("probe.exe" if windows else "probe")
-    run([*common, "--crate-name=probe", *extern("sunrise_client"), *extern("mod_api"), *extern("mod_points"),
-         *extern("libloading"), *extern("log"), "--extern", f"probe_shared={output / (prefix + 'probe_shared' + extension)}",
+    run([*common, "--crate-name=probe", *extern("sunrise_client"), *extern("mod_api"),
+         *extern("libloading"), "--extern", f"probe_shared={output / (prefix + 'probe_shared' + extension)}",
          str(FIXTURES / "main.rs"), "-o", str(executable)])
     env = runtime_env(output)
     # The std runtime library is part of the process too and carries its own default-allocator shim.
     images = [executable, *output.glob("*" + extension), *deps.glob("*" + extension), *std_runtime]
-    probe_args = [str(executable), str(output / (prefix + "probe_a" + extension)), str(output / (prefix + "probe_b" + extension)),
-                  *map(str, phase_folders)]
+    probe_args = [str(executable), str(output / (prefix + "probe_a" + extension)), str(output / (prefix + "probe_b" + extension))]
     if windows:
         try:
             windows_allocator(images, game, output / "allocator-symbols.json")

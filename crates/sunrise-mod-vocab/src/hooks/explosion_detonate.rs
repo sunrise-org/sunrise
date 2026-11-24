@@ -1,11 +1,11 @@
 //! The `explosion_detonate` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0042
 
 pub trait Hooks {
     /// An explosion at `center` in `dimension` (`minecraft:overworld`) is
     /// about to break `blocks` and reach `entities`: `ServerExplosion.explode`
-    /// with its `toBlow`, before any block or entity is hit. Take out the
-    /// positions to spare; they keep their block and get no fire. `entities`
+    /// with its `toBlow`, before any block or entity is hit. Listeners may
+    /// remove positions to spare them (they keep their block and get no fire),
+    /// add positions, or reorder the list (`ExplosionEvent.Detonate`). `entities`
     /// is `getEntities(source, box)`: every entity in the box the centre
     /// ± (2 × radius + 1), in walk order, without the exploding source, those
     /// that will ignore the blast included — the entity-list walk, then the
@@ -19,11 +19,17 @@ pub trait Hooks {
     /// Block positions are shuffled before destruction, so their list order is
     /// not destruction order either. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "collect",
         out = "blocks",
-        version = 2,
+        version = 3,
         neoforge = "ExplosionEvent.Detonate"
     )]
-    fn explosion_detonate();
+    fn explosion_detonate(
+        dimension: &str,
+        center: [f64; 3],
+        blocks: &mut Vec<[i32; 3]>,
+        entities: &mut Vec<EntityRef>,
+    );
 }

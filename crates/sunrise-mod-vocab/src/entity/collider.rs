@@ -25,9 +25,11 @@ pub struct ColliderBox {
 ///
 /// A collider that moves or turns carries the bodies standing on it: once a tick, after the
 /// level's entities ticked, each moves by the displacement of its contact point as a collided
-/// move with `MoveCause::Carried`, never through a wall; a body caught between the collider and a
-/// wall stays where the collision leaves it and a living one takes `in_wall` damage while a box
-/// covers its eyes. Passengers follow their vehicle instead of being carried.
+/// move with `MoveCause::Carried`. After carrying, a collider that translated without turning
+/// shoves bodies in the path of its boxes, in its direction of travel, with the same move cause.
+/// The shove does not cancel velocity into the collider; ordinary collision handles velocity.
+/// A body caught between the collider and a wall stays where the move leaves it, and a living
+/// one takes `in_wall` damage while a box covers its eyes. Passengers follow their vehicle.
 ///
 /// A vanilla client has none of this: the server sends a collider only to a Sunrise client that
 /// tracks the entity, and a vanilla client sees the entity and walks through it.

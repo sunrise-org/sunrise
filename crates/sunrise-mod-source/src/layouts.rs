@@ -49,14 +49,27 @@ pub fn derives(attrs: &[syn::Attribute]) -> Vec<String> {
     out.into_iter().collect()
 }
 
+/// A type or const parameter in declaration order.
+#[derive(Clone)]
+pub struct GenericName {
+    pub name: String,
+    pub is_type: bool,
+}
+
 /// The generic parameter names of `generics`, lifetimes left out.
-pub fn param_names(generics: &syn::Generics) -> Vec<String> {
+pub fn param_names(generics: &syn::Generics) -> Vec<GenericName> {
     generics
         .params
         .iter()
         .filter_map(|param| match param {
-            syn::GenericParam::Type(t) => Some(t.ident.to_string()),
-            syn::GenericParam::Const(c) => Some(c.ident.to_string()),
+            syn::GenericParam::Type(t) => Some(GenericName {
+                name: t.ident.to_string(),
+                is_type: true,
+            }),
+            syn::GenericParam::Const(c) => Some(GenericName {
+                name: c.ident.to_string(),
+                is_type: false,
+            }),
             syn::GenericParam::Lifetime(_) => None,
         })
         .collect()
@@ -83,8 +96,14 @@ pub trait Wires {
     fn form(&self, id: ItemId, attrs: &[syn::Attribute], derives: &[String]) -> Option<WireForm>;
     /// `id`'s public path, for a note.
     fn path(&self, id: ItemId) -> Option<&[String]>;
-    /// `ty`, written in `module` with type parameters `params`, as an opaque shape.
-    fn opaque(&self, index: &mut Index<'_>, module: usize, ty: &Type, params: &[String]) -> Shape;
+    /// `ty`, written in `module` with generic parameters `params`, as an opaque shape.
+    fn opaque(
+        &self,
+        index: &mut Index<'_>,
+        module: usize,
+        ty: &Type,
+        params: &[GenericName],
+    ) -> Shape;
 }
 
 impl<W: Wires> Layouts<W> {
@@ -195,7 +214,13 @@ impl<W: Wires> Layouts<W> {
     }
 
     /// A type the description does not look into, as the surface writes it.
-    fn opaque(&self, index: &mut Index<'_>, module: usize, ty: &Type, params: &[String]) -> Shape {
+    fn opaque(
+        &self,
+        index: &mut Index<'_>,
+        module: usize,
+        ty: &Type,
+        params: &[GenericName],
+    ) -> Shape {
         self.wires.opaque(index, module, ty, params)
     }
 
@@ -204,7 +229,7 @@ impl<W: Wires> Layouts<W> {
         index: &mut Index<'_>,
         module: usize,
         fields: &syn::Fields,
-        params: &[String],
+        params: &[GenericName],
     ) -> Body {
         match fields {
             syn::Fields::Named(named) => Body::Record(
@@ -240,7 +265,7 @@ impl<W: Wires> Layouts<W> {
         index: &mut Index<'_>,
         module: usize,
         ty: &Type,
-        params: &[String],
+        params: &[GenericName],
         depth: usize,
     ) -> Shape {
         let boxed = |s: Shape| Box::new(s);
@@ -284,7 +309,7 @@ impl<W: Wires> Layouts<W> {
         module: usize,
         ty: &Type,
         path: &syn::Path,
-        params: &[String],
+        params: &[GenericName],
         depth: usize,
     ) -> Shape {
         let opaque = self.opaque(index, module, ty, params);
@@ -304,7 +329,7 @@ impl<W: Wires> Layouts<W> {
             _ => Vec::new(),
         };
         if path.segments.len() == 1
-            && let Some(position) = params.iter().position(|p| *p == name)
+            && let Some(position) = params.iter().position(|p| p.name == name)
         {
             return Shape::Param(position);
         }
@@ -394,7 +419,7 @@ impl<W: Wires> Layouts<W> {
 
 /// Replaces an alias's type parameters by its arguments.
 struct Substitute<'s> {
-    names: &'s [String],
+    names: &'s [GenericName],
     args: &'s [Type],
 }
 
@@ -403,7 +428,7 @@ impl VisitMut for Substitute<'_> {
         if let Type::Path(p) = ty
             && p.qself.is_none()
             && p.path.segments.len() == 1
-            && let Some(i) = self.names.iter().position(|n| p.path.is_ident(n))
+            && let Some(i) = self.names.iter().position(|n| p.path.is_ident(&n.name))
             && let Some(arg) = self.args.get(i)
         {
             *ty = arg.clone();

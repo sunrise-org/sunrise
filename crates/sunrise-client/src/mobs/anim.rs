@@ -1,10 +1,12 @@
 //! Model animation: ports of each vanilla `EntityModel.setupAnim` family
 //! (quadrupeds, humanoids, creepers, spiders, chickens...) applied to a map of
 //! part poses before the model is drawn.
-use super::{Mob, Part, keyframes::AnimationState, living::wrap};
+use super::{Mob, Part, keyframes::AnimationState, living::wrap, render::BakedFrameModel};
 use crate::fast_hash::{FxHashMap, FxHashSet};
+use mod_api::HumanoidPart;
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_6, PI};
+use std::sync::{Arc, LazyLock};
 use sunrise_core::geometry::trig::Mth;
 use sunrise_core::use_animation::UseAnimation;
 
@@ -115,19 +117,57 @@ pub(crate) fn key(name: &str) -> u64 {
     h.write_usize(name.len());
     h.finish()
 }
+// Index by HumanoidPart, keying only the editable mid-animation inputs.
+static HUMANOID_POSE_KEYS: LazyLock<[Option<u64>; HumanoidPart::ALL.len()]> = LazyLock::new(|| {
+    HumanoidPart::ALL.map(|part| match part {
+        HumanoidPart::Head
+        | HumanoidPart::Hat
+        | HumanoidPart::Body
+        | HumanoidPart::RightArm
+        | HumanoidPart::LeftArm
+        | HumanoidPart::RightLeg
+        | HumanoidPart::LeftLeg => Some(key(part.model_name())),
+        _ => None,
+    })
+});
+
+#[derive(Clone, Copy)]
+struct PoseEntry {
+    pose: [f32; 9],
+    base_hidden: bool,
+}
+
+impl PoseEntry {
+    fn new(pose: [f32; 9]) -> Self {
+        Self {
+            pose,
+            base_hidden: false,
+        }
+    }
+}
+
 /// Part poses for one draw, keyed by part name.
 #[derive(Clone, Default)]
 pub struct Poses {
-    map: FxHashMap<u64, [f32; 9]>,
+    map: FxHashMap<u64, PoseEntry>,
     dummy: [f32; 9],
     /// Parts with `skipDraw` set: their own cubes are not drawn, children are.
     skipped: FxHashSet<u64>,
-    /// Parts with `visible` cleared: neither they nor their children draw.
-    hidden: FxHashSet<u64>,
-    /// Names this content: a fresh number at each change, kept by copies
-    /// ([`Poses::version`]).
+    /// Number of parts with `visible` cleared by animation.
+    base_hidden_count: usize,
+    /// Draw-local visibility indexed by the selected tree, independent of animation names.
+    frame_layout: Option<Arc<BakedFrameModel>>,
+    frame_hidden: Vec<bool>,
+    has_frame_edits: bool,
+    apply_frame_visibility: bool,
+    /// Mods' own values per part ([`Poses::set_data`]), keyed like `map` and by the value's
+    /// type; the engine never reads them.
+    data: FxHashMap<(u64, std::any::TypeId), PartData>,
+    /// Names the draw state, kept by copies ([`Poses::version`]).
     version: u64,
 }
+/// A mod's value on a part ([`Poses::set_data`]): shared, not cloned, by a copy of the poses.
+type PartData = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 /// The next [`Poses::version`].
 static NEXT_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 thread_local! {
@@ -176,10 +216,10 @@ impl Poses {
                 .unwrap_or_default(),
         )
     }
-    /// Names the content: two `Poses` with the same version pose every part
-    /// alike (one is a copy of the other, neither changed since). A draw of
-    /// the same model under the same matrix with the same version can reuse
-    /// the first's part matrices (`skin::Skin::draw`).
+    /// Names the draw state: two `Poses` with the same version pose every part
+    /// alike and have the same effective visibility. A draw of the same model
+    /// under the same matrix with the same version can reuse the first's part
+    /// matrices and jobs (`skin::Skin::draw`).
     pub fn version(&self) -> u64 {
         self.version
     }
@@ -191,15 +231,29 @@ impl Poses {
         self.map.clone_from(&other.map);
         self.dummy = other.dummy;
         self.skipped.clone_from(&other.skipped);
-        self.hidden.clone_from(&other.hidden);
+        self.base_hidden_count = other.base_hidden_count;
+        self.frame_layout.clone_from(&other.frame_layout);
+        self.frame_hidden.clone_from(&other.frame_hidden);
+        self.has_frame_edits = other.has_frame_edits;
+        self.apply_frame_visibility = other.apply_frame_visibility;
+        self.data.clone_from(&other.data);
         self.version = other.version;
     }
-    /// Refills this for another model, keeping the map and the sets' capacity:
+    /// Refills this for another model, keeping the map and set capacity:
     /// a mob draws its body and every equipment layer each frame.
     pub fn reset(&mut self, model: &Part) {
-        fn walk(p: &Part, map: &mut FxHashMap<u64, [f32; 9]>) {
+        self.frame_layout = None;
+        self.frame_hidden.clear();
+        self.has_frame_edits = false;
+        self.reset_animation(model);
+    }
+
+    /// Restore the selected model's bind pose and base visibility for another mirror, without
+    /// losing its shared Pre edits. The next setupAnim starts with the override inactive.
+    pub(super) fn reset_animation(&mut self, model: &Part) {
+        fn walk(p: &Part, map: &mut FxHashMap<u64, PoseEntry>) {
             // ModelPart.createPartLookup fills its map with putIfAbsent: the first part keeps a name.
-            map.entry(key(&p.name)).or_insert(p.pose);
+            map.entry(key(&p.name)).or_insert(PoseEntry::new(p.pose));
             for c in &p.children {
                 walk(c, map);
             }
@@ -207,23 +261,37 @@ impl Poses {
         self.map.clear();
         self.dummy = [0.0; 9];
         self.skipped.clear();
-        self.hidden.clear();
+        self.base_hidden_count = 0;
+        self.apply_frame_visibility = false;
+        self.data.clear();
         walk(model, &mut self.map);
         self.changed();
     }
     pub fn get(&mut self, name: &str) -> &mut [f32; 9] {
         self.changed();
         match self.map.get_mut(&key(name)) {
-            Some(p) => p,
+            Some(entry) => &mut entry.pose,
             None => &mut self.dummy,
         }
     }
     /// The pose of the part named `name`, when the model has one.
     pub fn pose_of(&self, name: &str) -> Option<[f32; 9]> {
-        self.map.get(&key(name)).copied()
+        self.pose_by_key(key(name)).copied()
+    }
+    pub(super) fn pose_by_key(&self, key: u64) -> Option<&[f32; 9]> {
+        self.map.get(&key).map(|entry| &entry.pose)
     }
     pub fn pose(&self, part: &Part) -> [f32; 9] {
-        self.map.get(&key(&part.name)).copied().unwrap_or(part.pose)
+        self.pose_of(&part.name).unwrap_or(part.pose)
+    }
+    fn set_humanoid_vector(&mut self, part: HumanoidPart, start: usize, values: [f32; 3]) -> bool {
+        let Some(entry) = HUMANOID_POSE_KEYS[part as usize].and_then(|key| self.map.get_mut(&key))
+        else {
+            return false;
+        };
+        entry.pose[start..start + 3].copy_from_slice(&values);
+        self.changed();
+        true
     }
     pub fn skip_draw(&mut self, name: &str) {
         if self.skipped.insert(key(name)) {
@@ -235,7 +303,10 @@ impl Poses {
     }
     /// `skips` by the part's name.
     pub fn skips_named(&self, name: &str) -> bool {
-        !self.skipped.is_empty() && self.skipped.contains(&key(name))
+        !self.skipped.is_empty() && self.skips_key(key(name))
+    }
+    pub(super) fn skips_key(&self, key: u64) -> bool {
+        self.skipped.contains(&key)
     }
     pub fn has(&self, name: &str) -> bool {
         self.map.contains_key(&key(name))
@@ -249,26 +320,128 @@ impl Poses {
     pub fn zrot(&mut self, n: &str, v: f32) {
         self.get(n)[5] = v;
     }
-    /// `ModelPart.visible = v`; a hidden part and its children do not draw.
-    pub fn visible(&mut self, n: &str, v: bool) {
-        let changed = if v {
-            self.hidden.remove(&key(n))
-        } else {
-            self.map.contains_key(&key(n)) && self.hidden.insert(key(n))
+    /// Set `ModelPart.visible`; animation changes the base visibility, not the frame override.
+    pub fn visible(&mut self, name: &str, visible: bool) {
+        let Some(entry) = self.map.get_mut(&key(name)) else {
+            return;
         };
-        if changed {
+        let hidden = !visible;
+        if entry.base_hidden == hidden {
+            return;
+        }
+        entry.base_hidden = hidden;
+        if hidden {
+            self.base_hidden_count += 1;
+        } else {
+            self.base_hidden_count -= 1;
+        }
+        self.changed();
+    }
+    /// Base visibility for animation, without the draw-local overlay.
+    pub fn is_hidden_named(&self, name: &str) -> bool {
+        self.base_hidden_count != 0 && self.is_hidden_key(key(name))
+    }
+    pub(super) fn is_hidden_key(&self, key: u64) -> bool {
+        self.base_hidden_count != 0 && self.map.get(&key).is_some_and(|entry| entry.base_hidden)
+    }
+    /// Refill pooled visibility storage before calling Pre, so edits never grow it.
+    pub(super) fn prepare_frame_visibility(&mut self, layout: Arc<BakedFrameModel>) {
+        self.frame_hidden.resize(layout.nodes().len(), false);
+        self.frame_layout = Some(layout);
+        self.apply_frame_visibility(true);
+    }
+
+    pub(super) fn hide_frame_part(&mut self, index: usize) -> bool {
+        let Some(hidden) = self.frame_hidden.get_mut(index) else {
+            return false;
+        };
+        if !*hidden {
+            *hidden = true;
+            self.has_frame_edits = true;
+            self.changed();
+        }
+        true
+    }
+    /// Stores `value`, a mod's own data of any type, on the part named `name`, when the model
+    /// has one: the engine never reads it. A mod's mixin on [`setup`] writes, say, a limb's
+    /// bend here, and its replacement of `render::compile_part` reads it back for the part it
+    /// draws. One value per part and type: a mod keeps its data in a type of its own, so two
+    /// mods never read each other's. A write changes [`Poses::version`], so a later draw never
+    /// reuses part matrices of the walk before it. `reset` (and `reset_animation`, before each
+    /// `setupAnim`) drops the values, `copy_from`
+    /// shares them with the copy.
+    pub fn set_data<T: std::any::Any + Send + Sync>(&mut self, name: &str, value: T) {
+        if self.map.contains_key(&key(name)) {
+            self.data.insert(
+                (key(name), std::any::TypeId::of::<T>()),
+                std::sync::Arc::new(value),
+            );
             self.changed();
         }
     }
+    /// The value of type `T` [`Poses::set_data`] stored on the part named `name`.
+    pub fn data<T: std::any::Any + Send + Sync>(&self, name: &str) -> Option<&T> {
+        self.data
+            .get(&(key(name), std::any::TypeId::of::<T>()))
+            .and_then(|value| value.downcast_ref())
+    }
+    /// Removes the value of type `T` [`Poses::set_data`] stored on the part named `name`.
+    pub fn clear_data<T: std::any::Any + Send + Sync>(&mut self, name: &str) {
+        if self
+            .data
+            .remove(&(key(name), std::any::TypeId::of::<T>()))
+            .is_some()
+        {
+            self.changed();
+        }
+    }
+    /// Select whether the next draw sees the frame override or only the animated visibility.
+    pub(super) fn apply_frame_visibility(&mut self, apply: bool) {
+        if self.apply_frame_visibility != apply {
+            self.apply_frame_visibility = apply;
+            if self.has_frame_edits {
+                self.changed();
+            }
+        }
+    }
+    /// Effective visibility for drawing; an inactive overlay costs no part lookup.
     pub fn is_hidden(&self, part: &Part) -> bool {
         self.is_hidden_named(&part.name)
+            || self.frame_visibility_active()
+                && self
+                    .frame_layout
+                    .as_ref()
+                    .and_then(|layout| layout.index_of(part))
+                    .is_some_and(|index| self.frame_hidden[index])
     }
-    /// `is_hidden` by the part's name.
-    pub fn is_hidden_named(&self, name: &str) -> bool {
-        !self.hidden.is_empty() && self.hidden.contains(&key(name))
+    pub(super) fn has_hidden_parts(&self) -> bool {
+        self.base_hidden_count != 0 || self.frame_visibility_active()
+    }
+    pub(super) fn is_hidden_at(&self, index: usize, key: u64) -> bool {
+        self.is_hidden_key(key) || self.frame_visibility_active() && self.frame_hidden[index]
+    }
+    fn frame_visibility_active(&self) -> bool {
+        self.apply_frame_visibility && self.has_frame_edits
     }
 }
-/// Gameplay's read-only observer at the humanoid mid-setupAnim seam.
+
+impl mod_api::HumanoidPose for Poses {
+    fn get(&self, part: HumanoidPart) -> Option<[[f32; 3]; 2]> {
+        let key = HUMANOID_POSE_KEYS[part as usize]?;
+        let [x, y, z, x_rot, y_rot, z_rot, ..] = self.map.get(&key)?.pose;
+        Some([[x, y, z], [x_rot, y_rot, z_rot]])
+    }
+
+    fn set_position(&mut self, part: HumanoidPart, position: [f32; 3]) -> bool {
+        self.set_humanoid_vector(part, 0, position)
+    }
+
+    fn set_rotation(&mut self, part: HumanoidPart, rotation: [f32; 3]) -> bool {
+        self.set_humanoid_vector(part, 3, rotation)
+    }
+}
+
+/// Gameplay's callback at the humanoid mid-setupAnim seam.
 /// This library knows only animation inputs and poses, never Game or a Host.
 pub trait HumanoidSetup {
     fn before_arm_pose(&self, mob: &Mob, state: &State<'_>, poses: &mut Poses);
@@ -1169,6 +1342,67 @@ fn player_model_visibility(p: &mut Poses, hidden: u8, spectator: bool) {
     }
 }
 #[cfg(test)]
+mod humanoid_pose_tests {
+    use super::*;
+
+    #[test]
+    fn live_humanoid_pose_writes_all_components_and_refuses_only_missing_or_uneditable_parts() {
+        let mut poses = Poses {
+            map: [
+                ("hat", [1.0, 2.0, 3.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0]),
+                ("jacket", [0.0, 1.0, 2.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0]),
+            ]
+            .into_iter()
+            .map(|(name, pose)| (key(name), PoseEntry::new(pose)))
+            .collect(),
+            ..Default::default()
+        };
+        let before = poses.version();
+        let view = &mut poses as &mut dyn mod_api::HumanoidPose;
+        assert_eq!(
+            view.get(HumanoidPart::Hat),
+            Some([[1.0, 2.0, 3.0], [0.25, 0.5, 0.75]])
+        );
+        assert!(view.set_position(HumanoidPart::Hat, [f32::NAN, 4.0, f32::INFINITY]));
+        assert_ne!(poses.version(), before);
+
+        let before = poses.version();
+        let view = &mut poses as &mut dyn mod_api::HumanoidPose;
+        assert!(view.set_rotation(HumanoidPart::Hat, [f32::INFINITY, f32::NAN, -0.75]));
+        let [pos, rot] = view.get(HumanoidPart::Hat).unwrap();
+        assert!(pos[0].is_nan() && pos[1] == 4.0 && pos[2] == f32::INFINITY);
+        assert!(rot[0] == f32::INFINITY && rot[1].is_nan() && rot[2] == -0.75);
+        assert_ne!(poses.version(), before);
+        let hat = poses.pose_of("hat").unwrap();
+        assert!(hat[0].is_nan() && hat[1] == 4.0 && hat[2] == f32::INFINITY);
+        assert!(hat[3] == f32::INFINITY && hat[4].is_nan() && hat[5] == -0.75);
+        assert_eq!(hat[6..9], [1.0, 1.0, 1.0]);
+
+        let before = poses.version();
+        let view = &mut poses as &mut dyn mod_api::HumanoidPose;
+        assert_eq!(view.get(HumanoidPart::LeftArm), None);
+        assert_eq!(view.get(HumanoidPart::Jacket), None);
+        assert!(!view.set_position(HumanoidPart::LeftArm, [9.0; 3]));
+        assert!(!view.set_rotation(HumanoidPart::Jacket, [9.0; 3]));
+        assert_eq!(poses.pose_of("left_arm"), None);
+        assert_eq!(
+            poses.pose_of("jacket"),
+            Some([0.0, 1.0, 2.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0])
+        );
+        assert_eq!(poses.dummy, [0.0; 9]);
+        assert_eq!(poses.version(), before);
+
+        // Non-finite incoming poses do not suppress pose access or later writes.
+        poses.xrot("hat", f32::NAN);
+        let view = &mut poses as &mut dyn mod_api::HumanoidPose;
+        let [_, rot] = view.get(HumanoidPart::Hat).unwrap();
+        assert!(rot[0].is_nan());
+        assert!(view.set_rotation(HumanoidPart::Hat, [0.5, 0.25, -0.5]));
+        assert_eq!(view.get(HumanoidPart::Hat).unwrap()[1], [0.5, 0.25, -0.5]);
+    }
+}
+
+#[cfg(test)]
 mod rot_lerp_tests {
     use super::*;
 
@@ -1203,22 +1437,19 @@ mod flight_pose_tests {
                 "left_leg",
             ]
             .into_iter()
-            .map(|n| (key(n), [0.0; 9]))
+            .map(|n| (key(n), PoseEntry::new([0.0; 9])))
             .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         player_model_visibility(&mut p, 0, true);
         for part in ["body", "right_arm", "left_arm", "right_leg", "left_leg"] {
-            assert!(p.hidden.contains(&key(part)), "{part}");
+            assert!(p.is_hidden_named(part), "{part}");
         }
-        assert!(!p.hidden.contains(&key("head")) && !p.hidden.contains(&key("hat")));
+        assert!(!p.is_hidden_named("head") && !p.is_hidden_named("hat"));
         // Back in another mode they all show, but for the layers the player hid.
         player_model_visibility(&mut p, 1 << 6, false);
-        assert!(!p.hidden.contains(&key("body")) && !p.hidden.contains(&key("left_leg")));
-        assert!(p.hidden.contains(&key("hat")));
+        assert!(!p.is_hidden_named("body") && !p.is_hidden_named("left_leg"));
+        assert!(p.is_hidden_named("hat"));
     }
     #[test]
     fn blocking_arm_follows_the_head_with_limits_in_both_hands() {
@@ -1231,12 +1462,9 @@ mod flight_pose_tests {
                 let mut p = Poses {
                     map: ["head", "right_arm", "left_arm"]
                         .into_iter()
-                        .map(|n| (key(n), [0.0; 9]))
+                        .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                         .collect(),
-                    dummy: [0.0; 9],
-                    skipped: Default::default(),
-                    hidden: Default::default(),
-                    version: 0,
+                    ..Default::default()
                 };
                 let arm = if right { "right_arm" } else { "left_arm" };
                 p.xrot("head", pitch);
@@ -1271,12 +1499,9 @@ mod flight_pose_tests {
                 let mut p = Poses {
                     map: ["head", "right_arm", "left_arm"]
                         .into_iter()
-                        .map(|n| (key(n), [0.0; 9]))
+                        .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                         .collect(),
-                    dummy: [0.0; 9],
-                    skipped: Default::default(),
-                    hidden: Default::default(),
-                    version: 0,
+                    ..Default::default()
                 };
                 let arm = if right { "right_arm" } else { "left_arm" };
                 p.xrot("head", pitch);
@@ -1326,12 +1551,9 @@ mod flight_pose_tests {
                 "left_leg",
             ]
             .into_iter()
-            .map(|n| (key(n), [0.0; 9]))
+            .map(|n| (key(n), PoseEntry::new([0.0; 9])))
             .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         enderman::anim(&seated, &state, &mut poses);
         let right = *poses.get("right_leg");
@@ -1383,12 +1605,9 @@ mod flight_pose_tests {
                 "body",
             ]
             .into_iter()
-            .map(|n| (key(n), [0.0; 9]))
+            .map(|n| (key(n), PoseEntry::new([0.0; 9])))
             .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         let mut ground = make();
         let mut flight = make();
@@ -1426,12 +1645,9 @@ mod flight_pose_tests {
         let make = || Poses {
             map: ["head", "right_arm", "left_arm", "right_leg", "left_leg"]
                 .into_iter()
-                .map(|n| (key(n), [0.0; 9]))
+                .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                 .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         let same_angle = |a: f32, b: f32| ((a - b + PI).rem_euclid(PI * 2.0) - PI).abs() < 1e-5;
         let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
@@ -1534,12 +1750,9 @@ mod flight_pose_tests {
         let mut p = Poses {
             map: ["head", "right_arm", "left_arm"]
                 .into_iter()
-                .map(|n| (key(n), [0.0; 9]))
+                .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                 .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         let mut m = player();
         m.extra.set_slot_id(
@@ -1562,12 +1775,9 @@ mod flight_pose_tests {
         let mut p = Poses {
             map: ["head", "right_arm", "left_arm"]
                 .into_iter()
-                .map(|n| (key(n), [0.0; 9]))
+                .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                 .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         setup(&m, &state, &mut p, &HashMap::new());
         assert!((p.get("right_arm")[3] + PI / 10.0).abs() < 1e-6);
@@ -1592,12 +1802,9 @@ mod flight_pose_tests {
         let make = || Poses {
             map: ["head", "right_arm", "left_arm"]
                 .into_iter()
-                .map(|n| (key(n), [0.0; 9]))
+                .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                 .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         let mut m = player();
         m.extra
@@ -1660,12 +1867,9 @@ mod flight_pose_tests {
         let make = || Poses {
             map: ["head", "right_arm", "left_arm", "right_leg", "left_leg"]
                 .into_iter()
-                .map(|n| (key(n), [0.0; 9]))
+                .map(|n| (key(n), PoseEntry::new([0.0; 9])))
                 .collect(),
-            dummy: [0.0; 9],
-            skipped: Default::default(),
-            hidden: Default::default(),
-            version: 0,
+            ..Default::default()
         };
         let mut m = player();
         m.extra.set_slot_id(
@@ -1730,7 +1934,7 @@ mod flight_pose_tests {
                     "right_leg",
                     "left_leg",
                 ] {
-                    p.map.insert(key(part), [0.0; 9]);
+                    p.map.insert(key(part), PoseEntry::new([0.0; 9]));
                 }
                 setup(&m, &state, &mut p, &HashMap::new());
                 let arm = if left { "left_arm" } else { "right_arm" };
@@ -1776,9 +1980,10 @@ mod flight_pose_tests {
                 "right_leg",
                 "left_leg",
             ] {
-                poses
-                    .map
-                    .insert(key(name), [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+                poses.map.insert(
+                    key(name),
+                    PoseEntry::new([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+                );
             }
             poses
         };
@@ -1812,7 +2017,10 @@ mod flight_pose_tests {
                         if !using {
                             let mut baseline = make();
                             setup(&mob, &state, &mut baseline, &HashMap::new());
-                            assert_eq!(poses.map, baseline.map);
+                            assert_eq!(poses.map.len(), baseline.map.len());
+                            for (&part, entry) in &baseline.map {
+                                assert_eq!(poses.pose_by_key(part), Some(&entry.pose));
+                            }
                         }
                     }
                 }
@@ -1850,9 +2058,10 @@ mod flight_pose_tests {
         mob.extra.swim.visually = true;
         let state = state(&mob, 0.5).observed(&mob, Some(&listener));
         let mut poses = Poses::default();
-        poses
-            .map
-            .insert(key("head"), [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        poses.map.insert(
+            key("head"),
+            PoseEntry::new([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+        );
         setup(&mob, &state, &mut poses, &HashMap::new());
         assert!(listener.0.get());
         assert!(poses.get("head")[3].is_finite());
@@ -1883,7 +2092,7 @@ mod flight_pose_tests {
                 "right_leg",
                 "left_leg",
             ] {
-                p.map.insert(key(part), [0.0; 9]);
+                p.map.insert(key(part), PoseEntry::new([0.0; 9]));
             }
             let state = State {
                 pos: 0.0,
@@ -1914,14 +2123,92 @@ mod flight_pose_tests {
             pose: [0.0, 0.0, 0.0, xrot, 0.0, 0.0, 1.0, 1.0, 1.0],
             polygons: Vec::new(),
             children: Vec::new(),
+            layer: None,
         };
         let root = Part {
             name: "root".into(),
             pose: [0.0; 9],
             polygons: Vec::new(),
             children: vec![child(0.5), child(-0.5)],
+            layer: None,
         };
         let mut p = Poses::new(&root);
         assert_eq!(p.get("leg")[3], 0.5);
+    }
+}
+
+#[cfg(test)]
+mod part_data_tests {
+    use super::*;
+
+    /// One mod's data on a part: a bend.
+    #[derive(Debug, PartialEq)]
+    struct Bend {
+        axis: f32,
+        angle: f32,
+    }
+    /// Another mod's, of a type of its own, on the same part.
+    #[derive(Debug, PartialEq)]
+    struct Stretch(Vec<f32>);
+
+    /// Mods' values on a part are a change of the poses: every write gives a new `version`,
+    /// so `Skin::draw` never reuses the part matrices of a walk before it; a copy keeps them
+    /// and the version, and a reset for another draw drops them. Values of two types live
+    /// side by side on one part.
+    #[test]
+    fn writing_a_parts_data_changes_the_version() {
+        let model = Part::parse(
+            "root",
+            &serde_json::json!({"children": {"right_arm": {}, "left_arm": {}}}),
+        );
+        let mut poses = Poses::new(&model);
+        let start = poses.version();
+        poses.set_data(
+            "right_arm",
+            Bend {
+                axis: 0.0,
+                angle: 0.5,
+            },
+        );
+        let set = poses.version();
+        assert_ne!(set, start);
+        let bend = Bend {
+            axis: 0.0,
+            angle: 0.5,
+        };
+        assert_eq!(poses.data::<Bend>("right_arm"), Some(&bend));
+        poses.set_data("right_arm", Stretch(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
+        assert_ne!(poses.version(), set, "a second type is a write too");
+        assert_eq!(poses.data::<Bend>("right_arm"), Some(&bend));
+        assert_eq!(
+            poses.data::<Stretch>("right_arm").map(|s| s.0.len()),
+            Some(5)
+        );
+        assert_eq!(poses.data::<Bend>("left_arm"), None);
+        let mut copy = Poses::default();
+        copy.copy_from(&poses);
+        assert_eq!(copy.version(), poses.version());
+        assert_eq!(copy.data::<Bend>("right_arm"), Some(&bend));
+        // A part the model lacks has no slot: nothing stored, nothing changed.
+        let before = poses.version();
+        poses.set_data("tail", Stretch(Vec::new()));
+        assert_eq!(
+            (poses.data::<Stretch>("tail"), poses.version()),
+            (None, before)
+        );
+        poses.clear_data::<Bend>("left_arm");
+        assert_eq!(poses.version(), before, "nothing to clear");
+        poses.clear_data::<Bend>("right_arm");
+        assert_ne!(poses.version(), before);
+        assert_eq!(poses.data::<Bend>("right_arm"), None);
+        assert!(poses.data::<Stretch>("right_arm").is_some());
+        assert_eq!(
+            copy.data::<Bend>("right_arm"),
+            Some(&bend),
+            "the copy keeps its own"
+        );
+        copy.reset(&model);
+        assert_eq!(copy.data::<Bend>("right_arm"), None);
+        assert_eq!(copy.data::<Stretch>("right_arm"), None);
     }
 }

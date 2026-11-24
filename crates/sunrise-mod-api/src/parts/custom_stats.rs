@@ -2,33 +2,39 @@
 use super::*;
 
 impl CustomStatsRegistrar for PartRegistrar {
-    fn register_custom_stat(&mut self, id: &str) -> Result<(), String> {
+    fn register_custom_stat(&mut self, id: &str) -> Result<(), crate::DeclarationError> {
+        use crate::DeclarationError;
+        let id = qualified(self.mod_id, id);
         let result = (|| {
-            if mod_vocab::__private::parts_installation::parts_installed() {
-                return Err("registry is frozen".to_owned());
-            }
-            let id = if id.contains(':') {
-                id.to_owned()
-            } else {
-                format!("{}:{id}", self.mod_id)
-            };
-            let identifier = crate::Identifier::parse_namespaced(&id)
-                .ok_or("lowercase resource-id namespace and path required")?;
-            if self.custom_stats.iter().any(|declared| declared == &id) {
-                return Err("duplicate custom statistic".into());
-            }
-            if identifier.namespace() == "minecraft"
-                || !owns_namespace(self.mod_id, identifier.namespace())
+            if mod_vocab::__private::parts_installation::parts_installed()
+                && !REGISTERING_KEYS.with_borrow(Option::is_some)
             {
-                return Err("namespace must be owned by the registering mod, not minecraft".into());
+                return Err(DeclarationError::RegistrationClosed { id });
+            }
+            if crate::Identifier::parse_namespaced(&id).is_none() {
+                return Err(DeclarationError::InvalidId { id });
+            }
+            if self.custom_stats.iter().any(|declared| declared == &id) {
+                return Err(DeclarationError::Rejected {
+                    id,
+                    reason: "duplicate custom statistic".into(),
+                });
+            }
+            if self.has_builtin_entry("minecraft:custom_stat", &id) {
+                return Err(DeclarationError::Rejected {
+                    id,
+                    reason: "built-in custom statistic".into(),
+                });
             }
             self.custom_stats.push(id);
+            self.custom_stat_owners.push(self.mod_id);
             Ok(())
         })();
-        result.map_err(|reason: String| {
-            let message = format!("mod {} custom statistic {id:?}: {reason}", self.mod_id);
-            self.refused.push(message.clone());
-            message
+        result.inspect_err(|error| {
+            self.refused.push(format!(
+                "mod {} custom statistic declaration refused: {error}",
+                self.mod_id
+            ));
         })
     }
 }
@@ -38,22 +44,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn custom_stat_registration_qualifies_owned_ids_and_refuses_invalid_entries() {
+    fn custom_stat_registration_accepts_explicit_namespaces_and_refuses_invalid_entries() {
         let mut registrar = PartRegistrar::new("demo");
         registrar.register_custom_stat("steps").unwrap();
         assert_eq!(registrar.custom_stats, ["demo:steps"]);
         assert!(registrar.register_custom_stat("demo:steps").is_err());
-        for id in [
-            "demo:",
-            ":steps",
-            "demo:Steps",
-            "minecraft:steps",
-            "other:steps",
-            "demo:a:b",
-        ] {
-            assert!(registrar.register_custom_stat(id).is_err(), "{id}");
+        for id in ["demo:", ":steps", "demo:Steps", "demo:a:b"] {
+            assert_eq!(
+                registrar.register_custom_stat(id),
+                Err(crate::DeclarationError::InvalidId { id: id.into() })
+            );
         }
-        assert_eq!(registrar.custom_stats, ["demo:steps"]);
+        registrar.register_custom_stat("minecraft:steps").unwrap();
+        registrar.register_custom_stat("other:steps").unwrap();
+        assert_eq!(
+            registrar.custom_stats,
+            ["demo:steps", "minecraft:steps", "other:steps"]
+        );
+    }
+
+    #[test]
+    fn custom_stat_registration_refuses_a_builtin_key() {
+        let data = mod_vocab::__private::RegistrationData::new(
+            [(
+                "minecraft:custom_stat".into(),
+                vec!["minecraft:play_time".into()],
+            )]
+            .into(),
+            Default::default(),
+            crate::InstanceDirectory::from_path(std::path::Path::new("unused")).unwrap(),
+            crate::RuntimeEnvironment::new(
+                crate::Dist::Client,
+                "26.3".into(),
+                "test".into(),
+                false,
+            ),
+        );
+        crate::load_state::with_test_registration_data(data, || {
+            let mut registrar = PartRegistrar::new("demo");
+            assert_eq!(
+                registrar.register_custom_stat("minecraft:play_time"),
+                Err(crate::DeclarationError::Rejected {
+                    id: "minecraft:play_time".into(),
+                    reason: "built-in custom statistic".into(),
+                })
+            );
+            assert!(registrar.custom_stats.is_empty());
+        });
     }
 
     #[test]
@@ -62,8 +99,11 @@ mod tests {
         registrar.register_custom_stat("steps").unwrap();
         registrar.mod_id = "second";
         assert!(registrar.register_custom_stat("first:steps").is_err());
-        assert!(registrar.register_custom_stat("first:other").is_err());
+        registrar.register_custom_stat("first:other").unwrap();
         registrar.register_custom_stat("steps").unwrap();
-        assert_eq!(registrar.custom_stats, ["first:steps", "second:steps"]);
+        assert_eq!(
+            registrar.custom_stats,
+            ["first:steps", "first:other", "second:steps"]
+        );
     }
 }

@@ -32,7 +32,7 @@ impl Game<'_> {
     fn bundle_slot(&mut self, slot: usize) -> bool {
         slot < 36
             || slot == 504
-            || ((300..500).contains(&slot)
+            || (crate::game::inventory_slots::container_slot_index(slot).is_some()
                 && (self.remote.is_none() || self.remote_storage_open())
                 && self.slots().contains(&slot))
     }
@@ -69,8 +69,9 @@ impl Game<'_> {
 
     /// `BundleMouseActions.toggleSelectedBundleItem`: the stack here and, on a server, there.
     fn select_bundle(&mut self, slot: usize, index: i32) {
+        let res = self.res.clone();
         if let Some(stack) = self.slot_mut(slot) {
-            toggle_selected(stack, index);
+            toggle_selected(res.items(), stack, index);
         }
         if self.remote.is_some() {
             let (_, menu) = self.remote_menu();

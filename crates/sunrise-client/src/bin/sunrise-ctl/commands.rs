@@ -610,7 +610,19 @@ pub const COMMANDS: &[Cmd] = &[
         "on meshes every section and far tile again so the copies are complete (SUNRISE_RENDER_CAPTURE=1 keeps them from the start). DIR gets the camera, frame inputs, settings and every resident near section and far tile mesh; entities, particles, weather, the hand and the HUD are left out. See docs/graphics.md.",
         ["sunrise-ctl render-capture on", "sunrise-ctl render-capture /tmp/scene"], &[], mcp: false, local: false),
     cmd!("fly", Scripting, "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]", "fly the camera along a line, then reply with the frame summary",
-        "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). With raw, the reply also lists every frame time in milliseconds (frame_ms).",
+        "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). \
+         With raw, the reply lists each rendered frame's time in milliseconds (frame_ms). \
+         The streaming_work series is [unload_entries_visited, upload_elements_sorted, upload_elements_merged]. \
+         The unload counter covers departures and replacements in the active world. \
+         The streaming_uploads series is [meshes_uploaded, vertex_bytes_uploaded] for inline and queued mesh submissions to the renderer. \
+         This includes empty meshes and excludes stale meshes skipped before submission. \
+         Bytes use the upload budget's unpacked vertex size, not actual GPU transfers. \
+         The streaming_block_entities series is [block_entities_inserted_on_load, item_entities_visited]. \
+         Replacements count as inserts; item_entities_visited counts entity visits in the item-render loops. \
+         The streaming_span_ms object holds wall milliseconds for unload_block_entities (column removal on departure or replacement), \
+         order_uploads (stale-entry filtering and queue ordering), upload_queue (queued uploads only), \
+         load_block_entities (column block-entity loads) and block_entity_items (campfire, vault, shelf and brushable item loops). \
+         Spans are summed by name per frame and null where they did not run.",
         ["sunrise-ctl fly 0 100 0 500 100 0 20"], &[], mcp: false, local: false),
     // Repro recordings
     cmd!("record-start", Scripting, "record-start [NAME] [--no-world]", "record input, state and the world for a bug repro",

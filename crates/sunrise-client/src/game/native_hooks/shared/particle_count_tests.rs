@@ -7,6 +7,7 @@ use sunrise_core::geometry::Vec3;
 
 fn orb(at: Vec3) -> ExperienceOrb {
     ExperienceOrb {
+        size_answer: None,
         attachment_lifetime: Default::default(),
         fall_distance: 0.0,
         rotation: [0.0, 0.0],
@@ -18,7 +19,7 @@ fn orb(at: Vec3) -> ExperienceOrb {
         velocity: Vec3::ZERO,
         value: 1,
         age: 0,
-        on_ground: false,
+        ground: Default::default(),
         count: 1,
         fire_ticks: 0,
         ticks: 0,
@@ -72,6 +73,7 @@ fn a_client_mod_counts_and_clears_particles() {
                 width: 1.0,
                 height: 1.0,
             },
+            None,
         );
         assert!(host_clear(game));
         let host: &dyn ClientHost = game;
@@ -123,15 +125,16 @@ fn late_gui_clear_prevents_same_frame_particle_geometry_without_a_tick() {
             game.extras_frame(Duration::ZERO);
             let camera = glam::DVec3::from_array(game.particles.camera);
             let mut before = Vec::new();
-            game.client_particle_geometry(camera, 0.0, 70.0, &mut before);
+            game.client_particle_geometry(camera, 0.0, 70.0, None, &mut before);
             assert!(
                 !before.is_empty(),
                 "live guardian, pickup and ordinary particles draw"
             );
             game.native_render_gui_pre(&mut false);
             assert_eq!(mod_api::prelude::EffectsClientHost::particle_count(game), 0);
-            let (mut after, _, _, _) = game.entity_geometry(camera, 0.0, None, Vec::new());
-            game.client_particle_geometry(camera, 0.0, 70.0, &mut after);
+            let (mut after, _, _, _) =
+                game.entity_geometry(camera, 0.0, None, Vec::new(), &mut Vec::new());
+            game.client_particle_geometry(camera, 0.0, 70.0, None, &mut after);
             assert!(
                 after.is_empty(),
                 "no stale pickup, guardian or ordinary quads"
@@ -171,7 +174,7 @@ fn a_model_callback_clear_discards_particle_geometry_already_extracted() {
             fill(game);
             let camera = glam::DVec3::from_array(game.particles.camera);
             let mut out = Vec::new();
-            game.client_particle_geometry(camera, 0.0, 70.0, &mut out);
+            game.client_particle_geometry(camera, 0.0, 70.0, None, &mut out);
             let previous = out.len();
             assert!(previous > 0);
             let positions: Vec<_> = out.iter().map(|v| v.pos).collect();
@@ -203,7 +206,7 @@ fn a_model_callback_clear_discards_particle_geometry_already_extracted() {
             let item = game.dropped.pop().unwrap();
             game.add_pickup_toward(Taken::Item(Box::new(item)), Collector::Player, at);
             game.tick_particles();
-            game.client_particle_geometry(camera, 0.0, 70.0, &mut out);
+            game.client_particle_geometry(camera, 0.0, 70.0, None, &mut out);
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
             assert_eq!(out.iter().map(|v| v.pos).collect::<Vec<_>>(), positions);
             assert_eq!(&game.entity_motion.borrow()[..motion.len()], &motion);

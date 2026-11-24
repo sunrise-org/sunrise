@@ -16,7 +16,7 @@ use sunrise_client::{
     blocks::BlockFacts,
     items::Items,
     mobs::{
-        Species,
+        MobTypes, Species,
         data::MobData,
         spawn_rules::{self, SpawnLevel},
         spawn_selection::{self, Heightmap},
@@ -482,11 +482,14 @@ pub fn main() -> sunrise_client::Result<()> {
     let facts = BlockFacts::load(root, registry)?;
     let data = MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        &facts,
-    );
+        facts.states.len(),
+        false,
+    )?;
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::tags_only(root, &PackOverlay::NONE, &defaults)?;
     let attributes = GameplayAttributes::load(root);
+    let types = MobTypes::load(root)?;
+    let pillager = &types.types["minecraft:pillager"];
     let shared = Shared {
         facts: &facts,
         data: &data,
@@ -608,11 +611,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 next_tick: get("next", "0").parse()?,
             };
             let enemies = get("enemies", "1") != "0";
-            let mut spawn = |l: &World, m: Member, _: &mut LegacyRandom| -> bool {
-                // EntityType.create: no monsters in peaceful.
-                if l.difficulty == 0 {
-                    return false;
-                }
+            let mut spawn = |_: &World, m: Member, _: &mut LegacyRandom| -> bool {
                 let mut s = format!(
                     "spawn minecraft:pillager {} {} {}",
                     m.pos[0], m.pos[1], m.pos[2]
@@ -638,7 +637,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 true
             };
             for _ in 0..ticks {
-                spawner.tick(&world, enemies, &mut random, &mut spawn);
+                spawner.tick(&world, enemies, pillager, &mut random, &mut spawn);
             }
             log.push(format!(
                 "next {} {}",

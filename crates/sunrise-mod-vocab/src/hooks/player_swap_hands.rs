@@ -1,5 +1,4 @@
 //! The `player_swap_hands` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0262
 
 pub trait Hooks {
     /// Heard before a non-spectator player's swap-hands action.
@@ -13,11 +12,18 @@ pub trait Hooks {
     /// owner and a LAN host. Not heard: the same swap made in an open inventory
     /// (hovering a slot and pressing the key, a menu click).
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
-        version = 2,
+        version = 4,
         neoforge = "LivingSwapItemsEvent.Hands"
     )]
-    fn player_swap_hands();
+    fn player_swap_hands(
+        player: u128,
+        name: &str,
+        to_main_hand: &mut Option<ItemStack>,
+        to_off_hand: &mut Option<ItemStack>,
+        cancel: &mut bool,
+    );
 }

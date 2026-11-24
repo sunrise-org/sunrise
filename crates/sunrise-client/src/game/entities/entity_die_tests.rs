@@ -78,6 +78,58 @@ fn with_game(f: impl FnOnce(&mut Game<'_>)) {
 
 #[test]
 #[ignore = "daily"]
+fn receiver_kill_stages_orb_removal_until_commit_and_kills_a_resident_knot_once() {
+    use super::native_entity_refs::tests::{fixture_resident_column, with_game};
+
+    with_game(|game| {
+        fixture_resident_column(&mut game.world, (0, 0));
+        let at = [4.25, 70.0, 4.75];
+        game.summon_with_nbt("minecraft:experience_orb", at, "{Value:1s}")
+            .unwrap();
+        let orb = game.entity(game.orbs[0].id).unwrap();
+
+        for commit in [false, true] {
+            capture();
+            game.storage_scope(|game, _| {
+                assert_eq!(orb.kill(game), Ok(true));
+                assert!(game.entity(orb.id()).is_none());
+                assert!(orb.position(game).is_none());
+                assert_eq!(orb.kill(game), Err(mod_api::LevelWriteError::Stale));
+                assert!(deaths().is_empty());
+                capture();
+                ((), commit)
+            });
+            assert_eq!(game.entity(orb.id()), (!commit).then_some(orb));
+            let expected = if commit { vec![at] } else { vec![] };
+            assert_eq!(
+                deaths()
+                    .into_iter()
+                    .map(|(_, pos, _)| pos)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+
+        let fence = [8, 70, 8];
+        game.tie_knot(fence);
+        let knot = game.entity(game.knot_ids[&fence]).unwrap();
+        let at = knot.position(game).unwrap();
+        capture();
+        assert_eq!(knot.kill(game), Ok(true));
+        assert_eq!(knot.kill(game), Err(mod_api::LevelWriteError::Stale));
+        assert_eq!(game.natural_knot(knot.id()), None);
+        assert_eq!(
+            deaths()
+                .into_iter()
+                .map(|(_, pos, _)| pos)
+                .collect::<Vec<_>>(),
+            [at]
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn entity_die_commands() {
     with_game(|game| {
         let at = [4.25, 200.0, 4.75];

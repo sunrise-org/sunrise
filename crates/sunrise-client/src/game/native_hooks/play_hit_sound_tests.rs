@@ -1,4 +1,3 @@
-#![cfg(test)]
 use crate::game::{native_entity_refs::tests::with_game, *};
 use mod_api::{
     BlockPart, BlockPos, ClientHost, Direction, Flow, Hooks, ModEntry, PlayHitSoundEvent, Registrar,
@@ -53,7 +52,7 @@ fn play_hit_sound_helper_and_eight_mining_ticks() {
                 game.creative = false;
                 game.screen = Screen::Playing;
                 game.title = None;
-                game.left = true;
+                game.set_mapping_held("key.attack", true);
                 game.forced_hit = Some(Hit {
                     pos: [5, 63, 4],
                     face: [-1, 0, 0],

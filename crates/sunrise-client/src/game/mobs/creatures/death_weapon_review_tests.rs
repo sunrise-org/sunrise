@@ -3,6 +3,14 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 fn fixture(expected: Option<ItemStack>, run: impl FnOnce(&mut Game<'_>)) {
+    fixture_with_source(expected, None, run);
+}
+
+fn fixture_with_source(
+    expected: Option<ItemStack>,
+    expected_source: Option<(&'static str, i32)>,
+    run: impl FnOnce(&mut Game<'_>),
+) {
     crate::game::native_entity_refs::tests::with_game(|game| {
         let scratch = tempfile::tempdir().unwrap();
         game.world_root = scratch.path().to_path_buf();
@@ -25,6 +33,7 @@ fn fixture(expected: Option<ItemStack>, run: impl FnOnce(&mut Game<'_>)) {
             "review_weapon",
             Box::new(WeaponProbe {
                 expected: expected.map(|stack| stack.try_into_api().unwrap()),
+                expected_source,
                 swap: None,
                 seen: seen.clone(),
             }),
@@ -65,7 +74,7 @@ fn hit(game: &mut Game<'_>, shot: &Projectile, amount: f32) -> bool {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -94,7 +103,7 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
             let mut dead = game.mobs.iter().find(|m| m.id == 70).unwrap().clone();
             assert_eq!(dead.last_damage.unwrap().1, committed.1);
             dead.health = 0.0;
-            game.mob_died(&dead);
+            game.mob_die(&dead);
         });
     });
 }
@@ -102,7 +111,7 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -123,9 +132,8 @@ fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
             let mut attempted = second.clone();
             game.shot_damage(&mut attempted, Some("minecraft:pig"), Who::Mob(70));
             assert!(!hit(game, &second, 1.0));
-            let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap().clone();
+            let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap();
             assert_eq!(dead.last_damage.unwrap().1, committed.unwrap().1);
-            game.mob_died(&dead);
         });
     });
 }
@@ -151,8 +159,6 @@ fn death_weapon_dispenser_arrow_without_recorded_weapon_is_none() {
             .invulnerable = 0;
         game.mobs.iter_mut().find(|mob| mob.id == 70).unwrap().age += 1;
         assert!(hit(game, &arrow(None), 100.0));
-        let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap().clone();
-        game.mob_died(&dead);
     });
 }
 
@@ -163,7 +169,7 @@ fn player(game: &mut Game<'_>) {
 #[test]
 #[ignore = "daily"]
 fn death_weapon_riptide_iii_uses_spin_trident() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -180,17 +186,22 @@ fn death_weapon_riptide_iii_uses_spin_trident() {
             dead.health = 0.0;
             dead.ai.last_hurt_by_player = 100;
             game.remember_mob_player_credit(dead.id);
-            game.mob_died(&dead);
+            game.mob_die(&dead);
         });
     });
 }
 #[test]
 #[ignore = "daily"]
 fn death_weapon_harming_potion_does_not_read_thrower_sword() {
-    if isolated() {
+    use crate::game::native_entity_refs::tests::run_fresh_cases;
+    if run_fresh_cases(
+        "game::creatures::death_weapon::review_tests::death_weapon_harming_potion_does_not_read_thrower_sword",
+        "SUNRISE_DEATH_WEAPON_POTION_CHILD",
+        &["harming_potion"],
+    ) {
         return;
     }
-    fixture(None, |game| {
+    fixture_with_source(None, Some(("minecraft:indirect_magic", 11)), |game| {
         player(game);
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:diamond_sword", 1));
         let mut target = victim(game);
@@ -201,14 +212,9 @@ fn death_weapon_harming_potion_does_not_read_thrower_sword() {
         potion.data_mut().potion = Some("minecraft:harming".into());
         let owner = game.potion_owner(Some(Who::Player));
         game.splash(&potion, at, Some(at), None, 3, &owner, true, Vec3::ZERO);
-        let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap().clone();
+        let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap();
         assert_eq!(dead.health, 0.0);
         assert_eq!(dead.last_direct, Some("minecraft:splash_potion"));
-        assert_eq!(
-            game.mob_damage_source(&dead),
-            ("minecraft:indirect_magic", 11)
-        );
-        game.mob_died(&dead);
     });
 }
 
@@ -229,7 +235,7 @@ fn death_weapon_different_killing_source_discards_projectile() {
         let mut dead = game.mobs[0].clone();
         dead.last_damage = Some((Damage::of(DamageKind::Fall), i64::from(dead.age) + 1));
         dead.health = 0.0;
-        game.mob_died(&dead);
+        game.mob_die(&dead);
         assert!(game.mobs[0].accepted_hit.is_none());
     });
 }
@@ -293,14 +299,14 @@ fn death_weapon_removal_clears_capture_and_vehicle_transfer_keeps_its_owner() {
         }
         let mut dead = victim(game);
         dead.health = 0.0;
-        game.mob_died(&dead);
+        game.mob_die(&dead);
     });
 }
 
 #[test]
 #[ignore = "daily"]
 fn death_weapon_same_tick_stronger_arrow_replaces_weapon() {
-    crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+    crate::game::native_entity_refs::tests::run_with_game_stack(|| {
         if isolated() {
             return;
         }
@@ -324,7 +330,7 @@ fn death_weapon_same_tick_stronger_arrow_replaces_weapon() {
                 Some(expected.clone())
             );
             dead.health = 0.0;
-            game.mob_died(&dead);
+            game.mob_die(&dead);
         });
     });
 }

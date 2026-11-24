@@ -27,6 +27,68 @@ impl Hooks for Probe {
     }
 }
 
+#[test]
+#[ignore = "daily"]
+fn base_allow_does_not_override_worn_immunity() {
+    use super::native_entity_refs::tests::{prepare_entity_ticking_neighborhood, run_fresh_cases};
+
+    if run_fresh_cases(
+        "game::native_hit_attempt_tests::base_allow_does_not_override_worn_immunity",
+        "SUNRISE_TEST_WORN_IMMUNITY",
+        &["base_allow"],
+    ) {
+        return;
+    }
+
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "allow_base",
+        Box::new(Probe(Arc::clone(&heard), Arc::new(Mutex::new(Some(false))))),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            prepare_entity_ticking_neighborhood(game, sunrise_core::position::ChunkPos::new(0, 0));
+            assert!(game.run_command(concat!(
+                "summon pig 4.5 100 4.5 {Invulnerable:1b,NoAI:1b,NoGravity:1b,",
+                "equipment:{feet:{id:\"minecraft:leather_boots\",count:1,components:",
+                "{\"minecraft:attribute_modifiers\":[],",
+                "\"minecraft:enchantments\":{\"minecraft:frost_walker\":1}}}}}"
+            )));
+            let pig = game.mobs.last().unwrap().id;
+            assert!(
+                !game
+                    .run_command("damage @e[type=pig,limit=1] 2 minecraft:campfire at 5.5 100 4.5")
+            );
+            assert_eq!(
+                &*heard.lock().unwrap(),
+                &[true],
+                "listener explicitly allows a base refusal"
+            );
+            assert_eq!(game.mob_object(pig).unwrap().health, 10.0);
+
+            assert!(game.run_command("data merge entity @e[type=pig,limit=1] {Invulnerable:0b}"));
+            heard.lock().unwrap().clear();
+            assert!(
+                !game
+                    .run_command("damage @e[type=pig,limit=1] 2 minecraft:campfire at 5.5 100 4.5")
+            );
+            assert_eq!(
+                &*heard.lock().unwrap(),
+                &[false],
+                "the hook's input excludes equipment"
+            );
+            assert_eq!(game.mob_object(pig).unwrap().health, 10.0);
+            assert!(
+                game.run_command("damage @e[type=pig,limit=1] 2 minecraft:in_fire at 5.5 100 4.5")
+            );
+            assert_eq!(game.mob_object(pig).unwrap().health, 8.0);
+        });
+    });
+}
+
 fn fresh_player(game: &mut super::Game<'_>, mode: GameMode) {
     game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
     bind_local_player(game, 7, 7);
@@ -361,8 +423,14 @@ fn hit_attempts_reach_the_listener_once_including_refusals() {
             ghast.invulnerable_flag = false;
             let mut fireball = Damage::of(DamageKind::Fireball);
             fireball.attacker = Some(Who::Player);
+            let reflected = sunrise_client::health::Attack {
+                attacker: 7,
+                projectile: Some(12),
+                projectile_kind: sunrise_client::health::DirectEntity::LargeFireball,
+                ..Default::default()
+            };
             assert!(ghast.damage(
-                damage_level_of!(game, &sunrise_client::health::NO_ATTACK, no_push, None),
+                damage_level_of!(game, &reflected, no_push, None),
                 2.0,
                 fireball
             ));

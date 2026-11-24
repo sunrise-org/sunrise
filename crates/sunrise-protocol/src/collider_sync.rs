@@ -1,6 +1,6 @@
 //! Collider sync: the boxes of a moving collider (an entity's `set_collider`), sent by a
 //! Sunrise server to the Sunrise clients that track the entity
-//! (docs/modding/src/how-to/native-mods.md, "Moving colliders").
+//! (docs/modding/src/how-to/entities/collision-exclusions.md, "Moving colliders").
 //!
 //! A client that starts tracking the entity gets the collider whole, split into messages of
 //! at most [`MAX_MESSAGE`] bytes; after that it gets only what changed: boxes replaced,
@@ -9,11 +9,9 @@
 //!
 //! The channel is an engine declaration in the negotiated payload table: only a peer that
 //! offers it at [`VERSION`] is sent anything.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
 use sunrise_core::geometry::oriented;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The custom payload channel, clientbound only.
 pub const CHANNEL: &str = "sunrise:collider_sync";

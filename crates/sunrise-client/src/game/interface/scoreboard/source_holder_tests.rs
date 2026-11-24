@@ -8,11 +8,8 @@ use sunrise_client::{
     chunk::Chunk,
     lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::HubConfig},
 };
-use sunrise_protocol::{
-    buf::{Reader, Writer},
-    ids,
-    packets::configuration::ClientInformation,
-};
+use sunrise_core::vanilla_bytes::Writer;
+use sunrise_protocol::{buf::Reader, ids, packets::configuration::ClientInformation};
 
 /// A hosted world with `name` joined and placed at the world spawn.
 fn game_with_guest<'a>(
@@ -161,13 +158,15 @@ fn a_wildcard_reset_names_tracked_holders_without_their_team_formatting() {
         assert!(game.run_command(command), "{command}");
     }
     // `Scoreboard.getTrackedPlayers` hands out `ScoreHolder.forNameOnly`, which has no display name.
-    let swap = game.enter_guest(2).unwrap();
-    game.chat_capture = Some(Vec::new());
-    let permission = std::mem::replace(&mut game.ui.registries.permission, 4);
-    let ok = game.run_command("scoreboard players reset *");
-    game.ui.registries.permission = permission;
-    let lines = game.chat_capture.take().unwrap();
-    game.leave_guest(swap);
+    let (ok, lines) = game
+        .with_guest_swap(2, game.dim, |game| {
+            game.chat_capture = Some(Vec::new());
+            let permission = std::mem::replace(&mut game.ui.registries.permission, 4);
+            let ok = game.run_command("scoreboard players reset *");
+            game.ui.registries.permission = permission;
+            (ok, game.chat_capture.take().unwrap())
+        })
+        .unwrap();
     assert!(ok);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].plain(), "Reset all scores for Alex");

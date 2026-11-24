@@ -79,10 +79,7 @@ impl Game<'_> {
         if !self.res.facts().is_air(in_block) {
             return (feet, in_block);
         }
-        let on_ground = m
-            .on_ground
-            .then(|| self.supporting_block(m.position, m.bounds()));
-        let at = on_ground.flatten().map_or(
+        let at = m.ground.supporting_block.map_or(
             [
                 feet[0],
                 (m.position.y - f64::from(1.0e-5_f32)).floor() as i32,
@@ -97,7 +94,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Audio, Options, Progress, Settings, load_resources};
+    use crate::game::{Audio, Options, Progress, Settings, entity::Entity, load_resources};
     use std::sync::Arc;
     use sunrise_client::chunk::Chunk;
     use sunrise_client::mobs::Mob;
@@ -174,7 +171,13 @@ mod tests {
         let fence = registry.default_state("minecraft:oak_fence").unwrap();
         game.world.set(8, 63, 8, stone).unwrap();
         game.world.set(8, 64, 8, fence).unwrap();
-        game.mobs[0].on_ground = true;
+        let _ = game.mobs[0].update_retained_ground(
+            &game.world,
+            game.collision,
+            &world_items!(game).entity_type_tags,
+            true,
+            None,
+        );
         assert_eq!(
             game.breeze_ground(&game.mobs[0]),
             ([8, 64, 8], fence),
@@ -211,7 +214,13 @@ mod tests {
             .default_state("minecraft:stone")
             .unwrap();
         game.world.set(8, 63, 8, stone).unwrap();
-        game.mobs[0].on_ground = true;
+        let _ = game.mobs[0].update_retained_ground(
+            &game.world,
+            game.collision,
+            &world_items!(game).entity_type_tags,
+            true,
+            None,
+        );
         game.world.random = sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(1234));
         let level = game.world.random.state();
 
@@ -237,7 +246,6 @@ mod tests {
         let registry = &game.pack.assets.registry;
         let stone = registry.default_state("minecraft:stone").unwrap();
         game.world.set(8, 63, 8, stone).unwrap();
-        game.mobs[0].on_ground = true;
         for name in [
             "minecraft:oak_fence",
             "minecraft:cobblestone_wall",
@@ -245,15 +253,31 @@ mod tests {
         ] {
             let state = registry.default_state(name).unwrap();
             game.world.set(8, 64, 8, state).unwrap();
+            let _ = game.mobs[0].update_retained_ground(
+                &game.world,
+                game.collision,
+                &world_items!(game).entity_type_tags,
+                true,
+                None,
+            );
             assert_eq!(
                 game.breeze_ground(&game.mobs[0]),
                 ([8, 64, 8], state),
                 "{name}"
             );
         }
-        // The same breeze on the full block's top reads that block.
+        // Replacing the shape between moves doesn't select a new support.
         game.world.set(8, 64, 8, stone).unwrap();
+        assert_eq!(game.breeze_ground(&game.mobs[0]), ([8, 64, 8], stone));
+        // The same breeze on the full block's top reads that block.
         game.mobs[0].position = Vec3::new(8.5, 65.0, 8.5);
+        let _ = game.mobs[0].update_retained_ground(
+            &game.world,
+            game.collision,
+            &world_items!(game).entity_type_tags,
+            true,
+            None,
+        );
         assert_eq!(game.breeze_ground(&game.mobs[0]), ([8, 64, 8], stone));
     }
 }

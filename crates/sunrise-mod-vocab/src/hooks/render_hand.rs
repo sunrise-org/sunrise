@@ -1,5 +1,4 @@
 //! The `render_hand` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0098
 
 pub trait Hooks {
     /// Before one first-person hand of this window's player is drawn
@@ -11,19 +10,29 @@ pub trait Hooks {
     /// hands' view space, in blocks, +x right, +y up, -z into the screen,
     /// under the hand sway and before vanilla's per-item transforms; both
     /// hands share it, and `render.hand` says which one is asked. It is lit
-    /// with the light at the eyes; add geometry with `native_draw_cube`,
-    /// `native_draw_quad`, `native_draw_block` and `native_draw_item`. It
+    /// with the light at the eyes. Add geometry with `draw.cube`, `draw.quad`,
+    /// `draw.block` (taking a resolved `BlockState`) and `draw.item`.
+    /// [`HandDrawContext::render_arm`](crate::HandDrawContext::render_arm) submits either
+    /// physical arm with the local avatar's skin, sleeve and model width, at the
+    /// current draw pose and light. The submitted geometry
     /// joins the hand's own vertices, ahead of vanilla's: the hand's field of
     /// view, the view bob, a shader pack's hand pass and `hand_drawn`
     /// see it as they see vanilla's hand. Unlike NeoForge, the pose stack is
     /// `draw`'s own: turning it moves what you draw, `render`'s pose moves
     /// the default geometry, and player render state is not exposed.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
+        version = 3,
         contract = "cancel",
         out = "canceled",
         neoforge = "RenderHandEvent",
         cancellable = true
     )]
-    fn render_hand();
+    fn render_hand(
+        render: &mut HandRender<'_>,
+        draw: &mut dyn HandDrawContext,
+        canceled: &mut bool,
+    );
 }

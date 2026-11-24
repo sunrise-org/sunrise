@@ -290,7 +290,7 @@ impl Game<'_> {
             return;
         };
         // LevelRenderer.playJukeboxSong: SimpleSoundInstance.forJukeboxSong.
-        let id = self.audio.play_jukebox_song(&s.sound, pos);
+        let id = self.play_audio_jukebox_song(&s.sound, pos);
         self.jukebox_sounds.insert((pos[0], pos[1], pos[2]), id);
         let description =
             sunrise_client::component::to_text(&s.description, &mut |k| Text::literal(k));

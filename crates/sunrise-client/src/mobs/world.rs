@@ -34,10 +34,9 @@ thread_local! {
     static NEAR_BUF_POOL: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// What `push_entities` pushes: who, where, whether it rides a vehicle (`Entity.isPassenger`),
-/// whether it shares the pusher's root vehicle (`isPassengerOfSameVehicle`), and whether it is
-/// itself a vehicle.
-pub(super) type PushTarget = (Who, Vec3, bool, bool, bool);
+/// The selected object and whether it was a passenger for the cramming count.
+/// A paused round also pins the mob's join so it cannot push a replacement.
+pub(super) type PushTarget = (Who, bool, Option<crate::join_seq::JoinSeq>);
 thread_local! {
     static PUSH_TARGETS: std::cell::RefCell<Vec<PushTarget>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -189,6 +188,35 @@ impl<'b> RaycastBlockCache<'b> {
     }
 }
 
+/// What `Level.precipitationAt` reads of the mobs' level.
+impl sunrise_world::level::weather::PrecipitationReads for MobWorld<'_> {
+    fn is_raining(&self) -> bool {
+        self.raining
+    }
+    fn can_see_sky(&self, pos: BlockPos) -> bool {
+        MobWorld::can_see_sky(self, pos.x, pos.y, pos.z)
+    }
+    fn motion_blocking_y(&self, pos: BlockPos) -> i32 {
+        self.motion_blocking_height(pos.x, pos.z)
+    }
+    /// `Biome.getPrecipitationAt`: none in a column not loaded or a biome without
+    /// precipitation, else snow below 0.15.
+    fn biome_precipitation(&self, pos: BlockPos) -> sunrise_world::level::PrecipitationKind {
+        use sunrise_world::level::PrecipitationKind;
+        let Some(chunk) = self.world.chunks.get(&(pos.x >> 4, pos.z >> 4)) else {
+            return PrecipitationKind::None;
+        };
+        let biome = self.biomes.get(chunk.biome(pos.x, pos.y, pos.z));
+        if !biome.precipitation {
+            PrecipitationKind::None
+        } else if biome.temperature_at(pos, self.sea_level) >= 0.15 {
+            PrecipitationKind::Rain
+        } else {
+            PrecipitationKind::Snow
+        }
+    }
+}
+
 impl MobWorld<'_> {
     /// `Level.getEntity(uuid)`: the entity a UUID a mob stored names, while it
     /// is in the level. Nothing when this world keeps no entity UUIDs, or when
@@ -295,6 +323,20 @@ impl MobWorld<'_> {
     }
     pub fn has_tag(&self, tag: &str, block: &str) -> bool {
         self.block_tags.get(tag).is_some_and(|s| s.contains(block))
+    }
+    /// `EntityType.is`: membership in the owning side's bound tags.
+    pub fn entity_has(&self, tag: &str, id: &str) -> bool {
+        self.items
+            .is_some_and(|items| items.entity_type_tags.contains(tag, id))
+    }
+    /// Membership in a prebound gameplay tag, indexed by the mob type's registry slot.
+    #[inline]
+    pub fn entity_tag_bit(&self, kind: &super::MobType, bit: u32) -> bool {
+        self.items.is_some_and(|items| {
+            items
+                .entity_type_tags
+                .has_bit(kind.flags.entity_tag_slot, bit)
+        })
     }
     /// The state's [`crate::items::BlockTagFlags`]: 0 when this view carries
     /// no table.
@@ -592,19 +634,16 @@ impl MobWorld<'_> {
         }
         self.world.light(x, y, z) >> 4 == 15
     }
-    /// Level.precipitationAt: raining, open to the sky, nothing motion
-    /// blocking above, then the biome's precipitation at the position:
-    /// `Some(true)` rain, `Some(false)` snow, `None` nothing.
+    /// Level.precipitationAt (`sunrise_world::level::weather::precipitation_at`): raining, open
+    /// to the sky, nothing motion blocking above, then the biome's precipitation at the
+    /// position: `Some(true)` rain, `Some(false)` snow, `None` nothing.
     pub fn precipitation_at(&self, x: i32, y: i32, z: i32) -> Option<bool> {
-        if !self.raining || !self.can_see_sky(x, y, z) || self.motion_blocking_height(x, z) > y {
-            return None;
+        use sunrise_world::level::PrecipitationKind;
+        match sunrise_world::level::weather::precipitation_at(self, BlockPos::new(x, y, z)) {
+            PrecipitationKind::Rain => Some(true),
+            PrecipitationKind::Snow => Some(false),
+            PrecipitationKind::None => None,
         }
-        let chunk = self.world.chunks.get(&(x >> 4, z >> 4))?;
-        let biome = self.biomes.get(chunk.biome(x, y, z));
-        if !biome.precipitation {
-            return None;
-        }
-        Some(biome.temperature_at(BlockPos::new(x, y, z), self.sea_level) >= 0.15)
     }
     /// `Entity.isInClouds`: a dimension whose `visual/cloud_color` is
     /// transparent has no clouds, else the cloud band is the four blocks from
@@ -671,17 +710,44 @@ impl MobWorld<'_> {
                 creative: p.creative,
                 passenger: p.passenger,
             }),
-            Who::Mob(id) => self.seen(id).map(|s| TargetInfo {
-                position: s.position,
-                eye_y: s.eye_y,
-                bounds: s.bounds,
-                hitbox: s.hitbox,
-                alive: s.alive,
-                can_be_seen_as_enemy: !s.playing_dead,
-                is_player: false,
-                creative: false,
-                passenger: s.passenger,
-            }),
+            Who::Mob(id) => self
+                .seen(id)
+                .map(|s| TargetInfo {
+                    position: s.position,
+                    eye_y: s.eye_y,
+                    bounds: s.bounds,
+                    hitbox: s.hitbox,
+                    alive: s.alive,
+                    can_be_seen_as_enemy: !s.playing_dead,
+                    is_player: false,
+                    creative: false,
+                    passenger: s.passenger,
+                })
+                .or_else(|| {
+                    self.armor_stands.iter().find(|s| s.id == id).map(|s| {
+                        let (width, height, eye) = s.probe_dimensions();
+                        let half = width / 2.0;
+                        let bounds = Aabb::new(
+                            Vec3::new(s.position.x - half, s.position.y, s.position.z - half),
+                            Vec3::new(
+                                s.position.x + half,
+                                s.position.y + height,
+                                s.position.z + half,
+                            ),
+                        );
+                        TargetInfo {
+                            position: s.position,
+                            eye_y: s.position.y + eye,
+                            bounds,
+                            hitbox: bounds,
+                            alive: s.health > 0.0,
+                            can_be_seen_as_enemy: false,
+                            is_player: false,
+                            creative: false,
+                            passenger: false,
+                        }
+                    })
+                }),
         }
     }
     /// The other mobs whose boxes may meet `area` (callers test the boxes),
@@ -772,9 +838,9 @@ impl MobWorld<'_> {
 
 /// Level.clip with VISUAL shapes and no fluids: the block the segment first
 /// hits, None inside when it hits nothing and outside when the segment is
-/// too long to walk. Glass and copper grates (`TransparentBlock`) and bars and panes
-/// (`IronBarsBlock`) have no visual shape; mud, soul sand and powder snow
-/// look like full blocks.
+/// too long to walk. Glass and copper grates (`TransparentBlock`), bars and panes
+/// (`IronBarsBlock`) and powder snow have no visual shape; mud and soul sand
+/// look like full blocks; fences and snow layers use their outline.
 pub fn visual_clip<W: DynamicCollisionWorld>(
     facts: &BlockFacts,
     collision: &BlockCollisionRegistry,
@@ -784,31 +850,50 @@ pub fn visual_clip<W: DynamicCollisionWorld>(
     to: Vec3,
 ) -> Option<Option<[i32; 3]>> {
     let full = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
-    let result = traverse_blocks(from, to, 512, |p: BlockPos| {
-        let id = state(p.x, p.y, p.z);
-        if facts.is_air(id) {
-            return None;
-        }
-        let name = facts.get(id).name.trim_start_matches("minecraft:");
-        if name.ends_with("glass")
-            || name.ends_with("glass_pane")
-            || name.ends_with("_bars")
-            || name.ends_with("copper_grate")
-        {
-            return None;
-        }
-        if matches!(name, "mud" | "soul_sand" | "powder_snow") {
-            return full
-                .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
-                .clip(from, to)
+    let result =
+        traverse_blocks(from, to, 512, |p: BlockPos| {
+            let id = state(p.x, p.y, p.z);
+            if facts.is_air(id) {
+                return None;
+            }
+            let name = facts.get(id).name.trim_start_matches("minecraft:");
+            if name.ends_with("glass")
+                || name.ends_with("glass_pane")
+                || name.ends_with("_bars")
+                || name.ends_with("copper_grate")
+                || name == "powder_snow"
+            {
+                return None;
+            }
+            // FenceBlock and SnowLayerBlock: their outline (a fence's collision shape is 24 px tall).
+            let vanilla_fence = facts
+                .get(id)
+                .name
+                .strip_prefix("minecraft:")
+                .is_some_and(|n| n.ends_with("_fence"));
+            if name == "snow" || vanilla_fence {
+                return VoxelShape::clip_boxes(
+                    facts.get(id).outline.iter().map(|b| {
+                        Aabb::new(Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5]))
+                    }),
+                    from,
+                    to,
+                    p,
+                )
                 .map(|_| [p.x, p.y, p.z]);
-        }
-        if let Ok(Some(shape)) = collision.static_shape(id) {
-            return shape.clip(from, to, p).map(|_| [p.x, p.y, p.z]);
-        }
-        let shape = collision.collision_shape(scene, id, [p.x, p.y, p.z]).ok()?;
-        shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
-    });
+            }
+            if matches!(name, "mud" | "soul_sand") {
+                return full
+                    .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
+                    .clip(from, to)
+                    .map(|_| [p.x, p.y, p.z]);
+            }
+            if let Ok(Some(shape)) = collision.static_shape(id) {
+                return shape.clip(from, to, p).map(|_| [p.x, p.y, p.z]);
+            }
+            let shape = collision.collision_shape(scene, id, [p.x, p.y, p.z]).ok()?;
+            shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
+        });
     result.ok()
 }
 
@@ -892,7 +977,7 @@ impl TestResources {
         let facts = BlockFacts::load(root, registry).unwrap();
         let motion = crate::motion::MotionResources::load(root, &assets).unwrap();
         let source = sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf());
-        let data = super::MobData::load(&source, &facts);
+        let data = super::MobData::load(&source, facts.states.len(), false).unwrap();
         let types = super::MobTypes::load(root).unwrap();
         let biomes = crate::biome::Biomes::load(&source).unwrap();
         let defaults = sunrise_world::item_defaults::read(root).unwrap();
@@ -937,6 +1022,34 @@ impl TestResources {
             .as_ref()
     }
 }
+/// A built test world with the generic damage key installed for its mocked contact Part.
+#[cfg(test)]
+pub(crate) fn with_built_contact_test_world(
+    build: impl FnOnce(&mut crate::world::World, &sunrise_world::registry::BlockRegistry),
+    f: impl FnOnce(&MobWorld<'_>, &super::MobTypes, mod_api::DamageTypeKey),
+) -> bool {
+    struct Contact(std::sync::Arc<std::sync::OnceLock<mod_api::DamageTypeKey>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Contact {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let requested = r.damage_type_key("minecraft:generic");
+            assert_eq!(*self.0.get_or_init(|| requested), requested);
+        }
+    }
+    let key = std::sync::Arc::new(std::sync::OnceLock::new());
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "contact",
+        Box::new(Contact(key.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods.clone(), || {
+        mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
+        with_built_test_world(&[], build, |world, types| {
+            f(world, types, *key.get().unwrap())
+        })
+    })
+}
+
 /// Runs `f` over a fresh `World` (`build` places its blocks) on `resources`.
 #[cfg(test)]
 fn run_test_world(
@@ -964,6 +1077,7 @@ fn run_test_world(
     build(&mut world, registry);
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
+        side: &crate::motion::surface::DrySide(&motion.health.damage),
         mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
         goal_host: None,
         teams: Default::default(),
@@ -986,6 +1100,7 @@ fn run_test_world(
         others,
         live_mobs: None,
         dragon: None,
+        armor_stands: &[],
         leash_boats: &[],
         who_lookup: None,
         others_grid: None,
@@ -1006,6 +1121,7 @@ fn run_test_world(
         biomes,
         mob_griefing,
         universal_anger: false,
+        pvp: false,
         mob_drops,
         max_entity_cramming: 24,
         difficulty: super::spawning::LocalDifficulty::new(2, 18000, 0, 0.0),
@@ -1021,6 +1137,7 @@ fn run_test_world(
         asks_baby_spawn: false,
         border: None,
         section_writer: None,
+        trading_players: None,
     };
     f(&w, types);
     true
@@ -1094,6 +1211,57 @@ mod scaffolding_sight_tests {
                 let above = Vec3::new(0.5, 66.0 + 1.62, 0.5);
                 assert!(w.line_of_sight_for(Some(64.0), below, above));
                 assert!(!w.line_of_sight_for(Some(66.0), above, below));
+            },
+        );
+        assert!(ran, "vanilla data is missing");
+    }
+
+    /// `ClipContext.Block.VISUAL` (Creaking's `isLookingAtMe`): a fence and a snow layer use their
+    /// outline, not the 24 px / one-layer-shorter collision shape; powder snow has none.
+    #[test]
+    #[ignore = "daily"]
+    fn visual_sight_uses_the_fence_outline_and_skips_powder_snow() {
+        use sunrise_core::nbt::Tag;
+        let ran = super::with_built_test_world(
+            &[],
+            |world, registry| {
+                world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+                );
+                let snow4 = registry
+                    .saved_state_id(&Tag::compound([
+                        ("id", Tag::String("minecraft:snow".into())),
+                        (
+                            "properties",
+                            Tag::compound([("layers", Tag::String("4".into()))]),
+                        ),
+                    ]))
+                    .unwrap();
+                for (x, name) in [(0, "oak_fence"), (2, "powder_snow")] {
+                    let id = registry
+                        .default_state(&format!("minecraft:{name}"))
+                        .unwrap();
+                    world.set(x, 65, 0, id).unwrap();
+                }
+                world.set(4, 65, 0, snow4).unwrap();
+            },
+            |w, _| {
+                let see = |x: f64, y0: f64, y1: f64| {
+                    w.visual_clear_between(Vec3::new(x, y0, 0.5), Vec3::new(x, y1, 0.5))
+                };
+                // Fence: outline top 66.0, collision top 66.5.
+                assert!(see(0.5, 67.0, 66.2));
+                assert!(!see(0.5, 67.0, 65.5));
+                // Enters the fence's cell below its outline top, crosses the collider above it and
+                // misses the outline.
+                assert!(
+                    w.visual_clear_between(Vec3::new(0.1, 65.9, 0.5), Vec3::new(0.5, 66.3, 0.5))
+                );
+                // Powder snow never blocks a visual ray.
+                assert!(see(2.5, 66.5, 65.1));
+                // Four layers: outline top 65.5, collision top 65.375.
+                assert!(!see(4.5, 66.0, 65.45));
             },
         );
         assert!(ran, "vanilla data is missing");

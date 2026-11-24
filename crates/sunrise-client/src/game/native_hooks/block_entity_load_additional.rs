@@ -1,7 +1,11 @@
 //! Saved-data loads on the owning server thread, distinct from attachment and client sync.
+use super::block_entity_client_tick::ResidentReadBlockEntity;
 use super::{BlockEntity, Game, GameLevel, Pos};
-use crate::game::native_level_signals::ReadLevel;
-use mod_api::{BlockEntityRef, BlockEntityTypeKey, HookId, LevelRef};
+use crate::game::{api_values::TryIntoApi, native_level_signals::ReadLevel};
+use mod_api::{
+    BlockEntityLevelReadAccess, BlockEntityLevelReadScope, BlockEntityReadView, BlockEntityRef,
+    BlockEntityTypeKey, HookId, LevelHost, LevelRef,
+};
 use sunrise_client::world::World;
 use sunrise_core::nbt::Compound;
 
@@ -20,16 +24,61 @@ fn loaded_payload(
     Some((id, entity, &data.nbt))
 }
 
+struct LevelReadBlockEntityAccess<'a> {
+    world: &'a World,
+    host: &'a dyn LevelHost,
+    subject: BlockEntityRef,
+}
+
+impl BlockEntityLevelReadAccess for LevelReadBlockEntityAccess<'_> {
+    fn with_view(&self, call: &mut dyn FnMut(BlockEntityReadView<'_>)) {
+        use mod_api::__private::game::Fields;
+        let target = self.subject.fields();
+        let [x, y, z] = target.position;
+        let pos = (x, y, z);
+        if self.world.block_entities.generation(&pos) != Some(target.generation) {
+            return;
+        }
+        let Some(BlockEntity::Mod(entity)) = self.world.block_entities.get(&pos) else {
+            return;
+        };
+        let state_id = self.world.block(x, y, z);
+        let Ok(state) = state_id.try_into_api() else {
+            return;
+        };
+        let slot_count = self
+            .world
+            .block_entities
+            .mod_container(state_id.0)
+            .map_or(0, |c| c.slots);
+        let data = ResidentReadBlockEntity { entity, slot_count };
+        call(BlockEntityReadView::new(self.subject, state, &data));
+    }
+
+    fn host(&self) -> &dyn LevelHost {
+        self.host
+    }
+}
+
 impl Game<'_> {
     /// An explicit engine load into an attached instance.
     pub(in crate::game) fn notify_block_entity_load_additional(&self, pos: Pos) {
         if self.is_logical_server()
             && mod_api::__private::has_part_hook(HookId::BlockEntityLoadAdditional)
             && let Some(level) = self.level(self.dim.id())
-            && let Some((id, entity, tag)) = loaded_payload(&self.world, level, pos)
+            && let Some((id, subject, tag)) = loaded_payload(&self.world, level, pos)
         {
             let host = ReadLevel { game: self, level };
-            mod_api::dispatch_block_entity_load_additional(&host, id, entity, tag);
+            let access = LevelReadBlockEntityAccess {
+                world: &self.world,
+                host: &host,
+                subject,
+            };
+            mod_api::dispatch_block_entity_load_additional(
+                id,
+                BlockEntityLevelReadScope::new(&access),
+                tag,
+            );
         }
     }
 
@@ -52,19 +101,27 @@ impl GameLevel<'_> {
         if self.native_authoritative
             && mod_api::__private::has_part_hook(HookId::BlockEntityLoadAdditional)
             && let Some(level) = self.api_level
-            && let Some((id, entity, tag)) = loaded_payload(self.world, level, pos)
+            && let Some((id, subject, tag)) = loaded_payload(self.world, level, pos)
         {
-            self.native_block_entity_load_additional(id, entity, tag);
+            let access = LevelReadBlockEntityAccess {
+                world: self.world,
+                host: self,
+                subject,
+            };
+            Self::native_block_entity_load_additional(
+                id,
+                BlockEntityLevelReadScope::new(&access),
+                tag,
+            );
         }
     }
 
     /// The level's `BlockEntity.loadAdditional` notice once the payload is installed.
     pub(in crate::game) fn native_block_entity_load_additional(
-        &self,
         id: mod_api::BlockEntityTypeKey,
-        entity: BlockEntityRef,
+        subject: mod_api::BlockEntityLevelReadScope<'_>,
         tag: &Compound,
     ) {
-        self.fire_block_entity_load_additional(id, entity, tag);
+        Self::fire_block_entity_load_additional(id, subject, tag);
     }
 }

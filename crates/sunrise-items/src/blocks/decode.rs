@@ -145,6 +145,7 @@ impl<'de> Deserialize<'de> for Entries<'de> {
 object!(Gameplay<'a> { states: Entries<'a> = Entries::default() => typed });
 object!(SoundId<'a> { id: Option<String> = None => value(text) });
 object!(Sound<'a> {
+    identity: Option<String> = None => value(text),
     volume: f64 = 1.0 => value(|v: Value| v.as_f64().unwrap_or(1.0)),
     pitch: f64 = 1.0 => value(|v: Value| v.as_f64().unwrap_or(1.0)),
     r#break: SoundId<'a> = SoundId::default() => typed,
@@ -188,6 +189,7 @@ object!(Entry<'a> {
     ignited_by_lava: bool = false => value(flag),
     push: Option<String> = None => value(text),
     render_shape: Option<String> = None => value(text),
+    spawn_terrain_particles: Option<bool> = None => value(|v: Value| v.as_bool()),
     no_destroy_overlay: bool = false => value(flag),
     full_collision: bool = false => value(flag),
     friction: f64 = 0.0 => value(number),

@@ -139,41 +139,32 @@ impl Goal for DrinkItem {
         cx.events
             .push(MobEvent::Sound(self.finish_sound, m.center(), 1.0, pitch));
     }
-    fn every_tick(&self) -> bool {
-        true
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if m.extra.using_item == 0 {
-            return;
-        }
-        super::spear_use::count_use_tick(m);
-        if m.extra.using_item > DRINK_TICKS {
-            // LivingEntity.completeUsingItem: the potion or the milk takes effect.
-            if self.dark {
-                m.retain_effects(|e| e.id != INVISIBILITY);
-                m.add_effect(INVISIBILITY, 3600, 0);
-                cx.events.push(MobEvent::Sound(
-                    "entity.wandering_trader.drink_potion",
-                    m.center(),
-                    1.0,
-                    1.0,
-                ));
-            } else {
-                // The milk's effective consumable list owns the clear-all entry.
-                cx.events.push(MobEvent::Sound(
-                    "entity.wandering_trader.drink_milk",
-                    m.center(),
-                    1.0,
-                    1.0,
-                ));
-            }
-            if let Some(stack) = m.extra.main_hand_stack().cloned() {
-                cx.events.push(MobEvent::DrinkFinished { mob: m.id, stack });
-            }
-            m.extra.using_item = 0;
-        }
-    }
 }
+
+/// `LivingEntity.updatingUsingItem`: the trader's goal starts the use, but
+/// `completeUsingItem` belongs to the living tick, before its goal selector.
+pub(super) fn tick_drink(
+    m: &mut Mob,
+    events: &mut Vec<MobEvent>,
+) -> Option<crate::items::ItemStack> {
+    if m.extra.using_item == 0 {
+        return None;
+    }
+    super::spear_use::count_use_tick(m);
+    if m.extra.using_item <= DRINK_TICKS {
+        return None;
+    }
+    m.extra.using_item = 0;
+    let stack = m.extra.main_hand_stack()?.clone();
+    let sound = if &*stack.item == "minecraft:milk_bucket" {
+        "entity.wandering_trader.drink_milk"
+    } else {
+        "entity.wandering_trader.drink_potion"
+    };
+    events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+    Some(stack)
+}
+
 /// `TradeWithPlayerGoal`: stand still while trading.
 #[derive(Clone, Debug)]
 struct TradeWithPlayer;
@@ -189,7 +180,7 @@ impl Goal for TradeWithPlayer {
             && m.alive()
             && m.hurt_time <= 0
             && !m.fluids.in_water
-            && m.on_ground
+            && m.ground.on_ground
             && cx
                 .w
                 .selected_player()
@@ -443,7 +434,7 @@ mod trade_start_tests {
             ] {
                 let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
                 m.extra.flag2 = true;
-                m.on_ground = true;
+                m.ground.on_ground = true;
                 m.hurt_time = hurt_time;
                 m.ai.goals.add(1, TradeWithPlayer);
                 let mut world = w.clone();
@@ -475,7 +466,7 @@ mod trade_start_tests {
 #[cfg(test)]
 mod use_overflow_tests {
     use super::*;
-    use crate::mobs::world::{test_player, with_test_world};
+    use crate::mobs::world::with_test_world;
     use std::sync::Arc;
     use sunrise_core::geometry::Vec3;
 
@@ -486,9 +477,6 @@ mod use_overflow_tests {
             with_test_world(&[], |w, types| {
                 let kind = Arc::new(types.types["minecraft:wandering_trader"].clone());
                 let mut m = Mob::new(1, kind, Vec3::new(0.5, 80.0, 0.5), 0.0);
-                m.extra.using_item = i32::MAX;
-                let mut world = w.clone();
-                world.player = Some(test_player(Vec3::new(2.5, 80.0, 0.5)));
                 let mut goal = DrinkItem {
                     item: "minecraft:potion",
                     finish_sound: "entity.wandering_trader.disappeared",
@@ -496,16 +484,18 @@ mod use_overflow_tests {
                 };
                 let mut fixture = crate::health::TestLevel::new(0);
                 let mut events = Vec::new();
-                goal.tick(
+                goal.start(
                     &mut m,
                     &mut Cx {
-                        w: &world,
+                        w,
                         level: &mut fixture.level(),
                         events: &mut events,
                     },
                 );
+                m.extra.using_item = i32::MAX;
+                let drink = tick_drink(&mut m, &mut events).unwrap();
                 assert_eq!(m.extra.using_item, 0);
-                assert!(invisible(&m));
+                assert_eq!(drink.potion(), Some("minecraft:invisibility"));
             }),
             "prepared mob resources required"
         );

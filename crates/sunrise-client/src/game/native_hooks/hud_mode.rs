@@ -59,9 +59,9 @@ mod tests {
                 assert_eq!(game.hud_mode(), HudMode::NoHud);
                 assert!(game.ui.hands_drawn(false, false, true, true, false));
                 game.toggle_hide_gui();
-                assert_eq!(game.hud_mode(), HudMode::AllVisible);
-                game.toggle_hide_gui();
                 assert_eq!(game.hud_mode(), HudMode::AllHidden);
+                game.toggle_hide_gui();
+                assert_eq!(game.hud_mode(), HudMode::AllVisible);
             });
         });
     }

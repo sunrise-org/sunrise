@@ -42,7 +42,7 @@ impl Hooks for MyMod {
 | `ItemPart` | An item type, your own or vanilla's |
 | `MenuPart` | A menu type: a mod's, or one of vanilla's that a mod block opens |
 | `FluidPart` | A mod world fluid type |
-| `EntityPart` | An entity type, your own or vanilla's; registered through `Registrar::entity_part`; on wasm, `general_entity_tick` and `can_rider_interact` cross |
+| `EntityPart` | An entity type, your own or vanilla's; registered through `Registrar::entity_part` |
 
 - Annotate each part trait implementation with `#[mod_api::sunrise_part]`. For scoped hooks, the
   attribute subscribes the part only to the methods you implement.
@@ -51,6 +51,13 @@ impl Hooks for MyMod {
 - Parts implement `Send + Sync + 'static`.
 - In `has_analog_output`, answer from the block state alone. In `analog_output`, do not change the
   world. The game clamps the comparator signal to the range 0 to 15.
+
+## Equipment eligibility
+
+Implement `ItemPart::can_equip` to allow or refuse a stack in the candidate slot for a living
+entity. `event.can_equip` starts with the vanilla data answer; set it to override the answer, or
+leave it alone. Read live target state through its handle and the supplied read-only `Host`, for
+example `event.entity.health(host)` or `event.entity.entity().position(host)`.
 
 ## Fire eligibility
 

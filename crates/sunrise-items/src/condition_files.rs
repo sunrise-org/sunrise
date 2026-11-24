@@ -34,6 +34,10 @@ impl Items {
             ("minecraft:block", &self.block_tags),
             ("minecraft:item", &self.item_tags),
             ("minecraft:fluid", &self.fluid_tags),
+            (
+                super::EntityTypeTags::REGISTRY,
+                self.entity_type_tags.members().as_ref(),
+            ),
         ]
         .into_iter()
         .map(|(registry, tags)| {

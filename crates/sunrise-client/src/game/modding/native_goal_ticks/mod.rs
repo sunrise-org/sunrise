@@ -15,10 +15,11 @@ use crate::mobs::{
     part_goals::{BehaviorOp, GoalOp},
 };
 use mod_api::{
-    BehaviorCxBackend, EntityRef, GoalCxBackend, Host, LivingRef, MobRef, PlayerRef, RandomSource,
+    BehaviorCxBackend, EntityRef, EntityTags, GoalCxBackend, Host, LivingRef, MobRef, PlayerRef,
+    RandomSource,
     content::crash::{ModCall, enter_native_mod},
 };
-use sunrise_core::geometry::Axis;
+use sunrise_core::geometry::{Axis, Vec3};
 use sunrise_core::random::RandomSource as EngineRandom;
 
 #[cfg(test)]
@@ -29,7 +30,7 @@ mod live_living;
 mod live_merchant;
 mod live_mob;
 #[cfg(test)]
-mod live_read_tests;
+pub(in crate::game) mod live_read_tests;
 mod live_support;
 mod live_vehicle;
 #[cfg(test)]
@@ -257,6 +258,7 @@ impl GoalCx<'_, '_> {
         match self.resolve(entity)? {
             Resolved::Own if !self.m.removed => Some(self.m.body_yaw),
             Resolved::Live(mob) => Some(mob.body_yaw),
+            Resolved::Player | Resolved::Dragon(_) => entity.body_yaw(self.host),
             _ => None,
         }
     }
@@ -309,8 +311,8 @@ impl GoalCx<'_, '_> {
 
     fn r_entity_on_ground(&self, entity: EntityRef) -> Option<bool> {
         match self.resolve(entity)? {
-            Resolved::Own => Some(self.m.on_ground),
-            Resolved::Live(mob) => Some(mob.on_ground),
+            Resolved::Own => Some(self.m.ground.on_ground),
+            Resolved::Live(mob) => Some(mob.ground.on_ground),
             // Not carried by the snapshot or a player's view.
             _ => None,
         }
@@ -524,6 +526,31 @@ impl GoalCxBackend for GoalCx<'_, '_> {
         // handle writes it.
         self.m.ai.jump = true;
     }
+
+    fn delta_movement(&self) -> [f64; 3] {
+        let v = self.m.velocity;
+        [v.x, v.y, v.z]
+    }
+
+    fn set_delta_movement(&mut self, velocity: [f64; 3]) -> bool {
+        // `Entity.setDeltaMovement`: a vector that is not finite is not
+        // stored. No sync is forced: as for vanilla's goals, the tracker
+        // sends the motion on its own schedule.
+        if !velocity.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let [x, y, z] = velocity;
+        self.m.velocity = Vec3::new(x, y, z);
+        true
+    }
+
+    fn add_delta_movement(&mut self, delta: [f64; 3]) -> bool {
+        // `Entity.addDeltaMovement`: a delta that is not finite is not
+        // added, and `setDeltaMovement` refuses a sum that overflows.
+        let v = self.m.velocity;
+        let sum = [v.x + delta[0], v.y + delta[1], v.z + delta[2]];
+        delta.iter().all(|d| d.is_finite()) && self.set_delta_movement(sum)
+    }
 }
 
 impl BehaviorCxBackend for GoalCx<'_, '_> {
@@ -546,10 +573,13 @@ impl BehaviorCxBackend for GoalCx<'_, '_> {
     fn attack_target(&self) -> Option<LivingRef> {
         // The brain's own target read through the engine's path, the handle
         // resolved in the tick's view.
-        let who = mobs::ai::brain_target(self.m)??;
         let host = self.w.goal_host?;
         let epoch = host.epoch()?;
-        let id = match who {
+        if self.m.species() == mobs::Species::Warden {
+            let id = mobs::warden::brain_target_id(self.m)?;
+            return self.lookup_living(EntityRef::new(epoch, id));
+        }
+        let id = match mobs::ai::brain_target(self.m)?? {
             Who::Mob(id) => id,
             Who::Player => self.w.player_identity?.1,
         };
@@ -577,7 +607,7 @@ impl BehaviorCxBackend for GoalCx<'_, '_> {
                 Some(Resolved::Dragon(_) | Resolved::Unavailable) | None => return false,
             },
         };
-        mobs::ai::set_brain_target(self.m, who)
+        mobs::ai::set_brain_target(self.m, who, target.map(|t| t.entity().id()))
     }
 
     fn set_walk_target(&mut self, at: [i32; 3], speed: f64, close: i32) {
@@ -608,11 +638,20 @@ impl mobs::part_goals::GoalHost for Game<'_> {
         self.merchant_read_lent(mob, |_, xp, level| (xp, level))
     }
 
-    fn player_passenger_seats(&self, vehicle: u32) -> Vec<(i64, u32)> {
-        self.seated_passengers(vehicle)
-            .into_iter()
-            .filter_map(|(order, id, player)| player.then_some((order, id)))
-            .collect()
+    fn visit_player_passenger_seats(
+        &self,
+        vehicle: u32,
+        visit: &mut dyn FnMut(i64, u32) -> bool,
+    ) -> bool {
+        self.any_player_passenger_seat(vehicle, visit)
+    }
+
+    fn next_passenger_seat(&self, vehicle: u32, after: Option<u32>) -> Option<u32> {
+        Game::next_passenger_seat(self, vehicle, after)
+    }
+
+    fn passenger_vehicle(&self, rider: u32) -> Option<u32> {
+        self.seated_passenger_vehicle(rider)
     }
 
     fn mob_dismount_location(
@@ -638,11 +677,11 @@ impl mobs::part_goals::GoalHost for Game<'_> {
         ) && self.native_player_controls(mob, target)
     }
 
-    fn mob_tags(&self, mob: &Mob) -> Option<Vec<String>> {
+    fn mob_tags(&self, mob: &Mob) -> Option<EntityTags<'_>> {
         if self.remote.is_some() {
             return None;
         }
-        Some(self.tags_of(super::commands::Target::Mob(mob.id)))
+        Some(self.saved_entity_tags(super::commands::Target::Mob(mob.id)))
     }
 
     fn mob_name(&self, mob: &Mob, actor: &Mob, world: &MobWorld<'_>) -> String {
@@ -685,6 +724,10 @@ impl mobs::part_goals::GoalHost for Game<'_> {
             && Game::mob_in_other_level(self, entity.id()).is_some()
     }
 
+    fn living_last_hurt_record(&self, living: LivingRef) -> Option<(u32, i32)> {
+        Game::living_last_hurt_record(self, living)
+    }
+
     fn mob_player_credit(&self, mob: &Mob) -> Option<Option<u32>> {
         let credit = *self.last_hurt_by_player.get(&mob.id)?;
         Some(
@@ -695,6 +738,13 @@ impl mobs::part_goals::GoalHost for Game<'_> {
     }
 
     fn mob_target(&self, mob: &Mob, actor: &Mob, world: &MobWorld<'_>) -> Option<LivingRef> {
+        if mob.species() == mobs::Species::Warden {
+            let (id, _) = self.warden_attack_target(mob, Some((actor, world)))?;
+            return Some(LivingRef::new(EntityRef::new(
+                self.native_lifecycle.epoch()?,
+                id,
+            )));
+        }
         let target = mobs::ai::brain_target(mob).unwrap_or(mob.ai.target)?;
         match target {
             Who::Player => {
@@ -730,34 +780,16 @@ impl mobs::part_goals::GoalHost for Game<'_> {
                 if other.removed {
                     return None;
                 }
-                let valid = if mob.species() == mobs::Species::Warden {
-                    let bounds = other.bounds();
-                    let border = self.border.geometry();
-                    other.alive()
-                        && !other.invulnerable_flag
-                        && other.species() != mobs::Species::Warden
-                        && !sunrise_client::scoreboard::teams_allied(
-                            self.mob_team_scoped(mob, actor, world),
-                            self.mob_team_scoped(other, actor, world),
-                        )
-                        && border.is_within_bounds(bounds.min(Axis::X), bounds.min(Axis::Z), 0.0)
-                        && border.is_within_bounds(
-                            bounds.max(Axis::X) - f64::from(1.0e-5_f32),
-                            bounds.max(Axis::Z) - f64::from(1.0e-5_f32),
-                            0.0,
-                        )
-                } else {
-                    mob.valid_target(
-                        world,
-                        &mobs::goals::TargetFacts::Mob {
-                            id,
-                            species: other.species(),
-                            alive: other.alive(),
-                            invulnerable: other.invulnerable_flag,
-                            baby: other.is_baby(),
-                        },
-                    )
-                };
+                let valid = mob.valid_target(
+                    world,
+                    &mobs::goals::TargetFacts::Mob {
+                        id,
+                        species: other.species(),
+                        alive: other.alive(),
+                        invulnerable: other.invulnerable_flag,
+                        baby: other.is_baby(),
+                    },
+                );
                 let epoch = self.native_lifecycle.epoch()?;
                 valid.then(|| LivingRef::new(EntityRef::new(epoch, id)))
             }
@@ -765,11 +797,7 @@ impl mobs::part_goals::GoalHost for Game<'_> {
     }
 
     fn mob_on_block(&self, mob: &Mob) -> [i32; 3] {
-        let support = mob
-            .on_ground
-            .then(|| self.supporting_block(mob.position, mob.bounds()))
-            .flatten();
-        super::native_entity_motion::on_block_position(support, mob.position)
+        super::native_entity_motion::on_block_position(mob.ground.supporting_block, mob.position)
     }
 
     fn entities_team_damage_allowed(
@@ -815,8 +843,7 @@ impl mobs::part_goals::GoalHost for Game<'_> {
             hook: call,
             part: Some(part),
         });
-        // Outside the world (a reload or setup) a refused Host call is no answer.
-        mod_api::__private::contain_outside_world(|| match op {
+        Some(match op {
             GoalOp::CanUse => goal.can_use(&mut context),
             GoalOp::CanContinue => goal.can_continue(&mut context),
             GoalOp::Start => {
@@ -832,8 +859,6 @@ impl mobs::part_goals::GoalHost for Game<'_> {
                 true
             }
         })
-        .map_err(|refusal| refusal.report())
-        .ok()
     }
 
     fn run_behavior(
@@ -861,8 +886,7 @@ impl mobs::part_goals::GoalHost for Game<'_> {
             hook: call,
             part: Some(part),
         });
-        // Outside the world (a reload or setup) a refused Host call is no answer.
-        mod_api::__private::contain_outside_world(|| match op {
+        Some(match op {
             BehaviorOp::CheckExtraStartConditions => {
                 behavior.check_extra_start_conditions(&mut context)
             }
@@ -880,8 +904,6 @@ impl mobs::part_goals::GoalHost for Game<'_> {
                 true
             }
         })
-        .map_err(|refusal| refusal.report())
-        .ok()
     }
 }
 

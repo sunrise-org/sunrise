@@ -643,6 +643,9 @@ def check_menu_transfer(host, guest, out):
         wait_dimension(guest, OVERWORLD, 400)
         guest.wait(20)
         open_chest()
+        # ServerPlayer.die drops the inventory (Player.dropEquipment) unless keep_inventory is on;
+        # the diamonds must come through the respawn to be counted in the new inventory menu.
+        host('command', command='gamerule keep_inventory true')
         guest('command', command='kill @s')
         guest.wait(20)
         guest.raw('respawn')
@@ -650,6 +653,7 @@ def check_menu_transfer(host, guest, out):
         guest.wait(40)
         settled('respawn')
     finally:
+        host('command', command='gamerule keep_inventory false')
         back_to_game(guest)
         # A failure after the trip must not leave the guest in the Nether for the checks that follow.
         if guest('state').get('dimension') != OVERWORLD:
@@ -767,7 +771,9 @@ def check_effects(host, guest, out):
     bx, by, bz = x - 3, y, z - 3
     host('command', command=f'fill {bx - 1} {by - 1} {bz - 1} {bx + 1} {by - 1} {bz + 1} minecraft:iron_block')
     host('command', command=f'setblock {bx} {by} {bz} minecraft:beacon{{primary_effect:"minecraft:speed"}}')
-    # BeaconBlockEntity.tick applies its powers every 80 ticks, once the beam has reached the sky.
+    # BeaconBlockEntity.tick applies its powers every 80 ticks, once the beam has reached the sky: nothing
+    # over it up to the build limit (the trees by the world spawn would stop it).
+    host('command', command=f'fill {bx} {by + 1} {bz} {bx} 319 {bz} minecraft:air')
     seen = {}
     for _ in range(15):
         host.wait(20)
@@ -1240,8 +1246,9 @@ def check_player_armor_components(host, guest):
                                      f'equipment.{slot}.components."minecraft:damage"')
                 value = re.search(r'entity data: (-?\d+)\s*$', reply)
                 read_damage = int(value.group(1)) if value else None
+                # "Test passed" or "Test failed": not a late reply to the read before it.
                 exists = server_reply(guest, f'execute if items entity @s armor.{slot} '
-                                      f'minecraft:diamond_{item}')
+                                      f'minecraft:diamond_{item}', 'Test ')
                 observed[slot] = {'damage': read_damage, 'present': 'Test passed' in exists}
             after_health = health()
             cases[case] = {'health': after_health, 'equipment': observed}
@@ -1701,6 +1708,7 @@ def check_deaths(host, guest, out):
                 g.wait(40)
             back_to_game(g)
             g('command', command='effect give @s minecraft:instant_health 1 5')
+        platforms.append(pos_of(host))
         host('command', command='execute at @s run fill ~-5 200 ~-5 ~5 200 ~5 minecraft:stone')
         host('command', command='tp @s ~ 201 ~')
         host('command', command=f'tp {GUEST_NAME} {host.player}')
@@ -1711,6 +1719,7 @@ def check_deaths(host, guest, out):
         host.wait(5)
 
     said = {}
+    platforms = []
     try:
         host('command', command='gamerule pvp true')
         host('command', command='gamerule natural_health_regeneration false')
@@ -1797,6 +1806,11 @@ def check_deaths(host, guest, out):
         for g in (host, guest):
             g('command', command='item replace entity @s armor.chest with minecraft:air')
             g('command', command='clear @s')
+        # The platforms, holed by the TNT, go: one over the world spawn is where every later
+        # respawn would land (the heightmap's top).
+        for x, _, z in platforms:
+            host('command', command=f'fill {int(x // 1) - 6} 200 {int(z // 1) - 6} '
+                                    f'{int(x // 1) + 6} 200 {int(z // 1) + 6} minecraft:air')
     name = host.player
     want = {'sword': f'{GUEST_NAME} was slain by {name}',
             'host_death': f'{name} was slain by {GUEST_NAME}',
@@ -2278,8 +2292,8 @@ def check_stonecutter(host, guest, out):
     # StonecutterMenu.quickMoveStack: stone has recipes, so it goes to the input.
     guest.raw('click-slot', hotbar_slot(guest, 'minecraft:stone'), 'shift')
     guest.wait(10)
-    recipes = guest.raw('menu')['info']['recipes']
-    index = recipes.index('minecraft:stone_slab_from_stone_stonecutting')
+    results = guest.raw('menu')['info']['recipe_results']
+    index = results.index('minecraft:stone_slab')
     # StonecutterScreen's recipe grid: four columns of 16x18 cells from (52, 14).
     guest.raw('click-gui', 52 + index % 4 * 16 + 8, 14 + index // 4 * 18 + 9)
     guest.wait(10)
@@ -3310,7 +3324,14 @@ def check_recipes(host, guest, out):
             book = guest('screen').get('recipe_book')
         known = book['known']
         assert known > 0, f'the guest\'s book is empty: {book}'
-        guest.raw('click-at', *centre(book['targets'][1]))
+        # The book lists every recipe the guest knows, in the order it learned them (earlier checks
+        # teach others): search for the planks, then press the first recipe button (25x25), after
+        # the search field (81x14).
+        guest.raw('click-at', *centre(next(t for t in book['targets'] if t[2:] == [81.0, 14.0])))
+        guest.raw('type', 'oak planks')
+        guest.wait(5)
+        book = guest('screen').get('recipe_book')
+        guest.raw('click-at', *centre(next(t for t in book['targets'] if t[2:] == [25.0, 25.0])))
         guest.wait(10)
         grid = grid_items(guest)
         guest.shot(out, 'recipes')
@@ -3619,6 +3640,9 @@ def check_piston_entities(host, guest, out):
     host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
     host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
     host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+    # piston-push's pig and arrow stay in this same arena: the arrow would be read as this one.
+    clear = f'kill @e[type=!minecraft:player,x={x-4},y={y-1},z={z-4},dx=11,dy=6,dz=8]'
+    host('command', command=clear)
     host('command', command=f'tp @s {x+5.5} {y} {z+3.5}')
     kinds = {
         'falling_block': '{BlockState:{Name:"minecraft:sand"},Time:1,NoGravity:1b}',
@@ -3635,10 +3659,14 @@ def check_piston_entities(host, guest, out):
             assert objs, f'{kind} not found before the push'
             got[kind] = objs[0]['position'][0]
         return got
-    before = xs()
-    host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
-    host.wait(30)
-    after = xs()
+    try:
+        before = xs()
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+        host.wait(30)
+        after = xs()
+    finally:
+        # Out of later checks' counts of what stands near the host (projectiles).
+        host('command', command=clear)
     results = {}
     for kind in kinds:
         results[kind] = after[kind] - before[kind]
@@ -3725,6 +3753,7 @@ def check_piston_push(host, guest, out):
     assert seen is not None, 'guest did not receive the pushed arrow'
     results['guest_arrow'] = seen['position'][0] - before
     assert results['guest_arrow'] > 0.3, f'guest did not see arrow move: {before} -> {seen["position"][0]}'
+    host('command', command=f'kill @e[type=!minecraft:player,x={x-4},y={y-1},z={z-4},dx=11,dy=6,dz=8]')
     results.update(piston_push_at_border(host, guest))
     return results
 
@@ -4853,30 +4882,85 @@ def check_fireworks(host, guest, out):
         return {(y, i) for y, row in enumerate(rows[:len(rows) * 3 // 4]) for i in range(0, len(row), bpp)
                 if row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]}
 
+    rocket = 'minecraft:firework_rocket'
+
+    def simulation():
+        return host.raw('simulation')
+
+    def has_rocket(state):
+        return any(p['kind'] == rocket for p in state['projectiles'])
+
+    def held():
+        return host('state')['held']
+
+    def step(state):
+        target = state['game_time'] + 1
+        reply = host('command', command='tick step 1')
+        assert reply['success'], reply
+        return host.until(simulation, lambda s: s['game_time'] == target)
+
+    def settle_clients(state):
+        # A stop for an unused sound marks delivery of the step and any explosion event.
+        # Give each client one tick to spend the step, then one to reach the frozen state.
+        marker = f'sunrise:lan_fireworks_{state["game_time"]}'
+        reply = host('command', command=f'stopsound @a * {marker}')
+        assert reply['success'], reply
+        for game in (host, guest):
+            game.until(lambda: game('status')['stopped_sounds'].get(f'* {marker}', 0), bool)
+            game.wait(2)
+
     # Red where the view had none: the setup's own red chat lines (a fill that changed nothing) are in the
     # baseline, and fade out before the later shots, which a plain count difference would take as missing sparks.
     baseline = {g.name: reds(g.shot(out, 'fireworks-before')) for g in (host, guest)}
     before = {g.name: made(g, 'flash') for g in (host, guest)}
-    host('command', command='item replace entity @s weapon.mainhand with minecraft:firework_rocket'
-         '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
-    host.raw('interact', *at)
-    # The held item's red texture must not count as a burst or a later spark.
-    host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
-    for _ in range(30):
-        host.wait(2)
-        if all(made(g, 'flash') > before[g.name] for g in (host, guest)):
-            break
-    flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
+    try:
+        host('command', command='tick freeze')
+        host('command', command=f'item replace entity @s weapon.mainhand with {rocket}'
+             '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
+        host.until(held, lambda item: item is not None and item['item'] == rocket)
+        host.raw('interact', *at)
+        state = host.until(simulation, has_rocket)
+        # The held item's red texture must not count as a burst or a later spark.
+        host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+        host.until(held, lambda item: item is None)
+        # Stop on the explosion tick. Flight 0 expires by tick 22 (FireworkRocketEntity's
+        # constructor and tick), even if the rocket misses the ceiling.
+        for _ in range(22):
+            state = step(state)
+            if not has_rocket(state):
+                break
+        else:
+            raise AssertionError('the clicked rocket did not explode')
+        # FireworkParticles' overlay lasts four ticks. Capture halfway through it,
+        # and again four ticks later, after the overlay has gone but Sparks remain.
+        burst_age, trail_age = 2, 6
+        flash_tick, burst_shots, trail_shots = {}, {}, {}
+        # The event can miss the exploding step on either client. ParticleEngine
+        # takes one tick to admit the starter and then Starter.tick emits the flash.
+        # Allow those two steps, then advance to the last client's trail phase.
+        for tick in range(2 + trail_age + 1):
+            if tick:
+                state = step(state)
+            settle_clients(state)
+            flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
+            for game in (host, guest):
+                name = game.name
+                if flashes[name] == 0:
+                    continue
+                age = tick - flash_tick.setdefault(name, tick)
+                if age == burst_age:
+                    burst_shots[name] = game.shot(out, 'fireworks-burst')
+                elif age == trail_age:
+                    trail_shots[name] = game.shot(out, 'fireworks-trail-fade')
+            if len(trail_shots) == 2:
+                break
+        rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
+    finally:
+        host('command', command='tick unfreeze')
     assert all(n == 1 for n in flashes.values()), f'configured burst missing or duplicated: {flashes}'
-    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime (48-59 ticks). A
-    # screenshot takes ~0.6 s where the frame is drawn on the CPU (lavapipe), so the later shots come 4 ticks after
-    # the burst's, not more: by then the tracked rocket is gone.
-    burst_shots = {g.name: g.shot(out, 'fireworks-burst') for g in (host, guest)}
-    host.wait(4)
-    trail_shots = {g.name: g.shot(out, 'fireworks-trail-fade') for g in (host, guest)}
+    assert len(burst_shots) == len(trail_shots) == 2, f'missing particle phase: {flash_tick}'
     burst = {name: len(reds(path) - baseline[name]) for name, path in burst_shots.items()}
     trails = {name: len(reds(path) - baseline[name]) for name, path in trail_shots.items()}
-    rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
     assert not any(rockets.values()), f'exploded rocket remains: {rockets}'
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
     assert all(n > 20 for n in trails.values()), f'no later red trail/fade: {trails}'
@@ -5345,11 +5429,13 @@ def check_blast_projectiles(host, guest, out):
     host('command', command='gamemode creative')
     x, y, z = (int(v // 1) for v in pos_of(host))
     gx, gz = x + 6, z
-    floor = f'fill {gx - 6} {y - 1} {gz - 4} {gx + 6} {y - 1} {gz + 4} minecraft:bedrock'
+    # Open to the north, where the blast sends the snowball: a block in its way (the trees by the
+    # world spawn) removes it before it is read.
+    floor = f'fill {gx - 6} {y - 1} {gz - 16} {gx + 6} {y - 1} {gz + 4} minecraft:bedrock'
     detail = {}
     try:
         host('command', command=floor)
-        host('command', command=f'fill {gx - 6} {y} {gz - 4} {gx + 6} {y + 3} {gz + 4} minecraft:air')
+        host('command', command=f'fill {gx - 6} {y} {gz - 16} {gx + 6} {y + 3} {gz + 4} minecraft:air')
         host('command', command='kill @e[type=minecraft:arrow]')
         host('command', command='kill @e[type=minecraft:snowball]')
         # A snowball hanging north of the blast (the host stands west of it), and an arrow that settles into the floor.
@@ -6367,14 +6453,23 @@ def check_frames(host, guest, out):
             assert player('inventory')['counts'].get('minecraft:name_tag') == 2, 'named tag was not consumed once'
             server_reply(player, f'data get entity {selector} CustomName', name)
             server_reply(other, f'data get entity {selector} CustomName', name)
-            # NameTagItem shrinks its stack in creative too.
+            # NameTagItem shrinks the copy Player.interactOn hands it with infinite materials: in
+            # creative the tag is kept.
+            # A new name, so a click that does nothing can't pass.
+            creative_name = f'{label} Ann'
             player('command', command='gamemode creative')
             player('command', command='item replace entity @s weapon.mainhand with '
-                   f'minecraft:name_tag[minecraft:custom_name="{name}"] 3')
+                   f'minecraft:name_tag[minecraft:custom_name="{creative_name}"] 3')
             player.wait(5)
             player.raw('mouse', 'right', 'click')
             player.wait(10)
-            assert player('inventory')['counts'].get('minecraft:name_tag') == 2, 'creative tag was not consumed once'
+            server_reply(player, f'data get entity {selector} CustomName', creative_name)
+            # Each game's own copy of the stand has the new name: shown, it is the tag each draws.
+            player('command', command=f'data merge entity {selector} {{CustomNameVisible:1b}}')
+            for side in (player, other):
+                side.until(lambda: side('status').get('name_tags') or [], lambda tags: creative_name in tags,
+                           ticks=40)
+            assert player('inventory')['counts'].get('minecraft:name_tag') == 3, 'creative tag was consumed'
             player('command', command='gamemode survival')
             result[label] = {'frame': 'diamond, turned', 'stand': 'helmet on and off; named tag consumed'}
         finally:
@@ -7367,6 +7462,34 @@ def check_raid_captain_fields(host, guest, out):
             game('command', command='gamemode survival')
 
 
+ARENA_RADIUS = 8
+
+
+def restore_arena(host):
+    """Loads and refills the run's open stone floor, then checks it; raises Failed before anyone is teleported into a dirty one."""
+    x, y, z = (int(v // 1) for v in host.joined_at)
+    r = ARENA_RADIUS
+    floor = (x - r, y - 1, z - r, x + r, y - 1, z + r)
+    clear = (x - r, y, z - r, x + r, y + 6, z + r)
+    corners = [(x + dx, y, z + dz) for dx in (-r, r) for dz in (-r, r)]
+    box = lambda b: ' '.join(map(str, b))
+    # A no-op forceload (already forced) and a no-op fill (already right) both report failure: only the checks below decide.
+    host('command', command=f'execute in {OVERWORLD} run forceload add {x - r} {z - r} {x + r} {z + r}')
+    try:
+        host.until(lambda: [host('command', command=f'execute in {OVERWORLD} if loaded {c[0]} {c[1]} {c[2]}')['success']
+                            for c in corners], all, ticks=100)
+    except AssertionError as e:
+        raise Failed(f'the arena around {(x, y, z)} did not load, so it was not restored: {e}')
+    host('command', command=f'execute in {OVERWORLD} run fill {box(floor)} minecraft:stone')
+    host('command', command=f'execute in {OVERWORLD} run fill {box(clear)} minecraft:air')
+    want = {'floor': {'minecraft:stone': (2 * r + 1) ** 2}, 'clearance': {}}
+    try:
+        host.until(lambda: {'floor': host.raw('blocks', *floor)['counts'], 'clearance': host.raw('blocks', *clear)['counts']},
+                   lambda seen: seen == want, ticks=40)
+    except AssertionError as e:
+        raise Failed(f'the arena around {(x, y, z)} is not the open stone floor after its fills: {e}')
+
+
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
     # A headless run (SUNRISE_E2E_HEADLESS, or a Linux without vscreen) has no focused window to draw
@@ -7410,6 +7533,7 @@ def run(ctl, out, resources, checks):
             try:
                 # Cases assert their own deaths, menus and held actions before returning.
                 # Do not let those states turn later independent cases into false failures.
+                resets = []
                 for game in (host, guest):
                     game.raw('release')
                     back_to_game(game)
@@ -7417,9 +7541,35 @@ def run(ctl, out, resources, checks):
                     assert state.get('player') is not None, f'{game.name} lost its session before {name}: {state}'
                     if state.get('screen') == 'dead' or state['player']['health'] <= 0:
                         game.raw('respawn')
-                        game.until(lambda: game('state'),
-                                   lambda s: s.get('screen') == 'playing' and s['player']['health'] > 0,
-                                   ticks=40)
+                        # Where the respawn put it decides whether the reset below changes dimension.
+                        state = game.until(lambda: game('state'),
+                                           lambda s: s.get('screen') == 'playing' and s['player']['health'] > 0,
+                                           ticks=40)
+                    # Where the players stood once joined (the guest 3 blocks east of the host), as a run
+                    # of the check alone starts: cases move them, to platforms in the sky and arenas, and
+                    # a later case's floor, reach or spawned mobs must not depend on where one ended.
+                    x, y, z = host.joined_at
+                    x += 3 if game is guest else 0
+                    game('command', command=f'execute in {OVERWORLD} run tp @s {x:.2f} {y:.2f} {z:.2f}')
+                    if state.get('dimension') != OVERWORLD:
+                        state = wait_dimension(game, OVERWORLD, 400)
+                        assert state.get('dimension') == OVERWORLD and state.get('player'), \
+                            f'{game.name} did not return to the Overworld before {name}: {state}'
+                    resets.append((game, (x, y, z)))
+                # With the host back in the Overworld its arena is loaded and restored, then both are placed again.
+                restore_arena(host)
+                for game, (x, y, z) in resets:
+                    game('command', command=f'execute in {OVERWORLD} run tp @s {x:.2f} {y:.2f} {z:.2f}')
+                # Both games have their teleport before one is placed by the other's position: a game
+                # already in the Overworld passes the dimension wait before it arrives.
+                for game, at in resets:
+                    near = lambda p: all(abs(p[i] - at[i]) < (1.0 if i == 1 else 0.5) for i in range(3))
+                    game.until(lambda: game('state'),
+                               lambda s: s.get('dimension') == OVERWORLD and s.get('player')
+                               and near(s['player']['position']),
+                               ticks=100)
+                # And facing each other, as after joining.
+                face_each_other(host, guest)
                 detail = CHECK_FNS[name](host, guest, out)
                 skipped = isinstance(detail, str) and detail.startswith('skipped')
                 results[name] = {'pass': not skipped, 'skipped': skipped, 'detail': detail}
@@ -8241,7 +8391,7 @@ def check_fishing_item(host, guest, out):
     """Reeling an item sends its velocity to both clients immediately; they move it smoothly."""
     spots = apart(host, guest)
     x, y, z = spots['host']
-    item_x, item_z = x + 4.5, z + 0.5
+    item_x, item_y, item_z = x + 4.5, y + 1.5, z + 0.5
     item_id = None
 
     def item_position(game):
@@ -8255,7 +8405,7 @@ def check_fishing_item(host, guest, out):
         host('command', command='gamemode survival')
         host('command', command='clear @s')
         host('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod')
-        host.raw('look-at', f'{item_x:.2f}', f'{y + 1.5:.2f}', f'{item_z:.2f}')
+        host.raw('look-at', f'{item_x:.2f}', f'{item_y:.2f}', f'{item_z:.2f}')
         host.raw('use-item')
         for _ in range(10):
             status = host('status')
@@ -11213,11 +11363,15 @@ def check_projectile_land(host, guest, out):
     seen = {}
     try:
         for label, (item, mode, how) in cases.items():
+            # Wandering mobs step, flap and get hurt next to the sensor and power it themselves.
+            # Entity.kill raises ENTITY_DIE, so killing them (or the last case's trident) powers it
+            # too: kill first, then let that vibration arrive (up to 8 ticks of travel) and the
+            # sensor settle before the throw.
+            host('command', command='kill @e[type=!minecraft:player,distance=..40]')
+            host.wait(20)
             assert wait_state(host, sensor, 'sculk_sensor_phase', 'inactive', 200) == 'inactive', seen
             host('command', command=f'gamemode {mode}')
             host('command', command='clear @s')
-            # Wandering mobs step, flap and get hurt next to the sensor and power it themselves.
-            host('command', command='kill @e[type=!minecraft:player,distance=..40]')
             host('command', command=f'item replace entity @s weapon.mainhand with {item}')
             host('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} -90 0')
             host.wait(10)

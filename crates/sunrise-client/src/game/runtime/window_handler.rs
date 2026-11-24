@@ -1,5 +1,6 @@
 //! winit's `ApplicationHandler` for the game window: window and device events, shutting down,
 //! and the idle step (`about_to_wait`).
+use super::saving::ClientQuit;
 use super::*;
 use sunrise_client::window::PointerSample;
 
@@ -243,22 +244,33 @@ impl Game<'_> {
         if let Some((button, pressed, modifiers)) = mouse {
             let mut canceled = false;
             self.native_mouse_button_pre(button, pressed, modifiers, &mut canceled);
+            // This is release cleanup, not gameplay dispatch. Even a consumed release
+            // must not leave a mod's mapping down; presses wait for the screen outcome.
+            if let WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button,
+                ..
+            } = &event
+            {
+                self.mod_mappings_button(*button, false);
+            }
             if canceled {
                 return;
             }
         }
-        if mouse.is_some()
-            && let WindowEvent::MouseInput { state, button, .. } = &event
-        {
-            self.mod_mappings_button(*button, *state == ElementState::Pressed);
-        }
         let resized = matches!(event, WindowEvent::Resized(_));
-        self.handle_window_event_inner(event_loop, event, cursor_sample);
+        let mouse_press_millis = (origin == input_trace::InputOrigin::User
+            && mouse.is_some_and(|(_, pressed, _)| pressed))
+        .then(|| self.millis());
+        let title_settled =
+            self.handle_window_event_inner(event_loop, event, cursor_sample, mouse_press_millis);
         if resized {
             self.notify_window_resize();
         }
-        // A title screen the event asked for opens before the next event.
-        self.settle_title_mode();
+        // Button receivers settle before their Post; other events settle here.
+        if !title_settled {
+            self.settle_title_mode();
+        }
         if let Some((button, pressed, modifiers)) = mouse {
             self.native_mouse_button_post(button, pressed, modifiers);
         }
@@ -266,6 +278,8 @@ impl Game<'_> {
 
     /// The loop ended: close the pads' output, save the world.
     pub(super) fn shut_down(&mut self) {
+        self.client_quit.set(ClientQuit::Stopping);
+        self.close_client_tasks();
         if self.error.is_none()
             && let Some(renderer) = &mut self.renderer
         {
@@ -288,10 +302,13 @@ impl Game<'_> {
     /// winit's `about_to_wait`: what happens between frames (stop requests, the closing
     /// save, world entry, the control socket, pads), then the next frame.
     pub(super) fn idle(&mut self, event_loop: &dyn EventLoopCtl) {
-        if sunrise_threads::stop_requests() > 0
-            && self.pending_save.as_ref().is_none_or(|save| !save.quit)
-        {
-            // SIGTERM, SIGINT or SIGHUP: the shutdown hook's server halt, as a window close.
+        let quit_requested = match self.client_quit.get() {
+            ClientQuit::Running => sunrise_threads::stop_requests() > 0,
+            ClientQuit::Requested => true,
+            ClientQuit::Stopping => false,
+        };
+        if quit_requested {
+            // Mod requests and stop signals take the same path as a window close.
             if let Err(error) = self.begin_closing_save(true) {
                 self.error = Some(error);
                 event_loop.exit();
@@ -333,7 +350,7 @@ impl Game<'_> {
         }
         // A Realm's address came back (GetServerDetailsTask hands over to ConnectScreen).
         if let Some(action) = self.title.as_mut().and_then(|t| t.take_connect_request())
-            && let Err(error) = self.title_action(event_loop, action)
+            && let Err(error) = self.title_action(action)
         {
             self.error = Some(error);
             event_loop.exit();
@@ -398,8 +415,9 @@ impl ApplicationHandler for Game<'_> {
         let fullscreen = self.settings.fullscreen || self.options.fullscreen;
         let size = self.options.window_size.map(f64::from);
         self.fullscreen = sunrise_client::window::FullscreenState::new(fullscreen);
-        let attributes =
-            sunrise_client::window::with_icon(Window::default_attributes().with_title("Sunrise"));
+        let attributes = sunrise_client::window::with_icon(
+            Window::default_attributes().with_title(super::window_title::base()),
+        );
         // Wayland names the window by its app id, which the horizon.desktop entry matches.
         #[cfg(target_os = "linux")]
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -432,19 +450,65 @@ impl ApplicationHandler for Game<'_> {
             sunrise_threads::system_menu::suppress(hwnd);
         }
         drop(window_step);
-        match self.new_renderer(window.clone()) {
-            Ok(r) => {
-                self.renderer = Some(r);
-                self.world_renderer_ready = true;
+        let mut pending = self.pending_initial_models.take();
+        let renderer = (|| {
+            let Some(start) = &mut pending else {
+                return self.new_renderer(window.clone());
+            };
+            let models = &mut start.models;
+            let device = pollster::block_on(sunrise_client::gfx::Opened::for_window(
+                &window,
+                self.options.offscreen,
+                self.settings.sunrise.api,
+                models.pack.render.texture_layers,
+            ))?;
+            if models.gui.stitch_for_device(
+                &models.pack.source,
+                &self.vanilla_root(),
+                device.max_atlas_size(),
+            )? {
+                self.particles.reload(
+                    &models.pack.source,
+                    &models.gui.atlas.sprites,
+                    &models.gui.atlas.translucent,
+                );
             }
-            Err(e) => {
-                self.error = Some(e);
-                event_loop.exit();
-                return;
-            }
-        }
+            self.renderer_for(window.clone(), &models.pack, &models.gui, Some(device))
+        })();
         self.resize_state = Some(self.resize_state_of(window.inner_size()));
         self.window = Some(window);
+        if let Some(pending) = pending {
+            match self.apply_pending_client_start(*pending, renderer.map(Some)) {
+                Ok(true) => {
+                    self.settings.file.set(
+                        "startedCleanly",
+                        sunrise_client::options_file::V::Bool(true),
+                    );
+                    self.settings.save(&Game::options_path());
+                }
+                Ok(false) => {
+                    event_loop.exit();
+                    return;
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    event_loop.exit();
+                    return;
+                }
+            }
+        } else {
+            match renderer {
+                Ok(renderer) => {
+                    self.renderer = Some(renderer);
+                    self.world_renderer_ready = true;
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    event_loop.exit();
+                    return;
+                }
+            }
+        }
         self.ime_allowed = false;
         self.ime_area = None;
         self.apply_settings();

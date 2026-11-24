@@ -9,10 +9,11 @@ use super::super::{
 };
 use super::{GoalCx, Resolved};
 use crate::mobs::Mob;
-use mod_api::{EntityRef, MobCategory};
+use mod_api::{EntityReadError, EntityRef, EntityTags, MobCategory};
+use std::ops::ControlFlow;
 
 impl GoalCx<'_, '_> {
-    pub(super) fn r_entity_tags(&self, entity: EntityRef) -> Option<Vec<String>> {
+    pub(super) fn r_entity_tags(&self, entity: EntityRef) -> Option<EntityTags<'_>> {
         self.w.goal_host?.mob_tags(self.entity_mob(entity)?)
     }
 
@@ -22,6 +23,23 @@ impl GoalCx<'_, '_> {
                 .goal_host?
                 .mob_name(self.entity_mob(entity)?, self.m, self.w),
         )
+    }
+
+    pub(super) fn r_entity_custom_name(
+        &self,
+        entity: EntityRef,
+    ) -> Result<Option<mod_api::Text>, mod_api::TextFormError> {
+        use super::super::api_values::TryIntoApi;
+        // A snapshot carries no name, and an unavailable mob has none to read: neither is "unnamed".
+        match self.resolve(entity) {
+            Some(Resolved::Seen(_) | Resolved::Unavailable) => {
+                Err(mod_api::TextFormError::Unavailable)
+            }
+            _ => self
+                .entity_mob(entity)
+                .and_then(super::super::native_entity_data::mob_custom_name)
+                .try_into_api(),
+        }
     }
 
     pub(super) fn r_entity_added_to_level(&self, entity: EntityRef) -> bool {
@@ -161,8 +179,25 @@ impl GoalCx<'_, '_> {
         self.entity_mob(entity).map(|_| false)
     }
 
-    pub(super) fn r_entity_parts(&self, entity: EntityRef) -> Option<Vec<EntityRef>> {
-        self.entity_mob(entity).map(|_| Vec::new())
+    /// Goal visitors need an actual mob body, not a snapshot.
+    pub(super) fn live_entity_for_read(&self, entity: EntityRef) -> Result<&Mob, EntityReadError> {
+        match self.resolve(entity) {
+            Some(Resolved::Own) => Ok(self.m),
+            Some(Resolved::Live(mob)) => Ok(mob),
+            Some(Resolved::Player | Resolved::Seen(_) | Resolved::Dragon(_)) => {
+                Err(EntityReadError::Unavailable)
+            }
+            Some(Resolved::Unavailable) | None => Err(EntityReadError::Stale),
+        }
+    }
+
+    pub(super) fn r_entity_visit_parts(
+        &self,
+        entity: EntityRef,
+        _visit: &mut dyn FnMut(EntityRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, EntityReadError> {
+        self.live_entity_for_read(entity)?;
+        Ok(ControlFlow::Continue(()))
     }
 
     pub(super) fn r_entity_dimensions(&self, entity: EntityRef) -> Option<[f64; 2]> {

@@ -28,7 +28,7 @@ impl Hub {
             return Vec::new();
         };
         let waiting = self.hold_sound_removals(conn, &mut bodies);
-        g.sender.send_many(bodies);
+        g.sender.send_tracking_bodies(&mut bodies);
         waiting
     }
 

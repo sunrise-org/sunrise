@@ -13,8 +13,8 @@ sunrise_client_render::gfx::Renderer::render
 sunrise_client_render::gfx::entity_draw::Renderer::draw_outline
 sunrise_client_render::gfx::stars::Stars::draw
 sunrise_client_render::gfx::surface_lifecycle::Renderer::release_surface
-sunrise_client_render::hud::HudBatch::fill
-sunrise_client_render::hud::HudBatch::rect_uv
+sunrise_client_render::hud::batch::HudBatch::fill
+sunrise_client_render::hud::batch::HudBatch::rect_uv
 sunrise_client_render::menu_blur::MenuBlur::apply
 sunrise_client_render::mesher::Mesher<'_>::face
 sunrise_client_render::mesher::Mesher<'_>::mesh
@@ -53,10 +53,10 @@ sunrise_client_render::chat::ChatScreen
 sunrise_client_render::chat::ChatSource
 sunrise_client_render::chunk::Chunk
 sunrise_client_render::font::Font
-sunrise_client_render::gfx::Renderer
+sunrise_client_render::gfx::renderer::Renderer
 sunrise_client_render::gfx::frame::Frame
-sunrise_client_render::gfx::pack_timing::PassTiming
-sunrise_client_render::hud::HudAtlas
+sunrise_render_shaderpack::pack_timing::PassTiming
+sunrise_client_render::hud::atlas::HudAtlas
 sunrise_client_render::hud::Rect
 sunrise_client_render::mesher::Info
 sunrise_client_render::mesher::Mesher

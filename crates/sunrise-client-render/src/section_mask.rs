@@ -55,6 +55,25 @@ impl SectionMask {
     pub fn from(self, i: usize) -> Self {
         self & !Self::below(i)
     }
+    /// The lowest index `>= i`, if any.
+    #[inline]
+    pub fn first_from(self, i: usize) -> Option<usize> {
+        if i >= Self::CAPACITY {
+            return None;
+        }
+        let mut word_index = i >> 6;
+        let mut word = self.0[word_index] & (!0u64 << (i & 63));
+        loop {
+            if word != 0 {
+                return Some(word_index * 64 + word.trailing_zeros() as usize);
+            }
+            word_index += 1;
+            if word_index == self.0.len() {
+                return None;
+            }
+            word = self.0[word_index];
+        }
+    }
     /// The indexes, lowest first.
     pub fn iter(self) -> Indexes {
         Indexes(self)
@@ -186,6 +205,13 @@ mod tests {
         assert_eq!(mask.from(24).iter().collect::<Vec<_>>(), [63, 130, 255]);
         assert_eq!(mask.from(256), SectionMask::EMPTY);
         assert_eq!(mask.from(0), mask);
+        assert_eq!(mask.first_from(0), Some(0));
+        assert_eq!(mask.first_from(24), Some(63));
+        assert_eq!(mask.first_from(63), Some(63));
+        assert_eq!(mask.first_from(64), Some(130));
+        assert_eq!(mask.first_from(131), Some(255));
+        assert_eq!(mask.first_from(255), Some(255));
+        assert_eq!(mask.first_from(256), None);
         assert!(SectionMask::EMPTY.is_empty() && !mask.is_empty());
     }
 

@@ -1,4 +1,4 @@
-//! Retry the head payload from the physical receiver's existing maintenance turn.
+//! Advance ordered payload dispatch on the physical receiver's maintenance turn.
 use super::*;
 
 impl PlayConn {

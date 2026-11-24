@@ -14,12 +14,11 @@ use sunrise_client::{
     blocks::BlockFacts,
     items::Items,
     mobs::{
-        MobTypes,
+        MobType, MobTypes,
         data::MobData,
         spawn_rules::{self, Reason, SpawnLevel},
         spawn_selection::{
-            self, Heightmap, MobType as SelectionMobType, NaturalLevel, SpawnCost, StructureAt,
-            StructureSpawns, spawn_aabb,
+            self, Heightmap, NaturalLevel, SpawnCost, StructureAt, StructureSpawns, spawn_aabb,
         },
     },
 };
@@ -131,7 +130,7 @@ impl NaturalLevel for Column<'_> {
     fn has_ceiling(&self) -> bool {
         false
     }
-    fn mob_type(&self, _entity: &str) -> Option<SelectionMobType> {
+    fn mob_type(&self, _entity: &str) -> Option<&MobType> {
         None
     }
     fn biome_spawns(
@@ -230,8 +229,9 @@ pub fn main() -> sunrise_client::Result<()> {
     let facts = BlockFacts::load(root, registry)?;
     let data = MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        &facts,
-    );
+        facts.states.len(),
+        false,
+    )?;
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::tags_only(root, &PackOverlay::NONE, &defaults)?;
     let types = MobTypes::load(root)?;
@@ -316,7 +316,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 kind.height as f32,
             );
             let obstruction =
-                spawn_selection::spawn_obstruction(s, &level, bounds, Some(&[]), x0, y, z0);
+                spawn_selection::spawn_obstruction(s, &level, bounds, true, x0, y, z0);
             let _ = writeln!(out, "{name} {obstruction}");
             continue;
         }
@@ -324,8 +324,7 @@ pub fn main() -> sunrise_client::Result<()> {
         let s = kind.species;
         let ok = spawn_rules::is_spawn_position_ok(c["type"], s, &level, x0, y, z0);
         let rules = spawn_rules::check_spawn_rules(
-            c["type"],
-            s,
+            kind.into(),
             &level,
             reason(&get("reason", "natural")),
             &mut random,

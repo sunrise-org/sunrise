@@ -2,10 +2,11 @@
 //! offers it carries, each one or two item costs and a result.
 use crate::{
     Error, Result,
-    buf::{Bool, Codec, Reader, VarInt, Writer},
+    buf::{Bool, Codec, Reader, VarInt},
     item::{Component, Slot, Stack},
     packet,
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// ItemCost.STREAM_CODEC: item, count, then the exact component predicate
 /// (a list of typed component values, with no patch removal count).

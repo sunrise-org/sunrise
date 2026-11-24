@@ -1,5 +1,4 @@
 //! The `use_item` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0037
 
 pub trait Hooks {
     /// A player uses `stack` (right click) with `self.hand` on the block at
@@ -23,6 +22,8 @@ pub trait Hooks {
     /// ```
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_use_on",
+        dispatch = "api_carrier",
         side = "both",
         version = 2,
         contract = "replace",
@@ -63,6 +64,8 @@ pub trait Hooks {
     /// which only answers while the host has set the acting player.
     /// A client without this mod predicts vanilla here; the server corrects it.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_use_item",
+        dispatch = "api_carrier",
         side = "both",
         version = 2,
         contract = "replace",

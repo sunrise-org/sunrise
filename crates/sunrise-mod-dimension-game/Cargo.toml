@@ -17,6 +17,4 @@ sunrise-mod-host = { path = "../sunrise-mod-host" }
 workspace = true
 
 [dev-dependencies]
-sunrise-mod-wasm = { path = "../sunrise-mod-wasm", features = ["runtime-fixture"] }
 tempfile = "3"
-wat = "1.261"

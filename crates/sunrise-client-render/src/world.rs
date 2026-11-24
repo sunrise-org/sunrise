@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use sunrise_core::random::{LegacyRandom, LevelRandom};
 use sunrise_world::registry::BlockStateId;
 
+mod extra_models;
 mod path_type_cache;
 mod pending_entity;
 pub use pending_entity::{EntityLoadReason, PendingEntity};
@@ -21,16 +22,47 @@ pub use modified::{ChunkMark, ModifiedChunks};
 /// rather than at every section of it.
 #[derive(Clone, Debug, Default)]
 pub struct DirtySections {
-    columns: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
+    columns: FxHashMap<(i32, i32), SectionMask>,
+    // Raw input changes since the streamer last invalidated cached decisions. An answer changing
+    // the mesh of a neighbour does not change that neighbour's raw input.
+    visibility_edits: Option<FxHashMap<(i32, i32), SectionMask>>,
 }
 impl DirtySections {
-    pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
+    pub fn insert(&mut self, key @ (x, sy, z): (i32, i32, i32)) {
+        self.insert_mesh(key);
+        if let Some(edits) = &mut self.visibility_edits {
+            edits.entry((x, z)).or_default().insert(sy as usize);
+        }
+    }
+    /// Mark all sections in `mask` dirty for column `(x, z)`.
+    pub fn insert_column_mask(&mut self, key: (i32, i32), mask: SectionMask) {
+        self.insert_mesh_column_mask(key, mask);
+        if let Some(edits) = &mut self.visibility_edits {
+            *edits.entry(key).or_default() |= mask;
+        }
+    }
+    pub(crate) fn insert_mesh(&mut self, (x, sy, z): (i32, i32, i32)) {
         debug_assert!((0..SectionMask::CAPACITY as i32).contains(&sy));
         self.columns.entry((x, z)).or_default().insert(sy as usize);
     }
-    /// Mark all sections in `mask` dirty for column `(x, z)`.
-    pub fn insert_column_mask(&mut self, (x, z): (i32, i32), mask: SectionMask) {
-        *self.columns.entry((x, z)).or_default() |= mask;
+    pub(crate) fn insert_mesh_column_mask(&mut self, key: (i32, i32), mask: SectionMask) {
+        *self.columns.entry(key).or_default() |= mask;
+    }
+    pub(crate) fn track_visibility_edits(&mut self, listening: bool) {
+        self.visibility_edits = listening.then(FxHashMap::default);
+    }
+    pub(crate) fn visibility_edits(
+        &mut self,
+    ) -> impl Iterator<Item = ((i32, i32), SectionMask)> + '_ {
+        self.visibility_edits
+            .iter_mut()
+            .flat_map(|edits| edits.drain())
+    }
+    pub(crate) fn visibility_edited(&self, (x, sy, z): (i32, i32, i32)) -> bool {
+        self.visibility_edits
+            .as_ref()
+            .and_then(|edits| edits.get(&(x, z)))
+            .is_some_and(|mask| mask.contains(sy as usize))
     }
     pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
         (0..SectionMask::CAPACITY as i32).contains(&sy)
@@ -53,6 +85,9 @@ impl DirtySections {
     }
     pub fn clear(&mut self) {
         self.columns.clear();
+        if let Some(edits) = &mut self.visibility_edits {
+            edits.clear();
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.columns.is_empty()
@@ -62,6 +97,7 @@ impl DirtySections {
         self.columns.values().map(SectionMask::len).sum()
     }
 }
+
 pub struct World {
     // Initialized only for a logical server level, then borrowed by every AI worker.
     path_type_cache: OnceLock<path_type_cache::PathTypeCache>,
@@ -71,7 +107,7 @@ pub struct World {
     pub attachments: sunrise_mod_runtime::attachments::Attachments,
     /// Mod-owned watered areas; never serialized with the world.
     pub water_tickets: sunrise_mod_runtime::water_tickets::WaterTickets,
-    /// The holders lent to mods since the last flush, whose synced changes
+    /// The holders with accepted sync updates since the last flush, whose changes
     /// `flush_attachment_sync` sends.
     pub attachment_syncs: FxHashSet<sunrise_mod_runtime::attachments::Holder>,
     /// Block entities a moving piston landed since the last flush, whose
@@ -85,6 +121,10 @@ pub struct World {
     pub shape: LevelShape,
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
+    /// The light the columns that left the level keep (`light_border.rs`).
+    pub border: crate::fast_hash::FxHashMap<(i32, i32), crate::light_border::Border>,
+    /// Published section support of proto neighbours of saved columns.
+    pub(crate) proto_light_support: crate::fast_hash::FxHashMap<(i32, i32), SectionMask>,
     pub random: LevelRandom,
     pub revision: u64,
     pub health_rules: HealthRules,
@@ -148,6 +188,12 @@ pub struct World {
     /// Writes of this tick's block events and block entities, held out of
     /// the log while it is sent: they go out with the next tick's.
     pub block_log_held: Vec<(i32, i32, i32)>,
+    /// Positions whose group changed or was cleared since publication. Kept only while
+    /// the world is open to the network, alongside the vanilla block log.
+    pub connection_group_log: Option<FxHashSet<(i32, i32, i32)>>,
+    /// Only an authoritative world expires groups on storage replacement. Client group data
+    /// comes with the verified block from the server.
+    group_lifetime: Option<Arc<sunrise_world::level::Behaviours>>,
     /// Every write since the mobs last ticked (position, old and new state),
     /// for `ServerLevel.sendBlockUpdated`'s path recomputing; kept only while
     /// the mobs of this world tick (`game/mobs/creatures/mod.rs`).
@@ -155,9 +201,13 @@ pub struct World {
     /// The chunks changed in bulk (`edit_runs`) since the log was last
     /// drained, kept while `block_log` is: sent to the players whole.
     pub bulk_log: FxHashSet<(i32, i32)>,
+    /// Explicit resends with their light-completion markers (`ChunkResend`). Unlike bulk edits,
+    /// these do not refresh far terrain for a client that hasn't received the chunk.
+    pub chunk_resends: FxHashMap<(i32, i32), ChunkResend>,
     /// The sections whose light changed since the log was last drained, as
     /// a bit per section of each column, kept while `block_log` is
     /// (`ChunkHolder.sectionLightChanged`).
+    /// Pending network light updates, indexed from the column's lower light pad.
     pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), SectionMask>>,
     /// The villager POIs of each section (`PoiManager`'s sections).
     pub pois: crate::poi_sections::PoiSections<sunrise_world::poi::PoiIdentity>,
@@ -172,6 +222,12 @@ pub struct World {
     /// (`ShulkerBoxBlockEntity.getBoundingBox`), as `moving_pistons` for pistons.
     pub shulkers: FxHashMap<[i32; 3], crate::block_entity_anim::Shulker>,
 }
+/// `Level.isRaining` and `isThundering` compare interpolated float strengths to doubles.
+/// Use zero strengths for a level that cannot have weather.
+pub fn weather_flags((rain, thunder): (f32, f32)) -> (bool, bool) {
+    (f64::from(rain) > 0.2, f64::from(thunder) > 0.9)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Weather {
     pub clear_time: i32,
@@ -183,6 +239,15 @@ pub struct Weather {
     pub thunder_level: (f32, f32),
 }
 impl Weather {
+    /// `MinecraftServer.getWeatherData` is shared; the Level interpolants are not.
+    pub fn copy_parameters_from(&mut self, weather: Self) {
+        self.clear_time = weather.clear_time;
+        self.rain_time = weather.rain_time;
+        self.thunder_time = weather.thunder_time;
+        self.raining = weather.raining;
+        self.thundering = weather.thundering;
+    }
+
     /// The timers of `advanceWeatherCycle`, which run only while
     /// `advance_weather` is on.
     pub fn tick_timers(&mut self, random: &mut sunrise_core::random::LegacyRandom) {
@@ -228,13 +293,21 @@ impl Weather {
         self.rain_level.1 =
             (self.rain_level.1 + if self.raining { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
     }
+    /// `Level.setRainLevel` and `Level.setThunderLevel`: clamp both strengths to
+    /// `[0, 1]` and set both the previous and current interpolants.
+    pub fn set_levels(&mut self, rain: f32, thunder: f32) {
+        let rain = rain.clamp(0.0, 1.0);
+        let thunder = thunder.clamp(0.0, 1.0);
+        self.rain_level = (rain, rain);
+        self.thunder_level = (thunder, thunder);
+    }
+
     /// The levels at their targets at once (rain 1 while it rains, else 0, and thunder the
     /// same), both halves, so the frame shows them at any partial tick: a frozen world under
     /// `SUNRISE_STILL`, which would otherwise have to run about a hundred ticks to fade them.
     pub fn settle_levels(&mut self) {
         let target = |on: bool| if on { 1.0 } else { 0.0 };
-        self.rain_level = (target(self.raining), target(self.raining));
-        self.thunder_level = (target(self.thundering), target(self.thundering));
+        self.set_levels(target(self.raining), target(self.thundering));
     }
     /// Level.getRainLevel / getThunderLevel (thunder scales with rain).
     pub fn levels(&self, partial: f32) -> (f32, f32) {
@@ -281,8 +354,10 @@ impl World {
     ) {
         if self.chunks.contains_key(&chunk) {
             let incoming: FxHashSet<_> = entities.iter().map(|(pos, _)| *pos).collect();
-            self.block_entities
-                .unload(|p| (p.0 >> 4, p.2 >> 4) == chunk && !incoming.contains(p));
+            crate::spans::time("unload_block_entities", || {
+                self.block_entities
+                    .unload_column_where(chunk, |p| !incoming.contains(p));
+            });
         }
         self.block_entities.load_chunk(entities);
     }
@@ -310,6 +385,8 @@ impl World {
             infiniburn: None,
             shape: LevelShape::OVERWORLD,
             chunks: Default::default(),
+            border: Default::default(),
+            proto_light_support: Default::default(),
             random: LevelRandom::for_level(LegacyRandom::new(seed)),
             revision: 0,
             health_rules: HealthRules::default(),
@@ -342,8 +419,11 @@ impl World {
             weather: Weather::default(),
             block_log: None,
             block_log_held: Vec::new(),
+            connection_group_log: None,
+            group_lifetime: None,
             path_writes: None,
             bulk_log: Default::default(),
+            chunk_resends: Default::default(),
             light_log: None,
             moving_piston_fallback: Vec::new(),
             moving_pistons: Vec::new(),
@@ -422,13 +502,44 @@ impl World {
     pub fn below_world_y(&self) -> f64 {
         f64::from(self.shape.min_y - 64)
     }
+    #[inline]
+    pub fn chunk_at(&self, cx: i32, cz: i32) -> Option<&Chunk> {
+        self.chunks.get(&(cx, cz)).map(Arc::as_ref)
+    }
+
     /// The biome table index of the noise cell at a block (`ChunkAccess.getNoiseBiome`): a
     /// cell above or below the level reads its top or bottom cells, not the cells the chunks'
     /// widened column holds there (vanilla's Nether and End save none, and read back they
     /// hold the table's first biome). `None` where the chunk isn't loaded.
     pub fn noise_biome(&self, x: i32, y: i32, z: i32) -> Option<u16> {
+        self.noise_biome_with_chunk(x, y, z, self.chunk_at(x >> 4, z >> 4))
+    }
+
+    /// Reads the noise biome with the caller's lookup result for this column.
+    #[inline]
+    pub fn noise_biome_with_chunk(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        chunk: Option<&Chunk>,
+    ) -> Option<u16> {
         let y = y.clamp(self.shape.min_y, self.shape.max_y() - 1);
-        Some(self.chunks.get(&(x >> 4, z >> 4))?.biome(x, y, z))
+        Some(chunk?.biome(x, y, z))
+    }
+    /// `LevelReader.getBiome` (`BiomeManager.getBiome`): the biome table index of the noise cell
+    /// `zoom` picks for the block, one of the eight quarts around it and perhaps in a
+    /// neighbouring chunk, read as [`noise_biome`](Self::noise_biome) reads it. `None` where that
+    /// cell's chunk isn't loaded.
+    pub fn biome_at(
+        &self,
+        zoom: sunrise_core::biome::BiomeZoom,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> Option<u16> {
+        let [qx, qy, qz] = zoom.quart_at_block(sunrise_core::position::BlockPos::new(x, y, z));
+        self.noise_biome(qx << 2, qy << 2, qz << 2)
     }
     /// One above the highest block Y the level's chunks hold.
     pub fn top_y(&self) -> i32 {
@@ -454,6 +565,175 @@ impl World {
     pub fn set(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> crate::Result<()> {
         self.set_with_notification(x, y, z, state, true)
     }
+    /// Mark sections whose mesh depends on `(x, y, z)` dirty: the containing section, its
+    /// vertical neighbours on section borders (`height_above`: also `local_y == 1` for
+    /// `Connect::Height` two-above checks), and horizontal neighbours (including diagonals) on
+    /// chunk borders.
+    pub fn mark_remesh_at(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        min_y: i32,
+        sections: i32,
+        height_above: bool,
+    ) {
+        let sy = (y - min_y) >> 4;
+        let local_y = y & 15;
+        let below_reach = if height_above { 1 } else { 0 };
+        let mark = |dirty: &mut DirtySections, bx: i32, bz: i32| {
+            dirty.insert((bx >> 4, sy, bz >> 4));
+            if local_y <= below_reach && sy > 0 {
+                dirty.insert((bx >> 4, sy - 1, bz >> 4));
+            }
+            if local_y == 15 && sy + 1 < sections {
+                dirty.insert((bx >> 4, sy + 1, bz >> 4));
+            }
+        };
+        let (bx, bz) = (x & 15, z & 15);
+        mark(&mut self.dirty_sections, x, z);
+        if bx == 0 {
+            mark(&mut self.dirty_sections, x - 1, z);
+        } else if bx == 15 {
+            mark(&mut self.dirty_sections, x + 1, z);
+        }
+        if bz == 0 {
+            mark(&mut self.dirty_sections, x, z - 1);
+        } else if bz == 15 {
+            mark(&mut self.dirty_sections, x, z + 1);
+        }
+        if (bx == 0 || bx == 15) && (bz == 0 || bz == 15) {
+            mark(
+                &mut self.dirty_sections,
+                if bx == 0 { x - 1 } else { x + 1 },
+                if bz == 0 { z - 1 } else { z + 1 },
+            );
+        }
+    }
+    /// Read the mod-published connection group at `(x, y, z)`, or `None` if unset / unloaded /
+    /// out of height.
+    #[inline]
+    pub fn connection_group(&self, x: i32, y: i32, z: i32) -> Option<u64> {
+        self.chunks
+            .get(&(x >> 4, z >> 4))?
+            .connection_group(x & 15, y, z & 15)
+    }
+    /// Write or clear the connection group in resident storage only: no log or remesh
+    /// for speculative writes. Returns `false` if the chunk is unloaded, `y` is out of
+    /// height, or the group was unchanged.
+    pub fn set_connection_group_stored(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        group: Option<u64>,
+    ) -> bool {
+        self.write_connection_group((x, y, z), group, false)
+    }
+
+    /// Publish a server-side group without changing save or lighting state.
+    pub fn set_connection_group(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        group: Option<u64>,
+        notify: bool,
+    ) -> bool {
+        if !self.write_connection_group((x, y, z), group, true) {
+            return false;
+        }
+        if notify && let Some(log) = &mut self.connection_group_log {
+            log.insert((x, y, z));
+        }
+        true
+    }
+
+    fn write_connection_group(
+        &mut self,
+        (x, y, z): (i32, i32, i32),
+        group: Option<u64>,
+        publish: bool,
+    ) -> bool {
+        let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
+            return false;
+        };
+        let Some(cell) = chunk.dynamic_cell(x & 15, y, z & 15) else {
+            return false;
+        };
+        let previous = chunk.connection_groups.get(&cell).copied();
+        if previous == group {
+            return false;
+        }
+        let chunk = Arc::make_mut(chunk);
+        chunk.write_group(cell, group);
+        let (min_y, sections) = (chunk.min_y(), chunk.sections.len() as i32);
+        if previous.is_some() != group.is_some() {
+            self.chunks
+                .connection_group_changed(previous.is_some(), group.is_some());
+        }
+        if publish {
+            self.mark_remesh_at(x, y, z, min_y, sections, false);
+        }
+        true
+    }
+
+    pub fn authoritative_group_lifetime(
+        &mut self,
+        behaviours: Arc<sunrise_world::level::Behaviours>,
+    ) {
+        self.group_lifetime = Some(behaviours);
+    }
+
+    /// Whether this transition ends the lifetime of a group at that cell.
+    pub(crate) fn replaces_connection_group(&self, old: BlockStateId, new: BlockStateId) -> bool {
+        self.group_lifetime
+            .as_ref()
+            .is_some_and(|b| !b.keeps_block_entity(old, new))
+    }
+
+    /// A committed replacement (including a fresh block entity of the same state)
+    /// clears this cell and publishes the clear with the current block state.
+    pub fn invalidate_replaced_group(&mut self, (x, y, z): (i32, i32, i32)) -> bool {
+        self.set_connection_group(x, y, z, None, true)
+    }
+
+    /// Attach a fresh instance, even over a block of the same state. Payload updates to an
+    /// existing instance use `BlockEntities::insert` instead.
+    pub fn replace_block_entity(
+        &mut self,
+        pos: (i32, i32, i32),
+        entity: crate::containers::BlockEntity,
+    ) {
+        if self.group_lifetime.is_some() && self.is_loaded_at(pos.0, pos.1, pos.2) {
+            self.invalidate_replaced_group(pos);
+        }
+        self.block_entities.replace(pos, entity);
+    }
+
+    /// A replacement column carries its complete group map. Compare by cell once, before
+    /// adopting it, so a bundle never removes and re-adds an unchanged group.
+    pub(crate) fn dirty_connection_group_diff(&mut self, old: &Chunk, next: &Chunk) {
+        let removed_or_changed = old.connection_groups.iter().filter_map(|(&cell, &value)| {
+            (next.connection_groups.get(&cell) != Some(&value)).then_some(cell)
+        });
+        let new = next
+            .connection_groups
+            .keys()
+            .copied()
+            .filter(|cell| !old.connection_groups.contains_key(cell));
+        for cell in removed_or_changed.chain(new) {
+            let (x, y, z) = next.dynamic_cell_coords(cell);
+            self.mark_remesh_at(
+                next.x * 16 + i32::from(x),
+                y,
+                next.z * 16 + i32::from(z),
+                next.min_y(),
+                next.sections.len() as i32,
+                false,
+            );
+        }
+    }
     /// Store a state while controlling whether the change enters the client block log.
     pub fn set_with_notification(
         &mut self,
@@ -472,6 +752,11 @@ impl World {
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
         if previous != state.0 {
+            if !chunk.connection_groups.is_empty()
+                && self.replaces_connection_group(BlockStateId(previous), state)
+            {
+                self.invalidate_replaced_group((x, y, z));
+            }
             self.block_entities
                 .state_changed((x, y, z), previous, state.0);
             let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);
@@ -486,40 +771,12 @@ impl World {
                 writes.push(((x, y, z), previous, state.0));
             }
             self.modified.insert((x >> 4, z >> 4));
-            // The mesher reads a 3x3x3 neighbourhood for AO, so a write marks
-            // the sections it can reach: this section, the one above/below
-            // only on a section face, and a neighbour column only on a chunk
+            // The mesher reads a 3x3x3 neighbourhood for AO, and a connected texture's `above`
+            // test reads the cell two above a face's block, so a write marks the sections it
+            // can reach: this section, the one above only on its top layer, the one below on
+            // its bottom two layers, and a neighbour column only on a chunk
             // border (the diagonal only where both borders meet).
-            let sy = (y - min_y) >> 4;
-            let local_y = y & 15;
-            let mark = |dirty: &mut DirtySections, bx: i32, bz: i32| {
-                dirty.insert((bx >> 4, sy, bz >> 4));
-                if local_y == 0 && sy > 0 {
-                    dirty.insert((bx >> 4, sy - 1, bz >> 4));
-                }
-                if local_y == 15 && sy + 1 < sections {
-                    dirty.insert((bx >> 4, sy + 1, bz >> 4));
-                }
-            };
-            let (bx, bz) = (x & 15, z & 15);
-            mark(&mut self.dirty_sections, x, z);
-            if bx == 0 {
-                mark(&mut self.dirty_sections, x - 1, z);
-            } else if bx == 15 {
-                mark(&mut self.dirty_sections, x + 1, z);
-            }
-            if bz == 0 {
-                mark(&mut self.dirty_sections, x, z - 1);
-            } else if bz == 15 {
-                mark(&mut self.dirty_sections, x, z + 1);
-            }
-            if (bx == 0 || bx == 15) && (bz == 0 || bz == 15) {
-                mark(
-                    &mut self.dirty_sections,
-                    if bx == 0 { x - 1 } else { x + 1 },
-                    if bz == 0 { z - 1 } else { z + 1 },
-                );
-            }
+            self.mark_remesh_at(x, y, z, min_y, sections, true);
             if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
                 self.light_edits.push(((x, y, z), previous, state.0));
             } else {
@@ -536,8 +793,19 @@ impl World {
     /// block that isn't `air`, or the column's minimum Y (also where the chunk
     /// isn't loaded).
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
-        let bottom = self.layout().min_y();
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
+        self.world_surface_with_chunk(x, z, self.chunk_at(x >> 4, z >> 4), air)
+    }
+
+    /// Reads WORLD_SURFACE with the caller's lookup result for this column.
+    #[inline]
+    pub fn world_surface_with_chunk(
+        &self,
+        x: i32,
+        z: i32,
+        chunk: Option<&Chunk>,
+        air: impl Fn(BlockStateId) -> bool,
+    ) -> i32 {
+        chunk.map_or(self.bottom_y(), |chunk| {
             chunk.world_surface(x, z, |v| air(BlockStateId(v)))
         })
     }
@@ -552,9 +820,13 @@ impl World {
     }
     #[inline]
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
-        self.chunks
-            .get(&(x >> 4, z >> 4))
-            .map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
+        self.block_with_chunk(x, y, z, self.chunk_at(x >> 4, z >> 4))
+    }
+
+    /// Reads a block with the caller's lookup result for this column.
+    #[inline]
+    pub fn block_with_chunk(&self, x: i32, y: i32, z: i32, chunk: Option<&Chunk>) -> BlockStateId {
+        chunk.map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
     }
     /// Whether a block of the box `lo..=hi` may match, from the palettes of
     /// the sections it reaches (a palette of the whole registry may hold
@@ -603,14 +875,43 @@ impl World {
                 .0
         })
     }
+    /// The published light at a block, `sky << 4 | block`: its chunk's, or for a column with no
+    /// chunk what the light storage keeps there (`light_border.rs`). A level without skylight has
+    /// no sky layer (`LevelLightEngine.getRawBrightness`). Never loads a chunk.
+    #[inline]
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
-        self.chunks
-            .get(&(x >> 4, z >> 4))
-            .map_or(0xF0, |chunk| chunk.light(x & 15, y, z & 15))
+        self.light_with_chunk(x, y, z, self.chunk_at(x >> 4, z >> 4))
+    }
+
+    /// Reads published light with the caller's lookup result for this column.
+    #[inline]
+    pub fn light_with_chunk(&self, x: i32, y: i32, z: i32, chunk: Option<&Chunk>) -> u8 {
+        match chunk.and_then(|chunk| {
+            let s = chunk.section_index(y)?;
+            Some(chunk.sections[s].light(crate::chunk::index(x, y, z)))
+        }) {
+            Some(light) => light,
+            None => self.light_outside(x, y, z),
+        }
+    }
+    /// The light of a position no section holds: past a loaded column's sections, or in a column that
+    /// is not loaded ([`Self::border_light`]), without sky in a level without it. A read inside a
+    /// section of a level without skylight already has sky set to 0. It looks the column up again,
+    /// among the columns the client chunk cache hides too (light belongs to the level, not to the
+    /// cache's current view), so the hot read keeps nothing live for it.
+    #[cold]
+    #[inline(never)]
+    fn light_outside(&self, x: i32, y: i32, z: i32) -> u8 {
+        let light = match self.chunks.resident_get(&(x >> 4, z >> 4)) {
+            Some(chunk) => chunk.light(x & 15, y, z & 15),
+            None => self.border_light((x >> 4, z >> 4), x, y, z),
+        };
+        light & (0x0F | (u8::from(self.shape.sky_light) * 0xF0))
     }
     pub fn is_air(&self, state: BlockStateId) -> bool {
         state == self.air
     }
+    #[inline]
     pub fn loaded(&self, x: i32, z: i32) -> bool {
         self.chunks.contains_key(&(x >> 4, z >> 4))
     }
@@ -618,12 +919,75 @@ impl World {
     /// positions held.
     pub fn unload_chunk(&mut self, key: (i32, i32)) -> Option<Arc<Chunk>> {
         self.capability_generations.unload_chunk(key);
-        self.chunks.remove(&key)
+        let chunk = self.chunks.remove(&key)?;
+        self.chunk_resends.remove(&key);
+        // A surviving quad may join across any side or corner of the dropped column.
+        for &cell in chunk.connection_groups.keys() {
+            let (x, y, z) = chunk.dynamic_cell_coords(cell);
+            if x == 0 || x == 15 || z == 0 || z == 15 {
+                self.mark_remesh_at(
+                    key.0 * 16 + i32::from(x),
+                    y,
+                    key.1 * 16 + i32::from(z),
+                    chunk.min_y(),
+                    chunk.sections.len() as i32,
+                    false,
+                );
+            }
+        }
+        self.retain_border(key, &chunk);
+        Some(chunk)
     }
     /// `Level.isLoaded`: `y` is inside the build height and the chunk of `(x, z)` is loaded.
     /// Never loads a chunk.
     pub fn is_loaded_at(&self, x: i32, y: i32, z: i32) -> bool {
         self.shape.contains_y(y) && self.loaded(x, z)
+    }
+    /// The block entities of loaded chunks (taken-out ones included) in the box from `min`
+    /// (inclusive) to `max` (exclusive) and the build height, in no order. Empty for a box of
+    /// zero volume; None for reversed bounds. Walks the box's columns or the loaded chunks,
+    /// whichever are fewer, so no corner overflows or makes it scan past what is loaded.
+    pub fn block_entities_in_box(
+        &self,
+        min: [i32; 3],
+        max: [i32; 3],
+    ) -> Option<Vec<crate::block_entities::Pos>> {
+        if (0..3).any(|axis| min[axis] > max[axis]) {
+            return None;
+        }
+        if (0..3).any(|axis| min[axis] == max[axis]) {
+            return Some(Vec::new());
+        }
+        // `max > min` on every axis, so `max - 1` cannot overflow.
+        let (x0, x1) = (min[0] >> 4, (max[0] - 1) >> 4);
+        let (z0, z1) = (min[2] >> 4, (max[2] - 1) >> 4);
+        let span = (i64::from(x1 - x0) + 1) * (i64::from(z1 - z0) + 1);
+        let columns: Vec<(i32, i32)> = if span <= self.chunks.len() as i64 {
+            (x0..=x1)
+                .flat_map(|x| (z0..=z1).map(move |z| (x, z)))
+                .filter(|key| self.chunks.contains_key(key))
+                .collect()
+        } else {
+            self.chunks
+                .keys()
+                .copied()
+                .filter(|&(x, z)| (x0..=x1).contains(&x) && (z0..=z1).contains(&z))
+                .collect()
+        };
+        Some(
+            columns
+                .into_iter()
+                .flat_map(|chunk| self.block_entities.in_chunk(chunk))
+                .copied()
+                .filter(|&(x, y, z)| self.in_box(min, max, [x, y, z]))
+                .collect(),
+        )
+    }
+    /// Whether `pos` lies in the box from `min` (inclusive) to `max` (exclusive) and the build
+    /// height.
+    pub fn in_box(&self, min: [i32; 3], max: [i32; 3], pos: [i32; 3]) -> bool {
+        (0..3).all(|axis| (min[axis]..max[axis]).contains(&pos[axis]))
+            && self.shape.contains_y(pos[1])
     }
     /// Persisted container capacity override; absence preserves vanilla capacity.
     pub fn container_stack_limit(&self, key: (i32, i32, i32)) -> Option<u32> {
@@ -706,19 +1070,7 @@ impl World {
     /// The fields Sunrise keeps beside a block entity's model, for a journal: the tag it was
     /// loaded or set with (its `lock`) and its pending loot metadata.
     pub fn block_entity_extras(&self, key: (i32, i32, i32)) -> BlockEntityExtras {
-        let saved = self
-            .chunks
-            .get(&(key.0 >> 4, key.2 >> 4))
-            .and_then(|chunk| chunk.saved.as_ref());
-        BlockEntityExtras {
-            source: saved.and_then(|s| {
-                s.block_entity_sources
-                    .iter()
-                    .find(|(p, _)| *p == key)
-                    .map(|(_, tag)| tag.clone())
-            }),
-            pending_loot: saved.and_then(|s| s.pending_loot.get(&key).cloned()),
-        }
+        BlockEntityExtras::capture(&self.chunks, key)
     }
     /// Puts back what [`World::block_entity_extras`] kept.
     pub fn set_block_entity_extras(&mut self, key: (i32, i32, i32), kept: BlockEntityExtras) {
@@ -782,6 +1134,22 @@ impl World {
     }
 }
 
+/// Completion boundary for an explicit chunk resend (`ChunkMap.waitForLightBeforeSending` /
+/// `ThreadedLevelLightEngine.waitForPendingTasks`): tracks only the light work that preceded
+/// the resend request, so later light checks do not keep the resend queued indefinitely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChunkResend {
+    /// Preceding light work for this column is complete; ready to send on the next broadcast.
+    Ready,
+    /// Waiting for the prefix of `World::light_edits` already queued for the next light pass.
+    WaitingEdits { through: usize },
+    /// Waiting for the whole-column light job for this column that covers the request: the
+    /// running job when nothing was queued after it, else the first job submitted after the
+    /// request (`from_seq` and later). That job's light is published when it returns, even
+    /// if a newer request has since queued another job; later requests never extend the wait.
+    WaitingLight { from_seq: u64 },
+}
+
 /// The game rules and difficulty a player's health reads (`Player.isInvulnerableTo`,
 /// natural regeneration), kept with the world they belong to.
 #[derive(Clone, Copy, Debug)]
@@ -825,6 +1193,68 @@ mod tests {
         assert_eq!(world.block(16, 64, 0), BlockStateId(0));
         assert_eq!(world.chunks.len(), count);
         assert!(!world.loaded(16, 0));
+    }
+
+    #[test]
+    fn block_entities_in_box_reads_loaded_chunks_inside_the_build_height() {
+        use crate::containers::BlockEntity;
+        let mut world = World::new(BlockStateId(0), 0);
+        for key in [(0, 0), (-1, 0)] {
+            world
+                .chunks
+                .insert(key, Arc::new(Chunk::empty(key.0, key.1)));
+        }
+        let inside = [(1, 64, 1), (-16, -64, 15), (15, 319, 0)];
+        for pos in inside.into_iter().chain([(0, 320, 0), (40, 64, 40)]) {
+            world
+                .block_entities
+                .insert(pos, BlockEntity::Campfire(Box::default()));
+        }
+        // Above the build height, and in chunk (2, 2), which is not loaded: never listed.
+        let sorted = |found: Option<Vec<_>>| {
+            let mut found = found.unwrap();
+            found.sort_unstable();
+            found
+        };
+        let mut expected = inside.to_vec();
+        expected.sort_unstable();
+        let all = [i32::MIN; 3];
+        let top = [i32::MAX; 3];
+        assert_eq!(sorted(world.block_entities_in_box(all, top)), expected);
+        assert_eq!(
+            sorted(world.block_entities_in_box([-16, -64, 0], [16, 320, 16])),
+            expected,
+            "the box's own columns"
+        );
+        // A block entity taken out for its tick is still listed.
+        let taken = world.block_entities.take(&(1, 64, 1)).unwrap();
+        assert_eq!(
+            world.block_entities_in_box([1, 64, 1], [2, 65, 2]),
+            Some(vec![(1, 64, 1)])
+        );
+        assert_eq!(
+            world.block_entities.taken_type(&(1, 64, 1)),
+            Some(crate::block_entities::TakenType::Vanilla(
+                "minecraft:campfire"
+            ))
+        );
+        assert!(world.block_entities.put(taken.0, taken.1));
+        assert_eq!(world.block_entities.taken_type(&(1, 64, 1)), None);
+        // The maximum is exclusive on every axis; the build height clips the box.
+        for max in [[1, 65, 2], [2, 64, 2], [2, 65, 1]] {
+            assert_eq!(world.block_entities_in_box([0, 63, 0], max), Some(vec![]));
+        }
+        assert_eq!(
+            world.block_entities_in_box([0, 320, 0], [16, top[1], 16]),
+            Some(vec![])
+        );
+        assert_eq!(
+            world.block_entities_in_box([32, 0, 32], [48, 100, 48]),
+            Some(vec![])
+        );
+        assert_eq!(world.block_entities_in_box(top, top), Some(vec![]));
+        assert_eq!(world.block_entities_in_box([2, 0, 0], [1, 10, 10]), None);
+        assert_eq!(world.block_entities_in_box(top, all), None);
     }
 
     #[test]
@@ -925,6 +1355,23 @@ mod tests {
         }
     }
 
+    /// A connected texture's `above` test reads two cells up, so a write on the second layer of a
+    /// section re-meshes the section below too, and one on the third does not.
+    #[test]
+    fn a_write_on_a_sections_second_layer_marks_the_section_below() {
+        let mut world = World::new(BlockStateId(0), 0);
+        world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        let sy = (65 - MIN_Y) >> 4;
+        assert_eq!(65 & 15, 1);
+        world.set(3, 65, 3, BlockStateId(1)).unwrap();
+        let got: Vec<_> = world.dirty_sections.columns().collect();
+        assert_eq!(world.dirty_sections.len(), 2, "{got:?}");
+        assert!(world.dirty_sections.contains(&(0, sy - 1, 0)));
+        world.dirty_sections.clear();
+        world.set(3, 66, 3, BlockStateId(1)).unwrap();
+        assert_eq!(world.dirty_sections.len(), 1);
+    }
+
     /// `ChunkAccess.getNoiseBiome` clamps the cell to the level. An End chunk read back from a
     /// save holds the table's first biome in the sections its widened column adds below Y 0
     /// and above 255, which a read there must not reach.
@@ -966,6 +1413,31 @@ mod tests {
         assert_eq!(world.noise_biome(16, 0, 0), None);
     }
 
+    /// `BiomeManager.getBiome` reads the noise cell the zoom picks, not the block's own: at world
+    /// seed 12345, block (16, 64, 8) lies in chunk 1 0's quart 4 16 2, but the zoom picks quart
+    /// 3 15 1, which chunk 0 0 holds; block (17, 64, 8) keeps to chunk 1 0 (quart 4 15 1).
+    #[test]
+    fn biome_at_reads_the_quart_the_zoom_picks() {
+        use sunrise_core::biome::{BiomeZoom, obfuscate_seed};
+        let mut world = World::new(BlockStateId(0), 12345);
+        for (cx, biome) in [(0, 1), (1, 2)] {
+            let mut chunk = Chunk::empty(cx, 0);
+            for qy in 0..SECTIONS as i32 * 4 {
+                for qz in 0..4 {
+                    for qx in 0..4 {
+                        chunk.set_biome_cell(qx, qy, qz, biome);
+                    }
+                }
+            }
+            world.chunks.insert((cx, 0), Arc::new(chunk));
+        }
+        let zoom = BiomeZoom::new(obfuscate_seed(12345));
+        assert_eq!(world.noise_biome(16, 64, 8), Some(2));
+        assert_eq!(world.biome_at(zoom, 16, 64, 8), Some(1));
+        assert_eq!(world.biome_at(zoom, 17, 64, 8), Some(2));
+        assert_eq!(world.biome_at(zoom, 40, 64, 8), None);
+    }
+
     /// A box misses a state only where no section it reaches lists it, and
     /// unloaded columns or heights past the world count as their air.
     #[test]
@@ -986,6 +1458,65 @@ mod tests {
         assert!(!world.may_hold([0, 400, 0], [0, 401, 0], nine));
         assert!(world.may_hold([0, 400, 0], [0, 401, 0], |s| s.0 == 0));
     }
+
+    #[test]
+    fn connection_groups_dirty_only_meshes_log_changes_and_invalidate_unload_edges() {
+        let mut world = World::new(BlockStateId(0), 0);
+        world.connection_group_log = Some(Default::default());
+        world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        world.chunks.insert((1, 0), Arc::new(Chunk::empty(1, 0)));
+        world.chunks.insert((0, 1), Arc::new(Chunk::empty(0, 1)));
+        world.chunks.insert((1, 1), Arc::new(Chunk::empty(1, 1)));
+
+        // Unloaded chunk and out-of-height return false without logging or dirtying.
+        assert!(!world.set_connection_group(32, 64, 0, Some(1), true));
+        assert!(!world.set_connection_group(15, 999, 15, Some(1), true));
+        assert!(world.connection_group_log.as_ref().unwrap().is_empty());
+        assert!(world.dirty_sections.is_empty());
+
+        // Setting group 0 (valid u64 value) succeeds, logs, and marks
+        // remesh across borders without touching dirty_light, light_edits, or modified.
+        assert!(world.set_connection_group(15, 64, 15, Some(0), true));
+        assert_eq!(world.connection_group(15, 64, 15), Some(0));
+        assert!(!world.set_connection_group(15, 64, 15, Some(0), true));
+        assert_eq!(
+            world.connection_group_log.as_ref().unwrap(),
+            &[(15, 64, 15)].into_iter().collect()
+        );
+        let sy = (64 - MIN_Y) >> 4;
+        assert!(world.dirty_sections.contains(&(0, sy, 0)));
+        assert!(world.dirty_sections.contains(&(1, sy, 0)));
+        assert!(world.dirty_sections.contains(&(0, sy, 1)));
+        assert!(world.dirty_sections.contains(&(1, sy, 1)));
+        assert!(world.dirty_sections.contains(&(0, sy - 1, 0)));
+        assert!(world.dirty_light.is_empty());
+        assert!(world.light_edits.is_empty());
+        assert!(world.modified.is_empty());
+
+        // Automatic clear publishes the cell's final empty value; repeating it is a no-op.
+        assert!(world.invalidate_replaced_group((15, 64, 15)));
+        assert_eq!(world.connection_group(15, 64, 15), None);
+        assert!(!world.invalidate_replaced_group((15, 64, 15)));
+        assert!(
+            world
+                .connection_group_log
+                .as_ref()
+                .unwrap()
+                .contains(&(15, 64, 15))
+        );
+
+        // Forget a grouped column with no visibility hooks. Its surviving neighbours
+        // must retire their joins; groups farther from the edge do not affect them.
+        assert!(world.set_connection_group(15, 64, 15, Some(42), true));
+        assert!(world.set_connection_group(7, 128, 7, Some(99), true));
+        world.dirty_sections.clear();
+        world.unload_chunk((0, 0));
+        assert_eq!(world.connection_group(15, 64, 15), None);
+        assert!(world.dirty_sections.contains(&(1, sy, 0)));
+        assert!(world.dirty_sections.contains(&(0, sy, 1)));
+        assert!(world.dirty_sections.contains(&(1, sy, 1)));
+        assert!(!world.dirty_sections.contains(&(1, sy + 4, 0)));
+    }
 }
 
 /// A block entity's fields kept beside its model ([`World::block_entity_extras`]).
@@ -993,4 +1524,22 @@ mod tests {
 pub struct BlockEntityExtras {
     pub source: Option<sunrise_core::nbt::Tag>,
     pub pending_loot: Option<crate::chunk::PendingContainerLoot>,
+}
+
+impl BlockEntityExtras {
+    /// Capture the saved side fields without borrowing the block-entity map.
+    pub fn capture(chunks: &crate::chunk_map::ChunkMap, key: (i32, i32, i32)) -> Self {
+        let saved = chunks
+            .get(&(key.0 >> 4, key.2 >> 4))
+            .and_then(|chunk| chunk.saved.as_ref());
+        Self {
+            source: saved.and_then(|s| {
+                s.block_entity_sources
+                    .iter()
+                    .find(|(p, _)| *p == key)
+                    .map(|(_, tag)| tag.clone())
+            }),
+            pending_loot: saved.and_then(|s| s.pending_loot.get(&key).cloned()),
+        }
+    }
 }

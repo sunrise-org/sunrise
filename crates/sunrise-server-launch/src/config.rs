@@ -34,7 +34,6 @@ whitelist = true             # only whitelisted players and operators can join
 enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10           # chunks sent around each player
 simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
-max_view_distance = 0        # past view_distance, saved chunks only, up to this (never generated; 0: off)
 max_viewed_loaded_chunks = 2048             # chunks a mod may keep loaded for one player in another level (0: none; at most 4489, higher values lowered with a warning; an older Sunrise client gets at most 2048)
 max_viewed_ticking_chunks = 441             # of them, ticking (one player's simulation area at distance 10)
 max_viewed_loaded_chunks_per_level = 16384  # the same for all players together, per level
@@ -58,6 +57,8 @@ resources = ""               # the prepared game files; empty: resources/ here, 
 restart_on_crash = true      # start the game again when it crashes
 low_memory = false           # true: no transparent huge pages, ~60 MB less idle for ~1 % more tick time
 parallel_tick = false        # reserved: parallel phases are currently disabled in this fork
+droppable_clientbound = 262144  # bytes a second of droppable mod payloads (voice) sent to each player; 0 turns them off
+droppable_serverbound = 16384   # the same, accepted from each player
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
@@ -91,7 +92,7 @@ webhook = ""                 # the channel's webhook URL (a secret: anyone with 
 events = ["chat", "join", "leave", "death"]   # what is posted; "kick" too if you like
 enabled = true               # false pauses it and keeps the webhook
 
-# A world's biome regions from mods are fixed when it is made (docs/design/mod-api/mod-biome-regions.md).
+# A world's biome regions from mods are fixed when it is made.
 # When a mod with one is gone, the server refuses to start until you choose. To change it:
 # [biome_regions]
 # missing = "vanilla"        # generate vanilla's biomes where the missing mods' regions were; "refuse": don't start
@@ -99,7 +100,7 @@ enabled = true               # false pauses it and keeps the webhook
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-pub const TYPED: [(&str, &str, &str); 20] = [
+pub const TYPED: [(&str, &str, &str); 19] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -109,7 +110,6 @@ pub const TYPED: [(&str, &str, &str); 20] = [
     ("server", "enforce_whitelist", "enforce-whitelist"),
     ("server", "view_distance", "view-distance"),
     ("server", "simulation_distance", "simulation-distance"),
-    ("server", "max_view_distance", "sunrise-max-view-distance"),
     (
         "server",
         "max_viewed_loaded_chunks",
@@ -240,8 +240,6 @@ pub struct Server {
     pub enforce_whitelist: bool,
     pub view_distance: u32,
     pub simulation_distance: u32,
-    /// Sunrise's far ring (docs/hosting.md): saved chunks sent past `view_distance`, up to this; 0 is off.
-    pub max_view_distance: u32,
     /// Viewed levels (docs/hosting.md): the chunks mods may keep loaded for one player in one other
     /// level (at most 4489 columns; a higher value is lowered with a warning, and an older
     /// Sunrise client gets at most 2048), the ticking ones among them, and the same for all
@@ -277,6 +275,11 @@ pub struct Engine {
     pub low_memory: bool,
     /// The game's parallel tick phases (`SUNRISE_PARALLEL_TICK=1`), for hosts that cannot set the variable.
     pub parallel_tick: bool,
+    /// Bytes a second of `Droppable` mod payloads the game sends to each player (docs/hosting.md); 0 turns
+    /// them off.
+    pub droppable_clientbound: u32,
+    /// Bytes a second of `Droppable` mod payloads the game accepts from each player; 0 turns them off.
+    pub droppable_serverbound: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -512,7 +515,6 @@ impl Default for Server {
             enforce_whitelist: false,
             view_distance: 10,
             simulation_distance: 10,
-            max_view_distance: 0,
             max_viewed_loaded_chunks: 2048,
             max_viewed_ticking_chunks: 441,
             max_viewed_loaded_chunks_per_level: 2048 * 8,
@@ -540,6 +542,8 @@ impl Default for Engine {
             restart_on_crash: true,
             low_memory: false,
             parallel_tick: false,
+            droppable_clientbound: 256 << 10,
+            droppable_serverbound: 16 << 10,
         }
     }
 }
@@ -551,6 +555,42 @@ impl Default for Backups {
             keep: 12,
         }
     }
+}
+
+/// Keys no longer read, as (section, field, the server.properties key they wrote).
+pub const RETIRED: [(&str, &str, &str); 1] =
+    [("server", "max_view_distance", "sunrise-max-view-distance")];
+
+/// The `section.field` names of `RETIRED` keys that `text` still sets.
+pub fn retired_in(text: &str) -> Vec<String> {
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return Vec::new();
+    };
+    RETIRED
+        .iter()
+        .filter(|(section, field, _)| doc.get(section).and_then(|s| s.get(field)).is_some())
+        .map(|(section, field, _)| format!("{section}.{field}"))
+        .collect()
+}
+
+/// Whether a `section.field=value` change names a retired key, typed or as its property.
+pub fn retired_change(change: &str) -> bool {
+    let key = change.split_once('=').map_or(change, |(key, _)| key).trim();
+    RETIRED.iter().any(|(section, field, property)| {
+        key == format!("{section}.{field}") || key == format!("properties.{property}")
+    })
+}
+
+/// `text` without its `RETIRED` keys, or `None` when it has none.
+fn without_retired(text: &str) -> Option<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    let mut removed = false;
+    for (section, field, _) in RETIRED {
+        if let Some(table) = doc.get_mut(section).and_then(|s| s.as_table_like_mut()) {
+            removed |= table.remove(field).is_some();
+        }
+    }
+    removed.then(|| doc.to_string())
 }
 
 fn text_or_number<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -584,6 +624,8 @@ const ENTITIES_REMOVED: &str = "the mob settings dab, villager_lobotomize and ma
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
+        let stripped = without_retired(text);
+        let text = stripped.as_deref().unwrap_or(text);
         let config: Self = toml::from_str(text).map_err(|e| {
             let table = toml::from_str::<toml::Table>(text).unwrap_or_default();
             REMOVED_SECTIONS
@@ -783,7 +825,7 @@ impl Config {
         }
         let mut extra = toml::Table::new();
         for key in keys {
-            if TYPED.iter().any(|t| t.2 == key) {
+            if TYPED.iter().chain(&RETIRED).any(|t| t.2 == key) {
                 continue;
             }
             let value = parsed.raw.get(&key);
@@ -821,6 +863,8 @@ pub fn render(config: &Config) -> String {
         ("engine", "restart_on_crash"),
         ("engine", "low_memory"),
         ("engine", "parallel_tick"),
+        ("engine", "droppable_clientbound"),
+        ("engine", "droppable_serverbound"),
         ("backups", "every"),
         ("backups", "keep"),
         ("updates", "keep"),
@@ -1078,6 +1122,19 @@ mod tests {
         assert_eq!(render(&Config::default()), TEMPLATE);
     }
 
+    /// A server.toml from before the far ring was removed still loads, its `max_view_distance` unread.
+    #[test]
+    fn an_old_max_view_distance_is_ignored() {
+        let old = TEMPLATE.replace(
+            "simulation_distance = 10 ",
+            "max_view_distance = 24\nsimulation_distance = 10 ",
+        );
+        assert_ne!(old, TEMPLATE);
+        assert_eq!(Config::parse(&old).unwrap(), Config::default());
+        assert_eq!(retired_in(&old), ["server.max_view_distance"]);
+        assert!(retired_in(TEMPLATE).is_empty());
+    }
+
     /// `[transfer]` is off by default, passes nothing to the game then, and is checked when it is read.
     #[test]
     fn transfers_are_off_by_default_and_checked() {
@@ -1155,125 +1212,61 @@ mod tests {
             assert!(!table.contains_key("missing_mods"));
         }
         let typo = Config::parse("[missing_mods]\nalow = true\n").unwrap_err();
-        assert!(typo.contains("unknown field `alow`"), "{typo}");
+        assert!(typo.contains("`alow`"), "{typo}");
     }
 
     #[test]
-    fn hosting_guide_server_toml_examples_pass_config_check() {
-        // The TOML examples in docs/hosting.md, without the explanatory comments.
-        let examples = [
-            (
-                "server setup",
-                r#"[server]
-motd = "A Minecraft Server"
-port = 25565
-bind = ""
-max_players = 20
-online_mode = true
-whitelist = true
-enforce_whitelist = false
-view_distance = 10
-simulation_distance = 10
-max_view_distance = 0
-max_viewed_loaded_chunks = 2048
-max_viewed_ticking_chunks = 441
-max_viewed_loaded_chunks_per_level = 16384
-max_viewed_ticking_chunks_per_level = 3528
-admin_feedback_to_ops = true
+    fn a_fixed_api_address_takes_an_empty_token_and_refuses_one_with_spaces() {
+        let fixed = Config::parse("[api]\nbind = \"127.0.0.1:8131\"\ntoken = \"\"\n").unwrap();
+        assert_eq!(
+            fixed.api.address(),
+            Ok((std::net::Ipv4Addr::LOCALHOST, 8131).into())
+        );
+        let spaced = "[api]\nbind = \"127.0.0.1:8131\"\ntoken = \"a long random string\"\n";
+        assert!(Config::parse(spaced).unwrap_err().contains("api.token"));
+    }
 
-[world]
-name = "world"
-seed = ""
-game_mode = "survival"
-difficulty = "easy"
-hardcore = false
+    #[test]
+    fn a_prune_chunks_section_survives_rendering_and_refuses_what_it_cannot_keep() {
+        let set = Config::parse(
+            "[prune_chunks]\nmode = \"dry-run\"\nmin_inhabited_ticks = 600\nspawn_radius = 16\nring = 2\nkeep_files = [\"claims.json\"]\n",
+        )
+        .unwrap();
+        let prune = &set.prune_chunks;
+        assert_eq!(prune.mode, crate::prune::Mode::DryRun);
+        assert_eq!(
+            (prune.min_inhabited_ticks, prune.spawn_radius, prune.ring),
+            (600, 16, 2)
+        );
+        assert_eq!(prune.keep_files, ["claims.json"]);
+        assert_eq!(Config::parse(&render(&set)).unwrap(), set);
+        for bad in [
+            "ring = 9",
+            "min_inhabited_ticks = -1",
+            "keep_files = [\"../x\"]",
+            "keep_files = [\"/x\"]",
+        ] {
+            let error = Config::parse(&format!("[prune_chunks]\n{bad}\n")).unwrap_err();
+            assert!(error.contains("prune_chunks"), "{bad}: {error}");
+        }
+    }
 
-[properties]
-
-[engine]
-path = ""
-resources = ""
-restart_on_crash = true
-low_memory = false
-parallel_tick = false
-
-[backups]
-every = "6h"
-keep = 12
-
-[updates]
-keep = 1
-
-[panel]
-bind = "127.0.0.1:8130"
-allow_public = false
-
-[api]
-bind = ""
-token = ""
-allow_public = false
-"#,
-            ),
-            (
-                "runtime levels",
-                "[properties]\nsunrise-max-runtime-levels = 128\n",
-            ),
-            (
-                "control API",
-                r#"[api]
-bind = "127.0.0.1:8131"
-token = ""
-"#,
-            ),
-            (
-                "Discord",
-                r#"[discord]
-webhook = "https://discord.com/api/webhooks/..."
-events = ["chat", "join", "leave", "death"]
-enabled = true
-"#,
-            ),
-            (
-                "management protocol",
-                "[properties]\nmanagement-server-enabled = true\nmanagement-server-port = 8132\n",
-            ),
-            (
-                "RCON",
-                r#"[properties]
-enable-rcon = true
-"rcon.port" = 25575
-"rcon.password" = "a long random string"
-"#,
-            ),
-            (
-                "query",
-                "[properties]\nenable-query = true\n\"query.port\" = 25565\n",
-            ),
-            (
-                "prune chunks",
-                r#"[prune_chunks]
-mode = "dry-run"
-min_inhabited_ticks = 1200
-spawn_radius = 32
-ring = 1
-keep_files = ["sunrise-smp/claims.json", "sunrise-smp/places.json"]
-"#,
-            ),
-            (
-                "biome regions",
-                "[biome_regions]\nmissing = \"vanilla\"\nadopt_installed = false\n",
-            ),
-            ("missing mods", "[missing_mods]\nallow = true\n"),
-        ];
-        let errors: Vec<_> = examples
-            .into_iter()
-            .filter_map(|(name, example)| {
-                Config::parse(example)
-                    .err()
-                    .map(|error| format!("{name}: {error}"))
-            })
-            .collect();
-        assert!(errors.is_empty(), "{}", errors.join("\n"));
+    #[test]
+    fn a_discord_section_takes_a_discord_webhook_and_known_events_only() {
+        let hook = "webhook = \"https://discord.com/api/webhooks/1/x\"";
+        let set = Config::parse(&format!(
+            "[discord]\n{hook}\nevents = [\"chat\", \"kick\"]\n"
+        ))
+        .unwrap();
+        assert_eq!(set.discord.events, ["chat", "kick"]);
+        let elsewhere = "[discord]\nwebhook = \"https://example.com/api/webhooks/1/x\"\n";
+        assert!(
+            Config::parse(elsewhere)
+                .unwrap_err()
+                .contains("discord.webhook")
+        );
+        let unknown = format!("[discord]\n{hook}\nevents = [\"chat\", \"bogus\"]\n");
+        assert!(Config::parse(&unknown).unwrap_err().contains("bogus"));
     }
 
     #[test]
@@ -1313,8 +1306,8 @@ keep_files = ["sunrise-smp/claims.json", "sunrise-smp/places.json"]
             ServerProperties::new(Properties::default(), &mut SystemEntropy::default()).unwrap();
         for (key, value) in Config::default().vanilla() {
             // Sunrise's own, which vanilla doesn't have: their defaults behave as vanilla does
-            // (the far ring off, operators told of each other's commands, and caps on viewed areas,
-            // which only a mod asks for).
+            // (operators told of each other's commands, and caps on viewed areas, which only a
+            // mod asks for).
             if key.starts_with("sunrise-") {
                 let vanilla_like = match key.as_str() {
                     "sunrise-admin-feedback-to-ops" => "true",
@@ -1358,6 +1351,7 @@ keep_files = ["sunrise-smp/claims.json", "sunrise-smp/places.json"]
             ("spawn-protection", "0"),
             ("allow-flight", "false"),
             ("rate-limit", "10"),
+            ("sunrise-max-view-distance", "24"),
         ]);
         let c = Config::import(&source).unwrap();
         assert_eq!(c.server.motd, "Hello");
@@ -1365,7 +1359,7 @@ keep_files = ["sunrise-smp/claims.json", "sunrise-smp/places.json"]
         assert!(!c.server.whitelist);
         assert_eq!(c.world.game_mode, "creative");
         assert_eq!(c.world.seed, "12345");
-        // allow-flight=false is vanilla's default: dropped.
+        // allow-flight=false is vanilla's default, and sunrise-max-view-distance is retired: dropped.
         assert_eq!(
             c.properties,
             BTreeMap::from([

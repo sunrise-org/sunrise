@@ -1,5 +1,4 @@
 //! The `container_opened` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0241
 
 pub trait Hooks {
     /// A player opens one of the game's own menus (`ServerPlayer.openMenu`; the
@@ -12,17 +11,24 @@ pub trait Hooks {
     /// Heard after the checks that refuse the menu (a locked container, a
     /// spectator) and before the menu that was open closes. Set `cancel` and
     /// nothing opens: the open menu stays as it was and the click is spent.
-    /// The player's state is swapped in for the call, as for
-    /// `run_mod_command`, so `host.players().acting_player()`, `PlayerRef::tell` and
-    /// the item helpers reach them. Not heard: a menu a mod opens
-    /// (`native_open_menu`), the inventory screen, and the editors (sign,
+    /// The player's state is swapped in for the call, so `host.players().acting_player()`,
+    /// `PlayerRef::tell` and the item helpers reach them. Not heard: a menu a mod opens
+    /// (`PlayerRef::open_chest_menu`, `PlayerRef::open_mod_menu`), the inventory screen, and the editors (sign,
     /// book, command block). Server-side, for every player of the world.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_container_opened",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         neoforge = "none (not NeoForge's PlayerContainerEvent.Open: this hook can cancel the opening)",
         cancellable = true
     )]
-    fn container_opened();
+    fn container_opened(
+        player: u128,
+        name: &str,
+        kind: &str,
+        pos: Option<[i32; 3]>,
+        cancel: &mut bool,
+    );
 }

@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn what_the_camera_stands_on_is_inside_the_shadow_cameras_depth() {
         let shadow = camera(&Settings::default());
-        let (view, projection) = super::super::pack_uniforms::shadow_camera(
+        let (view, projection) = crate::gfx::pack_uniforms::shadow_camera(
             glam::Vec3::new(0.3, 0.9, 0.0).normalize(),
             glam::DVec3::new(-2064.5, 246.0, -4304.5),
             &shadow,
@@ -859,7 +859,7 @@ mod tests {
         let light = glam::Vec3::Y;
         for x in [5.5, -5.5, -2064.5, 2064.5] {
             let camera = glam::DVec3::new(x, 64.0, x);
-            let (view, _) = super::super::pack_uniforms::shadow_camera(light, camera, &shadow);
+            let (view, _) = crate::gfx::pack_uniforms::shadow_camera(light, camera, &shadow);
             let centre = view.inverse().w_axis.truncate();
             assert!(centre.x.abs() <= SNAP / 2.0, "{x}: {centre}");
             assert!(centre.z.abs() <= SNAP / 2.0, "{x}: {centre}");

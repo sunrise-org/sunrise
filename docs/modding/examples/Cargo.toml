@@ -12,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sunrise-mod-api = { path = "../../../crates/sunrise-mod-api" }
-sunrise-mod-points = { path = "../../../crates/sunrise-mod-points" }
+log = "0.4"
 
 [lints]
 workspace = true

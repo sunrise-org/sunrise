@@ -811,6 +811,18 @@ fn mobs_keep_their_variant_puff_state_carried_block_and_conversion_times() {
         assert_eq!(number(tag.get("DrownedConversionTime")), Some(-1), "{kind}");
         assert_eq!(number(tag.get("InWaterTime")), Some(-1), "{kind}");
     }
+    // Under water with no time loaded, the kinds that never convert save 0, as the tracker
+    // holds it.
+    for kind in [
+        "minecraft:drowned",
+        "minecraft:zombie_villager",
+        "minecraft:zombified_piglin",
+    ] {
+        let mut m = new(kind);
+        m.fluids.eye_in_water = true;
+        let (_, tag) = round_trip(&m);
+        assert_eq!(number(tag.get("InWaterTime")), Some(0), "{kind}");
+    }
     // A ticking one that left the snow or the water saves -1 over the times
     // it was loaded with (ConversionTracker.tick: setConverting(false)).
     for (kind, conversion, affliction) in [

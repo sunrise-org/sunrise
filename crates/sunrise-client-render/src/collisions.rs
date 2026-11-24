@@ -13,12 +13,13 @@ use sunrise_core::{
 };
 use sunrise_world::{
     block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
-    block_collision_scan::{BlockCollisionWorld, CollisionBlock},
+    block_collision_scan::{BlockCollisionWorld, CollisionBlock, CollisionScanError},
     collision::CachedCollisionRegistry,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     dynamic_support::DynamicSupportWorld,
     entity_obstruction::EntityIdentity,
     fluid::{FluidKind, FluidState},
+    ground_support::{GroundState, find_supporting_block},
     liquid_collision::LiquidCollisionWorld,
     piston_shape::PistonCollisionWorld,
     powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
@@ -49,12 +50,26 @@ pub fn published_outline<'w>(
     if !binding.publishes_shapes(state) {
         return None;
     }
-    match world.block_entities.get(&(p[0], p[1], p[2])) {
-        Some(crate::chunk::block_entity::BlockEntity::Mod(entity)) => {
-            entity.shapes().map(|shapes| shapes.outline())
-        }
-        _ => None,
-    }
+    published_shapes(world, binding.registry(), state, p).map(|shapes| shapes.outline())
+}
+
+/// The publication at `p` only belongs to the supplied block if its identity matches
+/// the block there. Properties can change without replacing that block entity.
+pub fn published_shapes<'w>(
+    world: &'w World,
+    registry: &BlockRegistry,
+    state: BlockStateId,
+    [x, y, z]: [i32; 3],
+) -> Option<&'w crate::chunk::block_entity::published_shapes::PublishedShapes> {
+    let crate::chunk::block_entity::BlockEntity::Mod(entity) =
+        world.block_entities.get(&(x, y, z))?
+    else {
+        return None;
+    };
+    let shapes = entity.shapes()?;
+    let resident = world.block(x, y, z);
+    (state == resident || registry.state(state)?.name == registry.state(resident)?.name)
+        .then_some(shapes)
 }
 
 /// What powder snow's and liquids' contextual collisions ask of the colliding
@@ -252,6 +267,26 @@ where
     }
 }
 impl<'w> SceneCollisions<'w, '_> {
+    /// `Entity.checkSupportingBlock` against this entity's contextual shapes.
+    pub fn update_ground_support(
+        &mut self,
+        ground: &mut GroundState,
+        feet: Vec3,
+        bounds: Aabb,
+        movement: Option<Vec3>,
+        context: CollisionContext<'_>,
+    ) -> std::result::Result<(), CollisionScanError<io::Error>> {
+        ground.check_support(ground.on_ground, bounds, movement, |bounds| {
+            find_supporting_block(
+                self,
+                context.at_entity_height(feet.y),
+                feet,
+                bounds,
+                usize::MAX,
+            )
+        })
+    }
+
     /// Position contexts permit geometric movement probes without inventing a
     /// player, inventory, effects or fluid-standing behavior. A supplied subject
     /// collides as a living entity with its captured main-hand stack.
@@ -631,13 +666,15 @@ impl DynamicSupportWorld for SceneCollisions<'_, '_> {
     }
     /// The shapes a mod block entity published for its block: one lookup of the entity at
     /// the position, whose built shape is shared, not made again.
-    fn published_collision_shape(&mut self, p: [i32; 3]) -> io::Result<Option<VoxelShape>> {
-        Ok(match self.world.block_entities.get(&(p[0], p[1], p[2])) {
-            Some(crate::chunk::block_entity::BlockEntity::Mod(entity)) => {
-                entity.shapes().map(|shapes| shapes.collision().clone())
-            }
-            _ => None,
-        })
+    fn published_collision_shape(
+        &mut self,
+        p: [i32; 3],
+        state: BlockStateId,
+    ) -> io::Result<Option<VoxelShape>> {
+        Ok(
+            published_shapes(self.world, self.binding.registry(), state, p)
+                .map(|shapes| shapes.collision().clone()),
+        )
     }
 }
 impl PistonCollisionWorld for SceneCollisions<'_, '_> {
@@ -1241,8 +1278,8 @@ mod published_shape_tests {
     use sunrise_core::{geometry::Axis, nbt::Tag};
     use sunrise_world::{DATA_VERSION, registry::BlockStateId};
 
-    /// `test:bus` (state 1) declares a full cube and may publish its shapes; `test:plain`
-    /// (state 2) declares the same cube and may not.
+    /// `test:bus` and `test:other` may publish shapes in place of their declared cubes.
+    /// `test:plain` declares the same cube and may not publish.
     fn binding(registry: &BlockRegistry) -> BlockCollisionRegistry<'_> {
         let empty = VoxelShape::empty();
         let (min, max) = empty.discrete_bounds();
@@ -1286,8 +1323,8 @@ mod published_shape_tests {
                 ("DataVersion", Tag::Int(DATA_VERSION)),
                 ("states", Tag::List(states())),
                 ("shapes", Tag::List(vec![cube, air])),
-                ("cached_shapes", Tag::IntArray(vec![1, 0, 0])),
-                ("published_shapes", Tag::IntArray(vec![1])),
+                ("cached_shapes", Tag::IntArray(vec![1, 0, 0, 0, 0])),
+                ("published_shapes", Tag::IntArray(vec![1, 3, 4])),
             ]),
             registry,
         )
@@ -1295,9 +1332,19 @@ mod published_shape_tests {
         BlockCollisionRegistry::new(Arc::new(cached)).unwrap()
     }
     fn states() -> Vec<Tag> {
-        ["minecraft:air", "test:bus", "test:plain"]
-            .map(|name| Tag::String(name.into()))
-            .to_vec()
+        vec![
+            Tag::String("minecraft:air".into()),
+            Tag::String("test:bus".into()),
+            Tag::String("test:plain".into()),
+            Tag::String("test:other".into()),
+            Tag::compound([
+                ("id", Tag::String("test:bus".into())),
+                (
+                    "properties",
+                    Tag::compound([("lit", Tag::String("true".into()))]),
+                ),
+            ]),
+        ]
     }
     fn registry() -> BlockRegistry {
         BlockRegistry::from_nbt(&Tag::compound([
@@ -1309,6 +1356,7 @@ mod published_shape_tests {
                     ("minecraft:air", Tag::Int(0)),
                     ("test:bus", Tag::Int(1)),
                     ("test:plain", Tag::Int(2)),
+                    ("test:other", Tag::Int(3)),
                 ]),
             ),
         ]))
@@ -1349,6 +1397,10 @@ mod published_shape_tests {
             World::new(BlockStateId(0), 0),
             World::new(BlockStateId(0), 0),
         );
+        for world in [&mut first, &mut second] {
+            world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            world.set(1, 64, 1, BlockStateId(1)).unwrap();
+        }
         publish(&mut first, (1, 64, 1), &[]);
         let mut entity = ModBlockEntity::new("test:bus".into(), Default::default());
         entity.set_shapes(Some(Arc::new(
@@ -1372,11 +1424,82 @@ mod published_shape_tests {
     }
 
     #[test]
+    fn a_supplied_state_reads_only_its_own_blocks_publication() {
+        let registry = registry();
+        let binding = binding(&registry);
+        let mut world = World::new(BlockStateId(0), 0);
+        world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        // The same block entity type can publish for both block identities.
+        let bus = BlockStateId(1);
+        let lit_bus = BlockStateId(4);
+        let other = BlockStateId(3);
+        for (x, state, height) in [(1, bus, 0.25), (2, other, 0.75)] {
+            world.set(x, 64, 1, state).unwrap();
+            let mut entity = ModBlockEntity::new("test:bus".into(), Default::default());
+            let boxes = vec![[0.0, 0.0, 0.0, 1.0, height, 1.0]];
+            entity.set_shapes(Some(Arc::new(
+                PublishedShapes::new(BlockEntityShapes {
+                    outline: boxes.clone(),
+                    collision: boxes,
+                })
+                .unwrap(),
+            )));
+            world
+                .block_entities
+                .insert((x, 64, 1), BlockEntity::Mod(Box::new(entity)));
+        }
+        let mut scene = SceneCollisions {
+            world: &world,
+            binding: &binding,
+            subject: None,
+        };
+        for (state, x, published) in [
+            (bus, 1, Some(0.25)),
+            (lit_bus, 1, Some(0.25)),
+            (other, 2, Some(0.75)),
+            (bus, 2, None),
+            (other, 1, None),
+        ] {
+            let p = [x, 64, 1];
+            assert_eq!(
+                published_outline(&world, &binding, state, p)
+                    .and_then(|s| s.bounds())
+                    .map(|b| b.max(Axis::Y)),
+                published
+            );
+            let height = published.unwrap_or(1.0);
+            assert_eq!(
+                binding
+                    .collision_shape(&mut scene, state, p)
+                    .unwrap()
+                    .bounds()
+                    .unwrap()
+                    .max(Axis::Y),
+                height
+            );
+            assert_eq!(
+                binding
+                    .collision_shape_with_context(
+                        &mut scene,
+                        state,
+                        sunrise_core::position::BlockPos::new(x, 64, 1),
+                        &CollisionContext::empty(false)
+                    )
+                    .unwrap()
+                    .bounds()
+                    .unwrap()
+                    .max(Axis::Y),
+                height
+            );
+        }
+    }
+
+    #[test]
     fn suffocation_reads_the_published_shape_of_a_flagged_state() {
         use sunrise_world::suffocation::{SuffocationDefinition, SuffocationRegistry};
         let registry = registry();
         let binding = Arc::new(binding(&registry));
-        let definitions = ["minecraft:air", "test:bus", "test:plain"]
+        let definitions = ["minecraft:air", "test:bus", "test:plain", "test:other"]
             .map(|name| (name.to_owned(), SuffocationDefinition::TaggedFullCollision))
             .into();
         let causes = ["test:bus", "test:plain"].map(String::from).into();

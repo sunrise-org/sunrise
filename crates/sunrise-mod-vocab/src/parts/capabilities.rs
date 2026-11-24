@@ -1,116 +1,138 @@
 use super::*;
+use std::any::TypeId;
+
 pub(crate) type Capabilities<P> = HashMap<&'static str, HashMap<Box<str>, Vec<CapabilityPart<P>>>>;
 
-/// A capability provider a mod registered: a [`BlockProviderOf`], [`ItemProviderOf`] or
-/// [`EntityProviderOf`].
+/// A capability provider a mod registered, with its dispatch metadata.
 #[derive(Clone)]
 pub(crate) struct CapabilityPart<P> {
     pub(crate) mod_id: &'static str,
     pub(crate) mod_index: usize,
-    /// The handler type it gives, for refusing a capability name answered with two.
-    pub(crate) type_name: Arc<str>,
     /// Asked ahead of the game's own provider.
     pub(crate) before_game: bool,
     /// Its place among every mod's registrations, which orders a block's providers and those of
     /// the block entity type standing there as one list.
     pub(crate) order: usize,
+    /// Panic containment state, shared by the installed snapshots of this registration.
+    pub(crate) poisoned: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) provider: P,
 }
 
-/// A capability provider whose handler type is a mod's own (a key a library's `[api]` crate
-/// publishes), erased: only mods linked with that crate know its handler type.
-// hidden: the registrar's erased provider, not part of the mod surface
+/// Opaque native provider bound by the typed capability methods on `dyn Registrar`.
+// hidden: the registrar's erased provider, not a mod construction surface
 // exhaustive: its fields are private, so mods cannot build or destructure it
-// no wire: transfers the handler name and a retained provider resource id, reporting unsupported handlers rather than serializing the native Any object.
+// no wire: it retains an in-process typed callback.
 #[doc(hidden)]
 #[derive(Clone)]
-pub struct OwnProvider {
-    /// The `Arc` of the provider trait object, which a lookup of that handler type downcasts:
-    /// a wasm mod's, in the game or another group, is the game's proxy, which no lookup takes.
-    pub(crate) provider: Arc<dyn Any + Send + Sync>,
-    pub(crate) handler: Arc<str>,
+pub struct NativeCapabilityProvider {
+    provider: Arc<dyn Any + Send + Sync>,
+    handler: &'static str,
+}
+
+impl NativeCapabilityProvider {
+    pub(crate) fn of<T: ?Sized + 'static, P: Send + Sync + 'static>(provider: P) -> Self {
+        Self {
+            provider: Arc::new(provider),
+            handler: type_name::<T>(),
+        }
+    }
+
+    pub(crate) fn binding(&self) -> (TypeId, &'static str) {
+        (self.provider.as_ref().type_id(), self.handler)
+    }
+
+    pub(crate) fn get<P: 'static>(&self) -> Option<&P> {
+        self.provider.downcast_ref::<P>()
+    }
+}
+
+impl<T: ?Sized + 'static> CapabilityKey<T> {
+    pub(crate) fn binding(&self) -> (TypeId, &'static str) {
+        (TypeId::of::<Arc<BlockProvider<T>>>(), type_name::<T>())
+    }
+}
+
+impl<T: ?Sized + 'static> ItemCapabilityKey<T> {
+    pub(crate) fn binding(&self) -> (TypeId, &'static str) {
+        (TypeId::of::<Arc<ItemProvider<T>>>(), type_name::<T>())
+    }
+}
+
+impl<T: ?Sized + 'static, C: 'static> EntityCapabilityKey<T, C> {
+    pub(crate) fn binding(&self) -> (TypeId, &'static str) {
+        (TypeId::of::<Arc<EntityProvider<T, C>>>(), type_name::<T>())
+    }
+}
+
+/// The canonical binding for a name, independent of whether it has any mod providers.
+// no wire: native type identities are process-local.
+#[derive(Clone)]
+pub(crate) struct CapabilityMetadata {
+    pub(crate) binding: (std::any::TypeId, &'static str),
+    pub(crate) owner: &'static str,
+    pub(crate) proxyable: Option<bool>,
 }
 
 /// The registrar's table, as the game reads it.
 pub(crate) struct InstalledProviders;
 
-pub(crate) fn next<P: Clone>(
-    table: &Capabilities<P>,
-    name: &str,
-    id: &str,
-    index: &mut u32,
-) -> Option<(P, &'static str, bool)> {
-    next_provider(table.get(name)?.get(id)?, index)
+/// Visits two sorted provider slices (a block entity type's and a block's) as one sequence in
+/// dispatch order: those asked ahead of the game, then the others, each group in registration
+/// order across both slices.
+pub(crate) struct MergedProviders<'a, P> {
+    first: &'a [CapabilityPart<P>],
+    second: &'a [CapabilityPart<P>],
 }
 
-/// The most providers one capability may have for one block or one block entity type: a
-/// position's lookup keeps its place in both lists in the one `u32` cursor, 16 bits each.
-pub(crate) const MAX_PROVIDERS_AT: usize = u16::MAX as usize;
+impl<'a, P> MergedProviders<'a, P> {
+    pub(crate) fn new(first: &'a [CapabilityPart<P>], second: &'a [CapabilityPart<P>]) -> Self {
+        Self { first, second }
+    }
+}
 
-/// The next enabled provider of two lists asked as one, `first` and `second` (a block entity
-/// type's and a block's): those asked ahead of the game, then the others, each group in
-/// registration order across both lists. `index` holds the place in each list, `first`'s in
-/// its low 16 bits and `second`'s in its high ones, so each step looks at the two lists' next
-/// provider and takes one, past disabled ones, as [`next_provider`] does for one list.
-pub(crate) fn next_merged<P: Clone>(
-    first: &[CapabilityPart<P>],
-    second: &[CapabilityPart<P>],
-    index: &mut u32,
-) -> Option<(P, &'static str, bool)> {
-    // Each list is already in this order: those ahead of the game first, by registration.
-    let rank = |part: &CapabilityPart<P>| (!part.before_game, part.order);
-    let (mut at_first, mut at_second) = (*index & 0xffff, *index >> 16);
-    loop {
-        let part = match (first.get(at_first as usize), second.get(at_second as usize)) {
-            (Some(a), Some(b)) if rank(b) < rank(a) => {
-                at_second += 1;
-                b
+impl<'a, P> Iterator for MergedProviders<'a, P> {
+    type Item = &'a CapabilityPart<P>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Each slice is already in this order: those ahead of the game first, by registration.
+        let rank = |part: &CapabilityPart<P>| (!part.before_game, part.order);
+        match (self.first.split_first(), self.second.split_first()) {
+            (Some((a, _)), Some((b, rest))) if rank(b) < rank(a) => {
+                self.second = rest;
+                Some(b)
             }
-            (Some(a), _) => {
-                at_first += 1;
-                a
+            (Some((a, rest)), _) => {
+                self.first = rest;
+                Some(a)
             }
-            (None, Some(b)) => {
-                at_second += 1;
-                b
+            (None, Some((b, rest))) => {
+                self.second = rest;
+                Some(b)
             }
-            (None, None) => return None,
-        };
-        *index = at_first | at_second << 16;
-        if crate::mod_index_on(part.mod_index) {
-            return Some((part.provider.clone(), part.mod_id, part.before_game));
+            (None, None) => None,
         }
     }
 }
 
-/// A provider by its handler type: one case for each handler type `mod_api`'s keys name
-/// (generated from them), and [`OwnProvider`] for a mod's own.
-#[allow(missing_docs)]
-pub(crate) mod providers_of {
-    use super::*;
-    // The keys' handler types and contexts, as the generated cases name them.
-    #[allow(unused_imports)]
-    use crate::*;
-    include!(concat!(
-        env!("OUT_DIR"),
-        "/capability_providers_generated.rs"
-    ));
-}
+include!(concat!(env!("OUT_DIR"), "/builtin_capability_keys.rs"));
 
 /// Who answers a capability: a mod's provider, the game's own, or nobody.
-pub(crate) enum Answer<T: ?Sized> {
-    Mod(Capability<T>),
+pub(crate) enum Answer<T> {
+    Mod(T, &'static str),
     Game,
     Nobody,
 }
 
 /// The handler `answer` names: a mod's, or `game`, the game's own when it answered.
 pub(crate) fn answered<T: ?Sized>(
-    answer: Answer<T>,
+    answer: Answer<Box<T>>,
     game: Option<Box<T>>,
 ) -> Option<Capability<T>> {
     match answer {
-        Answer::Mod(found) => Some(found),
+        Answer::Mod(handler, owner) => Some(Capability {
+            handler,
+            owner: Some(owner),
+        }),
         Answer::Game => game.map(|handler| Capability {
             handler,
             owner: None,
@@ -119,52 +141,53 @@ pub(crate) fn answered<T: ?Sized>(
     }
 }
 
-/// Asks the providers `next` gives (advancing a registration cursor in dispatch order: those
-/// registered `before_game`, then the others), and the game's own (`game`: whether it answers) between the
-/// two, in the fork's chosen order (NeoForge's javadoc doesn't state one between mods'
-/// providers and the game's); the first to answer wins. `get` takes a provider of this
-/// capability's handler type out of its case: a provider of a mod's own type the asker isn't
-/// linked with is passed over.
-pub(crate) fn ask_providers<O, P: ?Sized + 'static, T: ?Sized>(
-    host: &mut dyn ServerHost,
-    next: impl Fn(&mut u32) -> Option<(O, &'static str, bool)>,
-    get: impl Fn(&O) -> Option<&Arc<P>>,
-    call: impl Fn(&P, &mut dyn ServerHost) -> Option<Box<T>>,
-    game: impl FnOnce(&mut dyn ServerHost) -> bool,
+/// Ask borrowed registrations in dispatch order: those registered `before_game`, the game,
+/// then the others. The first answer wins. Each mod callback uses the shared panic boundary;
+/// the game's own provider runs outside it.
+pub(crate) fn ask_providers<'a, C: ?Sized, T>(
+    context: &mut C,
+    providers: impl Iterator<Item = &'a CapabilityPart<NativeCapabilityProvider>>,
+    (kind, operation): (&'static str, &'static str),
+    mut call: impl FnMut(&NativeCapabilityProvider, &mut C) -> Option<T>,
+    game: impl FnOnce(&mut C) -> bool,
 ) -> Answer<T> {
     let mut game = Some(game);
-    let mut index = 0;
-    while let Some((provider, owner, before_game)) = next(&mut index) {
-        if !before_game
+    for part in providers {
+        if !crate::callback_owner::enabled(part.mod_index, &part.poisoned) {
+            continue;
+        }
+        if !part.before_game
             && let Some(game) = game.take()
-            && game(host)
+            && game(context)
         {
             return Answer::Game;
         }
-        if let Some(handler) = get(&provider).and_then(|provider| call(provider, host)) {
-            return Answer::Mod(Capability {
-                handler,
-                owner: Some(owner),
-            });
+        if let Some(Some(handler)) = crate::callback_owner::call_for_lookup(
+            part.mod_id,
+            part.mod_index,
+            &part.poisoned,
+            kind,
+            operation,
+            || call(&part.provider, context),
+        ) {
+            return Answer::Mod(handler, part.mod_id);
         }
     }
-    match game.is_some_and(|game| game(host)) {
+    match game.is_some_and(|game| game(context)) {
         true => Answer::Game,
         false => Answer::Nobody,
     }
 }
 
-/// CapabilityProviders operations for capabilities.
-// hidden: per-kind lookup implementation, exposed for generated provider bindings
+/// Published capability metadata and switch generation for lookups and caches.
+// hidden: capability metadata read by lookups and game helpers
 #[doc(hidden)]
 pub trait CapabilitiesCapabilityProviders {
-    /// Whether any mod registered capability `name` for the things `by` names. This presence
-    /// check includes disabled mods; enumeration skips their providers.
-    fn provided(&self, by: ProvidedBy, name: &str) -> bool;
     /// Known block capability names in declaration/discovery order.
     fn block_capability_names(&self) -> Vec<String>;
-    /// Whether this capability was explicitly marked safe to forward.
-    fn block_capability_proxyable(&self, name: &str) -> bool;
+    /// Whether this capability was explicitly marked safe to forward. Typed callers supply their
+    /// binding identity; name-only discovery passes `None`.
+    fn block_capability_proxyable(&self, name: &str, binding: Option<TypeId>) -> bool;
     /// Known block capability names explicitly marked safe to forward, in discovery order.
     fn block_capability_proxyable_names(&self) -> Vec<String>;
     /// How many times a mod was switched on or off, as the game counts it: a kept capability
@@ -173,14 +196,6 @@ pub trait CapabilitiesCapabilityProviders {
 }
 
 impl CapabilitiesCapabilityProviders for InstalledProviders {
-    fn provided(&self, by: ProvidedBy, name: &str) -> bool {
-        installed().is_some_and(|installed| match by {
-            ProvidedBy::BlockEntity => installed.keys.capabilities.contains_key(name),
-            ProvidedBy::Block => installed.keys.block_capabilities.contains_key(name),
-            ProvidedBy::Item => installed.keys.item_capabilities.contains_key(name),
-            ProvidedBy::Entity => installed.keys.entity_capabilities.contains_key(name),
-        })
-    }
     fn block_capability_names(&self) -> Vec<String> {
         match installed() {
             Some(installed) => installed
@@ -189,16 +204,18 @@ impl CapabilitiesCapabilityProviders for InstalledProviders {
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect(),
-            None => providers_of::builtin_block_capabilities()
-                .into_iter()
-                .map(|(name, _)| name.to_owned())
+            None => builtin_capabilities()
+                .filter(|(by, _, _)| matches!(by, ProvidedBy::Block))
+                .map(|(_, name, _)| name.to_owned())
                 .collect(),
         }
     }
-    fn block_capability_proxyable(&self, name: &str) -> bool {
+    fn block_capability_proxyable(&self, name: &str, binding: Option<TypeId>) -> bool {
         installed()
             .and_then(|installed| installed.keys.block_capability_metadata.get(name))
-            .is_some_and(|(_, proxyable)| *proxyable == Some(true))
+            .is_some_and(|known| {
+                known.proxyable == Some(true) && binding.is_none_or(|ty| ty == known.binding.0)
+            })
     }
     fn block_capability_proxyable_names(&self) -> Vec<String> {
         let Some(installed) = installed() else {
@@ -208,69 +225,11 @@ impl CapabilitiesCapabilityProviders for InstalledProviders {
             .keys
             .block_capability_order
             .iter()
-            .filter(|name| self.block_capability_proxyable(name))
+            .filter(|name| self.block_capability_proxyable(name, None))
             .map(|name| (*name).to_owned())
             .collect()
     }
     fn mods_switched(&self) -> u64 {
         crate::runtime::mods_switched()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::*;
-
-    struct Empty;
-    #[mod_api::__subscriptions]
-    impl Hooks for Empty {}
-
-    #[test]
-    fn merged_cursor_exhausts_both_halves_without_wrapping_past_disabled_entries() {
-        install(
-            vec![
-                ModEntry::new("enabled", Box::new(Empty)),
-                ModEntry::new("disabled", Box::new(Empty)),
-            ]
-            .into(),
-        );
-        assert!(set_mod_enabled("disabled", false));
-        let providers: Vec<_> = (0..65_535)
-            .map(|order| CapabilityPart {
-                mod_id: if order == 65_533 {
-                    "disabled"
-                } else {
-                    "enabled"
-                },
-                mod_index: if order == 65_533 { 1 } else { 0 },
-                type_name: "test:handler".into(),
-                before_game: false,
-                order,
-                provider: order,
-            })
-            .collect();
-        for high_half in [false, true] {
-            let (first, second) = if high_half {
-                (&[][..], providers.as_slice())
-            } else {
-                (providers.as_slice(), &[][..])
-            };
-            let mut cursor = 0;
-            let mut count = 0;
-            let mut last = None;
-            while let Some((provider, owner, before_game)) = next_merged(first, second, &mut cursor)
-            {
-                assert_eq!(owner, "enabled");
-                assert!(!before_game);
-                count += 1;
-                last = Some(provider);
-            }
-            assert_eq!(count, 65_534);
-            assert_eq!(last, Some(65_534));
-            assert_eq!(cursor, if high_half { 0xffff_0000 } else { 0x0000_ffff });
-            assert_eq!(next_merged(first, second, &mut cursor), None);
-            assert_eq!(cursor, if high_half { 0xffff_0000 } else { 0x0000_ffff });
-        }
     }
 }

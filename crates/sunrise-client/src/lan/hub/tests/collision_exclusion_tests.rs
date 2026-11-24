@@ -46,6 +46,7 @@ fn walk(
     (0..20)
         .map(|_| {
             MotionWorld {
+                side: sunrise_client::motion::dry_side(),
                 entities: &[],
                 player: &mut client,
                 scene: &mut *scene,
@@ -93,6 +94,7 @@ fn the_server_checks_a_guests_moves_through_the_same_exclusions_as_its_client() 
         next_entity: &mut next_entity,
         spawn: [20.5, 5.0, 20.5],
         spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -147,6 +149,7 @@ fn a_change_of_level_and_a_respawn_clear_a_guests_exclusions() {
         next_entity: &mut next_entity,
         spawn: [0.5, 64.0, 0.5],
         spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -162,11 +165,16 @@ fn a_change_of_level_and_a_respawn_clear_a_guests_exclusions() {
         .update(0, |g| g.collision_exclusions.set(&OPENING))
         .unwrap();
     assert_eq!(boxes(&hub), 1);
-    hub.change_level(0, [100.5, 49.0, 0.5], 0.0, None, false, 0, &ctx);
+    let change = hub.begin_level_change(0, [100.5, 49.0, 0.5], 0.0, None, 0, &ctx);
+    hub.send_commands(0, hub.commands_packet(hub.guests[0].permission));
+    hub.finish_level_change(0, change, false, &ctx);
     assert_eq!(boxes(&hub), 0, "a change of level");
     hub.guests
         .update(0, |g| g.collision_exclusions.set(&OPENING))
         .unwrap();
-    hub.respawn(0, [0.5, 64.0, 0.5], None, &ctx);
+    hub.remove_player_for_respawn(0);
+    hub.begin_respawn(0, [0.5, 64.0, 0.5], None, false, &ctx);
+    hub.send_commands(0, hub.commands_packet(hub.guests[0].permission));
+    hub.finish_respawn(0);
     assert_eq!(boxes(&hub), 0, "a respawn");
 }

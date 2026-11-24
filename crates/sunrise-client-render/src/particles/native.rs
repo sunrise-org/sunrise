@@ -1,8 +1,22 @@
-//! Opt-in, compiled particle behavior. The ordinary engine still owns the
-//! particle, its sprite set, interpolation, rendering and total count limits.
-use super::{Particle, ParticleLevel, ParticleOptions};
-use mod_api::{ModParticle, ParticleProvider};
-use std::{collections::BTreeMap, fmt::Debug, sync::Arc, sync::OnceLock};
+//! Spawn and tick owned mod particles under the shared callback policy.
+use super::{Particle, ParticleEngine, ParticleLevel, ParticleOptions, Sprite};
+use mod_api::{
+    __private::{
+        BorrowedRandom, BoundParticleProvider, ParticleProviderFactory, TypedParticleOptions,
+        game::CallbackValue,
+    },
+    BlockState, CustomParticle, LightLayer, ParticleExtractView, ParticleFacing, ParticleKey,
+    ParticleLevelView, ParticleTickView, ParticleView, QuadParticleRenderState,
+};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    ops::Deref,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 /// Requests made by one particle tick, submitted through normal spawn limits.
 #[derive(Default)]
@@ -12,9 +26,9 @@ pub struct ParticleUpdate {
     pub spawned: Vec<(ParticleOptions, [f64; 3], [f64; 3])>,
 }
 
-/// Owned behavior for a compiled native particle. Cloning a particle clones its
-/// controller state. Do not retain world references; inspect `level` each tick.
-pub trait ParticleController: Clone + Debug + Send + Sync + 'static {
+/// Engine-side controller for a compiled particle, separate from mod providers.
+/// Do not retain world references; inspect `level` each tick.
+pub trait ParticleController: Debug + Send + Sync + 'static {
     /// Call `particle.advance_age()` for ordinary lifetime/interpolation, or
     /// explicitly maintain those fields for an overridden source tick.
     fn tick(&mut self, particle: &mut Particle, level: &ParticleLevel<'_>) -> ParticleUpdate;
@@ -22,471 +36,475 @@ pub trait ParticleController: Clone + Debug + Send + Sync + 'static {
 
 pub(super) trait Controller: Debug + Send + Sync {
     fn tick(&mut self, particle: &mut Particle, level: &ParticleLevel<'_>) -> ParticleUpdate;
-    fn clone_box(&self) -> Box<dyn Controller>;
 }
 impl<T: ParticleController> Controller for T {
     fn tick(&mut self, particle: &mut Particle, level: &ParticleLevel<'_>) -> ParticleUpdate {
         ParticleController::tick(self, particle, level)
     }
-    fn clone_box(&self) -> Box<dyn Controller> {
-        Box::new(self.clone())
-    }
-}
-impl Clone for Box<dyn Controller> {
-    fn clone(&self) -> Self {
-        self.clone_box()
-    }
 }
 
-/// The mods' particle providers by type name: set once at start, before the resources first load,
+/// The mods' particle providers by registered key: set once before the first resource load,
 /// and read by every engine built after.
-static REGISTERED: OnceLock<BTreeMap<String, Arc<dyn ParticleProvider>>> = OnceLock::new();
+static REGISTERED: OnceLock<HashMap<ParticleKey, Arc<ParticleProviderFactory>>> = OnceLock::new();
 
-/// Sets the native and wasm mods' particle providers (`register_particle_providers`), once, before
+/// Sets the mods' particle providers (`register_particle_providers`), once, before
 /// the resources first load; each engine then resolves its sprite sets' providers at every load.
 /// False when already set.
-pub fn register_particle_providers(providers: BTreeMap<String, Arc<dyn ParticleProvider>>) -> bool {
+pub fn register_particle_providers(
+    providers: HashMap<ParticleKey, Arc<ParticleProviderFactory>>,
+) -> bool {
     REGISTERED.set(providers).is_ok()
 }
 
 /// What [`register_particle_providers`] set; none before.
-pub(super) fn registered() -> &'static BTreeMap<String, Arc<dyn ParticleProvider>> {
-    static NONE: BTreeMap<String, Arc<dyn ParticleProvider>> = BTreeMap::new();
+pub(super) fn registered() -> &'static HashMap<ParticleKey, Arc<ParticleProviderFactory>> {
+    static NONE: std::sync::LazyLock<HashMap<ParticleKey, Arc<ParticleProviderFactory>>> =
+        std::sync::LazyLock::new(HashMap::new);
     REGISTERED.get().unwrap_or(&NONE)
 }
 
-/// How far from the origin a provider may move a particle: the world border's limit. Past it, or
-/// not a number, the particle expires rather than reach the renderer.
-const LIMIT: f64 = 3.0e7;
-
-/// The controller of a particle of a mod's code-defined type. It owns the particle's behaviour for
-/// the engine: age and expiry stay the engine's, the motion is the provider's. Holds the provider
-/// the type resolved to when its sprite sets loaded, so a tick dispatches straight to it.
-#[derive(Clone)]
-pub(super) struct Provided {
-    provider: Arc<dyn ParticleProvider>,
-    /// `ModParticle::state`, kept from one tick to the next.
-    state: [f64; 4],
-    /// The frame of the sprite set drawn, as the provider last saw it.
-    frame: u32,
+pub(super) struct BoundProvider {
+    pub(super) factory: Arc<ParticleProviderFactory>,
+    pub(super) provider: CallbackValue<Box<dyn BoundParticleProvider>>,
 }
+
+/// The engine's sole owner of a particle instance and its sprite orientation.
+pub(super) struct Provided {
+    factory: Arc<ParticleProviderFactory>,
+    instance: CallbackValue<Box<dyn CustomParticle>>,
+    presentation: Presentation,
+    live: Arc<AtomicUsize>,
+}
+
+struct Presentation {
+    frame: usize,
+    facing: ParticleFacing,
+}
+
+impl Drop for Provided {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 impl Debug for Provided {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Provided")
-            .field("state", &self.state)
-            .field("frame", &self.frame)
+            .field("mod", &self.factory.mod_id())
             .finish_non_exhaustive()
     }
 }
+
 impl Provided {
-    pub(super) fn new(provider: Arc<dyn ParticleProvider>, frame: u32) -> Self {
-        Self {
-            provider,
-            state: [0.0; 4],
-            frame,
+    pub(super) fn tick(
+        &mut self,
+        engine: &ParticleEngine,
+        particle: &mut Particle,
+        level: &ParticleLevel<'_>,
+    ) {
+        let owner = &self.factory.tick;
+        if !owner.is_enabled() {
+            if owner.is_poisoned() {
+                particle.remove();
+            }
+            return;
+        }
+        let Some(states) = (engine.block_state_source)() else {
+            return;
+        };
+        let level = ProviderLevel {
+            level,
+            states: (*states).as_ref(),
+        };
+        let set = particle.set.expect("provided particle has a sprite set");
+        let mut view = LiveParticle {
+            particle: &mut *particle,
+            presentation: &mut self.presentation,
+            context: TickContext {
+                level: level.level,
+                sprites: &engine.set_sprites[set as usize],
+                factory: &self.factory,
+            },
+        };
+        if let Err(error) = owner.call("particle provider", "tick_custom_particle", || {
+            self.instance.value_mut().tick(&mut view, &level);
+        }) {
+            log::warn!("Could not tick particle: {error}");
+            if owner.is_poisoned() {
+                particle.remove();
+            }
+        }
+    }
+
+    pub(super) fn extract(
+        &self,
+        particle: &Particle,
+        view: &ParticleExtractView,
+        output: &mut dyn QuadParticleRenderState,
+    ) -> Result<(), String> {
+        if !self.factory.extract.is_enabled() {
+            return Ok(());
+        }
+        self.factory
+            .extract
+            .call("particle provider", "extract_custom_particle", || {
+                let particle = LiveParticle {
+                    particle,
+                    presentation: &self.presentation,
+                    context: (),
+                };
+                self.instance.value().extract(&particle, view, output);
+            })
+    }
+
+    /// The quad's rotation at `partial` of a tick (`SingleQuadParticle.extract`): the facing's
+    /// quaternion (`LOOKAT_XYZ` the camera's, `LOOKAT_Y` its y and w alone, as vanilla sets it,
+    /// or the world-fixed one), then `rotateZ` of `Mth.lerp(partial, oRoll, roll)` when the
+    /// particle's roll is not zero. All of it in JOML's f32 maths.
+    pub(super) fn rotation(
+        &self,
+        camera: glam::Quat,
+        o_roll: f32,
+        roll: f32,
+        partial: f32,
+    ) -> glam::Quat {
+        use crate::camera::joml::Quat;
+        let facing = match self.presentation.facing {
+            ParticleFacing::Camera => Quat {
+                x: camera.x,
+                y: camera.y,
+                z: camera.z,
+                w: camera.w,
+            },
+            ParticleFacing::AroundY => Quat {
+                x: 0.0,
+                y: camera.y,
+                z: 0.0,
+                w: camera.w,
+            },
+            ParticleFacing::Fixed(q) => Quat {
+                x: q[0],
+                y: q[1],
+                z: q[2],
+                w: q[3],
+            },
+        };
+        let turned = if roll == 0.0 {
+            facing
+        } else {
+            facing.rotate_z(o_roll + partial * (roll - o_roll))
+        };
+        glam::Quat::from_xyzw(turned.x, turned.y, turned.z, turned.w)
+    }
+}
+
+// Read and write callbacks share the same getters. Only the tick/create loan carries
+// mutable state and the level/sprite context for ParticleTickView.
+struct LiveParticle<P, S, C> {
+    particle: P,
+    presentation: S,
+    context: C,
+}
+
+struct TickContext<'a, 'l> {
+    level: &'a ParticleLevel<'l>,
+    sprites: &'a [u32],
+    factory: &'a ParticleProviderFactory,
+}
+
+type TickParticle<'a, 'l> =
+    LiveParticle<&'a mut Particle, &'a mut Presentation, TickContext<'a, 'l>>;
+
+impl TickParticle<'_, '_> {
+    #[cold]
+    fn reject(&self, input: &'static str) -> bool {
+        let factory = self.context.factory;
+        log::warn!(
+            "Particle provider from mod {}: invalid {input}",
+            factory.mod_id(),
+        );
+        false
+    }
+}
+
+impl<P: Deref<Target = Particle>, S: Deref<Target = Presentation>, C> ParticleView
+    for LiveParticle<P, S, C>
+{
+    fn position(&self) -> [f64; 3] {
+        self.particle.position
+    }
+    fn previous_position(&self) -> [f64; 3] {
+        self.particle.previous
+    }
+    fn velocity(&self) -> [f64; 3] {
+        self.particle.velocity
+    }
+    fn age(&self) -> i32 {
+        self.particle.age
+    }
+    fn lifetime(&self) -> i32 {
+        self.particle.lifetime
+    }
+    fn on_ground(&self) -> bool {
+        self.particle.on_ground
+    }
+    fn is_alive(&self) -> bool {
+        self.particle.is_alive()
+    }
+    fn size(&self) -> f32 {
+        self.particle.size
+    }
+    fn rgba(&self) -> [f32; 4] {
+        self.particle.rgba
+    }
+    fn sprite_index(&self) -> usize {
+        self.presentation.frame
+    }
+    fn facing(&self) -> ParticleFacing {
+        self.presentation.facing
+    }
+    fn roll(&self) -> f32 {
+        self.particle.roll
+    }
+    fn previous_roll(&self) -> f32 {
+        self.particle.o_roll
+    }
+}
+
+impl ParticleTickView for TickParticle<'_, '_> {
+    fn set_position(&mut self, position: [f64; 3]) -> bool {
+        if !position.into_iter().all(f64::is_finite) {
+            return self.reject("position");
+        }
+        self.particle.set_pos(position);
+        true
+    }
+
+    fn set_previous_position(&mut self, position: [f64; 3]) -> bool {
+        if !position.into_iter().all(f64::is_finite) {
+            return self.reject("previous position");
+        }
+        self.particle.previous = position;
+        true
+    }
+
+    fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
+        if !velocity.into_iter().all(f64::is_finite) {
+            return self.reject("velocity");
+        }
+        self.particle.velocity = velocity;
+        true
+    }
+
+    fn set_age(&mut self, age: i32) {
+        self.particle.age = age;
+    }
+    fn set_lifetime(&mut self, lifetime: i32) {
+        self.particle.lifetime = lifetime;
+    }
+    fn set_has_physics(&mut self, has_physics: bool) {
+        self.particle.has_physics = has_physics;
+    }
+
+    fn set_gravity(&mut self, gravity: f32) -> bool {
+        if !gravity.is_finite() {
+            return self.reject("gravity");
+        }
+        self.particle.gravity = gravity;
+        true
+    }
+
+    fn set_friction(&mut self, friction: f32) -> bool {
+        if !friction.is_finite() {
+            return self.reject("friction");
+        }
+        self.particle.friction = friction;
+        true
+    }
+
+    fn set_size(&mut self, size: f32) -> bool {
+        if !size.is_finite() {
+            return self.reject("quad size");
+        }
+        self.particle.size = size;
+        true
+    }
+
+    fn set_rgba(&mut self, rgba: [f32; 4]) -> bool {
+        if !rgba.into_iter().all(f32::is_finite) {
+            return self.reject("quad color");
+        }
+        self.particle.rgba = rgba;
+        true
+    }
+
+    fn set_sprite_index(&mut self, index: usize) -> bool {
+        let Some(&sprite) = self.context.sprites.get(index) else {
+            return self.reject("sprite index");
+        };
+        self.presentation.frame = index;
+        self.particle.sprite = Sprite::Index(sprite);
+        true
+    }
+
+    fn set_sprite_from_age(&mut self) -> bool {
+        if !self.particle.is_alive() {
+            return false;
+        }
+        let lifetime = self.particle.lifetime;
+        if lifetime == 0 {
+            return self.reject("zero lifetime for sprite selection");
+        }
+        let index = self
+            .particle
+            .age
+            .wrapping_mul((self.context.sprites.len() - 1) as i32)
+            .wrapping_div(lifetime);
+        self.set_sprite_index(index as usize)
+    }
+
+    fn set_facing(&mut self, facing: ParticleFacing) -> bool {
+        self.presentation.facing = if let ParticleFacing::Fixed(q) = facing {
+            // Widen for the norm so every finite nonzero f32 quaternion can be normalized.
+            let q = glam::DQuat::from_array(q.map(f64::from));
+            let length = q.length();
+            if !length.is_finite() || length == 0.0 {
+                return self.reject("fixed facing");
+            }
+            ParticleFacing::Fixed(q.to_array().map(|value| (value / length) as f32))
+        } else {
+            facing
+        };
+        true
+    }
+
+    fn set_roll(&mut self, roll: f32) -> bool {
+        if !roll.is_finite() {
+            return self.reject("roll");
+        }
+        self.particle.roll = roll;
+        true
+    }
+
+    fn move_by(&mut self, displacement: [f64; 3]) -> bool {
+        if !displacement.into_iter().all(f64::is_finite) {
+            return self.reject("displacement");
+        }
+        self.particle.move_by(self.context.level, displacement);
+        true
+    }
+
+    fn advance_age(&mut self) -> bool {
+        self.particle.advance_age()
+    }
+
+    fn tick_base(&mut self) {
+        self.particle.o_roll = self.particle.roll;
+        self.particle.base_tick(self.context.level);
+    }
+
+    fn remove(&mut self) {
+        self.particle.remove();
+    }
+}
+
+/// `ParticleLevelView` over the engine's level: the loaded chunks' states and stored light.
+pub(super) struct ProviderLevel<'a, 'l> {
+    pub(super) level: &'a ParticleLevel<'l>,
+    /// Every engine state as a mod reads it, by state id.
+    pub(super) states: &'a [BlockState],
+}
+impl ParticleLevelView for ProviderLevel<'_, '_> {
+    fn block_state(&self, [x, y, z]: [i32; 3]) -> BlockState {
+        // The table holds every state the world can: an id outside it is the game's bug.
+        self.states[self.level.block(x, y, z).0 as usize]
+    }
+    fn brightness(&self, layer: LightLayer, [x, y, z]: [i32; 3]) -> u8 {
+        let world = self.level.world;
+        match layer {
+            LightLayer::Block => world.light(x, y, z) & 15,
+            // A dimension without skylight has no sky layer to read.
+            LightLayer::Sky if !world.shape.sky_light => 0,
+            LightLayer::Sky => world.light(x, y, z) >> 4,
         }
     }
 }
-impl ParticleController for Provided {
-    fn tick(&mut self, particle: &mut Particle, _: &ParticleLevel<'_>) -> ParticleUpdate {
-        if !particle.advance_age() {
-            return ParticleUpdate::default();
-        }
-        let mut view = ModParticle {
-            position: particle.position,
-            previous: particle.previous,
-            velocity: particle.velocity,
-            age: particle.age,
-            lifetime: particle.lifetime,
-            size: particle.size,
-            rgba: particle.rgba,
-            frame: self.frame,
-            removed: false,
-            state: self.state,
+
+impl ParticleEngine {
+    pub(super) fn make_typed_particle(
+        &mut self,
+        level: &ParticleLevel<'_>,
+        value: &TypedParticleOptions,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        seed: i64,
+    ) -> Result<Option<Particle>, String> {
+        let Some(set) = self.typed_sets.get(&value.key()) else {
+            return Ok(None);
         };
-        self.provider.tick(&mut view);
-        let finite = |v: &[f64; 3]| v.iter().all(|c| c.abs() <= LIMIT);
-        if view.removed
-            || !finite(&view.position)
-            || !finite(&view.previous)
-            || !finite(&view.velocity)
-            || !view.size.is_finite()
-            || !view.rgba.iter().all(|c| c.is_finite())
-        {
-            particle.remove();
-            return ParticleUpdate::default();
-        }
-        particle.position = view.position;
-        particle.previous = view.previous;
-        particle.velocity = view.velocity;
-        particle.lifetime = view.lifetime;
-        // The declarative range of a mod particle's size (`sunrise:behaviour`) and of its colour.
-        particle.size = view.size.clamp(0.0, 16.0);
-        particle.rgba = view.rgba.map(|c| c.clamp(0.0, 1.0));
-        self.state = view.state;
-        let frame = (view.frame != self.frame).then_some(view.frame as usize);
-        self.frame = view.frame;
-        ParticleUpdate {
+        let Some(bound) = &set.provider else {
+            return Ok(None);
+        };
+        let Some(states) = (self.block_state_source)() else {
+            return Ok(None);
+        };
+        let level = ProviderLevel {
+            level,
+            states: (*states).as_ref(),
+        };
+        let mut q = self.make_sprite_particle(set, position, velocity, seed);
+        let sprites = &self.set_sprites[set.set as usize];
+        let frame = sprites
+            .iter()
+            .position(|&s| matches!(q.sprite, Sprite::Index(i) if i == s))
+            .expect("native sprite particle starts in its own set");
+        let mut presentation = Presentation {
             frame,
-            ..ParticleUpdate::default()
-        }
+            facing: ParticleFacing::Camera,
+        };
+        let mut view = LiveParticle {
+            particle: &mut q,
+            presentation: &mut presentation,
+            context: TickContext {
+                level: level.level,
+                sprites,
+                factory: &bound.factory,
+            },
+        };
+        let instance =
+            bound
+                .factory
+                .create
+                .call("particle provider", "create_custom_particle", || {
+                    bound.provider.value().create_particle(
+                        value,
+                        position,
+                        velocity,
+                        &level,
+                        &mut BorrowedRandom(&mut self.random),
+                        &mut view,
+                    )
+                })??;
+        let Some(instance) = instance else {
+            return Ok(None);
+        };
+        self.provided_live.fetch_add(1, Ordering::Relaxed);
+        q.behaviour = super::Behaviour::Controlled { translucent: true };
+        q.set = Some(set.set);
+        q.provided = Some(Box::new(Provided {
+            factory: Arc::clone(&bound.factory),
+            instance: CallbackValue::new(
+                bound.factory.dispose.clone(),
+                "particle provider",
+                "drop_custom_particle",
+                instance,
+            ),
+            presentation,
+            live: Arc::clone(&self.provided_live),
+        }));
+        Ok((!q.removed).then_some(q))
     }
 }
 
 #[cfg(test)]
-pub(super) mod tests {
-    use super::super::*;
-    use mod_api::{ModParticle, ParticleProvider};
-    use std::sync::Arc;
-    use {
-        sunrise_core::nbt::Tag,
-        sunrise_world::{
-            DATA_VERSION,
-            collision::CachedCollisionRegistry,
-            registry::{BlockRegistry, BlockStateId},
-        },
-    };
-    #[derive(Clone, Debug)]
-    struct Moving(u32);
-    impl ParticleController for Moving {
-        fn tick(&mut self, p: &mut Particle, _: &ParticleLevel<'_>) -> ParticleUpdate {
-            if p.advance_age() {
-                self.0 += 1;
-                p.position[0] += f64::from(self.0);
-            }
-            ParticleUpdate {
-                frame: Some(self.0 as usize),
-                ..Default::default()
-            }
-        }
-    }
-    /// An empty world with no blocks, which a tick reads nothing of.
-    pub(in crate::particles) struct Scene {
-        world: World,
-        facts: BlockFacts,
-        collision: BlockCollisionRegistry<'static>,
-    }
-    impl Scene {
-        pub(in crate::particles) fn new() -> Self {
-            // Leaked: the collision registry borrows it for as long as the scene lives.
-            let registry: &'static BlockRegistry = Box::leak(Box::new(
-                BlockRegistry::from_nbt(&Tag::compound([
-                    ("DataVersion", Tag::Int(DATA_VERSION)),
-                    (
-                        "states",
-                        Tag::List(vec![Tag::String("minecraft:air".into())]),
-                    ),
-                    ("defaults", Tag::compound([("minecraft:air", Tag::Int(0))])),
-                ]))
-                .unwrap(),
-            ));
-            let cached = CachedCollisionRegistry::from_nbt(
-                &Tag::compound([
-                    ("DataVersion", Tag::Int(DATA_VERSION)),
-                    (
-                        "states",
-                        Tag::List(vec![Tag::String("minecraft:air".into())]),
-                    ),
-                    ("shapes", Tag::List(vec![])),
-                    ("cached_shapes", Tag::IntArray(vec![-1])),
-                ]),
-                registry,
-            )
-            .unwrap();
-            let collision = BlockCollisionRegistry::new(std::sync::Arc::new(cached)).unwrap();
-            let facts = BlockFacts {
-                states: vec![],
-                air: BlockStateId(0),
-                woods: HashMap::new(),
-                sign_texts: HashMap::new(),
-            };
-            Self {
-                world: World::new(BlockStateId(0), 0),
-                facts,
-                collision,
-            }
-        }
-        pub(in crate::particles) fn level(&self) -> ParticleLevel<'_> {
-            ParticleLevel {
-                world: &self.world,
-                facts: &self.facts,
-                collision: &self.collision,
-                player: None,
-                cached_chunk: std::cell::Cell::new(None),
-            }
-        }
-    }
-    fn engine() -> ParticleEngine {
-        let mut e = ParticleEngine::new(
-            &ResourceSource::indexed(Default::default()),
-            &HashMap::new(),
-            &HashSet::new(),
-        );
-        e.mod_sets.insert(
-            "example:orbit".into(),
-            ModSet {
-                set: 0,
-                behaviour: None,
-                provider: None,
-                group: None,
-            },
-        );
-        e.set_sprites.push(vec![0, 1]);
-        e.rects = vec![
-            Some(Rect {
-                u0: 0.0,
-                v0: 0.0,
-                u1: 1.0,
-                v1: 1.0,
-                w: 16,
-                h: 16
-            });
-            2
-        ];
-        e
-    }
-    #[test]
-    fn controlled_particle_keeps_owned_motion_sprite_interpolation_and_expiry() {
-        let scene = Scene::new();
-        let level = scene.level();
-        let mut e = engine();
-        let mut p = e
-            .controlled("example:orbit", [0.0; 3], true, Moving(0))
-            .unwrap();
-        p.lifetime = 2;
-        p.rgba[3] = 0.5;
-        p.velocity = [99.0; 3]; // no vanilla drift may leak into the custom tick
-        let mut copy = p.clone();
-        e.tick_particle(&mut p, &level);
-        e.tick_particle(&mut p, &level);
-        e.tick_particle(&mut copy, &level);
-        assert_eq!((p.position, p.previous), ([3.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
-        assert_eq!(copy.position, [1.0, 0.0, 0.0]); // controller state cloned independently
-        assert!(matches!(p.sprite, Sprite::Index(1))); // clamped frame
-        p.size = 0.1;
-        e.particles.push(p.clone());
-        let mut vertices = Vec::new();
-        e.render(
-            DVec3::ZERO,
-            glam::Quat::IDENTITY,
-            0.5,
-            &|_| 0,
-            &mut vertices,
-        );
-        assert_eq!(vertices.len(), 4);
-        assert!(vertices.iter().all(
-            |v| v.color >> 24 == 127 && v.layer & crate::gfx::TRANSLUCENT_PARTICLE_OVERLAY != 0
-        ));
-        e.particles[0].set_visible(false);
-        vertices.clear();
-        e.render(
-            DVec3::ZERO,
-            glam::Quat::IDENTITY,
-            0.5,
-            &|_| 0,
-            &mut vertices,
-        );
-        assert!(vertices.is_empty());
-        assert_eq!(e.particles[0].age, 2);
-        e.push(copy);
-        e.reload(
-            &ResourceSource::indexed(Default::default()),
-            &HashMap::new(),
-            &HashSet::new(),
-        );
-        assert!(e.pending.is_empty());
-        vertices.clear();
-        e.render(
-            DVec3::ZERO,
-            glam::Quat::IDENTITY,
-            0.5,
-            &|_| 0,
-            &mut vertices,
-        );
-        assert!(vertices.is_empty());
-        e.tick_particle(&mut p, &level);
-        assert!(p.removed);
-        assert_eq!(p.position, [3.0, 0.0, 0.0]);
-    }
-    /// Counts its ticks, so a test sees which calls a particle's expiry skipped.
-    #[derive(Default)]
-    struct Probe(std::sync::atomic::AtomicUsize);
-    impl ParticleProvider for Probe {
-        fn tick(&self, particle: &mut ModParticle) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            particle.position[0] = f64::from(particle.age) * 2.0;
-            particle.position[1] = particle.state[0];
-            particle.state[0] += 0.5;
-            particle.frame = particle.age as u32;
-            if particle.age == 3 {
-                particle.removed = true;
-                particle.position[0] = 999.0;
-            }
-        }
-    }
-    struct Broken(fn(&mut ModParticle));
-    impl ParticleProvider for Broken {
-        fn tick(&self, particle: &mut ModParticle) {
-            self.0(particle);
-        }
-    }
-    fn provided(e: &mut ParticleEngine, provider: Arc<dyn ParticleProvider>) -> Particle {
-        e.mod_sets.get_mut("example:orbit").unwrap().provider = Some(provider);
-        e.make(
-            &ParticleOptions::named("example:orbit"),
-            [1.0; 3],
-            [0.0; 3],
-            5,
-        )
-        .unwrap()
-    }
-    #[test]
-    fn a_providers_particle_moves_changes_frame_and_expires_by_its_tick() {
-        let scene = Scene::new();
-        let level = scene.level();
-        let mut e = engine();
-        let probe = Arc::new(Probe::default());
-        let mut p = provided(&mut e, probe.clone());
-        p.lifetime = 20;
-        let mut copy = p.clone();
-        e.tick_particle(&mut p, &level);
-        assert_eq!((p.position, p.previous), ([2.0, 0.0, 1.0], [1.0; 3]));
-        e.tick_particle(&mut p, &level);
-        assert_eq!((p.position, p.previous), ([4.0, 0.5, 1.0], [2.0, 0.0, 1.0]));
-        assert!(matches!(p.sprite, Sprite::Index(1))); // frame 2, clamped to the 2-sprite set
-        // State is per particle: the copy starts from zero state, not the original's.
-        e.tick_particle(&mut copy, &level);
-        assert_eq!(copy.position, [2.0, 0.0, 1.0]);
-        // The third tick of `p` removes it before its 20-tick lifetime, and its writes are dropped.
-        e.tick_particle(&mut p, &level);
-        assert!(p.removed);
-        assert_eq!(p.position, [4.0, 0.5, 1.0]);
-    }
-    #[test]
-    fn the_engine_expires_a_providers_particle_at_its_lifetime_without_calling_the_provider() {
-        let scene = Scene::new();
-        let level = scene.level();
-        let mut e = engine();
-        let probe = Arc::new(Probe::default());
-        let mut p = provided(&mut e, probe.clone());
-        p.lifetime = 2;
-        for _ in 0..2 {
-            e.tick_particle(&mut p, &level);
-            assert!(!p.removed);
-        }
-        e.tick_particle(&mut p, &level);
-        assert!(p.removed);
-        assert_eq!(probe.0.load(std::sync::atomic::Ordering::Relaxed), 2);
-    }
-    #[test]
-    fn a_provider_cannot_hand_the_renderer_a_bad_number() {
-        let scene = Scene::new();
-        let level = scene.level();
-        let mut e = engine();
-        let bad: [fn(&mut ModParticle); 5] = [
-            |p| p.position[1] = f64::NAN,
-            |p| p.position[0] = f64::INFINITY,
-            |p| p.position[2] = 1.0e300,
-            |p| p.velocity[0] = f64::NEG_INFINITY,
-            |p| p.size = f32::NAN,
-        ];
-        for tick in bad {
-            let mut p = provided(&mut e, Arc::new(Broken(tick)));
-            e.tick_particle(&mut p, &level);
-            assert!(p.removed);
-            assert_eq!(p.position, [1.0; 3]);
-        }
-        let mut p = provided(
-            &mut e,
-            Arc::new(Broken(|p| {
-                p.size = 1.0e9;
-                p.rgba = [2.0, -1.0, 0.5, 9.0];
-                p.frame = u32::MAX;
-                p.lifetime = i32::MIN;
-                p.age = i32::MAX;
-            })),
-        );
-        e.tick_particle(&mut p, &level);
-        assert!(!p.removed);
-        assert_eq!((p.size, p.rgba), (16.0, [1.0, 0.0, 0.5, 1.0]));
-        assert!(matches!(p.sprite, Sprite::Index(1)));
-        assert_eq!((p.lifetime, p.age), (i32::MIN, 1)); // the age stays the engine's
-        e.tick_particle(&mut p, &level);
-        assert!(p.removed);
-    }
-    #[test]
-    fn a_type_resolves_to_its_provider_at_load_and_other_types_stay_declarative() {
-        let dir =
-            std::env::temp_dir().join(format!("sunrise-provider-sets-{}", std::process::id()));
-        let particles = dir.join("assets/mymod/particles");
-        std::fs::create_dir_all(&particles).unwrap();
-        for name in ["orbit", "plain"] {
-            std::fs::write(
-                particles.join(format!("{name}.json")),
-                br#"{"textures":["mymod:one","mymod:two"],"sunrise:behaviour":{"lifetime":7,"size":[0.3,0.3]}}"#,
-            )
-            .unwrap();
-        }
-        let mut e = engine();
-        e.providers
-            .insert("mymod:orbit".into(), Arc::new(Probe::default()));
-        e.providers
-            .insert("mymod:unmatched".into(), Arc::new(Probe::default()));
-        e.reload(
-            &ResourceSource::directory(dir.clone()),
-            &HashMap::new(),
-            &HashSet::new(),
-        );
-        assert!(e.mod_sets["mymod:orbit"].provider.is_some());
-        assert!(e.mod_sets["mymod:plain"].provider.is_none());
-        assert!(!e.mod_sets.contains_key("mymod:unmatched"));
-        let orbit = e
-            .make(
-                &ParticleOptions::named("mymod:orbit"),
-                [0.0; 3],
-                [0.0; 3],
-                3,
-            )
-            .unwrap();
-        // The declared spawn values seed it, and its sprite is drawn by frame from the set.
-        assert!(orbit.controller.is_some());
-        assert_eq!((orbit.lifetime, orbit.size), (7, 0.3));
-        assert_eq!(orbit.set, Some(e.mod_sets["mymod:orbit"].set));
-        let plain = e
-            .make(
-                &ParticleOptions::named("mymod:plain"),
-                [0.0; 3],
-                [0.0; 3],
-                3,
-            )
-            .unwrap();
-        assert!(plain.controller.is_none());
-        assert!(matches!(plain.behaviour, Behaviour::Mod { .. }));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-    #[test]
-    fn controlled_spawn_respects_distance_settings_and_declared_sprite_sets() {
-        let mut e = engine();
-        assert!(
-            e.controlled("example:missing", [0.0; 3], true, Moving(0))
-                .is_none()
-        );
-        assert!(
-            e.controlled("example:orbit", [33.0, 0.0, 0.0], true, Moving(0))
-                .is_none()
-        );
-        assert!(
-            e.controlled("example:orbit", [f64::NAN, 0.0, 0.0], true, Moving(0))
-                .is_none()
-        );
-        assert!(
-            e.controlled("example:orbit", [32.0, 0.0, 0.0], true, Moving(0))
-                .is_some()
-        );
-        e.particle_level = 2;
-        assert!(
-            e.controlled("example:orbit", [0.0; 3], true, Moving(0))
-                .is_none()
-        );
-    }
-}
+pub(super) mod tests;

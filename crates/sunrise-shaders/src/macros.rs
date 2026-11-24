@@ -536,6 +536,7 @@ mod tests {
             &crate::preprocess(&pack, "composite.vsh", m),
             &crate::preprocess(&pack, "composite.fsh", m),
             crate::Target::Buffers,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
         )
         .map(|_| ())
         .map_err(|e| format!("{e:?}"))

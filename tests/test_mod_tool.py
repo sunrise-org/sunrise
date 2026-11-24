@@ -49,6 +49,7 @@ class ToolFoldersTests(unittest.TestCase):
             document = json.loads(out.read_text())
         self.assertEqual(document["tag"], "mod-tool")
         self.assertIsInstance(document["native_contract"], int)
+        self.assertIsInstance(document["release_contract"], int)
 
 
 class WorkflowTests(unittest.TestCase):

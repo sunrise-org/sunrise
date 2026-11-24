@@ -142,6 +142,7 @@ pub(super) mod picker;
 use picker::Picker;
 #[path = "place/custom.rs"]
 mod custom;
+pub use custom::SlotCap;
 #[path = "place/custom_access.rs"]
 mod custom_access;
 #[path = "place/custom_plan.rs"]
@@ -178,6 +179,11 @@ struct Grid {
     /// `inputGridSlots` and `slotsToClear` as menu slot indices.
     inputs: Vec<usize>,
     clear: Vec<usize>,
+}
+
+enum TransferMatch {
+    Ready(Grid, Placement, Stacked),
+    Missing(Placement, Stacked),
 }
 
 impl Menu {
@@ -328,7 +334,7 @@ impl Menu {
         if placement.impossible() {
             return PostPlace::Nothing;
         }
-        if !allow_drop && !self.test_clear_grid(env, &grid) {
+        if !allow_drop && !self.test_clear_slots(env, &grid.inputs) {
             return PostPlace::Nothing;
         }
         let mut stacked = self.stacked_contents(env);
@@ -366,7 +372,10 @@ impl Menu {
     /// JEI's transfer and crafting by hand do.
     pub fn transfer_recipe(&mut self, env: &Env, id: &str, all: bool) -> Result<(), TransferError> {
         self.touch();
-        let (grid, placement, mut stacked) = self.transfer_match(env, id)?;
+        let TransferMatch::Ready(grid, placement, mut stacked) = self.transfer_match(env, id)?
+        else {
+            return Err(TransferError::Missing);
+        };
         self.transfer_place(env, id, &grid, &placement, &mut stacked, all)?;
         self.recompute(env);
         Ok(())
@@ -378,29 +387,34 @@ impl Menu {
     /// counted items can't fill. `self` is only read, so nothing moves, no
     /// source changes and nothing drops.
     pub fn check_transfer(&self, env: &Env, id: &str) -> TransferCheck {
-        let result = match self.transfer_match(env, id) {
-            Ok((grid, placement, mut stacked)) => {
-                let mut copy = self.clone();
-                copy.transfer_place(env, id, &grid, &placement, &mut stacked, false)
-            }
-            Err(error) => Err(error),
-        };
-        let missing = match result {
-            Err(TransferError::Missing) => self.missing_cells(env, id),
-            _ => Vec::new(),
-        };
-        TransferCheck { result, missing }
+        match self.transfer_match(env, id) {
+            Ok(TransferMatch::Ready(grid, placement, mut stacked)) => TransferCheck {
+                result: self.clone().transfer_place(
+                    env,
+                    id,
+                    &grid,
+                    &placement,
+                    &mut stacked,
+                    false,
+                ),
+                missing: Vec::new(),
+            },
+            Ok(TransferMatch::Missing(placement, mut stacked)) => TransferCheck {
+                result: Err(TransferError::Missing),
+                missing: Self::missing_cells(&placement, &mut stacked),
+            },
+            Err(error) => TransferCheck {
+                result: Err(error),
+                missing: Vec::new(),
+            },
+        }
     }
 
     /// A viewer transfer's matching, shared by `transfer_recipe` and
     /// `check_transfer`: whether the recipe goes into this menu's grid, then
-    /// `stacked_contents` (the inventory, the mods' sources and the grid) and
-    /// one set picked from them. Reads the menu only.
-    fn transfer_match(
-        &self,
-        env: &Env,
-        id: &str,
-    ) -> Result<(Grid, Placement, Stacked), TransferError> {
+    /// one set picked from the inventory, the mods' sources and the grid.
+    /// Keep those same counts for the dry run's missing-cell report.
+    fn transfer_match(&self, env: &Env, id: &str) -> Result<TransferMatch, TransferError> {
         if !(matches!(self.state.kind, Kind::Inventory | Kind::Crafting)
             || self.mod_crafting().is_some())
             || self.state.carried.is_some()
@@ -422,10 +436,11 @@ impl Menu {
         }
         let mut stacked = self.stacked_for(env, true);
         let ingredients: Vec<_> = placement.ingredients.iter().collect();
-        if !stacked.try_pick(&ingredients, 1, None) {
-            return Err(TransferError::Missing);
+        if stacked.try_pick(&ingredients, 1, None) {
+            Ok(TransferMatch::Ready(grid, placement, stacked))
+        } else {
+            Ok(TransferMatch::Missing(placement, stacked))
         }
-        Ok((grid, placement, stacked))
     }
 
     /// The placement of a matched transfer (`transfer_match`). The vanilla
@@ -461,17 +476,11 @@ impl Menu {
         Ok(())
     }
 
-    /// The cells of recipe `id` the counted items can't fill
-    /// (`check_transfer`): its ingredients taken one at a time in order, each
-    /// kept when the items still cover it with the ones kept before, as
-    /// `StackedItemContents` matches them, so alternatives and shared items
-    /// count as the transfer counts them. Indices into the recipe's `slots`
+    /// The cells the transfer's counted items can't fill: ingredients taken
+    /// one at a time in order, each kept when the same picker can cover it
+    /// together with the ones kept before. Indices into the recipe's `slots`
     /// (width by height for a shaped recipe, else its ingredients in order).
-    fn missing_cells(&self, env: &Env, id: &str) -> Vec<usize> {
-        let Some(placement) = env.recipes.placement(id) else {
-            return Vec::new();
-        };
-        let mut stacked = self.stacked_contents(env);
+    fn missing_cells(placement: &Placement, stacked: &mut Stacked) -> Vec<usize> {
         let mut kept: Vec<&Ingredient> = Vec::new();
         let mut lacking = Vec::new();
         for (k, ingredient) in placement.ingredients.iter().enumerate() {
@@ -637,28 +646,25 @@ impl Menu {
         requested - taken_count
     }
 
+    /// Return every occupied slot in `slots` to the player's inventory (or drop
+    /// overflow), emptying each slot first (`ServerPlaceRecipe.clearGrid`).
+    pub(super) fn clear_slots(&mut self, env: &Env, slots: &[usize]) {
+        self.touch();
+        for &s in slots {
+            let slot = self.state.slots[s];
+            if let Some(mut stack) = self.state.containers[slot.container][slot.index].take() {
+                self.place_back(env, &mut stack);
+            }
+        }
+    }
+
     /// `clearGrid`: the slots to clear go back to the inventory (or drop),
     /// then the grid empties (`clearCraftingContent`).
     fn clear_grid(&mut self, env: &Env, grid: &Grid) {
-        self.touch();
-        for &s in &grid.clear {
-            let slot = self.state.slots[s];
-            if let Some(stack) = self.state.containers[slot.container][slot.index].clone() {
-                let mut copy = stack;
-                self.place_back(env, &mut copy);
-            }
-        }
-        match self.state.kind {
-            Kind::Furnace(_) => {
-                for &s in &grid.clear {
-                    let slot = self.state.slots[s];
-                    self.state.containers[slot.container][slot.index] = None;
-                }
-            }
-            _ => {
-                self.state.containers[GRID].fill(None);
-                self.state.containers[RESULT][0] = None;
-            }
+        self.clear_slots(env, &grid.clear);
+        if !matches!(self.state.kind, Kind::Furnace(_)) {
+            self.state.containers[GRID].fill(None);
+            self.state.containers[RESULT][0] = None;
         }
     }
 
@@ -668,7 +674,7 @@ impl Menu {
         while stack.count > 0 {
             let slot = self
                 .slot_with_space(env, stack)
-                .or_else(|| (0..36).find(|&i| self.state.containers[PLAYER][i].is_none()));
+                .or_else(|| super::free_slot(&self.state.containers[PLAYER][..36]));
             let Some(slot) = slot else {
                 let dropped = std::mem::replace(
                     stack,
@@ -721,14 +727,15 @@ impl Menu {
         }
     }
 
-    /// `testClearGrid`: whether the inventory can take the grid back.
-    fn test_clear_grid(&self, env: &Env, grid: &Grid) -> bool {
+    /// `ServerPlaceRecipe.testClearGrid`: whether the player inventory can take
+    /// `slots` back without dropping anything.
+    pub(super) fn test_clear_slots(&self, env: &Env, slots: &[usize]) -> bool {
         let mut free_slots: Vec<ItemStack> = Vec::new();
         let free_in_inventory = self.state.containers[PLAYER][..36]
             .iter()
             .filter(|s| s.is_none())
             .count();
-        for &s in &grid.inputs {
+        for &s in slots {
             let Some(mut stack) = self.slot(s).cloned() else {
                 continue;
             };

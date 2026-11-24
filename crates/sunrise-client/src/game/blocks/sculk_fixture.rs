@@ -420,9 +420,12 @@ impl Game<'_> {
         if s.trace_events {
             self.previous_position = Vec3::new(at[0], at[1], at[2]);
         }
-        self.keys.clear();
+        self.clear_device_keys();
+        // The oracle sets the new player's shift state for every scenario.
         if s.sneak {
-            self.keys.insert(KeyCode::ShiftLeft);
+            self.insert_device_key(KeyCode::ShiftLeft);
+        } else {
+            self.remove_device_key(&KeyCode::ShiftLeft);
         }
         self.sculk.tracker = WardenSpawnTracker::default();
         if let Some(level) = s.warning {
@@ -758,14 +761,15 @@ impl Game<'_> {
                         &attack,
                     );
                     let mut credit = plan.lend(&mut self.last_hurt_by_player);
-                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                        m.damage(
+                    if let Some(index) = self.mob_index.find(&self.mobs, id) {
+                        self.mobs[index].damage(
                             crate::game::entity::damage_level_of!(self, &attack, &mut credit, None),
                             amount,
                             sunrise_client::mobs::Damage::player(at),
                         );
+                        self.remember_mob_player_credit(id);
+                        self.finish_mob_damage_at(index);
                     }
-                    self.remember_mob_player_credit(id);
                 }
                 // Creeper.ignite: the next tick primes the fuse.
                 "ignite" | "ate" => {

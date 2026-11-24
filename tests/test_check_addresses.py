@@ -20,7 +20,7 @@ def strings(source):
 CONFIG = {
     "homes": ["crates/sunrise-addresses/src/lib.rs"],
     "vanilla": {"textures.minecraft.net": "skins"},
-    "not_addresses": {"ddns.net": "a suffix"},
+    "not_addresses": {"discord.com": "a webhook host"},
     "allowed": ["crates/sunrise-telemetry/src/lib.rs telemetry.playsunrise.net"],
 }
 
@@ -74,7 +74,7 @@ class CheckTests(unittest.TestCase):
     def test_home_vanilla_not_addresses_and_allowed_pass(self):
         found = [("crates/sunrise-addresses/src/lib.rs", "playsunrise.net"),
                  ("crates/sunrise-client-render/src/skins.rs", "textures.minecraft.net"),
-                 ("crates/sunrise-client-render/src/bluemap_detect.rs", "ddns.net"),
+                 ("crates/sunrise-server/src/discord.rs", "discord.com"),
                  ("crates/sunrise-telemetry/src/lib.rs", "telemetry.playsunrise.net")]
         self.assertEqual(self.run_check(found), ([], []))
 
@@ -82,6 +82,14 @@ class CheckTests(unittest.TestCase):
         problems, _ = self.run_check([("crates/sunrise-client/src/net.rs", "relay.playsunrise.net")])
         self.assertIn("relay.playsunrise.net", problems[0])
         self.assertIn("docs/layers.md#built-in-addresses", problems[0])
+
+    def test_non_address_identity_can_be_scoped_to_its_file(self):
+        identity = "crates/verifier/src/lib.rs"
+        client = "crates/downloader/src/lib.rs"
+        config = dict(CONFIG, not_addresses={f"{identity} github.com": "certificate identity"})
+        problems, _ = check_addresses.check(config, {(identity, "github.com"), (client, "github.com")})
+        self.assertEqual(len(problems), 1)
+        self.assertIn(client, problems[0])
 
     def test_an_address_that_left_its_file_is_a_note(self):
         problems, notes = self.run_check([])

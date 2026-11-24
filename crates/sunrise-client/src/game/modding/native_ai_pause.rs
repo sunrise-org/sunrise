@@ -109,7 +109,7 @@ mod tests {
     fn add(game: &mut super::Game<'_>, id: u32, name: &str, at: Vec3) -> MobRef {
         let kind = game.res.mob_types().get(name).unwrap().clone();
         let mut m = Mob::new(id, kind, at, 0.0);
-        m.on_ground = true;
+        m.ground.on_ground = true;
         game.mobs.push(m);
         game.mob(game.entity(id).unwrap()).unwrap()
     }
@@ -157,7 +157,7 @@ mod tests {
             let before = mob(game, pig).clone();
             let lifted = mob_mut(game, pig);
             lifted.position.y = 68.0;
-            lifted.on_ground = false;
+            lifted.ground.on_ground = false;
             // The pig is the last mob, so it pops for the push as a hit does.
             let mut m = game.mobs.pop().unwrap();
             let hit = Damage::of(DamageKind::Generic);

@@ -1,12 +1,10 @@
-//! Native mods compiled against a signed prebuilt SDK, for the launcher and `cargo sunrise-mod native-build`.
+//! Native mods compiled against a signed prebuilt SDK by `cargo sunrise-mod`.
 use crate::host::{tr, trf};
 use crate::rust::Toolchain;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 use sunrise_mod_package::dependencies;
@@ -18,24 +16,25 @@ pub mod contract;
 mod crates;
 mod diagnostics;
 pub mod discover;
+pub mod game_uses;
 pub mod host;
-mod inject;
 pub mod internals;
 pub mod library_record;
 mod mixins_patch;
 pub mod package;
 pub mod patch;
 pub mod prebuilt;
+pub mod present;
 pub mod registry_compile;
 pub mod registry_generate;
 mod registry_inventory;
 mod registry_lock;
 pub mod registry_plan;
+mod registry_resolve;
 mod registry_runtime;
 pub mod registry_rustc;
 mod registry_shared;
 pub mod rust;
-mod slots;
 
 pub use mixins_patch::MixinsIdentity;
 pub use prebuilt::{Refusal, compiling};
@@ -76,15 +75,6 @@ pub fn mixins_from_source(on: bool) {
     mixins_patch::FROM_SOURCE.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// What a cargo output line says about the compile.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Cargo {
-    /// `Compiling name vX`: a crate started.
-    Compiling(String),
-    /// Cargo's progress bar, `Building [===>   ] 12/430: names`: units done, and in all.
-    Progress(usize, usize),
-}
-
 /// `line` without terminal escape sequences (`ESC [ ... letter`).
 fn without_escapes(line: &str) -> String {
     let mut plain = String::new();
@@ -103,29 +93,6 @@ fn without_escapes(line: &str) -> String {
         }
     }
     plain
-}
-
-/// Cargo's events in one line of its standard error. With `CARGO_TERM_PROGRESS_WHEN=always` the
-/// progress bar is redrawn with carriage returns, so a line holds several pieces.
-pub fn parse_cargo(line: &str) -> Vec<Cargo> {
-    let mut out = Vec::new();
-    for piece in without_escapes(line).split('\r') {
-        let piece = piece.trim();
-        if let Some(name) = piece.strip_prefix("Compiling ") {
-            out.push(Cargo::Compiling(
-                name.split_whitespace().next().unwrap_or(name).to_owned(),
-            ));
-        } else if let Some(bar) = piece.strip_prefix("Building [") {
-            let counts = bar.split_once("] ").map(|(_, rest)| rest).unwrap_or("");
-            let counts = counts.split(':').next().unwrap_or("");
-            if let Some((done, total)) = counts.split_once('/')
-                && let (Ok(done), Ok(total)) = (done.trim().parse(), total.trim().parse())
-            {
-                out.push(Cargo::Progress(done, total));
-            }
-        }
-    }
-    out
 }
 
 /// What of `line` the build log keeps: all of it but cargo's progress bar, whose redraws are
@@ -195,26 +162,12 @@ impl Bundle {
     /// Whether horizon-mixins reads source to transform the game.
     pub fn needs_mixins(&self) -> bool {
         self.manifest.native.as_ref().is_some_and(|native| {
-            !native.mixin.is_empty()
-                || !native.module.is_empty()
-                || !native.bridge.is_empty()
-                || !native.state.is_empty()
+            !native.mixin.is_empty() || !native.module.is_empty() || !native.bridge.is_empty()
         })
     }
 }
 
 /// The flat native project in `folder`, or the native projects directly inside it.
-pub fn bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
-    let found = package::checked_bundles(folder)?;
-    if found.is_empty() {
-        return Err(format!(
-            "{} holds no native mod ({NATIVE_MANIFEST} and Cargo.toml).",
-            folder.display()
-        ));
-    }
-    Ok(found)
-}
-
 pub fn scan_bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
     if !folder.exists() {
         return Ok(Vec::new());
@@ -304,164 +257,102 @@ pub fn source_digest(bundle: &Bundle) -> Option<String> {
     Some(digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice()))))
 }
 
-/// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
+/// Runs `cmd`, its output appended to the build log.
 /// An error ends with its first `error` lines and the last lines: a failed build script's output
 /// alone could push the line naming its crate out of the last ones.
-pub fn run(cmd: Command, what: &str, line: impl FnMut(&str)) -> Result<(), String> {
-    run_checked(cmd, what, line, None).map_err(|e| e.error)
+pub fn run(cmd: Command, what: &str) -> Result<(), String> {
+    run_checked(cmd, what, None, None)
 }
 
-/// A failed command, with diagnostic ownership for build isolation.
-struct Ran {
-    error: String,
+/// [`run`] for a compiler started with `--error-format=json`: a diagnostic it prints is shown at
+/// the author's files (`sources`), and the build log keeps what the compiler printed.
+pub fn run_diagnosed(cmd: Command, what: &str, sources: &present::Sources) -> Result<(), String> {
+    run_checked(cmd, what, None, Some(sources))
 }
 
 fn run_checked(
     mut cmd: Command,
     what: &str,
-    mut line: impl FnMut(&str),
     stdout_file: Option<fs::File>,
-) -> Result<(), Ran> {
-    let ran = |error: String| Ran { error };
+    sources: Option<&present::Sources>,
+) -> Result<(), String> {
     let mut log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path())
-        .map_err(|e| ran(e.to_string()))?;
-    if CANCEL.load(Ordering::Relaxed) {
-        return Err(ran(CANCELLED.into()));
-    }
+        .map_err(|e| e.to_string())?;
     let _ = writeln!(log, "$ {cmd:?}");
     cmd.stdout(match stdout_file {
         Some(file) => file,
-        None => log.try_clone().map_err(|e| ran(e.to_string()))?,
+        None => log.try_clone().map_err(|e| e.to_string())?,
     });
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    // Keep the child in the CLI's group on Unix so the caller can stop the whole build.
     let started = std::time::Instant::now();
     let mut child = cmd
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| ran(app_control(format!("Could not start {what}: {e}"))))?;
-    let finished = Arc::new(AtomicBool::new(false));
-    let watcher = {
-        let (pid, finished) = (child.id(), finished.clone());
-        std::thread::spawn(move || {
-            while !finished.load(Ordering::Relaxed) {
-                if CANCEL.load(Ordering::Relaxed) {
-                    kill_tree(pid);
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        })
-    };
-    std::thread::scope(|_scope| {
-        let mut tail = std::collections::VecDeque::new();
-        let mut errors = Vec::new();
-        let mut blocked = false;
-        // Noted as the output arrives: later lines can push the linker's note out of `tail`.
-        let mut libraries = false;
-        for text in BufReader::new(child.stderr.take().expect("piped"))
-            .lines()
-            .map_while(Result::ok)
-        {
-            if let Some(kept) = log_text(&text) {
+        .map_err(|e| app_control(format!("Could not start {what}: {e}")))?;
+    let mut tail = std::collections::VecDeque::new();
+    let mut errors = Vec::new();
+    let mut blocked = false;
+    // Noted as the output arrives: later lines can push the linker's note out of `tail`.
+    let mut libraries = false;
+    for text in BufReader::new(child.stderr.take().expect("piped"))
+        .lines()
+        .map_while(Result::ok)
+    {
+        // A diagnostic is one line of JSON: its rendered text goes on as lines, each as the
+        // compiler printed it (for the log and the matchers) and as shown to the author.
+        let lines = match sources.zip(present::Diagnostic::parse(&text)) {
+            Some((sources, diagnostic)) => sources
+                .lines(&diagnostic)
+                .into_iter()
+                .map(|(raw, shown)| (raw.to_owned(), shown))
+                .collect(),
+            None => vec![(text.clone(), text)],
+        };
+        for (raw, shown) in lines {
+            if let Some(kept) = log_text(&raw) {
                 let _ = writeln!(log, "{kept}");
             }
-            line(&text);
-            blocked |= rust::blocked_by_app_control(&text);
-            libraries |= rust::missing_system_libraries(&text);
-            if text.starts_with("error") && errors.len() < 4 {
-                errors.push(text.clone());
+            blocked |= rust::blocked_by_app_control(&raw);
+            libraries |= rust::missing_system_libraries(&raw);
+            if shown.starts_with("error") && errors.len() < 4 {
+                errors.push(shown.clone());
             }
             if tail.len() == 12 {
                 tail.pop_front();
             }
-            tail.push_back(text);
+            tail.push_back(shown);
         }
-        let status = child.wait();
-        // Before the watcher's join, which can wait out its 100 ms poll.
-        let took = started.elapsed();
-        finished.store(true, Ordering::Relaxed);
-        let _ = watcher.join();
-        if CANCEL.load(Ordering::Relaxed) {
-            let _ = writeln!(log, "Build cancelled.");
-            return Err(ran(CANCELLED.into()));
-        }
-        let status = status.map_err(|e| ran(e.to_string()))?;
-        if status.success() {
-            // Every command of a native build says how long it took, so the log accounts for
-            // the whole build and not only the steps that time themselves. The command's stdout
-            // went into this log and may not have ended its last line.
-            let mut last = *b"\n";
-            if let Ok(mut read) = fs::File::open(log_path())
-                && read.seek(SeekFrom::End(-1)).is_ok()
-            {
-                let _ = read.read_exact(&mut last);
-            }
-            let _ = writeln!(
-                log,
-                "{}{}",
-                if last[0] == b'\n' { "" } else { "\n" },
-                trf(
-                    "{step}: {ms} ms",
-                    &[("step", what), ("ms", &took.as_millis().to_string())],
-                )
-            );
-            return Ok(());
-        }
-        let tail: Vec<String> = tail.into();
-        let error =
-            diagnostics::with_internals_hint(failure(what, &status.to_string(), &errors, &tail));
-        let error = match libraries {
-            true => with_system_libraries(error),
-            false => error,
-        };
-        Err(Ran {
-            error: match blocked {
-                true => with_app_control(error),
-                false => app_control(error),
-            },
-        })
-    })
-}
-
-/// What a cancelled build fails with: the card shows no error for it.
-pub const CANCELLED: &str = "Build cancelled";
-
-/// Ends the build with [`CANCELLED`] when the player cancelled it: checked between stages and
-/// before anything is installed or selected, so a cancel never ends as a finished build.
-pub fn check_cancelled() -> Result<(), String> {
-    if CANCEL.load(Ordering::Relaxed) {
-        return Err(CANCELLED.into());
     }
-    Ok(())
-}
-
-static CANCEL: AtomicBool = AtomicBool::new(false);
-
-/// Stops the build under way: its command is killed and the build ends with [`CANCELLED`].
-pub fn cancel() {
-    CANCEL.store(true, Ordering::Relaxed);
-}
-
-/// Forgets a cancel the last build ended with, as a new build starts.
-pub fn clear_cancel() {
-    CANCEL.store(false, Ordering::Relaxed);
-}
-
-/// Ends `pid` and everything it started (cargo's rustc and build scripts).
-fn kill_tree(pid: u32) {
-    #[cfg(unix)]
-    // SAFETY: a negative pid signals the process group `run` made for this command.
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let took = started.elapsed();
+    if status.success() {
+        // Every command of a native build says how long it took, so the log accounts for
+        // the whole build and not only the steps that time themselves. The command's stdout
+        // went into this log and may not have ended its last line.
+        let mut last = *b"\n";
+        if let Ok(mut read) = fs::File::open(log_path())
+            && read.seek(SeekFrom::End(-1)).is_ok()
+        {
+            let _ = read.read_exact(&mut last);
+        }
+        let _ = writeln!(
+            log,
+            "{}{}",
+            if last[0] == b'\n' { "" } else { "\n" },
+            trf(
+                "{step}: {ms} ms",
+                &[("step", what), ("ms", &took.as_millis().to_string())],
+            )
+        );
+        return Ok(());
     }
-    #[cfg(windows)]
-    let _ = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .status();
+    let tail: Vec<String> = tail.into();
+    let error =
+        diagnostics::with_internals_hint(failure(what, &status.to_string(), &errors, &tail));
+    Err(advised(error, blocked, libraries))
 }
 
 /// `error` led by what to do when Windows' Smart App Control refused one of the build's
@@ -474,12 +365,31 @@ fn app_control(error: String) -> String {
 }
 
 fn with_app_control(error: String) -> String {
-    format!("{}\n\n{error}", rust::smart_app_control())
+    match error.starts_with(&*rust::smart_app_control()) {
+        true => error,
+        false => format!("{}\n\n{error}", rust::smart_app_control()),
+    }
 }
 
 /// `error` led by what to install when the build's link could not find udev or ALSA.
 fn with_system_libraries(error: String) -> String {
-    format!("{}\n\n{error}", rust::system_libraries())
+    match error.starts_with(&*rust::system_libraries()) {
+        true => error,
+        false => format!("{}\n\n{error}", rust::system_libraries()),
+    }
+}
+
+/// `error` led by the advice the build's output (`blocked`: Application Control refused a
+/// program, `libraries`: the link could not find udev or ALSA) and the error itself call for.
+pub(crate) fn advised(error: String, blocked: bool, libraries: bool) -> String {
+    let error = match libraries {
+        true => with_system_libraries(error),
+        false => error,
+    };
+    match blocked {
+        true => with_app_control(error),
+        false => app_control(error),
+    }
 }
 
 /// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
@@ -548,16 +458,11 @@ fn diagnostic(text: &str) -> Option<String> {
     Some(line)
 }
 
-/// External mixins traverse ordinary module declarations, not generated OUT_DIR includes.
-/// Prepare their input separately so neither the downloaded source nor a cached snapshot changes.
+/// External mixins read source, not generated OUT_DIR includes: a copy of `source` with the
+/// generated host forwarders written in, so neither the download nor a cached snapshot changes.
 pub fn prepare_mixins_source(source: &Path, prepared: &Path) -> Result<(), String> {
-    // sync removes old files, not their directories. A leftover area directory without its
-    // marker would make module discovery refuse the next revision after an interrupted build.
-    if prepared.exists() {
-        fs::remove_dir_all(prepared).map_err(|e| format!("{}: {e}", prepared.display()))?;
-    }
     let result = sync(source, prepared)
-        .and_then(|()| sunrise_platform::mod_build::api_gen::materialize_game_modules(prepared));
+        .and_then(|()| sunrise_platform::mod_build::api_gen::materialize_generated_host(prepared));
     if result.is_err() {
         let _ = fs::remove_dir_all(prepared);
     }
@@ -771,92 +676,38 @@ mod tests {
     }
 
     #[test]
-    fn mixins_input_materializes_modules_without_changing_the_download() {
-        let root = dir("mixins-area-input");
+    fn mixins_input_copies_the_source_without_changing_the_download() {
+        let root = dir("mixins-input");
         let source = root.join("download");
         let prepared = root.join("prepared");
         let src = source.join("crates/sunrise-client/src");
         let area = src.join("game/items");
-        let hooks = src.join("game/native_hooks");
         fs::create_dir_all(&area).unwrap();
-        fs::create_dir_all(&hooks).unwrap();
-        let game = "struct Game; mod native_hooks;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/game_modules.rs\"));\n";
-        let native = "include!(concat!(env!(\"OUT_DIR\"), \"/native_hook_modules.rs\"));\n";
+        let game = "struct Game;\n#[path = \"game/items/using_item.rs\"]\nmod using_item;\n";
         let helper = "use super::*; impl Game { fn area_helper(&mut self) {} }";
         fs::write(src.join("game.rs"), game).unwrap();
-        fs::write(area.join(".game-area"), "").unwrap();
         fs::write(area.join("using_item.rs"), helper).unwrap();
-        fs::write(hooks.join("mod.rs"), native).unwrap();
-        fs::write(
-            hooks.join("base.rs"),
-            "use super::super::*; impl Game { fn native_helper(&mut self) {} }",
-        )
-        .unwrap();
         prepare_mixins_source(&source, &prepared).unwrap();
-        // External tools parse ordinary mod declarations, without our expansion pass.
-        fn modules(path: &Path) -> Vec<String> {
-            syn::parse_file(&fs::read_to_string(path).unwrap())
-                .unwrap()
-                .items
-                .into_iter()
-                .filter_map(|item| match item {
-                    syn::Item::Mod(module) => Some(module.ident.to_string()),
-                    _ => None,
-                })
-                .collect()
-        }
         let output = prepared.join("crates/sunrise-client/src");
-        assert!(modules(&output.join("game.rs")).contains(&"using_item".into()));
-        assert_eq!(modules(&output.join("game/native_hooks/mod.rs")), ["base"]);
+        assert_eq!(fs::read_to_string(output.join("game.rs")).unwrap(), game);
         assert_eq!(
             fs::read_to_string(output.join("game/items/using_item.rs")).unwrap(),
             helper
         );
-        assert_eq!(fs::read_to_string(src.join("game.rs")).unwrap(), game);
-        assert_eq!(fs::read_to_string(hooks.join("mod.rs")).unwrap(), native);
-        let first = fs::read(output.join("game.rs")).unwrap();
-        // A failed older preparation may have left an area that the next source no longer has.
-        let stale_area = output.join("game/removed");
-        fs::create_dir_all(&stale_area).unwrap();
-        fs::write(stale_area.join(".game-area"), "").unwrap();
-        fs::write(stale_area.join("old.rs"), "fn old() {}").unwrap();
+        // A file the next source no longer has leaves the copy.
+        fs::remove_file(area.join("using_item.rs")).unwrap();
+        fs::write(src.join("game.rs"), "struct Game;\n").unwrap();
         prepare_mixins_source(&source, &prepared).unwrap();
-        assert!(!stale_area.exists());
-        assert_eq!(fs::read(output.join("game.rs")).unwrap(), first);
-        let invalid = src.join("game/unmarked");
-        fs::create_dir_all(&invalid).unwrap();
-        fs::write(invalid.join("misplaced.rs"), "fn misplaced() {}").unwrap();
-        let error = prepare_mixins_source(&source, &prepared).unwrap_err();
-        assert!(error.contains("missing .game-area marker"), "{error}");
-        assert!(!prepared.exists());
-        assert!(invalid.exists());
+        assert!(!output.join("game/items/using_item.rs").exists());
+        assert_eq!(
+            fs::read_to_string(src.join("game.rs")).unwrap(),
+            "struct Game;\n"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn cargos_output_gives_the_crate_and_the_progress() {
-        assert_eq!(
-            parse_cargo("   Compiling serde v1.0.228"),
-            vec![Cargo::Compiling("serde".into())]
-        );
-        assert_eq!(
-            parse_cargo("   Building [==>        ] 12/430: serde, syn"),
-            vec![Cargo::Progress(12, 430)]
-        );
-        // The bar is redrawn with carriage returns and escapes, then the next line follows.
-        assert_eq!(
-            parse_cargo(
-                "   Building [=>   ] 3/9: a\r\x1b[K   Building [==>  ] 4/9: b\r      \r   Compiling b v0.1.0"
-            ),
-            vec![
-                Cargo::Progress(3, 9),
-                Cargo::Progress(4, 9),
-                Cargo::Compiling("b".into())
-            ]
-        );
-        assert!(parse_cargo("warning: unused variable").is_empty());
-        assert!(parse_cargo("    Finished `fast` profile in 1m").is_empty());
-        // The log leaves out the progress bar, never what follows it on the same line.
+    fn the_build_log_keeps_messages_but_not_progress_redraws() {
         assert_eq!(log_text("   Building [=>   ] 3/9: a"), None);
         assert_eq!(log_text("\x1b[K"), None);
         assert_eq!(
@@ -1058,7 +909,7 @@ mod tests {
                  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do echo \"warning: build failed, waiting ($i)\" >&2; done
                  exit 101"
             )]);
-            run(cmd, "Compiling the mod", |_| {}).unwrap_err()
+            run(cmd, "Compiling the mod").unwrap_err()
         };
         for library in ["-ludev", "-lasound"] {
             let e = script(library);
@@ -1088,7 +939,7 @@ mod tests {
             for i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do echo "warning: build failed, waiting ($i)" >&2; done
             exit 101
         "#]);
-        let e = run(cmd, "Building horizon-mixins", |_| {}).unwrap_err();
+        let e = run(cmd, "Building horizon-mixins").unwrap_err();
         assert!(e.starts_with(&rust::smart_app_control()), "{e}");
         assert!(e.contains("quote v1.0.47"), "{e}");
         // Another failure says nothing about it.
@@ -1097,8 +948,26 @@ mod tests {
             "-c",
             "echo 'error: could not compile `sunrise-client`' >&2; exit 101",
         ]);
-        let e = run(cmd, "Compiling the game", |_| {}).unwrap_err();
+        let e = run(cmd, "Compiling the game").unwrap_err();
         assert!(!e.contains("Smart App Control"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "daily"]
+    fn build_commands_inherit_the_tools_process_group() {
+        let _guard = log_lock();
+        clear_log().unwrap();
+        // SAFETY: getpgrp only reads this process's group and takes no arguments.
+        let group = unsafe { libc::getpgrp() }.to_string();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "ps -o pgid= -p \"$$\""]);
+        run(cmd, "Reading the build command's process group").unwrap();
+        let log = fs::read_to_string(log_path()).unwrap();
+        assert!(
+            log.lines().any(|line| line.trim() == group.as_str()),
+            "{log}"
+        );
     }
 
     /// A command that succeeds leaves its time in the build log; one that fails leaves none.
@@ -1111,10 +980,10 @@ mod tests {
         // Its stdout, which goes to the log, does not end its line.
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "printf output; sleep 0.05"]);
-        run(cmd, "Linking the game", |_| {}).unwrap();
+        run(cmd, "Linking the game").unwrap();
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "exit 1"]);
-        run(cmd, "Compiling fnr_alpha", |_| {}).unwrap_err();
+        run(cmd, "Compiling fnr_alpha").unwrap_err();
         let log = fs::read_to_string(log_path()).unwrap();
         let ms: u64 = log
             .lines()

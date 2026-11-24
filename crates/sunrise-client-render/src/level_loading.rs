@@ -1,6 +1,7 @@
 //! LevelLoadingScreen: "Loading terrain..." over the chunk status map and
 //! the server's load progress while a world opens or a portal is crossed.
 use crate::{
+    dimension_transition::ActiveTransitionScreen,
     hud::{HudAtlas, HudBatch},
     text::Text,
 };
@@ -53,6 +54,16 @@ pub enum Reason {
     Other,
 }
 
+impl From<Reason> for mod_api::DimensionTransitionReason {
+    fn from(reason: Reason) -> Self {
+        match reason {
+            Reason::NetherPortal => Self::NetherPortal,
+            Reason::EndPortal => Self::EndPortal,
+            Reason::Other => Self::Other,
+        }
+    }
+}
+
 /// `LevelLoadTracker.CLIENT_WAIT_TIMEOUT_MS`.
 pub const CLIENT_WAIT_TIMEOUT_MS: u64 = 30_000;
 /// `LevelLoadTracker.LEVEL_LOAD_CLOSE_DELAY_MS`: how long a new world's loading
@@ -103,10 +114,10 @@ pub struct PlayerCheck {
 
 /// The client half of `LevelLoadTracker`: what the loading screen waits for
 /// after a login or a respawn, and the screen it is shown on.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct LevelLoadTracker {
     state: Option<ClientState>,
-    transition_screen: Option<usize>,
+    transition_screen: Option<ActiveTransitionScreen>,
     close_delay_ms: u64,
     /// `LevelLoadingScreen.reason`.
     pub reason: Reason,
@@ -121,12 +132,12 @@ impl LevelLoadTracker {
         }
     }
     /// `startClientLoad`, for the screen `reason` (`startWaitingForNewLevel`).
+    /// Restarting the tracker while the screen is open keeps its presentation.
     pub fn start_client_load(&mut self, now: u64, reason: Reason) {
         self.state = Some(ClientState::WaitingForServer {
             timeout_after: now + CLIENT_WAIT_TIMEOUT_MS,
         });
         self.reason = reason;
-        self.transition_screen = None;
     }
     /// The tracker's work is over and the screen has closed
     /// (`ClientPacketListener.tick` drops it once the level is ready).
@@ -134,15 +145,15 @@ impl LevelLoadTracker {
         self.state = None;
         self.transition_screen = None;
     }
-    /// Retain the presentation selected once at dimension entry, until this load finishes.
-    pub fn set_transition_screen(&mut self, screen: Option<usize>) {
+    /// Install the presentation chosen for a newly opened loading screen.
+    pub fn set_transition_screen(&mut self, screen: ActiveTransitionScreen) {
         if self.is_active() {
-            self.transition_screen = screen;
+            self.transition_screen = Some(screen);
         }
     }
     /// The selected presentation, absent for vanilla or after completion.
-    pub fn transition_screen(&self) -> Option<usize> {
-        self.transition_screen
+    pub fn transition_screen(&self) -> Option<&ActiveTransitionScreen> {
+        self.transition_screen.as_ref()
     }
     /// A load is under way, so its screen is up.
     pub fn is_active(&self) -> bool {
@@ -592,7 +603,7 @@ pub fn draw_loading_overlay(
 
 /// Mods' startup bars under the stage bar, newest first, each with its label above it, as many
 /// as fit and at most four; and their lines in the top left corner (NeoForge's
-/// `StartupNotificationManager`). Labels and lines are cut to one line.
+/// `StartupNotificationManager`). Message lines are cut to one line; labels are stored verbatim.
 pub fn draw_mod_progress(
     batch: &mut HudBatch,
     atlas: &HudAtlas,

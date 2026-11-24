@@ -1,1 +1,0 @@
-The placement context a piece's [`post_process`](StructurePiece::post_process) and a type's [`after_place`](StructureType::after_place) see: the blocks and entities of one chunk, the piece's random and what the blocks around it are made of.

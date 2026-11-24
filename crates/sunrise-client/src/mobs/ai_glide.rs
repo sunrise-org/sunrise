@@ -27,7 +27,7 @@ pub(super) fn update_fall_flying(m: &mut Mob, w: &MobWorld, events: &mut Vec<Mob
             .collect(),
         None => Vec::new(),
     };
-    if m.on_ground
+    if m.ground.on_ground
         || m.extra.mount.is_some()
         || m.has_effect("minecraft:levitation")
         || gliders.is_empty()

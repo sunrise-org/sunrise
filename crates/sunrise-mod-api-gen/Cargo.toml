@@ -8,16 +8,11 @@ publish = false
 description = "Build-time typed native mod API generation"
 
 [features]
-# Shared listener integration fixture only; never enabled by gameplay crates.
 listener-fixture = []
-# Isolated generated native/guest boundary fixture; never enabled by game builds.
-mixed-output-fixture = []
 
 [dependencies]
 sunrise-game-discovery = { path = "../sunrise-game-discovery" }
-sunrise-mod-point-shape = { path = "../sunrise-mod-point-shape" }
 sunrise-mod-surface = { path = "../sunrise-mod-surface" }
-mod_call = { package = "sunrise-mod-call", path = "../sunrise-mod-call" }
 sunrise-mod-source = { path = "../sunrise-mod-source" }
 heck = "0.5"
 syn = { version = "2", features = ["full", "visit", "visit-mut"] }
@@ -29,17 +24,8 @@ serde_json = "1"
 sha2 = "0.10"
 toml = "1.1"
 
-[[bin]]
-name = "sunrise-stage"
-path = "src/bin/sunrise-stage.rs"
-
 [dev-dependencies]
 tempfile = "3.27.0"
 
 [lints]
 workspace = true
-
-[[example]]
-name = "listener-fixture-catalog"
-path = "../sunrise-mod-wasm/tests/support/catalog.rs"
-required-features = ["listener-fixture"]

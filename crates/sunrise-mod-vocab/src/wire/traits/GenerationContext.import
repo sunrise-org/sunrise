@@ -1,1 +1,0 @@
-The start context a type's [`find_generation_point`](StructureType::find_generation_point) sees: vanilla's `GenerationContext` over one chunk, on the worker thread; deterministic for the seed.

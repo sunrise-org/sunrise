@@ -175,12 +175,12 @@ fn a_placed_feature_runs_its_modifiers_before_the_feature() {
 #[test]
 #[ignore = "daily"]
 fn a_biome_filter_refuses_only_when_reached() {
-    use mod_api::{LegacyRandomSource, RandomSource};
+    use sunrise_core::random::{LegacyRandom, RandomSource};
     for (seed, reached) in [(5133, true), (0, false)] {
         with_game(|game| {
             ground(game, false);
             let level = game.level(game.dim.id()).unwrap();
-            assert!(level.set_random(game, LegacyRandomSource::new(seed)));
+            *game.world.random = LegacyRandom::new(seed);
             let before = game.world.chunks.clone();
             assert_eq!(
                 level.place_placed_feature(game, "minecraft:iceberg_blue", AT),
@@ -204,15 +204,15 @@ fn a_biome_filter_refuses_only_when_reached() {
                     }
                 }
             }
-            let mut expected = LegacyRandomSource::new(seed);
+            let mut expected = LegacyRandom::new(seed);
             let rarity = expected.next_float();
             assert_eq!(rarity < 1.0 / 200.0, reached);
             if reached {
-                expected.next_int_bound(16);
-                expected.next_int_bound(16);
+                expected.next_int_bound(16).unwrap();
+                expected.next_int_bound(16).unwrap();
             }
             assert_eq!(
-                <(u64, Option<f64>)>::from(&level.random(game).unwrap()),
+                <(u64, Option<f64>)>::from(&*game.world.random),
                 <(u64, Option<f64>)>::from(&expected)
             );
         });

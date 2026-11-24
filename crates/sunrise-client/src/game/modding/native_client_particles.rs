@@ -1,11 +1,10 @@
 //! Local particle and firework requests from native client hooks.
 use super::Game;
-use mod_api::{FireworksRequest, client::particles::PositionSource};
-use sunrise_client::particles::ParticleOptions;
-
-/// The most explosions one `create_fireworks` request draws (a crafted rocket holds at
-/// most 7 stars; a mod's show can be larger).
-const MAX_FIREWORK_EXPLOSIONS: usize = 256;
+use mod_api::{
+    Direction, FireworksRequest, LevelRef, LevelWriteError, client::particles::PositionSource,
+};
+use sunrise_client::particles::{Particle, ParticleLevel, ParticleOptions};
+use sunrise_world::registry::BlockStateId;
 
 fn finite_options(options: &ParticleOptions) -> bool {
     options.color.into_iter().all(f32::is_finite)
@@ -29,6 +28,13 @@ fn finite_options(options: &ParticleOptions) -> bool {
 }
 
 impl Game<'_> {
+    pub(in crate::game) fn particle_block_states() -> Option<sunrise_client::particles::BlockStates>
+    {
+        super::api_values::block_state::current()
+            .ok()
+            .map(|states| -> sunrise_client::particles::BlockStates { states })
+    }
+
     /// `ClientLevel.addParticle`: request one particle in this client's loaded world.
     /// Options and provider input slots pass through unchanged, including encoded
     /// color or size values in `velocity`. Normal distance, settings and population
@@ -49,14 +55,55 @@ impl Game<'_> {
         {
             return false;
         }
-        self.particles.add(options, at, velocity);
+        // The limiter's roll draws the level random: inside a part's `animate_tick`, the one
+        // the part holds as `event.random`.
+        self.with_lent_level_random(|game| {
+            let level = ParticleLevel::new(&game.world, game.res.facts(), game.collision);
+            game.particles
+                .add_with(Some(&level), options, at, velocity, false, false);
+        });
         true
     }
+    pub(super) fn level_add_breaking_particles(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockStateId,
+        face: Direction,
+    ) -> Result<bool, LevelWriteError> {
+        if self.native_client_level() != Some(level) {
+            return Err(LevelWriteError::Unavailable);
+        }
+        Ok(self.add_breaking_particle(pos, state, face))
+    }
+
+    pub(super) fn level_add_terrain_particle(
+        &mut self,
+        level: LevelRef,
+        state: BlockStateId,
+        source_pos: [i32; 3],
+        at: [f64; 3],
+        velocity: [f64; 3],
+    ) -> Result<bool, LevelWriteError> {
+        if self.native_client_level() != Some(level) {
+            return Err(LevelWriteError::Unavailable);
+        }
+        if !at.into_iter().chain(velocity).all(f64::is_finite) {
+            return Ok(false);
+        }
+        let Some((sprite, tint)) = self.particle_sprite(state, source_pos) else {
+            return Ok(false);
+        };
+        let particle = Particle::terrain(self.particles.random(), at, velocity, sprite, tint);
+        self.particles.push(particle);
+        Ok(true)
+    }
+
     /// `ClientLevel.createFireworks`: queue a firework's explosions in this client's loaded
     /// world through the starter a bursting rocket uses, its blast and twinkle sounds gated by
     /// `audible` as a rocket's by its silence. No entity, no damage, nothing on the server.
-    /// True means queued; false on a server, without a client player/level, for non-finite
-    /// input or for more than [`MAX_FIREWORK_EXPLOSIONS`] explosions. API @API:client_fireworks@.
+    /// True means queued; false on a server, without a client player/level or for non-finite
+    /// input. API @API:client_fireworks@.
     pub(super) fn create_fireworks(&mut self, request: &FireworksRequest) -> bool {
         use super::api_values::TryIntoEngine;
         if !self.native_window()
@@ -66,7 +113,6 @@ impl Game<'_> {
                 .into_iter()
                 .chain(request.velocity)
                 .all(f64::is_finite)
-            || request.explosions.len() > MAX_FIREWORK_EXPLOSIONS
         {
             return false;
         }
@@ -76,13 +122,16 @@ impl Game<'_> {
             .map(|explosion| explosion.try_into_engine(&()))
             .collect();
         let camera = self.eye_position().unwrap_or(request.at);
-        self.particles.fireworks(
-            request.at,
-            request.velocity,
-            explosions,
-            camera,
-            request.audible,
-        );
+        // Without explosions its poofs are added at once, each with the limiter's roll.
+        self.with_lent_level_random(|game| {
+            game.particles.fireworks(
+                request.at,
+                request.velocity,
+                explosions,
+                camera,
+                request.audible,
+            );
+        });
         true
     }
 }
@@ -91,7 +140,7 @@ impl Game<'_> {
 mod tests {
     use super::*;
     use mod_api::{ClientHost, FireworkExplosion, FireworkShape};
-    use sunrise_client::particles::{ParticleLevel, ParticleType};
+    use sunrise_client::particles::ParticleType;
 
     #[test]
     fn nonfinite_nested_particle_parameters_are_rejected() {
@@ -126,6 +175,16 @@ mod tests {
     #[ignore = "daily"]
     fn a_client_mods_fireworks_sound_only_when_audible() {
         use crate::game::native_entity_refs::tests::with_client_game;
+        fn tick_particles(game: &mut Game<'_>) {
+            let level = ParticleLevel {
+                world: &game.world,
+                facts: game.res.facts(),
+                collision: game.collision,
+                player: None,
+                cached_chunk: std::cell::Cell::new(None),
+            };
+            game.particles.tick(&level);
+        }
         with_client_game(|game| {
             let eye = sunrise_core::geometry::Vec3::new(0.5, 200.0, 0.5);
             game.player =
@@ -158,14 +217,7 @@ mod tests {
                 let host: &mut dyn ClientHost = game;
                 assert!(host.create_fireworks(&request(audible)));
                 for _ in 0..20 {
-                    let level = ParticleLevel {
-                        world: &game.world,
-                        facts: game.res.facts(),
-                        collision: game.collision,
-                        player: None,
-                        cached_chunk: std::cell::Cell::new(None),
-                    };
-                    game.particles.tick(&level);
+                    tick_particles(game);
                 }
                 let heard: Vec<_> = game
                     .particles
@@ -185,15 +237,73 @@ mod tests {
             let mut bad = request(true);
             bad.velocity[1] = f64::NAN;
             assert!(!host.create_fireworks(&bad), "non-finite input");
-            let mut most = request(false);
-            most.explosions = vec![most.explosions[0].clone(); 256];
+            game.particles.clear();
+            game.particles.sounds.clear();
+            let mut many = request(true);
+            many.explosions = vec![
+                FireworkExplosion {
+                    shape: FireworkShape::Burst,
+                    colors: vec![0xFF5555],
+                    fade_colors: Vec::new(),
+                    trail: false,
+                    twinkle: false,
+                };
+                257
+            ];
+            many.explosions[256].twinkle = true;
+            let host: &mut dyn ClientHost = game;
             assert!(
-                host.create_fireworks(&most),
-                "256 explosions, vanilla's most"
+                host.create_fireworks(&many),
+                "more than 256 explosions are queued without an item-component limit"
             );
-            bad = request(false);
-            bad.explosions = vec![bad.explosions[0].clone(); 257];
-            assert!(!host.create_fireworks(&bad), "257 explosions");
+            tick_particles(game);
+            assert_eq!(
+                game.particles.group_count(),
+                1,
+                "starter admitted on first tick"
+            );
+            assert!(game.particles.sounds.is_empty());
+            tick_particles(game);
+            assert!(
+                game.particles
+                    .sounds
+                    .iter()
+                    .any(|s| s.0 == "minecraft:entity.firework_rocket.large_blast" && s.1 == at),
+                "257-explosion starter played its launch blast"
+            );
+            assert!(
+                !game.particles.is_empty(),
+                "257-explosion starter emitted sparks"
+            );
+            // 257 explosions with twinkle live for 257 * 2 - 1 + 15 = 528 ticks after admission:
+            // life reaches 528 on tick 529 (still alive) and finishes on tick 530 with the twinkle.
+            for _ in 2..529 {
+                tick_particles(game);
+            }
+            assert!(
+                !game
+                    .particles
+                    .sounds
+                    .iter()
+                    .any(|s| s.0 == "minecraft:entity.firework_rocket.twinkle"),
+                "257-explosion starter still running before tick 530"
+            );
+            tick_particles(game);
+            let heard: Vec<_> = game
+                .particles
+                .sounds
+                .iter()
+                .filter(|s| s.0.starts_with("minecraft:entity.firework_rocket."))
+                .map(|s| (s.0, s.1))
+                .collect();
+            assert_eq!(
+                heard,
+                vec![
+                    ("minecraft:entity.firework_rocket.large_blast", at),
+                    ("minecraft:entity.firework_rocket.twinkle", at),
+                ],
+                "257th explosion's twinkle completes the starter's lifecycle"
+            );
             game.options.execution_role =
                 crate::game::execution_role::ExecutionRole::IntegratedServer;
             let host: &mut dyn ClientHost = game;

@@ -22,7 +22,7 @@ impl Game<'_> {
         hand: Hand,
         stack: &ItemStack,
     ) -> Option<mod_api::InteractionResult> {
-        if !mod_api::__private::has_part_hook(mod_api::HookId::UseOn) {
+        if !mod_api::__private::item_listens(mod_api::HookId::UseOn, &stack.item) {
             return None;
         }
         let snapshot = stack.try_into_api().ok()?;
@@ -51,8 +51,7 @@ impl Game<'_> {
         if self.spectator() || !mod_api::__private::listened(mod_api::HookId::EntityInteract) {
             return None;
         }
-        let entity = self.level_entity(id)?;
-        let kind = self.target_type(entity);
+        let kind = self.target_type(self.level_entity(id)?);
         let stack = self.with_hand(hand, |g| g.held().cloned());
         let mut result = None;
         self.native_entity_interact(hand, id, &kind, stack.as_ref(), &mut result);

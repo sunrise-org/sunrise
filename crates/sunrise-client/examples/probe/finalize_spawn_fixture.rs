@@ -106,10 +106,11 @@ impl FinalizeLevel for Level<'_> {
         self.halloween
     }
     fn create(&mut self, kind: &str, _reason: Reason) -> Option<Mob> {
-        if self.peaceful && !finalize::allowed_in_peaceful(kind) {
+        let t = self.types.types.get(kind)?;
+        if self.peaceful && !t.allowed_in_peaceful() {
             return None;
         }
-        let t = Arc::new(self.types.types.get(kind)?.clone());
+        let t = Arc::new(t.clone());
         let index = self.created;
         self.created += 1;
         let mut m = Mob::new(index as u32 + 1, t, Vec3::ZERO, 0.0);
@@ -420,8 +421,9 @@ pub fn main() -> sunrise_client::Result<()> {
     let facts = BlockFacts::load(root, assets.registry)?;
     let mob_data = MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        &facts,
-    );
+        facts.states.len(),
+        false,
+    )?;
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::tags_only(root, &PackOverlay::NONE, &defaults)?;
     let enchantments = Enchantments::load(root, &defaults)?;

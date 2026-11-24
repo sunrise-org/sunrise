@@ -4,25 +4,15 @@ use super::*;
 fn read_encoding_keeps_nonresident_stack_limits() {
     let items = super::stack_limit_tests::catalog();
     let key = mod_api::__private::item_key("minecraft:iron_sword").unwrap();
-    let mut damaged = ApiStack::of(key);
-    damaged
-        .set_components([(JavaString::from("minecraft:max_damage"), Tag::Int(250))].into())
+    let mut stackable = ApiStack::of(key);
+    stackable
+        .set_components([(JavaString::from("minecraft:max_stack_size"), Tag::Int(2))].into())
         .unwrap();
-    damaged.set_damage(251);
-    let mut removed = ApiStack::of(key);
-    removed
-        .set_components(
-            [(
-                JavaString::from("!minecraft:max_damage"),
-                Tag::Compound(Default::default()),
-            )]
-            .into(),
-        )
-        .unwrap();
-    removed.set_damage(1);
+    let mut oversized_damage = ApiStack::of(key);
+    oversized_damage.set_damage(u32::MAX);
     let mut excess = ApiStack::of(mod_api::__private::item_key("minecraft:stick").unwrap());
     excess.set_count(65).unwrap();
-    for api in [damaged, removed, excess] {
+    for api in [stackable, oversized_damage, excess] {
         assert!(api.try_into_engine(&items).is_err(), "write remains strict");
         let encoded = stack_value(&api).unwrap();
         assert_eq!(encoded.count, api.count());
@@ -39,21 +29,15 @@ fn draw_consumers_render_nonresident_stacks() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
         let mut excess = ApiStack::of(mod_api::__private::item_key("minecraft:stick").unwrap());
         excess.set_count(65).unwrap();
-        let mut damaged =
+        let mut stackable =
             ApiStack::of(mod_api::__private::item_key("minecraft:iron_sword").unwrap());
-        damaged.set_damage(251);
-        let mut removed = damaged.clone();
-        removed
-            .set_components(
-                [(
-                    JavaString::from("!minecraft:max_damage"),
-                    Tag::Compound(Default::default()),
-                )]
-                .into(),
-            )
+        stackable
+            .set_components([(JavaString::from("minecraft:max_stack_size"), Tag::Int(2))].into())
             .unwrap();
-        removed.set_damage(1);
-        for api in [excess, damaged, removed] {
+        let mut oversized_count =
+            ApiStack::of(mod_api::__private::item_key("minecraft:iron_sword").unwrap());
+        oversized_count.set_count(2).unwrap();
+        for api in [excess, stackable, oversized_count] {
             assert!(
                 api.try_into_engine(game.items()).is_err(),
                 "not a resident write"

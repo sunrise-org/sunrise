@@ -13,6 +13,7 @@ use sunrise_core::geometry::Vec3;
 
 fn item(id: u32, at: Vec3) -> ItemEntity {
     ItemEntity {
+        size_answer: None,
         attachment_lifetime: Default::default(),
         fall_distance: 0.0,
         random: sunrise_core::random::LegacyRandom::new(0),
@@ -33,10 +34,11 @@ fn item(id: u32, at: Vec3) -> ItemEntity {
         position: at,
         previous: at,
         velocity: Vec3::ZERO,
-        on_ground: false,
+        ground: Default::default(),
         vertical_collision: false,
-        horizontal_collision: false,
         age: 97,
+        stack_revision: 0,
+        lifespan: ItemEntity::LIFETIME,
         pickup_delay: 0,
         bob_offset: 0.0,
         ticks: 97,

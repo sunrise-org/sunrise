@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
-use sunrise_protocol::registry::Builtin;
+use sunrise_protocol::{item::consume_effects, registry::Builtin};
 
 pub const CHANNEL: &str = "sunrise:block_registry";
 /// Decode the optional identity challenge; an empty body requests our digest.
@@ -31,6 +31,7 @@ pub const MISMATCH: &str =
 /// Registries that a vanilla client cannot validate before reading their IDs.
 pub(crate) fn requires_sunrise() -> bool {
     sunrise_protocol::item::custom::entries().next().is_some()
+        || consume_effects::has_custom_types()
         || !mod_api::__private::custom_stat_declarations().is_empty()
 }
 
@@ -431,6 +432,7 @@ mod validity_tests {
         let mut types = BlockEntityTypes::new(
             BTreeMap::new(),
             vec!["minecraft:chest".into(), "minecraft:trapped_chest".into()],
+            [],
         );
         types.template(
             "minecraft:trapped_chest".into(),

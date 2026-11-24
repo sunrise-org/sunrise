@@ -4,9 +4,9 @@ use super::{
     main_queue::{FailedMain, PreparedMain},
 };
 use mod_api::{
-    HandlerThread, IPayloadContext, PayloadAccepted, PayloadBytes, PayloadContextError,
-    PayloadDirection, PayloadId, PayloadProtocol, PayloadSendError, PayloadWork, PayloadWorkStatus,
-    PlayerRef, Text,
+    __private::game::CallbackFailure, HandlerThread, IPayloadContext, PayloadAccepted,
+    PayloadBytes, PayloadContextError, PayloadDirection, PayloadId, PayloadProtocol,
+    PayloadSendError, PayloadWork, PayloadWorkStatus, PlayerRef, Text,
 };
 use std::sync::Arc;
 
@@ -25,27 +25,50 @@ pub fn dispatch(incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
     let Some(connection) = endpoint.transport().connection.as_ref() else {
         return;
     };
-    if let Some(incoming) = connection.queue_payload(incoming)
-        && let Some(incoming) = execute(incoming, &endpoint, &main, std::time::Instant::now())
-    {
-        connection.defer_payload(incoming);
+    // Only dedicated configuration/client receivers may park their physical stream.
+    let wait_epoch =
+        (!matches!(main, MainQueue::Server { conn: Some(_), .. })).then(|| incoming.epoch.clone());
+    if let Some(incoming) = connection.queue_payload(incoming) {
+        execute(
+            incoming,
+            &endpoint,
+            &main,
+            None,
+            PreparedMain::publish,
+            |reason| {
+                endpoint.disconnect(reason);
+            },
+        );
     }
     dispatch_pending(&endpoint, &main);
-    if !matches!(main, MainQueue::Server { conn: Some(_), .. }) {
-        // Dedicated configuration/client receivers already own their physical
-        // ordered stream. Park that receiver, never a guest or the pooled server.
-        while !endpoint.transport().closed() && connection.wait_payloads() {
+    if let Some(epoch) = wait_epoch {
+        while connection.wait_payloads(&epoch) {
             dispatch_pending(&endpoint, &main);
         }
     }
 }
 
-/// The pooled play receiver calls this from its existing maintenance turn.
-pub fn dispatch_pending(endpoint: &Endpoint, main: &MainQueue) {
-    dispatch_pending_at(endpoint, main, std::time::Instant::now());
+/// `ClientNetworkRegistry.handleModdedPayload` invokes NETWORK listeners on
+/// the caller, which is already main inside a bundle. The bundle is itself the
+/// ordered main turn; don't enqueue these roots behind work received later.
+pub fn dispatch_bundle(incoming: Incoming, endpoint: &Endpoint) -> Vec<Incoming> {
+    let work = Arc::new(std::sync::Mutex::new(Vec::new()));
+    execute(
+        incoming,
+        endpoint,
+        &MainQueue::ClientBundle(work.clone()),
+        None,
+        PreparedMain::publish,
+        |reason| {
+            endpoint.disconnect(reason);
+        },
+    );
+    let mut pending = work.lock().unwrap();
+    std::mem::take(&mut *pending)
 }
 
-pub(super) fn dispatch_pending_at(endpoint: &Endpoint, main: &MainQueue, now: std::time::Instant) {
+/// The pooled play receiver calls this from its existing maintenance turn.
+pub fn dispatch_pending(endpoint: &Endpoint, main: &MainQueue) {
     let Some(connection) = endpoint.transport().connection.as_ref() else {
         return;
     };
@@ -53,10 +76,16 @@ pub(super) fn dispatch_pending_at(endpoint: &Endpoint, main: &MainQueue, now: st
         return;
     }
     while let Some(incoming) = connection.next_payload() {
-        if let Some(incoming) = execute(incoming, endpoint, main, now) {
-            connection.defer_payload(incoming);
-            break;
-        }
+        execute(
+            incoming,
+            endpoint,
+            main,
+            None,
+            PreparedMain::publish,
+            |reason| {
+                endpoint.disconnect(reason);
+            },
+        );
     }
 }
 
@@ -64,38 +93,56 @@ fn execute(
     mut incoming: Incoming,
     endpoint: &Endpoint,
     main: &MainQueue,
-    now: std::time::Instant,
-) -> Option<Incoming> {
+    credit: Option<crate::net::ingress::ReceiveLease<crate::net::Event>>,
+    mut publish_main: impl FnMut(PreparedMain) -> Result<(), FailedMain>,
+    disconnect: impl FnOnce(Text),
+) {
     if !incoming.epoch.active() {
-        return None;
-    }
-    if let Some(holder) = incoming.expired_busy(now) {
-        handler_failed(&incoming, endpoint, &incoming.busy_failure(holder));
-        return None;
+        return;
     }
     if matches!(incoming.body, Body::Work(_)) || incoming.receiver.thread == HandlerThread::Main {
+        // The callback may have panicked while this delivery waited for its ordered turn.
+        if incoming.receiver.poisoned() {
+            return;
+        }
+        if let MainQueue::Client(events) = main
+            && matches!(incoming.body, Body::Payload(_))
+        {
+            // This is a wire record on the dedicated client reader, not work
+            // staged by a mod. A closed reader leaves the old epoch to main:
+            // an already-admitted bundle may still have inline payloads to run.
+            use crate::net::ingress::{Refusal, Refused};
+            if let Err(Refused {
+                reason: Refusal::Pressure,
+                ..
+            }) = events.send_wait(crate::net::Event::RawPayload(Box::new(incoming)))
+            {
+                endpoint.disconnect(failure("payload main refused: Pressure"));
+            }
+            return;
+        }
         let epoch = incoming.epoch.clone();
-        let prepared = match main.prepare(incoming) {
+        let prepared = match main.prepare(incoming, credit) {
             Ok(prepared) => prepared,
-            Err(error) => {
-                endpoint.disconnect(failure(&format!("payload main refused: {error:?}")));
-                return None;
+            Err((error, work_failure)) => {
+                if work_failure.is_none() {
+                    disconnect(failure(&format!("payload main refused: {error:?}")));
+                }
+                return;
             }
         };
         // The value stays outside the closure if invalidated before publication.
         let mut prepared = Some(prepared);
-        let result = epoch.with_active(|| prepared.take().unwrap().publish());
+        let result = epoch.with_active(|| publish_main(prepared.take().unwrap()));
         drop(prepared);
         if let Some(Err(error)) = result {
             let reason = error.reason();
             drop(error);
-            endpoint.disconnect(failure(&format!("payload main refused: {reason:?}")));
+            disconnect(failure(&format!("payload main refused: {reason:?}")));
         }
-        return None;
+        return;
     }
-    let Body::Payload(bytes) =
-        std::mem::replace(&mut incoming.body, Body::Payload(PayloadBytes(Vec::new())))
-    else {
+    let Body::Payload(bytes) = incoming.take_body() else {
         unreachable!("work is sent to main above");
     };
     let mut context = NetworkContext {
@@ -104,26 +151,24 @@ fn execute(
         main,
         after: Vec::new(),
         disconnect: None,
+        finish_task: None,
+        failure: None,
     };
-    match incoming.receiver.handle(bytes, &mut context) {
-        Err(mod_api::PayloadHandleError::Busy { payload, holder }) => {
+    let result = incoming.receiver.handle(bytes, &mut context);
+    match context.failure.take().map_or(result, Err) {
+        Err(CallbackFailure::Refused(error)) => {
+            // Drop reservations and staged work before reporting failure; publish no partial actions.
             drop(context);
-            if incoming.defer(payload, &holder, now) {
-                return Some(incoming);
+            if let Some(reason) = handler_failed(&incoming, &error) {
+                disconnect(reason);
             }
-            handler_failed(&incoming, endpoint, &incoming.busy_failure(&holder));
         }
-        Err(mod_api::PayloadHandleError::Failed(error)) => {
-            // Drop reservations and guest work before handling failure, publishing no partial actions.
-            drop(context);
-            // The reason (a guest's deadline, trap or refusal) goes to the log; the player is told
-            // only which mod's handler failed.
-            #[cfg(test)]
-            super::staging_probe::failure(&incoming.id.0, &error);
-            handler_failed(&incoming, endpoint, &error);
+        Err(CallbackFailure::Panicked | CallbackFailure::Poisoned) => {
+            // Already reported by the shared boundary. Drop only this callback's staged work.
         }
         Ok(()) => {
             let reason = context.disconnect.take();
+            let finish_task = context.finish_task.take();
             let mut after = std::mem::take(&mut context.after);
             drop(context);
             let result = incoming.epoch.with_active(|| {
@@ -132,12 +177,18 @@ fn execute(
                 for action in &mut after {
                     match action.take().unwrap() {
                         After::Reply(reply) => reply.publish().map_err(FailedPublication::Reply)?,
-                        After::Work(work) => work.publish().map_err(FailedPublication::Main)?,
+                        After::Work(work) => publish_main(work).map_err(FailedPublication::Main)?,
                     }
+                }
+                if reason.is_none()
+                    && let Some((session, ordinal)) = finish_task.as_ref()
+                {
+                    session.finish_ordinal_under_epoch(*ordinal);
                 }
                 Ok::<(), FailedPublication>(())
             });
             drop(after);
+            drop(finish_task);
             match result {
                 Some(Err(error)) => {
                     let message = match &error {
@@ -149,11 +200,11 @@ fn execute(
                         }
                     };
                     drop(error);
-                    endpoint.disconnect(failure(&message));
+                    disconnect(failure(&message));
                 }
                 Some(Ok(())) => {
                     if let Some(reason) = reason {
-                        endpoint.disconnect(reason);
+                        disconnect(reason);
                     }
                 }
                 // Phase/connection cancellation cancels the staged disconnect too.
@@ -161,21 +212,21 @@ fn execute(
             }
         }
     }
-    None
 }
-fn handler_failed(incoming: &Incoming, endpoint: &Endpoint, error: &str) {
+fn handler_failed(incoming: &Incoming, error: &str) -> Option<Text> {
     if incoming.raw {
         log::warn!(
             "Mod {} failed on raw channel {}: {error}",
             incoming.receiver.owner(),
             incoming.id.0
         );
+        None
     } else {
         log::warn!("payload {} failed: {error}", incoming.id.0);
-        endpoint.disconnect(failure(&format!(
+        Some(failure(&format!(
             "a mod's network handler failed ({})",
             mod_of(&incoming.id)
-        )));
+        )))
     }
 }
 /// The mod a channel belongs to: its namespace.
@@ -192,6 +243,8 @@ struct NetworkContext<'a> {
     main: &'a MainQueue,
     after: Vec<Option<After>>,
     disconnect: Option<Text>,
+    finish_task: Option<(Arc<crate::lan::configuration_tasks::Session>, usize)>,
+    failure: Option<CallbackFailure>,
 }
 impl IPayloadContext for NetworkContext<'_> {
     fn player(&self) -> Result<PlayerRef, PayloadContextError> {
@@ -256,6 +309,56 @@ impl IPayloadContext for NetworkContext<'_> {
     fn check_payload_token(&self, token: &mod_api::PayloadToken) -> Result<(), PayloadSendError> {
         mod_api::__private::game::check_payload_token(token)
     }
+    /// Published at once, not staged with the handler's replies: a droppable frame is worthless
+    /// late, and a relay must not hold it until the handler returns.
+    fn send_to(
+        &mut self,
+        players: &[PlayerRef],
+        id: &PayloadId,
+        bytes: PayloadBytes,
+    ) -> Result<u32, PayloadSendError> {
+        if self.disconnect.is_some() || self.failure.is_some() || !self.incoming.epoch.active() {
+            return Err(PayloadSendError::Disconnected);
+        }
+        if self.endpoint.side() != Side::Server {
+            return Err(PayloadSendError::WrongDirection(id.clone()));
+        }
+        self.endpoint.transport().local.send_to(players, id, bytes)
+    }
+    fn finish_configuration_task(
+        &mut self,
+        task_type: &mod_api::Identifier,
+    ) -> Result<(), mod_api::ConfigurationTaskError> {
+        if self.endpoint.side() != Side::Server
+            || self.incoming.epoch.phase
+                != sunrise_protocol::payload_negotiation::Phase::Configuration
+        {
+            return Err(mod_api::ConfigurationTaskError::WrongContext);
+        }
+        if self.disconnect.is_some() || !self.incoming.epoch.active() {
+            return Err(mod_api::ConfigurationTaskError::Disconnected);
+        }
+        let session = match self.endpoint.configuration_session() {
+            Some(weak) => weak
+                .upgrade()
+                .ok_or(mod_api::ConfigurationTaskError::Disconnected)?,
+            None => return Err(mod_api::ConfigurationTaskError::NotRunning),
+        };
+        if self
+            .endpoint
+            .transport()
+            .epoch()
+            .is_none_or(|epoch| !Arc::ptr_eq(&epoch, &self.incoming.epoch))
+        {
+            return Err(mod_api::ConfigurationTaskError::Disconnected);
+        }
+        if self.finish_task.is_some() {
+            return Err(mod_api::ConfigurationTaskError::NotRunning);
+        }
+        let ordinal = session.running_ordinal_for_type(task_type)?;
+        self.finish_task = Some((session, ordinal));
+        Ok(())
+    }
     fn disconnect(&mut self, reason: Text) {
         self.disconnect = Some(reason);
     }
@@ -263,11 +366,20 @@ impl IPayloadContext for NetworkContext<'_> {
         &mut self,
         work: Arc<dyn PayloadWork>,
     ) -> Result<PayloadWorkStatus, PayloadContextError> {
-        if self.disconnect.is_some() {
+        if self.disconnect.is_some() || self.failure.is_some() {
+            if let Err(error) = self.incoming.receiver.dispose_work(work) {
+                self.failure = Some(error);
+            }
             return Err(PayloadContextError::Disconnected);
         }
-        let work = self.incoming.work(self.endpoint.transport(), work)?;
-        let prepared = self.main.prepare(work)?;
+        let prepared = self
+            .incoming
+            .work(self.endpoint.transport(), work)
+            .and_then(|work| self.main.prepare(work, None))
+            .map_err(|(error, work_failure)| {
+                self.failure = work_failure;
+                error
+            })?;
         self.after.push(Some(After::Work(prepared)));
         #[cfg(any(test, feature = "test-payload-probe"))]
         super::staging_probe::prepared(&self.incoming.id.0, true);

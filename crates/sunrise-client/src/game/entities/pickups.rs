@@ -175,6 +175,7 @@ mod tests {
     fn orb_at(x: f64, y: f64, z: f64) -> Taken {
         let at = sunrise_core::geometry::Vec3::new(x, y, z);
         Taken::Orb(Box::new(ExperienceOrb {
+            size_answer: None,
             attachment_lifetime: Default::default(),
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
@@ -186,7 +187,7 @@ mod tests {
             velocity: sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),
             value: 1,
             age: 0,
-            on_ground: false,
+            ground: Default::default(),
             count: 1,
             ticks: 0,
             health: 5,

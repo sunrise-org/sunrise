@@ -11,10 +11,8 @@ pub trait LevelWorldgenBackend {
     /// The result follows vanilla's sampled spiral and vertical order; it is not a search
     /// through edited biome cells. Does not load resident chunks or switch parked levels.
     /// None for no match, a stale/unavailable level, an unavailable generator, a negative
-    /// radius, nonpositive sampling steps, or a potential sample count above
-    /// [`BiomeSearch::MAX_SAMPLES`] (see [`BiomeSearch::new`] for the work formula).
+    /// radius, or nonpositive sampling steps.
     /// Positive vertical steps larger than the build height sample only the clamped origin.
-    #[access(WorldOnly)]
     fn level_find_closest_biome(
         &self,
         level: LevelRef,
@@ -31,9 +29,8 @@ pub trait LevelWorldgenBackend {
     /// them, without loading or generating chunks or switching parked levels.
     /// None for no start, a structure that does not generate in this level,
     /// a world without structures, a stale level, a client, a negative radius,
-    /// one above [`StructureSearch::MAX_RADIUS`], and an origin outside the
-    /// world's 30,000,000-block bound.
-    #[access(WorldOnly)]
+    /// or an origin outside vanilla's `Level.isInWorldBoundsHorizontal` bound
+    /// (`-30_000_000..30_000_000`).
     fn level_find_nearest_structure(
         &self,
         level: LevelRef,
@@ -41,27 +38,44 @@ pub trait LevelWorldgenBackend {
         parameters: StructureSearch,
     ) -> Option<StructureSearchResult>;
     /// Side: server.
+    /// `StructureManager.getStructureWithPieceAt`: the structures `structure` names (an id or a
+    /// `#tag`) with a start that one of its pieces reaches `pos` in, by the structure references
+    /// of `pos`'s loaded chunk, in their order and without repeats. Empty where none does. None
+    /// for a stale level, a client, and a chunk not loaded: never loads or generates chunks.
+    fn level_structures_with_piece_at(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        structure: &str,
+    ) -> Option<Vec<String>>;
+    /// Side: server.
+    /// `StructureManager.getStructureAt`: as [`LevelRef::structures_with_piece_at`], with the
+    /// start's whole bounding box reaching `pos` instead of a piece's, so a position between a
+    /// structure's pieces counts.
+    fn level_structures_at(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        structure: &str,
+    ) -> Option<Vec<String>>;
+    /// Side: server.
     /// The biome id selected by `LevelReader.getBiome` and this level's biome zoom.
     /// Reads an active or parked server level. None for a
     /// stale handle or an unloaded selected noise column. Never generates or loads chunks.
-    #[access(WorldOnly)]
     fn level_biome_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<String>;
     /// Side: client.
     /// The biome in the client's current level (`LevelReader.getBiome`). None before
     /// login, for a stale or foreign dimension, or an unloaded selected column. Never loads chunks.
-    #[access(WorldOnly)]
     fn level_client_biome(&self, level: LevelRef, pos: [i32; 3]) -> Option<String>;
     /// Side: both.
     /// A biome's natural spawners by category (`MobSpawnSettings.getMobs`), from the level's
     /// biome table, data packs and biome modifiers included, categories sorted by name. None for a
     /// stale handle or an unknown biome. This is the biome's own list; `potential_spawns` is
     /// what a position gets after mods edit it. Reads no chunks.
-    #[access(WorldOnly)]
     fn level_biome_spawners(&self, level: LevelRef, biome: &str) -> Option<Vec<BiomeSpawners>>;
     /// Side: both.
     /// A biome's own sky, fog and water colours (`BiomeSpecialEffects`), from the level's biome
     /// table. None for a stale handle or an unknown biome. Reads no chunks.
-    #[access(WorldOnly)]
     fn level_biome_effects(&self, level: LevelRef, biome: &str) -> Option<BiomeEffects>;
     /// Side: both.
     /// Whether a biome is in a biome tag (`Holder.is(TagKey)`), by the level's tag tables: the
@@ -69,17 +83,14 @@ pub trait LevelWorldgenBackend {
     /// id (`minecraft:is_forest`), with or without a leading `#`. A tag no pack defines holds
     /// nothing, so false. None for a stale handle, an unknown biome or a level that has no tag
     /// tables loaded. Reads no chunks.
-    #[access(WorldOnly)]
     fn level_biome_in_tag(&self, level: LevelRef, biome: &str, tag: &str) -> Option<bool>;
     /// Side: both.
     /// A biome's climate by id (`minecraft:plains`), from the level's biome table, data packs
     /// included: temperature, downfall, whether it has precipitation and the frozen modifier
     /// (`Biome.ClimateSettings`). None for a stale handle or an unknown biome. Reads no chunks.
-    #[access(WorldOnly)]
     fn level_biome_properties(&self, level: LevelRef, biome: &str) -> Option<BiomeProperties>;
     /// Side: server.
     /// The world's seed (`WorldOptions.seed`), as `/seed` shows it.
-    #[access(WorldOnly)]
     fn level_seed(&self, level: LevelRef) -> Option<i64>;
 }
 /// The handles' writes of the `level_worldgen` area, implemented by the game and reached through [`BackendMut`].
@@ -98,7 +109,6 @@ pub trait LevelWorldgenBackendMut {
     /// `PlaceFeatureRefusal`: `Stale`, `Client`, `NotInPlace` (only the level being ticked is
     /// written), `NotLoaded` (a chunk of the 3x3 around `pos` is not loaded, or `pos` is out of
     /// height) and `UnknownFeature`.
-    #[access(WorldOnly)]
     fn level_place_feature(
         &mut self,
         level: LevelRef,
@@ -119,7 +129,6 @@ pub trait LevelWorldgenBackendMut {
     /// remained or all invocations failed. Blocks set before failure are kept. Other refusals
     /// are checked before placement, as for `level_place_feature`, with `UnknownFeature` for an
     /// id the placed-feature registry lacks.
-    #[access(WorldOnly)]
     fn level_place_placed_feature(
         &mut self,
         level: LevelRef,
@@ -133,6 +142,5 @@ pub trait LevelWorldgenBackendMut {
     /// Tentative reads see the new cells inside a transaction. Abort restores the cells
     /// without publishing. Saving, remeshing and resending wait for the outermost commit,
     /// once per column. Outside a transaction they run immediately.
-    #[access(WorldOnly)]
     fn level_set_biome(&mut self, level: LevelRef, pos: [i32; 3], biome: &str) -> bool;
 }

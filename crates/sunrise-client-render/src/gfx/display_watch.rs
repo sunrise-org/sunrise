@@ -9,7 +9,7 @@ use winit::window::Window;
 /// compositor's preferred image description of the surface; elsewhere what wgpu reads
 /// from the OS (on Windows, DXGI's luminances and the SDR white level).
 #[derive(Default)]
-pub(super) struct DisplayWatch {
+pub(crate) struct DisplayWatch {
     #[cfg(target_os = "linux")]
     pub(super) wayland: Option<sunrise_hdr::wayland::Watch>,
     /// Without Wayland's event, when to read wgpu's values again: the OS sends no event for

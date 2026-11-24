@@ -7,9 +7,13 @@ it out. `player.is_fake(host)` tells one apart; `player.remove_fake(host)` remov
 
 `player.disconnect(host, reason)` instead kicks the fake with a `Text` reason, as `/kick` by name or selector does.
 The first reason stands; removal completes at the next hub poll, after any current action returns.
-The shared leave path broadcasts the leave line and fires `player_kicked` and `player_logged_out` (version 2),
+The shared leave path broadcasts the leave line and fires `player_kicked` and `player_logged_out` (version 3),
 even though a fake has no preceding `player_logged_in`. It still writes no player-data save.
 Silent `remove_fake` sends no kick, leave line or logout notification.
+
+To check whether a fake player's current tool can harvest a block without breaking it, use
+[`player.has_correct_tool_for_drops`](../world/harvest-queries.md#what-the-game-uses-for-a-player).
+It reads that fake player's selected hotbar slot and runs the same harvest hooks as a connected player.
 
 ## Actions
 
@@ -94,4 +98,6 @@ shift flag. On the server the existing entity flag is read, including a scoped f
 clients without a joined local player return `None`.
 
 What a machine does beyond a player's action stays in the mod: its own mining progress and catching world drops.
-Scoped actions retain player reach, protection and border checks; eye placement is supplied by the mod.
+Scoped actions retain player reach, protection and border checks. The acting fake's body can obstruct its own block
+placement, just like a connected player's. For scoped placement, choose an eye position that keeps the temporary
+standing body clear of the block's collision shape.

@@ -12,6 +12,8 @@ pub trait Hooks {
     /// meshing workers read the table. The level and position are dropped: the meshing workers run no mod code.
     /// With no part answering, nothing is asked and meshes are unchanged. Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "overlay",
@@ -19,5 +21,9 @@ pub trait Hooks {
         key = "state",
         neoforge = "IBlockExtension.shouldDisplayFluidOverlay"
     )]
-    fn should_display_fluid_overlay();
+    fn should_display_fluid_overlay(
+        state: BlockState,
+        fluid: mod_api::FluidState,
+        overlay: &mut bool,
+    );
 }

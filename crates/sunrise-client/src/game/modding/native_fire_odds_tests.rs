@@ -75,7 +75,7 @@ fn a_block_part_answers_fire_odds_for_one_face() {
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
             game.sync_tick_chunks();
-            game.set_mode_id(0);
+            game.set_local_mode(sunrise_client::command::args::GameMode::Survival);
 
             let registry = game.pack.assets.registry;
             let glass = registry.default_state("minecraft:tinted_glass").unwrap();

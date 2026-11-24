@@ -1,90 +1,82 @@
-//! Resolve predicate/item-modifier tags once, without entering codec-owned payloads.
+//! Resolve holder sets and tags without entering codec-owned payloads.
+use super::super::loot_tags::BoundTags as Tags;
 use super::*;
+
 impl super::super::LootData {
-    /// Edit and validate private table replacements before the one publication.
-    /// A refused replacement leaves this snapshot and its retained codecs intact.
-    pub fn apply_native_table_loads(
+    pub(in crate::loot) fn prepare_types(
         &mut self,
-        context: &crate::native_load_context::LoadContext,
+        types: &Types,
+        native: Option<&crate::native_load_context::LoadContext>,
     ) -> io::Result<()> {
         let mut ids: Vec<_> = self.tables.ids().collect();
-        ids.sort();
-        let mut tables = HashMap::new();
+        ids.sort_unstable();
+        let mut tables = HashMap::with_capacity(ids.len());
         for id in ids {
             let mut table = self.tables[id].clone();
-            super::super::native_loot_table_load(context, id, &mut table);
+            if let Some(context) = native {
+                super::super::native_loot_table_load(context, id, &mut table);
+                super::super::validate_loot_table(&table).map_err(|reason| {
+                    invalid(&format!("native loot_table {id}"), "loot_table", reason)
+                })?;
+            }
+            let path = if native.is_some() {
+                format!("native loot_table {id}")
+            } else {
+                resource("loot_table", id)
+            };
             self.holder_sets
-                .walk(&format!("native loot_table {id}"), &mut table, &self.tags)?;
-            table_fields(&mut table, &self.tags, &self.types);
-            tables.insert(id.to_owned(), table);
-        }
-        self.types.validate(
-            tables.iter().map(|(id, value)| (id.as_str(), value)),
-            &self.predicates,
-            &self.modifiers,
-        )?;
-        self.tables = Arc::new(tables.into_iter().collect());
-        self.refresh_copy_requirements();
-        Ok(())
-    }
-    pub(in crate::loot) fn prepare_types(&mut self) -> io::Result<()> {
-        let mut active = HashSet::new();
-        let mut done = HashSet::new();
-        for (registry, id) in self
-            .tags
-            .keys()
-            .filter(|(registry, _)| matches!(registry.as_str(), "predicate" | "item_modifier"))
-        {
-            check_tag(&self.tags, registry, id, &mut active, &mut done)?;
-        }
-        let tags = &self.tags;
-        let types = &self.types;
-        let mut tables = HashMap::new();
-        for id in self.tables.ids() {
-            let mut table = self.tables[id].clone();
-            table_fields(&mut table, tags, types);
+                .walk(&path, &mut table, &self.tags, types, None)?;
+            table_fields(&mut table, &self.tags, types);
             tables.insert(id.to_owned(), table);
         }
         self.tables = Arc::new(tables.into_iter().collect());
         for value in Arc::make_mut(&mut self.predicates).values_mut() {
-            typed(value, false, tags, types);
+            typed(value, false, &self.tags, types);
         }
-        for value in self.modifiers.values_mut() {
-            typed(value, true, tags, types);
+        for value in Arc::make_mut(&mut self.modifiers).values_mut() {
+            typed(value, true, &self.tags, types);
         }
-        self.validate_types()?;
+        for enchantment in &mut self.enchantments {
+            for effect in Arc::make_mut(&mut enchantment.effects)
+                .get_mut("minecraft:equipment_drops")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(req) = effect
+                    .get_mut("requirements")
+                    .filter(|value| !value.is_null())
+                {
+                    typed(req, false, &self.tags, types);
+                }
+            }
+        }
+        self.bindings = types.bind_generation(
+            self.tables.clone(),
+            self.predicates.clone(),
+            self.modifiers.clone(),
+            self.enchantments
+                .iter()
+                .map(|e| (e.name.clone(), e.effects.clone()))
+                .collect(),
+            Normalization {
+                holder_sets: self.holder_sets.clone(),
+                tags: self.tags.clone(),
+            },
+        )?;
         self.refresh_copy_requirements();
         Ok(())
     }
 }
-type Tags = HashMap<(String, String), crate::tag_layers::TagLayers>;
-fn check_tag(
-    tags: &Tags,
-    registry: &str,
-    id: &str,
-    active: &mut HashSet<(String, String)>,
-    done: &mut HashSet<(String, String)>,
-) -> io::Result<()> {
-    let key = (registry.to_owned(), id.to_owned());
-    if done.contains(&key) {
-        return Ok(());
-    }
-    if !active.insert(key.clone()) {
-        return Err(invalid(
-            &format!("tags/{registry} {id}"),
-            id,
-            "reference cycle",
-        ));
-    }
-    if let Some(layers) = tags.get(&key) {
-        for tag in layers.tags() {
-            check_tag(tags, registry, tag, active, done)?;
-        }
-    }
-    active.remove(&key);
-    done.insert(key);
-    Ok(())
+
+pub(super) fn normalize_table(value: &mut Value, tags: &Tags, types: &Types) {
+    table_fields(value, tags, types);
 }
+
+pub(super) fn normalize_condition(value: &mut Value, tags: &Tags, types: &Types) {
+    typed(value, false, tags, types);
+}
+
 fn table_fields(value: &mut Value, tags: &Tags, types: &Types) {
     fields(value, tags, types);
     for pool in value
@@ -122,6 +114,11 @@ fn fields(value: &mut Value, tags: &Tags, types: &Types) {
     if let Some(condition) = value.get_mut("condition") {
         typed(condition, false, tags, types);
     }
+    if let Some(conditions) = value.get_mut("conditions").and_then(Value::as_array_mut) {
+        for condition in conditions {
+            typed(condition, false, tags, types);
+        }
+    }
     if let Some(modifier) = value.get_mut("modifier") {
         typed(modifier, true, tags, types);
     }
@@ -147,7 +144,7 @@ fn typed(value: &mut Value, function: bool, tags: &Tags, types: &Types) {
     let kind = value["type"].as_str().unwrap_or("");
     let conditional = shapes::contains(kind, true) || types.conditional(kind);
     // Locate only schema-owned edges; scalar/text decoding belongs to the
-    // validation pass, and registered payloads remain opaque.
+    // binding pass, and registered payloads remain opaque.
     let children = shapes::children(value, function, kind)
         .into_iter()
         .map(|child| (child.kind, child.pointer))
@@ -162,11 +159,15 @@ fn typed(value: &mut Value, function: bool, tags: &Tags, types: &Types) {
             }
         }
     }
-    if function
-        && conditional
-        && let Some(condition) = value.get_mut("condition").filter(|value| !value.is_null())
-    {
-        typed(condition, false, tags, types);
+    if function && conditional {
+        if let Some(condition) = value.get_mut("condition").filter(|value| !value.is_null()) {
+            typed(condition, false, tags, types);
+        }
+        if let Some(conditions) = value.get_mut("conditions").and_then(Value::as_array_mut) {
+            for condition in conditions {
+                typed(condition, false, tags, types);
+            }
+        }
     }
 }
 
@@ -180,8 +181,16 @@ fn set(value: &mut Value, function: bool, tags: &Tags, types: &Types) {
         } else {
             "predicate"
         };
-        let ids = super::super::loot_tags::members(tags, registry, &tag.to_string());
-        *value = Value::Array(ids.into_iter().map(Value::String).collect());
+        let ids = tags
+            .get(registry)
+            .and_then(|tags| tags.get(tag.to_string().as_str()));
+        *value = Value::Array(
+            ids.into_iter()
+                .flatten()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        );
     } else if !value.is_array() {
         *value = Value::Array(vec![std::mem::take(value)]);
     }

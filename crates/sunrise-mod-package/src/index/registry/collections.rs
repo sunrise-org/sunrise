@@ -1,5 +1,8 @@
 //! Collection entries and their published pages.
-use super::{Checkout, MAX_ICON, Sources, image, owned_by, owner_ids_error, read_regular};
+use super::{
+    Checkout, MAX_ICON, ReviewChange, ReviewStatus, Sources, has_versions, image, owned_by,
+    owner_ids_error, read_regular,
+};
 use crate::index::{Collection, Member, collections::by_default, page, valid_id};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
@@ -46,11 +49,11 @@ impl Checkout {
         let (collections, mut errors) = self.collection_pages(src);
         let listed: BTreeMap<_, _> = self
             .listed()
-            .filter(|(entry, cache)| !entry.versions.is_empty() || cache.is_some())
+            .filter(|(entry, cache)| has_versions(entry, *cache))
             .map(|(entry, _)| (entry.id.as_str(), &entry.kind))
             .collect();
         for collection in collections {
-            errors.extend(collection.check(|id| listed.get(id).copied()));
+            errors.extend(collection.check(false, |id| listed.get(id).copied()));
         }
         errors
     }
@@ -106,23 +109,9 @@ impl Checkout {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CollectionReviewStatus {
-    Routine,
-    ReviewRequired,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct CollectionReview {
-    pub id: String,
-    pub status: CollectionReviewStatus,
-    pub reason: String,
-}
-
 /// Classify what changed about collections. Use the base's owners, not any ownership a
 /// submission may add alongside the change. A routine result is not an approval or a check.
-pub fn review_collections(base: &Checkout, head: &Checkout, author: &str) -> Vec<CollectionReview> {
+pub fn review_collections(base: &Checkout, head: &Checkout, author: &str) -> Vec<ReviewChange> {
     let before: BTreeMap<_, _> = base
         .collections
         .iter()
@@ -139,11 +128,11 @@ pub fn review_collections(base: &Checkout, head: &Checkout, author: &str) -> Vec
     for id in ids {
         let (status, reason) = match (before.get(id), after.get(id)) {
             (None, Some(_)) => (
-                CollectionReviewStatus::ReviewRequired,
+                ReviewStatus::ReviewRequired,
                 "new collection: review its page and members".into(),
             ),
             (Some(_), None) => (
-                CollectionReviewStatus::ReviewRequired,
+                ReviewStatus::ReviewRequired,
                 "removed collection: review the removal".into(),
             ),
             (Some(old), Some(new)) => {
@@ -155,7 +144,7 @@ pub fn review_collections(base: &Checkout, head: &Checkout, author: &str) -> Vec
                 if old == new && !icon_changed {
                     continue;
                 }
-                use CollectionReviewStatus::{ReviewRequired, Routine};
+                use ReviewStatus::{ReviewRequired, Routine};
                 if !owned_by(&old.owners, author) {
                     (
                         ReviewRequired,
@@ -205,7 +194,7 @@ pub fn review_collections(base: &Checkout, head: &Checkout, author: &str) -> Vec
             }
             _ => continue,
         };
-        changes.push(CollectionReview {
+        changes.push(ReviewChange {
             id: id.into(),
             status,
             reason,

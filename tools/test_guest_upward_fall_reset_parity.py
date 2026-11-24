@@ -6,10 +6,10 @@ above the last one: the fall distance goes back to 0, and `fall_from_height` is 
 until then.
 
 A real protocol client joins a vanilla 26.3 dedicated server and Sunrise's as a survival player in the air. The
-world is frozen and stepped by hand. The client sends one position a block lower, then one half a block higher,
-each followed by one world step. After each, the console reads the player's fall distance and position, and which
-of three `fall_from_height` advancements it has: any fall, a fall of at most 1 block, a fall of about 5. The two
-servers must answer the same.
+world is frozen and stepped by hand. One position down, then one up, establish the single-report behavior.
+A down/up/down batch ends the old fall at the middle report and starts a new one at the last. A landing
+followed by a rise must damage the player and grant the landing criterion, not use the position of the rise.
+The two servers must give the same fall distance, position, health and `fall_from_height` advancements.
 
     python3 tools/test_guest_upward_fall_reset_parity.py
 """
@@ -29,7 +29,7 @@ from test_disconnect_crafting_parity import generate
 from test_machine_recipe_placement_parity import Commands
 
 PLAYER = 'FallGuest'
-ADVANCEMENTS = {'any': None, 'short': {'max': 1.0}, 'five': {'min': 4.9, 'max': 5.1}}
+ADVANCEMENTS = {'any': None, 'short': {'max': 1.0}, 'five': {'min': 4.9, 'max': 5.1}, 'landing': 3.5}
 MOVES = [('down', 109.0), ('up', 109.5)]
 
 
@@ -58,13 +58,14 @@ def step(server):
 
 
 def observe(commands):
-    """What the console says of the player: its fall distance, its position and its advancements."""
+    """The player's fall distance, position, health and advancements from the console."""
     def data(path):
         text = commands.reply(f'data get entity {PLAYER} {path}')
         return re.search(r'has the following entity data: (.*)', text).group(1).strip()
     done = {name: 'Test passed' in commands.reply(
         f'execute if entity @a[name={PLAYER},advancements={{fall:{name}=true}}]') for name in ADVANCEMENTS}
-    return {'fall_distance': data('fall_distance'), 'Pos': data('Pos'), 'advancements': done}
+    return {'fall_distance': data('fall_distance'), 'Pos': data('Pos'), 'Health': data('Health'),
+            'advancements': done}
 
 
 def run(side, command, client_command, out, world):
@@ -83,8 +84,8 @@ def run(side, command, client_command, out, world):
                 client.tell(option)
             client.tell('join ' + PLAYER)
             client.sync([PLAYER])
-            for text in ['gamerule show_advancement_messages false', f'gamemode survival {PLAYER}',
-                         f'tp {PLAYER} 12.5 110 12.5 0 0']:
+            for text in ['gamerule show_advancement_messages false', 'gamerule natural_health_regeneration false',
+                         f'gamemode survival {PLAYER}', f'tp {PLAYER} 12.5 110 12.5 0 0']:
                 commands.reply(text)
             client.sync([PLAYER])
             step(server)
@@ -95,6 +96,22 @@ def run(side, command, client_command, out, world):
                 step(server)
                 client.sync([PLAYER])
                 seen[label] = observe(commands)
+
+            for name in ('any', 'short'):
+                commands.reply(f'advancement revoke {PLAYER} only fall:{name}')
+            client.tell(f'fallmove {PLAYER} 12.5 108.5 12.5 false')
+            client.sync([PLAYER])
+            step(server)
+
+            # All three positions go in one write, with no world step or sync between them.
+            client.tell(f'fallmove {PLAYER} 12.5 104 12.5 false 12.5 104.5 12.5 false 12.5 103.5 12.5 false')
+            client.sync([PLAYER])
+            seen['down-up-down'] = observe(commands)
+            step(server)  # Track the new fall from the final position.
+
+            client.tell(f'fallmove {PLAYER} 12.5 100 12.5 true 12.5 100.5 12.5 false')
+            client.sync([PLAYER])
+            seen['landing-then-rise'] = observe(commands)
             client.end()
             client = None
         finally:
@@ -144,7 +161,14 @@ def main():
     assert falling['fall_distance'] == '1.0d' and not any(falling['advancements'].values()), falling
     risen = seen['vanilla']['up']
     assert risen['fall_distance'] == '0.0d', risen
-    assert risen['advancements'] == {'any': True, 'short': True, 'five': False}, risen
+    assert risen['advancements'] == {'any': True, 'short': True, 'five': False, 'landing': False}, risen
+    batch = seen['vanilla']['down-up-down']
+    assert batch['fall_distance'] == '1.0d' and batch['Pos'] == '[12.5d, 103.5d, 12.5d]', batch
+    assert batch['advancements'] == {'any': True, 'short': False, 'five': False, 'landing': False}, batch
+    landed = seen['vanilla']['landing-then-rise']
+    assert landed['fall_distance'] == '0.0d' and landed['Pos'] == '[12.5d, 100.5d, 12.5d]', landed
+    assert landed['Health'] == '19.0f', landed
+    assert landed['advancements'] == {'any': True, 'short': False, 'five': False, 'landing': True}, landed
     differences = [label for label in seen['vanilla'] if seen['vanilla'][label] != seen['sunrise'][label]]
     for label in differences:
         print(f"difference after {label}: vanilla {seen['vanilla'][label]}, sunrise {seen['sunrise'][label]}",

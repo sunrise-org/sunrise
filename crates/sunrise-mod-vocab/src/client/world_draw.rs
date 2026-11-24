@@ -3,7 +3,7 @@
 /// Whether world geometry is hidden by nearer world surfaces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local depth policy for world geometry.
 pub enum WorldDepth {
     /// Test against the world's depth, without writing depth.
     Tested,
@@ -14,7 +14,7 @@ pub enum WorldDepth {
 /// A world-space line, colored with 0xAARRGGBB and measured in screen pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local world line submission.
 pub struct WorldLine {
     /// Starting position in blocks, before camera subtraction.
     pub from: [f64; 3],
@@ -44,7 +44,7 @@ impl WorldLine {
 /// top right as seen from the front; alpha blends without writing depth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local world quad submission.
 pub struct WorldQuad {
     /// Four world-space corners in blocks, before camera subtraction.
     pub corners: [[f64; 3]; 4],
@@ -64,33 +64,58 @@ impl WorldQuad {
     }
 }
 
-/// Why a whole geometry batch was refused; nothing from that batch was appended.
+/// Why a whole geometry batch or label was refused; nothing from that call was appended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: refusal of an in-process draw submission.
 pub enum DrawError {
     /// A coordinate or width is not finite, or a camera-relative coordinate overflows f32.
     NonFinite,
     /// A finite line width is zero or negative.
     InvalidWidth,
-    /// The batch would exceed this view's setup-time capacity.
-    CapacityExceeded,
-    /// A label's text is deeper than 512 component nodes (`MAX_TEXT_DEPTH`).
-    TextTooDeep,
-    /// A label's text is otherwise refused at the boundary (`TextFormError`).
-    TextRefused,
+    /// The selected stage has no render pass.
+    NoRenderPass,
 }
+
+// no wire: a draw handle only names a batch in the current in-process render view.
+// exhaustive: its fields are private; only the renderer constructs a draw handle
+/// Geometry submitted in `prepare_render_buffers`. Use it in the matching stage of this view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedWorldDraw {
+    view: u64,
+    slot: usize,
+}
+
+impl PreparedWorldDraw {
+    // hidden: the renderer owns the view and its batch table.
+    #[doc(hidden)]
+    pub fn __new(view: u64, slot: usize) -> Self {
+        Self { view, slot }
+    }
+
+    // hidden: the renderer checks the view before resolving the slot.
+    #[doc(hidden)]
+    pub fn __slot(self, view: u64) -> Option<usize> {
+        (self.view == view).then_some(self.slot)
+    }
+}
+
+// no wire: only returned when resolving an in-process draw handle.
+// exhaustive: unit error marker carrying no fields
+/// A draw handle was not prepared for this view and stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedWorldDrawError;
 
 /// How [`WorldDrawContext::name_tag`](crate::WorldDrawContext::name_tag) draws a label.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local world label drawing options.
 pub struct NameTagOptions {
     /// Draw it as vanilla draws a name that is not sneaking: opaque text in the world and a
     /// faded copy over everything, walls included. Off, it is drawn once as a sneaking name:
     /// the faded text, depth tested and translucent. The faded text's alpha follows the
-    /// text background opacity: 255 times the larger of (opacity + 0.75) / 2 and 0.5, 0x7F
-    /// at the default.
+    /// text background opacity unless `faded_alpha` is set: 255 times the larger of
+    /// (opacity + 0.75) / 2 and 0.5, 0x7F at the default.
     pub see_through: bool,
     /// Put the translucent black backdrop behind the faded text, at the player's text
     /// background opacity (`Options.getBackgroundOpacity(0.25)`: 0x3F at the default).
@@ -101,115 +126,241 @@ pub struct NameTagOptions {
     /// this light; with it, the copy in the world raises each of the two levels to at least 2
     /// (`lightCoordsWithEmission(light, 2)`) and the copy over everything ignores it.
     pub light: u8,
+    /// The alpha byte of the faded text, whichever copy it is: the see-through copy, or the
+    /// single copy when `see_through` is off (`Font.drawInBatch` takes the colour's alpha from
+    /// its caller). `None` keeps the value derived from the text background opacity above.
+    /// Fragments under alpha 0.1 are discarded as for every name tag copy, so an alpha under 26
+    /// draws no text. The backdrop is unchanged.
+    pub faded_alpha: Option<u8>,
+    /// With `see_through`, draw the opaque copy in the world in `light` exactly, without
+    /// raising each level to at least 2. No effect without `see_through`, which already draws
+    /// in `light` as given.
+    pub exact_light: bool,
 }
 impl NameTagOptions {
-    /// Describe a label's drawing.
+    /// Describe a label's drawing; the faded text's alpha follows the text background opacity
+    /// and the light of the copy in the world is raised to at least 2.
     pub fn new(see_through: bool, background: bool, light: u8) -> Self {
         Self {
             see_through,
             background,
             light,
+            faded_alpha: None,
+            exact_light: false,
+        }
+    }
+
+    /// Draw the faded text at alpha `alpha` ([`NameTagOptions::faded_alpha`]).
+    pub fn with_faded_alpha(mut self, alpha: u8) -> Self {
+        self.faded_alpha = Some(alpha);
+        self
+    }
+
+    /// Draw the opaque copy in `light` exactly ([`NameTagOptions::exact_light`]).
+    pub fn with_exact_light(mut self) -> Self {
+        self.exact_light = true;
+        self
+    }
+}
+
+/// Order-independent transparency (OIT) sub-passes in vanilla 26.3 (`OitStage`), in execution
+/// order.
+// exhaustive: vanilla 26.3's closed three-pass OitStage enum
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// no wire: local OIT sub-pass selector.
+pub enum OitStage {
+    /// First OIT pass: records depth bounds for translucent fragments (`OitStage.DEPTH_BOUNDS`).
+    DepthBounds,
+    /// Second OIT pass: computes transmittance coefficients (`OitStage.TRANSMITTANCE`).
+    Transmittance,
+    /// Third OIT pass: accumulates weighted translucent colour (`OitStage.ACCUMULATE`).
+    Accumulate,
+}
+
+/// Where in the world's frame a stage runs: all 9 NeoForge 26.3
+/// `RenderLevelStageEvent` stages, listed in engine order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+// no wire: local world render-stage selector.
+pub enum RenderLevelStage {
+    /// NeoForge's `RenderLevelStageEvent.AfterSky` in `LevelRenderer.addSkyPass`. Fires once
+    /// immediately after the engine or classic pack's sky work, even if it draws nothing visible.
+    /// Absent for a dimension without a skybox, lava or powder-snow camera fog, or a camera mob
+    /// effect that blocks the sky. A classic pack that owns the disc or celestial programs
+    /// completes the logical pass after its world import; the engine still draws unclaimed
+    /// portions. Provides no active render pass.
+    AfterSky,
+    /// After solid and cutout chunk geometry, before opaque entities and block entities
+    /// (`RenderLevelStageEvent.AfterOpaqueBlocks`). When a classic shader pack owns terrain with a
+    /// float-blendable `colortex0`, the pack's opaque terrain pass supplies this boundary.
+    AfterOpaqueBlocks,
+    /// After opaque entities, block entities and particles
+    /// (`RenderLevelStageEvent.AfterOpaqueFeatures`). With a classic pack that owns
+    /// feature drawing, its opaque group owns this boundary.
+    AfterOpaqueFeatures,
+    /// Classic transparency only: after translucent entities and block entities
+    /// (`RenderLevelStageEvent.AfterTranslucentFeatures`). On the engine route this precedes
+    /// translucent chunk geometry. A classic pack supplies the boundary when its own
+    /// translucent feature drawing finishes.
+    AfterTranslucentFeatures,
+    /// Classic transparency only: after translucent chunk geometry such as water and stained
+    /// glass, before translucent particles (`RenderLevelStageEvent.AfterTranslucentBlocks`). When
+    /// a classic shader pack owns terrain/water with a float-blendable `colortex0`, the pack's
+    /// translucent terrain pass supplies this boundary.
+    AfterTranslucentBlocks,
+    /// Classic transparency only: after translucent particles, before weather
+    /// (`RenderLevelStageEvent.AfterTranslucentParticles`).
+    AfterTranslucentParticles,
+    /// Classic transparency only: after rain and snow, before the world border
+    /// (`RenderLevelStageEvent.AfterWeather`). When a classic shader pack owns weather with a
+    /// float-blendable `colortex0`, the pack's weather pass supplies this boundary.
+    AfterWeather,
+    /// Improved transparency (OIT) only: fired once per [`OitStage`] after translucent chunk
+    /// geometry, translucent features, the world border and weather
+    /// (`RenderLevelStageEvent.OitTranslucent`).
+    OitTranslucent(OitStage),
+    /// After the level finishes rendering, before the engine's first-person hand overlay
+    /// (`RenderLevelStageEvent.AfterLevel`). With a classic shader pack this follows the pack's
+    /// world passes (including its own hand), before pack composition. Provides no active
+    /// render pass.
+    AfterLevel,
+}
+impl RenderLevelStage {
+    /// The engine's stage order when classic transparency is active (`!view.improved_transparency`).
+    /// A classic shader pack can skip engine stages or provide its own sky, block, feature, and
+    /// weather boundaries on a float-blendable `colortex0`.
+    pub const CLASSIC_ORDER: &[Self] = &[
+        Self::AfterSky,
+        Self::AfterOpaqueBlocks,
+        Self::AfterOpaqueFeatures,
+        Self::AfterTranslucentFeatures,
+        Self::AfterTranslucentBlocks,
+        Self::AfterTranslucentParticles,
+        Self::AfterWeather,
+        Self::AfterLevel,
+    ];
+
+    /// The stages fired in frame order when improved transparency (OIT) is active
+    /// (`view.improved_transparency`).
+    pub const OIT_ORDER: &[Self] = &[
+        Self::AfterSky,
+        Self::AfterOpaqueBlocks,
+        Self::AfterOpaqueFeatures,
+        Self::OitTranslucent(OitStage::DepthBounds),
+        Self::OitTranslucent(OitStage::Transmittance),
+        Self::OitTranslucent(OitStage::Accumulate),
+        Self::AfterLevel,
+    ];
+
+    /// The engine's stage order for the active transparency mode. Classic shader packs can
+    /// skip stages or complete their sky, block, feature, and weather passes after the engine
+    /// world pass.
+    pub const fn frame_order(improved_transparency: bool) -> &'static [Self] {
+        if improved_transparency {
+            Self::OIT_ORDER
+        } else {
+            Self::CLASSIC_ORDER
+        }
+    }
+
+    /// Whether this stage has an active render pass (`AfterSky` and `AfterLevel` do not).
+    pub const fn has_render_pass(self) -> bool {
+        !matches!(self, Self::AfterSky | Self::AfterLevel)
+    }
+
+    /// The OIT sub-pass stage when this is [`Self::OitTranslucent`], or `None` otherwise.
+    pub const fn oit_stage(self) -> Option<OitStage> {
+        match self {
+            Self::OitTranslucent(stage) => Some(stage),
+            _ => None,
         }
     }
 }
 
-/// Where in the world's frame a stage's geometry is drawn: NeoForge 26.3's
-/// `RenderLevelStageEvent` stages Sunrise draws, in the order the frame reaches them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum RenderLevelStage {
-    /// After the sky, sun, moon and stars, before any terrain (`AfterSky`): behind
-    /// everything else the world draws, for backdrops and atmosphere.
-    AfterSky,
-    /// After solid and cutout terrain, before entities and block entities
-    /// (`AfterOpaqueBlocks`).
-    AfterOpaqueBlocks,
-    /// After translucent terrain such as water and stained glass, before translucent
-    /// particles (`AfterTranslucentBlocks`).
-    AfterTranslucentBlocks,
-    /// After rain and snow, before the world border (`AfterWeather`).
-    AfterWeather,
-    /// After the rest of the world, before the first-person hand (`AfterLevel`): where
-    /// `submit_custom_geometry` and the debug renderers draw.
-    AfterLevel,
-}
-impl RenderLevelStage {
-    /// Every stage, in the order the frame reaches them.
-    pub const ALL: [Self; 5] = [
-        Self::AfterSky,
-        Self::AfterOpaqueBlocks,
-        Self::AfterTranslucentBlocks,
-        Self::AfterWeather,
-        Self::AfterLevel,
-    ];
+// no wire: borrows the active stage's pass surface for the duration of a render_level_stage callback.
+// exhaustive: covers the three engine pass kinds for a render stage callback
+/// The drawing capability active for one [`RenderLevelStage`] callback.
+pub enum StagePass<'a> {
+    /// No active render pass (`RenderLevelStage::AfterSky`, `RenderLevelStage::AfterLevel`).
+    None,
+    /// Standard world colour/depth pass (`AfterOpaqueBlocks`, `AfterOpaqueFeatures`,
+    /// `AfterTranslucentFeatures`, `AfterTranslucentBlocks`, `AfterTranslucentParticles`,
+    /// `AfterWeather`).
+    World(&'a mut dyn crate::WorldPassDrawContext),
+    /// Order-independent transparency sub-pass (`RenderLevelStage::OitTranslucent`).
+    Oit(OitStage, &'a mut dyn crate::WorldOitPassDrawContext),
 }
 
-/// Immutable, minimal extracted state for custom world geometry submission.
-/// This initial view does not expose NeoForge's full level state or visible sections.
+// no wire: in-process frame section view lent during world rendering.
+/// One visible chunk section in the current world view (NeoForge 26.3's `IRenderableSection`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct WorldRenderView {
-    /// Camera origin in world-space blocks. Subtraction precedes f32 conversion.
-    pub camera: [f64; 3],
-    /// The frame's interpolation fraction.
+pub struct RenderableSection {
+    /// World-space block coordinates of the section's minimum corner.
+    pub origin: [i32; 3],
+    /// World-space axis-aligned bounding box `[min, max]` of the section in blocks.
+    pub bounds: [[f64; 3]; 2],
+    /// Whether the compiled section currently holds no rendered geometry.
+    pub empty: bool,
+}
+impl RenderableSection {
+    /// Describe one visible chunk section in the current frame.
+    pub const fn new(origin: [i32; 3], bounds: [[f64; 3]; 2], empty: bool) -> Self {
+        Self {
+            origin,
+            bounds,
+            empty,
+        }
+    }
+}
+
+// no wire: borrows frame camera state and visible sections for the duration of a render callback.
+/// Read-only frame state and visible chunk sections lent for one world view.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct WorldRenderView<'a> {
+    /// Frame camera state (position, eye height, rotation, projection and dimension).
+    pub camera: &'a crate::Camera,
+    /// World partial tick (`alpha`), distinct from `camera.partial_tick` while paused or frozen.
     pub partial_tick: f32,
     /// Level game time in ticks.
     pub game_time: i64,
+    /// Whether vanilla 26.3 order-independent transparency (improved transparency) is active this frame.
+    pub improved_transparency: bool,
+    /// Visible chunk sections in the current view (NeoForge 26.3 `IRenderableSection` list).
+    pub sections: &'a [RenderableSection],
 }
-impl WorldRenderView {
-    /// Describe the extracted view.
-    pub fn new(camera: [f64; 3], partial_tick: f32, game_time: i64) -> Self {
+impl<'a> WorldRenderView<'a> {
+    /// Borrow the frame camera and visible sections for one world view.
+    pub fn new(
+        camera: &'a crate::Camera,
+        partial_tick: f32,
+        game_time: i64,
+        improved_transparency: bool,
+        sections: &'a [RenderableSection],
+    ) -> Self {
         Self {
             camera,
             partial_tick,
             game_time,
+            improved_transparency,
+            sections,
         }
     }
-}
 
-/// Queued primitive counts and fixed capacities, shared across both depth modes.
-///
-/// `instances_capacity` is the per-view budget of 16,384 model copies. It is reserved
-/// when the view's storage is created and is never grown during submission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct WorldDrawUsage {
-    /// Lines queued for this view after near-plane clipping.
-    pub lines: u32,
-    /// Maximum lines per view.
-    pub line_capacity: u32,
-    /// Quads queued for this view.
-    pub quads: u32,
-    /// Maximum quads per view.
-    pub quad_capacity: u32,
-    /// Model copies accepted for this view. Culled copies are not included.
-    /// A call may pass at most [`instances_capacity`](Self::instances_capacity)
-    /// copies; that bound is applied before culling.
-    pub instances_used: u32,
-    /// Maximum model copies per view, and the most copies one call may pass.
-    pub instances_capacity: u32,
-}
-impl WorldDrawUsage {
-    /// Describe the current usage and setup-time limits.
-    pub fn new(
-        lines: u32,
-        line_capacity: u32,
-        quads: u32,
-        quad_capacity: u32,
-        instances_used: u32,
-        instances_capacity: u32,
-    ) -> Self {
-        Self {
-            lines,
-            line_capacity,
-            quads,
-            quad_capacity,
-            instances_used,
-            instances_capacity,
-        }
+    /// Camera position in world-space blocks.
+    pub fn camera_position(&self) -> [f64; 3] {
+        self.camera.position
+    }
+
+    /// Camera-relative model-view matrix in column-major order.
+    pub fn model_view_matrix(&self) -> [f32; 16] {
+        self.camera.view
+    }
+
+    /// Reversed-Z projection matrix in column-major order.
+    pub fn projection_matrix(&self) -> [f32; 16] {
+        self.camera.projection
     }
 }
 
@@ -217,16 +368,52 @@ impl WorldDrawUsage {
 mod tests {
     use crate::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn world_draw_values_are_not_wire_values() {
+        // If a draw type implements Wire, there are two possible marker types for it
+        // and the compiler rejects the ambiguous assertion.
+        trait Local<Marker> {
+            fn assert_local() {}
+        }
+        impl<T> Local<()> for T {}
+        impl<T: crate::wire::Wire> Local<u8> for T {}
+
+        let _ = <DrawError as Local<_>>::assert_local;
+        let _ = <RenderLevelStage as Local<_>>::assert_local;
+        let _ = <OitStage as Local<_>>::assert_local;
+        let _ = <WorldDepth as Local<_>>::assert_local;
+        let _ = <WorldLine as Local<_>>::assert_local;
+        let _ = <WorldQuad as Local<_>>::assert_local;
+        let _ = <NameTagOptions as Local<_>>::assert_local;
+    }
+
     static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static PREPARE_CALLS: AtomicUsize = AtomicUsize::new(0);
     struct Listener;
     #[mod_api::__subscriptions]
     impl Hooks for Listener {
+        fn prepare_render_buffers(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut PrepareRenderBuffersEvent<'_>,
+        ) {
+            assert_eq!(event.view.game_time, 42);
+            assert_eq!(event.view.partial_tick, 0.5);
+            assert!(event.view.improved_transparency);
+            assert_eq!(event.view.camera_position(), [1.0, 2.0, 3.0]);
+            assert_eq!(event.view.sections.len(), 1);
+            assert_eq!(event.view.sections[0].origin, [16, 64, -32]);
+            PREPARE_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
         fn submit_custom_geometry(
             &self,
             _: &dyn ClientHost,
             event: &mut SubmitCustomGeometryEvent<'_>,
         ) {
             assert_eq!(event.view.game_time, 42);
+            assert_eq!(event.view.camera_position(), [1.0, 2.0, 3.0]);
+            assert_eq!(event.view.sections.len(), 1);
             CALLS.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -238,6 +425,56 @@ mod tests {
     impl ClientHost for Empty {}
     mod_api::impl_client_host_areas!(Empty);
     impl WorldDrawContext for Empty {}
+    impl RenderLevelStageContext for Empty {}
+    impl PrepareRenderBuffersContext for Empty {
+        fn lines(
+            &mut self,
+            _: RenderLevelStage,
+            _: &[WorldLine],
+        ) -> Result<PreparedWorldDraw, DrawError> {
+            Err(DrawError::NoRenderPass)
+        }
+        fn quads(
+            &mut self,
+            _: RenderLevelStage,
+            _: &[WorldQuad],
+        ) -> Result<PreparedWorldDraw, DrawError> {
+            Err(DrawError::NoRenderPass)
+        }
+    }
+    #[test]
+    fn render_level_stage_orders_and_capabilities_match_neoforge() {
+        assert_eq!(
+            RenderLevelStage::frame_order(false),
+            RenderLevelStage::CLASSIC_ORDER
+        );
+        assert_eq!(
+            RenderLevelStage::frame_order(true),
+            RenderLevelStage::OIT_ORDER
+        );
+        assert!(!RenderLevelStage::AfterSky.has_render_pass());
+        assert!(!RenderLevelStage::AfterLevel.has_render_pass());
+        for &stage in RenderLevelStage::CLASSIC_ORDER
+            .iter()
+            .chain(RenderLevelStage::OIT_ORDER.iter())
+        {
+            let expected_pass = !matches!(
+                stage,
+                RenderLevelStage::AfterSky | RenderLevelStage::AfterLevel
+            );
+            assert_eq!(stage.has_render_pass(), expected_pass);
+        }
+        assert_eq!(
+            RenderLevelStage::OitTranslucent(OitStage::Transmittance).oit_stage(),
+            Some(OitStage::Transmittance)
+        );
+        assert_eq!(RenderLevelStage::AfterOpaqueBlocks.oit_stage(), None);
+        let mut ctx = Empty;
+        assert!(!ctx.has_render_pass());
+        assert!(matches!(ctx.pass(), StagePass::None));
+        assert!(ctx.world_pass().is_none());
+        assert!(ctx.oit_pass().is_none());
+    }
     #[test]
     fn world_geometry_dispatch_skips_unsubscribed_and_disabled_mods() {
         install(
@@ -247,11 +484,34 @@ mod tests {
             ]
             .into(),
         );
-        let view = WorldRenderView::new([0.0; 3], 0.5, 42);
+        let camera = Camera {
+            position: [1.0, 2.0, 3.0],
+            eye_height: 1.62,
+            partial_tick: 0.25,
+            yaw: 15.0,
+            pitch: -10.0,
+            roll: 0.0,
+            fov_degrees: 70.0,
+            near: 0.05,
+            far: 128.0,
+            view: [0.0; 16],
+            projection: [0.0; 16],
+            dimension: "minecraft:overworld".into(),
+        };
+        let sections = [RenderableSection::new(
+            [16, 64, -32],
+            [[16.0, 64.0, -32.0], [32.0, 80.0, -16.0]],
+            false,
+        )];
+        let view = WorldRenderView::new(&camera, 0.5, 42, true, &sections);
+        dispatch_prepare_render_buffers(&Empty, &view, &mut Empty);
         dispatch_submit_custom_geometry(&Empty, &view, &mut Empty);
+        assert_eq!(PREPARE_CALLS.load(Ordering::Relaxed), 1);
         assert_eq!(CALLS.load(Ordering::Relaxed), 1);
         assert!(set_mod_enabled("geometry", false));
+        dispatch_prepare_render_buffers(&Empty, &view, &mut Empty);
         dispatch_submit_custom_geometry(&Empty, &view, &mut Empty);
+        assert_eq!(PREPARE_CALLS.load(Ordering::Relaxed), 1);
         assert_eq!(CALLS.load(Ordering::Relaxed), 1);
     }
 }

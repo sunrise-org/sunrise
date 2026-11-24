@@ -230,7 +230,6 @@ fn removing_one_effect_takes_off_its_modifier_only() {
 #[test]
 fn consumed_effect_removals_take_off_the_modifiers() {
     use crate::items::ConsumeEffect;
-    let mut level = crate::health::TestLevel::new(0);
     let mut m = zombie();
     m.add_effect("minecraft:speed", -1, 0);
     m.add_effect("minecraft:weakness", -1, 0);
@@ -238,16 +237,15 @@ fn consumed_effect_removals_take_off_the_modifiers() {
         stored(&m, Attr::AttackDamage, "minecraft:effect.weakness"),
         [(-4.0, Op::AddValue)]
     );
-    m.apply_consume_effect(
-        &mut level.level(),
-        &ConsumeEffect::RemoveEffects(vec!["minecraft:speed".into()]),
-    );
+    m.apply_consume_effect(&ConsumeEffect::RemoveEffects(vec![
+        "minecraft:speed".into(),
+    ]));
     assert!(stored(&m, Attr::MovementSpeed, SPEED).is_empty());
     assert_eq!(
         stored(&m, Attr::AttackDamage, "minecraft:effect.weakness").len(),
         1
     );
-    m.apply_consume_effect(&mut level.level(), &ConsumeEffect::ClearAllEffects);
+    m.apply_consume_effect(&ConsumeEffect::ClearAllEffects);
     assert!(m.extra.effects.is_empty());
     assert!(stored(&m, Attr::AttackDamage, "minecraft:effect.weakness").is_empty());
     assert_eq!(m.attrs.attack_damage, 3.0);
@@ -503,7 +501,7 @@ fn a_health_boosted_partner_below_its_maximum_is_no_mate() {
         let mut m = Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.5), 0.0);
         m.extra.tame = true;
         m.extra.in_love = 600;
-        m.on_ground = true;
+        m.ground.on_ground = true;
         finalize::set_base(&mut m, Attr::MaxHealth, 30.0);
         m.health = 30.0;
         m

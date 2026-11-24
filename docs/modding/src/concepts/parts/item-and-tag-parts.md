@@ -3,8 +3,10 @@
 For an item-specific Part, request its canonical registry key once in `register`:
 `let stick = r.item_key("minecraft:stick"); r.item_part(stick, Sharp);`. Bare names use the
 `minecraft:` namespace. Requests may refer to content declared later; the final item registry refuses
-unknown IDs with the requesting mod. `ItemKey` equality uses its load-owned slot, and `key.id(host)`
-reads its canonical diagnostic name. Item capability registration and item helpers use strings.
+unknown IDs with the requesting mod. Compare `ItemKey` values directly when you have both keys.
+When you need text, `key.id(host)` borrows its canonical name as `Option<&str>`, so you can
+compare with `Some("minecraft:stick")` without allocating. Item capability registration and item
+helpers use strings.
 
 `r.block_part_tag("minecraft:logs", Rotates)` and `r.item_part_tag("minecraft:axes", Sharp)` attach a part to
 every member of a tag (its name without `#`). Each game resolves them against its own tags when its world
@@ -19,8 +21,8 @@ does) can't see tag parts, and warns once.
 ## Right click on a block
 
 `Hooks::right_click_block` corresponds to NeoForge 26.3's
-`PlayerInteractEvent.RightClickBlock`, on the clicking client and server, with
-identical switches for native and wasm mods:
+`PlayerInteractEvent.RightClickBlock`, with the same switches on the clicking
+client and server:
 
 - `use_block = TriState::True` allows block use even while sneaking with an item
   in either hand. `Default` skips while sneaking with either hand full; `False` skips block use.
@@ -42,9 +44,10 @@ including air clicks with identical stacks in both hands. Read it directly when
 choosing which held stack to shrink. `player` and `player_entity_id` name who clicked,
 as `UseOnEvent` does: on a server the acting player's UUID and entity id (a guest's
 own, never the host's), on a client this client's own player. They come with the
-event, so a Part does not need `players().acting_player()` to be set while it runs. `living_used_item_hand` instead answers only during active item use and
-cannot identify an instantaneous click. The Part runs on both sides with `HostSide`,
-after the global right-click event and before the item's own use, on native and wasm.
+event, so a Part does not need `players().acting_player()` to be set while it runs.
+`living_used_item_hand` answers only during ordinary active item use; it does not identify an
+instantaneous click or intercepted input. The Part runs on both sides with `HostSide`,
+after the global right-click event and before the item's own use.
 Return `Some(InteractionResult::Success)` to consume and swing on the client,
 `Some(SuccessServer)` to consume and swing on the server, or `Some(Consume)`
 to consume without a swing. `Some(Fail)` skips this item's own use without
@@ -61,21 +64,73 @@ The hand field corresponds to NeoForge's
 `Hooks::right_click_item` runs before `Item.use`, including after the same hand's
 unhandled block or entity interaction. A block success or FAIL, or an entity success, stops fallback.
 The server fires it for the separate use-item packet, once for that packet's hand.
-Canceling skips the item Part and vanilla action on native and wasm alike.
+Canceling skips the item Part and vanilla action.
 `Success`, `SuccessServer` and `Consume` end the client's hand loop.
 `Success` swings on the client, `SuccessServer` on the server, and `Consume` has no swing.
 
+## Intercept main-hand client input
+
+Use `ClientItemUseBehavior` for local input, for example to open a tool's client UI rather
+than use the block under the crosshair. In `Hooks::register`, request the item's key and bind
+one behavior to it. The item can be yours, vanilla's or another mod's. An unknown item or a
+second registration for the same item refuses startup; there is no last-writer-wins rule.
+
+This example traces the input for an existing `mymod:tool` without doing anything in the world:
+
+```rust
+{{#include ../../../examples/src/item_behaviors.rs:client_item_use}}
+```
+
+An enabled owner consumes the input before crosshair handling. This applies to main-hand
+input only. The callbacks send neither an item use nor a release packet and do not make the
+player use or block with the item. For ordinary behavior on both sides, use
+`ItemPart::use_item` and `ItemPart::release_using` instead. To track this local interception,
+use the callbacks, not `local_item_use`, `living_used_item_hand` or `living_is_blocking`.
+
+Each callback sees a typed `&ItemStack` and its hotbar slot (`u32`, 0–8). While the same item
+kind remains in that slot, each tick and release rebinds the stack to the live slot contents
+(matching vanilla `LivingEntity.updatingUsingItem` and `LivingEntity.releaseUsingItem`), so
+`release_using` and `on_stop_using` observe live count and component updates. If the slot is
+emptied or replaced with a different item kind, `on_stop_using` receives the last valid stack
+of the captured item kind. `stack.item()` gives the `ItemKey` and `stack.count()` gives the
+count. Read `minecraft:custom_name` or `minecraft:custom_data` as typed `Tag` entries in the
+component patch, as above, or decode a component with `stack.get(&descriptor)`.
+
+Both optional end methods also receive the elapsed held ticks. The game clears the capture
+before calling either. Releasing the use input—including when a keybind opens a screen and
+releases key mappings (matching `Minecraft.handleKeybinds`) or when focus is lost and the next
+tick observes the use key up—while the same item kind is still selected in the active slot and
+the player can still use it calls `release_using` followed by `on_stop_using`. A reset, such as
+a slot or item kind change, death or disconnect, only calls `on_stop_using`. Put actions that
+require a release in `release_using` and cleanup that should also run on resets in
+`on_stop_using`. A disabled owner receives no callbacks.
+
 ## Item use on a block
 
-`Hooks::use_item_on_block` (`UseItemOnBlockEvent`) runs on native and wasm with
-`HostSide` before each selected phase: `ItemBeforeBlock`, `Block`, then
-`ItemAfterBlock`. `event.click` describes the hit, hand, held stack and player.
-Return `Flow::Cancel` to skip the selected phase's Part and vanilla behaviour,
-using `*event.cancellation_result` (initially `TryWithEmptyHand`) as its result.
+After `Hooks::right_click_block` lets the click through, `Hooks::use_item_on_block`
+(`UseItemOnBlockEvent`) runs with `HostSide` before each selected phase:
+`ItemBeforeBlock`, `Block`, then `ItemAfterBlock`. The event and the scoped Parts
+below share `event.click`: the logical side, level, position, exact hit, hand,
+optional held stack and acting player. Return `Flow::Cancel` to skip the selected
+phase's Part and vanilla behaviour, using `*event.cancellation_result` (initially
+`TryWithEmptyHand`) as its result. Canceling does not undo work from earlier phases.
 
-Canceling `ItemBeforeBlock` skips the item's `on_item_use_first` Part. `Pass`
-continues to the block phase; any non-`Pass` result ends the block interaction. Cancellation alone does not suppress the later phases when its answer is `Pass`. A block-phase `TryWithEmptyHand`
-can run the block's empty-hand behaviour on the main hand.
+- `ItemPart::on_item_use_first` is the held item's first refusal, after the
+  `ItemBeforeBlock` event and before the block is asked. `Pass` goes on to the
+  block; any other result skips both block use and the item's `use_on` for this hand.
+- `BlockPart::use_item_on` is the clicked state's behaviour, after the `Block`
+  event, for either hand. `Pass` and `Fail` go on to the item rather than using
+  the block's template. `TryWithEmptyHand` selects the empty method on the main
+  hand only, even if it came from a canceled `Block` event.
+- `BlockPart::use_without_item` then runs before the empty method's template.
+  There is no fourth event phase. The click still carries whatever the hand
+  holds; the fallback does not require an empty stack. `Pass`, `Fail` and
+  `TryWithEmptyHand` go on to the item without retrying the fallback.
+
+These three methods take `HostSide` and return `Option<InteractionResult>`.
+`None` defers to the ordinary behaviour if no other Part answers. A supplied
+result replaces that behaviour. If the block lets the click through, the
+`ItemAfterBlock` event still precedes the held item's `use_on` Part.
 
 `ItemPart::use_on`, `Hooks::entity_interact` and `ItemPart::item_interact_mob`
 use version 2, run on both logical sides, and expose native `HostSide`.
@@ -84,19 +139,28 @@ listeners and the ordinary behaviour; `Some(result)` supplies the replacement
 answer. `item_interact_mob` also carries the interaction `hand`.
 `ItemPart::use_item` keeps its existing both-side, version-2 contract.
 
-Client execution predicts hands only. Client hosts allow reads and local effects,
-not authoritative world, inventory or entity writes; perform those on the server.
-Answer on the client as well when prediction must stop the hand loop: an answer
-made only on the server cannot suppress an offhand attempt already predicted by
-the client.
+Client hosts allow reads and local effects, not authoritative world, inventory or
+entity writes; perform those on the server. A client Part changes only prediction,
+not whether the ordinary `UseItemOn` request goes to the server. If its click or
+stack cannot be represented, the engine keeps the ordinary path; if the captured
+block or hand changed while deciding, it discards the prediction without retrying.
+A main-hand request still uses the hotbar slot selected before prediction; a Part's
+change of slot applies to later actions.
+Answer on the client as well when prediction must stop the hand loop: a server-only
+answer cannot suppress an offhand attempt already predicted by the client.
 
-A client without this mod predicts vanilla here; the server corrects it.
+A client without this mod usually predicts vanilla here; the server corrects it.
+For a [server-registered cauldron click](../../how-to/world/cauldron-interactions.md#client-prediction),
+the client waits for the server's block phase to pass or be skipped before running
+its own `ItemAfterBlock`. The server's later item result does not decide whether
+that local phase runs, but it can stop air use and the other hand's turn.
 
 `Success`, `SuccessServer` and `Consume` consume the interaction and end the
 client's hand loop. Only `Success` swings on the client; `SuccessServer` swings
-on the server and `Consume` never swings. `Fail` ends block interaction only,
-not an entity or air-use hand loop. `Pass` and `TryWithEmptyHand` fall through
-(the latter can select the block's empty-hand behaviour at the block phase).
+on the server and `Consume` never swings. A `Fail` from the outer block gate or
+an item-on-block result ends the client's click, but a `Fail` from either block
+method falls through to the item as described above. `Pass` falls through;
+`TryWithEmptyHand` selects the empty method only at the main-hand `Block` phase.
 
 ## Item wear
 
@@ -110,7 +174,7 @@ not asked when Unbreaking already saved the item or for a creative player's tool
 one table lookup. With no part, the vanilla amount applies.
 
 To change wear without attaching a Part to an item, use an enchantment's
-`minecraft:item_damage` effect (the component Unbreaking uses), or an injection.
+`minecraft:item_damage` effect (the component Unbreaking uses).
 A part does not get the wearing entity;
 `host.players().acting_player()` names the player on the paths a player takes.
 
@@ -118,7 +182,8 @@ A part does not get the wearing entity;
 
 `ItemPart::xp_repair_ratio` is `IItemExtension.getXpRepairRatio`: the durability points Mending restores to a
 stack of the part's item per point of experience (`ExperienceOrb.repairPlayerItems`), asked on the server once for
-each item it repairs, from an orb or from `PlayerRef::give_experience_points`. `event.ratio` arrives as vanilla's:
+each item it repairs at orb pickup. `PlayerRef::give_experience_points` never invokes Mending.
+`event.ratio` arrives as vanilla's:
 the item's `minecraft:repair_with_xp` repair divided by `event.experience`, 2.0 for vanilla Mending. The repair
 becomes `floor(experience × ratio)`, capped at the item's damage, and the experience it doesn't use goes on to the
 next damaged Mending item, then to the player. A ratio left as it arrived keeps vanilla's repair exactly. One that
@@ -159,8 +224,28 @@ held-stack queries. Each item's parts are asked once per registered enchantment 
 installed (server world open or `/reload`, or client tag packets), with the item's default stack. The
 engines read the stored answers until the next install or world close. Support resolves before the server
 resolves primary answers. Each snapshot owns its answers; publishing a fresh world-loot snapshot copies
-the current answers without asking listeners again. The client `Host::enchantment_supports` read is separate:
-it checks `supported_items` membership only.
+the current answers without asking listeners again.
+
+`enchantments()`, `enchantment_supports(id, item)` and `enchantment_min_cost(id, level)` answer on either
+side, on any `Host` and on `ClientSetupContext`: a server reads its own enchantment registry, data packs
+included, and a client the table built from the server's synced entries when available, else the local table. `enchantments()` lists `EnchantmentInfo` records in registry order, including
+`weight` (selection weight) and `anvil_cost` (base anvil fee per enchantment level).
+`enchantment_supports` checks only `supported_items` membership, not Item Part overrides.
+
+## Inventory ticks and attacks
+
+`inventory_tick` chooses the Parts of `event.item` at the start of the tick. Read the live
+slot with `event.place.with_stack(host, |stack| ...)`, or use `event.place.edit(host, tx, ...)`
+to edit its component overrides in a transaction. A later read sees the write; replacing the
+item does not redispatch the tick. `event.slot` and `event.selected` still describe the slot
+that started this callback.
+
+`on_left_click_entity`, `on_entity_swing` and `hurt_enemy` lend `event.stack` as an
+`ItemStackView` of the stack that reached the action. `get_enchantment_level` and
+`item_attribute_modifier` likewise lend the queried stack; their output collections are
+unchanged. `living_incoming_damage` lends optional views of the direct weapon and causing
+weapon at the hit. Use `stack.get(&component)` to read an override or `stack.project()` when
+you need an owned value.
 
 ## Hand, break and name on the client
 
@@ -184,6 +269,66 @@ lookup.
   text the part leaves is drawn at the same place and fade. It is asked once a client tick while the name shows. The
   name's timer still restarts only when the item or its hover name changes, so a tip that changes every tick doesn't
   keep it up.
+- `ItemPart::item_name` is vanilla's `Item.getName(ItemStack)`: the name of `event.stack`, from its components, so
+  one item names each stack (a data model after the mob in it, a filled tank after its fluid). `event.name` arrives
+  as `None`, the default name: the `minecraft:item_name` component, else the item's translated name. Set it to
+  `Some(text)`, a translatable `Text` (`Text::translate`) so each viewer reads it in their language. It replaces the
+  default, as the vanilla items that override `getName` do, and a `minecraft:custom_name` or a written book's title
+  still wins over it (`ItemStack.getHoverName`); the part isn't asked then. Every place that names a stack reads it,
+  once per naming: tooltips, the held item's name above the hotbar, command feedback such as `/give`'s, the anvil's
+  rename box and its comparison on both sides, stats, the recipe book's and the creative inventory's search, recipe
+  screens and `Host::hover_name`. It takes the loop `context` and no `Host`, so it can't name a stack again: answer
+  from the stack alone, and fast.
+
+```rust,ignore
+struct DataModelMob;
+
+impl Component for DataModelMob {
+    type Value = JavaString;
+    fn id(&self) -> &str { "mymod:data_model" }
+    fn decode(&self, tag: &Tag) -> Option<JavaString> {
+        match tag {
+            Tag::String(name) => Some(name.clone()),
+            _ => None,
+        }
+    }
+    fn encode(&self, name: JavaString) -> Tag { Tag::String(name) }
+}
+
+struct DataModel;
+
+#[mod_api::sunrise_part]
+impl ItemPart for DataModel {
+    fn item_name(&self, _context: &dyn LoopContext, event: &mut ItemNameEvent<'_>) {
+        // The mob in the stack's own component names it: "Zombie Data Model".
+        if let Some(mob) = event.stack.get(&DataModelMob) {
+            let mob = Text::translate(format!("entity.{}", mob.to_string_lossy().replace(':', ".")), Vec::new());
+            *event.name = Some(Text::translate("item.mymod.data_model.named", vec![mob]));
+        }
+    }
+}
+```
+
+## Continuing a use
+
+`ItemPart::can_continue_using` is `IItemExtension.canContinueUsing`: whether a use (eating, drawing a bow, raising
+a shield) goes on now that the used hand holds `event.held`. `event.stack` is the stack the use goes on with, and
+only the parts of its item are asked. `event.can_continue` arrives as vanilla's answer, `true` for the same item, and
+the part may set it either way. `true` goes on with `event.held` as the use's stack, so the next tick asks the parts
+of that item; `false` stops the use as another item would, without a release. It is asked each tick of a use, on the
+server and on a server's client, before `living_entity_use_item_tick`; `event.entity` is `None` for a player. An
+emptied hand stops the use without asking, and so does a hotbar switch, which stops a main-hand use first.
+
+## Stopping a use
+
+`ItemPart::on_stop_using` is `IItemExtension.onStopUsing`: the use of `event.stack` in `event.hand` is over, with
+`event.time_left` ticks of it left (0 for a finished use). It comes once per stop, where `LivingEntity.stopUsingItem`
+runs, whatever stopped the use: a release, a finish, another item in the hand, a brush with nothing to brush, a
+mob's release (`event.entity` is `Some`) and the server's own stops (a hotbar switch, swapped hands, a disabled
+shield, spectator mode, a dimension trip). The use is already cleared, so releasing again from here finds nothing,
+and it comes after `release_using` and `living_entity_use_item_finish`. An emptied hand is a used-up stack, not a
+stop. On a server's client it comes where the client ends its own use; change the world only on the server side of
+`HostSide`.
 
 ## Grindstone, repair combining and container items
 
@@ -192,7 +337,10 @@ sides, the server's menus and the client's own result display, so they take the 
 answer from `event.stack` and `context` alone, and fast. Each `event` field arrives holding vanilla's answer, which
 the part may set either way, and an item with no such part costs one table lookup.
 
-A client without this mod predicts vanilla here; the server corrects it.
+`event.stack` is a borrowed `ItemStackView`: read the item, count or damage directly, use
+`get` for a single component override, and use `project` only when you need an owned stack.
+`crafting_remainder` also lends its consumed stack; its replacement remainder is still an
+owned stack. A client without the menu Part predicts vanilla here; the server corrects it.
 
 - `ItemPart::can_grindstone_repair` is `IItemExtension.canGrindstoneRepair`. `event.can_repair` starts with
   whether the stack is damageable. It is asked for the top input when both grindstone inputs are single stacks of
@@ -208,5 +356,93 @@ A client without this mod predicts vanilla here; the server corrects it.
   contents) and the item slots a mod gives an item. A hopper filling a shulker box doesn't ask. A `true` for a
   shulker box lets shulker boxes nest: that is the mod's choice, bounded by the NBT readers' depth limit.
 
-Global events cover the rest of these menus: `grindstone_place` and `grindstone_take` change a grindstone's result
-after it is made, and `MenuPart::menu_slot_rules` answers per menu type and slot.
+When the grindstone inputs change, `grindstone_place` runs inline and lends the top and bottom
+stacks and vanilla's result through `event.inputs` (matching NeoForge
+`CommonHooks.onGrindstoneChange`). Cancellation is checked first and clears the result slot
+without rolling back listener writes. Otherwise leave `event.edits.output` at `None` to keep
+vanilla's result and award, or set `Some(stack)` with a valid stack to replace the result. Only
+a replacement uses `event.edits.xp`: any negative value falls through to vanilla experience, and
+nonnegative values set the award. Only the replacement stack is checked as a write; the borrowed
+stacks are not. An invalid replacement is logged and ignored, keeping vanilla's result.
+
+`grindstone_take` runs inline after the click takes the result and lends the pre-take stacks as
+`event.inputs.top` and `event.inputs.bottom` (matching NeoForge `CommonHooks.onGrindstoneTake`).
+These optional references do not change when listeners edit the answer. `event.edits.xp` starts
+at the resolved experience (`>= 0`, from `grindstone_place` or vanilla's pre-rolled award);
+non-positive values (`<= 0`) spawn 0 orbs while still firing level event 1042 and replacing the
+inputs. The two input writes and the final input-container notification each run
+`grindstone_place` before the click drops the taken stack or checks for a repeat. Set `event.edits.new_top` or `event.edits.new_bottom` to leave a stack in that slot;
+both start at `None` (empty the slot), and an invalid remainder is logged and ignored as an
+empty slot.
+
+Cancelling `grindstone_take` is checked before converting remainders: it keeps the taken result
+and any listener writes while skipping experience, level event 1042 and input replacement. A
+panicking listener is caught so it cannot unwind across the turn and leaves vanilla/initial
+behavior.
+
+After the anvil calculates a result with a left input, `anvil_update` fires live on both
+sides for each result calculation (with no answer cache), including a take consuming material
+while its left input is still present. On the server the take has already charged the player
+at that point. The hook lends `event.inputs`: the left and optional right stacks,
+the optional rename text and vanilla's output and costs. Read those values without cloning;
+they don't change as listeners edit `event.edits`. Leave `edits.output` at
+`StackResult::Keep` to use vanilla's output, use `StackResult::Set(Some(stack))` to replace
+it, or use `StackResult::Set(None)` to clear it. To read the current answer, match on
+`&event.edits.output`: use `event.inputs.vanilla_output` for `Keep` and `stack.as_ref()` for
+`Set(stack)`. The level and material costs start at vanilla's values (`xp_cost` stays signed
+across listeners and clamps to `0` when applied, matching NeoForge `AnvilMenu.setCost`).
+Changing only the costs doesn't revalidate vanilla's stack. Cancellation clears the output
+and both costs; an invalid replacement output is logged and ignored, keeping vanilla's
+output while still applying the cost edits.
+
+The server's `anvil_craft_pre` and `anvil_craft_post` both borrow the same pre-take snapshot
+through `event.inputs` (`AnvilCraftInputs<'_>`). Read the optional stacks through `inputs.left`
+and `inputs.right`, and the taken result through `inputs.output`. Set `event.cancelled` or
+return `Flow::Cancel` in Pre to return early before charging levels, consuming inputs,
+applying anvil wear and firing Post, without undoing the click's item move (matching
+NeoForge `AnvilMenu.onTake`). Post runs after those effects.
+
+These input views are valid only during the callback. Clone an individual stack only if you
+need to keep it afterwards. The input views and staged edits are not Wire records.
+
+`MenuPart::menu_slot_rules` answers per menu type and slot, including for a replacement from
+`item_stacked_on_other`.
+
+## Stacking onto another item in a menu
+
+`ItemPart::item_stacked_on_other` shares the `item_stacked_on_other` hook and its transaction
+with `Hooks::item_stacked_on_other` (NeoForge's `ItemStackedOnOtherEvent`), covering vanilla
+26.3's `Item.overrideStackedOnOther` and `Item.overrideOtherStackedOnMe`. It runs on the server
+and in the client's click prediction (`HostSide::Client`), where the server stays authoritative.
+
+`event.click` lends the cursor and the clicked slot for the call. Read them with `carried()` and
+`clicked()`, and change them with `set_carried`, `set_clicked` (a direct `Slot.set`, without take
+side effects) and `take_clicked` (a `Slot.safeTake`, with furnace experience, crafting remainders
+and `item_smelted` when the removed count is nonzero). A Part answers like vanilla's override
+returns a boolean: `Flow::Cancel` takes the click, `Flow::Continue` goes on with its edits. The
+phase order, the global listener's `handled` rules and what refuses a click are in the hook's
+documentation (`Hooks::item_stacked_on_other`).
+
+For an authoritative mount-menu pickup, the saddle, body equipment and chest slots belong to
+the mount, but roll back together with the player's inventory and cursor if the click is refused
+or an enclosing transaction aborts. The server reconciles the open menu from settled storage.
+
+## Dropped item destruction
+
+`ItemPart::item_destroyed` is `IItemExtension.onDestroyed` (vanilla `ItemStack.onDestroyed`). It
+fires on the server inside a transaction whenever a dropped item entity reaches zero health from
+damage — fire (`minecraft:on_fire`, `minecraft:in_fire`), lava (`minecraft:lava`), cactus
+(`minecraft:cactus`), explosions, `/damage`, `EntityRef::hurt`, or block-contact damage — before
+built-in container components are cleared and before the entity is discarded (matching vanilla
+`ItemEntity.hurtServer` -> `ItemStack.onDestroyed` -> `discard()`). Lifetime despawn
+(`item_despawn`) and void removal do not fire it.
+
+The part receives the original intact `event.stack`, the still-live `event.item: ItemEntityRef`
+(whose `with_stack(host, ...)` also still holds the original un-emptied stack), the lethal
+`event.damage_type`, and `event.drops: &mut Vec<ItemStack>` (pre-populated with any vanilla
+`minecraft:bundle_contents` or `minecraft:container` spills). Push or edit stacks in `event.drops`
+to spawn them at the entity's position (`ItemUtils.onContainerDestroyed`) once the entity is
+discarded. Each part's drop edits are validated against the item registry (an invalid stack rolls
+that part's edit back); a panic or a refused commit rolls back the transaction's host writes and
+falls back to the vanilla drop baseline while still discarding the destroyed item entity. An item
+with no listening `ItemPart` pays one table lookup and opens no transaction.

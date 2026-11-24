@@ -29,6 +29,14 @@ fn campfire_game<'a>(pos: [i32; 3], resources: &'a mut Option<Arc<Resources>>) -
         .default_state("minecraft:campfire")
         .unwrap();
     game.world.set(pos[0], pos[1], pos[2], state).unwrap();
+    // A FULL read of this hand-made column (the advancement's block read) finds it ready.
+    std::sync::Arc::make_mut(
+        game.world
+            .chunks
+            .get_mut(&(pos[0] >> 4, pos[2] >> 4))
+            .unwrap(),
+    )
+    .lit = true;
     game.world.block_entities.insert(
         (pos[0], pos[1], pos[2]),
         BlockEntity::Campfire(Box::default()),
@@ -95,6 +103,7 @@ fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
                     "predicate": {"block": {"blocks": "minecraft:campfire"}}
                 }
             })),
+            player: None,
         }],
         requirements: vec![vec!["food".into()]],
         rewards: Rewards::default(),
@@ -104,7 +113,7 @@ fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
         .insert("minecraft:item_used_on_block".into(), vec![(0, 0)]);
     game.adv.tree = Arc::new(tree);
     let hit = game.forced_hit.unwrap();
-    game.keys.press(KeyCode::ShiftLeft, Source::Keyboard);
+    game.press_device_key(KeyCode::ShiftLeft, Source::Keyboard);
     assert!(game.use_hand(Some(&hit)).unwrap());
     assert_eq!(slots(&game, POS), 0, "the sneak put no beef on the fire");
     assert_eq!(game.held().unwrap().count, 4, "the beef stayed in hand");
@@ -115,7 +124,7 @@ fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
     );
     // Stop eating, let go of the sneak: the same click now feeds the fire.
     game.using = None;
-    game.keys.release(&KeyCode::ShiftLeft, Source::Keyboard);
+    game.release_device_key(&KeyCode::ShiftLeft, Source::Keyboard);
     assert!(game.use_hand(Some(&hit)).unwrap());
     assert_eq!(slots(&game, POS), 1, "the beef went on the fire");
     assert_eq!(game.held().unwrap().count, 3, "one beef was used");

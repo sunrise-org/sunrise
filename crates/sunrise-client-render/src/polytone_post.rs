@@ -1,7 +1,8 @@
 //! Resource packs' Polytone post chains (#11486, wiki "Shaders"): vanilla `post_effect` chains a
 //! pack runs over the world while their `activation_condition` holds, with uniform blocks from
-//! expressions (`expression_uniforms`), the `PolyGlobals` block, and targets of their own
-//! (`post_targets`) kept between frames. `post_chain` runs them; this reads what they add.
+//! expressions (`expression_uniforms`) and targets of their own (`post_targets`) kept between
+//! frames. `post_chain` runs them; this reads what they add. Their passes, as any effect's, read
+//! the game's `PolyGlobals` ([`PolyGlobals`], handed to `post_chain` with each frame's request).
 use crate::environment::Frame;
 use crate::post_chain::{Extras, InternalTarget};
 use serde_json::Value as Json;
@@ -43,25 +44,17 @@ pub struct PolyGlobals {
 }
 
 impl PolyGlobals {
-    /// The std140 block: `mat4, mat4, float, float, float, ivec3, vec3`.
-    pub fn bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(176);
-        for m in [self.projection, self.model_view] {
-            out.extend(m.to_cols_array().iter().flat_map(|v| v.to_le_bytes()));
+    /// The std140 block (`sunrise_polytone::globals`).
+    pub fn bytes(&self) -> [u8; sunrise_polytone::globals::BLOCK_SIZE] {
+        sunrise_polytone::globals::Globals {
+            projection: self.projection.to_cols_array(),
+            model_view: self.model_view.to_cols_array(),
+            sun_angle: self.sun_angle,
+            day_time: self.day_time,
+            delta_time: self.delta_time,
+            player: self.player,
         }
-        for v in [self.sun_angle, self.day_time, self.delta_time, 0.0] {
-            out.extend(v.to_le_bytes());
-        }
-        let block = self.player.map(f64::floor);
-        for v in block {
-            out.extend((v as i32).to_le_bytes());
-        }
-        out.extend(0i32.to_le_bytes());
-        for i in 0..3 {
-            out.extend(((block[i] - self.player[i]) as f32).to_le_bytes());
-        }
-        out.extend(0f32.to_le_bytes());
-        out
+        .std140()
     }
 }
 
@@ -118,6 +111,14 @@ impl PolytonePost {
                 } else {
                     format!("minecraft:{effect}")
                 };
+                // `PolyGlobals` is the game's: a chain giving it is refused, named.
+                let globals = sunrise_polytone::globals::BLOCK;
+                if json["expression_uniforms"].get(globals).is_some() {
+                    log::warn!(
+                        "{id}: not used: its expression uniform {globals} is the game's block"
+                    );
+                    return None;
+                }
                 let activation = json
                     .get("activation_condition")
                     .and_then(|c| compile(&id, c));
@@ -157,16 +158,15 @@ impl PolytonePost {
         })
     }
 
-    /// The chains to run this frame (those whose condition holds), and what they add.
-    pub fn frame(&self, frame: &Frame, globals: &PolyGlobals) -> (Vec<String>, Extras) {
+    /// The chains to run this frame (those whose condition holds), and what they add. The
+    /// game's `PolyGlobals` reach every post pass that reads them through the request
+    /// (`post_chain::Request::poly_globals`), not here.
+    pub fn frame(&self, frame: &Frame) -> (Vec<String>, Extras) {
         let mut effects = Vec::new();
         let mut extras = Extras {
             targets: self.targets.clone(),
             blocks: Default::default(),
         };
-        extras
-            .blocks
-            .insert("PolyGlobals".to_owned(), globals.bytes());
         for chain in &self.chains {
             let on = chain.activation.as_ref().is_none_or(|c| {
                 crate::environment::eval_frame(c, frame, &self.configs).is_some_and(|v| v.truthy())
@@ -201,20 +201,22 @@ pub struct ShaderModifiers {
 pub const MAX_SHADER_MODIFIERS_FILE: u64 = 64 * 1024;
 
 /// One expression uniform of a pipeline, resolved when its shader loads: the block's binding
-/// and the stages that read it, and the program that gives its value each frame.
+/// and the stages that read it, with an optional expression program.
 #[derive(Clone)]
 pub struct ExpressionUniform {
     pub name: String,
     pub binding: u32,
     pub stages: wgpu::ShaderStages,
-    program: Arc<Program>,
+    program: Option<Arc<Program>>,
     configs: Arc<sunrise_polytone::pack::Configs>,
 }
 
 impl ExpressionUniform {
-    /// Its value in `frame` (the packs' expression context): the expression's, 0 when it fails.
+    /// The expression's value in `frame`, or zero when missing or when evaluation fails.
     pub fn evaluate(&self, frame: &Frame) -> f32 {
-        crate::environment::eval_frame(&self.program, frame, &self.configs)
+        self.program
+            .as_ref()
+            .and_then(|program| crate::environment::eval_frame(program, frame, &self.configs))
             .map_or(0.0, |v| v.num() as f32)
     }
 }
@@ -234,17 +236,23 @@ impl std::fmt::Debug for ExpressionUniform {
 pub enum ExpressionRefusal {
     /// A stage reads the block, and it is not one float.
     NotOneFloat(String),
-    /// A stage reads the block, and no `shader_modifiers` file of the pipeline's shaders gives it.
-    NotGiven(String),
+    /// A `shader_modifiers` file of the pipeline's shaders gives a block the game fills
+    /// (`LightmapInfo`, `PolyGlobals`).
+    Reserved(String),
+    /// The shaders declare `PolyGlobals` other than its layout
+    /// (`expression_blocks::check_poly_globals`).
+    Globals(crate::gfx::expression_blocks::GlobalsRefusal),
 }
 
 impl std::fmt::Display for ExpressionRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotOneFloat(name) => write!(f, "its block {name} is not one float"),
-            Self::NotGiven(name) => {
-                write!(f, "no shader_modifiers file of its shaders gives {name}")
-            }
+            Self::Reserved(name) => write!(
+                f,
+                "a shader_modifiers file of its shaders gives {name}, which the game fills"
+            ),
+            Self::Globals(e) => e.fmt(f),
         }
     }
 }
@@ -328,41 +336,47 @@ impl ShaderModifiers {
             name: name.to_owned(),
             binding,
             stages,
-            program: program.clone(),
+            program: Some(program.clone()),
             configs: self.configs.clone(),
         }
-    }
-
-    /// The names the files of `shaders` (a pipeline's stages' ids) give: the blocks the loader
-    /// lets the pipeline's shaders declare.
-    pub fn names(&self, shaders: &[&str]) -> Vec<String> {
-        let mut names: Vec<String> = (self.shaders.iter())
-            .filter(|(id, _)| shaders.contains(&id.as_str()))
-            .flat_map(|(_, uniforms)| uniforms.iter().map(|(n, _)| n.clone()))
-            .collect();
-        names.sort_unstable();
-        names.dedup();
-        names
     }
 
     /// The expression uniforms of `program`, a pipeline whose vertex stage is shader
     /// `vertex` and whose fragment stage is `fragment` (their ids): each of its blocks but
     /// `own` that a stage reads, with that stage's file's expression. A block both stages
     /// read, or that both files give, takes the fragment shader's file's first, then the
-    /// vertex shader's. One no stage reads is not bound; one that isn't one float refuses
-    /// the shader, named.
+    /// vertex shader's. Without either expression, the block reads zero. Unread blocks are
+    /// skipped. A read block that isn't a single float refuses the shader, as does an
+    /// expression for one of `own` (the game's), or
+    /// a `PolyGlobals` declared other than its layout, the same rule as the post shaders'.
     pub fn resolve(
         &self,
         (vertex, fragment): (&str, &str),
-        program: &crate::core_shader::CoreProgram,
+        program: &sunrise_glsl::Translated,
         own: &[&str],
     ) -> Result<Vec<ExpressionUniform>, ExpressionRefusal> {
+        if let Some(name) = (own.iter()).find(|name| {
+            [vertex, fragment]
+                .iter()
+                .any(|id| self.uniform(id, name).is_some())
+        }) {
+            return Err(ExpressionRefusal::Reserved((*name).to_owned()));
+        }
+        if let Some(i) = (program.other.iter()).position(|n| n == sunrise_polytone::globals::BLOCK)
+        {
+            let binding = program.other_binding(i);
+            crate::gfx::expression_blocks::check_poly_globals(
+                [&program.vertex, &program.fragment],
+                binding,
+            )
+            .map_err(ExpressionRefusal::Globals)?;
+        }
         let mut uniforms = Vec::new();
         for (i, name) in program.other.iter().enumerate() {
             if own.contains(&name.as_str()) {
                 continue;
             }
-            let binding = crate::core_shader::other_binding(i);
+            let binding = program.other_binding(i);
             let stages = program.stages_reading(binding);
             if stages.is_empty() {
                 continue;
@@ -375,14 +389,12 @@ impl ShaderModifiers {
             } else {
                 [vertex, fragment]
             };
-            let program = (order.iter())
-                .find_map(|id| self.uniform(id, name))
-                .ok_or_else(|| ExpressionRefusal::NotGiven(name.clone()))?;
+            let program = order.iter().find_map(|id| self.uniform(id, name)).cloned();
             uniforms.push(ExpressionUniform {
                 name: name.clone(),
                 binding,
                 stages,
-                program: program.clone(),
+                program,
                 configs: self.configs.clone(),
             });
         }
@@ -411,11 +423,7 @@ mod tests {
     /// A lightmap pipeline's program whose vertex stage reads blocks `vertex` and whose
     /// fragment stage reads `fragment` (each `uniform Name { float v; };`, or `vec4` for one
     /// named `Wide`), besides `LightmapInfo` and the blocks in `unused`, declared and not read.
-    fn program(
-        vertex: &[&str],
-        fragment: &[&str],
-        unused: &[&str],
-    ) -> crate::core_shader::CoreProgram {
+    fn program(vertex: &[&str], fragment: &[&str], unused: &[&str]) -> sunrise_glsl::Translated {
         let block = |name: &&str| {
             let ty = if *name == "Wide" { "vec4" } else { "float" };
             format!(
@@ -463,7 +471,7 @@ mod tests {
 
     fn resolved(
         modifiers: &ShaderModifiers,
-        program: &crate::core_shader::CoreProgram,
+        program: &sunrise_glsl::Translated,
     ) -> Result<Vec<(String, wgpu::ShaderStages, f32)>, ExpressionRefusal> {
         let [vertex, fragment] = crate::gfx::LIGHTMAP_SHADERS;
         let uniforms = modifiers.resolve((vertex, fragment), program, &["LightmapInfo"])?;
@@ -497,12 +505,6 @@ mod tests {
             ]),
             Default::default(),
         );
-        let lightmap = crate::gfx::LIGHTMAP_SHADERS;
-        assert_eq!(
-            modifiers.names(&lightmap),
-            ["Both", "Frag", "Unused", "Vert", "Wide"]
-        );
-        assert_eq!(modifiers.names(&["minecraft:core/sky"]), ["Sky"]);
         let (v, f) = (wgpu::ShaderStages::VERTEX, wgpu::ShaderStages::FRAGMENT);
         let split = program(&["Vert", "Both"], &["Frag", "Both"], &["Unused"]);
         assert_eq!(
@@ -552,14 +554,13 @@ mod tests {
         // A block a stage reads that no file of the pipeline's shaders gives.
         let ungiven = program(&[], &["Sky"], &[]);
         assert_eq!(
-            resolved(&modifiers, &ungiven).unwrap_err(),
-            ExpressionRefusal::NotGiven("Sky".into())
+            resolved(&modifiers, &ungiven).unwrap(),
+            [("Sky".to_owned(), f, 0.0)]
         );
     }
 
     /// A file over the read budget, not JSON, or refused by its contents is left out, named by
-    /// its resource path: its uniforms are no shader's, so a shader reading one is refused
-    /// when it loads.
+    /// its resource path.
     #[test]
     fn a_bad_shader_modifiers_file_is_left_out_by_its_path() {
         let budget = MAX_SHADER_MODIFIERS_FILE as usize;
@@ -639,7 +640,7 @@ mod tests {
             rain: 0.25,
             ..Frame::default()
         };
-        let (effects, extras) = post.frame(&frame, &PolyGlobals::default());
+        let (effects, extras) = post.frame(&frame);
         assert_eq!(effects, ["p:glare"]);
         // `g.rain` is the mean of rain (0.25) and thunder (0): 0.125.
         assert_eq!(
@@ -648,7 +649,36 @@ mod tests {
         );
         assert!(extras.targets["p:history"].persistent);
         frame.rain = 1.0;
-        assert!(post.frame(&frame, &PolyGlobals::default()).0.is_empty());
+        assert!(post.frame(&frame).0.is_empty());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `PolyGlobals` is the game's: a chain giving an expression uniform of that name is refused
+    /// (the others still run), and no chain's block of that name is handed on.
+    #[test]
+    fn a_chain_cannot_give_poly_globals() {
+        use sunrise_assets::resource_source::{Resource, ResourceSource};
+        let chain = |effect: &str, uniform: &str| {
+            format!(r#"{{"post_chain": "{effect}", "expression_uniforms": {{"{uniform}": "1"}}}}"#)
+        };
+        let pack = ResourceSource::indexed(
+            [
+                (
+                    "assets/p/polytone/post_chains/a.json",
+                    chain("p:a", "PolyGlobals"),
+                ),
+                (
+                    "assets/p/polytone/post_chains/b.json",
+                    chain("p:b", "Weather"),
+                ),
+            ]
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), Resource::bytes(text.into_bytes())))
+            .collect(),
+        );
+        let post = PolytonePost::read(&pack, Default::default()).unwrap();
+        let (effects, extras) = post.frame(&Frame::default());
+        assert_eq!(effects, ["p:b"]);
+        assert!(!extras.blocks.contains_key("PolyGlobals"));
     }
 }

@@ -474,15 +474,21 @@ const MIN_SCROLL_PERIOD: f64 = 3.0;
 /// `max(max_position * 0.5, 3)` seconds, eased with a sine, so the line rests
 /// a moment at each end; at time 0 it is at the far end.
 pub fn scroll_offset(max_position: i32, now_ms: i64) -> i32 {
+    scroll_position(f64::from(max_position), now_ms) as i32
+}
+
+/// The slide before the `(int)` cast, shared with the batch renderer
+/// (`ui::scrolled_left`), whose lengths are `f32`.
+pub(crate) fn scroll_position(max_position: f64, now_ms: i64) -> f64 {
     let time = now_ms as f64 / 1000.0;
-    let period = (f64::from(max_position) * PERIOD_PER_SCROLLED_PIXEL).max(MIN_SCROLL_PERIOD);
+    let period = (max_position * PERIOD_PER_SCROLLED_PIXEL).max(MIN_SCROLL_PERIOD);
     let alpha = sunrise_core::jmath::sin(
         (std::f64::consts::PI / 2.0)
             * sunrise_core::jmath::cos(std::f64::consts::PI * 2.0 * time / period),
     ) / 2.0
         + 0.5;
-    // `Mth.lerp(alpha, 0.0, maxPosition)`, then the `(int)` cast.
-    (0.0 + alpha * (f64::from(max_position) - 0.0)) as i32
+    // `Mth.lerp(alpha, 0.0, maxPosition)`.
+    0.0 + alpha * (max_position - 0.0)
 }
 
 /// `ActiveTextCollector.defaultScrollingHelper` with the line height of 9
@@ -1053,7 +1059,7 @@ pub fn paint(batch: &mut HudBatch, atlas: &HudAtlas, draws: &[Draw]) -> Option<u
             } => crate::ui::nine_slice(
                 batch,
                 atlas,
-                &format!("gui/sprites/{sprite}"),
+                sprite,
                 *x as f32,
                 *y as f32,
                 *w as f32,
@@ -1304,12 +1310,11 @@ mod button_label_tests {
                 paint_tooltip(batch, atlas, draws, tooltip);
             };
             assert!(!batch.vertices.is_empty());
-            for v in &batch.vertices {
+            for [x0, y0, x1, y1] in batch.visible_quads().flatten() {
                 assert!(
-                    (left as f32..=right as f32).contains(&v.pos[0])
-                        && (20.0..=40.0).contains(&v.pos[1]),
+                    left as f32 <= x0 && x1 <= right as f32 && 20.0 <= y0 && y1 <= 40.0,
                     "{ms}: {:?}",
-                    v.pos
+                    [x0, y0, x1, y1]
                 );
             }
         }
@@ -1369,12 +1374,9 @@ mod button_label_tests {
                     };
                     if let Some([x0, _, x1, _]) = scissor_of(&draws) {
                         // Whatever scrolled is clipped to the (maybe empty) box.
-                        for v in batch.vertices.iter().skip(sprite_vertices(&atlas, w)) {
-                            assert!(
-                                x1 <= x0 || (x0 as f32..=x1 as f32).contains(&v.pos[0]),
-                                "{w} {ms}: {:?}",
-                                v.pos
-                            );
+                        let scrolled = batch.visible_quads().skip(sprite_vertices(&atlas, w) / 6);
+                        for [l, _, r, _] in scrolled.flatten() {
+                            assert!(x0 as f32 <= l && r <= x1 as f32, "{w} {ms}: {:?}", [l, r]);
                         }
                     }
                 }
@@ -1414,23 +1416,7 @@ mod scissor_tests {
 
     /// The bounds of every quad's six vertices, in draw order.
     fn quads(batch: &HudBatch) -> Vec<[f32; 4]> {
-        batch
-            .vertices
-            .as_chunks::<6>()
-            .0
-            .iter()
-            .map(|q| {
-                let (mut x0, mut y0) = (f32::MAX, f32::MAX);
-                let (mut x1, mut y1) = (f32::MIN, f32::MIN);
-                for v in q {
-                    x0 = x0.min(v.pos[0]);
-                    y0 = y0.min(v.pos[1]);
-                    x1 = x1.max(v.pos[0]);
-                    y1 = y1.max(v.pos[1]);
-                }
-                [x0, y0, x1, y1]
-            })
-            .collect()
+        batch.visible_quads().flatten().collect()
     }
 
     fn fill(x0: i32, y0: i32, x1: i32, y1: i32) -> Draw {

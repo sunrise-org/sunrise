@@ -51,7 +51,7 @@ impl std::fmt::Display for Error {
                 signature,
             } => write!(
                 f,
-                "E_INTERNAL_CHANGED: {mod_id} uses {path}, whose signature is now {signature}; run cargo sunrise-mod update to see what changed."
+                "E_INTERNAL_CHANGED: {mod_id} uses {path}, whose signature is now {signature}; run cargo sunrise-mod pin to see what changed."
             ),
             Self::Ambiguous {
                 mod_id,
@@ -83,7 +83,8 @@ pub fn parse(text: &str) -> Result<Vec<ListedInternal>, String> {
     struct Internals {
         internals: Vec<ListedInternal>,
     }
-    let (_, body) = crate::build_data::read::<Internals>(crate::build_data::INTERNALS, text)?;
+    let (_, body) = crate::build_data::read::<Internals>(crate::build_data::INTERNALS, text)
+        .map_err(|error| error.to_string())?;
     Ok(body.internals)
 }
 

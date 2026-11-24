@@ -325,9 +325,9 @@ pub fn client_sounds(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.alive() {
         let roll = m.random.next_int_bound(1000).unwrap_or(999);
         let t = m.ambient_timer;
-        m.ambient_timer += 1;
+        m.ambient_timer = m.ambient_timer.wrapping_add(1);
         if roll < t {
-            m.ambient_timer = -m.ambient_interval();
+            m.ambient_timer = m.ambient_interval().wrapping_neg();
             if let Some(s) = ambient(m)
                 && !m.silent
             {
@@ -340,10 +340,10 @@ pub fn client_sounds(m: &mut Mob, events: &mut Vec<MobEvent>) {
 /// `Breeze.playAmbientSound` (a local sound at volume and pitch 1) and its
 /// sound selection.
 pub fn ambient(m: &Mob) -> Option<&'static str> {
-    if m.ai.target.is_some() && m.on_ground {
+    if m.ai.target.is_some() && m.ground.on_ground {
         return None;
     }
-    Some(if m.on_ground {
+    Some(if m.ground.on_ground {
         "entity.breeze.idle_ground"
     } else {
         "entity.breeze.idle_air"

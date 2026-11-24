@@ -1,6 +1,7 @@
 //! Bounded configuration-only metadata negotiation. Application bodies never use this codec.
-use crate::buf::{Codec, Ident, Reader, Writer};
+use crate::buf::{Codec, Ident, Reader};
 use std::collections::BTreeMap;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// Global raw transport revision, independent of application declaration versions.
 pub const RAW_PROTOCOL: u8 = 1;

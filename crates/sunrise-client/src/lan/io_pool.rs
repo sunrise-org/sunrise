@@ -87,6 +87,15 @@ pub(super) fn charge(retained: usize) -> usize {
     retained.saturating_add(std::mem::size_of::<Queued>() * 2)
 }
 
+/// A pairing payload carries its own prepaid charge until the queued body is dropped.
+pub(super) fn body_charge(body: &Body) -> usize {
+    if body.is_prepared() {
+        0
+    } else {
+        charge(body.retained())
+    }
+}
+
 pub(super) struct Queued {
     body: Body,
     prepared: bool,
@@ -108,6 +117,8 @@ pub(super) struct Outbox {
     // Body-framing calls are frames for raw payloads, not necessarily adapters.
     probe: [AtomicUsize; 8],
     queue: Mutex<Queue>,
+    /// The connection's `Droppable` sends, framed by its thread when it has room.
+    droppable: OnceLock<Arc<crate::raw_payloads::droppable::Queue>>,
     /// The bytes queued and not framed yet (`PlayerSender::pending`).
     pending: Arc<AtomicUsize>,
     /// Whether [`MAX_PENDING`] applies. A client in this process (a memory connection) reads
@@ -150,6 +161,7 @@ impl Outbox {
             #[cfg(any(test, feature = "test-payload-probe"))]
             probe: std::array::from_fn(|_| AtomicUsize::new(0)),
             queue: Mutex::default(),
+            droppable: OnceLock::new(),
             pending,
             capped,
             worker: worker.clone(),
@@ -167,21 +179,26 @@ impl Outbox {
     /// Past [`MAX_PENDING`] a capped connection closes. The thread to wake, if
     /// this is the first news it has since it last looked.
     pub(super) fn push(&self, bodies: Vec<Body>, end: Option<End>) -> Option<&Arc<Worker>> {
+        self.push_checked(bodies, end).ok().flatten()
+    }
+    // An accepted send may need no wake: its worker is already listed or not attached yet.
+    fn push_checked(
+        &self,
+        bodies: Vec<Body>,
+        end: Option<End>,
+    ) -> Result<Option<&Arc<Worker>>, ()> {
         let bodies = bodies
             .into_iter()
             .map(|body| Queued {
-                cost: charge(body.retained()),
+                cost: body_charge(&body),
+                prepared: body.is_prepared(),
                 body,
-                prepared: false,
                 pending: self.pending.clone(),
             })
-            .collect();
-        self.push_queued(bodies, end)
-    }
-    fn push_queued(&self, bodies: Vec<Queued>, end: Option<End>) -> Option<&Arc<Worker>> {
+            .collect::<Vec<_>>();
         let mut q = self.queue();
         match (q.at, q.end) {
-            (At::Closed, _) => return None,
+            (At::Closed, _) => return Err(()),
             (_, None) => {
                 if q.bodies.is_empty() {
                     q.bodies = bodies;
@@ -195,24 +212,33 @@ impl Outbox {
                 };
             }
             (_, Some(End::Disconnect)) if end == Some(End::Close) => q.end = end,
-            (_, Some(_)) => return None,
+            (_, Some(_)) => return Err(()),
         }
         let At::Slot(slot) = q.at else {
-            return None;
+            return Ok(None);
         };
         if std::mem::replace(&mut q.listed, true) {
-            return None;
+            return Ok(None);
         }
         drop(q);
-        self.worker
+        Ok(self
+            .worker
             .post(|i| i.serve.push(slot))
-            .then_some(&self.worker)
+            .then_some(&self.worker))
     }
     /// [`Self::push`], waking the thread at once.
     pub(super) fn send(&self, bodies: Vec<Body>, end: Option<End>) {
-        if let Some(worker) = self.push(bodies, end) {
+        self.try_send(bodies, end);
+    }
+    /// Whether the already reserved bodies were admitted, independently of waking a worker.
+    pub(super) fn try_send(&self, bodies: Vec<Body>, end: Option<End>) -> bool {
+        let Ok(wake) = self.push_checked(bodies, end) else {
+            return false;
+        };
+        if let Some(worker) = wake {
             worker.wake();
         }
+        true
     }
     #[cfg(any(test, feature = "test-payload-probe"))]
     pub(super) fn queued_contents(&self) -> Vec<Vec<u8>> {
@@ -238,17 +264,37 @@ impl Outbox {
             return false;
         }
         q.bodies.push(packet);
+        self.list(q);
+        true
+    }
+    /// Have the thread look at this outbox, if it is on one and not listed already.
+    fn list(&self, mut q: MutexGuard<'_, Queue>) {
         let At::Slot(slot) = q.at else {
-            return true;
+            return;
         };
         if std::mem::replace(&mut q.listed, true) {
-            return true;
+            return;
         }
         drop(q);
         if self.worker.post(|i| i.serve.push(slot)) {
             self.worker.wake();
         }
-        true
+    }
+    /// Serve `queue`'s `Droppable` sends on this connection's thread.
+    pub(super) fn attach_droppable(
+        self: &Arc<Self>,
+        queue: Arc<crate::raw_payloads::droppable::Queue>,
+    ) {
+        let this = Arc::downgrade(self);
+        queue.set_wake(Box::new(move || {
+            if let Some(outbox) = this.upgrade() {
+                let q = outbox.queue();
+                if !matches!(q.at, At::Closed) && q.end.is_none() {
+                    outbox.list(q);
+                }
+            }
+        }));
+        let _ = self.droppable.set(queue);
     }
     /// What waits, for the thread.
     /// What waits, for the thread: the bodies and the end after them with
@@ -330,8 +376,11 @@ fn start(threads: usize) -> std::io::Result<Pool> {
             load: AtomicUsize::new(0),
         });
         let mine = worker.clone();
-        // Payload handlers of wasm mods run on these threads (the server's network root).
-        sunrise_guest_stack::spawn(format!("sunrise-net-{n}"), move || run(poll, &mine))?;
+        // Mod payload handlers run on these threads (the server's network root).
+        std::thread::Builder::new()
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
+            .name(format!("sunrise-net-{n}"))
+            .spawn(move || run(poll, &mine))?;
         workers.push(worker);
     }
     Ok(Pool { workers })
@@ -501,6 +550,9 @@ struct Conn {
     left: bool,
     /// A disconnect is in `out`: nothing more is taken from the outbox.
     draining: bool,
+    /// A bundle (between two `BUNDLE_DELIMITER` packets) is open on the wire: no `Droppable` packet
+    /// goes between them.
+    bundling: bool,
     close_at: Option<Instant>,
 }
 impl Conn {
@@ -561,6 +613,7 @@ impl Conn {
             stalled: None,
             left: false,
             draining: false,
+            bundling: false,
             close_at: None,
         })
     }
@@ -613,6 +666,14 @@ impl Conn {
     /// if one could not be.
     fn frame(&mut self, now: Instant, bodies: Vec<Queued>, _queued: bool) -> bool {
         for body in &bodies {
+            // Do not insert a droppable packet between a bundle's delimiters.
+            if self.outbox.droppable.get().is_some()
+                && !body.prepared
+                && body.body.first()
+                    == Some(&(sunrise_protocol::ids::play::clientbound::BUNDLE_DELIMITER as u8))
+            {
+                self.bundling = !self.bundling;
+            }
             let result = if body.prepared {
                 self.writer.frame_into(&body.body, &mut self.out);
                 Ok(())
@@ -620,6 +681,7 @@ impl Conn {
                 super::conn::frame_body(&mut self.writer, &body.body, &mut self.out)
             };
             if let Err(e) = result {
+                log::warn!("[lan] failed to frame outgoing packet: {e}");
                 self.end(now, e.to_string());
                 return false;
             }
@@ -673,6 +735,20 @@ impl Conn {
             }
             // A close is seen even while the client takes nothing.
             let room = !self.draining && self.out.len() - self.written <= AHEAD;
+            // Droppable sends go first while there is room: they are small, and late is
+            // worthless; vanilla's packets keep their own order.
+            if room
+                && !self.bundling
+                && let Some(queue) = self.outbox.droppable.get().cloned()
+                && let Some(body) = queue.pop(now)
+            {
+                if let Err(e) =
+                    super::conn::frame_body(&mut self.writer, &Body::from(body), &mut self.out)
+                {
+                    return self.end(now, e.to_string());
+                }
+                continue;
+            }
             let (bodies, end) = self.outbox.take(room);
             if end == Some(End::Close) {
                 return self.end(now, "Disconnected");
@@ -939,6 +1015,79 @@ mod tests {
         assert!(client.recv().unwrap_err().is_end_of_stream());
         assert_eq!(served.next(), Seen::Left("Disconnected".into()));
         assert_eq!(served.next(), Seen::Closed);
+    }
+
+    /// Every packet the client reads until a closing sentinel (id 0x7e), as (id, payload).
+    fn read_until_sentinel(client: &mut Connection) -> Vec<(i32, Vec<u8>)> {
+        let mut all = Vec::new();
+        loop {
+            let packet = client.recv().unwrap();
+            if packet.0 == 0x7e {
+                return all;
+            }
+            all.push(packet);
+        }
+    }
+
+    #[test]
+    fn a_droppable_packet_never_lands_inside_a_bundle() {
+        use crate::raw_payloads::droppable::Queue;
+        let delimiter = 0u8;
+        let (a, b) = Pipe::pair();
+        let mut client = Connection::local(a);
+        let served = serve(Connection::local(b), quiet, Duration::from_secs(30));
+        let queue = Queue::new(u32::MAX, None);
+        served.outbox.attach_droppable(queue.clone());
+        let counters = Arc::default();
+        // The opening delimiter is on the wire and the thread is idle between batches when the
+        // droppable frame arrives. The thread looks at the droppable queue before it takes the
+        // next batch, so a probe packet read back proves it declined to frame the droppable one.
+        served.send(vec![body(delimiter, 0)], None);
+        assert_eq!(client.recv().unwrap(), packet(&body(delimiter, 0)));
+        queue.push(Instant::now(), &counters, body(0x40, 4));
+        served.send(vec![body(0x7d, 0)], None);
+        assert_eq!(client.recv().unwrap(), packet(&body(0x7d, 0)));
+        // Once the bundle closes, the waiting frame follows it.
+        served.send(vec![body(0x30, 3), body(delimiter, 0)], None);
+        assert_eq!(client.recv().unwrap(), packet(&body(0x30, 3)));
+        assert_eq!(client.recv().unwrap(), packet(&body(delimiter, 0)));
+        assert_eq!(client.recv().unwrap(), packet(&body(0x40, 4)));
+    }
+
+    #[test]
+    fn a_dropped_droppable_leaves_the_framed_stream_as_if_never_sent() {
+        use crate::raw_payloads::droppable::Queue;
+        let run = |push: bool| {
+            let (a, b) = Pipe::pair();
+            let mut client = Connection::local(a);
+            let served = serve(Connection::local(b), quiet, Duration::from_secs(30));
+            // A zero budget drops every droppable send at the queue.
+            let queue = Queue::new(0, None);
+            served.outbox.attach_droppable(queue.clone());
+            served.send(vec![body(3, 10)], None);
+            if push {
+                queue.push(Instant::now(), &Arc::default(), body(0x40, 20));
+            }
+            served.send(vec![body(4, 300), body(0x7e, 0)], None);
+            read_until_sentinel(&mut client)
+        };
+        assert_eq!(run(true), run(false));
+    }
+
+    #[test]
+    fn waiting_droppable_packets_are_framed_by_the_thread_with_room() {
+        use crate::raw_payloads::droppable::Queue;
+        let (a, b) = Pipe::pair();
+        let mut client = Connection::local(a);
+        let served = serve(Connection::local(b), quiet, Duration::from_secs(30));
+        let queue = Queue::new(u32::MAX, None);
+        served.outbox.attach_droppable(queue.clone());
+        for n in 0..3u8 {
+            queue.push(Instant::now(), &Arc::default(), body(0x40 + n, 10));
+        }
+        for n in 0..3u8 {
+            assert_eq!(client.recv().unwrap(), packet(&body(0x40 + n, 10)));
+        }
     }
 
     #[test]

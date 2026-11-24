@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import io
 import json
@@ -235,17 +236,15 @@ class PublicationTests(unittest.TestCase):
     def test_force_added_ignored_file_is_detected_in_index_and_history(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
-            real_check_output = subprocess.check_output
             def git(*args):
-                return real_check_output(["git", *args], cwd=directory, stderr=subprocess.DEVNULL)
+                return subprocess.check_output(["git", *args], cwd=directory, stderr=subprocess.DEVNULL)
             git("init", "-b", "main")
             (directory / ".gitignore").write_text("/.local/\n")
             (directory / ".local").mkdir()
             (directory / ".local" / "artifact.txt").write_text("private fixture")
             git("add", ".gitignore")
             git("add", "-f", ".local/artifact.txt")
-            with mock.patch("tools.check_public_tree.subprocess.check_output",
-                            side_effect=lambda command: git(*command[1:])):
+            with contextlib.chdir(directory):
                 self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository())
                 git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture")
                 self.assertIn(".local/artifact.txt", check_public_tree.paths_in_repository(history=True))
@@ -257,7 +256,7 @@ class PublicationTests(unittest.TestCase):
                 (directory / "README.md").write_text("public\n")
                 git("add", "README.md")
                 git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "public")
-                self.assertEqual(check_public_tree.paths_in_repository(True, ["HEAD~1..HEAD"]), ["README.md", ""])
+                self.assertEqual(check_public_tree.paths_in_repository(True, ["HEAD~1..HEAD"]), {"README.md", ""})
 
 
 def library(name, os_name=None):

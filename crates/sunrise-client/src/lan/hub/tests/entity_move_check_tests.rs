@@ -49,6 +49,7 @@ fn a_reported_move_through_a_shulker_is_moved_wrongly_and_one_that_stops_at_its_
         next_entity: &mut next_entity,
         spawn: [20.5, 5.0, 20.5],
         spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -94,7 +95,7 @@ fn a_reported_move_through_a_shulker_is_moved_wrongly_and_one_that_stops_at_its_
 }
 
 /// Runs `test` with a hub whose guest 0 stands at (20.5, 5, 20.5) on the floor, and its tick context.
-fn with_rig(test: impl FnOnce(&mut Hub, &TickCtx)) {
+fn with_rig(test: impl FnOnce(&mut Hub, &mut TickCtx)) {
     let Some(fixture) = crate::test_fixtures::vanilla() else {
         return;
     };
@@ -102,13 +103,14 @@ fn with_rig(test: impl FnOnce(&mut Hub, &TickCtx)) {
     let (mut hub, _rx) = hub_with_a_guest();
     let mut next_entity = 2;
     let border = crate::worldborder::WorldBorder::default();
-    let ctx = TickCtx {
+    let mut ctx = TickCtx {
         sea_level: 63,
         world: &mut world,
         entities: &[],
         next_entity: &mut next_entity,
         spawn: [20.5, 5.0, 20.5],
         spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
         difficulty: 2,
         difficulty_locked: false,
         clock_rate: 1.0,
@@ -123,7 +125,59 @@ fn with_rig(test: impl FnOnce(&mut Hub, &TickCtx)) {
         g.position = [20.5, 5.0, 20.5];
         g.on_ground = true;
     });
-    test(&mut hub, &ctx);
+    test(&mut hub, &mut ctx);
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_accepted_move_still_yields_when_it_logs_moved_wrongly() {
+    // Unlike a clean old box, an already obstructed start can accept a move
+    // logging "moved wrongly" when the destination is clear.
+    with_rig(|hub, ctx| {
+        hub.dispatch_move_effects = true;
+        hub.move_solids = vec![
+            Candidate::fixed(
+                SolidKind::Shulker,
+                501,
+                Aabb::new(Vec3::new(20.0, 5.0, 20.0), Vec3::new(21.0, 6.0, 21.0)),
+            ),
+            shulker(),
+        ];
+        hub.guests.update(0, |g| {
+            g.load_timeout = 0;
+            g.inbox.extend([
+                InboxItem::Packet(
+                    S::MovePlayerPos(play::MovePlayerPos {
+                        x: 24.5,
+                        y: 5.0,
+                        z: 20.5,
+                        flags: 3,
+                    }),
+                    None,
+                ),
+                InboxItem::Packet(
+                    S::MovePlayerRot(play::MovePlayerRot {
+                        yaw: 25.0,
+                        pitch: 0.0,
+                        flags: 1,
+                    }),
+                    None,
+                ),
+            ]);
+        });
+        let mut events = Vec::new();
+        let mut held = false;
+        assert!(hub.process_inbox(0, ctx, &mut events, true, &mut held, &mut None));
+        assert!(
+            matches!(&events[..], [HostEvent::Warn(_), HostEvent::AcceptedMove(_, movement), HostEvent::InputCredits(_)] if movement.horizontal_collision)
+        );
+        let guest = &hub.guests[0];
+        assert_eq!(guest.position, [24.5, 5.0, 20.5]);
+        assert!(matches!(
+            guest.inbox.front(),
+            Some(InboxItem::Packet(S::MovePlayerRot(_), _))
+        ));
+    });
 }
 
 /// `isEntityCollidingWithAnythingNew`: a report that ends inside a solid entity the old box did

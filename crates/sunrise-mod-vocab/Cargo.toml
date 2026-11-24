@@ -7,7 +7,6 @@ publish = false
 description = "Engine-owned mod interface vocabulary, host contracts and dispatch tables"
 # Hands its build output folder to sunrise-mod-api's build script (DEP_SUNRISE_MOD_VOCAB_OUT_DIR),
 # which reruns whenever this one does.
-links = "sunrise_mod_vocab"
 
 [lib]
 name = "mod_vocab"
@@ -26,17 +25,13 @@ glam = "0.30"
 sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 
 [dev-dependencies]
-sunrise-protocol = { path = "../sunrise-protocol" }
 # Shared API docs deliberately exercise the mod-facing facade, as mods do.
 sunrise-mod-api = { path = "../sunrise-mod-api" }
 
 [features]
 # Scoped mod installation for other crates' tests (`mod_api::testing`).
 testing = []
-# The mod side of the wasm boundary on a native build, for the boundary's tests.
-wasm-guest = []
 # Test-only generated mixed-output contract, not a shipped gameplay hook.
-mixed-output-fixture = ["sunrise-mod-api-gen/mixed-output-fixture"]
 
 [lints]
 workspace = true

@@ -6,7 +6,7 @@ use std::{
     io::{self, Write},
     path::Path,
 };
-use sunrise_world::damage_immunity::{DamageRule, ImmunityTag, ImmunityWorld};
+use sunrise_world::damage_immunity::{DamageRule, EntityImmunityWorld, ImmunityTag, ImmunityWorld};
 use sunrise_world::living_damage::DamageContainer;
 use sunrise_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use sunrise_world::{
@@ -577,7 +577,7 @@ fn run<A: FixtureAttributes>(dir: &Path, output: &str) -> Result<(), Box<dyn std
     }
     Ok(())
 }
-impl ImmunityWorld for Env<'_> {
+impl EntityImmunityWorld for Env<'_> {
     type Error = io::Error;
     fn removed(&self) -> bool {
         self.flag("removed")
@@ -607,6 +607,8 @@ impl ImmunityWorld for Env<'_> {
     fn fall_immune(&mut self) -> io::Result<bool> {
         self.query("fall-immune", "fall_immune")
     }
+}
+impl ImmunityWorld for Env<'_> {
     fn enchantment_immunity(&mut self) -> io::Result<bool> {
         for s in self.slots {
             self.event(&format!("slot {}", s.as_u64().unwrap()))?;

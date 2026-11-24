@@ -1,7 +1,7 @@
 # Ignored-test policy rows
 
 `tools/ci/ignored_tests.py` reads every `*.txt` file here, in file-name order. Each file holds one topic: a
-policy (`parity-harness.txt`, `wasm-fixture.txt`, `gpu.txt`, `flaky.txt`, ...) or one tracked failure, named for
+policy (`parity-harness.txt`, `gpu.txt`, `flaky.txt`, ...) or one tracked failure, named for
 its issue (`issue-2177.txt`). A lane that adds a known failure writes its own file; fixing it deletes that file.
 A test may be listed in one file only: a second listing fails naming both files.
 
@@ -17,7 +17,7 @@ harness's own step: its harness runs it with the environment it needs, and the j
 that needs a graphics adapter: it runs, and must pass, only where the runner has a Vulkan driver. `needs` marks a
 test that reads an input only its harness provides: refused by name when the variable is unset, run and required
 to pass when it is set. `ignored_tests.py --needs VARIABLE --one-process-each` runs one variable's tests, each
-alone in its own process (`wasm-mods.yml` does this for `SUNRISE_WASM_FIXTURE`).
+alone in its own process.
 
 `needs-plain` has the same variable and refusal policy as `needs`, but is not an ignored test or a known
 failure. The one-process runner selects it with `--exact` without `--ignored`; ordinary data shards skip it
@@ -27,10 +27,14 @@ when the variable is absent and require it to pass when present.
 `#[ignore = "daily"]` in its source, and its row, in a new `daily-PACKAGE-TOPIC.txt` with the rows sorted,
 names its cargo target
 (`lib`, `bin:NAME` or `test:NAME`) and why it is a daily test (`slow`, `game-boot`, `resources`, `child-process`,
-`network`, `wasm-fixture`, `windows`). It is not a known failure: it runs every day and must pass, and a row whose test no
+`network`, `gpu`, `windows`, `own-sdk`, or `stable-line` for a check `verify` runs too that a stable release's green
+daily must include). For `gpu` daily rows, a missing adapter fails the test instead of skipping it; these are
+distinct from the existing adapter-gated `gpu` policy rows above. It is not a known failure: it runs every day and must pass, and a row whose test no
 longer runs fails. Its package's shard runs it when that shard builds its target, and the `daily-rows` leg runs
-every other one, except a `wasm-fixture` row: only `wasm-mods.yml`'s fixture job builds the compiled fixture, so it runs
-those there, each alone in its own process with the `needs SUNRISE_WASM_FIXTURE` rows, and no shard runs them.
+every other one except the tests run by the Windows or book quickstart jobs.
+An `own-sdk` row names an integration test that needs the daily head's SDK. The daily calls
+`book-quickstart.yml` with `own_sdk: true`, and that workflow runs the test by exact name after setting
+`SUNRISE_SDK_BASE`. No generic shard selects it.
 A `windows` row must name an integration test (`test:NAME`) in the game workspace. The Cargo target root
 must be the package's `tests/NAME.rs` and begin with `#![cfg(windows)]` after any comments. Library,
 binary and launcher-workspace targets cannot use this reason. No Linux shard or `daily-rows` leg runs or expects
@@ -47,8 +51,7 @@ The guard invokes that small helper once for all targets; it does not build Game
 
 Every descriptive `#[ignore = "..."]` other than `daily` fails unless its exact package, logical test path and
 reason appear in `tools/ci/ignored-test-exceptions.json`, with a concrete rationale. These are not prefix
-exemptions: a new test or a changed reason needs its own review. Exceptions cover separate parity/wasm fixture
-runners, opt-in measurements and fixture writers, interactive/device tests, and intentionally destructive or
+exemptions: a new test or a changed reason needs its own review. Exceptions cover separate parity runners, opt-in measurements and fixture writers, interactive/device tests, and intentionally destructive or
 private-input checks. Their existing `harness`, `needs`, `gpu` or `manual` rows retain who runs them; these tests
 must not be indiscriminately selected as prepared-resource daily tests. Ordinary prepared-resource tests instead
 use `daily` and one `resources` or `child-process` row here.
@@ -73,8 +76,7 @@ uncompiled; no prefix exemption is granted. If a target declares it later, its d
 until it is explicitly scheduled. No tests or assertions are removed from this source copy or the migrated tests.
 
 `manual` marks an ignored test that never runs in the daily shards, in `manual-<package>.txt`: WHO runs it
-(`by-hand`, `subprocess` for a child process its parent test starts, or the workflow file that runs it, such as
-`wasm-mods.yml`) and the note says why (a benchmark, a fixture writer, a real GPU, the OS keychain, ...). The shards
+(`by-hand`, `subprocess` for a child process its parent test starts, or the workflow file that runs it) and the note says why (a benchmark, a fixture writer, a real GPU, the OS keychain, ...). The shards
 skip it.
 
 A rowless `#[ignore]` in a target a package's shard builds (`sunrise-client`'s targets, the other shard packages'

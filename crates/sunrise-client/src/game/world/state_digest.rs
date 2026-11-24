@@ -1,4 +1,3 @@
-// game-module-cfg: feature = "state-digest"
 //! Per-level-tick state digest to `SUNRISE_STATE_DIGEST` (`_DETAIL=1` adds per-entity lines).
 use super::{
     Dim, FallingBlock, Game, boats,

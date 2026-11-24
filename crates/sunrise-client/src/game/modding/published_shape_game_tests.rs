@@ -3,6 +3,7 @@
 use crate::game::Game;
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
 use mod_api::*;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;
 
@@ -23,7 +24,7 @@ impl Hooks for Bus {
         for (id, template) in [(BUS, "minecraft:stone"), (TUFT, "minecraft:bamboo")] {
             let mut block = mod_api::Block::new(id, template);
             block.shapes_from_block_entity = true;
-            event.blocks.push(block);
+            event.register(block).unwrap();
         }
     }
 }
@@ -96,7 +97,7 @@ fn fresh(name: &str) -> bool {
 
 /// Two levels hold the block at the same position with different published
 /// shapes: each level's query answers with its own, the one in place and the
-/// parked one alike (`level_block_shape`, the empty-context shape query).
+/// parked one alike (`visit_block_shape`, the empty-context shape query).
 #[test]
 #[ignore = "daily"]
 fn each_level_answers_with_its_own_published_shape() {
@@ -116,11 +117,11 @@ fn each_level_answers_with_its_own_published_shape() {
         publish(game, pos, shapes(&[LOW], &[TALL]));
         for (level, collision, outline) in [(overworld, HALF, SMALL), (nether, LOW, TALL)] {
             assert_eq!(
-                game.level_block_shape(level, state, pos, BlockShapeKind::Collision),
+                game.collect_level_block_shape(level, state, pos, BlockShapeKind::Collision),
                 Some(vec![collision])
             );
             assert_eq!(
-                game.level_block_shape(level, state, pos, BlockShapeKind::Outline),
+                game.collect_level_block_shape(level, state, pos, BlockShapeKind::Outline),
                 Some(vec![outline])
             );
         }
@@ -130,17 +131,30 @@ fn each_level_answers_with_its_own_published_shape() {
         );
         // Back in the overworld, the nether is the parked level.
         assert_eq!(
-            game.level_block_shape(nether, state, pos, BlockShapeKind::Collision),
+            game.collect_level_block_shape(nether, state, pos, BlockShapeKind::Collision),
             Some(vec![LOW])
         );
         assert_eq!(
-            game.level_block_shape(nether, state, pos, BlockShapeKind::Outline),
+            game.collect_level_block_shape(nether, state, pos, BlockShapeKind::Outline),
             Some(vec![TALL])
         );
         assert_eq!(
-            game.level_block_shape(overworld, state, pos, BlockShapeKind::Collision),
+            game.collect_level_block_shape(overworld, state, pos, BlockShapeKind::Collision),
             Some(vec![HALF])
         );
+        let bounds = [2.25, 64.125, 2.25, 2.75, 64.375, 2.75];
+        for (level, top) in [(nether, 64.25), (overworld, 64.5)] {
+            let mut boxes = Vec::new();
+            assert_eq!(
+                level.visit_block_collisions(game, bounds, &mut |shape| {
+                    boxes.extend(shape.boxes());
+                    ControlFlow::Continue(())
+                }),
+                Some(ControlFlow::Continue(()))
+            );
+            assert_eq!(boxes, [[2.0, 64.0, 2.0, 3.0, top, 3.0]]);
+            assert_eq!(level.has_collisions(game, bounds), Some(true));
+        }
     });
 }
 
@@ -200,10 +214,15 @@ fn collision_selection_and_support_read_the_published_shape() {
         )
         .unwrap();
         assert_eq!(66.0 + moved.y, 64.5, "it lands on the published top");
+        let mut boxes = Vec::new();
         assert_eq!(
-            game.level_collision_boxes(level, [2.0, 64.0, 2.0, 3.0, 65.0, 3.0]),
-            Some(vec![[2.0, 64.0, 2.0, 3.0, 64.5, 3.0]])
+            level.visit_block_collisions(game, [2.0, 64.0, 2.0, 3.0, 65.0, 3.0], &mut |shape| {
+                boxes.extend(shape.boxes());
+                ControlFlow::Continue(())
+            }),
+            Some(ControlFlow::Continue(()))
         );
+        assert_eq!(boxes, [[2.0, 64.0, 2.0, 3.0, 64.5, 3.0]]);
         let down = |game: &Game<'_>, blocks| {
             game.level_clip(
                 level,
@@ -291,7 +310,7 @@ fn pathfinding_stands_on_the_published_collision_top() {
             assert_eq!(finder.static_floor(2, 65, 2), 64.5);
             drop(finder);
             // `MoveControl.tick`: standing on the published top, walking on, it doesn't jump.
-            zombie.on_ground = true;
+            zombie.ground.on_ground = true;
             zombie.ai.mov.wanted = [5.5, 64.5, 2.5];
             zombie.ai.mov.speed_modifier = 1.0;
             zombie.ai.mov.operation = sunrise_client::mobs::control::Operation::MoveTo;
@@ -434,19 +453,20 @@ fn an_aborted_publish_restores_the_shape_and_notifies_the_neighbours() {
                 .unwrap()
         );
         let entity = game.block_entity(level, pos).unwrap();
-        let abort = game.transaction_open();
+        game.storage_scope(|game, _| {
+            assert_eq!(
+                game.block_entity_set_shapes(entity, Some(shapes(&[LOW], &[TALL]))),
+                Ok(true)
+            );
+            // What the publish scheduled is dropped, so only the abort's notice can schedule again.
+            let chunk = sunrise_core::position::ChunkPos::new(0, 0);
+            game.block_ticks.remove_chunk(chunk);
+            game.block_ticks.add_empty_chunk(chunk).unwrap();
+            assert_eq!(game.block_ticks.fluids.count(), 0);
+            ((), false)
+        });
         assert_eq!(
-            game.block_entity_set_shapes(entity, Some(shapes(&[LOW], &[TALL]))),
-            Ok(true)
-        );
-        // What the publish scheduled is dropped, so only the abort's notice can schedule again.
-        let chunk = sunrise_core::position::ChunkPos::new(0, 0);
-        game.block_ticks.remove_chunk(chunk);
-        game.block_ticks.add_empty_chunk(chunk).unwrap();
-        assert_eq!(game.block_ticks.fluids.count(), 0);
-        game.transaction_close(&abort, false);
-        assert_eq!(
-            game.level_block_shape(level, state, pos, BlockShapeKind::Collision),
+            game.collect_level_block_shape(level, state, pos, BlockShapeKind::Collision),
             Some(vec![HALF])
         );
         assert!(

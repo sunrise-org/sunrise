@@ -10,17 +10,39 @@ extra_mod = { version = "^2", optional = true }
 ```
 
 Requirements use Cargo semver syntax and are checked against each installed mod's `sunrise-mod.toml`
-`version`, not its Cargo package version. That version is semver, checked when the manifest is read,
-so a mod whose version isn't semver never loads, whatever requirement a dependent states. Content-only mods use these declarations to validate their
-requirements and, by default, load their layers after dependencies. Code dependencies additionally require
-API packages for the dependent and every installed dependency. Missing required dependencies,
-incompatible versions and cycles refuse resolution with the mods named. An absent optional dependency
-is permitted; an installed optional dependency must match its requirement.
+`version`, not its Cargo package version. That version must be semver or the manifest is refused.
+Content-only mods use these declarations to validate their requirements and, by default, load
+their layers after dependencies. Native packages can depend on content-only packages without
+linking anything from them. Missing required dependencies, incompatible versions, and dispatch
+cycles refuse loading with the mods named. An optional dependency can be absent, but when installed
+it must match its version requirement.
+
+`cargo sunrise-mod build`, `run` and `check` use the same native libraries. For a library you
+are working on locally, pass `--with <path>` for its project folder or `.smod`; repeat the flag
+for more libraries. A local copy takes precedence over the registry and still has to satisfy the
+declared version. Otherwise the tool takes each required library from the Sunrise mod registry's
+signed index, including the library's own requirements, and does the same for a release build. A
+library is the registry project whose in-game ID is the one you declared. When several projects
+provide that ID, the tool names them and you supply the one to use with `--with`. Before it builds
+with a release, the tool checks the release package's size and SHA-256 against the index, and its
+GitHub attestation against the project's registered repository and release workflow. It also refuses
+an index older than the newest one it accepted on the same computer; a fresh machine, such as a CI
+runner, accepts any signed index. To include an
+optional library, supply it with `--with`; an optional declaration alone never fetches one from the
+registry. The tool tries in-range registry releases newest first and takes the first one that fits.
+A library pinned to another Sunrise build must carry a uses list that shows it fits the project's
+SDK, and the tool doesn't change its pin. Libraries are resolved in the order they are reached: when a
+later requirement rules out a release that was already picked, the tool names both requirements.
+
+`check` type-checks the wired code without producing mod binaries, and `build` packages only the
+project itself. `run` puts the resolved native libraries and local content packages supplied with
+`--with` alongside the project in the development game. Content-only dependencies don't generate
+Rust links.
 
 The [registry index and installers](../reference/registry-index.md#planning-installs-and-removals) use these
 same manifest declarations. A new submission must resolve with the listed dependencies on its Minecraft release.
 Optional dependencies never install automatically, but an installed or selected target must match the declared range.
-`cargo sunrise-mod check <file>` shows both kinds.
+[`cargo sunrise-mod check <file.smod>`](../reference/sdk/05-commands.md#check-a-released-package) shows both kinds for an attested release.
 
 A version such as `3.6.30-sunrise.1` is a SemVer prerelease, even when the mod author uses the suffix to name
 an ordinary port release. `^3.6` cannot select it. To require that release, declare `"=3.6.30-sunrise.1"`.
@@ -30,18 +52,19 @@ Detailed rows also accept `side`, `order`, `reason` and `url`; see the
 before checking it: an integrated server is client, a dedicated server is server. `order = "before"`
 or `"none"` changes listener/content dispatch, not compiler staging or actual imports.
 
-The instance's `sunrise-mods/dependency-overrides.toml` can drop a logical constraint/dispatch edge
-or make it a warning. These overrides also cover ordinary dependency rows. This policy is a Sunrise
-addition: it cannot fabricate a code library or bypass native Cargo or wasm ABI/hash/toolchain checks.
-A code dependency still links dependency-first or is refused by name. Selected content and loaded
-native/wasm code share one rule resolver; warnings and every applied override appear on both affected
-installed Mods rows, alongside any failed/off status.
+The instance's `sunrise-mods/dependency-overrides.toml` can drop a logical requirement or turn it
+into a warning, including when a required content package is missing. A removed dependency row no
+longer lets a Part attach to that package's effect or block entity type. Overrides cannot remove a
+linked native library or compiled package requirement. Selected content and loaded native code share
+one logical resolver; warnings and overrides appear on both affected installed Mods rows, alongside
+any failed/off status.
 
-The launcher adds a path dependency using the mod ID as the Cargo alias and the target's actual Cargo
-package name. Optional dependencies also get a Cargo feature named exactly as their mod ID, enabled
-only when that mod is installed. Guard calls with `if_installed!`, which builds the block only with
-that feature and runs it only when the mod is installed, so the same source works when built to
-`mod.wasm`, where the library is linked at load and an absent one's functions trap:
+For each supplied native dependency, the build adds a path dependency on the target's root Cargo
+package, using the mod ID as the Cargo alias. The dependency exposes items the target makes public
+from that crate; there is no separate API package to declare. Optional native dependencies use a
+Cargo feature named exactly as their mod ID and enabled only when that library is supplied.
+Guard calls with `if_installed!`, which builds the block only with that feature and runs it only
+when the mod is installed:
 
 ```rust,ignore
 mod_api::if_installed!(host, extra_mod, {
@@ -53,7 +76,5 @@ Do not define these dependencies or features yourself in `Cargo.toml`.
 Public statics must use appropriate synchronization for shared and reentrant hooks; private state in
 another mod's hook object is not exposed.
 
-Hook listeners run in descending priority, then resolved dependency dispatch order, with dependency-order ties kept in bundle order. Mixin injection order remains
-horizon-mixins' priority, mod ID, then injection ID for source splices. Function-slot listeners
-instead use descending priority, dependency/registration order, then injection ID within a mod;
-call-site listeners retain mod-ID tie ordering.
+Hook listeners run in descending priority, then resolved dependency dispatch order, with dependency-order
+ties kept in bundle order. For source splices, horizon-mixins orders mixins by priority, mod ID, then row ID.

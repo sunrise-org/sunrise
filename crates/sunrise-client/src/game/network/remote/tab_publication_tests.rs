@@ -1,42 +1,130 @@
-use crate::game::remote::{object_skin_changed, skin_entries};
+use crate::game::remote::{PlayerTextures, ServicesKeys, object_skin_changed, skin_entries};
+use std::{collections::HashMap, sync::Arc};
+use sunrise_client::skins;
+use sunrise_core::profile::AccountProperty;
+use sunrise_server_files::profiles::profile_key_keys;
+
+// Offline test data: two independently generated RSA keys and SHA1withRSA
+// signatures, on the base64 property string (not its decoded JSON).
+const SIGNED_TEXTURES: &str = include_str!("fixtures/signed_textures.json");
 
 /// An NPC plugin lists the NPC, spawns it, and takes the entry off the list:
 /// the entity keeps the skin it found; a player spawned before its entry
 /// arrives takes the entry once it comes.
 #[test]
 fn a_player_entity_keeps_the_skin_its_entry_gave() {
-    use std::collections::HashMap;
-    use sunrise_client::skins::Textures;
-    let npc = Textures {
-        skin: Some("http://textures.minecraft.net/texture/npc".into()),
-        signed: true,
-        ..Textures::default()
+    let property = |value: &str| {
+        Arc::new(PlayerTextures::new(AccountProperty {
+            name: "textures".into(),
+            value: value.into(),
+            signature: None,
+        }))
     };
+    let npc = property("npc");
     let (mut listed, mut kept) = (HashMap::from([(7u128, npc.clone())]), HashMap::new());
     let mut players = HashMap::from([(2i32, 7u128), (3, 8)]);
-    assert_eq!(
-        skin_entries(&players, &listed, &mut kept),
-        [(7, npc.clone())]
-    );
-    listed.remove(&7);
-    assert_eq!(
-        skin_entries(&players, &listed, &mut kept),
-        [(7, npc.clone())]
-    );
-    // Player 8's entry comes after its entity.
-    let late = Textures {
-        skin: Some("http://textures.minecraft.net/texture/late".into()),
-        ..npc.clone()
+    let assert_npc = |entries: Vec<(u128, Arc<PlayerTextures>)>| {
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, 7);
+        assert!(Arc::ptr_eq(&entries[0].1, &npc));
     };
+    assert_npc(skin_entries(&players, &listed, &mut kept));
+    listed.remove(&7);
+    assert_npc(skin_entries(&players, &listed, &mut kept));
+    // Player 8's entry comes after its entity.
+    let late = property("late");
     listed.insert(8, late.clone());
     let mut entries = skin_entries(&players, &listed, &mut kept);
     entries.sort_by_key(|(u, _)| *u);
-    assert_eq!(entries, [(7, npc), (8, late)]);
+    assert_eq!(entries.len(), 2);
+    assert_eq!((entries[0].0, entries[1].0), (7, 8));
+    assert!(Arc::ptr_eq(&entries[0].1, &npc));
+    assert!(Arc::ptr_eq(&entries[1].1, &late));
     // A removed entity forgets its profile with it.
     players.remove(&2);
     kept.remove(&2);
     listed.clear();
     assert_eq!(skin_entries(&players, &listed, &mut kept).len(), 1);
+}
+
+#[test]
+fn texture_signatures_use_only_the_profile_property_keys() {
+    use skins::{Signature, TEXTURE_URIS};
+    let fixture: serde_json::Value = serde_json::from_str(SIGNED_TEXTURES).unwrap();
+    let keys = ServicesKeys::Ready(profile_key_keys(&fixture["public_keys"].to_string()).unwrap());
+    let value = fixture["value"].as_str().unwrap();
+    let good = fixture["profile_property_signature"].as_str().unwrap();
+    let cert = fixture["player_certificate_signature"].as_str().unwrap();
+    let altered = fixture["altered_value"].as_str().unwrap();
+
+    let classify = |value: &str, signature: Option<&str>, keys: &ServicesKeys| {
+        let property = PlayerTextures::new(AccountProperty {
+            name: "textures".into(),
+            value: value.into(),
+            signature: signature.map(str::to_owned),
+        });
+        property
+            .unpack(keys, &TEXTURE_URIS, true)
+            .unwrap()
+            .signature
+    };
+    assert_eq!(classify(value, None, &keys), Signature::Unsigned);
+    assert_eq!(classify(value, Some(good), &keys), Signature::Signed);
+    assert_eq!(classify(value, Some(cert), &keys), Signature::Invalid);
+    assert_eq!(classify(altered, Some(good), &keys), Signature::Invalid);
+    assert_eq!(
+        classify(value, Some(good), &ServicesKeys::Ready(Default::default())),
+        Signature::Invalid
+    );
+    assert_eq!(
+        classify(value, Some("not base64"), &keys),
+        Signature::Invalid
+    );
+    // The decoded payload is unchanged, but the signature is over the wire string.
+    assert_eq!(
+        classify(value.trim_end_matches('='), Some(good), &keys),
+        Signature::Invalid
+    );
+}
+
+#[test]
+fn signed_texture_retained_by_entity_resolves_when_keys_arrive() {
+    use skins::{Download, SkinLookup, TEXTURE_URIS, lookup};
+    let fixture: serde_json::Value = serde_json::from_str(SIGNED_TEXTURES).unwrap();
+    let property = Arc::new(PlayerTextures::new(AccountProperty {
+        name: "textures".into(),
+        value: fixture["value"].as_str().unwrap().into(),
+        signature: Some(
+            fixture["profile_property_signature"]
+                .as_str()
+                .unwrap()
+                .into(),
+        ),
+    }));
+    let players = HashMap::from([(2, 7)]);
+    let mut kept = HashMap::new();
+    let mut listed = HashMap::from([(7, property)]);
+    let entries = skin_entries(&players, &listed, &mut kept);
+    let retained = entries[0].1.clone();
+    assert!(
+        retained
+            .unpack(&ServicesKeys::Pending, &TEXTURE_URIS, true)
+            .is_none(),
+        "a signature waits for the keys: no verdict is cached"
+    );
+    listed.clear();
+
+    let keys = ServicesKeys::Ready(profile_key_keys(&fixture["public_keys"].to_string()).unwrap());
+    let entries = skin_entries(&players, &listed, &mut kept);
+    assert!(
+        Arc::ptr_eq(&retained, &entries[0].1),
+        "the entity kept the same property"
+    );
+    let textures = entries[0].1.unpack(&keys, &TEXTURE_URIS, true).unwrap();
+    let SkinLookup::Ready(resolved) = lookup(textures, true, |_, _| Download::Ready) else {
+        panic!("the retained signed property must pass the secure lookup once keys load");
+    };
+    assert_eq!(resolved.cape, Some(skins::cape_location("abcd1234")));
 }
 
 #[test]
@@ -76,4 +164,62 @@ fn tab_object_skin_publication_tracks_changes_and_atlas_clear() {
         "name:player",
         "skins/second"
     ));
+}
+
+/// The services' keys come the way a joined client's do: nothing is cached on keys
+/// it does not have, a signed property resolves once they arrive, and the local
+/// player's lookup does not wait for them.
+#[test]
+fn a_client_waits_for_the_services_keys_except_for_the_local_player() {
+    use skins::{Download, Signature, SkinLookup, TEXTURE_URIS, lookup};
+    use sunrise_server_files::profiles::ServicesKeySet;
+    let fixture: serde_json::Value = serde_json::from_str(SIGNED_TEXTURES).unwrap();
+    let (answer, asked) = std::sync::mpsc::channel::<ServicesKeySet>();
+    let signed = || {
+        PlayerTextures::new(AccountProperty {
+            name: "textures".into(),
+            value: fixture["value"].as_str().unwrap().into(),
+            signature: Some(
+                fixture["profile_property_signature"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+            ),
+        })
+    };
+    let property = signed();
+    let keys = ServicesKeys::fetching_with(move || Ok::<_, &'static str>(asked.recv().unwrap()));
+    assert!(matches!(*keys.lock().unwrap(), ServicesKeys::Pending));
+    assert!(
+        property
+            .unpack(&keys.lock().unwrap(), &TEXTURE_URIS, true)
+            .is_none(),
+        "empty ready keys would cache the signature as invalid"
+    );
+    assert_eq!(
+        signed()
+            .unpack(&keys.lock().unwrap(), &TEXTURE_URIS, false)
+            .expect("the local player's lookup shows its textures unverified")
+            .signature,
+        Signature::Invalid,
+        "PlayerInfo.createSkinLookup: requireSecure is false for the local player"
+    );
+    answer
+        .send(profile_key_keys(&fixture["public_keys"].to_string()).unwrap())
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while matches!(*keys.lock().unwrap(), ServicesKeys::Pending) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the keys never arrived"
+        );
+        std::thread::yield_now();
+    }
+    let textures = property
+        .unpack(&keys.lock().unwrap(), &TEXTURE_URIS, true)
+        .unwrap();
+    let SkinLookup::Ready(resolved) = lookup(textures, true, |_, _| Download::Ready) else {
+        panic!("the signed property must resolve once the keys arrive");
+    };
+    assert_eq!(resolved.cape, Some(skins::cape_location("abcd1234")));
 }

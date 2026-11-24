@@ -2,137 +2,13 @@
 //! while it runs (game rules, weather, the day time, difficulty, functions,
 //! all of them), set up when the batch starts and torn down after it. The
 //! definitions are the data pack's `test_environment` entries, or inline.
-use super::Game;
+use super::{Dim, Game, native_level_world::weather_for_world};
 use serde_json::Value as Json;
-use sunrise_client::gamerules::{GameRules, Value};
-
-/// `Weather.Type`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WeatherType {
-    Clear,
-    Rain,
-    Thunder,
-}
-
-impl WeatherType {
-    fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "clear" => Some(Self::Clear),
-            "rain" => Some(Self::Rain),
-            "thunder" => Some(Self::Thunder),
-            _ => None,
-        }
-    }
-
-    /// (clearTime, rainTime, raining, thundering).
-    fn parameters(self) -> (i32, i32, bool, bool) {
-        match self {
-            Self::Clear => (100_000, 0, false, false),
-            Self::Rain => (0, 100_000, true, false),
-            Self::Thunder => (0, 100_000, true, true),
-        }
-    }
-}
-
-/// A `TestEnvironmentDefinition`.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum Environment {
-    AllOf(Vec<Environment>),
-    ClockTime {
-        clock: String,
-        time: i64,
-    },
-    Difficulty(u8),
-    Functions {
-        setup: Option<String>,
-        teardown: Option<String>,
-    },
-    GameRules(Vec<(String, Value)>),
-    /// `timeline_attributes`: Sunrise has no environment attribute system to
-    /// layer timelines on, so it changes nothing.
-    Timelines,
-    Weather(WeatherType),
-}
-
-/// The `SavedDataType` of an activated definition.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum Saved {
-    AllOf(Vec<(Environment, Saved)>),
-    Clock(i64),
-    Difficulty(u8),
-    Unit,
-    GameRules(Vec<(String, Value)>),
-    Weather(WeatherType),
-}
-
-/// `TestEnvironmentDefinition.Activation`.
-#[derive(Clone, Debug)]
-pub(super) struct Activation {
-    environment: Environment,
-    saved: Saved,
-}
-
-/// Reads a definition from its JSON (`DIRECT_CODEC`); a string is the id of
-/// a registry entry, read by `load`.
-pub(super) fn parse(
-    json: &Json,
-    load: &dyn Fn(&str) -> Option<Json>,
-    depth: u32,
-    rules: &GameRules,
-) -> Option<Environment> {
-    if depth > 16 {
-        return None;
-    }
-    if let Some(id) = json.as_str() {
-        return parse(&load(id)?, load, depth + 1, rules);
-    }
-    let kind = json.get("type")?.as_str()?;
-    let kind = kind.strip_prefix("minecraft:").unwrap_or(kind);
-    Some(match kind {
-        "all_of" => Environment::AllOf(
-            json.get("definitions")?
-                .as_array()?
-                .iter()
-                .map(|d| parse(d, load, depth + 1, rules))
-                .collect::<Option<_>>()?,
-        ),
-        "clock_time" => Environment::ClockTime {
-            clock: json.get("clock")?.as_str()?.to_owned(),
-            time: json.get("time")?.as_i64().filter(|t| *t >= 0)?,
-        },
-        "difficulty" => Environment::Difficulty(
-            ["peaceful", "easy", "normal", "hard"]
-                .iter()
-                .position(|d| Some(*d) == json.get("difficulty").and_then(Json::as_str))?
-                as u8,
-        ),
-        "function" => Environment::Functions {
-            setup: json.get("setup").and_then(Json::as_str).map(str::to_owned),
-            teardown: json
-                .get("teardown")
-                .and_then(Json::as_str)
-                .map(str::to_owned),
-        },
-        "game_rules" => Environment::GameRules(
-            json.get("rules")?
-                .as_object()?
-                .iter()
-                .map(|(name, v)| {
-                    let rule = rules.rule(name)?;
-                    let value = match (v.as_bool(), v.as_i64()) {
-                        (Some(b), _) => Value::Bool(b),
-                        (_, Some(i)) => Value::Int(i32::try_from(i).ok()?),
-                        _ => return None,
-                    };
-                    Some((rule.name.to_owned(), value))
-                })
-                .collect::<Option<_>>()?,
-        ),
-        "timeline_attributes" => Environment::Timelines,
-        "weather" => Environment::Weather(WeatherType::from_name(json.get("weather")?.as_str()?)?),
-        _ => return None,
-    })
-}
+use sunrise_client::world::weather_flags;
+use sunrise_client_core::gamerules::Value;
+pub(super) use sunrise_gameplay::test_environments::{
+    Activation, Environment, Saved, WeatherType, parse,
+};
 
 impl Game<'_> {
     /// The data pack entry `data/<ns>/test_environment/<path>.json`.
@@ -159,21 +35,25 @@ impl Game<'_> {
     }
 
     /// `TestEnvironmentDefinition.activate`.
-    pub(super) fn activate_test_environment(&mut self, environment: Environment) -> Activation {
-        let saved = self.set_up_environment(&environment);
+    pub(super) fn activate_test_environment(
+        &mut self,
+        environment: Environment,
+        dim: Dim,
+    ) -> Activation {
+        let saved = self.set_up_environment(&environment, dim);
         Activation { environment, saved }
     }
 
     /// `Activation.teardown`.
-    pub(super) fn tear_down_test_environment(&mut self, activation: Activation) {
-        self.tear_down_environment(&activation.environment, activation.saved);
+    pub(super) fn tear_down_test_environment(&mut self, activation: Activation, dim: Dim) {
+        self.tear_down_environment(&activation.environment, activation.saved, dim);
     }
 
-    fn set_up_environment(&mut self, environment: &Environment) -> Saved {
+    fn set_up_environment(&mut self, environment: &Environment, dim: Dim) -> Saved {
         match environment {
             Environment::AllOf(all) => Saved::AllOf(
                 all.iter()
-                    .map(|e| (e.clone(), self.set_up_environment(e)))
+                    .map(|e| (e.clone(), self.set_up_environment(e, dim)))
                     .collect(),
             ),
             Environment::ClockTime { clock, time } => {
@@ -212,25 +92,36 @@ impl Game<'_> {
             }
             Environment::Timelines => Saved::Unit,
             Environment::Weather(kind) => {
-                let w = &self.world.weather;
-                let previous = if w.thundering {
-                    WeatherType::Thunder
-                } else if w.raining {
-                    WeatherType::Rain
+                let world = if dim == self.dim {
+                    &self.world
+                } else if let Some(world) = self.levels.parked_world(dim) {
+                    world
                 } else {
-                    WeatherType::Clear
+                    log::warn!(
+                        "cannot set up GameTest weather in {}: level is not resident",
+                        dim.id()
+                    );
+                    return Saved::Unit;
                 };
-                self.set_weather_type(*kind);
-                Saved::Weather(previous)
+                let previous = match weather_flags(weather_for_world(world, dim == Dim::End)) {
+                    (_, true) => WeatherType::Thunder,
+                    (true, false) => WeatherType::Rain,
+                    (false, false) => WeatherType::Clear,
+                };
+                if self.set_weather_type(dim, *kind) {
+                    Saved::Weather(previous)
+                } else {
+                    Saved::Unit
+                }
             }
         }
     }
 
-    fn tear_down_environment(&mut self, environment: &Environment, saved: Saved) {
+    fn tear_down_environment(&mut self, environment: &Environment, saved: Saved, dim: Dim) {
         match (environment, saved) {
             (Environment::AllOf(_), Saved::AllOf(all)) => {
                 for (e, s) in all.into_iter().rev() {
-                    self.tear_down_environment(&e, s);
+                    self.tear_down_environment(&e, s, dim);
                 }
             }
             (Environment::ClockTime { clock, .. }, Saved::Clock(previous)) => {
@@ -254,7 +145,7 @@ impl Game<'_> {
                 w.raining = false;
                 w.thunder_time = 0;
                 w.thundering = false;
-                self.set_weather_type(previous);
+                self.set_weather_type(dim, previous);
             }
             _ => {}
         }
@@ -272,15 +163,11 @@ impl Game<'_> {
         self.sync_rules();
     }
 
-    /// `Weather.Type.apply`: `ServerLevel.setWeatherParameters`.
-    fn set_weather_type(&mut self, kind: WeatherType) {
+    /// `TestEnvironmentDefinition.Weather.Type.apply`: the test level is the origin
+    /// of a write to `MinecraftServer.setWeatherParameters`.
+    fn set_weather_type(&mut self, dim: Dim, kind: WeatherType) -> bool {
         let (clear, rain, raining, thundering) = kind.parameters();
-        let w = &mut self.world.weather;
-        w.clear_time = clear;
-        w.rain_time = rain;
-        w.thunder_time = rain;
-        w.raining = raining;
-        w.thundering = thundering;
+        self.set_weather_parameters(dim.id(), clear, rain, raining, thundering)
     }
 
     /// `Functions.run`: the function with game master permission and
@@ -306,86 +193,5 @@ impl Game<'_> {
             }
             None => log::error!("Test Batch failed for non-existent function {id}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn load(id: &str) -> Option<Json> {
-        match id {
-            "minecraft:night" => Some(
-                json!({"type": "minecraft:clock_time", "clock": "minecraft:overworld", "time": 18000}),
-            ),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn definitions_parse_with_references_and_nesting() {
-        let json = json!({
-            "type": "minecraft:all_of",
-            "definitions": [
-                "minecraft:night",
-                {"type": "minecraft:weather", "weather": "thunder"},
-                {"type": "minecraft:game_rules", "rules": {"minecraft:advance_time": false}},
-                {"type": "minecraft:difficulty", "difficulty": "hard"},
-                {"type": "minecraft:function", "setup": "test:on"}
-            ]
-        });
-        let Some(Environment::AllOf(all)) = parse(&json, &load, 0, &GameRules::default()) else {
-            panic!("not all_of");
-        };
-        assert_eq!(
-            all[0],
-            Environment::ClockTime {
-                clock: "minecraft:overworld".into(),
-                time: 18000
-            }
-        );
-        assert_eq!(all[1], Environment::Weather(WeatherType::Thunder));
-        assert!(matches!(&all[2], Environment::GameRules(r) if r.len() == 1));
-        assert_eq!(all[3], Environment::Difficulty(3));
-        assert_eq!(
-            all[4],
-            Environment::Functions {
-                setup: Some("test:on".into()),
-                teardown: None
-            }
-        );
-    }
-
-    #[test]
-    fn unknown_or_invalid_definitions_do_not_parse() {
-        assert_eq!(
-            parse(&json!("minecraft:missing"), &load, 0, &GameRules::default()),
-            None
-        );
-        assert_eq!(
-            parse(
-                &json!({"type": "minecraft:nothing"}),
-                &load,
-                0,
-                &GameRules::default()
-            ),
-            None
-        );
-        assert_eq!(
-            parse(
-                &json!({"type": "minecraft:clock_time", "clock": "c", "time": -1}),
-                &load,
-                0,
-                &GameRules::default()
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn weather_types_set_vanillas_timers() {
-        assert_eq!(WeatherType::Clear.parameters(), (100_000, 0, false, false));
-        assert_eq!(WeatherType::Thunder.parameters(), (0, 100_000, true, true));
     }
 }

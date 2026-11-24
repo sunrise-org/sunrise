@@ -84,9 +84,11 @@ impl Game<'_> {
     /// `PathNavigation.moveTo(Path, speed)`: follow a path the mod computed.
     /// Each node is floored to its block, classified by the engine on submit
     /// (the classification never filters the path), trimmed as every `moveTo`
-    /// trims, and followed as given. A supplied path keeps no recompute
-    /// target, so a block change on it or the stuck check drops it without a
-    /// search. Only non-finite coordinates and speeds are refused; the node
+    /// trims, and followed as given. As in vanilla, taking the path leaves
+    /// the navigation's recompute target as it was (a block change on it
+    /// re-searches to the last searched target, and with none the path is
+    /// kept); the stuck check drops it. Only non-finite coordinates and
+    /// speeds are refused; the node
     /// count is unbounded, unloaded or out-of-world nodes are neither refused
     /// nor clamped, and an extreme finite node is classified and followed with
     /// saturating block arithmetic. `Unavailable` for a stale or unavailable
@@ -354,7 +356,7 @@ mod tests {
                 .unwrap()
                 .clone();
             let mut zombie = Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0);
-            zombie.on_ground = true;
+            zombie.ground.on_ground = true;
             game.mobs.push(zombie);
             let entity = game.entity(99).unwrap();
             let mob = game.mob(entity).unwrap();

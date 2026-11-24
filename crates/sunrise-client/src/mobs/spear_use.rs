@@ -7,9 +7,8 @@
 //! living entity flags tell the clients (`mob_meta`), so the arm and the
 //! spear are drawn charging for them as well.
 use super::{
-    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, WeaponAttack, WeaponHit, Who,
     brain::Timed,
-    gear,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone, reduced},
 };
 use crate::spear::{Kinetic, REACH, hits_in_reach};
@@ -195,7 +194,7 @@ fn damage_entities(
     // The attack damage attribute's base value.
     let base = m.attrs.attack_damage;
     let mut affected = false;
-    for (i, _) in hits {
+    for (contact, (i, _)) in hits.into_iter().enumerate() {
         let target = &targets[i];
         let recent = m.extra.stabbed.as_ref().is_some_and(|stabbed| {
             stabbed.iter().any(|&(who, at)| {
@@ -227,6 +226,7 @@ fn damage_entities(
             affected |= stab_attack(
                 m,
                 target.who,
+                contact,
                 amount,
                 (damages, pushes, dismounts),
                 w,
@@ -251,82 +251,58 @@ fn damage_entities(
 fn stab_attack(
     m: &mut Mob,
     target: Who,
+    contact: usize,
     base_damage: f32,
     (deals_damage, deals_knockback, dismounts): (bool, bool, bool),
     w: &MobWorld,
     events: &mut Vec<MobEvent>,
 ) -> bool {
-    let species = match target {
-        Who::Mob(id) => w.seen(id).map(|s| s.species),
-        Who::Player => None,
+    let Some(weapon) = m.extra.main_hand_stack() else {
+        return false;
     };
-    // `EnchantmentHelper.modifyDamage`.
-    let damage = base_damage + gear::melee_bonus(m, species);
     let from = [m.position.x, m.position.y, m.position.z];
-    // `weaponItem.getDamageSource(this)`: the spear's, for the hurt and the pushes.
-    let source = Damage {
-        kind: DamageKind::Spear,
-        attacker: Some(Who::Mob(m.id)),
-        from: Some(from),
-        attacker_species: Some(m.species()),
+    let to_rad = std::f32::consts::PI / 180.0;
+    // `LivingEntity.stabAttack`: a type in `cannot_be_dismounted_by_item_usage` stays seated.
+    let flag = crate::items::EntityTypeTags::CANNOT_BE_DISMOUNTED_BY_ITEM_USAGE;
+    let seated = match target {
+        Who::Player => w
+            .items
+            .is_some_and(|items| items.entity_type_tags.has_flag("minecraft:player", flag)),
+        Who::Mob(id) => w.seen(id).is_some_and(|s| w.entity_tag_bit(&s.kind, flag)),
     };
-    let mut affected = deals_knockback;
-    if deals_damage {
-        match target {
-            Who::Player => events.push(w.route_player_event(MobEvent::DamagePlayer {
-                amount: damage,
-                from,
-                kind: "minecraft:spear",
-            })),
-            Who::Mob(id) => events.push(MobEvent::AttackMob {
-                target: id,
-                amount: damage,
-                source,
-            }),
-        }
-        affected = true;
-        // `EnchantmentHelper.doPostAttackEffects`: Fire Aspect.
-        let burn = gear::fire_aspect(m);
-        if burn > 0 {
-            events.push(w.route_player_event(MobEvent::Ignite(target, burn)));
-        }
-    }
-    if deals_knockback {
-        cause_extra_knockback(m, target, 0.4_f32, source, w, events);
-        // `LivingEntity.getKnockback`: the Knockback enchantment, halved.
-        let power = gear::knockback(m) as f32 / 2.0;
-        cause_extra_knockback(m, target, power, source, w, events);
-    }
-    if dismounts && w.target_info(target).is_some_and(|t| t.passenger) {
-        affected = true;
-        events.push(w.route_player_event(MobEvent::StabDismount { target }));
+    let dismounts = dismounts && !seated && w.target_info(target).is_some_and(|t| t.passenger);
+    events.push(w.route_player_event(MobEvent::WeaponAttack(WeaponHit {
+        target,
+        source: Damage {
+            kind: DamageKind::Spear,
+            attacker: Some(Who::Mob(m.id)),
+            from: Some(from),
+            attacker_species: Some(m.species()),
+        },
+        weapon: weapon.clone(),
+        amount: base_damage,
+        knockback: m.attrs.attack_knockback as f32,
+        direction: [
+            f64::from((m.yaw * to_rad).msin()),
+            f64::from(-(m.yaw * to_rad).mcos()),
+        ],
+        attack: WeaponAttack::Stab {
+            deals_damage,
+            deals_knockback,
+            dismounts,
+        },
+    })));
+    let affected = deals_damage || deals_knockback || dismounts;
+    if affected {
+        events.push(w.route_player_event(MobEvent::StabMemory {
+            attacker: m.id,
+            target,
+            contact,
+            attempted_damage: deals_damage,
+            otherwise_affected: deals_knockback || dismounts,
+        }));
     }
     affected
-}
-
-/// `LivingEntity.causeExtraKnockback`: a push along the attacker's facing,
-/// which slows the attacker.
-fn cause_extra_knockback(
-    m: &mut Mob,
-    target: Who,
-    power: f32,
-    source: Damage,
-    w: &MobWorld,
-    events: &mut Vec<MobEvent>,
-) {
-    if power <= 0.0 {
-        return;
-    }
-    let to_rad = std::f32::consts::PI / 180.0;
-    events.push(w.route_player_event(MobEvent::Knockback {
-        target,
-        power: f64::from(power),
-        x: f64::from((m.yaw * to_rad).msin()),
-        z: f64::from(-(m.yaw * to_rad).mcos()),
-        source,
-        apply_blocking: None,
-    }));
-    m.velocity = Vec3::new(m.velocity.x * 0.6, m.velocity.y, m.velocity.z * 0.6);
 }
 
 /// `Mob.chargeSpeedModifier` of the mount: a zombie horse runs 1.4 times as
@@ -922,7 +898,10 @@ impl<G: Goal + Clone + 'static> Goal for NoMeleeWithSpear<G> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mob, count_use_tick, is_using_item, start_using_item};
+    use super::{
+        Mob, MobEvent, MobWorld, WeaponAttack, WeaponHit, Who, count_use_tick, is_using_item,
+        stab_attack, start_using_item,
+    };
     use sunrise_core::geometry::Vec3;
 
     fn spear_zombie() -> Mob {
@@ -953,5 +932,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `LivingEntity.stabAttack`: a stab that dismounts leaves a rider whose type is in
+    /// `cannot_be_dismounted_by_item_usage` seated and unseats one outside it, and the answer
+    /// follows the tag's membership when it is rebound (a `/reload`).
+    #[test]
+    #[ignore = "daily"]
+    fn a_stab_leaves_a_rider_of_the_no_dismount_tag_seated() {
+        use crate::items::{EntityTypeTags, Items};
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.id = "test:rider".into();
+        // Its place in the one-type registry the tags below bind, as a type's is set at load.
+        kind.flags.entity_tag_slot = Some(0);
+        let mut rider = Mob::new(2, std::sync::Arc::new(kind), Vec3::new(1.0, 80.0, 0.0), 0.0);
+        rider.extra.mount = Some(3);
+        let bind = |members: Vec<String>| {
+            let mut items = Items::empty();
+            items.set_entity_type_tags(EntityTypeTags::from_ordered(
+                [(
+                    "minecraft:cannot_be_dismounted_by_item_usage".to_owned(),
+                    members,
+                )]
+                .into(),
+                vec!["test:rider".to_owned()].into(),
+            ));
+            items
+        };
+        let (tagged, untagged) = (bind(vec!["test:rider".into()]), bind(Vec::new()));
+        let others = [rider.seen(None, &tagged)];
+        assert!(crate::mobs::world::with_test_world(&others, |world, _| {
+            for (items, seated) in [(&tagged, true), (&untagged, false), (&tagged, true)] {
+                let w = MobWorld {
+                    items: Some(items),
+                    ..world.clone()
+                };
+                let mut attacker = spear_zombie();
+                let mut events = Vec::new();
+                stab_attack(
+                    &mut attacker,
+                    Who::Mob(2),
+                    0,
+                    1.0,
+                    (false, false, true),
+                    &w,
+                    &mut events,
+                );
+                // The stab's handler unseats the target on the decision made here.
+                let dismounted = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        MobEvent::WeaponAttack(WeaponHit {
+                            attack: WeaponAttack::Stab {
+                                dismounts: true,
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                });
+                assert_eq!(dismounted, !seated, "seated {seated}");
+            }
+        }));
     }
 }

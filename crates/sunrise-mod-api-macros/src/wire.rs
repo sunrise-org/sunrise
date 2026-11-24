@@ -46,13 +46,21 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         return Ok(quote! {
             #[automatically_derived]
             impl #imp #w::Wire for #name #ty #clause {
-                const MIN: usize = <#via as #w::Wire>::MIN;
-                fn holds_resource(visiting: &mut ::std::vec::Vec<&'static str>) -> bool { <#via as #w::Wire>::holds_resource(visiting) }
-                fn put(&self, out: &mut #w::Writer) {
-                    out.put(&<#via as ::core::convert::From<&Self>>::from(self));
+                const MIN: ::core::primitive::usize = <#via as #w::Wire>::MIN;
+                fn describe(schema: &mut #w::WireSchema) -> ::core::primitive::u64
+                where
+                    Self: 'static,
+                {
+                    schema.ordinary_only();
+                    schema.named::<Self>(|schema| <#via as #w::Wire>::describe(schema))
                 }
-                fn put_owned(self, out: &mut #w::Writer) { self.put(out); }
+                fn put(&self, out: &mut #w::Writer) {
+                    if out.ordinary_only() {
+                        out.put(&<#via as ::core::convert::From<&Self>>::from(self));
+                    }
+                }
                 fn take(input: &mut #w::Reader<'_>) -> ::core::result::Result<Self, #w::WireError> {
+                    input.ordinary_only()?;
                     <Self as ::core::convert::TryFrom<#via>>::try_from(input.take::<#via>()?)
                         .map_err(|_| #w::WireError::Invalid(::core::stringify!(#name)))
                 }
@@ -60,26 +68,28 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         });
     }
     let mut min = quote!(0usize);
-    let mut resource = Vec::new();
     let mut puts = Vec::new();
-    let mut owned = Vec::new();
     let mut takes = Vec::new();
     let nested;
+    let describe;
     match &input.data {
         Data::Struct(data) => {
             nested = !matches!(data.fields, Fields::Unit);
+            let shape = describe_fields(&data.fields, &w);
+            describe = quote! {
+                let hash = #w::WireSchema::leaf("struct");
+                #shape
+                hash
+            };
             let (pattern, build, fields) = fields(&data.fields);
             for (field, bind) in data.fields.iter().zip(&fields) {
                 check_owned(&field.ty)?;
                 let ft = &field.ty;
                 min = quote!(#min + <#ft as #w::Wire>::MIN);
-                resource.push(quote!(|| <#ft as #w::Wire>::holds_resource(visiting)));
                 puts.push(quote!(out.put(#bind);));
-                owned.push(quote!(out.put_owned(#bind);));
             }
             takes.push(quote!(#build));
             puts = vec![quote!(let Self #pattern = self; #(#puts)*)];
-            owned = vec![quote!(let Self #pattern = self; #(#owned)*)];
         }
         Data::Enum(data) => {
             min = quote!(4usize);
@@ -87,6 +97,13 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 .variants
                 .iter()
                 .any(|v| !matches!(v.fields, Fields::Unit));
+            let count = data.variants.len() as u64;
+            let shapes = data.variants.iter().map(|v| describe_fields(&v.fields, &w));
+            describe = quote! {
+                let hash = #w::WireSchema::mix(#w::WireSchema::leaf("enum:u32-le"), #count);
+                #(#shapes)*
+                hash
+            };
             for (index, variant) in data.variants.iter().enumerate() {
                 let index = index as u32;
                 let case = &variant.ident;
@@ -95,59 +112,57 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 // `fields` returns a constructor beginning with Self; enum cases supply that prefix.
                 let build = construct(&variant.fields, quote!(Self::#case));
                 let mut ps = Vec::new();
-                let mut os = Vec::new();
                 for (field, bind) in variant.fields.iter().zip(binds) {
                     check_owned(&field.ty)?;
-                    let ft = &field.ty;
-                    resource.push(quote!(|| <#ft as #w::Wire>::holds_resource(visiting)));
                     ps.push(quote!(out.put(#bind);));
-                    os.push(quote!(out.put_owned(#bind);));
                 }
                 puts.push(quote!(#pat => { out.put(&#index); #(#ps)* }));
-                owned.push(quote!(#pat => { out.put(&#index); #(#os)* }));
                 takes.push(quote!(#index => #build,));
             }
             puts = vec![quote!(match self { #(#puts,)* _ => ::core::unreachable!() })];
-            owned = vec![quote!(match self { #(#owned,)* _ => ::core::unreachable!() })];
-            takes = vec![
-                quote!(match input.take::<u32>()? { #(#takes)* tag => return ::core::result::Result::Err(#w::WireError::Tag(tag)) }),
-            ];
+            takes = vec![quote! {
+                match input.take::<::core::primitive::u32>()? {
+                    #(#takes)*
+                    tag => return ::core::result::Result::Err(#w::WireError::Tag(tag)),
+                }
+            }];
         }
         Data::Union(_) => return Err(syn::Error::new_spanned(name, "Wire cannot encode a union")),
     }
     let take = if nested {
-        quote!(input.nested(|input| ::core::result::Result::Ok(#(#takes)*)))
+        quote!(input.record(|input| ::core::result::Result::Ok(#(#takes)*)))
     } else {
         quote!(::core::result::Result::Ok(#(#takes)*))
     };
     let put = if nested {
-        quote!(out.nested(|out| { #(#puts)* }))
+        quote!(out.record(|out| { #(#puts)* }))
     } else {
         quote!(#(#puts)*)
-    };
-    let put_owned = if nested {
-        quote!(out.nested(|out| { #(#owned)* }))
-    } else {
-        quote!(#(#owned)*)
     };
     Ok(quote! {
         #[allow(unreachable_patterns, unused_variables)]
         #[automatically_derived]
-            impl #imp #w::Wire for #name #ty #clause {
-            const MIN: usize = #min;
-            fn holds_resource(visiting: &mut ::std::vec::Vec<&'static str>) -> bool {
-                let this = ::core::any::type_name::<Self>();
-                if visiting.contains(&this) { return false; }
-                visiting.push(this);
-                let found = false #(#resource)*;
-                visiting.pop();
-                found
+        impl #imp #w::Wire for #name #ty #clause {
+            const MIN: ::core::primitive::usize = #min;
+            fn describe(schema: &mut #w::WireSchema) -> ::core::primitive::u64
+            where
+                Self: 'static,
+            {
+                schema.named::<Self>(|schema| { #describe })
             }
             fn put(&self, out: &mut #w::Writer) { #put }
-            fn put_owned(self, out: &mut #w::Writer) { #put_owned }
             fn take(input: &mut #w::Reader<'_>) -> ::core::result::Result<Self, #w::WireError> { #take }
         }
     })
+}
+
+fn describe_fields(fields: &Fields, wire: &syn::Path) -> TokenStream {
+    let count = fields.len() as u64;
+    let types = fields.iter().map(|field| &field.ty);
+    quote! {
+        let hash = #wire::WireSchema::mix(hash, #count);
+        #(let hash = #wire::WireSchema::mix(hash, <#types as #wire::Wire>::describe(schema));)*
+    }
 }
 
 fn fields(fields: &Fields) -> (TokenStream, TokenStream, Vec<syn::Ident>) {
@@ -208,15 +223,10 @@ fn check_owned(ty: &Type) -> syn::Result<()> {
             }
         }
         fn visit_type_reference(&mut self, r: &'ast syn::TypeReference) {
-            let static_str = r.mutability.is_none()
-                && r.lifetime.as_ref().is_some_and(|l| l.ident == "static")
-                && matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str"));
-            if !static_str {
-                self.0 = Some(syn::Error::new_spanned(
-                    r,
-                    "Wire is for owned values; a borrowed record crosses as a call argument",
-                ));
-            }
+            self.0 = Some(syn::Error::new_spanned(
+                r,
+                "Wire is for owned values; a borrowed record crosses as a call argument",
+            ));
         }
     }
     let mut check = Borrowed(None);
@@ -241,7 +251,7 @@ mod tests {
             "struct Generic<T, const N: usize> { value: [T; N] }",
             "struct Recursive { children: Vec<Recursive> }",
             "#[wire(via = String)] struct Checked(String);",
-            "struct Static { text: &'static str }",
+            "struct OwnedCow { text: std::borrow::Cow<'static, str> }",
         ] {
             let expanded = expand(syn::parse_str(source).unwrap()).unwrap();
             syn::parse2::<syn::ItemImpl>(expanded).unwrap_or_else(|e| panic!("{source}: {e}"));
@@ -276,6 +286,8 @@ mod tests {
             "struct Borrow<'a> { value: &'a str }",
             "struct Borrow<'a> { value: Vec<&'a u8> }",
             "struct Borrow { value: &'static [u8] }",
+            "struct Borrow { value: &'static str }",
+            "struct Borrow { value: Option<&'static str> }",
             "struct Borrow { value: &'static mut str }",
             "struct Borrow<'a> { value: Option<Other<'a>> }",
         ] {

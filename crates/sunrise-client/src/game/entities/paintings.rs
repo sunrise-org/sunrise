@@ -4,106 +4,15 @@
 //! `PaintingRenderer` quads.
 use super::{Game, Hit, entity_culling::default_range};
 use std::sync::Arc;
-use sunrise_client::{
-    entities::{ItemFrame, Painting},
-    items::ItemStack,
-    mesher::Vertex,
-    random_source,
-};
+use sunrise_client::{entities::Painting, items::ItemStack, mesher::Vertex, random_source};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
 };
 
-pub(super) use sunrise_client::entities::PaintingVariant as Variant;
-/// Variants by id plus the `#minecraft:placeable` list.
-#[derive(Default)]
-pub(super) struct PaintingVariants {
-    pub all: Vec<Variant>,
-    pub placeable: Vec<Arc<str>>,
-}
-impl PaintingVariants {
-    pub fn load(root: &std::path::Path) -> Self {
-        let data = root.join("data/minecraft");
-        let mut all = Vec::new();
-        if let Ok(folder) = sunrise_world::json_folder::read(&data.join("painting_variant")) {
-            for file in &folder.files {
-                let name = file.name.as_str();
-                let Ok(v) =
-                    serde_json::from_slice::<serde_json::Value>(file.bytes().unwrap_or_default())
-                else {
-                    continue;
-                };
-                if let Ok(variant) = Variant::decode(&format!("minecraft:{name}"), &v) {
-                    all.push(variant);
-                }
-            }
-        }
-        let placeable =
-            sunrise_core::prepared_files::read(&data.join("tags/painting_variant/placeable.json"))
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .and_then(|v| v["values"].as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|v| v.as_str().map(Arc::from))
-                .collect();
-        Self { all, placeable }
-    }
-    pub fn get(&self, id: &str) -> Option<&Variant> {
-        self.all.iter().find(|v| &*v.id == id)
-    }
-    /// The variant a stack's `painting/variant` component names.
-    pub fn of_stack(&self, stack: &ItemStack) -> Option<&Variant> {
-        let id = sunrise_client::save::text(stack.data()?.other("minecraft:painting/variant"))?;
-        self.get(&sunrise_world::datafix::dynamic::namespaced(&id))
-    }
-    /// `VariantUtils.readVariant` then `Painting.defineSynchedData`'s
-    /// `VariantUtils.getAny`: a saved id that does not resolve, or none at all,
-    /// leaves the registry's first variant in place. `Identifier.CODEC` reads a
-    /// bare id in the `minecraft` namespace.
-    pub fn saved_or_default(&self, id: Option<&str>) -> Option<Variant> {
-        id.map(sunrise_world::datafix::dynamic::namespaced)
-            .and_then(|id| self.get(&id))
-            .or_else(|| self.all.first())
-            .cloned()
-    }
-}
-fn overlaps(a: ([f64; 3], [f64; 3]), b: ([f64; 3], [f64; 3])) -> bool {
-    (0..3).all(|i| a.0[i] < b.1[i] && b.0[i] < a.1[i])
-}
-/// `HangingEntity.canCoexist(true)` for an item frame.
-pub(super) fn frame_coexists(f: &ItemFrame, frames: &[ItemFrame], paintings: &[Painting]) -> bool {
-    !frames
-        .iter()
-        .any(|o| o.id != f.id && o.facing == f.facing && overlaps(o.bounds(), f.bounds()))
-        && !paintings
-            .iter()
-            .any(|o| o.step() == f.step() && overlaps(o.bounds(), f.bounds()))
-}
-/// `HangingEntity.canCoexist(false)` for a painting.
-fn painting_coexists(p: &Painting, paintings: &[Painting], frames: &[ItemFrame]) -> bool {
-    !paintings
-        .iter()
-        .any(|o| o.id != p.id && overlaps(o.bounds(), p.bounds()))
-        && !frames
-            .iter()
-            .any(|o| o.step() == p.step() && overlaps(o.bounds(), p.bounds()))
-}
-
-/// `HangingEntityItem.mayPlace` for a painting: not a floor or ceiling.
-/// Direction.get2DDataValue: south 0, west 1, north 2, east 3.
-fn painting_facing(face: [i32; 3]) -> Option<u8> {
-    if face[1] != 0 {
-        return None;
-    }
-    Some(match face {
-        [0, 0, 1] => 0,
-        [-1, 0, 0] => 1,
-        [0, 0, -1] => 2,
-        _ => 3,
-    })
-}
+pub(super) use sunrise_gameplay::painting_variants::{
+    PaintingVariants, Variant, frame_coexists, painting_coexists, painting_facing,
+};
 /// Whether the camera, at the origin of `corners`' space, is on the side of the quad
 /// that `normal` points to.
 fn faces_camera(corners: &[glam::DVec3; 4], normal: glam::DVec3) -> bool {
@@ -169,6 +78,7 @@ impl Game<'_> {
             pos,
             facing,
             variant: Arc::from(""),
+            asset: None,
             width: 1,
             height: 1,
             check_interval: 0,
@@ -217,6 +127,7 @@ impl Game<'_> {
             pos,
             facing,
             variant: Arc::from(""),
+            asset: None,
             width: 1,
             height: 1,
             check_interval: 0,
@@ -290,8 +201,7 @@ impl Game<'_> {
             (lo[1] + hi[1]) / 2.0,
             (lo[2] + hi[2]) / 2.0,
         ];
-        self.audio
-            .play("minecraft:entity.painting.place", Some(at), 1.0, 1.0);
+        self.play_audio("minecraft:entity.painting.place", Some(at), 1.0, 1.0);
         // HangingEntityItem.useOn: ENTITY_PLACE at the painting, by the player, before it is
         // added; ItemStack.useOn then counts the use.
         let ctx = self.player_context(None);
@@ -308,13 +218,6 @@ impl Game<'_> {
     }
     /// The painting under the crosshair within reach and its distance.
     pub(super) fn painting_hit(&self) -> Option<(usize, f64)> {
-        let mut pick = crate::game::pick_accumulator::PickAccumulator::new(self.entity_reach);
-        self.painting_hit_with_pick(&mut pick)
-    }
-    pub(super) fn painting_hit_with_pick(
-        &self,
-        pick: &mut crate::game::pick_accumulator::PickAccumulator,
-    ) -> Option<(usize, f64)> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, _) = hit?;
             let index = self.paintings.iter().position(|f| f.id == entity.id())?;
@@ -322,25 +225,17 @@ impl Game<'_> {
         }
         let (eye, dir) = self.aim()?;
         let reach: f64 = self.entity_reach;
+        let (from, to) = super::pick_accumulator::pick_ray_segment(eye, dir, reach);
+        let mut pick = super::pick_accumulator::PickAccumulator::new(reach * reach);
         let mut best: Option<(usize, f64)> = None;
         for (i, p) in self.paintings.iter().enumerate() {
             let (lo, hi) = p.bounds();
-            let (mut t0, mut t1) = (0.0f64, reach);
-            let mut hit = true;
-            for a in 0..3 {
-                if dir[a].abs() < 1e-9 {
-                    hit &= eye[a] >= lo[a] && eye[a] <= hi[a];
-                    continue;
-                }
-                let (mut ta, mut tb) = ((lo[a] - eye[a]) / dir[a], (hi[a] - eye[a]) / dir[a]);
-                if ta > tb {
-                    std::mem::swap(&mut ta, &mut tb);
-                }
-                t0 = t0.max(ta);
-                t1 = t1.min(tb);
-            }
-            if hit && t0 <= t1 && pick.consider(self, p.id, t0) {
-                best = Some((i, t0));
+            let bb = Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            );
+            if pick.consider_box(self, p.id, from, to, bb) {
+                best = Some((i, pick.hovered.unwrap().distance_sq.sqrt()));
             }
         }
         best
@@ -366,7 +261,17 @@ impl Game<'_> {
         };
         // BlockAttachedEntity.kill, before dropItem.
         self.entity_killed_event_by(at, source);
-        self.drop_painting(p, at, by_player);
+        let creative = match source {
+            Some(super::commands::Target::Player) => self.creative,
+            Some(super::commands::Target::Guest(conn)) if self.lan_acting == Some(conn) => {
+                self.creative
+            }
+            Some(super::commands::Target::Guest(conn)) => {
+                self.command_guest(conn).is_some_and(|g| g.creative())
+            }
+            _ => by_player && self.creative,
+        };
+        self.drop_painting(p, at, creative);
         true
     }
     /// `BlockAttachedEntity.tick`: a painting whose `survives()` failed is
@@ -397,9 +302,8 @@ impl Game<'_> {
         self.world.modified.insert((p.pos[0] >> 4, p.pos[2] >> 4));
         Some((p, at))
     }
-    /// `Painting.dropItem`: the break sound, then the item unless drops are off
-    /// or the player who broke it has infinite materials.
-    fn drop_painting(&mut self, p: Painting, at: [f64; 3], by_player: bool) {
+    /// `Painting.dropItem`: break sound, then item unless drops off or creative.
+    fn drop_painting(&mut self, p: Painting, at: [f64; 3], creative: bool) {
         if !self
             .ui
             .rules
@@ -407,9 +311,8 @@ impl Game<'_> {
         {
             return;
         }
-        self.audio
-            .play("minecraft:entity.painting.break", Some(at), 1.0, 1.0);
-        if by_player && self.creative {
+        self.play_audio("minecraft:entity.painting.break", Some(at), 1.0, 1.0);
+        if creative {
             return;
         }
         let stack = ItemStack {
@@ -456,6 +359,9 @@ impl Game<'_> {
         let sprites = &self.gui.atlas.sprites;
         let partial = alpha as f32;
         for p in &self.paintings {
+            if self.hides_as_camera(p.id) {
+                continue;
+            }
             // EntityRenderer.shouldRender: the default range and its box,
             // measured from the box's centre (HangingEntity's position).
             let (lo, hi) = p.bounds();
@@ -499,6 +405,7 @@ impl Game<'_> {
                             height: p.height,
                         }),
                         item_frame: None,
+                        attachments: None,
                     }
                     .into();
                 let light = self.world.light(p.pos[0], p.pos[1], p.pos[2]);
@@ -508,6 +415,7 @@ impl Game<'_> {
                     &entity,
                     "minecraft:painting",
                     at - camera,
+                    Some(at),
                     p.pos,
                     packed,
                     out,
@@ -519,10 +427,14 @@ impl Game<'_> {
             let Some(back) = sprites.get("painting/back").copied() else {
                 continue;
             };
-            let Some(v) = self.painting_variants.get(&p.variant) else {
-                continue;
+            let asset = match p.asset.as_deref() {
+                Some(asset) => asset,
+                None => match self.painting_variants.get(&p.variant) {
+                    Some(v) => v.asset.as_str(),
+                    None => continue,
+                },
             };
-            let Some(front) = sprites.get(&format!("painting/{}", v.asset)).copied() else {
+            let Some(front) = sprites.get(&format!("painting/{asset}")).copied() else {
                 continue;
             };
             let (lo, hi) = p.bounds();
@@ -655,6 +567,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sunrise_client::entities::ItemFrame;
 
     #[test]
     fn hanging_entities_block_overlapping_other_types() {
@@ -665,6 +578,7 @@ mod tests {
             pos: [0, 0, 0],
             facing: 0,
             variant: Arc::from("minecraft:kebab"),
+            asset: None,
             width: 1,
             height: 1,
             check_interval: 0,

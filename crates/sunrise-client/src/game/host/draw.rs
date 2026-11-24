@@ -5,25 +5,129 @@ use crate::game::{
 };
 use mod_api::{prelude::*, *};
 
+#[path = "draw/gui_canvas.rs"]
+mod gui_canvas;
+#[path = "draw/text_layout.rs"]
+pub(in crate::game) mod text_layout;
+
+/// Borrow `minecraft:default` directly or format another font identifier.
+pub(in crate::game) fn font_id_str(id: &mod_api::Identifier) -> std::borrow::Cow<'static, str> {
+    if id.namespace() == "minecraft" && id.path() == "default" {
+        std::borrow::Cow::Borrowed(sunrise_client::font::DEFAULT)
+    } else {
+        std::borrow::Cow::Owned(id.to_string())
+    }
+}
+
+/// Engine font view lent to [`ClientTooltipComponent`] and `render_tooltip_pre`.
+pub(in crate::game) struct EngineTooltipFont<'a> {
+    font: &'a sunrise_client::font::Font,
+    id: &'a Identifier,
+    name: std::borrow::Cow<'static, str>,
+}
+impl<'a> EngineTooltipFont<'a> {
+    pub(in crate::game) fn new(font: &'a sunrise_client::font::Font, id: &'a Identifier) -> Self {
+        Self {
+            font,
+            id,
+            name: font_id_str(id),
+        }
+    }
+
+    pub(in crate::game) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl TooltipFont for EngineTooltipFont<'_> {
+    fn id(&self) -> &Identifier {
+        self.id
+    }
+    fn line_height(&self) -> i32 {
+        9
+    }
+    fn width(&self, text: &Text) -> Result<i32, TextFormError> {
+        let text: crate::text::Text = text.try_into_engine(&())?;
+        Ok(self.font.width_text_with_font(&text, self.name()) as i32)
+    }
+    fn split(&self, text: &Text, max_width: i32) -> Result<Vec<Text>, TextFormError> {
+        let text: crate::text::Text = text.try_into_engine(&())?;
+        self.font
+            .split_formatted_with_font(&text, max_width as f32, self.name())
+            .into_iter()
+            .map(|line| line.try_into_api())
+            .collect()
+    }
+}
+
+impl Game<'_> {
+    pub(in crate::game) fn draw_gui_canvas(
+        &self,
+        batch: &mut crate::hud::HudBatch,
+        scissor: Option<[f32; 4]>,
+        draw: &mut dyn FnMut(&mut dyn GuiCanvas) -> Result<(), GuiDrawError>,
+    ) -> Result<(), GuiDrawError> {
+        gui_canvas::GameGuiCanvas::draw(batch, &self.gui.atlas, Some(self), scissor, draw)
+    }
+}
+
 /// [`DrawContext`] on the game's `crate::hud::HudBatch`: one per hook call.
 pub(crate) struct GameDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
     pub(crate) surface: &'a mut crate::hud::HudBatch,
-    /// The call's open clips (`push_clip`), closed when the call returns.
-    clips: crate::game::gui_clips::GuiClips,
+    /// Only a scoped child owns a clip; its parent keeps the enclosing one.
+    clip: Option<crate::game::gui_clips::GuiClip>,
+    tooltip_font: Option<&'a EngineTooltipFont<'a>>,
 }
 impl<'a, 'g> GameDrawContext<'a, 'g> {
+    /// Lend a fresh clip stack and isolate the drawable tail of one listener.
+    pub(crate) fn stage(
+        game: &Game<'_>,
+        surface: &mut crate::hud::HudBatch,
+        listen: &mut dyn FnMut(&mut dyn DrawContext) -> bool,
+    ) {
+        let counts = (
+            surface.vertices.len(),
+            surface.pictures.len(),
+            surface.blends.len(),
+            surface.inline_profiles.len(),
+        );
+        let last_blend_end = surface.blends.last().map(|(range, _)| range.end);
+        let accepted = listen(&mut GameDrawContext::new(game, surface));
+        if !accepted {
+            surface.truncate_vertices(counts.0);
+            surface.pictures.truncate(counts.1);
+            surface.blends.truncate(counts.2);
+            surface.inline_profiles.truncate(counts.3);
+            if let Some((last, end)) = surface.blends.last_mut().zip(last_blend_end) {
+                last.0.end = end;
+            }
+            // Keep glyph uploads: font extraction already cached those atlas locations.
+            // They do not draw anything without an accepted vertex referencing them.
+        }
+    }
+
     pub(crate) fn new(game: &'a Game<'g>, surface: &'a mut crate::hud::HudBatch) -> Self {
         Self {
             game,
             surface,
-            clips: Default::default(),
+            clip: None,
+            tooltip_font: None,
         }
+    }
+    pub(in crate::game) fn with_active_tooltip_font(
+        mut self,
+        font: &'a EngineTooltipFont<'a>,
+    ) -> Self {
+        self.tooltip_font = Some(font);
+        self
     }
 }
 impl Drop for GameDrawContext<'_, '_> {
     fn drop(&mut self) {
-        self.clips.close_all(self.surface);
+        if let Some(clip) = self.clip.take() {
+            clip.close(self.surface);
+        }
     }
 }
 impl DrawContext for GameDrawContext<'_, '_> {
@@ -61,6 +165,43 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_text(&mut *self.surface, text, at, argb, shadow)
     }
+    fn text_with_font(
+        &mut self,
+        font: &Identifier,
+        text: &Text,
+        at: [f32; 2],
+        argb: u32,
+        shadow: bool,
+    ) -> Result<f32, TextFormError> {
+        let text: crate::text::Text = text.try_into_engine(&())?;
+        let [a, r, g, b] = argb.to_be_bytes();
+        if a == 0 {
+            return Ok(0.0);
+        }
+        let formatted;
+        let name: &str = match self.tooltip_font.filter(|active| active.id == font) {
+            Some(active) => active.name(),
+            None => {
+                formatted = font_id_str(font);
+                &formatted
+            }
+        };
+        Ok(self.surface.text_styled_with_font(
+            &self.game.gui.atlas,
+            &text,
+            at,
+            crate::hud::rgba(r, g, b, a),
+            shadow,
+            name,
+        ))
+    }
+    fn with_tooltip_font_raw(&self, font: &Identifier, f: &mut dyn FnMut(&dyn TooltipFont)) {
+        if let Some(active) = self.tooltip_font.filter(|active| active.id == font) {
+            f(active);
+        } else {
+            f(&EngineTooltipFont::new(&self.game.gui.atlas.font, font));
+        }
+    }
     fn text_scaled(&mut self, text: &str, at: [f32; 2], scale: f32, argb: u32, shadow: bool) {
         self.game
             .native_text_scaled(&mut *self.surface, text, at, scale, argb, shadow)
@@ -72,10 +213,17 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_item_stack(&mut *self.surface, &stack, at, size)
     }
-    fn gui_paint(&mut self, draws: &[GuiDraw]) -> Result<(), GuiPaintError> {
-        let draws = draws.try_into_engine(&())?;
-        crate::game::gui_pose::report_refused_poses(&draws);
-        self.game.native_gui_paint(&mut *self.surface, &draws)
+    fn draw_gui(
+        &mut self,
+        draw: &mut dyn FnMut(&mut dyn GuiCanvas) -> Result<(), GuiDrawError>,
+    ) -> Result<(), GuiDrawError> {
+        self.game.draw_gui_canvas(
+            self.surface,
+            self.clip
+                .as_ref()
+                .map(crate::game::gui_clips::GuiClip::rect),
+            draw,
+        )
     }
     fn gui_nine_slice(&mut self, sprite: &str, rect: [f32; 4], color: u32) {
         self.game
@@ -86,22 +234,15 @@ impl DrawContext for GameDrawContext<'_, '_> {
         lines: &[Text],
         at: [f32; 2],
     ) -> Result<(), mod_api::text::TextFormError> {
-        let lines = lines.try_into_engine(&())?;
+        let lines: Vec<_> = lines
+            .iter()
+            .map(sunrise_client_lib::api_text::to_engine)
+            .collect::<Result<_, _>>()?;
         self.game.native_gui_tooltip(&mut *self.surface, &lines, at);
         Ok(())
     }
     fn text_width(&self, text: &str) -> f32 {
         self.game.native_text_width(&*self.surface, text)
-    }
-    fn text_lines(
-        &self,
-        text: &Text,
-        max_width: f32,
-        align: TextAlign,
-        scale: f32,
-    ) -> Result<TextLines, TextLinesRefusal> {
-        let text: crate::text::Text = text.try_into_engine(&())?;
-        label_layout(&self.game.gui.atlas.font, &text, max_width, align, scale)
     }
     fn fluid(&mut self, fluid: &str, at: [f32; 2], size: f32) {
         self.game.native_fluid(&mut *self.surface, fluid, at, size)
@@ -116,11 +257,26 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_draw_scene(&mut *self.surface, rect, &blocks, scene, view)
     }
-    fn push_clip(&mut self, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
-        self.clips.push(self.surface, rect)
+    fn model_3d(
+        &mut self,
+        subject: mod_api::Gui3dSubject<'_>,
+        view: mod_api::Gui3dView,
+    ) -> Result<(), mod_api::Gui3dError> {
+        self.game.native_model_3d(&mut *self.surface, subject, view)
     }
-    fn pop_clip(&mut self) -> Result<(), GuiClipRefusal> {
-        self.clips.pop(self.surface)
+    fn with_scissor(
+        &mut self,
+        rect: [f32; 4],
+        draw: &mut dyn FnMut(&mut dyn DrawContext),
+    ) -> Result<(), GuiClipRefusal> {
+        let clip = crate::game::gui_clips::GuiClip::open(self.surface, rect, self.clip.as_ref())?;
+        draw(&mut GameDrawContext {
+            game: self.game,
+            surface: &mut *self.surface,
+            clip: Some(clip),
+            tooltip_font: self.tooltip_font,
+        });
+        Ok(())
     }
     fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
         self.game
@@ -141,88 +297,6 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_gui_draw_item_with(&mut *self.surface, &stack, at, text)
     }
-    fn widget_button(
-        &mut self,
-        rect: [f32; 4],
-        label: &Text,
-        active: bool,
-        highlighted: bool,
-    ) -> Result<(), mod_api::text::TextFormError> {
-        let label = label.try_into_engine(&())?;
-        self.game
-            .native_widget_button(&mut *self.surface, rect, &label, active, highlighted);
-        Ok(())
-    }
-    fn widget_text_field(&mut self, field: &TextFieldView) -> TextFieldLayout {
-        self.game
-            .native_widget_text_field(&mut *self.surface, field)
-    }
-}
-/// `Font.lineHeight`: nine GUI pixels a line, before `scale`.
-const LINE_HEIGHT: f32 = 9.0;
-/// The most lines one layout may have; [`DrawContext::text_lines`] refuses more
-/// ([`TextLinesRefusal::TooManyLines`]) rather than answer a component of any size. The method's
-/// doc names the same number: keep them in step.
-const MAX_LINES: usize = 512;
-/// The most characters one layout's lines may hold together, before
-/// [`TextLinesRefusal::TooManyGlyphs`]. The method's doc names the same number: keep them in step.
-const MAX_GLYPHS: usize = 8192;
-/// Lays `text` out as a label's lines, as [`DrawContext::text_lines`] documents: the font's own
-/// split wraps it at `max_width / scale`, the font measures each line, `align` places them inside
-/// that wrapping width, and every dimension and position answered is scaled by `scale`.
-fn label_layout(
-    font: &crate::font::Font,
-    text: &crate::text::Text,
-    max_width: f32,
-    align: TextAlign,
-    scale: f32,
-) -> Result<TextLines, TextLinesRefusal> {
-    // No position and no size to answer: a scale of zero or less, or one that is not a number,
-    // refuses rather than answering every line at an undefined place.
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(TextLinesRefusal::ScaleInvalid);
-    }
-    // A width the game cannot measure in refuses too: it is not "no wrapping", which would answer
-    // lines of any length in a box of no width.
-    if !max_width.is_finite() {
-        return Err(TextLinesRefusal::WidthNotFinite);
-    }
-    // Vanilla's one-pixel minimum (`StringSplitter.splitLines`): a finite box narrower than one
-    // pixel wraps at one — and so does one `scale` makes narrower — rather than not wrapping.
-    let wrap_width = max_width / scale;
-    if !wrap_width.is_finite() {
-        return Err(TextLinesRefusal::WidthNotFinite);
-    }
-    let wrap_width = wrap_width.max(1.0);
-    let wrapped = font.split_formatted(text, wrap_width);
-    if wrapped.len() > MAX_LINES {
-        return Err(TextLinesRefusal::TooManyLines);
-    }
-    let mut lines = Vec::with_capacity(wrapped.len());
-    let mut glyphs = 0usize;
-    for (i, piece) in wrapped.into_iter().enumerate() {
-        // The split keeps the legacy codes; applying them to each run's own style (a `§r` restores
-        // the style the run carried out of the break) lets a line measure and draw the same way.
-        let piece = piece.resolve_legacy();
-        glyphs += piece.chars().count();
-        if glyphs > MAX_GLYPHS {
-            return Err(TextLinesRefusal::TooManyGlyphs);
-        }
-        let width = font.width_text(&piece);
-        let x = match align {
-            TextAlign::Left => 0.0,
-            // `TextAlignment.CENTER.calculateLeft`: the half line width is rounded down.
-            TextAlign::Centre => wrap_width / 2.0 - (width / 2.0).floor(),
-            TextAlign::Right => wrap_width - width,
-        };
-        let at = [x * scale, i as f32 * LINE_HEIGHT * scale];
-        lines.push(TextLine::new(piece.try_into_api()?, at, width * scale));
-    }
-    let width = lines.iter().map(|line| line.width).fold(0.0, f32::max);
-    let height = lines
-        .last()
-        .map_or(0.0, |line| line.at[1] + LINE_HEIGHT * scale);
-    Ok(TextLines::new(lines, width, height))
 }
 /// [`BlockEntityDrawContext`] on the game's `crate::game::native_block_entity_draw::BlockEntityDraw`.
 pub(crate) struct GameBlockEntityDrawContext<'a, 'g> {
@@ -272,6 +346,12 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
     fn set_light(&mut self, light: u32) {
         self.game.native_draw_set_light(&mut *self.surface, light)
     }
+    fn level_light(&mut self) {
+        self.game.native_draw_level_light(&mut *self.surface)
+    }
+    fn unlit(&mut self, on: bool) {
+        self.game.native_draw_unlit(&mut *self.surface, on)
+    }
     fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
         self.game
             .native_draw_quad(&mut *self.surface, sprite, corners, uv, tint)
@@ -286,12 +366,11 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
         self.game
             .native_draw_cube(&mut *self.surface, from, to, faces, tint)
     }
-    fn block(&mut self, block: BlockKey, properties: &[(&str, &str)]) -> bool {
-        let Some(block) = mod_api::__private::block_key_id(block) else {
+    fn block(&mut self, state: BlockState) -> bool {
+        let Ok(id) = state.try_into_engine(&()) else {
             return false;
         };
-        self.game
-            .native_draw_block(&mut *self.surface, block, properties)
+        self.game.native_draw_block(&mut *self.surface, id)
     }
     fn item(
         &mut self,
@@ -327,7 +406,7 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
         glowing: bool,
         outline: Option<u32>,
     ) -> Result<f32, mod_api::text::TextFormError> {
-        let text = text.try_into_engine(&())?;
+        let text = sunrise_client_lib::api_text::to_engine(text)?;
         Ok(self
             .game
             .native_draw_text(&mut *self.surface, &text, at, color, glowing, outline))
@@ -336,28 +415,36 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
         &mut self,
         model: ModelRef,
         options: TerrainModelOptions<'_>,
-    ) -> Result<(), TerrainModelError> {
+    ) -> Result<(), ModelError> {
         self.game
             .native_draw_terrain_model(&mut *self.surface, model, options)
     }
-    fn text_width(&self, text: &Text) -> Result<f32, mod_api::text::TextFormError> {
-        let text = text.try_into_engine(&())?;
-        Ok(self.game.native_draw_text_width(&*self.surface, &text))
+    fn text_width(&self, text: &Text) -> f32 {
+        let text = sunrise_client_lib::api_text::to_engine_inprocess(text);
+        self.game.native_draw_text_width(&*self.surface, &text)
     }
     fn model_part(&mut self, part: &ModelPart, sprite: &str, tint: u32) -> bool {
         self.game
             .native_draw_model_part(&mut *self.surface, part, sprite, tint)
     }
-    fn fluid_box(
-        &mut self,
-        stack: &FluidStack,
-        bounds: [f32; 6],
-        options: FluidBoxOptions,
-    ) -> Result<(), FluidBoxError> {
+    fn fluid_box(&mut self, stack: &FluidStack, bounds: [f32; 6], options: FluidBoxOptions) {
         self.game
             .native_draw_fluid_box(&mut *self.surface, stack, bounds, options)
     }
 }
+impl HandDrawContext for GameBlockEntityDrawContext<'_, '_> {
+    fn render_arm(&mut self, arm: MainHand) {
+        if let Some(normals) = self.surface.normal_pose() {
+            self.game.submit_first_person_arm(
+                arm == MainHand::Left,
+                (self.surface.pose(), normals),
+                self.surface.light(),
+                self.surface.vertices_mut(),
+            );
+        }
+    }
+}
+
 /// [`CameraDrawContext`] on the game's `crate::screen_effects::CameraQuads`.
 pub(crate) struct GameCameraDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
@@ -421,9 +508,6 @@ impl WorldDrawContext for GameWorldDrawContext<'_, '_> {
         self.game
             .native_world_name_tag(&mut *self.surface, at, text, options)
     }
-    fn usage(&self) -> WorldDrawUsage {
-        self.game.native_world_draw_usage(&*self.surface)
-    }
     fn draw_model_instances(
         &mut self,
         model: ModelRef,
@@ -432,6 +516,173 @@ impl WorldDrawContext for GameWorldDrawContext<'_, '_> {
         self.game
             .native_world_draw_model_instances(&mut *self.surface, model, instances)
     }
+    fn set_pack_uniform(&mut self, name: &str, value: PackUniformValue) -> bool {
+        let Some((static_name, ty)) = sunrise_client::mod_pipelines::lookup_pack_uniform(name)
+        else {
+            return false;
+        };
+        if ty != value.ty() {
+            return false;
+        }
+        self.surface.set_pack_uniform(static_name, value);
+        true
+    }
+    fn pack_override_state(
+        &self,
+        pipeline: RenderPipelineRef,
+    ) -> Result<PackOverrideState, RenderPipelineError> {
+        let slot = self.game.pack.render.mod_pipelines.slot(pipeline)?;
+        Ok(self
+            .game
+            .renderer
+            .as_ref()
+            .map_or(PackOverrideState::NoPack, |renderer| {
+                renderer.pack_override_state(slot as usize)
+            }))
+    }
+}
+/// The only mod surface that appends CPU geometry for named passes.
+pub(crate) struct GamePrepareRenderBuffersContext<'a, 'g> {
+    game: &'a Game<'g>,
+    surface: &'a mut crate::world_geometry::WorldGeometry,
+}
+
+impl<'a, 'g> GamePrepareRenderBuffersContext<'a, 'g> {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::world_geometry::WorldGeometry,
+    ) -> Self {
+        Self { game, surface }
+    }
+}
+
+impl PrepareRenderBuffersContext for GamePrepareRenderBuffersContext<'_, '_> {
+    fn lines(
+        &mut self,
+        stage: RenderLevelStage,
+        lines: &[WorldLine],
+    ) -> Result<PreparedWorldDraw, DrawError> {
+        if !stage.has_render_pass() {
+            return Err(DrawError::NoRenderPass);
+        }
+        self.surface.prepare_draw(stage, |surface| {
+            self.game.native_world_draw_lines(surface, lines)
+        })
+    }
+
+    fn quads(
+        &mut self,
+        stage: RenderLevelStage,
+        quads: &[WorldQuad],
+    ) -> Result<PreparedWorldDraw, DrawError> {
+        if !stage.has_render_pass() {
+            return Err(DrawError::NoRenderPass);
+        }
+        self.surface.prepare_draw(stage, |surface| {
+            self.game.native_world_draw_quads(surface, quads)
+        })
+    }
+}
+
+/// A stage borrows only its prepared draw command surface, never the upload path.
+pub(crate) struct GameRenderLevelStageContext<'a, 's> {
+    surface: &'a mut crate::world_geometry::StageSurface<'s>,
+}
+
+impl<'a, 's> GameRenderLevelStageContext<'a, 's> {
+    pub(crate) fn new(
+        _: &Game<'_>,
+        surface: &'a mut crate::world_geometry::StageSurface<'s>,
+    ) -> Self {
+        Self { surface }
+    }
+}
+
+impl WorldPassDrawContext for GameRenderLevelStageContext<'_, '_> {
+    fn draw(&mut self, batch: PreparedWorldDraw) -> Result<(), PreparedWorldDrawError> {
+        self.surface.draw(batch)
+    }
+}
+
+impl WorldOitPassDrawContext for GameRenderLevelStageContext<'_, '_> {
+    fn oit_stage(&self) -> OitStage {
+        self.surface
+            .stage()
+            .oit_stage()
+            .expect("only lent in the OIT capability")
+    }
+
+    fn draw(&mut self, batch: PreparedWorldDraw) -> Result<(), PreparedWorldDrawError> {
+        self.surface.draw(batch)
+    }
+}
+
+impl RenderLevelStageContext for GameRenderLevelStageContext<'_, '_> {
+    fn pass(&mut self) -> StagePass<'_> {
+        match self.surface.stage() {
+            RenderLevelStage::AfterSky | RenderLevelStage::AfterLevel => StagePass::None,
+            RenderLevelStage::OitTranslucent(stage) => StagePass::Oit(stage, self),
+            _ => StagePass::World(self),
+        }
+    }
+
+    fn has_render_pass(&self) -> bool {
+        self.surface.stage().has_render_pass()
+    }
+}
+
+#[cfg(test)]
+pub(in crate::game) fn canvas_test_font() -> crate::font::Font {
+    use crate::{
+        hud::Rect,
+        resource_source::{Resource, ResourceSource},
+    };
+
+    // A 24×8 sheet in a 32×16 bitmap, six fixed-size cells. Ink widths of
+    // 3, 2, 2, 2, 2, 3 give advances of 4, 3, 3, 3, 3, 4 respectively.
+    let definition = r#"{"providers":[{"type":"space","advances":{" ":2}},{"type":"bitmap","file":"test:font/fixture.png","ascent":7,"chars":["mאבג65"]}]}"#;
+    let source = ResourceSource::indexed(
+        [(
+            "assets/minecraft/font/default.json".into(),
+            Resource::bytes(definition.as_bytes().to_vec()),
+        )]
+        .into(),
+    );
+    let mut pixels = vec![0; 32 * 16 * 4];
+    for (cell, width) in [3, 2, 2, 2, 2, 3].into_iter().enumerate() {
+        for y in 0..8 {
+            let offset = (y * 32 + cell * 4) * 4;
+            pixels[offset..offset + width * 4].fill(255);
+        }
+    }
+    let pixel = Rect {
+        u0: 0.0,
+        v0: 0.0,
+        u1: 1.0 / 32.0,
+        v1: 1.0 / 16.0,
+        w: 1,
+        h: 1,
+    };
+    let sheet = Rect {
+        u0: 0.0,
+        v0: 0.0,
+        u1: 24.0 / 32.0,
+        v1: 8.0 / 16.0,
+        w: 24,
+        h: 8,
+    };
+    crate::font::Font::load(
+        &source,
+        &[
+            ("test:font/fixture".into(), sheet),
+            ("sunrise/missing_glyph".into(), pixel),
+        ]
+        .into(),
+        &pixels,
+        (32, 16),
+        (0, 0),
+        pixel,
+    )
 }
 
 #[cfg(test)]
@@ -464,8 +715,43 @@ mod tests {
         text.try_into_engine(&()).unwrap()
     }
 
-    /// The lines' plain characters, top to bottom.
-    fn plain(lines: &TextLines) -> Vec<String> {
+    #[derive(Debug)]
+    struct MeasuredLine {
+        text: Text,
+        at: [f32; 2],
+        width: f32,
+    }
+
+    #[derive(Debug)]
+    struct Measurement {
+        lines: Vec<MeasuredLine>,
+        size: TextLayoutSize,
+    }
+
+    fn measured(
+        font: &crate::font::Font,
+        text: &Text,
+        max_width: f32,
+        align: TextAlign,
+        scale: f32,
+    ) -> Result<Measurement, TextLayoutError> {
+        let layout = text_layout::LabelLayout::try_from(TextLayoutSpec {
+            max_width,
+            align,
+            scale,
+        })?;
+        let mut lines = Vec::new();
+        let size = layout.visit_components(font, text, &mut |line| {
+            lines.push(MeasuredLine {
+                text: line.text.clone(),
+                at: line.at,
+                width: line.width,
+            })
+        })?;
+        Ok(Measurement { lines, size })
+    }
+
+    fn plain(lines: &Measurement) -> Vec<String> {
         lines
             .lines
             .iter()
@@ -473,32 +759,15 @@ mod tests {
             .collect()
     }
 
-    /// Each character six GUI pixels wide, as the widget tests fake one.
-    fn layout(text: &str, max_width: f32, align: TextAlign, scale: f32) -> TextLines {
-        label_layout(
+    fn layout(text: &str, max_width: f32, align: TextAlign, scale: f32) -> Measurement {
+        measured(
             &fake_font(6.0),
-            &crate::text::Text::literal(text),
+            &Text::literal(text),
             max_width,
             align,
             scale,
         )
         .unwrap()
-    }
-
-    /// The layout `text` gets at `scale`, refusing where it should.
-    fn refusal(
-        text: &str,
-        max_width: f32,
-        align: TextAlign,
-        scale: f32,
-    ) -> Result<TextLines, TextLinesRefusal> {
-        label_layout(
-            &fake_font(6.0),
-            &crate::text::Text::literal(text),
-            max_width,
-            align,
-            scale,
-        )
     }
 
     #[test]
@@ -507,7 +776,7 @@ mod tests {
         // "brown fox" is one character too wide for the second line.
         let lines = layout("a quick brown fox", 48.0, TextAlign::Left, 1.0);
         assert_eq!(plain(&lines), ["a quick", "brown", "fox"]);
-        assert_eq!(lines.width, 42.0);
+        assert_eq!(lines.size.width, 42.0);
         assert!(
             lines.lines.iter().all(|line| line.width <= 48.0),
             "{:?}",
@@ -530,7 +799,7 @@ mod tests {
         );
         let empty = layout("", 100.0, TextAlign::Left, 1.0);
         assert!(empty.lines.is_empty());
-        assert_eq!((empty.width, empty.height), (0.0, 0.0));
+        assert_eq!((empty.size.width, empty.size.height), (0.0, 0.0));
     }
 
     #[test]
@@ -539,10 +808,10 @@ mod tests {
         // two leave two, the second from the split's own trailing newline.
         let one = layout("AA\n", 100.0, TextAlign::Left, 1.0);
         assert_eq!(plain(&one), ["AA", ""]);
-        assert_eq!((one.width, one.height), (12.0, 18.0));
+        assert_eq!((one.size.width, one.size.height), (12.0, 18.0));
         let two = layout("AA\n\n", 100.0, TextAlign::Left, 1.0);
         assert_eq!(plain(&two), ["AA", "", ""]);
-        assert_eq!((two.width, two.height), (12.0, 27.0));
+        assert_eq!((two.size.width, two.size.height), (12.0, 27.0));
     }
 
     #[test]
@@ -550,7 +819,7 @@ mod tests {
         // Nothing trims a label: the spaces at its start are characters like any other.
         let lead = layout("  AA", 100.0, TextAlign::Left, 1.0);
         assert_eq!(plain(&lead), ["  AA"]);
-        assert_eq!(lead.width, 24.0);
+        assert_eq!(lead.size.width, 24.0);
         // A run between words is kept when it fits, and the space a wrap breaks at is dropped.
         assert_eq!(
             plain(&layout("AA   BB", 100.0, TextAlign::Left, 1.0)),
@@ -595,9 +864,9 @@ mod tests {
     fn a_centred_line_rounds_the_half_line_width_down() {
         // A 15-pixel line in a 40-pixel box: `TextAlignment.CENTER.calculateLeft` floors the half
         // line width, so it starts at 13, not at the exact 12.5 an unrounded centre would give.
-        let lines = label_layout(
+        let lines = measured(
             &fake_font(5.0),
-            &crate::text::Text::literal("AAA"),
+            &Text::literal("AAA"),
             40.0,
             TextAlign::Centre,
             1.0,
@@ -611,17 +880,16 @@ mod tests {
         let lines = layout("A\nB\nC", 100.0, TextAlign::Left, 1.0);
         let down: Vec<f32> = lines.lines.iter().map(|line| line.at[1]).collect();
         assert_eq!(down, [0.0, 9.0, 18.0]);
-        assert_eq!(lines.height, 3.0 * 9.0);
+        assert_eq!(lines.size.height, 3.0 * 9.0);
         // A viewport sizes itself from the last line rather than the count.
-        assert_eq!(lines.height, down.last().unwrap() + 9.0);
+        assert_eq!(lines.size.height, down.last().unwrap() + 9.0);
     }
 
     #[test]
     fn styles_survive_wrapping() {
         let mut text = mod_api::Text::literal("AAAA BBBB");
         text.style.bold = Some(true);
-        let text: crate::text::Text = text.try_into_engine(&()).unwrap();
-        let lines = label_layout(&fake_font(6.0), &text, 30.0, TextAlign::Left, 1.0).unwrap();
+        let lines = measured(&fake_font(6.0), &text, 30.0, TextAlign::Left, 1.0).unwrap();
         assert_eq!(plain(&lines), ["AAAA", "BBBB"]);
         for line in &lines.lines {
             let line = engine(&line.text);
@@ -631,6 +899,116 @@ mod tests {
                 line.plain()
             );
         }
+    }
+
+    #[test]
+    fn laid_out_objects_keep_their_sprites_profiles_and_fallbacks_on_redraw() {
+        use mod_api::text::{TextContent, TextObject, TextProfile};
+        use sunrise_client::text::InlineObject;
+
+        let atlas = Text::new(TextContent::Object(TextObject::Atlas {
+            atlas: "minecraft:gui".into(),
+            sprite: "minecraft:heart/full".into(),
+            fallback: Some(Box::new(Text::literal("[heart]"))),
+        }));
+        let mut profile = TextProfile::default();
+        profile.name = Some("Alex".into());
+        let mut head = Text::new(TextContent::Object(TextObject::Player {
+            profile,
+            hat: false,
+            fallback: Some(Box::new(Text::literal("[Alex]"))),
+        }));
+        head.style.shadow_color = Some(0xFF00_0011);
+        let input = atlas.append(head);
+        let font = fake_font(6.0);
+        let lines = measured(&font, &input, 150.0, TextAlign::Left, 1.0).unwrap();
+        let redrawn = engine(&lines.lines[0].text);
+        assert_eq!(redrawn.plain(), "[heart][Alex]");
+        assert_eq!(font.width_text(&redrawn), lines.lines[0].width);
+        let [atlas, head] = redrawn.spans.as_slice() else {
+            panic!("expected two object spans")
+        };
+        assert!(matches!(&atlas.style.inline_object,
+            Some(InlineObject::Atlas { atlas, sprite, .. })
+            if atlas == "minecraft:gui" && sprite == "minecraft:heart/full"));
+        assert!(matches!(&head.style.inline_object,
+            Some(InlineObject::Player { profile, hat: false, .. })
+            if profile.get("name").and_then(serde_json::Value::as_str) == Some("Alex")));
+        assert_eq!(head.style.shadow_color, Some(0xFF00_0011));
+    }
+
+    #[test]
+    fn layout_does_not_read_style_indices_from_mod_metadata() {
+        use mod_api::{Tag, text::TextClick};
+        let mut styled = Text::literal("A");
+        styled.style.click = Some(TextClick::CopyToClipboard("not for B".into()));
+        let mut plain = Text::literal("B");
+        plain.metadata = Tag::compound([("__sunrise_local_style_id", Tag::Int(0))]);
+        let input = Text::literal("").append(styled).append(plain);
+        let lines = measured(&fake_font(6.0), &input, 150.0, TextAlign::Left, 1.0).unwrap();
+        let [styled, plain] = lines.lines[0].text.children.as_slice() else {
+            panic!("expected two styles")
+        };
+        assert_eq!(
+            styled.style.click,
+            Some(TextClick::CopyToClipboard("not for B".into()))
+        );
+        assert_eq!(
+            plain.content,
+            mod_api::text::TextContent::Literal("B".into())
+        );
+        assert_eq!(plain.style.click, None);
+    }
+
+    #[test]
+    fn layout_copies_inherited_deep_hover_and_opaque_metadata_without_recursion() {
+        use mod_api::{
+            Tag,
+            text::{TextContent, TextHover},
+        };
+        const DEPTH: usize = 4096;
+        let mut hover = Text::literal("hover leaf");
+        let mut metadata = Tag::Int(73);
+        for _ in 0..DEPTH {
+            let mut parent = Text::literal("");
+            parent.style.hover = Some(TextHover::Text(Box::new(hover)));
+            hover = parent;
+            metadata = Tag::List(vec![metadata]);
+        }
+        let mut root = Text::literal("");
+        root.style.hover = Some(TextHover::Text(Box::new(hover)));
+        root.style.metadata = Tag::compound([("deep", metadata), ("override", Tag::Int(1))]);
+        let mut child = Text::literal("A");
+        child.style.metadata = Tag::compound([("override", Tag::Int(2))]);
+        root.children.push(child);
+        let lines = measured(&fake_font(6.0), &root, 150.0, TextAlign::Left, 1.0).unwrap();
+        let style = &lines.lines[0].text.style;
+        let Some(TextHover::Text(hover)) = &style.hover else {
+            panic!("inherited hover")
+        };
+        let mut hover = hover.as_ref();
+        let Tag::Compound(metadata) = &style.metadata else {
+            panic!("inherited metadata")
+        };
+        assert_eq!(
+            metadata[&sunrise_core::nbt::JavaString::from("override")],
+            Tag::Int(2)
+        );
+        let mut deep = &metadata[&sunrise_core::nbt::JavaString::from("deep")];
+        for _ in 0..DEPTH {
+            let Tag::List(list) = deep else {
+                panic!("nested metadata")
+            };
+            deep = &list[0];
+        }
+        assert_eq!(deep, &Tag::Int(73));
+        for _ in 0..DEPTH {
+            let Some(TextHover::Text(child)) = &hover.style.hover else {
+                panic!("nested hover")
+            };
+            hover = child;
+        }
+        assert_eq!(hover.content, TextContent::Literal("hover leaf".into()));
     }
 
     #[test]
@@ -660,7 +1038,7 @@ mod tests {
         assert_eq!(widths, [24.0, 24.0, 24.0]);
         let down: Vec<f32> = lines.lines.iter().map(|line| line.at[1]).collect();
         assert_eq!(down, [0.0, 18.0, 36.0]);
-        assert_eq!((lines.width, lines.height), (24.0, 54.0));
+        assert_eq!((lines.size.width, lines.size.height), (24.0, 54.0));
         // Positions scale too: a 6-pixel line centred in 12 starts at 3, answered at 6.
         let one = layout("A", 24.0, TextAlign::Centre, 2.0);
         assert_eq!(one.lines[0].at, [6.0, 0.0]);
@@ -674,16 +1052,16 @@ mod tests {
         for max_width in [0.0, 0.5, -4.0] {
             let lines = layout("AAA", max_width, TextAlign::Left, 1.0);
             assert_eq!(plain(&lines), ["A", "A", "A"], "{max_width}");
-            assert_eq!(lines.height, 27.0, "{max_width}");
+            assert_eq!(lines.size.height, 27.0, "{max_width}");
         }
     }
 
     #[test]
     fn a_glyph_wider_than_the_box_gets_a_line_of_its_own() {
         // A 20-pixel character in a 6-pixel box: neither fits, and neither is dropped.
-        let lines = label_layout(
+        let lines = measured(
             &fake_font(20.0),
-            &crate::text::Text::literal("AB"),
+            &Text::literal("AB"),
             6.0,
             TextAlign::Left,
             1.0,
@@ -691,84 +1069,130 @@ mod tests {
         .unwrap();
         assert_eq!(plain(&lines), ["A", "B"]);
         assert_eq!(lines.lines[0].width, 20.0);
-        assert_eq!(lines.width, 20.0);
+        assert_eq!(lines.size.width, 20.0);
     }
 
     #[test]
     fn a_layout_refuses_a_width_or_a_scale_it_cannot_place() {
         for max_width in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             assert_eq!(
-                refusal("AA", max_width, TextAlign::Left, 1.0).unwrap_err(),
-                TextLinesRefusal::WidthNotFinite,
+                measured(
+                    &fake_font(6.0),
+                    &Text::literal("AA"),
+                    max_width,
+                    TextAlign::Left,
+                    1.0
+                )
+                .unwrap_err(),
+                TextLayoutError::WidthNotFinite,
                 "{max_width}"
             );
         }
         for scale in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
             assert_eq!(
-                refusal("AA", 100.0, TextAlign::Left, scale).unwrap_err(),
-                TextLinesRefusal::ScaleInvalid,
+                measured(
+                    &fake_font(6.0),
+                    &Text::literal("AA"),
+                    100.0,
+                    TextAlign::Left,
+                    scale
+                )
+                .unwrap_err(),
+                TextLayoutError::ScaleInvalid,
                 "{scale}"
             );
         }
         // A finite width `scale` makes overflow is no box at all, not a box of no width.
         assert_eq!(
-            refusal("AA", f32::MAX, TextAlign::Left, f32::MIN_POSITIVE).unwrap_err(),
-            TextLinesRefusal::WidthNotFinite
+            measured(
+                &fake_font(6.0),
+                &Text::literal("AA"),
+                f32::MAX,
+                TextAlign::Left,
+                f32::MIN_POSITIVE
+            )
+            .unwrap_err(),
+            TextLayoutError::WidthNotFinite
         );
     }
 
     #[test]
-    fn a_layout_refuses_more_lines_or_characters_than_its_budget() {
-        // 512 lines and 8192 characters are the most a layout answers, and both bounds are the last
-        // one it accepts.
-        assert!(refusal(&"x\n".repeat(511), 1e9, TextAlign::Left, 1.0).is_ok());
-        assert_eq!(
-            refusal(&"x\n".repeat(600), 1e9, TextAlign::Left, 1.0).unwrap_err(),
-            TextLinesRefusal::TooManyLines
-        );
-        assert!(refusal(&"a".repeat(8192), 1e9, TextAlign::Left, 1.0).is_ok());
-        assert_eq!(
-            refusal(&"a".repeat(8193), 1e9, TextAlign::Left, 1.0).unwrap_err(),
-            TextLinesRefusal::TooManyGlyphs
-        );
+    fn a_layout_visits_every_line_and_character_without_transport_limits() {
+        let font = fake_font(6.0);
+        let layout = text_layout::LabelLayout::try_from(TextLayoutSpec {
+            max_width: 1e9,
+            align: TextAlign::Left,
+            scale: 1.0,
+        })
+        .unwrap();
+        let text = Text::literal("abcdefghijklmnop\n".repeat(600));
+        let mut lines = 0;
+        let mut characters = 0;
+        let size = layout
+            .visit_components(&font, &text, &mut |line| {
+                lines += 1;
+                characters += engine(line.text).plain().len();
+            })
+            .unwrap();
+        assert_eq!(lines, 601);
+        assert_eq!(characters, 9600);
+        assert_eq!((size.width, size.height), (96.0, 5409.0));
     }
 
     #[test]
-    fn a_layout_survives_the_wire() {
-        use mod_api::wire::{Reader, Wire, Writer};
-        let lines = layout("AAAA\nBB", 100.0, TextAlign::Centre, 1.0);
-        let mut writer = Writer::default();
-        lines.put(&mut writer);
-        let back: TextLines = Reader::decode(&writer.into_bytes()).unwrap();
-        assert_eq!(plain(&back), ["AAAA", "BB"]);
-        assert_eq!((back.width, back.height), (lines.width, lines.height));
-        let at: Vec<[f32; 2]> = back.lines.iter().map(|line| line.at).collect();
-        assert_eq!(at, [[38.0, 0.0], [44.0, 9.0]]);
+    fn warmed_wrapped_paint_lends_lines_without_allocating() {
+        let font = fake_font(6.0);
+        let text = crate::text::Text::literal("abcd ef  ghi\njkl");
+        let layout = text_layout::LabelLayout::try_from(TextLayoutSpec {
+            max_width: 24.0,
+            align: TextAlign::Left,
+            scale: 1.0,
+        })
+        .unwrap();
+        crate::lang::scoped(crate::lang::Language::of("en_us", []), || {
+            let spec = [("abcd", 0.0), ("ef ", 9.0), ("ghi", 18.0), ("jkl", 27.0)];
+            let paint = || {
+                let mut lines = 0;
+                let size = layout
+                    .visit_visual(&font, &text, |line, at| {
+                        let (expected, y) = spec[lines];
+                        assert!(line.chars().map(|(c, _)| c).eq(expected.chars()));
+                        assert_eq!(at, [0.0, y]);
+                        lines += 1;
+                    })
+                    .unwrap();
+                assert_eq!(lines, spec.len());
+                assert_eq!((size.width, size.height), (24.0, 36.0));
+            };
+            paint();
+            let (_, allocations) = sunrise_threads::allocation_count::measure(paint);
+            assert_eq!(allocations, 0);
+        });
     }
 
-    /// The game's own font and GUI atlas, read from the prepared resources alone: a real font with
-    /// its real advances and the atlas it draws from, with no game, no world and no process-wide
-    /// state registered.
-    fn prepared_atlas() -> crate::hud::HudAtlas {
-        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../.local/sunrise-client")
-                    .join(sunrise_core::VANILLA_VERSION)
+    #[test]
+    fn warm_item_count_and_empty_decorations_need_no_replay_allocations() {
+        use crate::hud_overlays::{ItemDecorations, paint_item_decorations};
+        let mut atlas = crate::hud::HudAtlas::boot();
+        atlas.font = canvas_test_font();
+        let mut batch = crate::hud::HudBatch::scratch([320, 240]);
+        for (count, vertices) in [(1, 0), (65, 24)] {
+            let decorations = ItemDecorations {
+                count,
+                count_text: None,
+                bar: None,
+                cooldown: 0.0,
+            };
+            paint_item_decorations(&mut batch, &atlas, [0.0; 2], &decorations);
+            batch.vertices.clear();
+            let (_, allocations) = sunrise_threads::allocation_count::measure(|| {
+                paint_item_decorations(&mut batch, &atlas, [0.0; 2], &decorations);
             });
-        assert!(
-            root.join("assets/minecraft/font/default.json").is_file(),
-            "the prepared resources are not at {}",
-            root.display()
-        );
-        crate::hud::HudAtlas::build(&crate::resource_source::ResourceSource::directory(root))
-            .expect("the prepared resources' font and atlas")
+            assert_eq!(batch.vertices.len(), vertices);
+            assert_eq!(allocations, 0, "stack count {count}");
+        }
     }
 
-    /// A label of 400 characters in a 120-pixel box, with the game's own font: every line fits,
-    /// the lines are as many as the text's own width needs, the drawn glyphs cover exactly the
-    /// height the layout answered, and every answer doubles with `scale`.
     #[test]
     #[ignore = "daily"]
     fn scaled_text_is_the_text_scaled_about_its_corner() {
@@ -796,59 +1220,174 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "daily"]
     fn a_wrapped_label_measures_and_draws_its_own_height() {
-        let atlas = prepared_atlas();
-        let font = &atlas.font;
-        // The prepared font, not the fallback one whose every character is six pixels wide.
-        assert!(
-            font.width("i") < font.width("m"),
-            "an {} wide i and {} wide m",
-            font.width("i"),
-            font.width("m")
-        );
-        let text = crate::text::Text::literal("mmmm ".repeat(80));
-        let lines = label_layout(font, &text, 120.0, TextAlign::Centre, 1.0).unwrap();
-        // The text needs this many 120-pixel lines even with no space wasted.
-        let floor = (font.width_text(&text) / 120.0).ceil() as usize;
-        assert!(
-            lines.lines.len() >= floor,
-            "{} lines for a floor of {floor}",
-            lines.lines.len()
-        );
-        assert!(lines.lines.len() >= 20, "{} lines", lines.lines.len());
-        for line in &lines.lines {
-            assert!(line.width <= 120.0, "{} wide", line.width);
-        }
-        // What the lines draw: the glyphs' own extent, as the HUD batch records them.
-        let mut batch = crate::hud::HudBatch::scratch([1, 1]);
-        for line in &lines.lines {
-            batch.text_styled(
-                &atlas,
-                &engine(&line.text),
-                line.at[0],
-                line.at[1],
-                0xFFFF_FFFF,
-                false,
+        let mut atlas = crate::hud::HudAtlas::boot();
+        atlas.font = canvas_test_font();
+        let spec = TextLayoutSpec {
+            max_width: 32.0,
+            align: TextAlign::Left,
+            scale: 2.0,
+        };
+        let text = Text::literal("§cmmmm §aאבג §bmmmm");
+        let mut actual = crate::hud::HudBatch::scratch([320, 240]);
+        gui_canvas::GameGuiCanvas::draw(&mut actual, &atlas, None, None, &mut |canvas| {
+            canvas.scope(
+                &[mod_api::client::hud_layout::PoseOp::Translate(4.0, 6.0)],
+                Some([5.0, 10.0, 34.0, 53.0]),
+                &mut |scoped| {
+                    let size =
+                        scoped.text_with_word_wrap(&text, [10.0, 20.0], spec, u32::MAX, false)?;
+                    assert_eq!(
+                        size,
+                        TextLayoutSize {
+                            width: 32.0,
+                            height: 54.0
+                        }
+                    );
+                    Ok(())
+                },
+            )
+        })
+        .unwrap();
+
+        let runs: Vec<_> = actual.scissors_in(0..66).collect();
+        assert_eq!(runs, [(0..66, Some([9.0, 16.0, 43.0, 69.0]))]);
+        let clip = runs[0].1.unwrap();
+        // The final column and row are partly clipped, but the glyph UVs still
+        // address the original cells. The Hebrew line's first glyph is gimel.
+        let glyphs = [
+            ([14.0, 26.0, 22.0, 42.0], [22.0, 42.0], 0.0, 0xFF55_55FF),
+            ([22.0, 26.0, 30.0, 42.0], [30.0, 42.0], 0.0, 0xFF55_55FF),
+            ([30.0, 26.0, 38.0, 42.0], [38.0, 42.0], 0.0, 0xFF55_55FF),
+            ([38.0, 26.0, 46.0, 42.0], [43.0, 42.0], 0.0, 0xFF55_55FF),
+            ([14.0, 44.0, 22.0, 60.0], [22.0, 60.0], 12.0, 0xFF55_FF55),
+            ([20.0, 44.0, 28.0, 60.0], [28.0, 60.0], 8.0, 0xFF55_FF55),
+            ([26.0, 44.0, 34.0, 60.0], [34.0, 60.0], 4.0, 0xFF55_FF55),
+            ([14.0, 62.0, 22.0, 78.0], [22.0, 69.0], 0.0, 0xFFFF_FF55),
+            ([22.0, 62.0, 30.0, 78.0], [30.0, 69.0], 0.0, 0xFFFF_FF55),
+            ([30.0, 62.0, 38.0, 78.0], [38.0, 69.0], 0.0, 0xFFFF_FF55),
+            ([38.0, 62.0, 46.0, 78.0], [43.0, 69.0], 0.0, 0xFFFF_FF55),
+        ];
+        assert_eq!(actual.vertices.len(), glyphs.len() * 6);
+        for (quad, ([l, t, r, b], [visible_r, visible_b], u, color)) in
+            actual.vertices.as_chunks::<6>().0.iter().zip(glyphs)
+        {
+            let corners = [[l, t], [r, t], [r, b], [l, b]];
+            let (min_u, max_u) = ((u + 0.01) / 32.0, (u + 4.0 - 0.01) / 32.0);
+            let (min_v, max_v) = (0.01 / 16.0, 7.99 / 16.0);
+            let uvs = [
+                [min_u, min_v],
+                [max_u, min_v],
+                [max_u, max_v],
+                [min_u, max_v],
+            ];
+            for (v, corner) in quad.iter().zip([0, 1, 2, 0, 2, 3]) {
+                assert_eq!(
+                    (v.pos, v.uv, v.color, v.text),
+                    (corners[corner], uvs[corner], color, 1)
+                );
+            }
+            assert_eq!(
+                [
+                    quad[0].pos[0].max(clip[0]),
+                    quad[0].pos[1].max(clip[1]),
+                    quad[2].pos[0].min(clip[2]),
+                    quad[2].pos[1].min(clip[3])
+                ],
+                [l, t, visible_r, visible_b],
             );
         }
-        let (top, bottom) = batch.vertices.iter().fold(
-            (f32::INFINITY, f32::NEG_INFINITY),
-            |(top, bottom), vertex| (top.min(vertex.pos[1]), bottom.max(vertex.pos[1])),
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn local_tooltip_draws_deep_text_but_refuses_unrepresentable_metadata() {
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let mut deep = mod_api::Text::literal("Tooltip");
+            for _ in 0..mod_api::text::MAX_TEXT_DEPTH {
+                deep = mod_api::Text::literal("").append(deep);
+            }
+            let mut invalid = mod_api::Text::literal("Unrepresentable");
+            invalid.metadata = Tag::compound([("test:nonfinite", Tag::Double(f64::NAN.to_bits()))]);
+
+            let mut batch = crate::hud::HudBatch::scratch([400, 200]);
+            let mut draw = GameDrawContext::new(game, &mut batch);
+            assert_eq!(
+                draw.gui_tooltip(&[deep.clone(), invalid], [16.0, 16.0]),
+                Err(TextFormError::NonFinite)
+            );
+            assert!(draw.surface.vertices.is_empty());
+            draw.gui_tooltip(&[deep], [16.0, 16.0]).unwrap();
+            assert!(!draw.surface.vertices.is_empty());
+        });
+    }
+
+    #[test]
+    fn local_label_layout_handles_deep_trees_and_preserves_opaque_styles() {
+        let mut opaque_dialog = Tag::ByteArray(vec![7, 8]);
+        for _ in 0..600 {
+            let mut map = std::collections::BTreeMap::new();
+            map.insert("n".into(), opaque_dialog);
+            opaque_dialog = Tag::Compound(map.into_iter().collect());
+        }
+        let mut style = mod_api::text::TextStyle::default();
+        style.bold = Some(true);
+        style.click = Some(mod_api::text::TextClick::ShowDialog(opaque_dialog.clone()));
+        let mut deep = mod_api::Text::literal("AAAA BBBB").with_style(style);
+        for _ in 0..mod_api::text::MAX_TEXT_DEPTH {
+            let mut parent = mod_api::Text::literal("");
+            parent.children.push(deep);
+            deep = parent;
+        }
+        let lines = measured(&fake_font(6.0), &deep, 30.0, TextAlign::Left, 1.0).unwrap();
+        assert_eq!(lines.lines.len(), 2);
+        for line in &lines.lines {
+            assert_eq!(line.text.style.bold, Some(true));
+            assert_eq!(
+                line.text.style.click,
+                Some(mod_api::text::TextClick::ShowDialog(opaque_dialog.clone()))
+            );
+        }
+    }
+
+    #[test]
+    fn engine_tooltip_font_measures_and_splits_deep_local_text() {
+        let default_json = r#"{"providers":[{"type":"space","advances":{" ":2,"a":3}}]}"#;
+        let alt_json = r#"{"providers":[{"type":"space","advances":{" ":4,"a":8}}]}"#;
+        let source = crate::resource_source::ResourceSource::indexed(BTreeMap::from([
+            (
+                "assets/minecraft/font/default.json".into(),
+                crate::resource_source::Resource::bytes(default_json.as_bytes().to_vec()),
+            ),
+            (
+                "assets/minecraft/font/alt.json".into(),
+                crate::resource_source::Resource::bytes(alt_json.as_bytes().to_vec()),
+            ),
+        ]));
+        let font = crate::font::Font::metrics(&source);
+        let default_id = Identifier::parse("minecraft:default").unwrap();
+        let alt_id = Identifier::parse("minecraft:alt").unwrap();
+
+        let default_tf = EngineTooltipFont::new(&font, &default_id);
+        let alt_tf = EngineTooltipFont::new(&font, &alt_id);
+        assert_eq!(default_tf.id(), &default_id);
+        assert_eq!(alt_tf.id(), &alt_id);
+        assert_eq!(default_tf.line_height(), 9);
+
+        let sample = mod_api::Text::literal("aa aa");
+        assert_eq!(default_tf.width(&sample).unwrap(), 14);
+        assert_eq!(alt_tf.width(&sample).unwrap(), 36);
+        assert_eq!(default_tf.split(&sample, 16).unwrap().len(), 1);
+        assert_eq!(alt_tf.split(&sample, 16).unwrap().len(), 2);
+
+        let mut deep = mod_api::Text::literal("x");
+        for _ in 0..600 {
+            deep = mod_api::Text::literal("").append(deep);
+        }
+        assert_eq!(
+            default_tf.width(&deep),
+            default_tf.width(&mod_api::Text::literal("x"))
         );
-        assert!(
-            (bottom - top - lines.height).abs() <= 1.0,
-            "drawn {} against a height of {}",
-            bottom - top,
-            lines.height
-        );
-        // At scale 2 the same two-line word fits its box at twice every answer: a line's width,
-        // the second line's place and the block's height.
-        let word = crate::text::Text::literal("mmmm\nmmmm");
-        let plain_size = label_layout(font, &word, 200.0, TextAlign::Left, 1.0).unwrap();
-        let doubled = label_layout(font, &word, 200.0, TextAlign::Left, 2.0).unwrap();
-        assert_eq!(doubled.lines[1].width, plain_size.lines[1].width * 2.0);
-        assert_eq!(doubled.lines[1].at[1], plain_size.lines[1].at[1] * 2.0);
-        assert_eq!(doubled.height, plain_size.height * 2.0);
+        assert_eq!(default_tf.split(&deep, 100).unwrap().len(), 1);
     }
 }

@@ -43,7 +43,7 @@
 //! # Integration sketch
 //!
 //! ```ignore
-//! use sunrise_world::level::{self, Behaviours, LevelAccess, LevelEvent, PlaceContext, Ticks, flags};
+//! use sunrise_world::level::{self, Behaviours, LevelAccess, LevelEvent, PlaceContext, PlacementSource, Ticks, flags};
 //!
 //! struct GameLevel { chunks: Chunks, random: LegacyRandom, time: i64, events: Vec<LevelEvent> }
 //! impl level::BlockEntityNeighbors for GameLevel {}
@@ -79,7 +79,8 @@
 //!
 //! // Player actions:
 //! behaviours.place_block(&mut level, &mut ticks, &PlaceContext { clicked_pos, face, hit, inside: false,
-//!     yaw, pitch, sneaking, item: "minecraft:oak_stairs".into(), can_use_game_master_blocks: false });
+//!     source: PlacementSource::Player { yaw, pitch, sneaking }, item: "minecraft:oak_stairs".into(),
+//!     can_use_game_master_blocks: false });
 //! let state = level.block_state(pos);
 //! let block_hit = sunrise_core::geometry::BlockHit { block: pos, direction: face, location: hit, inside: false };
 //! behaviours.use_without_item(&mut level, &mut ticks, state, block_hit, player_context);
@@ -103,7 +104,7 @@ use sunrise_core::{
     connection_kind::ConnectionKind, dimension::Dimension, neighbour_update::NeighbourUpdate,
 };
 
-pub use block_maps::BlockMaps;
+pub use block_maps::{BlockMapValue, BlockMaps};
 pub mod classes;
 pub mod data;
 pub mod states;
@@ -141,7 +142,8 @@ mod survive;
 mod tick;
 mod timeline;
 mod update;
-mod weather;
+pub use update::BlockWrite;
+pub mod weather;
 
 #[cfg(test)]
 #[path = "tests/connections.rs"]
@@ -178,21 +180,6 @@ pub use fluids::{
     fluid_randomly_ticks, fluid_tick_delay,
 };
 
-/// A write a block's part asks for when an entity is inside it (`Block.entityInside`'s
-/// own `setBlockAndUpdate` or `destroyBlock`), at the block the entity touched. The
-/// level applies each once the entity's batch has ticked, in the order asked, if the
-/// block is still the state the entity touched: the same contract as [`LandingWrite`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum InsideWrite {
-    /// `Level.setBlockAndUpdate(pos, state)`: a pressure plate a part pressed.
-    SetBlock(BlockStateId),
-    /// `Level.destroyBlock(pos, drop)`: the block gone, with its drops or without.
-    DestroyBlock {
-        /// Whether the block drops its resources.
-        drop: bool,
-    },
-}
 /// A write a block's part asks for when an entity lands on it (`Block.fallOn`'s own
 /// `setBlockAndUpdate` or `destroyBlock`), at the block the entity landed on. The level
 /// applies each once the entity's batch has ticked, in the order asked.
@@ -210,8 +197,8 @@ pub enum LandingWrite {
 pub use interact::{InteractionResult, PlayerContext, PlayerEffect, UseBranch, hit_slot};
 pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{
-    AppliedPlacement, PlaceContext, PlaceOutcome, PlacementContext, PlacementPreview,
-    ResolvedPlacement,
+    AppliedPlacement, DirectionalRefusal, PlaceContext, PlaceOutcome, PlacementContext,
+    PlacementPreview, PlacementSource, ResolvedPlacement,
 };
 pub use portal::PortalShape;
 pub use states::{BlockId, PropKey, StateTable};
@@ -337,6 +324,10 @@ pub struct LevelEventPlayer(pub u128);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LevelSoundSource {
     Blocks,
+    /// `BlockItem.place`: blocks source, excluding the player predicting the placement.
+    BlockPlacement {
+        except: Option<u32>,
+    },
 }
 
 /// Side effects reported to the caller, in vanilla call order.
@@ -508,6 +499,27 @@ pub trait LevelAccess: BlockEntityNeighbors {
     ) -> Option<bool> {
         None
     }
+    /// NeoForge's `HasFluidInteraction.test` of the native interaction the engine registered as
+    /// `handler`, for the liquid at `pos` against its neighbour `relative`. The default has none.
+    fn fluid_interaction_test(
+        &self,
+        _handler: u32,
+        _pos: BlockPos,
+        _relative: BlockPos,
+        _fluid: FluidState,
+    ) -> bool {
+        false
+    }
+    /// NeoForge's `FluidInteraction.interact` of that handler, which writes the level itself.
+    fn fluid_interaction_interact(
+        &mut self,
+        _ticks: &mut Ticks,
+        _handler: u32,
+        _pos: BlockPos,
+        _relative: BlockPos,
+        _fluid: FluidState,
+    ) {
+    }
     /// Returns the state to place for a liquid conversion, or None to cancel.
     fn fluid_place_block(
         &self,
@@ -624,17 +636,15 @@ pub trait LevelAccess: BlockEntityNeighbors {
     fn allow_bell_ring(&self, _pos: BlockPos) -> bool {
         true
     }
-    /// The sound type `state`, just placed at `pos`, plays its place sound from
-    /// (`IBlockExtension.getSoundType`): `sounds`, its own, unless a mod's block part answers
-    /// another (`BlockItem.place`, asked with the placing player, or none when nothing places
-    /// it, such as a dispenser). The default keeps the block's own.
-    fn place_sound_type(
+    /// The contextual placement event and base levels, if a block part changes them
+    /// (`BlockItem.place`, asked with the placer or with no entity for a dispenser).
+    fn override_place_sound(
         &self,
         _pos: BlockPos,
         _state: BlockStateId,
-        sounds: Arc<data::Sounds>,
-    ) -> Arc<data::Sounds> {
-        sounds
+        _placer: Option<u32>,
+    ) -> Option<data::BlockSound> {
+        None
     }
     fn allow_cauldron_level_change(
         &self,
@@ -718,10 +728,14 @@ pub trait LevelAccess: BlockEntityNeighbors {
     }
     /// Observe `BlockState.handleNeighborChanged` before the block handles it,
     /// with the level's `ticks`, as vanilla's `neighborChanged` gets the level
-    /// itself (a diode schedules its tick there). The default does nothing;
-    /// implementations must not alter the update queue.
+    /// itself: a diode schedules its tick there, and `RedstoneLampBlock` sets its
+    /// own block. A write goes through `Behaviours::set_block` with these `ticks`,
+    /// so its neighbour updates run next, before the rest of the current update
+    /// (`CollectingNeighborUpdater`); the block's own handling then runs with the
+    /// state it was called with, as code after a `setBlock` in `neighborChanged`
+    /// does. The default does nothing.
     fn observe_neighbor_changed(
-        &self,
+        &mut self,
         _ticks: &mut Ticks,
         _pos: BlockPos,
         _state: BlockStateId,
@@ -844,15 +858,6 @@ pub trait LevelAccess: BlockEntityNeighbors {
         _fluid: FluidState,
         _answer: &mut Option<Option<BlockStateId>>,
     ) {
-    }
-    /// `BlockItem.updatePlacementContext`: replace or refuse the item context.
-    /// None retains the vanilla item rewrite, including scaffolding's walk.
-    fn placement_context(
-        &self,
-        _item: &str,
-        _context: &PlacementContext,
-    ) -> Option<Option<PlacementContext>> {
-        None
     }
     /// `BlockItem.mustSurvive`: None retains the item's vanilla requirement.
     fn must_survive(&self, _item: &str) -> Option<bool> {
@@ -1462,8 +1467,12 @@ pub trait GameplayStateSource {
     fn unsigned(&self, name: &str) -> u64;
     fn number(&self, name: &str) -> f64;
     fn text(&self, name: &str) -> &str;
-    fn sound_number(&self, name: &str) -> f64;
-    fn sound_id(&self, name: &str) -> &str;
+    /// The state's placement sound. Raw JSON resolves its event at load; the
+    /// typed gameplay projection already holds the resolved event.
+    fn placement_sound(
+        &self,
+        resolve: &mut dyn FnMut(&str) -> std::io::Result<mod_api::SoundEventKey>,
+    ) -> std::io::Result<data::BlockSound>;
 }
 
 /// Immutable vanilla block-behaviour tables. Build once with [`Behaviours::load`].
@@ -1637,6 +1646,31 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).set_block(pos, state, flags)
     }
+    /// Store a block and pause before removal. A server host uses this boundary to
+    /// run `preRemoveSideEffects` with the item-entity join API still available.
+    pub fn begin_block_write<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        flags: i32,
+    ) -> Option<BlockWrite> {
+        self.sim(level, ticks).begin_block_write(pos, state, flags)
+    }
+
+    /// Finish the paused write. If the host ran block-entity removal, pass its number of
+    /// jukebox neighbor updates; otherwise the ordinary removal runs here.
+    pub fn finish_block_write<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        write: BlockWrite,
+        removal_updates: Option<u8>,
+    ) -> bool {
+        self.sim(level, ticks)
+            .finish_block_write(write, removal_updates, flags::UPDATE_LIMIT)
+    }
     /// `CopperChestBlock.getFromCopperBlock(copperBlock, facing, level, pos)`.
     pub fn copper_chest_from_block<L: LevelAccess + ?Sized>(
         &self,
@@ -1658,6 +1692,20 @@ impl Behaviours {
         moved_by_piston: bool,
     ) -> bool {
         self.sim(level, ticks).remove_block(pos, moved_by_piston)
+    }
+    /// `Block.spawnDestroyParticles`: fire has no event and straw beds use their own.
+    pub fn destroy_particle_event(&self, state: BlockStateId) -> Option<i32> {
+        let data = self.data(state);
+        if data.is(classes::Class::StrawBed) {
+            Some(2014)
+        } else if data.is(classes::Class::BaseFire)
+            || data.is(classes::Class::Fire)
+            || data.is(classes::Class::SoulFire)
+        {
+            None
+        } else {
+            Some(2001)
+        }
     }
     /// `Level.destroyBlock(pos, dropResources)`: destroy particles (2001),
     /// optional drops, and replacement by the block's fluid.
@@ -2103,6 +2151,9 @@ pub(crate) struct Sim<'a, L: LevelAccess + ?Sized> {
     signal_reads: Option<&'a Ticks>,
     /// The carried block being settled, before it is written into the cell.
     landing_block: Option<(BlockPos, BlockStateId)>,
+    /// Why a placement rule had no answer for its context (vanilla throws), noted by the rule
+    /// and taken by `state_for_placement`, which returns it as its `Err`.
+    placement_refusal: Option<DirectionalRefusal>,
     /// `RedstoneWireBlock.shouldSignal` is false while a wire samples its
     /// neighbours (`getBlockSignal`).
     pub wire_signal_off: std::cell::Cell<bool>,
@@ -2177,17 +2228,22 @@ impl Behaviours {
     /// Ask `Block.getStateForPlacement` with a resolved context, without placing the result.
     /// Give it a scratch level to discard writes and random draws. Signals may read live ticks;
     /// any ticks requested by the placement rule go into a separate, empty queue.
+    /// A player context is taken as written. A directional context's `replace_clicked` is
+    /// what `DirectionalPlaceContext.replacingClickedOnBlock()` reads from the clicked block
+    /// here, whatever the caller wrote; a question vanilla throws on is refused.
     pub fn state_for_resolved_placement<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         signal_reads: &Ticks,
         block: BlockId,
         context: &PlacementContext,
-    ) -> Option<BlockStateId> {
+    ) -> Result<Option<BlockStateId>, DirectionalRefusal> {
         let mut ticks = Ticks::default();
         let mut sim = self.sim(level, &mut ticks);
         sim.signal_reads = Some(signal_reads);
-        sim.state_for_placement(block, context)
+        let mut context = context.clone();
+        sim.settle_replacing_clicked(&mut context)?;
+        sim.state_for_placement(block, &context)
     }
     pub(crate) fn sim<'a, L: LevelAccess + ?Sized>(
         &'a self,
@@ -2200,6 +2256,7 @@ impl Behaviours {
             ticks,
             signal_reads: None,
             landing_block: None,
+            placement_refusal: None,
             wire_signal_off: std::cell::Cell::new(false),
         }
     }
@@ -2446,6 +2503,42 @@ mod liquid_container_tests {
         b.scheduled_fluid_tick(&mut level, &mut Ticks::default(), source);
         assert_eq!(level.block_state(north), filled);
         assert_eq!(level.block_state(south), stone);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn lateral_flow_still_spreads_to_a_target_changed_to_another_washable_block() {
+        let fixture = tests::fixture().expect("prepared block facts for daily fixture");
+        let b = &fixture.behaviours;
+        let state = |name| fixture.registry.default_state(name).unwrap();
+        let source = BlockPos::new(0, 65, 0);
+        let north = source.offset(0, 0, -1);
+        let south = source.offset(0, 0, 1);
+        let container = state("minecraft:dandelion");
+        let stone = state("minecraft:stone");
+        let wire = state("minecraft:redstone_wire");
+        let mut level = ContainerLevel {
+            base: TestLevel::new(b),
+            container,
+            accepts: Some(FluidKind::FlowingWater),
+            filled: state("minecraft:emerald_block"),
+            // Stands in for a neighbour update rewriting the target mid-spread,
+            // the way a wire's power recompute does in a real cascade.
+            replace_on_fill: Some((south, wire)),
+        };
+        level.set_raw(source, state("minecraft:water"));
+        level.set_raw(source.offset(0, -1, 0), stone);
+        level.set_raw(source.offset(-1, 0, 0), stone);
+        level.set_raw(source.offset(1, 0, 0), stone);
+        level.set_raw(north, container);
+        b.scheduled_fluid_tick(&mut level, &mut Ticks::default(), source);
+        // Vanilla's spreadTo acts on the live block: air tested, wire found, water
+        // still washes the wire away instead of skipping the target.
+        assert!(
+            b.fluid(level.block_state(south))
+                .kind()
+                .same_family(FluidKind::Water)
+        );
     }
 }
 

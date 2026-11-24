@@ -23,6 +23,7 @@ fn a_follow_mob_goal_ignores_an_invisible_mob() {
             target.invisible = invisible;
             let seen = [target.seen(None, &crate::items::Items::empty())];
             let world = crate::mobs::MobWorld {
+                side: sunrise_client::motion::dry_side(),
                 others: &seen,
                 ..w.clone()
             };

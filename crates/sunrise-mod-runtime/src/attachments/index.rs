@@ -31,15 +31,24 @@ pub struct AttachmentRow<H> {
 /// Dense rows and residency probes captured as one immutable bucket version.
 #[derive(Clone)]
 pub struct AttachmentSnapshot<H> {
+    key: Option<Arc<AttachmentKey>>,
     rows: Vec<AttachmentRow<H>>,
     slots: FxHashMap<H, usize>,
 }
 impl<H> Default for AttachmentSnapshot<H> {
     fn default() -> Self {
         Self {
+            key: None,
             rows: Vec::new(),
             slots: FxHashMap::default(),
         }
+    }
+}
+impl<H> AttachmentSnapshot<H> {
+    pub(super) fn matches(&self, namespace: &str, name: &str) -> bool {
+        self.key
+            .as_deref()
+            .is_none_or(|key| (key as &dyn Lookup) == (&Named(namespace, name) as &dyn Lookup))
     }
 }
 impl<H> std::ops::Deref for AttachmentSnapshot<H> {
@@ -49,17 +58,6 @@ impl<H> std::ops::Deref for AttachmentSnapshot<H> {
     }
 }
 impl<H: Copy + Eq + Hash> AttachmentSnapshot<H> {
-    /// Build a captured bucket from transferred rows, preserving their order.
-    ///
-    /// rows must have distinct holders.
-    pub fn from_rows(rows: Vec<AttachmentRow<H>>) -> Self {
-        let mut snapshot = Self::default();
-        for row in rows {
-            snapshot.push(row);
-        }
-        snapshot
-    }
-
     fn push(&mut self, row: AttachmentRow<H>) {
         let previous = self.slots.insert(row.holder, self.rows.len());
         debug_assert!(previous.is_none(), "duplicate attachment residency");
@@ -145,28 +143,6 @@ impl<T> AttachmentChange<T> {
             self.first = Some(entry);
         } else {
             self.overflow.push(entry);
-        }
-    }
-}
-
-impl<H> AttachmentOwner<H> {
-    /// Rebuild a transferred residency identity; the index still validates it.
-    #[doc(hidden)]
-    pub fn from_parts(holder: H, generation: u64) -> Self {
-        Self { holder, generation }
-    }
-    /// The fields needed to transfer this identity.
-    #[doc(hidden)]
-    pub fn parts(&self) -> (&H, u64) {
-        (&self.holder, self.generation)
-    }
-    /// Rebuild a snapshot row from a transferred identity and value.
-    #[doc(hidden)]
-    pub fn into_row(self, entry: Arc<AttachmentEntry>) -> AttachmentRow<H> {
-        AttachmentRow {
-            holder: self.holder,
-            generation: self.generation,
-            entry,
         }
     }
 }
@@ -375,7 +351,12 @@ impl<H: Copy + Eq + Hash> AttachmentIndex<H> {
             let rows = self
                 .buckets
                 .entry(BucketKey(shared_key.clone()))
-                .or_default();
+                .or_insert_with(|| {
+                    Arc::new(AttachmentSnapshot {
+                        key: Some(shared_key.clone()),
+                        ..Default::default()
+                    })
+                });
             owner.slots.insert(shared_key, rows.len());
             Arc::make_mut(rows).push(row);
         }
@@ -481,7 +462,7 @@ mod tests {
             },
         }),
         copy_on_death: false,
-        sync: false,
+        sync_codec: None,
     };
 
     fn key(name: &str) -> AttachmentKey {
@@ -501,37 +482,26 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "duplicate attachment residency")]
-    fn snapshot_from_rows_refuses_duplicate_residencies() {
-        let row = AttachmentOwner::from_parts(1u32, 7).into_row(entry(7));
-        AttachmentSnapshot::from_rows(vec![row.clone(), row]);
-    }
-
-    #[test]
     fn snapshot_probes_follow_mutations_and_retain_old_residencies() {
         let mut index = AttachmentIndex::default();
         let k = key("value");
         let a = index.register(1, [(k.clone(), entry(7))]).into_result();
         let b = index.register(2, [(k.clone(), entry(9))]).into_result();
         let c = index.register(3, [(k.clone(), entry(11))]).into_result();
+        let no_value = index.register(4, []).into_result();
         let old = index.snapshot(&k);
         assert_eq!(values(&old), [(1, 7), (2, 9), (3, 11)]);
         assert_eq!(
             [old.slot_of(&a), old.slot_of(&b), old.slot_of(&c)],
             [Some(0), Some(1), Some(2)]
         );
-        assert_eq!(old.slot_of(&AttachmentOwner::from_parts(4, 0)), None);
+        assert_eq!(old.slot_of(&no_value), None);
         assert!(index.remove(&b, &k).into_result());
         let live = index.snapshot(&k);
         assert_eq!(values(&live), [(1, 7), (3, 11)]);
         assert_eq!(live.slot_of(&c), Some(1));
         assert_eq!(live.slot_of(&b), None);
         assert_eq!(old.slot_of(&c), Some(2));
-        let transferred = AttachmentSnapshot::from_rows(old.iter().cloned().collect());
-        assert_eq!(values(&transferred), [(1, 7), (2, 9), (3, 11)]);
-        assert_eq!(transferred.slot_of(&b), Some(1));
-        assert_eq!(transferred.slot_of(&c), Some(2));
         assert_eq!(values(&old), [(1, 7), (2, 9), (3, 11)]);
         assert!(index.unregister(&c).into_result());
         let seven = index.snapshot(&k);
@@ -590,7 +560,7 @@ mod tests {
     fn saved_entries_join_without_a_typed_read_and_remain_snapshot_values() {
         let mut source = Attachments::default();
         VALUE.set(&mut source, Holder::Level, 42).unwrap();
-        let nbt = source.to_nbt();
+        let nbt = source.try_to_nbt().unwrap();
         let loaded = Attachments::from_nbt(nbt.clone());
         let raw = loaded.entry("test", "value").unwrap().unwrap().clone();
         let mut index = AttachmentIndex::default();
@@ -602,7 +572,7 @@ mod tests {
         index.set(&owner, &key("value"), entry(99)).into_result();
         assert_eq!(values(&before), [(1, 42)]);
         assert_eq!(values(&index.snapshot(&key("value"))), [(1, 99)]);
-        assert_eq!(loaded.to_nbt(), nbt);
+        assert_eq!(loaded.try_to_nbt().unwrap(), nbt);
     }
 
     #[test]
@@ -793,7 +763,7 @@ mod tests {
             default: || unreachable!(),
             codec: None,
             copy_on_death: false,
-            sync: false,
+            sync_codec: None,
         };
         fn apply<T>(
             index: &Mutex<AttachmentIndex<u32>>,

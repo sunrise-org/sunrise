@@ -216,3 +216,71 @@ fn a_wolf_with_a_health_modifier_keeps_its_taming_base() {
         }
     }
 }
+
+/// Loaded `Health` matches the vanilla 26.3 witness `tools/test_mob_attribute_nbt_parity.py` records (#2360).
+#[test]
+#[ignore = "run by tools/test_mob_attribute_nbt_parity.py"]
+fn a_loaded_health_is_clamped_to_the_loaded_max_health() {
+    let path = std::env::var("SUNRISE_MOB_LOADED_HEALTH_WITNESS")
+        .expect("run through tools/test_mob_attribute_nbt_parity.py, which records the witness");
+    let witness = std::fs::read_to_string(&path).unwrap();
+    let mut rows = 0usize;
+    for line in witness.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        let &[
+            name,
+            entity,
+            default_max_hex,
+            loaded_max_hex,
+            loaded_health_hex,
+            saved_health_hex,
+            snbt,
+        ] = parts.as_slice()
+        else {
+            panic!("bad witness row: {line}");
+        };
+        let short = entity.strip_prefix("minecraft:").unwrap_or(entity);
+        let species = crate::mobs::species::ALL
+            .iter()
+            .find(|def| def.name == short)
+            .unwrap_or_else(|| panic!("unknown species {entity} in {name}"))
+            .species;
+        let default_max = f64::from_bits(u64::from_str_radix(default_max_hex, 16).unwrap());
+        let expected_max = u32::from_str_radix(loaded_max_hex, 16).unwrap();
+        let expected_health = u32::from_str_radix(loaded_health_hex, 16).unwrap();
+        let expected_saved = u32::from_str_radix(saved_health_hex, 16).unwrap();
+
+        let mut mob_types = types(entity, species, &[(HEALTH, default_max)]);
+        Arc::make_mut(mob_types.get_mut(entity).unwrap()).max_health = default_max as f32;
+        let input = parse_snbt(snbt).unwrap().0;
+        let mob = mob_from_nbt(&input, &mob_types, 1, None).unwrap();
+        assert_eq!(
+            mob.attrs.max_health.to_bits(),
+            expected_max,
+            "{name}: loaded max_health bits"
+        );
+        assert_eq!(
+            mob.health.to_bits(),
+            expected_health,
+            "{name}: loaded health bits"
+        );
+        let saved_tag = mob_to_nbt(
+            &mob,
+            [1, 2, 3, 4],
+            None,
+            None,
+            |_| None,
+            &Default::default(),
+        );
+        assert_eq!(
+            saved_tag.get("Health"),
+            Some(&Tag::Float(expected_saved)),
+            "{name}: saved Health bits"
+        );
+        rows += 1;
+    }
+    assert!(rows > 0, "witness file had no rows");
+}

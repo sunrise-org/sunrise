@@ -1,3 +1,0 @@
-sunrise-client game::native_custom_geometry::tests::custom_geometry_outside_the_world_is_refused_not_a_panic lib daily resources
-sunrise-client game::native_panel::tests::the_panel_outside_the_world_is_refused_not_a_panic lib daily resources
-sunrise-client game::client_item_extensions::tests::client_item_extensions_outside_the_world_are_refused_not_a_panic lib daily resources

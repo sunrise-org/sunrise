@@ -1,29 +1,14 @@
-//! Every item and recipe the game knows, made once for the mods that read
-//! them (native mods' `native_recipes`, capability `recipes` of WebAssembly
-//! mods, docs/modding/src/how-to/content-mods.md), and the recipe book's known displays; placing a
-//! recipe and creative gifts. The recipes are the window's own data — the
-//! content root's — with the server's recipes of the types its native mods
-//! had it send (`sunrise:recipe_content`) in their place, while the known
-//! displays follow the server's book as the recipe book does.
-use super::api_values::TryIntoApi;
+//! Recipe lookup, placement, creative gives, and client synchronization. The client uses its
+//! own recipes, with server-synced types taking precedence, and follows the server's book for
+//! known displays.
 use super::{
     Game,
-    native_hooks::{
-        NativeItem as RecipeItem, NativeRecipe as Recipe, NativeRecipeKind as RecipeKind,
-        NativeRecipeStack as RecipeStack, NativeRecipes as Recipes,
-    },
+    api_values::{TryIntoApi, TryIntoEngine},
 };
-use mod_api::{LevelRef, RecipeInput, RecipeLookupError, RecipeMatch};
-use std::{collections::HashMap, sync::Arc};
-use sunrise_client::{
-    crafting::{Ingredient, qualified},
-    items::ItemStack,
-    recipe_book::{Category, Display},
-    stations::Smithing,
-};
+use mod_api::{CreativeGiveError, LevelRef, RecipeInput, RecipeLookupError, RecipeMatch};
+use std::sync::Arc;
+use sunrise_client::items::ItemStack;
 
-/// The tables, made once, and the recipe book's known displays with the
-/// book's version they are of.
 /// The most recipes a server's recipe content may carry.
 const MAX_SYNCED_RECIPES: usize = 1_000_000;
 
@@ -67,7 +52,6 @@ impl IncomingRecipes {
 
 #[derive(Default)]
 pub(super) struct RecipeTables {
-    tables: Option<Arc<Recipes>>,
     pub(super) books: Option<
         Result<
             sunrise_client::recipe_book::ModBookIndex,
@@ -100,27 +84,6 @@ impl RecipeTables {
     }
 }
 
-/// Item id -> its index in [`Recipes::items`].
-struct Index(HashMap<Arc<str>, u32>);
-impl Index {
-    fn stack(&self, item: &str, count: u32, components: String) -> Option<RecipeStack> {
-        Some(RecipeStack {
-            item: *self.0.get(item)?,
-            count,
-            components,
-        })
-    }
-    fn of(&self, s: &ItemStack) -> Option<RecipeStack> {
-        self.stack(&s.item, s.count, components(s))
-    }
-    fn any(&self, i: &Ingredient) -> Vec<RecipeStack> {
-        i.order
-            .iter()
-            .filter_map(|id| self.stack(id, 1, String::new()))
-            .collect()
-    }
-}
-
 /// A stack's components beyond its item's, as vanilla's item syntax writes
 /// them (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`), or "".
 pub(super) fn components(s: &ItemStack) -> String {
@@ -139,22 +102,6 @@ pub(super) fn components(s: &ItemStack) -> String {
         })
         .collect();
     format!("[{}]", parts.join(","))
-}
-
-fn recipe(id: String, kind: RecipeKind) -> Recipe {
-    Recipe {
-        id,
-        kind,
-        category: String::new(),
-        group: String::new(),
-        width: 0,
-        height: 0,
-        slots: Vec::new(),
-        results: Vec::new(),
-        cooking_time: 0,
-        experience: 0.0,
-        book_id: -1,
-    }
 }
 
 impl Game<'_> {
@@ -194,40 +141,29 @@ impl Game<'_> {
                     return Err(InvalidInput);
                 };
                 let (w, h) = (*width as usize, *height as usize);
-                if !(1..=3).contains(&w) || !(1..=3).contains(&h) || slots.len() != w * h {
+                if w.checked_mul(h) != Some(slots.len()) {
                     return Err(InvalidInput);
                 }
-                let size = w.max(h);
-                let at = |i: usize| (i / w) * size + i % w;
-                let mut grid: [Option<ItemStack>; 9] = Default::default();
-                for (i, stack) in slots.iter().enumerate() {
+                let mut grid = Vec::with_capacity(slots.len());
+                for stack in slots {
                     #[allow(clippy::needless_borrows_for_generic_args)] // TODO(#2273)
                     {
-                        grid[at(i)] = stack.as_ref().map(&read_stack).transpose()?;
+                        grid.push(stack.as_ref().map(&read_stack).transpose()?);
                     }
                 }
-                let grid = &grid[..size * size];
                 let scale = |id: i32| self.maps.data.get(&id).map(|m| m.scale);
                 let recipes = self.recipes();
                 let matched =
-                    recipes.find_with_dimensions(&self.loop_context, grid, size, w, h, &scale);
+                    recipes.find_with_dimensions(&self.loop_context, &grid, w, w, h, &scale);
                 let Some((id, output)) = matched.filter(|(_, output)| output.count > 0) else {
                     return Ok(None);
                 };
-                let mut placed = if matches!(
-                    recipes.recipe(id),
-                    Some(sunrise_client::crafting::Recipe::Mod(_))
-                ) {
-                    recipes.mod_remainders_rect(&self.loop_context, id, grid, size, w, h, &|s| {
+                let remainders = recipes
+                    .remainders_rect(&self.loop_context, id, &grid, w, w, h, &|s| {
                         self.crafting_remainder(s)
                     })
-                } else {
-                    recipes.remainders(&self.loop_context, id, grid, size, &|s| {
-                        self.crafting_remainder(s)
-                    })
-                };
-                let remainders = (0..w * h)
-                    .map(|i| placed[at(i)].take().try_into_api().map_err(|_| InvalidItem))
+                    .into_iter()
+                    .map(|stack| stack.try_into_api().map_err(|_| InvalidItem))
                     .collect::<Result<Vec<_>, _>>()?;
                 make(id, &output, remainders, 0.0, 0)
             }
@@ -314,21 +250,6 @@ impl Game<'_> {
             .find(|category| category.recipe_type == kind)
             .cloned()
     }
-    /// `give`: `count` of `item`, refused outside a world, unless
-    /// creative and for an item the game doesn't have.
-    pub(super) fn recipe_give(&mut self, item: &str, count: u32) -> Result<(), String> {
-        if self.player.is_none() || self.res.rest.get().is_none() {
-            return Err("not in a world".into());
-        }
-        if !self.creative {
-            return Err("only in creative mode".into());
-        }
-        if self.res.items().get(item).is_none() {
-            return Err(format!("no item {item}"));
-        }
-        self.mod_give(item, count.clamp(1, 99), "");
-        Ok(())
-    }
     /// `place_recipe`: refused as `recipes.place` refuses it.
     pub(super) fn recipe_place(&mut self, book_id: i32, all: bool) -> Result<(), String> {
         if !self.mod_recipe_screen() {
@@ -342,36 +263,48 @@ impl Game<'_> {
         self.mod_place_recipe(book_id, all);
         Ok(())
     }
-    /// `recipes.give`: a creative player takes the stack as from the
-    /// creative inventory; a server hears it as `SetCreativeModeSlot`
-    /// through the inventory's sync, and refuses it unless creative.
-    pub(super) fn mod_give(&mut self, item: &str, count: u32, components: &str) {
-        let Some(max) = self.items().get(item).map(|i| i.max_stack) else {
-            return;
-        };
+    /// `give_creative`: `Inventory.add` of `stack` for a creative player, components kept and up
+    /// to the stack's own maximum, then `MultiPlayerGameMode.handleCreativeModeItemAdd` for
+    /// every slot it changed, sent now: the end of the tick's sync skips creative slots while
+    /// a server menu is open. What did not fit comes back and is not dropped.
+    pub(super) fn creative_give_stack(
+        &mut self,
+        stack: &mod_api::ItemStack,
+    ) -> Result<Option<mod_api::ItemStack>, CreativeGiveError> {
+        if self.is_logical_server() || self.player.is_none() || self.res.rest.get().is_none() {
+            return Err(CreativeGiveError::Unavailable);
+        }
         if !self.creative {
-            return;
+            return Err(CreativeGiveError::NotCreative);
         }
-        let (damage, extra) = sunrise_client::item_data::command_components(components)
-            .map_or((0, None), |tag| {
-                sunrise_client::item_data::decode_components(Some(&tag))
-            });
-        let _ = self.add_stack_to_inventory(ItemStack {
-            item: item.into(),
-            // One stack at most, as the creative inventory hands out.
-            count: count.min(max),
-            damage,
-            extra,
-        });
-    }
-    /// The tables, made on the first call; none while the world resources
-    /// they come from are still loading behind the title on a slow start.
-    pub(super) fn made_recipes(&mut self) -> Option<Arc<Recipes>> {
-        self.res.rest.get()?;
-        if self.recipe_tables.tables.is_none() {
-            self.recipe_tables.tables = Some(Arc::new(self.make_mod_recipes()));
+        let mut stack = stack.try_into_engine(self.items())?;
+        if self.remote.is_some()
+            && !self
+                .creative_screen
+                .catalog()
+                .item_enabled(&stack, self.enabled_feature_ids())
+        {
+            return Err(CreativeGiveError::FeatureDisabled);
         }
-        self.recipe_tables.tables.clone()
+        let max = self.stack_max_size(&stack);
+        let inventory = self.inventory[..36].to_vec();
+        let offhand = self.offhand.clone();
+        self.insert_stack_up_to(&mut stack, max);
+        for i in 0..36 {
+            if self.inventory[i] != inventory[i] {
+                self.remote_creative_slot_add(i);
+            }
+        }
+        if self.offhand != offhand {
+            self.remote_creative_slot_add(36);
+        }
+        if stack.count == 0 {
+            return Ok(None);
+        }
+        stack
+            .try_into_api()
+            .map(Some)
+            .map_err(|error| error.into_write_error().into())
     }
     /// The `book_id`s the player's recipe book holds now.
     pub(super) fn known_displays(&mut self) -> Arc<[i32]> {
@@ -393,199 +326,6 @@ impl Game<'_> {
         }
         self.viewer_book_ids(recipe_id)
     }
-
-    fn make_mod_recipes(&mut self) -> Recipes {
-        let names = &self.pack.names;
-        let items = self.items();
-        let mut tags: HashMap<&str, Vec<String>> = HashMap::new();
-        for (tag, members) in &items.item_tags {
-            for m in members {
-                tags.entry(m).or_default().push(tag.clone());
-            }
-        }
-        let table: Vec<RecipeItem> = items
-            .registry_order
-            .iter()
-            .map(|id| RecipeItem {
-                id: id.to_string(),
-                name: names.display_item(id),
-                tags: tags.remove(&**id).map_or_else(Vec::new, |mut t| {
-                    t.sort();
-                    t
-                }),
-            })
-            .collect();
-        let index = Index(
-            items
-                .registry_order
-                .iter()
-                .enumerate()
-                .map(|(i, id)| (id.clone(), i as u32))
-                .collect(),
-        );
-        let mut out = Vec::new();
-        let cooking: HashMap<String, (u32, f32)> = self
-            .recipes()
-            .cooking
-            .iter()
-            .map(|c| (qualified(&c.id), (c.time, c.experience)))
-            .collect();
-        for e in self.recipe_book_entries() {
-            let furnace = |c: Category| match c.name().split('_').next() {
-                Some("blast") => RecipeKind::Blasting,
-                Some("smoker") => RecipeKind::Smoking,
-                _ => RecipeKind::Smelting,
-            };
-            let kind = match &e.display {
-                Display::Shaped { .. } => RecipeKind::CraftingShaped,
-                Display::Shapeless(_) => RecipeKind::CraftingShapeless,
-                Display::Furnace(_) => furnace(e.category),
-            };
-            let mut r = recipe(e.id.clone(), kind);
-            r.category = e.category.name().to_owned();
-            r.group = e.group.clone().unwrap_or_default();
-            r.book_id = e.display_id;
-            r.slots = match &e.display {
-                Display::Shaped {
-                    width,
-                    height,
-                    cells,
-                } => {
-                    (r.width, r.height) = (*width as u32, *height as u32);
-                    cells
-                        .iter()
-                        .map(|c| c.as_ref().map_or_else(Vec::new, |i| index.any(i)))
-                        .collect()
-                }
-                Display::Shapeless(list) => list.iter().map(|i| index.any(i)).collect(),
-                Display::Furnace(i) => vec![index.any(i)],
-            };
-            // Requirements shown as other stacks (an arrow's potions): the
-            // requirement's index counts the filled slots only.
-            let filled: Vec<usize> = (0..r.slots.len())
-                .filter(
-                    |&k| !matches!(&e.display, Display::Shaped { cells, .. } if cells[k].is_none()),
-                )
-                .collect();
-            for (req, stacks) in &e.stacks {
-                if let Some(&k) = filled.get(*req) {
-                    r.slots[k] = stacks.iter().filter_map(|s| index.of(s)).collect();
-                }
-            }
-            r.results = e.results().iter().filter_map(|s| index.of(s)).collect();
-            if let Some(&(time, xp)) = cooking.get(&e.id) {
-                (r.cooking_time, r.experience) = (time, xp);
-            }
-            out.push(r);
-        }
-        for c in &self.recipes().cooking {
-            if c.kind == "minecraft:campfire_cooking" {
-                let mut r = recipe(qualified(&c.id), RecipeKind::Campfire);
-                r.group = c.group.clone();
-                r.slots = vec![index.any(&c.ingredient)];
-                r.results = index.of(&c.result).into_iter().collect();
-                (r.cooking_time, r.experience) = (c.time, c.experience);
-                out.push(r);
-            }
-        }
-        let stations = self.stations();
-        for s in &stations.recipes.stonecutting {
-            let mut r = recipe(s.id.clone(), RecipeKind::Stonecutting);
-            r.slots = vec![index.any(&s.input)];
-            r.results = index.of(&s.result).into_iter().collect();
-            out.push(r);
-        }
-        for s in &stations.recipes.smithing {
-            let (id, slots, results) = match s {
-                Smithing::Transform {
-                    id,
-                    template,
-                    base,
-                    addition,
-                    result,
-                } => (
-                    id,
-                    vec![
-                        template.as_ref().map(|i| index.any(i)).unwrap_or_default(),
-                        index.any(base),
-                        addition.as_ref().map(|i| index.any(i)).unwrap_or_default(),
-                    ],
-                    index.of(&result.create()).into_iter().collect(),
-                ),
-                Smithing::Trim {
-                    id,
-                    template,
-                    base,
-                    addition,
-                    ..
-                } => (
-                    id,
-                    vec![index.any(template), index.any(base), index.any(addition)],
-                    index.any(base),
-                ),
-            };
-            let mut r = recipe(id.clone(), RecipeKind::Smithing);
-            r.slots = slots;
-            r.results = results;
-            out.push(r);
-        }
-        for b in &stations.brewing.recipes {
-            let potion = |p: &sunrise_client::brewing::PotionIngredient| -> Vec<RecipeStack> {
-                let mut item_ids: Vec<&String> = p.items.iter().collect();
-                item_ids.sort();
-                let mut potions: Vec<&String> = p.potions.iter().flatten().collect();
-                potions.sort();
-                item_ids
-                    .into_iter()
-                    .flat_map(|item| {
-                        let one = |c: String| index.stack(item, 1, c);
-                        if potions.is_empty() {
-                            one(String::new()).into_iter().collect::<Vec<_>>()
-                        } else {
-                            potions
-                                .iter()
-                                .filter_map(|p| {
-                                    one(format!("[minecraft:potion_contents={{potion:\"{p}\"}}]"))
-                                })
-                                .collect()
-                        }
-                    })
-                    .collect()
-            };
-            let mut r = recipe(b.id.clone(), RecipeKind::Brewing);
-            r.slots = vec![potion(&b.input), potion(&b.reagent)];
-            r.results = index.of(&b.output).into_iter().collect();
-            out.push(r);
-        }
-        Recipes {
-            items: table,
-            recipes: out,
-        }
-    }
-}
-
-/// The window's own recipes outside `types` and the server's of them, in
-/// `recipe_sources::sources`' shape. The server sends its ids whole
-/// (`encode_content`), but the tables find a vanilla recipe by its bare name
-/// (`Recipes::placement`, `meta`): kept whole, `minecraft:stick` had no
-/// placement, so the book dropped every synced vanilla recipe and a viewer's
-/// "+" found no book id for it.
-fn synced_sources(
-    own: Vec<(String, serde_json::Value)>,
-    received: Vec<(String, serde_json::Value)>,
-    types: &[String],
-) -> Vec<(String, serde_json::Value)> {
-    let of = |v: &serde_json::Value| sunrise_client::crafting::mod_kinds::file_has_type(v, types);
-    let mut all: Vec<_> = own.into_iter().filter(|(_, v)| !of(v)).collect();
-    all.extend(
-        received
-            .into_iter()
-            .map(|(id, v)| match id.strip_prefix("minecraft:") {
-                Some(name) => (name.to_owned(), v),
-                None => (id, v),
-            }),
-    );
-    all
 }
 
 impl Game<'_> {
@@ -608,7 +348,6 @@ impl Game<'_> {
         self.recipe_tables.synced_index = None;
         self.recipe_tables.incoming = IncomingRecipes::default();
         self.recipe_tables.received = None;
-        self.recipe_tables.tables = None;
         self.forget_book();
     }
     /// `native_recipes_received` for the types that came, once the window
@@ -645,33 +384,20 @@ impl Game<'_> {
         if types.is_empty() {
             self.recipe_tables.synced_index = None;
             if self.recipe_tables.synced.take().is_some() {
-                self.recipe_tables.tables = None;
                 self.forget_book();
                 self.recipe_tables.received = Some(types);
                 self.recipes_received_now();
             }
             return;
         }
-        let root = &self.options.resources;
-        let overlay = sunrise_world::loot::PackOverlay::NONE;
-        let built = sunrise_items::recipe_sources::sources(root, &overlay).and_then(|own| {
-            let all = synced_sources(own, received, &types);
-            let index = sunrise_client::recipe_book::RecipeIndex::load_from_sources(&all);
-            sunrise_client::crafting::Recipes::from_sources(
-                root,
-                self.items(),
-                &overlay,
-                all,
-                self.res.core.item_data.context(),
-            )
-            .map(|recipes| (recipes, index))
-        });
+        let built = self
+            .res
+            .recipes()
+            .with_recipe_content(self.items(), received, &types);
         match built {
             Ok((recipes, index)) => {
                 self.recipe_tables.synced = Some(recipes);
                 self.recipe_tables.synced_index = Some(index);
-                // What was made of the window's own recipes is made again.
-                self.recipe_tables.tables = None;
                 self.forget_book();
                 self.recipe_tables.received = Some(types);
                 self.recipes_received_now();
@@ -730,58 +456,6 @@ mod tests {
         )
     }
 
-    /// `level.recipe_for` against vanilla's own recipes: a shaped recipe that hands back buckets, the
-    /// same shaped recipe from a smaller grid and from a corner of a larger one, a special
-    /// recipe, and grids that make nothing.
-    /// The server's recipes come with whole ids (`encode_content`); the
-    /// synced set names a vanilla one bare, as the window's own files do,
-    /// and keeps a data pack's whole. The window's own recipes of a synced
-    /// type give way to the server's.
-    #[test]
-    fn synced_sources_name_vanilla_recipes_as_the_tables_find_them() {
-        let shaped = serde_json::json!({"type": "minecraft:crafting_shaped"});
-        let smelting = serde_json::json!({"type": "minecraft:smelting"});
-        let own = vec![
-            ("stick".to_owned(), shaped.clone()),
-            ("iron_ingot".to_owned(), smelting.clone()),
-        ];
-        let received = vec![
-            ("minecraft:stick".to_owned(), shaped.clone()),
-            ("braid:sticks_from_logs".to_owned(), shaped.clone()),
-        ];
-        let types = ["minecraft:crafting".to_owned()];
-        let names: Vec<_> = super::synced_sources(own, received, &types)
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        assert_eq!(names, ["iron_ingot", "stick", "braid:sticks_from_logs"]);
-    }
-
-    /// A window's own `smelting` file (a bare type) and a server's bare one
-    /// both read as `minecraft:smelting`: the server's replaces the window's,
-    /// and the book numbers the same displays as for qualified types.
-    #[test]
-    fn synced_sources_classify_bare_types_as_minecrafts() {
-        let root = tempfile::tempdir().unwrap();
-        let folder = root.path().join("data/minecraft/recipe");
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("iron_ingot.json"), r#"{"type":"smelting"}"#).unwrap();
-        let own = sunrise_items::recipe_sources::sources(
-            root.path(),
-            &sunrise_world::loot::PackOverlay::NONE,
-        )
-        .unwrap();
-        let part = sunrise_client::lan::recipes::ContentPart::decode(
-            br#"{"recipes":[["minecraft:gold_ingot",{"type":"smelting"}]],"last":["minecraft:smelting"]}"#,
-        )
-        .unwrap();
-        let types = part.last.unwrap();
-        let all = super::synced_sources(own, part.recipes, &types);
-        let names: Vec<_> = all.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(names, ["gold_ingot"]);
-        assert_eq!(all[0].1["type"], "minecraft:smelting");
-    }
-
     /// With the server's crafting recipes synced, the book still holds the
     /// vanilla ones under their own display ids (a viewer's "+" reads them,
     /// `recipe_book_ids`), and a recipe only the server has gets one too.
@@ -803,18 +477,25 @@ mod tests {
             let own = ids.map(|id| book_ids(game, id));
             assert!(own.iter().all(|ids| !ids.is_empty()), "{own:?}");
             let types = ["minecraft:crafting", "minecraft:smelting"].map(str::to_owned);
-            let mut sources = sunrise_items::recipe_sources::sources(
-                &game.options.resources,
-                &sunrise_world::loot::PackOverlay::NONE,
-            )
-            .unwrap();
             let pack = serde_json::json!({
                 "type": "minecraft:crafting_shaped",
                 "pattern": ["#", "#"],
                 "key": {"#": "#minecraft:logs"},
                 "result": {"id": "minecraft:stick", "count": 16},
             });
-            sources.push(("zzz:sticks_from_logs".to_owned(), pack));
+            let overlay = sunrise_world::loot::PackOverlay::NONE;
+            let mut files =
+                sunrise_items::recipe_sources::sources(&game.options.resources, &overlay).unwrap();
+            files.push(("zzz:sticks_from_logs".to_owned(), pack));
+            let server = sunrise_client::crafting::Recipes::from_sources(
+                &game.options.resources,
+                game.items(),
+                &overlay,
+                files,
+                game.res.core.item_data.context(),
+            )
+            .unwrap();
+            let sources = server.recipe_content(&types);
             for part in sunrise_client::lan::recipes::encode_content(&types, &sources, false) {
                 game.remote_recipe_content(&part);
             }
@@ -887,11 +568,7 @@ mod tests {
             });
             assert_eq!(ids.map(|id| book_ids(game, id)), server);
             let types = ["minecraft:crafting", "minecraft:smelting"].map(str::to_owned);
-            let sources = sunrise_items::recipe_sources::sources(
-                &game.options.resources,
-                &sunrise_world::loot::PackOverlay::NONE,
-            )
-            .unwrap();
+            let sources = game.recipes().recipe_content(&types);
             for part in sunrise_client::lan::recipes::encode_content(&types, &sources, false) {
                 game.remote_recipe_content(&part);
             }
@@ -968,9 +645,8 @@ mod tests {
 
             assert!(lookup(1, 1, &[stack("dirt")]).unwrap().is_none());
             assert!(lookup(1, 1, &[None]).unwrap().is_none());
-            assert!(
-                lookup(4, 1, &[None, None, None, None]) == Err(RecipeLookupError::InvalidInput)
-            );
+            assert!(lookup(4, 1, &[None, None, None, None]).unwrap().is_none());
+            assert!(lookup(0, 0, &[]).unwrap().is_none());
             assert!(lookup(1, 2, &planks[..1]) == Err(RecipeLookupError::InvalidInput));
         });
     }

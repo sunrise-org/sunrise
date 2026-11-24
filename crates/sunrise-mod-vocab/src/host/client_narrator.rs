@@ -15,7 +15,6 @@ pub trait ClientNarratorClientHost {
     /// current language, bounded only by the component's own form limits.
     /// Nothing reaches the server. Refused with nothing said, by name, as
     /// [`NarrateError`] lists: an empty line, the option Off or Chat only, or
-    /// no speech. Available from client setup on, on native and wasm alike.
-    #[access(ClientSetup)]
+    /// no speech. Available from client setup onward.
     fn narrate(&mut self, text: &Text, when: Narration) -> Result<(), NarrateError>;
 }

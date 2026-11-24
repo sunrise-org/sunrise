@@ -69,7 +69,7 @@ fn a_frame_of_gpu_records_only_draws_their_quads() {
         let camera = glam::DVec3::new(at[0], at[1] + 2.0, at[2]);
         game.polytone_gpu_decide(camera);
         let mut out = Vec::new();
-        game.client_particle_geometry(camera, 0.0, 70.0, &mut out);
+        game.client_particle_geometry(camera, 0.0, 70.0, None, &mut out);
         assert_eq!(out.len(), 4, "the record's quad");
     });
 }
@@ -93,7 +93,7 @@ fn rain_under_the_surface_is_hidden_from_its_first_frame() {
         let camera = glam::DVec3::from_array(camera);
         game.polytone_gpu_decide(camera);
         let mut out = Vec::new();
-        game.client_particle_geometry(camera, 0.0, 70.0, &mut out);
+        game.client_particle_geometry(camera, 0.0, 70.0, None, &mut out);
         assert_eq!(out.len(), 4, "the drop above the surface only");
     });
 }

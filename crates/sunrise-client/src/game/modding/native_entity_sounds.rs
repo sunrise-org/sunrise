@@ -36,7 +36,11 @@ impl Game<'_> {
     /// phantoms, shulkers, slimes and a killer bunny are `Hostile`; dropped
     /// items and experience orbs `Ambient`; every other entity `Neutral`.
     pub(super) fn entity_sound_source(&self, entity: EntityRef) -> Option<SoundSource> {
-        Some(match self.native_entity_target(entity)? {
+        self.target_sound_source(self.native_entity_target(entity)?)
+    }
+
+    pub(super) fn target_sound_source(&self, target: Target) -> Option<SoundSource> {
+        Some(match target {
             Target::Player | Target::Guest(_) => SoundSource::Players,
             Target::Mob(id) => {
                 let m = self.mobs.iter().find(|m| m.id == id)?;
@@ -61,8 +65,7 @@ impl Game<'_> {
     /// the entity under its sound source, for the players within range. A
     /// silent mob plays nothing, as vanilla's check is `isSilent`; a player
     /// (`Player.playSound`) doesn't hear it themself, their own client plays
-    /// it. True means queued, not heard; false for an unknown `minecraft:`
-    /// event or a volume or pitch that isn't a finite non-negative number.
+    /// it. True means queued, not heard. Registered events go by ID and other valid keys by name.
     pub(super) fn entity_play_sound(
         &mut self,
         entity: EntityRef,
@@ -90,8 +93,18 @@ impl Game<'_> {
                 None
             }
         };
-        self.native_queue_sound(level, sound, at, source, volume, pitch, except)
-            .is_some()
+        self.native_queue_sound(super::native_level_effects::NativeSoundRequest {
+            level,
+            sound,
+            at,
+            source,
+            volume,
+            pitch,
+            except,
+            entity: None,
+            inline_range: None,
+            seed: None,
+        })
     }
     /// `Entity.gameEvent(event)`: game event `event` (`minecraft:step`...)
     /// at the entity's position with the entity as its source, which sculk
@@ -119,22 +132,38 @@ impl Game<'_> {
             },
         )
     }
+    fn resolve_entity_broadcast_event(&self, entity: EntityRef) -> Option<(i32, [f64; 3])> {
+        let target = self.native_entity_target(entity)?;
+        let at = self.target_position(target)?;
+        if !self.native_entity_here(entity) {
+            return None;
+        }
+        let entity_id = i32::try_from(entity.id()).ok()?;
+        Some((entity_id, at))
+    }
     /// `Level.broadcastEntityEvent(entity, id)`: sends entity event `id` (the
     /// byte `Entity.handleEntityEvent` reads: `2` is a hurt flash, `3` a
     /// death, `35` a totem...) to the players tracking the entity and to the
     /// entity itself. True means queued; false for an entity outside the
     /// level in place.
     pub(super) fn entity_broadcast_event(&mut self, entity: EntityRef, id: u8) -> bool {
-        let Some(target) = self.native_entity_target(entity) else {
+        let Some((entity_id, at)) = self.resolve_entity_broadcast_event(entity) else {
             return false;
         };
-        let Some(at) = self.target_position(target) else {
-            return false;
-        };
-        if !self.native_entity_here(entity) {
-            return false;
-        }
-        let Ok(entity_id) = i32::try_from(entity.id()) else {
+        self.emit_level_effect(super::journal_level_write::PendingWrite::EntityEvent {
+            level: self.dim,
+            entity_id,
+            event: id as i8,
+            at,
+        });
+        true
+    }
+    /// Immediate counterpart to `entity_broadcast_event` for unjournaled direct writes whose
+    /// mutation takes effect immediately even inside an open transaction (such as non-player
+    /// `living_hurt_and_break`), keeping the write and its notification on the same side of the
+    /// rollback boundary.
+    pub(super) fn broadcast_entity_event_immediate(&mut self, entity: EntityRef, id: u8) -> bool {
+        let Some((entity_id, at)) = self.resolve_entity_broadcast_event(entity) else {
             return false;
         };
         self.lan_entity_event(entity_id, id as i8, at);
@@ -154,7 +183,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::dispense_fixture;
-    use super::super::native_entity_refs::tests::with_game;
+    use super::super::native_entity_refs::tests::{fixture_resident_column, with_game};
     use mod_api::{EntityRef, SoundSource, WorldEpoch};
     use sunrise_client::command::args::GameMode;
     use sunrise_client::mobs::Mob;
@@ -209,6 +238,7 @@ mod tests {
     #[ignore = "daily"]
     fn play_sound_queues_at_the_entity_in_its_source() {
         super::super::native_guest_turn_tests::with_guests(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
             let cow = spawn(game, 10, "minecraft:cow");
             assert!(game.entity_play_sound(cow, "minecraft:entity.cow.ambient", 0.5, 1.5));
             let sound = &game.creatures.lan_sounds[0];
@@ -216,11 +246,11 @@ mod tests {
             assert_eq!(sound.at, [1.5, 64.0, 2.5]);
             assert_eq!(sound.source as usize, SoundSource::Neutral.index());
             assert_eq!((sound.volume, sound.pitch, sound.except), (0.5, 1.5, None));
-            // A silent mob plays nothing; a bad pitch is refused.
+            // A silent mob plays nothing; a malformed event key is refused.
             game.mobs[0].silent = true;
             assert!(!game.entity_play_sound(cow, "minecraft:entity.cow.ambient", 1.0, 1.0));
             game.mobs[0].silent = false;
-            assert!(!game.entity_play_sound(cow, "minecraft:entity.cow.ambient", 1.0, f32::NAN));
+            assert!(!game.entity_play_sound(cow, "invalid key", 1.0, 1.0));
             assert_eq!(game.creatures.lan_sounds.len(), 1);
             // A player doesn't hear their own sound, silent or not.
             game.as_guest(12, |game| {

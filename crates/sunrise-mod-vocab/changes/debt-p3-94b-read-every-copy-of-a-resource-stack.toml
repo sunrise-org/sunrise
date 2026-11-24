@@ -1,0 +1,6 @@
+ids = [
+    "const:MAX_RESOURCE_BYTES",
+    "method:prelude::ResourcesHost::resource_stack",
+]
+why = "Vanilla FallbackResourceManager.getResourceStack returns every pack's copy of a resource and Resource.open reads each with no size limit; NeoForge does not add one. resource_stack now reads every copy in full, as open_resource does, and MAX_RESOURCE_BYTES, the old guest reply limit it kept, is removed. A copy that can't be read is still left out."
+migrate = "Remove MAX_RESOURCE_BYTES imports and checks; apply any limit your decoder needs to the bytes resource_stack returns."

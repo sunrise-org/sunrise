@@ -274,15 +274,16 @@ mod tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         }
     }

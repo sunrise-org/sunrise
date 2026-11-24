@@ -37,7 +37,7 @@ impl Game<'_> {
 fn run(action: Action, game_dir: &Path) -> R<Vec<Text>> {
     #[cfg(test)]
     crate::game::api_values::install_test_platform();
-    let profiler = sunrise_engine_slots::platform()
+    let profiler = mod_api::__private::platform::platform()
         .map_err(|e| err("sunrise.modprofile.writeFailed", &[&e.to_string()]))?;
     match action {
         Action::Start => {

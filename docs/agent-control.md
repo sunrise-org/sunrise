@@ -64,8 +64,12 @@ left alone.
 
 ## Protocol revisions
 
-All three servers share one implementation, `crates/sunrise-mcp`, so they advertise and answer
-the same revisions. There are two of them.
+`sunrise-ctl mcp` and [`sunrise-server mcp`](server.md#8-control-api-and-mcp) share the
+implementation in `crates/sunrise-mcp`. The separate launcher has its own MCP implementation.
+Its `game_*` tools depend on the stdio wire contract with the installed game's `sunrise-ctl mcp`,
+not on this crate.
+
+The shared implementation serves two revisions:
 
 - `2026-07-28` is stateless: there is no handshake, and every request carries its version and
   its capabilities in `_meta` (`io.modelcontextprotocol/protocolVersion`,
@@ -134,7 +138,7 @@ passes on without checking it).
 | Open to LAN | Pause > Open to LAN | yes | yes | `lan open\|close\|status` |
 | Play with Friends: host, stop, status | Pause | yes | yes | `friends host\|stop\|status` |
 | Vanilla options, every page | Options | yes | yes | `options-get`, `options-set` (all of options.txt, typed) |
-| Sunrise Settings: Extras, PvP & HUD, AI Agent; the graphics screen (Video Settings); Controller (Controls) | Sunrise Settings, Video Settings, Controls | yes | yes | `options sunrise\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
+| Sunrise Settings: Extras, PvP & HUD, AI Agent; the graphics screen (Extras → Sunrise Graphics...); Controller (Controls) | Sunrise Settings, Extras, Controls | yes | yes | `options sunrise\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
 | Agent control on or off, status, connection details | Sunrise Settings > AI Agent | yes | yes | `options sunrise`, the page's widgets (`ai-agent`) |
 | Key binds | Controls > Key Binds | yes | yes | `options-set key_key.jump key.keyboard.j` |
 | Resource packs | Options > Resource Packs | yes | yes | `options packs`, then `ui` rows and `click`; `options-set resourcePacks` |
@@ -445,8 +449,8 @@ of the frame ([#8750](https://github.com/horizon-rust/horizon/issues/8750)).
   the last frame's clock. Without a pack it draws the frames all the same. It needs the world
   frozen, far terrain (LOD Distance), TAA, frame generation and the shadow cache off and chunk fade
   0, and says so otherwise. While it runs, commands that would change the scene are refused, a
-  change to the camera, the world, the settings, the pack or the window's size ends it with an
-  error, `screenshot-sequence cancel` stops it and `quit` quits.
+  change to the camera (compared with the first extracted frame), the world, the settings, the pack
+  or the window's size ends it with an error, `screenshot-sequence cancel` stops it and `quit` quits.
 - Not covered: temporal AA and frame generation (they build on earlier frames: turn them off),
   custom entity model animations, native mods, and what eases on the wall clock for a moment
   (toasts, the boss bar's fill, chunks fading in, the spyglass): wait for them to settle. Frame

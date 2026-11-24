@@ -7,13 +7,13 @@ name: sdk publish
 #   surface is the same (tools/prebuilt_game.py gather), compares the surface with the SDK published before it on
 #   this commit's history (sunrise-stage surface-diff), writes the API source (tools/sdk_api_source.py), and writes
 #   sdk.json over every asset (prebuilt_game.py index).
-# - `sign` is the only job with the release key, and only on main with `publish` set (the `release` environment):
+# - `sign` is the only job with the release key, and only on main or release/26.3 with `publish` set (the `release` environment):
 #   it checks out nothing but tools/ci/sign_release.sh, which hashes the assets and signs SHA256SUMS for the tag
 #   `sdk-<sha>`, so the signature never passes for a game release (sunrise-release-sign: sdk_digest), and refuses a
-#   commit that is not on main. Any other run signs with a throwaway key.
-# - `publish` checks the signature as the launcher does (sunrise-release-sign verify) and that the release holds
-#   exactly the assets a Nightly needs (tools/ci/nightly.py sdk-assets), then creates `sdk-<sha>`: only on main
-#   with `publish` set. A branch run, or a dry run, publishes nothing.
+#   commit that is not on its branch. Any other run signs with a throwaway key.
+# - `publish` checks the signature as the launcher does (tools/ci/nightly.py verify-sums) and that the release holds
+#   exactly the assets a Nightly needs (tools/ci/nightly.py sdk-assets), then creates `sdk-<sha>`: only on main or
+#   release/26.3 with `publish` set. Any other branch's run, or a dry run, publishes nothing.
 on:
   workflow_call:
     inputs:
@@ -22,7 +22,7 @@ on:
         type: string
         required: true
       publish:
-        description: Sign with the release key and create sdk-<sha> (on main only); otherwise a throwaway key, nothing published
+        description: Sign with the release key and create sdk-<sha> (on main or release/26.3 only); otherwise a throwaway key, nothing published
         type: boolean
         default: false
 permissions:
@@ -35,6 +35,25 @@ env:
   TAG: sdk-${{ inputs.commit }}
   COMMIT: ${{ inputs.commit }}
 jobs:
+  # Whether this run signs with the release key and publishes, decided exactly (release_train.py authorize).
+  authorize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.authorize.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/release_train.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: authorize
+        env:
+          DRY_INPUT: ${{ !inputs.publish }}
+        run: python3 tools/release_train.py authorize --publish-kind sdk --dry-run "$DRY_INPUT"
+
   index:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -55,8 +74,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust.outputs.version }}
-          # The API source is checked for wasm32 too (tools/sdk_api_source.py build).
-          targets: wasm32-unknown-unknown
       # As the legs' caches: main's runs save it, every branch restores it.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -86,11 +103,21 @@ jobs:
         run: |
           set -euo pipefail
           previous=$(python3 tools/ci/nightly.py sdk-previous "$COMMIT" previous-surface.json)
-          echo "build=$previous" >> "$GITHUB_OUTPUT"
           if [ -z "$previous" ]; then
             echo "### No SDK was published before $COMMIT on its history: sdk.json has no comparison" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          # Start the schema-3 SDK baseline once. There is no comparable previous SDK until
+          # one has been published with this schema; don't publish an empty or invented diff.
+          # Remove this branch and the reset audit after the first complete schema-3 SDK publishes.
+          if [ -f tools/ci/surface-schema-3-reset.json ] &&
+             jq -e '.schema == 2' previous-surface.json >/dev/null &&
+             jq -e '.schema == 3' dist/surface.json >/dev/null; then
+            echo "### SDK surface baseline reset (schema 2 → 3)" >> "$GITHUB_STEP_SUMMARY"
+            echo "The previous SDK ($previous) has schema 2. This SDK starts the new baseline without a previous diff. The transition comparison is in tools/ci/surface-schema-3-reset.json." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "build=$previous" >> "$GITHUB_OUTPUT"
           # The change notes added since that build: those its tree did not have.
           mkdir -p base
           if git cat-file -e "$previous:crates/sunrise-mod-vocab/changes" 2> /dev/null; then
@@ -119,39 +146,39 @@ jobs:
           overwrite: true
 
   sign:
-    needs: index
+    needs: [index, authorize]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-    # The key's only job, and only for a publishing run on main: sign_release.sh hashes the assets and signs with the
+    # The key's only job, and only for a publishing run on main or release/26.3: sign_release.sh hashes the assets and signs with the
     # runner's OpenSSL, never running what the legs built.
-    environment: ${{ inputs.publish && github.ref == 'refs/heads/main' && 'release' || '' }}
+    environment: ${{ needs.authorize.outputs.publish == 'true' && 'release' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: tools/ci/sign_release.sh
           sparse-checkout-cone-mode: false
           persist-credentials: false
-          # main's history without its files' contents: enough for the check below.
+          # The history without its files' contents: enough for the check below.
           fetch-depth: 0
           filter: blob:none
-      # Where the key is: whatever the caller says, the real key signs only a commit of main.
-      - name: The commit is on main
-        if: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+      # Where the key is: whatever the caller says, the real key signs only a commit of the branch it runs on.
+      - name: The commit is on its branch
+        if: ${{ needs.authorize.outputs.publish == 'true' }}
         run: |
-          git fetch -q --no-tags --filter=blob:none origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main \
-            || { echo "::error::$COMMIT is not on main: its SDK is not signed"; exit 1; }
+          git fetch -q --no-tags --filter=blob:none origin "+refs/heads/$GITHUB_REF_NAME:refs/remotes/origin/$GITHUB_REF_NAME"
+          git merge-base --is-ancestor "$COMMIT" "refs/remotes/origin/$GITHUB_REF_NAME" \
+            || { echo "::error::$COMMIT is not on $GITHUB_REF_NAME: its SDK is not signed"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           name: sdk-release
           path: dist
       - name: Sign SHA256SUMS for sdk-<sha>
         env:
-          RELEASE_SIGNING_KEY: ${{ inputs.publish && github.ref == 'refs/heads/main' && secrets.RELEASE_SIGNING_KEY || '' }}
-          RELEASE_SIGNING_KEY_NEXT: ${{ inputs.publish && github.ref == 'refs/heads/main' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
-          EPHEMERAL: ${{ !(inputs.publish && github.ref == 'refs/heads/main') && 'yes' || '' }}
+          RELEASE_SIGNING_KEY: ${{ needs.authorize.outputs.publish == 'true' && secrets.RELEASE_SIGNING_KEY || '' }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ needs.authorize.outputs.publish == 'true' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
+          EPHEMERAL: ${{ !(needs.authorize.outputs.publish == 'true') && 'yes' || '' }}
         run: bash tools/ci/sign_release.sh "$TAG" dist/*
       - uses: actions/upload-artifact@v4
         with:
@@ -161,7 +188,7 @@ jobs:
           retention-days: 7
           overwrite: true
       - uses: actions/upload-artifact@v4
-        if: ${{ !(inputs.publish && github.ref == 'refs/heads/main') }}
+        if: ${{ !(needs.authorize.outputs.publish == 'true') }}
         with:
           name: sdk-ephemeral.pub
           path: dist/ephemeral.pub
@@ -169,7 +196,7 @@ jobs:
           overwrite: true
 
   publish:
-    needs: [index, sign]
+    needs: [index, sign, authorize]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -177,7 +204,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      PUBLISH: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+      PUBLISH: ${{ needs.authorize.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -198,8 +225,9 @@ jobs:
       - name: The signature, checked as the launcher checks it
         run: |
           key=(); [[ "$PUBLISH" != true ]] && key=(--key "$(cat key/ephemeral.pub)")
-          cargo run --locked --quiet -p sunrise-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "$TAG" \
-            --publishing "${key[@]}" dist
+          # The workflow checkout's Python and the runner's OpenSSL against main's release keys: nothing is compiled, and
+          # no binary of the release runs.
+          python3 tools/ci/nightly.py verify-sums --tag "$TAG" --publishing "${key[@]}" dist
       - name: Exactly the assets a Nightly needs
         run: |
           expected=$(python3 tools/ci/nightly.py sdk-assets | sort)
@@ -224,3 +252,110 @@ jobs:
         run: |
           echo "### Would publish $TAG (a branch or dry run: signed with a throwaway key)" >> "$GITHUB_STEP_SUMMARY"
           ls -l dist | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Generated modding-book chapters and SDK tables for this exact SDK commit, published to the orphan branch
+  # `modding-book-generated` so playsunrise.net's Node-only docs-sync reads them straight from its blobless clone
+  # with no extra token, no path-filter misses, and no latest-only cancellation races. Runs in parallel with
+  # index/sign/publish with read-only permissions; only `book-generated-publish` writes the branch after `publish`.
+  book-generated:
+    needs: [authorize]
+    if: needs.authorize.outputs.publish == 'true'
+    runs-on: ${{ vars.DYNA_CI_SELF_HOSTED == 'true' && 'dyna-medium' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: The pinned Rust (tools/ci/rust-version)
+        env:
+          DYNA: ${{ runner.environment != 'github-hosted' }}
+        run: |
+          if [ "$DYNA" = true ]; then
+            if [ ! -x "$CARGO_HOME/bin/rustup" ]; then
+              curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
+            fi
+            export PATH="$CARGO_HOME/bin:$PATH"
+            echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          fi
+          bash tools/ci/rustup_install.sh --profile minimal
+      - name: Export generated chapters and SDK tables
+        run: |
+          rm -rf "$RUNNER_TEMP/modding-book-generated"
+          python3 tools/modding_export_generated.py --out "$RUNNER_TEMP/modding-book-generated"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: modding-book-generated
+          path: ${{ runner.temp }}/modding-book-generated
+          if-no-files-found: error
+          overwrite: true
+
+  book-generated-publish:
+    needs: [authorize, publish, book-generated]
+    if: needs.authorize.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: modding-book-generated
+      cancel-in-progress: false
+    permissions:
+      contents: write  # updates orphan branch modding-book-generated
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: modding-book-generated
+          path: ${{ runner.temp }}/modding-book-generated
+      - name: Publish modding-book-generated snapshot for this SDK commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          exported="$RUNNER_TEMP/modding-book-generated"
+          python3 - "$exported" <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1]).resolve()
+          allowed = {
+              "sdk-tables.json",
+              "reference/api-reference.md",
+              "reference/hook-notes.md",
+              "reference/neoforge-counterparts.md",
+          }
+          found = []
+          for p in sorted(root.rglob("*")):
+              if p.is_dir():
+                  assert not p.is_symlink(), f"refusing symlink dir {p}"
+                  continue
+              assert not p.is_symlink() and p.is_file(), f"refusing non-regular file {p}"
+              rel = p.relative_to(root).as_posix()
+              assert rel in allowed, f"refusing unexpected exported file {rel}"
+              found.append(rel)
+          assert found, "no generated files exported"
+          PY
+          work="$RUNNER_TEMP/book-generated-repo"
+          rm -rf "$work"
+          mkdir -p "$work"
+          git -C "$work" init -q
+          git -C "$work" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git -C "$work" fetch -q --depth=1 origin refs/heads/modding-book-generated:refs/heads/modding-book-generated 2>/dev/null; then
+            git -C "$work" checkout -q -f modding-book-generated
+            git -C "$work" rm -q -rf .
+          else
+            git -C "$work" checkout -q --orphan modding-book-generated
+            git -C "$work" rm -q -rf . 2>/dev/null || true
+          fi
+          printf '%s\n' "$COMMIT" > "$work/source-commit"
+          cp -R "$exported"/. "$work"/
+          git -C "$work" add -A
+          if git -C "$work" diff --cached --quiet; then
+            echo "### \`modding-book-generated\` already matches \`${COMMIT::10}\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git -C "$work" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c commit.gpgsign=false commit -q -m "docs(modding): generated bundle for ${COMMIT::10}"
+          git -C "$work" push -q origin HEAD:refs/heads/modding-book-generated
+          echo "### Published \`modding-book-generated\` snapshot for \`${COMMIT::10}\`" >> "$GITHUB_STEP_SUMMARY"

@@ -9,26 +9,39 @@ sample, before enchantments. `None` leaves the answer to another attached part
 and then vanilla. The query receives the dimension, state, position, optional
 block entity, breaker entity handle and tool. The level host reads without writing;
 `level.block_entity_data(entity)` reads the supplied entity's saved data without
-identity metadata and refuses stale handles. Answers are clamped to 0 through
-32,767. Player breaks supply the part's answer to the global `break_block`
-event's `exp_to_drop`, after Silk Touch suppresses the starting amount (except
-for spawners). An explicit global override is applied as given. `block_drops` sees the resulting amount afterwards.
+identity metadata and refuses stale handles. Negative answers are clamped to 0;
+positive values are awarded as given. Player breaks supply the part's answer to
+the global `break_block` event's `exp_to_drop`, after Silk Touch suppresses the
+starting amount (except for spawners). An explicit global override is applied as
+given. `block_drops` sees the resulting amount afterwards.
 Level and mob breaks use the shared resource-drop path. A canceled player break
 or a break that does not harvest produces no award.
 
 `block_drops(level, event)` hears the drops after that. Besides the breaking
-player's UUID (`breaker`) and the `tool`, it carries `breaker_entity`, the
-entity that broke the block (the player, or the mob whose own break of it is
-running: a ravager's), and `block_entity`, the block's block entity.
-`breaker_entity` is not set when no entity broke the block (a piston, water, a
-neighbour update, `/setblock destroy`) or for explosions. `block_entity` is set
-whenever the block has one at that moment, whoever broke it, and not for
-explosions, whose blocks are gone before the event. A player's break removes the
-block entity from the world first, so its saved data, taken before the removal
-(its `CustomName` too: copy a chest's name onto its drop), is held through the
-event: `level.block_entity_data(entity)` reads it and, as with `exp_drop`, a
-stale handle is refused. The data is released when the event ends, also if a
-listener panics; keep nothing from it but what you copied.
+player's UUID (`breaker`), it carries `tool` as `Option<ItemStackView<'_>>`
+(lazy component projection; call `project()` to copy components on demand),
+`breaker_entity`, the entity that broke the block (the player, or the mob whose
+own break of it is running: a ravager's), and `drops` as a live
+`PreparedBlockDrops<'_>` view. Read entries or mutate them in place via
+`PreparedDropView` and `PreparedDropMut` to preserve each prepared drop's RNG,
+or add, replace or copy entries via owned `ItemDrop` captures. Stack writes are
+validated per edit with `StackWriteError`, so one invalid edit leaves all other
+drops, `experience` and cancel state intact. `breaker_entity` is not set when no
+entity broke the block (a piston, water, a neighbour update, `/setblock destroy`).
+`block_entity` is `Option<BlockEntityRef>` only while the original is resident.
+`block_entity_data` is `Option<&Compound>` carrying the original entity's
+read-only payload when no resident handle is available:
+for a player break after removal, for a level-side or mob break of an entity
+stored only in the chunk (such as a decorated pot), or for a mob break after a
+`loot_drops` listener removes or replaces the original entity. A replacement's
+handle is never passed. The payload preserves `CustomName` but excludes identity
+and position. Breaks of blocks without a block entity provide neither field.
+Copy any data you need to retain past the event. Items join before the event's
+experience is awarded.
+
+With the `block_drops` rule off, the level still draws the drop positions, but
+no item entities are constructed, so the hook starts with an empty list. No
+items or experience spawn after the event.
 
 ## Explosions
 
@@ -36,21 +49,33 @@ listener panics; keep nothing from it but what you copied.
 block. The server host permits writes. `event.block_entity` is a live handle,
 and `entity.data(host)` can read it while the block remains. The event borrows
 the same `ExplosionStart` description as the global start event: dimension,
-center, radius, fire, interaction, damage type, source and owner.
+center, radius, fire, interaction, damage type, source and owner. `dimension` is a
+`DimensionKey`; use `dimension.id(host)` when you need the name. `source` and `owner`
+are optional `EntityRef`s for the direct and indirect source, respectively.
 
 The engine writes air after the callback, including when the callback
 replaced the block. Vanilla's separate `wasExploded` behavior follows removal.
 Air, spared blocks, canceled explosions and explosions that keep blocks produce
-no callback. The initial explosion experience amount is zero.
+no callback.
+
+Explosions do not fire `block_drops`: they roll and merge item stacks, then pop
+and join each merged stack before drawing the next one's position. To edit the
+stacks before merging, use `loot_drops` and match a block drop with
+`event.context.explosion.is_some()`. To spare a block, remove its position in
+`explosion_detonate`. To add your own experience to a destroyed block, use
+`on_block_exploded` and `level.award_experience` at the block's centre. This
+adds an award before removal; it does not replace the block's vanilla XP.
 
 `explosion_resistance(level, event)` answers `Some(resistance)` to replace the
 block's own explosion resistance against `event.explosion`, as a ray of the
 blast enters the block. The ray's next steps in the same block reuse the
-answer, so keep it a pure function of the event. A fluid in the cell still
-raises the value to 100, and the overrides vanilla applies afterwards keep
-winning: a respawn anchor's water cell, a TNT minecart's rails and the blocks
-under them (never asked) and a dangerous wither skull's 0.8 cap. A negative or
-non-finite answer is refused with a warning and the block's own value is used.
+answer, so keep it a pure function of the event. Vanilla combines the block's
+answer with the cell's fluid via `max` (`0.0` for empty fluid, `100.0` for
+water or lava), and the overrides vanilla applies afterwards keep winning: a
+respawn anchor's water cell, a TNT minecart's rails and the blocks under them
+(never asked) and a dangerous wither skull's 0.8 cap. Any finite answer is
+accepted; a non-finite answer is refused with a warning and the block's own
+value is used.
 
 `can_drop_from_explosion(level, event)` answers whether a destroyed block drops.
 `Some(false)` skips its loot and its `spawnAfterBreak` (an infested block's
@@ -171,12 +196,15 @@ total, past 2,147,483,647 is refused.
 
 | `ExplodeError` | When |
 | --- | --- |
-| `Unavailable` | A client, a parked level or a stale handle, a `source` that is stale, names no entity or is a player in another level, a centre in a chunk that isn't loaded |
-| `InvalidBlast` | A centre outside the world or not finite, a radius or knockback multiplier that isn't finite |
+| `Unavailable` | A client, a parked level or a stale handle, or a `source` that is stale, names no entity or is a player in another level |
+| `InvalidBlast` | A centre, radius or knockback multiplier that isn't finite |
 | `UnknownDamageType` | A damage type that isn't registered |
 | `UnknownBlockTag` | An `immune_blocks` that names no block tag |
 | `InvalidParticle` | A particle that isn't a particle type taking no options, a block particle with a weight of 0 or a scaling or speed that isn't finite, or a weight or total of weights past 2,147,483,647 |
-| `UnknownSound` | A sound that isn't a sound event id, or a `minecraft:` one the server doesn't have |
+| `UnknownSound` | A malformed namespaced sound event key |
+
+A valid sound key need not be registered on the server, in any namespace. It
+is sent by name when not registered; a client without that sound does not play it.
 
 ## Reading explosion resistance
 
@@ -224,22 +252,14 @@ interaction)` reads many cells in one call, one answer a cell in the order
 | `Box { min, max }` | Every cell, both corners included: x fastest, then z, then y |
 | `Columns { columns, min_y, max_y }` | Each column in the order given, from `min_y` up to `max_y` |
 
-A read of more than `ResistanceCells::MAX` (262,144) cells, or of an inverted
-area, is refused with `ResistanceCellsError` and reads nothing. It runs on the
-server tick, so read a big area in pieces. A block's parts are asked once a
-cell, unless every part on the block that answers `explosion_resistance`
-declares its answer pure:
+A read of an inverted area, or of an area whose cell count overflows what one
+allocation can hold, is refused with `ResistanceCellsError` and reads nothing.
+It runs on the server tick, so read a big area in pieces. A block's parts are
+asked once a cell, unless every part on the block that answers
+`explosion_resistance` declares its answer pure:
 
 ```rust
-#[mod_api::sunrise_part]
-impl BlockPart for Reinforced {
-    fn explosion_resistance(&self, _: &dyn LevelHost, _: &mut ExplosionResistanceEvent<'_>) -> Option<f32> {
-        Some(5000.0)
-    }
-    fn explosion_resistance_is_pure(&self) -> bool {
-        true
-    }
-}
+{{#include ../../../examples/src/world_helpers.rs:explosion_resistance}}
 ```
 
 Then a batched read asks them once a state per call; one part that doesn't
@@ -263,9 +283,10 @@ call that does this.
 Each call is one explosion to the hooks. `explosion_start` hears it first and
 may cancel it: then nothing breaks and the answer is 0. For a radius of at
 least 0.00001, `explosion_detonate` hears the positions as its block list, in
-the order given, a repeated one once. A listener may
-only take positions out (spare them): one it adds is ignored. Then the block
-step runs as a blast's does, in vanilla's order:
+the order given, a repeated one once. Listeners may remove, add or reorder
+positions (`ExplosionEvent.Detonate`), and the resulting list is kept in order
+with multiplicity intact, filtered only to loaded chunks within the level's
+height. Then the block step runs as a blast's does, in vanilla's order:
 
 1. The positions are shuffled with the level's random.
 2. Each block is hit: air is skipped; `can_drop_from_explosion` decides the
@@ -275,7 +296,8 @@ step runs as a blast's does, in vanilla's order:
    causing entity.
 3. The drops of the whole call are merged (a stack is offered to every earlier
    pile, up to 16 a pile; the rest starts a pile at that block) and popped
-   after the last block, in the order the piles began.
+   after the last block, in the order the piles began. Each pile draws its
+   position, constructs its item entity and joins before the next pile pops.
 4. With `fire`, a third of the cells left air above a solid block catch fire,
    under `None` too.
 
@@ -286,9 +308,7 @@ Unlike vanilla's rays, a position in a chunk that isn't loaded is skipped,
 never loaded and not counted, and so is one outside the level's height. The
 answer is the number of blocks destroyed: those that were not air when their
 turn came. `Err(ExplosionDestroyError)`, with nothing changed and no hook told,
-for more than 65,536 positions (`ExplosionDestroyError::MAX_POSITIONS`), a
-stale level or `source`, or a centre or radius that isn't finite or a negative
-radius.
+for a stale level or `source`, or a centre or radius that isn't finite.
 
 ## Entities that destroy blocks
 
@@ -308,16 +328,3 @@ allowed (the turtle-egg choice fires none). For the dragon,
 the griefing event. The host is read-only. The dragon asks every
 tick for each block in its head, neck and body, so answer fast. A panic is
 contained and vanilla's rule is used.
-
-## Pistons
-
-`on_destroyed_by_push_reaction(level, event)` hears a piston's move destroy the
-block (a `Destroy` push reaction, such as a torch's), after the block dropped
-its resources and while it is still in its cell. `event.direction` is the way
-the blocks move and `event.fluid` is the fluid state the cell holds. The removal still happens: the cell becomes air afterwards.
-The level host writes and schedules ticks, but a write to any cell of the move
-is lost. The destroyed cells turn to air, and the pushed blocks were read
-before, so each moves as it was and the cells they leave and enter end as air
-or a moving block, as does the arm. Writes outside the move stay. A move that
-`piston_pre` cancels and a client's replay of a move are not heard. A panic is
-contained and the move goes on.

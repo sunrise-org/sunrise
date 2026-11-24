@@ -12,6 +12,9 @@
 // registries. Without it, rustc can link a private copy into the official dylib.
 extern crate sunrise_game as _;
 
+#[cfg(feature = "sunrise-extras")]
+mod mod_audio;
+
 use sunrise_platform::hooks::{self, ClientIdentity, GetTheGame, Hooks};
 use sunrise_platform::{hud, lang, mod_rows, pages, release, settings};
 
@@ -108,6 +111,8 @@ static SUNRISE_ROW: mod_rows::Row = mod_rows::Row {
 const STORES: &[&dyn settings::Store] = &[
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::SETTING,
+    #[cfg(feature = "sunrise-extras")]
+    &mod_audio::SETTING,
     &sunrise_discord::SETTING,
     #[cfg(feature = "sunrise-extras")]
     &sunrise_perf_overlay::SETTING,
@@ -116,6 +121,8 @@ const STORES: &[&dyn settings::Store] = &[
 const PAGES: &[&dyn pages::Page] = &[
     #[cfg(feature = "sunrise-extras")]
     &sunrise_reconnect::SECTION,
+    #[cfg(feature = "sunrise-extras")]
+    &mod_audio::SECTION,
     &sunrise_discord::SECTION,
     #[cfg(feature = "sunrise-extras")]
     &sunrise_perf_overlay::SECTION,
@@ -126,7 +133,7 @@ const LAYERS: &[&dyn hud::Layer] = &[
     &sunrise_perf_overlay::LAYER,
 ];
 
-/// The text of Sunrise's own rows, loaded with the game's.
+/// Sunrise's official text (its rows and the launcher page), loaded with the game's.
 static LANG: &lang::Files = &[("en_us", include_str!("../assets/lang/en_us.json"))];
 
 /// Registers Sunrise's in-game parts with the game. The executable calls it before it runs the
@@ -138,6 +145,7 @@ pub fn register() {
     let late = late.chain(std::iter::once(lang::register(LANG)));
     #[cfg(feature = "sunrise-extras")]
     let late = late.chain(std::iter::once(lang::register(sunrise_reconnect::LANG)));
+    let late = late.chain(std::iter::once(lang::register(sunrise_discord::LANG)));
     let late = late.chain(PAGES.iter().copied().map(pages::register));
     for result in late.chain(LAYERS.iter().copied().map(hud::register)) {
         if let Err(e) = result {

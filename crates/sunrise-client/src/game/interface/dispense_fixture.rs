@@ -26,11 +26,12 @@ use sunrise_client::{
 };
 use sunrise_core::{position::BlockPos, random::RandomSource};
 use sunrise_world::{level::Ticks, registry::BlockStateId};
-use winit::keyboard::KeyCode;
 
 thread_local! {
     /// Level and game events recorded while a fixture case runs.
     static LOG: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    /// The running case is exact (`"exact": true`): `num` prints raw bits.
+    static EXACT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Record a line if a fixture case is running.
@@ -75,8 +76,12 @@ fn event_sound(line: &str) -> Option<String> {
 }
 
 /// Java's `String.format("%.6f")`: the exact value rounded half up (away
-/// from zero) where Rust rounds a tie to even.
+/// from zero) where Rust rounds a tie to even. An exact case prints the raw
+/// bits instead, as the oracle's `num` does then.
 fn num(v: f64) -> String {
+    if EXACT.get() {
+        return format!("{:x}", v.to_bits());
+    }
     let exact = format!("{:.40}", v.abs());
     let tie = exact
         .split_once('.')
@@ -185,6 +190,7 @@ impl Game<'_> {
 
     fn dispense_case(&mut self, case: &Value) -> Result<Vec<String>> {
         let seed = case["seed"].as_i64().unwrap_or(0);
+        EXACT.set(case["exact"].as_bool().unwrap_or(false));
         self.fixture_reset(seed);
         if let Some(op) = case.get("blocking_wear") {
             return self.fixture_blocking_wear(op);
@@ -488,10 +494,12 @@ impl Game<'_> {
             out.push(self.fixture_describe(i, t));
             self.fixture_vehicle_items(i, t, &mut out);
         }
-        let log = LOG.with(|log| log.borrow_mut().take()).unwrap_or_default();
-        let event_sounds: Vec<String> = log.iter().filter_map(|l| event_sound(l)).collect();
-        out.extend(log);
-        out.extend(event_sounds);
+        // Each level event's sound right after the event, as the oracle frames its log.
+        for line in LOG.with(|log| log.borrow_mut().take()).unwrap_or_default() {
+            let sound = event_sound(&line);
+            out.push(line);
+            out.extend(sound);
+        }
         for sound in self.audio.capture.take().unwrap_or_default() {
             out.push(format!("S {} {}", floor_pos(sound.position), sound.event));
         }
@@ -515,10 +523,14 @@ impl Game<'_> {
         } else {
             GameMode::Survival
         };
-        self.player = Some(PlayerMotion::new(
+        let mut player = PlayerMotion::new(
             self.motion,
             sunrise_core::geometry::Vec3::new(0.0, 0.0, 0.0),
-        )?);
+        )?;
+        // A creative player is invulnerable (`GameType.updatePlayerAbilities`): the
+        // arrow's hurt is refused before the shield is reached.
+        player.invulnerable = self.creative;
+        self.player = Some(player);
         self.yaw = 0.0;
         self.armor = Default::default();
         self.offhand = Some(stack);
@@ -661,10 +673,9 @@ impl Game<'_> {
         self.player = Some(player);
         self.yaw = op["yaw"].as_f64().unwrap_or(0.0) as f32;
         self.pitch = 90.0;
-        self.keys.clear();
-        if op["sneaking"].as_bool().unwrap_or(false) {
-            self.keys.insert(KeyCode::ShiftLeft);
-        }
+        self.clear_device_keys();
+        // The oracle supplies the acting player's logical sneak state for each click.
+        self.set_mapping_held("key.sneak", op["sneaking"].as_bool().unwrap_or(false));
         self.using = None;
         // The oracle's player wears nothing: no armor left on from an earlier case.
         self.armor = Default::default();
@@ -818,7 +829,10 @@ impl Game<'_> {
         player.fall_distance = op["fall"].as_f64().unwrap_or(0.0);
         player.fall_flying = op["fall_flying"].as_bool().unwrap_or(false);
         player.flying = op["flying"].as_bool().unwrap_or(false);
+        // A creative player's abilities: it may fly and is invulnerable, as
+        // `GameType.updatePlayerAbilities` sets them (a victim's Thorns hurts no one then).
         player.may_fly = self.creative;
+        player.invulnerable = self.creative;
         if !op["impact"].is_null() {
             player.impulse.impact_position = Some(v3(&op["impact"]));
         }
@@ -839,17 +853,22 @@ impl Game<'_> {
                     .position(|m| m.id == id)
                     .ok_or("the target is gone")?;
                 let kind = self.mobs[index].kind.id.clone();
-                let bonus = self.smash_damage_bonus(&kind);
-                let hurt = self.hurt_by_player(index, base + bonus, source);
+                let bonus = self.smash_damage_bonus(&kind, Some(id));
+                let join = self.mobs[index].join;
+                let (hurt, _) = self.hurt_by_player(index, base + bonus, source);
+                let index = self
+                    .mob_index
+                    .find(&self.mobs, id)
+                    .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+                    .ok_or("the target is gone")?;
                 // The hurt sound the mob raised, where it stands.
                 for event in std::mem::take(&mut self.mobs[index].outbox) {
                     if let sunrise_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
-                        self.audio
-                            .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+                        self.play_audio(&format!("minecraft:{s}"), Some(at), volume, pitch);
                     }
                 }
                 if hurt {
-                    self.weapon_hit(index);
+                    self.weapon_hit(index, sunrise_client::mobs::Damage::player([0.0; 3]));
                 }
                 (bonus, hurt)
             }
@@ -859,7 +878,7 @@ impl Game<'_> {
                     .iter()
                     .position(|s| s.id == id)
                     .ok_or("the target is gone")?;
-                let bonus = self.smash_damage_bonus("minecraft:armor_stand");
+                let bonus = self.smash_damage_bonus("minecraft:armor_stand", Some(id));
                 (bonus, self.hit_armor_stand(index, |_, _, _| {}))
             }
             _ => return Err("an attack case has a living target or armor stand".into()),
@@ -1118,7 +1137,7 @@ impl Game<'_> {
         )?);
         self.yaw = 0.0;
         self.pitch = 90.0;
-        self.keys.clear();
+        self.clear_device_keys();
         self.inventory[self.selected] = stack.clone();
         self.offhand = None;
         let state = self.world.block(pos.x, pos.y, pos.z);
@@ -1210,7 +1229,7 @@ impl Game<'_> {
         if kind == "minecraft:armor_stand" {
             let mut stand = sunrise_client::entities::ArmorStand::new(id, at, yaw);
             stand.marker = e["marker"].as_bool().unwrap_or(false);
-            stand.on_ground = e["ground"].as_bool().unwrap_or(false);
+            stand.ground.on_ground = e["ground"].as_bool().unwrap_or(false);
             stand.show_arms = e["arms"].as_bool().unwrap_or(false);
             stand.disabled_slots = e["disabled"].as_i64().unwrap_or(0) as i32;
             if let Some(last_hit) = e["last_hit"].as_i64() {
@@ -1259,7 +1278,7 @@ impl Game<'_> {
         if flag("loot") {
             mob.extra.pick_up_loot = true;
         }
-        mob.on_ground = flag("ground");
+        mob.ground.on_ground = flag("ground");
         if let Some(health) = e["health"].as_f64() {
             mob.attrs.max_health = health as f32;
             mob.health = health as f32;
@@ -1270,7 +1289,8 @@ impl Game<'_> {
         if flag("brown") && s == Species::Mooshroom {
             mob.extra.variant = 1;
         }
-        for (name, snbt) in e["equip"].as_object().into_iter().flatten() {
+        let equip = e["equip"].as_object();
+        for (name, snbt) in equip.into_iter().flatten() {
             if let (Some(slot), Some(stack)) = (
                 Slot::from_name(name),
                 parse_stack(snbt.as_str().unwrap_or("-"))?,
@@ -1285,6 +1305,16 @@ impl Game<'_> {
                     None => mob_set_slot(&mut mob, slot, stack),
                 }
             }
+        }
+        // VanillaDispenserOracle's target has ticked since it was equipped: its
+        // collectEquipmentChanges put the worn pieces' armor and other modifiers
+        // on its attributes, which the hit's absorption reads.
+        if equip.is_some_and(|equip| !equip.is_empty()) {
+            crate::game::living_attributes::collect_equipment(
+                &self.motion.attributes,
+                world_items!(self),
+                &mut mob,
+            );
         }
         self.mobs.push(mob);
         Ok(Target::Mob(id))

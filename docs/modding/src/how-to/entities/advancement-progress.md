@@ -9,7 +9,7 @@ snapshots the acting player's live progress, including during a nested turn.
 
 Keep `event.progress.clone()` if it is needed later: the owned `AdvancementProgress` snapshot
 cannot change the player's progress and is not updated by subsequent events. No-op grants and
-revokes do not fire. The snapshot uses the same plain-data bindings in native and wasm mods.
+revokes do not fire.
 
 ## Display icons
 
@@ -58,3 +58,27 @@ two permission-failure cases in isolated child processes. The resource-free
 `lan::advancements::tests::advancement_icons_roundtrip_count_damage_and_opposite_glint_overrides`
 checks the LAN packet, remote stack conversion and byte differences when only
 the same icon's glint override changes.
+
+## Advancement triggers
+
+Name the custom trigger in an advancement criterion's `trigger` field. The engine binds the
+criterion's `conditions` when loading the advancement. The engine decodes `player` using vanilla's
+loot condition codec (use `"type"` for an inline condition). A malformed `player` field rejects the
+advancement. On the server, call `player.trigger_criterion(host, &trigger, &mut predicate)`.
+Implement `CriterionTest::test(&mut self, criterion: &dyn CriterionContext)` on the predicate.
+It can borrow the triggering event's data and is not retained by the game.
+
+Read mod-specific fields through `criterion.conditions()`, a borrowed `mod_api::serde_json::Value`.
+Use `criterion.item("pipe", &stack)?` to test an item field using the target player's level and tags.
+A missing `conditions` value is null. The engine tests `player` after the mod predicate passes and
+awards matches through the normal advancement path.
+
+Use methods such as `trigger_consume_item`, `trigger_block_use` and `trigger_item_used_on_block`
+for those built-in triggers. Only exact built-in keys are reserved; the namespace alone does not
+reserve a key. Block-use triggers read the event block in the target player's level, loading its
+chunk if needed. A location predicate checks the position it actually tests; a tool predicate does
+not require any additional chunks. If the player's level cannot be entered, the call returns
+`PlayerUnavailable`; if the event block cannot be read, the block-use call returns `BlockUnavailable`.
+Return `CriterionTestError::Refused(message)` when a custom predicate cannot answer. A refusal or
+panic stops the current matcher invocation only. A panic logs and shows an error toast naming the
+mod and returns `TestPanicked`; a later call can lend another matcher for the same trigger.

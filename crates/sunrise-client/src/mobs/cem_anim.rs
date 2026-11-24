@@ -674,12 +674,12 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
             // weather and the sky above it, which the draw doesn't have.
             Wet => flag(m.fluids.in_water),
             Invisible => flag(m.invisible),
-            OnGround => flag(m.on_ground),
+            OnGround => flag(m.ground.on_ground),
             Riding => flag(m.extra.passenger),
             // `Entity.isVehicle`: SetPassengers names its first rider.
             Ridden => flag(m.extra.rider.is_some() || m.rider.is_some()),
             Climbing => flag(m.climbing),
-            Jumping => flag(!m.on_ground && m.velocity.y > 0.0),
+            Jumping => flag(!m.ground.on_ground && m.velocity.y > 0.0),
             Paused => flag(frame.paused),
             InGui => flag(IN_GUI.get()),
             FirstPerson => flag(frame.first_person),
@@ -726,6 +726,7 @@ mod tests {
             pose: [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
             polygons: Vec::new(),
             children,
+            layer: None,
         }
     }
     fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -932,7 +933,7 @@ mod tests {
         );
         m.hurt_time = 5;
         m.fire_ticks = 3;
-        m.on_ground = false;
+        m.ground.on_ground = false;
         m.velocity = sunrise_core::geometry::Vec3::new(0.0, 0.1, 0.0);
         let s = State {
             pos: 1.5,
@@ -1073,6 +1074,7 @@ mod tests {
     fn a_fox_sits_by_its_own_flags() {
         let mut m = mob();
         m.kind = std::sync::Arc::new(crate::mobs::MobType {
+            type_key: Default::default(),
             species: crate::mobs::Species::Fox,
             ..(*m.kind).clone()
         });

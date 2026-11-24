@@ -15,7 +15,6 @@ use sunrise_client::{
     hud::{HudAtlas, HudBatch, rgba},
     items::ItemStack,
     menu::Input,
-    stations::hover_name,
 };
 use sunrise_hooks::{
     containers::{self as api, Button, Click, Container, Panel, Role, Slot, SlotId, Stack},
@@ -97,10 +96,11 @@ fn kind_of(stack: &ItemStack) -> u64 {
     hasher.finish()
 }
 
-/// The role of game slot `slot` in mod menu `menu`, whose slots are game slots 300 and up however
-/// many it has: `None` outside them.
+/// The role of game slot `slot` in mod menu `menu`, whose slots use the disjoint mod-menu
+/// range (`MOD_MENU_SLOT_BASE..`): `None` outside them.
 fn mod_menu_role(menu: &ModMenuType, slot: usize) -> Option<Role> {
-    let index = slot.checked_sub(300).filter(|&i| i < menu.slots)?;
+    let index =
+        crate::game::inventory_slots::container_slot_index(slot).filter(|&i| i < menu.slots)?;
     Some(match menu.crafting {
         Some(c) if c.result == index => Role::Result,
         Some(c) if c.grid_slots().contains(&index) => Role::Input,
@@ -180,7 +180,7 @@ impl Container for Open<'_, '_> {
     fn name(&self, slot: SlotId) -> Option<String> {
         let game = self.game();
         let stack = game.slot_view(self.slot(slot)?)?;
-        Some(hover_name(&game.pack.names, &stack))
+        Some(game.stack_hover_name(&stack))
     }
     fn takes_one(&mut self, slot: SlotId, of: &Stack) -> bool {
         let Some(slot) = self.slot(slot) else {
@@ -314,15 +314,17 @@ impl<'g> Game<'g> {
             200 | stations::RESULT => Role::Result,
             500..=504 | mount_menu::SADDLE | mount_menu::ARMOR => Role::Equipment,
             s if (stations::INPUT..stations::RESULT).contains(&s) => Role::Input,
-            s if (mount_menu::CHEST..mount_menu::CHEST + 15).contains(&s) => Role::Storage,
-            300..500 => match self.container_kind() {
-                Some(BlockEntity::Furnace(_)) if slot == 302 => Role::Result,
-                Some(BlockEntity::Crafter(_)) if slot == 309 => Role::Result,
-                Some(
-                    BlockEntity::Furnace(_) | BlockEntity::Brewing(_) | BlockEntity::Crafter(_),
-                ) => Role::Input,
-                _ => Role::Storage,
-            },
+            s if self.is_mount_chest_slot(s) => Role::Storage,
+            s if crate::game::inventory_slots::container_slot_index(s).is_some() => {
+                match self.container_kind() {
+                    Some(BlockEntity::Furnace(_)) if slot == 302 => Role::Result,
+                    Some(BlockEntity::Crafter(_)) if slot == 309 => Role::Result,
+                    Some(
+                        BlockEntity::Furnace(_) | BlockEntity::Brewing(_) | BlockEntity::Crafter(_),
+                    ) => Role::Input,
+                    _ => Role::Storage,
+                }
+            }
             _ => Role::Other,
         }
     }
@@ -677,16 +679,27 @@ mod tests {
     fn a_mod_menus_result_past_slot_199_is_a_result() {
         let menu = ModMenuType {
             id: "test:big",
+            owner: "test",
             slots: 201,
+            player_inventory: true,
             data_slots: 0,
+            owned_slots: None,
             results: vec![200],
+            inputs: Vec::new(),
             links: None,
             crafting: None,
         };
-        // Game slot 500 is past the vanilla container range: the mod's own slot 200.
-        assert_eq!(mod_menu_role(&menu, 500), Some(Role::Result));
-        assert_eq!(mod_menu_role(&menu, 300), Some(Role::Storage));
-        assert_eq!(mod_menu_role(&menu, 501), None);
+        use crate::game::inventory_slots::MOD_MENU_SLOT_BASE;
+        assert_eq!(
+            mod_menu_role(&menu, MOD_MENU_SLOT_BASE + 200),
+            Some(Role::Result)
+        );
+        assert_eq!(
+            mod_menu_role(&menu, MOD_MENU_SLOT_BASE),
+            Some(Role::Storage)
+        );
+        assert_eq!(mod_menu_role(&menu, MOD_MENU_SLOT_BASE + 201), None);
+        assert_eq!(mod_menu_role(&menu, 500), None);
         assert_eq!(mod_menu_role(&menu, 9), None);
     }
 

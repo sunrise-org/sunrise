@@ -1,5 +1,26 @@
 use super::*;
 
+/// Vanilla `ServerGamePacketListenerImpl.handleUseItem` + `Entity.absSnapRotationTo`:
+/// wrap both incoming packet angles via `Mth.wrapDegrees`, then snap each axis whose
+/// wrapped value is finite (`Entity.setYRot` / `Entity.setXRot` ignore non-finite values,
+/// keeping the previous axis unchanged).
+fn snap_use_item_rotation(yaw: &mut f32, pitch: &mut f32, target_yaw: f32, target_pitch: f32) {
+    let target_yaw = crate::game::remote::wrap_degrees(target_yaw);
+    let target_pitch = crate::game::remote::wrap_degrees(target_pitch);
+    if target_pitch != *pitch || target_yaw != *yaw {
+        let next_yaw = target_yaw % 360.0;
+        if next_yaw.is_finite() {
+            *yaw = next_yaw;
+        }
+        if target_pitch.is_finite() {
+            let next_pitch = target_pitch.clamp(-90.0, 90.0) % 360.0;
+            if next_pitch.is_finite() {
+                *pitch = (next_pitch % 360.0).clamp(-90.0, 90.0);
+            }
+        }
+    }
+}
+
 impl Game<'_> {
     pub(super) fn guest_tick_death(&mut self, gi: usize) {
         let removed = self.lan.as_mut().and_then(|host| {
@@ -30,12 +51,19 @@ impl Game<'_> {
     }
 
     pub(super) fn guest_drop_carried(&mut self, gi: usize) {
-        let carried = self
-            .lan
-            .as_mut()
-            .and_then(|host| host.hub.guests.update(gi, |g| g.carried.take()));
-        if let Some(c) = carried {
-            self.drop_guest_items(gi, vec![c]);
+        let carried = self.with_own_record(gi, |host, _, _| {
+            let conn = host.hub.guests[gi].conn;
+            let mut stacks = host.hub.take_closed_menu_cursors(conn).collect::<Vec<_>>();
+            let (to_return, to_drop) = host.hub.take_closed_processing_inputs(conn);
+            stacks.extend(to_return);
+            stacks.extend(to_drop);
+            host.hub
+                .guests
+                .update(gi, |g| stacks.extend(g.take_menu_cursors()));
+            Some(stacks)
+        });
+        if let Some(carried) = carried.filter(|stacks| !stacks.is_empty()) {
+            self.drop_guest_items(gi, carried);
         }
     }
 
@@ -267,7 +295,8 @@ impl Game<'_> {
     /// `hit` with `hand`, after the packet's sequence is acknowledged: reach, the hit's place in
     /// its block, the build height, spawn protection and the border, then
     /// `ServerPlayerGameMode.useItemOn`, and the blocks the client predicted sent back. True
-    /// when the use consumed (`InteractionResult` a success or a consume). A fake player's
+    /// when the use ends the click. An optional receipt reports block and item phases before
+    /// their block updates. The packet handler answers refusals. A fake player's
     /// `PlayerRef::perform_action` runs it as the packet does.
     pub(in crate::game) fn guest_use_item_on(
         &mut self,
@@ -275,8 +304,16 @@ impl Game<'_> {
         gi: usize,
         hit: Hit,
         hand: Hand,
+        receipt: Option<i64>,
     ) -> Result<bool, ActionRefused> {
-        let mut consumed = false;
+        use super::super::cauldron_prediction::{UseOnOutcome, use_result};
+
+        let reply = |game: &Self, outcome| {
+            if let (Some(receipt), Some(host)) = (receipt, &game.lan) {
+                host.hub.send_to(conn, &use_result(receipt, outcome));
+            }
+        };
+        let (mut consumed, mut block_fell_through) = (false, false);
         let Some(host) = self.lan.as_mut() else {
             return Err(ActionRefused::Stale);
         };
@@ -331,43 +368,58 @@ impl Game<'_> {
             .contains(f64::from(hit.pos[0]), f64::from(hit.pos[2]))
         {
             if spectator && self.spectator_use_portal(conn, gi, hit.pos) {
+                reply(self, UseOnOutcome::default());
                 return Ok(true);
             }
             let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
             let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
-            let used = self
-                .as_guest_at(gi, conn, |g| {
-                    let attempt = g.was_block_placement_attempt(hand);
-                    let saved = (g.forced_hit, g.guest_use);
-                    g.forced_hit = Some(hit);
-                    g.guest_use = Some(GuestUse::OnBlock(hand));
-                    let swings = g.swings_started;
-                    let predicted = g.predicted_swings;
-                    let consumed = g.with_block_use_original(hand, |g| {
-                        let consumed = matches!(g.use_item(), Ok(Some(_)));
-                        if consumed && !g.use_failed {
-                            g.finish_block_use(hit.pos, hand);
-                        }
-                        consumed
-                    });
-                    (g.forced_hit, g.guest_use) = saved;
-                    reset_use_attack_strength(&mut g.attack_ticks, swings, g.swings_started);
-                    (
-                        g.swings_started != swings && g.predicted_swings == predicted,
-                        consumed,
-                        attempt,
-                    )
-                })
-                .ok();
-            consumed = used.is_some_and(|u| u.1);
-            let swung = used.map(|u| u.0);
-            self.lan_swing_back(conn, swung);
+            let used = self.as_guest_at(gi, conn, |g| {
+                let attempt = g.was_block_placement_attempt(hand);
+                let saved = (g.forced_hit, g.guest_use);
+                g.forced_hit = Some(hit);
+                g.guest_use = Some(GuestUse::on_block(hand));
+                let swings = g.swings_started;
+                let predicted = g.predicted_swings;
+                let result = g.with_block_use_original(hand, |g| {
+                    let result = g.use_item();
+                    if matches!(result, Ok(Some(_))) && !g.use_failed {
+                        g.finish_block_use(hit.pos, hand);
+                    }
+                    result
+                });
+                let fell_through = matches!(
+                    g.guest_use,
+                    Some(GuestUse::OnBlock {
+                        block_fell_through: true,
+                        ..
+                    })
+                );
+                (g.forced_hit, g.guest_use) = saved;
+                reset_use_attack_strength(&mut g.attack_ticks, swings, g.swings_started);
+                (
+                    g.swings_started != swings && g.predicted_swings == predicted,
+                    result.map(|used| used.is_some()),
+                    attempt,
+                    fell_through,
+                )
+            });
+            let (swung, result, attempt, fell_through) = used.map_err(|_| ActionRefused::Stale)?;
+            block_fell_through = fell_through;
+            self.lan_swing_back(conn, Some(swung));
             self.guest_use_sounds(conn, logged, heard);
             // A placement that did nothing at the top or bottom of the
             // world says why. Vanilla asks twice for the top (once
             // before the swing, once in the check that also has the
             // bottom), so a player there is told twice.
-            if let Some((_, false, true)) = used {
+            consumed = match result {
+                Ok(consumed) => consumed,
+                Err(error) => {
+                    log::warn!("block interaction for guest {conn} refused: {error:#}");
+                    refused = Some(ActionRefused::InvalidTarget);
+                    false
+                }
+            };
+            if !consumed && attempt && refused.is_none() {
                 if face == [0, 1, 0] && hit.pos[1] >= max_y {
                     self.build_limit_message(conn, true, max_y);
                     self.build_limit_message(conn, true, max_y);
@@ -379,21 +431,30 @@ impl Game<'_> {
             self.build_limit_message(conn, true, max_y);
             refused = Some(ActionRefused::Protected);
         }
+        // Let a waiting client run the item prediction while it still sees the
+        // pre-use blocks, under the same sequence that will settle the changes.
+        if refused.is_none() {
+            reply(
+                self,
+                UseOnOutcome {
+                    block_fell_through,
+                    passed: !spectator && !consumed,
+                },
+            );
+        }
         // The client predicted a result: correct it with what really is.
         let Some(host) = self.lan.as_mut() else {
             return refused.map_or(Ok(consumed), Err);
         };
         for pos in [hit.pos, hit.beside()] {
-            let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
-            host.hub
-                .send_to(conn, &C::BlockUpdate(play::BlockUpdate { pos, state }));
+            host.hub.send_authoritative_block(conn, &self.world, pos);
         }
         refused.map_or(Ok(consumed), Err)
     }
 
     /// `ServerGamePacketListenerImpl.handleUseItem` for guest `conn` (at `gi`) using the item in
-    /// `hand`, after the packet's sequence is acknowledged: the rotation the client sent, if any
-    /// (`absSnapRotationTo`), a spawn egg's own `mayInteract`, then `ServerPlayerGameMode.useItem`.
+    /// `hand`, after the packet's sequence is acknowledged: a non-empty, enabled stack permits
+    /// the packet rotation (`absSnapRotationTo`), then `ServerPlayerGameMode.useItem`.
     /// True when the use consumed (`InteractionResult` a success or a consume). A fake player's
     /// `PlayerRef::perform_action` runs it as the packet does, with no rotation.
     pub(in crate::game) fn guest_use_item(
@@ -406,30 +467,34 @@ impl Game<'_> {
         let Some(host) = self.lan.as_ref() else {
             return Err(ActionRefused::Stale);
         };
-        // ServerPlayerGameMode.useItem: a spectator's use passes.
-        if host.hub.guests[gi].spectator() {
-            return Ok(false);
-        }
-        // handleUseItem: the client's rotation (absSnapRotationTo, which
-        // sends nothing back), then the item alone. What it looked at a
-        // moment ago (a block, a mob) is UseItemOn's or Interact's.
-        let Some(host) = self.lan.as_mut() else {
-            return Err(ActionRefused::Stale);
-        };
-        if let Some((yaw, pitch)) = rotation {
-            host.hub
-                .guests
-                .update(gi, |g| (g.yaw, g.pitch) = (yaw, pitch));
-        }
         let g = &host.hub.guests[gi];
-        // SpawnEggItem.use calls ServerLevel.mayInteract at its own
-        // fluid ray's position, unlike useOn's packet-supplied block.
         let held = if hand == Hand::Off {
             g.offhand.as_ref()
         } else {
             g.inventory.get(g.selected).and_then(Option::as_ref)
         };
-        if held.is_some_and(|s| s.item.ends_with("_spawn_egg")) {
+        let Some(held) = held.filter(|s| s.count != 0 && s.item.as_ref() != "minecraft:air") else {
+            return Ok(false);
+        };
+        if !self
+            .creative_screen
+            .catalog()
+            .item_enabled(held, self.enabled_feature_ids())
+        {
+            return Ok(false);
+        }
+        let (spectator, spawn_egg) = (g.spectator(), held.item.ends_with("_spawn_egg"));
+        if let Some((yaw, pitch)) = rotation {
+            self.lan.as_mut().unwrap().hub.guests.update(gi, |g| {
+                snap_use_item_rotation(&mut g.yaw, &mut g.pitch, yaw, pitch)
+            });
+        }
+        // ServerPlayerGameMode.useItem returns PASS for spectators, after the turn.
+        if spectator {
+            return Ok(false);
+        }
+        // SpawnEggItem.use calls ServerLevel.mayInteract at its own fluid ray's position.
+        if spawn_egg {
             let hit = self
                 .as_guest_at(gi, conn, |g| g.with_hand(hand, |g| g.spawn_egg_fluid_hit()))
                 .ok()
@@ -464,7 +529,7 @@ impl Game<'_> {
         Ok(consumed)
     }
 
-    /// `handleInteract`'s entity use for a guest or the persistent fake: the border and
+    /// `ServerGamePacketListenerImpl.handleInteract`'s entity use for a guest or the persistent fake: the border and
     /// interaction range, then that entity and hand only, never an air-use fallback.
     pub(in crate::game) fn guest_interact(
         &mut self,
@@ -526,7 +591,7 @@ impl Game<'_> {
         Ok(used.is_some_and(|u| u.1))
     }
 
-    /// `ServerGamePacketListenerImpl.handleInteract`'s ATTACK for guest `conn` (at `gi`) hitting
+    /// `ServerGamePacketListenerImpl.handleAttack` for guest `conn` (at `gi`) hitting
     /// entity `id`: the border and the attack range, the native mods' `attack_entity`, then
     /// `Player.attack` for a player, a mob or another entity, and the deflection of a fireball,
     /// a wind charge or a shulker bullet. True when the blow landed. A fake player's
@@ -592,12 +657,14 @@ impl Game<'_> {
         }
         if let Some(victim) = self.pvp_victim(conn, id) {
             if let Ok(Some(strike)) = self.as_guest_at(gi, conn, |g| g.pvp_strike(id as u32))
-                && self.pvp_land(victim, &strike)
+                && let Some(stops_sprint) = self.pvp_land(victim, &strike)
             {
                 let on_ground = self.pvp_victim_on_ground(victim);
-                let stops_sprint = strike.stops_sprint();
                 let sent = self
-                    .as_guest_at(gi, conn, |g| g.pvp_hit_after(on_ground, stops_sprint))
+                    .as_guest_at(gi, conn, |g| {
+                        g.remember_player_target(Some(id as u32));
+                        g.pvp_hit_after(id as u32, on_ground, stops_sprint, &strike)
+                    })
                     .ok()
                     .flatten();
                 self.send_guest_motion(conn, sent);
@@ -672,9 +739,33 @@ impl Game<'_> {
         };
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         let boat = self.boats.iter().position(|boat| boat.id as i32 == id);
-        // A packet names its target already. Keep the attacker's actual yaw
-        // for the boat's knockback instead of aiming a ray at its center.
-        if boat.is_none() && self.look_at_entity(gi, id, None).is_none() {
+        let tnt = self
+            .tnts
+            .iter()
+            .find(|tnt| tnt.id as i32 == id)
+            .map(|tnt| tnt.id);
+        let falling = self.falling.iter().any(|block| block.id as i32 == id);
+        if falling {
+            // FallingBlockEntity.isAttackable is false: Player.attack exits at cannotAttack.
+            return Ok(false);
+        }
+        let general = match u32::try_from(id).ok().and_then(|id| self.general_row(id)) {
+            Some(row) => {
+                let catalog = crate::game::general::general_type_catalog();
+                if !catalog.pickable(row.type_slot) {
+                    return Ok(false);
+                }
+                Some((row.id, catalog.key(row.type_slot)))
+            }
+            None => None,
+        };
+        // A packet names its target already. Boats, primed TNT and general rows use that target
+        // with the attacker's actual aim instead of casting a new ray at its center.
+        if boat.is_none()
+            && tnt.is_none()
+            && general.is_none()
+            && self.look_at_entity(gi, id, None).is_none()
+        {
             return Err(ActionRefused::InvalidTarget);
         }
         // A mace's smash sets the attacker's velocity and sends it at once, before the
@@ -688,6 +779,10 @@ impl Game<'_> {
                 if let Some(index) = boat {
                     g.strike_boat(index);
                     g.swing_arm();
+                } else if let Some(tnt_id) = tnt {
+                    g.strike_general_row(tnt_id, "minecraft:tnt");
+                } else if let Some((id, kind)) = general {
+                    g.strike_general_row(id, kind);
                 } else {
                     g.attack();
                 }
@@ -698,6 +793,10 @@ impl Game<'_> {
             .ok()
             .flatten();
         self.send_guest_motion(conn, sent);
+        if tnt.is_some() || general.is_some() {
+            // Primed TNT and plain rows refuse damage, even though the attack spent its charge.
+            return Ok(false);
+        }
         // The mob now answers to this guest (game/network/lan_mobs.rs).
         let Some(host) = self.lan.as_mut() else {
             return Err(ActionRefused::Stale);
@@ -716,5 +815,96 @@ impl Game<'_> {
             host.hub.guests.update(gi, |guest| guest.pitch = value);
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn use_item_rotation_matches_vanilla_wrap_and_abs_snap() {
+        let (mut yaw, mut pitch) = (15.0_f32, 25.0_f32);
+        snap_use_item_rotation(&mut yaw, &mut pitch, 405.0, 120.0);
+        assert_eq!((yaw, pitch), (45.0, 90.0));
+
+        // Non-finite yaw preserves previous yaw while still snapping finite pitch.
+        snap_use_item_rotation(&mut yaw, &mut pitch, f32::NAN, -120.0);
+        assert_eq!((yaw, pitch), (45.0, -90.0));
+
+        // Non-finite pitch preserves previous pitch while still wrapping finite yaw.
+        snap_use_item_rotation(&mut yaw, &mut pitch, -540.0, f32::INFINITY);
+        assert_eq!((yaw, pitch), (-180.0, -90.0));
+
+        // Both non-finite preserve both previous axes.
+        snap_use_item_rotation(&mut yaw, &mut pitch, f32::NEG_INFINITY, f32::NAN);
+        assert_eq!((yaw, pitch), (-180.0, -90.0));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn use_item_non_finite_angles_preserve_previous_axis_and_wrap_finite_ones() {
+        use crate::game::lan::world_spawn_sync_tests::host_for;
+        use crate::game::native_entity_refs::tests::run_fresh_cases;
+        use mod_api::PlayPacketRequest;
+        use sunrise_client::mod_packet_builders::encode_play_packet;
+        use sunrise_protocol::ids::play::serverbound as sb;
+
+        if run_fresh_cases(
+            "game::lan_actions::interaction::tests::use_item_non_finite_angles_preserve_previous_axis_and_wrap_finite_ones",
+            "SUNRISE_USE_ITEM_ROTATION_CHILD",
+            &["rotation"],
+        ) {
+            return;
+        }
+        let mut resources = None;
+        let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+        let _rx = host_for(&mut game);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+            g.dimension = "minecraft:overworld".into();
+            g.yaw = 15.0;
+            g.pitch = 25.0;
+            g.inventory[0] = Some(ItemStack::new("minecraft:snowball", 4));
+        });
+
+        let cases = [
+            (1, f32::NAN, 120.0_f32, 15.0_f32, 90.0_f32, 3_u32),
+            (2, 405.0_f32, f32::INFINITY, 45.0_f32, 90.0_f32, 2_u32),
+            (3, f32::NEG_INFINITY, f32::NAN, 45.0_f32, 90.0_f32, 1_u32),
+        ];
+        for (sequence, yaw, pitch, want_yaw, want_pitch, want_count) in cases {
+            let built = encode_play_packet(&PlayPacketRequest::UseItem {
+                hand: 0,
+                sequence,
+                yaw,
+                pitch,
+            })
+            .expect("UseItem preserves non-finite float bits on the wire");
+            let decoded = S::decode(sb::USE_ITEM, &built.body).unwrap();
+            let before_proj = game.creatures.projectiles.len();
+            game.lan_guest_packet(1, decoded);
+
+            let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+            assert_eq!(guest.yaw, want_yaw, "sequence {sequence}");
+            assert_eq!(guest.pitch, want_pitch, "sequence {sequence}");
+            assert_eq!(
+                guest.inventory[0].as_ref().map(|s| s.count),
+                Some(want_count),
+                "sequence {sequence} still uses the held snowball"
+            );
+            assert_eq!(
+                game.creatures.projectiles.len(),
+                before_proj + 1,
+                "sequence {sequence} spawns a snowball"
+            );
+            let proj = game.creatures.projectiles.last().unwrap();
+            assert!(
+                proj.velocity.x.is_finite()
+                    && proj.velocity.y.is_finite()
+                    && proj.velocity.z.is_finite(),
+                "sequence {sequence} projectile velocity stays finite: {:?}",
+                proj.velocity
+            );
+        }
     }
 }

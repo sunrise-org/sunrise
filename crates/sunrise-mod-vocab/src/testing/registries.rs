@@ -12,6 +12,7 @@ pub struct FakeRegistries {
     containers: HashMap<String, usize>,
     loaded: HashSet<String>,
     fluid_sounds: HashMap<String, (&'static str, &'static str)>,
+    fluid_buckets: HashMap<String, String>,
 }
 
 impl FakeRegistries {
@@ -60,8 +61,9 @@ impl FakeRegistries {
         self
     }
     /// Gives fluid `fluid` the sounds a bucket plays as it fills with it (`pickup`) and empties
-    /// it (`empty`), as `fluid_pickup_sound` and `fluid_empty_sound` answer; a fluid not given
-    /// any has none, as a tank-only fluid has none in the game.
+    /// it (`empty`), as [`FluidKey::pickup_sound`](crate::FluidKey::pickup_sound) and
+    /// [`FluidKey::empty_sound`](crate::FluidKey::empty_sound) answer; a fluid not given any has
+    /// none, as a tank-only fluid has none in the game.
     pub fn fluid_sounds(
         &mut self,
         fluid: &str,
@@ -69,6 +71,12 @@ impl FakeRegistries {
         empty: &'static str,
     ) -> &mut Self {
         self.fluid_sounds.insert(fluid.to_owned(), (pickup, empty));
+        self
+    }
+    /// Gives fluid `fluid` the bucket `item` the game registers for it, as `fluid_bucket`
+    /// answers and `bucket_fluid` answers back; a fluid not given one has none.
+    pub fn fluid_bucket(&mut self, fluid: &str, item: &str) -> &mut Self {
+        self.fluid_buckets.insert(fluid.to_owned(), item.to_owned());
         self
     }
     /// Marks mod `id` as loaded.
@@ -100,9 +108,27 @@ impl FakeRegistries {
             .map(|&slots| vec![None; slots])
     }
     /// The sound a bucket plays filling with `fluid` (`pickup`) or emptying it, if given.
-    pub(super) fn fluid_sound(&self, fluid: &str, pickup: bool) -> Option<&'static str> {
+    pub(super) fn fluid_sound(&self, fluid: crate::FluidKey, pickup: bool) -> Option<&'static str> {
+        self.fluid_sound_named(crate::content::registry_keys::fluid_id(fluid)?, pickup)
+    }
+    /// [`Self::fluid_sound`] for the fluid's registered name, as a queued effect keeps it.
+    pub(super) fn fluid_sound_named(&self, fluid: &str, pickup: bool) -> Option<&'static str> {
         let (fill, empty) = self.fluid_sounds.get(fluid)?;
         Some(if pickup { fill } else { empty })
+    }
+    /// The bucket `fluid` was given, resolved.
+    pub(super) fn bucket_of(&self, fluid: crate::FluidKey) -> Option<crate::ItemKey> {
+        let id = crate::content::registry_keys::fluid_id(fluid)?;
+        crate::content::registry_keys::item_key(self.fluid_buckets.get(id)?)
+    }
+    /// The fluid whose bucket `bucket` was given as, resolved.
+    pub(super) fn fluid_of(&self, bucket: crate::ItemKey) -> Option<crate::FluidKey> {
+        let item = crate::content::registry_keys::item_id(bucket)?;
+        let (fluid, _) = self
+            .fluid_buckets
+            .iter()
+            .find(|(_, known)| *known == item)?;
+        crate::content::registry_keys::fluid_key(fluid)
     }
     pub(super) fn is_loaded(&self, id: &str) -> bool {
         self.loaded.contains(id)
@@ -118,16 +144,51 @@ impl crate::Tags for FakeRegistries {
         Self::resolved_item_id(item)?;
         Some(false)
     }
-    fn items(&self, _: crate::TagKey) -> Option<Vec<crate::ItemKey>> {
+    fn item_tags(&self, item: crate::ItemKey) -> Option<Vec<crate::Identifier>> {
+        Self::resolved_item_id(item)?;
+        Some(Vec::new())
+    }
+    fn item_tag_names(&self) -> Option<Vec<crate::Identifier>> {
         crate::parts::installed()?.resolved_items.get()?;
         Some(Vec::new())
     }
-    fn fluids(&self, _: crate::TagKey) -> Option<Vec<crate::FluidKey>> {
-        crate::parts::resolved_fluids().get()?;
-        Some(Vec::new())
+    fn block_in_tag(&self, block: crate::BlockKey, _: crate::TagKey) -> Option<bool> {
+        crate::parts::installed()?
+            .resolved_blocks
+            .get()?
+            .names
+            .id(block.0)?;
+        Some(false)
     }
-    fn blocks(&self, _: crate::TagKey) -> Option<Vec<crate::BlockKey>> {
-        crate::parts::installed()?.resolved_blocks.get()?;
-        Some(Vec::new())
+    fn fluid_in_tag(&self, fluid: crate::FluidKey, _: crate::TagKey) -> Option<bool> {
+        crate::parts::resolved_fluids().get()?.id(fluid.0)?;
+        Some(false)
+    }
+    fn items(&self, _: crate::TagKey) -> crate::TagMembers<crate::ItemKey> {
+        if crate::parts::installed()
+            .and_then(|parts| parts.resolved_items.get())
+            .is_some()
+        {
+            crate::TagMembers::Missing
+        } else {
+            crate::TagMembers::Unavailable
+        }
+    }
+    fn fluids(&self, _: crate::TagKey) -> crate::TagMembers<crate::FluidKey> {
+        if crate::parts::resolved_fluids().get().is_some() {
+            crate::TagMembers::Missing
+        } else {
+            crate::TagMembers::Unavailable
+        }
+    }
+    fn blocks(&self, _: crate::TagKey) -> crate::TagMembers<crate::BlockKey> {
+        if crate::parts::installed()
+            .and_then(|parts| parts.resolved_blocks.get())
+            .is_some()
+        {
+            crate::TagMembers::Missing
+        } else {
+            crate::TagMembers::Unavailable
+        }
     }
 }

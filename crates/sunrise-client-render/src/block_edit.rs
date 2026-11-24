@@ -7,9 +7,10 @@
 use crate::chunk::index;
 use crate::fast_hash::FxHashMap;
 use crate::world::World;
+use sunrise_world::registry::BlockStateId;
 
 /// A run of one column, resolved: blocks `y0..=y1` of column (x, z) set to
-/// `state` where filter `only` (if any) passes the block there.
+/// `state` where filter `only` (if any) passes the block there. Filter IDs may be sparse.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Run {
     pub x: i32,
@@ -17,7 +18,7 @@ pub struct Run {
     pub y0: i32,
     pub y1: i32,
     pub state: u32,
-    pub only: Option<u16>,
+    pub only: Option<usize>,
 }
 
 /// What an edit changed.
@@ -32,7 +33,14 @@ pub struct Outcome {
     pub tracked: Vec<((i32, i32, i32), u32, u32)>,
 }
 
+/// Changed sections waiting for one whole-chunk publication, after transaction commit.
+#[derive(Default)]
+pub struct BulkPublication {
+    chunks: Vec<((i32, i32), Vec<bool>)>,
+}
+
 /// Per state answers, worked out once each.
+#[derive(Default)]
 struct Memo(Vec<u8>);
 impl Memo {
     #[inline]
@@ -50,10 +58,10 @@ impl Memo {
 
 impl World {
     /// Make `runs` in order, each seeing the changes of those before it.
-    /// `matches(filter, state)` says whether a filter passes a state, and
-    /// `tracked(state)` whether its changes are reported; each is asked once
-    /// per state. Runs in unloaded chunks and the parts of runs outside each
-    /// chunk's own column (`Chunk::layout`) are left out.
+    /// `matches(filter, state)` is asked once per filter and state, and
+    /// `tracked(state)` once per state to decide whether its changes are reported.
+    /// Runs in unloaded chunks and the parts of runs outside each chunk's own column
+    /// (`Chunk::layout`) are left out.
     ///
     /// Unlike `World::set`, this records nothing per block: no
     /// `block_entities.state_changed` (a caller adds or removes block
@@ -65,10 +73,35 @@ impl World {
     pub fn edit_runs(
         &mut self,
         runs: &[Run],
-        mut matches: impl FnMut(u16, u32) -> bool,
-        mut tracked: impl FnMut(u32) -> bool,
+        matches: impl FnMut(usize, u32) -> bool,
+        tracked: impl FnMut(u32) -> bool,
     ) -> Outcome {
+        self.write_runs::<false>(runs, matches, tracked, |_, _, _, _, _| {})
+            .0
+    }
+
+    /// The same bulk storage write without publishing; `keep` records each transition
+    /// (including whether it replaces the group and what group it replaces) in the
+    /// caller's transaction.
+    pub fn stage_edit_runs(
+        &mut self,
+        runs: &[Run],
+        matches: impl FnMut(usize, u32) -> bool,
+        tracked: impl FnMut(u32) -> bool,
+        keep: impl FnMut((i32, i32, i32), u32, u32, bool, Option<u64>),
+    ) -> (Outcome, BulkPublication) {
+        self.write_runs::<true>(runs, matches, tracked, keep)
+    }
+
+    fn write_runs<const STAGED: bool>(
+        &mut self,
+        runs: &[Run],
+        mut matches: impl FnMut(usize, u32) -> bool,
+        mut tracked: impl FnMut(u32) -> bool,
+        mut keep: impl FnMut((i32, i32, i32), u32, u32, bool, Option<u64>),
+    ) -> (Outcome, BulkPublication) {
         let mut out = Outcome::default();
+        let mut publication = BulkPublication::default();
         // the runs of each chunk, in order, and the chunks in the order they were first named
         let mut by_chunk: FxHashMap<(i32, i32), Vec<u32>> = FxHashMap::default();
         let mut order = Vec::new();
@@ -85,16 +118,18 @@ impl World {
                 })
                 .push(i as u32);
         }
-        let mut filter_memo: Vec<Memo> = Vec::new();
-        let mut tracked_memo = Memo(Vec::new());
+        let mut filter_memo: FxHashMap<usize, Memo> = FxHashMap::default();
+        let mut tracked_memo = Memo::default();
         let mut values: Vec<Option<Box<[u32; 4096]>>> = Vec::new();
         let mut changed: Vec<bool> = Vec::new();
+        let mut group_clears = Vec::new();
         for key in order {
             let Some(chunk) = self.chunks.get(&key) else {
                 continue;
             };
             let (min_y, sections) = (chunk.min_y(), chunk.sections.len());
             let max_y = chunk.max_y();
+            let has_groups = !chunk.connection_groups.is_empty();
             let list = &by_chunk[&key];
             changed.clear();
             changed.resize(sections, false);
@@ -105,6 +140,10 @@ impl World {
                 let r = runs[i as usize];
                 let (lx, lz) = (r.x & 15, r.z & 15);
                 let (y0, y1) = (r.y0.max(min_y), r.y1.min(max_y - 1));
+                if y0 > y1 {
+                    continue;
+                }
+                let mut filter = r.only.map(|id| (id, filter_memo.entry(id).or_default()));
                 let mut y = y0;
                 while y <= y1 {
                     let s = ((y - min_y) >> 4) as usize;
@@ -120,14 +159,32 @@ impl World {
                         if old == r.state {
                             continue;
                         }
-                        if let Some(f) = r.only {
-                            let f = f as usize;
-                            if filter_memo.len() <= f {
-                                filter_memo.resize_with(f + 1, || Memo(Vec::new()));
-                            }
-                            if !filter_memo[f].get(old, |s| matches(f as u16, s)) {
-                                continue;
-                            }
+                        if let Some((id, memo)) = &mut filter
+                            && !memo.get(old, |state| matches(*id, state))
+                        {
+                            continue;
+                        }
+                        let pos = (r.x, yy, r.z);
+                        let group = has_groups
+                            .then(|| chunk.connection_groups.get(&((s as u32) << 12 | at as u32)))
+                            .flatten()
+                            .copied();
+                        let clears_group = (STAGED || group.is_some())
+                            && self.replaces_connection_group(
+                                BlockStateId(old),
+                                BlockStateId(r.state),
+                            );
+                        if STAGED {
+                            keep(
+                                pos,
+                                old,
+                                r.state,
+                                clears_group,
+                                group.filter(|_| clears_group),
+                            );
+                        }
+                        if clears_group && group.is_some() {
+                            group_clears.push(pos);
                         }
                         vals[at] = r.state;
                         changed[s] = true;
@@ -155,32 +212,54 @@ impl World {
                     chunk.replace_blocks(s, v);
                 }
             }
-            self.revision = self.revision.wrapping_add(1);
-            self.modified.insert(key);
-            if self.block_log.is_some() {
-                self.bulk_log.insert(key);
-            }
-            // remeshed once (with the neighbours whose faces and light it touches), lit again whole
-            for (s, _) in changed.iter().enumerate().filter(|c| *c.1) {
-                for ds in -1..=1 {
-                    let sy = s as i32 + ds;
-                    if !(0..sections as i32).contains(&sy) {
-                        continue;
-                    }
-                    for dz in -1..=1 {
-                        for dx in -1..=1 {
-                            self.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
-                        }
-                    }
+            for (x, y, z) in group_clears.drain(..) {
+                if STAGED {
+                    self.set_connection_group_stored(x, y, z, None);
+                } else {
+                    self.invalidate_replaced_group((x, y, z));
                 }
             }
-            for dz in -1..=1 {
-                for dx in -1..=1 {
-                    self.dirty_light.insert((key.0 + dx, key.1 + dz));
+            if STAGED {
+                publication.chunks.push((key, changed.clone()));
+            } else {
+                self.publish_bulk_chunk(key, &changed);
+            }
+        }
+        (out, publication)
+    }
+
+    pub fn publish_bulk(&mut self, publication: BulkPublication) {
+        for (key, changed) in publication.chunks {
+            self.publish_bulk_chunk(key, &changed);
+        }
+    }
+
+    fn publish_bulk_chunk(&mut self, key: (i32, i32), changed: &[bool]) {
+        let sections = changed.len();
+        self.revision = self.revision.wrapping_add(1);
+        self.modified.insert(key);
+        if self.block_log.is_some() {
+            self.bulk_log.insert(key);
+        }
+        // remeshed once (with the neighbours whose faces and light it touches), lit again whole
+        for (s, _) in changed.iter().enumerate().filter(|c| *c.1) {
+            for ds in -1..=1 {
+                let sy = s as i32 + ds;
+                if !(0..sections as i32).contains(&sy) {
+                    continue;
+                }
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        self.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
+                    }
                 }
             }
         }
-        out
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                self.dirty_light.insert((key.0 + dx, key.1 + dz));
+            }
+        }
     }
 }
 
@@ -189,7 +268,6 @@ mod tests {
     use super::*;
     use crate::chunk::Chunk;
     use std::sync::Arc;
-    use sunrise_world::registry::BlockStateId;
 
     fn world() -> World {
         let mut w = World::new(BlockStateId(0), 0);
@@ -211,7 +289,7 @@ mod tests {
         w.block_log = Some(Vec::new());
         w
     }
-    fn run(x: i32, z: i32, y0: i32, y1: i32, state: u32, only: Option<u16>) -> Run {
+    fn run(x: i32, z: i32, y0: i32, y1: i32, state: u32, only: Option<usize>) -> Run {
         Run {
             x,
             z,
@@ -250,6 +328,31 @@ mod tests {
         assert!(w.dirty_sections.contains(&(1, 4, 1)));
         // the per-block log is left to the blocks set one at a time
         assert!(w.block_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn sparse_filter_ids_match_and_memoize_independently() {
+        let mut w = World::new(BlockStateId(0), 0);
+        w.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        let runs = [
+            run(0, 0, 0, 1, 1, Some(0)),
+            run(1, 0, 0, 1, 1, Some(usize::MAX)),
+            run(2, 0, 0, 1, 1, Some(usize::MAX)),
+        ];
+        let mut asked = Vec::new();
+        let out = w.edit_runs(
+            &runs,
+            |id, state| {
+                asked.push((id, state));
+                id == usize::MAX && state == 0
+            },
+            |_| false,
+        );
+        assert_eq!(asked, [(0, 0), (usize::MAX, 0)]);
+        assert_eq!(out.changed, 4);
+        assert_eq!(w.block(0, 0, 0), BlockStateId(0));
+        assert_eq!(w.block(1, 0, 0), BlockStateId(1));
+        assert_eq!(w.block(2, 1, 0), BlockStateId(1));
     }
 
     #[test]

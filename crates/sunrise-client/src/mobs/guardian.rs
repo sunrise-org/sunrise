@@ -15,9 +15,12 @@ use super::{
 };
 use crate::health::DamageLevel;
 use std::f32::consts::PI;
+use std::ops::ControlFlow;
 use sunrise_core::geometry::trig::Mth;
-use sunrise_core::{geometry::Vec3, random::RandomSource};
-use sunrise_world::move_gate::MoveGate;
+use sunrise_core::{
+    geometry::{Axis, Vec3},
+    random::RandomSource,
+};
 
 // Guardian state: `flag` an active beam target (DATA_ID_ATTACK_TARGET),
 // `flag2` moving (DATA_ID_MOVING), `counter2` the client attack time.
@@ -137,6 +140,7 @@ impl Goal for GuardianAttack {
                         amount: magic,
                         from,
                         kind: "minecraft:indirect_magic",
+                        wielder: None,
                     })),
                 Who::Mob(id) => cx.events.push(MobEvent::DamageMob {
                     target: id,
@@ -208,26 +212,23 @@ pub fn move_control(m: &mut Mob) {
     m.extra.flag2 = true;
 }
 /// `Guardian.travelInWater`; on land the usual travel.
-pub fn travel(
+pub(super) fn travel(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    if !m.fluids.in_water {
-        return false;
-    }
+    pause: bool,
+) -> ControlFlow<super::living::TravelPause> {
     m.move_relative(0.1, input);
-    m.do_move(w, level, events, &mut MoveGate::new());
-    m.velocity = m.velocity.scale(0.9);
-    if !m.extra.flag2 && m.ai.target.is_none() {
-        m.velocity.y -= 0.005;
-    }
-    true
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.set_velocity(m.velocity.scale(0.9));
+        if !m.extra.flag2 && m.ai.target.is_none() {
+            m.set_velocity(m.velocity.with_component(Axis::Y, m.velocity.y - 0.005));
+        }
+    })
 }
-/// `Guardian.aiStep`'s `clientSideTailAnimation` and
-/// `clientSideSpikesAnimation` (the server's and a client's).
+/// `Guardian.aiStep`'s client-only tail and spikes animation update.
 pub fn tail_and_spikes(m: &mut Mob) {
     let moving = m.extra.flag2;
     let in_water = m.fluids.in_water;
@@ -254,25 +255,22 @@ pub fn tail_and_spikes(m: &mut Mob) {
         a.v[SPIKES] += (1.0 - a.v[SPIKES]) * 0.06;
     }
 }
-/// `Guardian.aiStep`: the client animations, air, flopping on land and the
-/// beam's clock. The spikes are in [`hurt_server`].
+/// `Guardian.aiStep`: air, flopping on land and the beam's clock. The
+/// client alone draws random spike animation; defensive spikes are in [`hurt_server`].
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !m.alive() {
         return;
     }
     let in_water = m.fluids.in_water;
-    tail_and_spikes(m);
     client_tick(m);
     if in_water {
         m.air = 300;
-    } else if m.on_ground {
+    } else if m.ground.on_ground {
         let r = &mut m.random;
-        let (x, z) = (r.next_float() * 2.0 - 1.0, r.next_float() * 2.0 - 1.0);
-        m.velocity = m
-            .velocity
-            .add_vector(Vec3::new(f64::from(x) * 0.4, 0.5, f64::from(z) * 0.4));
+        let (x, z) = (r.next_float(), r.next_float());
+        m.velocity = m.velocity.add_vector(flop_kick(x, z));
         m.yaw = m.random.next_float() * 360.0;
-        m.on_ground = false;
+        m.ground.on_ground = false;
         if !m.silent {
             let flop = if is_elder(m) {
                 "entity.elder_guardian.flop"
@@ -327,6 +325,7 @@ pub fn hurt_server(m: &mut Mob, d: &Damage) {
             amount: 2.0,
             from,
             kind: "minecraft:thorns",
+            wielder: None,
         }),
         Some(Who::Mob(id)) => m.outbox.push(MobEvent::DamageMob {
             target: id,
@@ -603,11 +602,59 @@ pub fn attack_scale(m: &Mob) -> f32 {
         0.0
     }
 }
+/// `Guardian.aiStep`'s flop on land: `(nextFloat() * 2 - 1) * 0.4F` for x and
+/// z, in float and only then widened to double, and 0.5 up.
+fn flop_kick(x: f32, z: f32) -> Vec3 {
+    let kick = |f: f32| f64::from((f * 2.0 - 1.0) * 0.4);
+    Vec3::new(kick(x), 0.5, kick(z))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mobs::world::with_test_world;
+
+    /// `0.5F * 0.4F` widened is `(double) 0.2F`, not the double 0.2.
+    #[test]
+    fn a_flop_kicks_in_float() {
+        let kick = flop_kick(0.75, 0.25);
+        assert_eq!(kick.x.to_bits(), 0.20000000298023224f64.to_bits());
+        assert_eq!(kick.y, 0.5);
+        assert_eq!(kick.z.to_bits(), (-0.20000000298023224f64).to_bits());
+    }
+
+    /// `Guardian.aiStep` on the server draws x, z and yaw, without the
+    /// client-only spike animation draw.
+    #[test]
+    #[ignore = "daily"]
+    fn a_seeded_flop_pins_the_motion() {
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut mob = Mob::new(
+                    1,
+                    Arc::new(types.types["minecraft:guardian"].clone()),
+                    Vec3::new(0.5, 64.0, 0.5),
+                    0.0,
+                );
+                register(&mut mob);
+                mob.random.set_seed(42);
+                mob.ground.on_ground = true;
+                mob.fluids.in_water = false;
+                mob.silent = true;
+                ai_step(&mut mob, w, &mut Vec::new());
+                assert_eq!(
+                    [mob.velocity.x, mob.velocity.y, mob.velocity.z].map(f64::to_bits),
+                    [
+                        0x3fc7_4d72_0000_0000,
+                        0x3fe0_0000_0000_0000,
+                        0xbfd6_cd17_a000_0000
+                    ]
+                );
+                assert_eq!(mob.yaw.to_bits(), 0x4375_f5df);
+            }),
+            "vanilla data is missing"
+        );
+    }
     use std::sync::Arc;
 
     fn flop(kind: &str, silent: bool) -> Option<(Mob, Vec<MobEvent>)> {
@@ -620,7 +667,7 @@ mod tests {
                 0.0,
             );
             register(&mut mob);
-            mob.on_ground = true;
+            mob.ground.on_ground = true;
             mob.fluids.in_water = false;
             mob.silent = silent;
             let mut events = Vec::new();
@@ -646,7 +693,10 @@ mod tests {
                 let Some((mob, events)) = flop(kind, silent) else {
                     return;
                 };
-                assert!(!mob.on_ground && mob.velocity.y > 0.0, "{kind} flops");
+                assert!(
+                    !mob.ground.on_ground && mob.velocity.y > 0.0,
+                    "{kind} flops"
+                );
                 let sounds: Vec<_> = events
                     .iter()
                     .filter_map(|e| match e {

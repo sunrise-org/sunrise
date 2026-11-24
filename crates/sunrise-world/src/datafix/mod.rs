@@ -10,6 +10,7 @@
 //! fix of the server data is ported ([`OLDEST_SUPPORTED`]). The fixes of client
 //! files (options, debug profiles) are not ported either (creative toolbars in
 //! `hotbar.nbt` are ported via [`update_hotbar`]).
+mod advancement_criteria;
 mod block_state_data;
 mod chunk_flatten;
 mod chunk_leaves;
@@ -33,8 +34,8 @@ mod text;
 pub mod world_upgrader;
 
 use dynamic::{as_str, string};
-use schema::{Key, Ty, key, walk};
-pub use single::{MAX_DEPTH, UpgradeError, upgrade_block_entity, upgrade_entity};
+use schema::{Key, Ty, WalkStep, key, walk};
+pub use single::{MAX_DEPTH, upgrade_compound};
 use sunrise_core::nbt::Tag;
 pub use tables::{available as tables_available, set_resources};
 
@@ -60,50 +61,62 @@ pub fn identifier(id: &str) -> Option<(String, String)> {
 }
 
 /// What a fix works on: the root value, its type and the fix's key.
-pub struct Cx<'a> {
+struct Cx<'a> {
     root: Ty,
     data: &'a mut Tag,
     k: Key,
+    result: tables::Result,
 }
 
 impl Cx<'_> {
     /// Every value of `ty`, read with the fix's input schema.
-    pub fn each(&mut self, ty: Ty, mut f: impl FnMut(&mut Tag)) {
-        walk(self.root, self.data, self.k - 1, ty, &mut f);
+    fn each<R: WalkStep>(&mut self, ty: Ty, f: impl FnMut(&mut Tag) -> R) {
+        if self.result.is_ok() {
+            self.result = walk(self.root, self.data, self.k - 1, ty, f);
+        }
     }
     /// Every value of `ty` read with the fix's output schema (fixes declared
     /// on `getOutputSchema().getType(...)`).
-    pub fn each_out(&mut self, ty: Ty, mut f: impl FnMut(&mut Tag)) {
-        walk(self.root, self.data, self.k, ty, &mut f);
+    fn each_out<R: WalkStep>(&mut self, ty: Ty, f: impl FnMut(&mut Tag) -> R) {
+        if self.result.is_ok() {
+            self.result = walk(self.root, self.data, self.k, ty, f);
+        }
     }
     /// Every entity of one type (`NamedEntityFix` and friends).
-    pub fn entity(&mut self, id: &str, mut f: impl FnMut(&mut Tag)) {
+    fn entity<R: WalkStep>(&mut self, id: &str, mut f: impl FnMut(&mut Tag) -> R) {
         self.each(Ty::Entity, |e| {
             if id_is(e, id) {
-                f(e);
+                f(e).result()?;
             }
+            Ok(())
         });
     }
     /// Every block entity of one type.
-    pub fn block_entity(&mut self, id: &str, mut f: impl FnMut(&mut Tag)) {
+    fn block_entity<R: WalkStep>(&mut self, id: &str, mut f: impl FnMut(&mut Tag) -> R) {
         self.each(Ty::BlockEntity, |e| {
             if id_is(e, id) {
-                f(e);
+                f(e).result()?;
             }
+            Ok(())
         });
     }
     /// Every item stack whose id passes `filter`.
-    pub fn item(&mut self, filter: impl Fn(&str) -> bool, mut f: impl FnMut(&mut Tag)) {
+    fn item<R: WalkStep>(
+        &mut self,
+        filter: impl Fn(&str) -> bool,
+        mut f: impl FnMut(&mut Tag) -> R,
+    ) {
         self.each(Ty::ItemStack, |s| {
             if let Some(id) = as_str(s.get("id"))
                 && filter(&dynamic::namespaced(&id))
             {
-                f(s);
+                f(s).result()?;
             }
+            Ok(())
         });
     }
     /// A name type renamed in place (`fixTypeEverywhere` over a namespaced string).
-    pub fn rename(&mut self, ty: Ty, rename: impl Fn(&str) -> Option<&'static str>) {
+    fn rename(&mut self, ty: Ty, rename: impl Fn(&str) -> Option<&'static str>) {
         self.each(ty, |v| {
             if let Some(name) = as_str(Some(v))
                 && let Some(new) = rename(&name)
@@ -126,33 +139,33 @@ pub fn mark_read(e: &mut Tag) {
     if let Tag::Compound(_) = e {
         let mut raw = e.clone();
         strip_last_read(&mut raw);
-        dynamic::set(e, LAST_READ, raw);
+        dynamic::put(e, LAST_READ, raw);
     }
 }
 
 /// `Util.writeAndReadTypedOrThrow` over an entity by the fix with key `k`: it is
 /// written and read again with the output schema, so it (and every entity inside
 /// it) now remembers its current fields as the map it was last read from.
-pub fn reread(k: Key, e: &mut Tag) {
-    reread_as(Ty::Entity, k, e);
+fn reread(k: Key, e: &mut Tag) -> tables::Result {
+    reread_as(Ty::Entity, k, e)
 }
 
 /// [`reread`] for a value of another type (a block entity).
-pub fn reread_as(ty: Ty, k: Key, v: &mut Tag) {
+fn reread_as(ty: Ty, k: Key, v: &mut Tag) -> tables::Result {
     // What was untyped is read again with the new schema.
     schema::flat::strip_untyped(v);
-    schema::flat::mark_untyped(ty, v, k);
-    walk(ty, v, k, Ty::BlockEntity, &mut mark_read);
-    walk(ty, v, k, Ty::Entity, &mut mark_read);
+    schema::flat::mark_untyped(ty, v, k)?;
+    walk(ty, v, k, Ty::BlockEntity, mark_read)?;
+    walk(ty, v, k, Ty::Entity, mark_read)
 }
 
 /// A typed field dropped from an entity: what writing the entity gives back for
 /// it (its value in the map the entity was last read from, if any).
 pub fn drop_typed(e: &mut Tag, field: &str) {
     match e.get(LAST_READ).and_then(|raw| raw.get(field)).cloned() {
-        Some(raw) => dynamic::set(e, field, raw),
+        Some(raw) => dynamic::put(e, field, raw),
         None => {
-            dynamic::remove(e, field);
+            dynamic::take(e, field);
         }
     }
 }
@@ -162,9 +175,9 @@ fn strip_last_read(v: &mut Tag) {
         Tag::Compound(c) => {
             c.remove(&dynamic::key(LAST_READ));
             c.remove(&dynamic::key(schema::flat::UNTYPED));
-            for value in c.values_mut() {
+            c.for_each_mut(|_, value| {
                 strip_last_read(value);
-            }
+            });
         }
         Tag::List(items) => items.iter_mut().for_each(strip_last_read),
         _ => {}
@@ -207,18 +220,28 @@ fn fixes() -> Vec<(Key, FixFn)> {
     out
 }
 
+/// `DataFixerUpper.getLowestSchemaSameVersion`: a version before the first
+/// schema reads with that schema. `DataFixers.addFixers` starts at V99.
+fn source_schema_key(version: i32) -> Key {
+    key(version.max(99) as u32, 0)
+}
+
 /// `DataFixer.update(type, data, from, to)` for a root value.
 pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
+    tables::required(try_update(root, data, from, to));
+}
+
+fn try_update(root: Ty, data: &mut Tag, from: i32, to: i32) -> tables::Result {
     if from >= to {
-        return;
+        return Ok(());
     }
-    let from_key = key(from.max(0) as u32, 0);
+    let from_key = source_schema_key(from);
     let to_version = to as u32;
     // The data is read once with the schema of its version (its read hooks)...
-    walk(root, data, from_key, Ty::BlockEntity, &mut mark_read);
-    walk(root, data, from_key, Ty::Entity, &mut mark_read);
-    schema::flat::mark_untyped(root, data, from_key);
-    read_hooks(root, data, from_key);
+    walk(root, data, from_key, Ty::BlockEntity, mark_read)?;
+    walk(root, data, from_key, Ty::Entity, mark_read)?;
+    schema::flat::mark_untyped(root, data, from_key)?;
+    read_hooks(root, data, from_key)?;
     // ...then every fix above that key, up to the target version...
     let mut refreshed = from_key >= schema::flat::END;
     for (k, fix) in fixes() {
@@ -231,40 +254,43 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
                     data,
                     schema::flat::END - 1,
                     Ty::BlockEntity,
-                    &mut mark_read,
-                );
-                walk(
-                    root,
-                    data,
-                    schema::flat::END - 1,
-                    Ty::Entity,
-                    &mut mark_read,
-                );
+                    mark_read,
+                )?;
+                walk(root, data, schema::flat::END - 1, Ty::Entity, mark_read)?;
             }
-            fix(&mut Cx { root, data, k });
+            let mut cx = Cx {
+                root,
+                data,
+                k,
+                result: Ok(()),
+            };
+            fix(&mut cx);
+            cx.result?;
         }
     }
     // ...and written with the target schema (its write hooks).
-    write_hooks(root, data, key(to_version, 9));
+    write_hooks(root, data, key(to_version, 9))?;
     strip_last_read(data);
+    Ok(())
 }
 
 /// The read hooks of the schema the data was saved with.
-fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
-    walk(root, data, k, Ty::ItemStack, &mut |stack| {
+fn read_hooks(root: Ty, data: &mut Tag, k: Key) -> tables::Result {
+    walk(root, data, k, Ty::ItemStack, |stack| {
         if k < key(3818, 5) {
-            items::add_names_at(stack, k);
+            items::add_names_at(stack, k)?;
         } else if let Tag::String(_) = stack {
             // V3818_5 UNPACK_PLAIN_ID: a bare item id is a stack of one.
             *stack = Tag::compound([("id", stack.clone()), ("count", Tag::Int(1))]);
         }
-    });
+        Ok(())
+    })?;
     if k >= key(1451, 6) {
-        walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
+        walk(root, data, k, Ty::Objective, fixes_a::unpack_objective)?;
     }
     // Block names are numbers or namespaced strings until V1451_4: a number is read as an
     // int and written as one.
-    walk(root, data, k, Ty::BlockName, &mut |name| {
+    walk(root, data, k, Ty::BlockName, |name| {
         if let Some(n) = as_str(Some(name)) {
             *name = string(&dynamic::namespaced(&n));
         } else if k < key(1451, 4)
@@ -272,19 +298,20 @@ fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
         {
             *name = Tag::Int(n.int_value());
         }
-    });
+    })?;
     // Namespaced name types read their strings with `ensureNamespaced`.
     for ty in [Ty::Biome, Ty::EntityName, Ty::ItemName] {
-        walk(root, data, k, ty, &mut |name| {
+        walk(root, data, k, ty, |name| {
             if let Some(n) = as_str(Some(name)) {
                 *name = string(&dynamic::namespaced(&n));
             }
-        });
+        })?;
     }
+    Ok(())
 }
 
-fn write_hooks(root: Ty, data: &mut Tag, k: Key) {
-    walk(root, data, k, Ty::Objective, &mut fixes_a::repack_objective);
+fn write_hooks(root: Ty, data: &mut Tag, k: Key) -> tables::Result {
+    walk(root, data, k, Ty::Objective, fixes_a::repack_objective)
 }
 
 /// `SimpleRegionStorage.upgradeChunkTag` for a region chunk (`ChunkMap`):
@@ -302,37 +329,12 @@ pub fn update_chunk_to(tag: &mut Tag, dimension: &str, generator: Option<&str>, 
     }
     let mut context = Tag::compound([("dimension", string(dimension))]);
     if let Some(g) = generator {
-        dynamic::set(&mut context, "generator", string(g));
+        dynamic::put(&mut context, "generator", string(g));
     }
-    dynamic::set(tag, "__context", context);
+    dynamic::put(tag, "__context", context);
     update(Ty::Chunk, tag, version, to);
-    dynamic::remove(tag, "__context");
-    dynamic::set(tag, "DataVersion", Tag::Int(to));
-}
-
-/// The DataVersion of 1.13, the flattening: block states written before it carry 1.12 names and properties.
-pub const FLATTENING: i32 = 1519;
-
-/// A block state, `name` with `props` (`key`, `value`), as written at `data_version`, upgraded as the datafixers
-/// do it: a state from before the flattening comes out with its 1.13 name and properties (the table of
-/// `BlockStateData`); any other, or one the table doesn't know, is returned as it is. The numeric block ids of
-/// the oldest chunks are not read here. API 620.
-pub fn native_upgrade_block_state(
-    name: &str,
-    props: &[(String, String)],
-    data_version: i32,
-) -> (String, Vec<(String, String)>) {
-    if data_version >= FLATTENING {
-        return (name.to_owned(), props.to_vec());
-    }
-    let mut sorted = props.to_vec();
-    sorted.sort();
-    let old = block_state_data::State {
-        name: name.to_owned(),
-        props: sorted,
-    };
-    let new = block_state_data::upgrade_state(&old);
-    (new.name, new.props)
+    dynamic::take(tag, "__context");
+    dynamic::put(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `SimpleRegionStorage.upgradeChunkTag` for entity chunks (default version -1)
@@ -349,7 +351,7 @@ pub fn update_region_tag_to(root: Ty, tag: &mut Tag, to: i32) {
         return;
     }
     update(root, tag, version, to);
-    dynamic::set(tag, "DataVersion", Tag::Int(to));
+    dynamic::put(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `PlayerDataStorage.load`: the DataVersion field stays as loaded.
@@ -362,7 +364,7 @@ pub fn update_player(tag: &mut Tag) {
 pub fn update_player_to(tag: &mut Tag, to: i32) {
     let version = dynamic::as_int(tag.get("DataVersion"), -1);
     update(Ty::Player, tag, version, to);
-    dynamic::set(tag, "DataVersion", Tag::Int(to));
+    dynamic::put(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `HotbarManager.load`: a creative toolbar file (`hotbar.nbt`, its DataVersion

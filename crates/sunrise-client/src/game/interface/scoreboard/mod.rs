@@ -3,6 +3,7 @@
 //! entities, the selector options `scores=`, `team=` and `tag=`, the
 //! commands' [`Env`] and the sidebar.
 use super::{Game, chat::PLAYER_NAME, commands::Target};
+use mod_api::EntityTags;
 use std::collections::{HashMap, HashSet};
 use sunrise_client::actions::Action;
 use sunrise_client::{
@@ -20,6 +21,7 @@ use sunrise_client::{
     text::Text,
 };
 use sunrise_core::nbt::Tag;
+use sunrise_gameplay::stats::{StatScoreChange, StatScoreOp};
 
 /// What `ServerPlayer` last recorded for the criteria that follow the player.
 #[derive(Default)]
@@ -119,6 +121,7 @@ fn gives_uuid(t: Target) -> Option<u32> {
         | Target::Other(id)
         | Target::Fangs(id)
         | Target::Cloud(id)
+        | Target::Bolt(id)
         | Target::General(id)
         | Target::Hook(id)
         | Target::Orb(id) => Some(id),
@@ -142,10 +145,13 @@ impl Game<'_> {
         if root.is_none() && dim == super::Dim::Overworld {
             root = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"));
         }
-        root.as_ref()
-            .and_then(|root| root.get("data"))
-            .map(sunrise_client::worldborder::WorldBorder::unpack)
-            .unwrap_or_default()
+        if let Some(data) = root.as_ref().and_then(|root| root.get("data")) {
+            match sunrise_client::worldborder::WorldBorder::unpack(data) {
+                Ok(border) => return border,
+                Err(error) => log::warn!("invalid saved world border in {}: {error}", dim.id()),
+            }
+        }
+        sunrise_client::worldborder::WorldBorder::default()
     }
     /// Save the border of the level in place (`SavedData`, one per level).
     pub(super) fn save_border(&self) {
@@ -285,8 +291,8 @@ impl Game<'_> {
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
         self.target_with_uuid(uuid)
     }
-    /// `Entity.getTags` (the `Tags` list of the saved entity).
-    pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
+    /// The saved `Tags` list read by commands and native entity handles.
+    pub(super) fn saved_entity_tags(&self, t: Target) -> EntityTags<'_> {
         let raw = match t {
             Target::Mob(id)
             | Target::Item(id)
@@ -307,6 +313,7 @@ impl Game<'_> {
             | Target::Other(id)
             | Target::Fangs(id)
             | Target::Cloud(id)
+            | Target::Bolt(id)
             | Target::Hook(id) => self.persist.raw.get(&id),
             Target::DragonPart(_) => None,
             Target::Player => self.level.player_extra.as_ref(),
@@ -325,16 +332,19 @@ impl Game<'_> {
             // A natural knot keeps no saved compound: it has no tags.
             Target::Knot(_) => None,
         };
-        match raw.and_then(|r| r.get("Tags")) {
-            Some(Tag::List(l)) => l
-                .iter()
-                .filter_map(|t| match t {
-                    Tag::String(s) => Some(s.to_string_lossy()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
+        let tags = match raw.and_then(|r| r.get("Tags")) {
+            Some(Tag::List(tags)) => tags.as_slice(),
+            _ => &[],
+        };
+        mod_api::__private::game::borrow_entity_tags(tags)
+    }
+
+    /// The lossy UTF-8 presentation used by `/tag` and its existing write paths.
+    pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
+        self.saved_entity_tags(t)
+            .iter_utf16()
+            .map(String::from_utf16_lossy)
+            .collect()
     }
     /// The selector options that need the scoreboard or entity data: which
     /// of `candidates` pass `scores=`, `team=` and `tag=`.
@@ -463,23 +473,22 @@ impl Game<'_> {
 
     // ---- criteria ----------------------------------------------------------
 
-    /// `ServerStatsCounter.setValue`'s scoreboard side: the objectives of
+    /// `ServerPlayer.awardStat` and `ServerPlayer.resetStat`: the objectives of
     /// each changed statistic's criteria follow it for the player `name`.
-    pub(super) fn stat_criteria_changed(
-        &mut self,
-        name: &str,
-        events: Vec<(String, String, Option<i32>)>,
-    ) {
-        let board = &mut self.score.board;
-        if board.objectives.is_empty() {
+    pub(super) fn stat_criteria_changed(&mut self, name: &str, events: Vec<StatScoreChange>) {
+        if self.score.board.objectives.is_empty() {
             return;
         }
-        for (ty, key, amount) in events {
+        for (ty, key, op) in events {
             let criteria = sb::stat_criteria(&ty, &key);
-            if board.has_objectives_for(&criteria) {
-                board.for_all_objectives(&criteria, name, |v| {
-                    amount.map_or(0, |n| v.wrapping_add(n))
-                });
+            if self.score.board.has_objectives_for(&criteria) {
+                self.journal_scoreboard();
+                self.score
+                    .board
+                    .for_all_objectives(&criteria, name, |v| match op {
+                        StatScoreOp::Add(amount) => v.wrapping_add(amount),
+                        StatScoreOp::Set(value) => value,
+                    });
             }
         }
     }
@@ -498,16 +507,12 @@ impl Game<'_> {
         let Some(host) = self.lan.as_mut() else {
             return;
         };
-        host.hub.teams.clone_from(&self.score.board.teams);
-        let view = sunrise_client::lan::scoreboard::View::of(&self.score.board);
+        let board = &self.score.board;
+        host.hub.teams.clone_from(&board.teams);
+        let view = sunrise_client::lan::scoreboard::View::of(board);
         host.hub.guests.update_all(|g| {
-            if g.placed && !g.scoreboard_synced {
-                g.send_all(&view.initial());
-                g.scoreboard = view.clone();
-                g.scoreboard_synced = true;
-            } else if g.placed && g.scoreboard != view {
-                g.send_all(&g.scoreboard.changes(&view));
-                g.scoreboard = view.clone();
+            if g.placed {
+                g.sync_scoreboard(&view, board);
             }
         });
     }
@@ -574,27 +579,37 @@ impl Game<'_> {
         self.score_player_killed_named(name, matches!(victim, Target::Player | Target::Guest(_)));
     }
     /// [`score_player_killed`](Self::score_player_killed) with the victim's
-    /// scoreboard name at hand: a guest's record is out of `self.lan` during
-    /// its turn (`ServerPlayer.die` runs there).
+    /// scoreboard name at hand.
     pub(super) fn score_player_killed_named(&mut self, victim_name: Option<String>, player: bool) {
-        let display = self.player_display_comp();
-        let me = self.acting_player_name().to_owned();
+        let killer = self.acting_player_name().to_owned();
+        self.score_player_kill_for(&killer, victim_name.as_deref(), player);
+    }
+
+    /// `ServerPlayer.awardKillScore` uses the killer as score holder, even
+    /// when the body installed for `ServerPlayer.die` belongs to the victim.
+    pub(super) fn score_player_kill_for(
+        &mut self,
+        killer: &str,
+        victim: Option<&str>,
+        player: bool,
+    ) {
+        let display = self.player_score_display(killer);
         let board = &mut self.score.board;
         let inc = |v: i32| v.wrapping_add(1);
-        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, &me, Some(&display), inc);
+        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, killer, Some(&display), inc);
         if player {
-            board.for_all_objectives_with(sb::CRITERIA_PLAYER_KILLS, &me, Some(&display), inc);
+            board.for_all_objectives_with(sb::CRITERIA_PLAYER_KILLS, killer, Some(&display), inc);
         }
         let color_of =
             |board: &Scoreboard, name: &str| board.players_team(name).and_then(|t| t.color.clone());
-        if let Some(victim_name) = victim_name {
-            if let Some(color) = color_of(board, &victim_name) {
+        if let Some(victim) = victim {
+            if let Some(color) = color_of(board, victim) {
                 let criteria = format!("teamkill.{color}");
-                board.for_all_objectives_with(&criteria, &me, Some(&display), inc);
+                board.for_all_objectives_with(&criteria, killer, Some(&display), inc);
             }
-            if let Some(color) = color_of(board, &me) {
+            if let Some(color) = color_of(board, killer) {
                 let criteria = format!("killedByTeam.{color}");
-                board.for_all_objectives(&criteria, &victim_name, inc);
+                board.for_all_objectives(&criteria, victim, inc);
             }
         }
     }
@@ -606,6 +621,15 @@ impl Game<'_> {
     fn scoreboard_name(&self, id: u32, uuid: [i32; 4]) -> String {
         self.remote_player_name(id)
             .map_or_else(|| uuid_text(uuid), str::to_owned)
+    }
+    /// `Entity.getTeam`: the team holding this entity's scoreboard name (its UUID).
+    pub(super) fn entity_team(&self, id: u32) -> Option<&sb::Team> {
+        if self.score.board.teams.is_empty() {
+            return None;
+        }
+        let uuid = *self.persist.uuids.get(&id)?;
+        let own = self.scoreboard_name(id, uuid);
+        self.score.board.players_team(&own)
     }
     /// `TamableAnimal.getTeam` of a mob or another player: its own team, else,
     /// when it is a tamed pet, its root owner's.
@@ -733,8 +757,22 @@ impl Game<'_> {
             .iter()
             .filter_map(|m| Some((m.id, tame_owner(m)?)))
             .collect();
+        let host = self
+            .player_identity()
+            .and_then(|(_, id)| Some((id, self.player_team()?)));
+        let guests = self.lan.iter().flat_map(|lan| &lan.hub.guests);
+        let players = host
+            .into_iter()
+            .chain(guests.filter(|g| !g.is_fake()).filter_map(|g| {
+                Some((
+                    u32::try_from(g.entity_id).ok()?,
+                    self.score.board.players_team(&g.name)?,
+                ))
+            }))
+            .collect();
         sunrise_client::mobs::Teams {
             player: self.player_team(),
+            players,
             mobs: self
                 .persist
                 .uuids
@@ -785,10 +823,13 @@ impl Game<'_> {
     }
     /// `Player.getDisplayName`: the name with the team's prefix, suffix and colour.
     pub(super) fn player_display_comp(&self) -> Comp {
-        let name = literal(self.acting_player_name());
-        match self.player_team() {
-            Some(t) => t.formatted_name_comp(&name),
-            None => name,
+        self.player_score_display(self.acting_player_name())
+    }
+    fn player_score_display(&self, name: &str) -> Comp {
+        let display = literal(name);
+        match self.score.board.players_team(name) {
+            Some(t) => t.formatted_name_comp(&display),
+            None => display,
         }
     }
     pub(super) fn player_display_text(&self) -> Text {
@@ -960,7 +1001,7 @@ impl Game<'_> {
         // Player heads and the player list both draw from the same skin
         // slots: a new frame, with what the last one drew.
         self.flush_skin_slots();
-        let key = self.screen == super::Screen::Playing && self.keys.held(Action::Playerlist);
+        let key = self.screen == super::Screen::Playing && self.held_mapping(Action::Playerlist);
         let count = self.remote.as_ref().map_or_else(
             || {
                 1 + self
@@ -1015,12 +1056,10 @@ impl Game<'_> {
             return;
         }
         // The faces of the players the list shows.
-        let faces: std::collections::HashSet<u128> = self
-            .tab_list
-            .displayed_ids(&players, &self.score.board)
-            .iter()
-            .copied()
-            .collect();
+        let faces: std::collections::HashSet<u128> =
+            tab_list::sorted_players(&players, &self.score.board)
+                .map(|player| player.uuid)
+                .collect();
         for p in players.iter_mut().filter(|p| faces.contains(&p.uuid)) {
             p.skin = self.face_skin(p.uuid, &p.skin);
         }
@@ -1133,7 +1172,7 @@ impl Env for GameEnv<'_, '_> {
         }
     }
     fn source(&mut self) -> Option<(Holder, bool)> {
-        let entity = match self.g.command_source {
+        let entity = match &self.g.command_source {
             Some(s) => s.entity,
             None => Some(Target::Player),
         }?;

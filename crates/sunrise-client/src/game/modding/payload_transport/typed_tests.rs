@@ -1,9 +1,11 @@
 //! Typed payloads (#813 step 4b-1) on the real routes: the integrated server over memory and a
 //! published server over TCP. The values are decoded by the typed adapter and encoded by the
 //! token sends; the expected bodies are written out by hand.
+use mod_api::wire::{Reader, Wire, WireError, WireSchema, Writer};
 use mod_api::{
-    Hooks, IPayloadContext, ModEntry, PayloadAccepted, PayloadCodec, PayloadDecodeError, PayloadId,
-    PayloadReader, PayloadSendError, PayloadWriter, PlayerRef, Registrar, ToClient, ToServer,
+    __private::{HookPanicReport, take_hook_panics},
+    Hooks, IPayloadContext, ModEntry, PayloadAccepted, PayloadId, PayloadSendError, PlayerRef,
+    Registrar, ToClient, ToServer, Wire,
 };
 use std::sync::{
     Mutex,
@@ -21,34 +23,35 @@ const STAGED: f32 = 3.0;
 static ENCODES: AtomicUsize = AtomicUsize::new(0);
 static DECODES: AtomicUsize = AtomicUsize::new(0);
 
-/// A VarInt that counts its codec calls.
+/// An i32 that counts its codec calls.
 #[derive(Debug, PartialEq)]
 struct Counted(i32);
-impl PayloadCodec for Counted {
-    fn encode(&self, out: &mut PayloadWriter) {
+impl Wire for Counted {
+    const MIN: usize = <i32 as Wire>::MIN;
+    fn put(&self, out: &mut Writer) {
         ENCODES.fetch_add(1, Ordering::SeqCst);
-        out.var_int(self.0);
+        out.put(&self.0);
     }
-    fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
+    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
         DECODES.fetch_add(1, Ordering::SeqCst);
-        input.var_int().map(Self)
+        input.take().map(Self)
     }
-    fn schema(_: &mut Vec<std::any::TypeId>) -> u64 {
-        mod_api::payload_schema_leaf("var_int")
+    fn describe(schema: &mut WireSchema) -> u64 {
+        i32::describe(schema)
     }
 }
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Probe {
     counter: Counted,
     labels: Vec<String>,
     chain: Chain,
 }
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Chain(Option<Box<Chain>>);
 
 /// The same ids' value with another shape.
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Other(i32);
 
 fn probe(counter: i32) -> Probe {
@@ -112,7 +115,7 @@ fn up(value: Probe, context: &mut dyn IPayloadContext) -> Result<(), String> {
                         "listed owner {owner:?} differs from client {expected:?}"
                     ));
                 }
-                let name = owner
+                let name: &str = owner
                     .name(host)
                     .ok_or("connected owner's account name missing")?;
                 let found = host.players().player_by_name(&name.to_uppercase());
@@ -137,11 +140,12 @@ fn up(value: Probe, context: &mut dyn IPayloadContext) -> Result<(), String> {
             let witness = WITNESS.lock().unwrap().expect("a witness sent 7 first");
             let host = context.server_host().map_err(|e| format!("{e:?}"))?;
             let living = host.living(witness.entity()).ok_or("no witness")?;
-            assert!(living.set_health(host, STAGED));
-            assert_eq!(
-                down().reply(context, &probe(14)),
-                Ok(PayloadAccepted::Queued)
-            );
+            if !living.set_health(host, STAGED) || living.health(host) != Some(STAGED) {
+                return Err("could not stage witness health".into());
+            }
+            if down().reply(context, &probe(14)) != Ok(PayloadAccepted::Queued) {
+                return Err("could not stage panic reply".into());
+            }
             panic!("typed handler panics after a staged write and a staged reply");
         }
         _ => Ok(()),
@@ -328,18 +332,20 @@ fn lan(game: &mut super::Game<'_>) {
         })
         .expect("integrated server answered publication request")
         .unwrap();
+    // i32 counter, empty list, then an absent optional child.
+    let empty = |low_byte| [low_byte, 0, 0, 0, 0, 0, 0, 0, 0];
     let nested = |levels: usize| {
-        let mut body = vec![7, 0];
+        let mut body = empty(7)[..8].to_vec();
         body.extend(std::iter::repeat_n(1, levels));
         body.push(0);
         body
     };
     // Each malformed body ends its own session by name, with no handler call and no reply.
     for (index, body) in [
-        vec![7, 0xff, 0xff, 0xff, 0xff, 0x0f],
-        vec![7, 0x81, 0x20],
+        empty(7)[..5].to_vec(),          // truncated list length
+        vec![7, 0, 0, 0, 1, 0x10, 0, 0], // 4097 labels
         nested(33),
-        vec![7, 0, 0, 0xaa],
+        [empty(7).as_slice(), &[0xaa]].concat(),
     ]
     .into_iter()
     .enumerate()
@@ -351,30 +357,38 @@ fn lan(game: &mut super::Game<'_>) {
     }
     // A clientbound-only channel sent by a client: a forged direction, no handler runs.
     let mut forged = super::sender_tests::connect_peer(port, "ForgedDirection");
-    send(&mut forged, DOWN, vec![7, 0, 0]);
+    send(&mut forged, DOWN, empty(7).to_vec());
     await_disconnect(&mut forged, DOWN);
     assert!(SERVER.lock().unwrap().is_empty());
     assert!(CLIENT.lock().unwrap().is_empty());
     // An independent session is accepted: 7, then the order A=1, B=2, A=3, then 7 again,
     // whose reply orders them before any other connection's message.
     let mut witness = super::sender_tests::connect_peer(port, "TypedWitness");
-    send(&mut witness, UP, vec![7, 0, 0]);
-    assert_eq!(await_reply(&mut witness, DOWN), [8, 0, 0]);
+    send(&mut witness, UP, empty(7).to_vec());
+    assert_eq!(await_reply(&mut witness, DOWN), empty(8));
     let full = SERVER.lock().unwrap()[0].2.expect("the witness's health");
-    send(&mut witness, UP, vec![1, 0, 0]);
-    send(&mut witness, OTHER, vec![2, 0, 0]);
-    send(&mut witness, UP, vec![3, 0, 0]);
-    send(&mut witness, UP, vec![7, 0, 0]);
-    assert_eq!(await_reply(&mut witness, DOWN), [2, 0, 0]);
-    assert_eq!(await_reply(&mut witness, DOWN), [8, 0, 0]);
-    // A reply staged before a panic is never sent, and the session closes.
+    send(&mut witness, UP, empty(1).to_vec());
+    send(&mut witness, OTHER, empty(2).to_vec());
+    send(&mut witness, UP, empty(3).to_vec());
+    send(&mut witness, UP, empty(7).to_vec());
+    assert_eq!(await_reply(&mut witness, DOWN), empty(2));
+    assert_eq!(await_reply(&mut witness, DOWN), empty(8));
+    // The next callback on this peer runs after the panic. Its reply must come first:
+    // the staged reply is discarded without closing the connection.
     let mut failing = super::sender_tests::connect_peer(port, "TypedPanic");
-    send(&mut failing, UP, vec![13, 0, 0]);
-    let reason = await_disconnect(&mut failing, DOWN);
-    assert!(reason.contains("typed_probe"), "{reason}");
-    // The staged write to the witness was rolled back, as a healthy callback sees it.
-    send(&mut witness, OTHER, vec![4, 0, 0]);
-    assert_eq!(await_reply(&mut witness, DOWN), [4, 0, 0]);
+    send(&mut failing, UP, empty(13).to_vec());
+    send(&mut failing, OTHER, empty(4).to_vec());
+    assert_eq!(await_reply(&mut failing, DOWN), empty(4));
+    assert_eq!(
+        SERVER.lock().unwrap().last().copied(),
+        Some((OTHER, 4, Some(full))),
+        "the failed handler's write was rolled back"
+    );
+    // A fresh peer still negotiates the channel, but skips the disabled callback.
+    let mut later = super::sender_tests::connect_peer(port, "TypedLater");
+    send(&mut later, UP, empty(7).to_vec());
+    send(&mut later, OTHER, empty(5).to_vec());
+    assert_eq!(await_reply(&mut later, DOWN), empty(5));
     let seen: Vec<_> = SERVER
         .lock()
         .unwrap()
@@ -390,21 +404,17 @@ fn lan(game: &mut super::Game<'_>) {
             (UP, 3),
             (UP, 7),
             (UP, 13),
-            (OTHER, 4)
+            (OTHER, 4),
+            (OTHER, 5),
         ]
     );
-    let last = SERVER.lock().unwrap().last().unwrap().2;
     assert_eq!(
-        last,
-        Some(full),
-        "the failed handler's write was rolled back"
+        take_hook_panics(),
+        [HookPanicReport {
+            mod_id: "typed_probe",
+            hook: "payload",
+        }]
     );
-    // The panicked callback is disabled: a later message on it is refused at ingress, as for
-    // a disabled owner, and the session ends without running it.
-    let mut later = super::sender_tests::connect_peer(port, "TypedLater");
-    send(&mut later, UP, vec![7, 0, 0]);
-    await_disconnect(&mut later, DOWN);
-    assert_eq!(SERVER.lock().unwrap().len(), seen.len());
 }
 
 /// Send `data` on `channel` from a TCP peer in play.

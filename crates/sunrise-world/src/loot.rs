@@ -8,22 +8,42 @@
 //! maps are kept as found (structure search is not run); conditions that
 //! need an entity, tool or damage source fail when the context has none, as
 //! they do for containers.
+mod component_validation;
 mod fill;
 pub mod global_modifiers;
 pub mod number;
 pub mod query;
+use component_validation::retain_valid;
+pub use component_validation::{
+    validate_entity_predicate, validate_item_modifier, validate_item_predicate,
+    validate_loot_condition, validate_loot_table, validate_slot_source,
+};
+mod component_validation_nbt;
+pub use component_validation_nbt::{
+    validate_item_modifier_tag, validate_loot_condition_tag, validate_loot_table_tag,
+};
+mod number_validation;
+pub use number_validation::{
+    number as validate_number_provider, number_tag as validate_number_provider_tag,
+};
 #[path = "loot_query.rs"]
 mod query_context;
 mod root;
 #[path = "loot_types.rs"]
 pub mod types;
+mod views;
 pub use fill::ContainerLootContext;
+pub use query::LootAbilityTool;
+pub use views::LootStacks;
 #[path = "loot/tags.rs"]
 mod loot_tags;
-pub use loot_tags::LootTags;
+pub use loot_tags::{ItemTagNames, LootTags};
+
+/// Ordered tag bindings for a single registry, keyed by tag ID.
+pub type RegistryTags = HashMap<String, Vec<String>>;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs, io,
     path::Path,
     sync::{Arc, Mutex, Weak},
@@ -37,6 +57,14 @@ use {
     sunrise_core::nbt::{Compound, Tag},
 };
 
+/// One pack's copy of the recipe priorities, before JSON or conditions are decoded.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct RecipePriorityLayer {
+    pub pack: String,
+    pub path: &'static str,
+    pub contents: Result<Vec<u8>, String>,
+}
+
 /// Raw files a world's data packs add over the game's own data, by
 /// `<kind>/<ns>:<path>` (a `recipe/minecraft:stick` key names the file
 /// `data/minecraft/recipe/stick.json`), each id's files in pack order.
@@ -48,12 +76,15 @@ pub struct PackOverlay<'a> {
     /// Immutable enabled package IDs for this owning server data load.
     pub conditions: &'a crate::conditions::LoadConditions,
     pub files: &'a [(String, Vec<Vec<u8>>)],
+    /// Recipe-priority layers, lowest pack first. Kept separately from path winners.
+    pub priority_layers: &'a [RecipePriorityLayer],
 }
 impl PackOverlay<'static> {
     /// No packs: the tables are the resource root's alone.
     pub const NONE: Self = Self {
         files: &[],
         conditions: &crate::conditions::LoadConditions::vanilla(),
+        priority_layers: &[],
     };
 }
 impl Default for PackOverlay<'_> {
@@ -67,7 +98,7 @@ impl<'a> PackOverlay<'a> {
     pub const fn new(files: &'a [(String, Vec<Vec<u8>>)]) -> Self {
         Self {
             files,
-            conditions: PackOverlay::NONE.conditions,
+            ..PackOverlay::NONE
         }
     }
     /// The overlay's files under `<kind>/`, with the prefix stripped.
@@ -97,49 +128,38 @@ impl<'a> PackOverlay<'a> {
     }
 }
 
-/// The tool a loot context names: its item id and enchantments.
-#[derive(Clone)]
-pub struct LootTool {
-    pub item: String,
-    pub enchantments: Vec<(String, i32)>,
-}
+/// Engine readers and editors for live loot parameters, candidates and output lists.
+pub use mod_api::__private::{
+    LootListAccess, LootStackAccess, LootStackEditAccess, LootToolAccess,
+};
+pub use mod_api::{ExplorationMap as ApiExplorationMap, LootBlockView, LootExplorationView};
 
-/// What a mod's own loot kinds see of the roll: the entity, the damage,
-/// the player who killed it, the tool, the block, the luck, the biome,
-/// where the roll happens. Registered types borrow the evaluator's actual random. The tool and
-/// block are filled by the items engine (block drops, entity drops,
-/// loot_table, interact_loot); the entity, damage and player by the main
-/// loot engine; each is None in the other. A table without a mod's kinds
-/// draws nothing and stays bit-for-bit the same.
+/// Parameters borrowed from either evaluator for the duration of a loot operation.
+/// Randomness is lent separately from these immutable inputs.
+#[derive(Clone, Copy, Default)]
 pub struct LootContext<'a> {
-    /// First id wins; written after the root and all nested rolls, before #1270's modifier pass.
-    /// Unset reads as `UNKNOWN_LOOT_TABLE`; nested rolls never write it.
-    pub queried_table_id: Option<String>,
-    /// Stack whose data is queried; unchanged through nested rolls, absent in existing callers.
-    pub queried_stack: Option<LootStack>,
-    /// The entity the table names (`this`), if any.
+    /// First id wins; the root sets it after nested rolls and before global modifiers.
+    pub queried_table_id: Option<&'a str>,
+    /// The queried stack, shared by nested rolls.
+    pub queried_stack: Option<&'a LootStack>,
+    /// `THIS_ENTITY`, when supplied.
     pub entity: Option<&'a LootEntity>,
-    /// The damage that killed it, if any.
+    /// `DAMAGE_SOURCE`, when supplied.
     pub damage: Option<&'a LootDamage>,
-    /// The player whose kill dropped the table (`LootEntity`), if any.
+    /// `LAST_DAMAGE_PLAYER`, when supplied.
     pub player: Option<&'a LootEntity>,
-    /// The tool used, if any. The items engine fills it (all of its
-    /// tables: block drops, entity drops, loot_table, interact_loot);
-    /// the main loot engine has no tool in its context.
-    pub tool: Option<LootTool>,
-    /// The block a block-drop table breaks, if any. The items engine
-    /// fills it; the main loot engine has no block in its context.
-    pub block: Option<&'a str>,
+    /// `INTERACTING_ENTITY`, when supplied.
+    pub interacting_entity: Option<&'a LootEntity>,
+    /// `TOOL`, when supplied.
+    pub tool: Option<&'a dyn LootToolAccess>,
+    /// `BLOCK_STATE` for a block or block-interaction roll.
+    pub block: Option<LootBlockView<'a>>,
     /// `LootContext.getLuck`.
     pub luck: f32,
-    /// The biome the roll is in, if any.
+    /// The biome the roll is in, if supplied.
     pub biome: Option<&'a str>,
-    /// Zero for registered codecs: their scoped context lends the actual roll random.
-    pub seed: i64,
-    /// Where the roll happens: the origin, the block entity and the level,
-    /// when the game rolled the table at a place (a broken block's drops,
-    /// a mob's death loot); None for the other rolls. Either engine fills it.
-    pub place: Option<Arc<LootPlace>>,
+    /// The roll's already scoped origin, block entity and level, if supplied.
+    pub place: Option<&'a LootPlace>,
 }
 
 /// One generated item stack.
@@ -240,7 +260,7 @@ struct Enchantment {
     /// `slots`: the equipment slot groups the enchantment works in.
     slots: Vec<String>,
     /// `effects` (equipment_drops and others).
-    effects: Value,
+    effects: Arc<Value>,
 }
 impl Enchantment {
     fn min_cost(&self, level: i32) -> i32 {
@@ -256,13 +276,13 @@ mod holder_sets;
 
 /// Loot tables, items, enchantments and the tags they reference.
 pub struct LootData {
-    holder_sets: holder_sets::Binding,
-    types: types::Types,
+    holder_sets: Arc<holder_sets::Binding>,
+    bindings: types::Bindings,
     component_defaults: Arc<HashMap<String, Compound>>,
     copies_entity_nbt: bool,
     tables: Arc<LootTables>,
     global_modifiers: Arc<global_modifiers::GlobalLootModifiers>,
-    modifiers: HashMap<String, Value>,
+    modifiers: Arc<HashMap<String, Value>>,
     predicates: Arc<HashMap<String, Value>>,
     items: HashMap<String, ItemFacts>,
     /// Enchantments in registry (identifier) order.
@@ -271,8 +291,11 @@ pub struct LootData {
     /// the items engine's selection table, never with another world's answers.
     primary_answers: crate::enchantment_answers::AnswerTable,
     support_answers: crate::enchantment_answers::AnswerTable,
-    /// Tag files' layers by (registry, tag id).
-    tags: HashMap<(String, String), crate::tag_layers::TagLayers>,
+    /// Bound tags by registry and tag ID.
+    tags: Arc<loot_tags::BoundTags>,
+    item_tag_names: Option<ItemTagNames>,
+    /// The bound damage type registry's names, sorted, for `LootTags::damage_type_in_tag`.
+    damage_types: Vec<String>,
     /// Smelting recipes in recipe id order: (ingredient, result, result count).
     smelting: Vec<(Value, String, i32)>,
 }
@@ -326,7 +349,7 @@ impl LootEntity {
     }
 }
 /// A `DamageSource`: its damage type and the entities behind it.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LootDamage {
     /// Damage type id (`minecraft:player_attack`).
     pub kind: String,
@@ -334,6 +357,8 @@ pub struct LootDamage {
     pub source: Option<LootEntity>,
     /// `getDirectEntity`: the projectile, or the attacker itself.
     pub direct: Option<LootEntity>,
+    /// `DamageSource.isDirect`: both handles named the same entity, or both were absent.
+    pub is_direct: bool,
 }
 /// The parameters of `LivingEntity.dropFromLootTable`.
 #[derive(Clone, Debug, Default)]
@@ -347,6 +372,24 @@ pub struct EntityLootParams {
     /// `ATTACKING_ENTITY` when the roll has no damage source to name it: a
     /// fishing hook's owner.
     pub attacker: Option<LootEntity>,
+}
+impl EntityLootParams {
+    /// The ENTITY parameters of `LivingEntity.dropFromLootTable`. The last damage player
+    /// supplies luck; the attacking and direct entities come from the damage source.
+    pub fn death(
+        this: LootEntity,
+        damage: Option<LootDamage>,
+        credit: Option<(LootEntity, f32)>,
+    ) -> Self {
+        let (player, luck) = credit.map_or((None, 0.0), |(player, luck)| (Some(player), luck));
+        Self {
+            this,
+            damage,
+            player,
+            luck,
+            attacker: None,
+        }
+    }
 }
 /// The most a table's read of an enchantment level counts as. A mod can answer
 /// any level, and what it answers drives loops: a stack of that size splits one
@@ -562,7 +605,7 @@ pub use predicates::load_predicates;
 /// few, and as `Value`s they took ~7 MB for 0.6 MB of JSON. Every table was
 /// read whole when it loaded, so reading it again cannot fail.
 #[derive(Debug, Default)]
-pub struct LootTables(HashMap<String, LazyJson>);
+pub struct LootTables(BTreeMap<String, LazyJson>);
 impl LootTables {
     /// The table `id`.
     pub fn get(&self, id: &str) -> Option<&Value> {
@@ -571,7 +614,7 @@ impl LootTables {
     pub fn contains_key(&self, id: &str) -> bool {
         self.0.contains_key(id)
     }
-    /// The tables' ids, in no order.
+    /// The tables' IDs in lexical order.
     pub fn ids(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
     }
@@ -643,7 +686,8 @@ pub fn shared_tables(root: &Path, overlay: &PackOverlay) -> io::Result<Arc<LootT
     if let Some(tables) = held(&mut LOADED.lock().unwrap_or_else(|e| e.into_inner())) {
         return Ok(tables);
     }
-    let tables = load_resources::load_ordered_kind(root, overlay, "loot_table")?;
+    let mut tables = load_resources::load_ordered_kind(root, overlay, "loot_table")?;
+    tables.retain(|id, table| retain_valid("loot table", id, validate_loot_table(table)));
     let tables: LootTables = tables.into_iter().collect();
     let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
     // Another thread may have loaded the same tables meanwhile: keep one.
@@ -680,6 +724,32 @@ fn cost(v: &Value) -> (i32, i32) {
     )
 }
 
+/// Selected loot resources awaiting the owning server's load hooks and codec binding.
+pub struct LootLoadCandidate {
+    data: LootData,
+    types: types::Types,
+}
+
+impl LootLoadCandidate {
+    /// Predicates selected for this generation's advancement criteria.
+    pub fn predicates(&self) -> &Arc<HashMap<String, Value>> {
+        self.data.predicates()
+    }
+
+    pub fn component_defaults(&self) -> &Arc<HashMap<String, Compound>> {
+        self.data.component_defaults()
+    }
+
+    /// Apply native edits before normalizing and binding the final immutable documents.
+    pub fn prepare(
+        mut self,
+        native: Option<&crate::native_load_context::LoadContext>,
+    ) -> io::Result<LootData> {
+        self.data.prepare_types(&self.types, native)?;
+        Ok(self.data)
+    }
+}
+
 impl LootData {
     /// Load tables, modifiers, predicates, tags and recipes from `data/`,
     /// and item metadata from the owning load's default-component snapshot.
@@ -698,10 +768,63 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
     ) -> io::Result<Self> {
-        let mut loaded = Self::load_table_candidate(root, overlay, defaults, types)?;
+        Self::load_generation(root, overlay, defaults, types, None, &[])?.prepare(None)
+    }
+
+    /// Load server loot against its damage catalog, applying native edits, when present,
+    /// before binding the immutable generation's rules.
+    pub fn load_with_damage(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &crate::item_defaults::ItemDefaults,
+        damage: &crate::damage_source::Catalog,
+        bound_tags: &[(&str, &RegistryTags)],
+        native: Option<&crate::native_load_context::LoadContext>,
+    ) -> io::Result<Self> {
+        Self::load_candidate_with_damage(root, overlay, defaults, damage, bound_tags)?
+            .prepare(native)
+    }
+
+    /// Read the server's loot resources while the other dependent registries are staged.
+    /// This candidate cannot be rolled until the owner prepares it.
+    pub fn load_candidate_with_damage(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &crate::item_defaults::ItemDefaults,
+        damage: &crate::damage_source::Catalog,
+        bound_tags: &[(&str, &RegistryTags)],
+    ) -> io::Result<LootLoadCandidate> {
+        Self::load_generation(
+            root,
+            overlay,
+            defaults,
+            types::Types::capture(),
+            Some(damage),
+            bound_tags,
+        )
+    }
+
+    fn load_generation(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &crate::item_defaults::ItemDefaults,
+        types: types::Types,
+        damage: Option<&crate::damage_source::Catalog>,
+        bound_tags: &[(&str, &RegistryTags)],
+    ) -> io::Result<LootLoadCandidate> {
+        let mut loaded =
+            Self::load_table_candidate(root, overlay, defaults, &types, damage, bound_tags)?;
         let mut recipes = HashMap::new();
         load_kind(&root.join("data"), "recipe", &mut recipes)?;
         overlay_map(overlay, "recipe", &mut recipes);
+        recipes.retain(|id, value| {
+            value["type"] != "minecraft:smelting"
+                || retain_valid(
+                    "recipe",
+                    id,
+                    crate::item_defaults::validate_stack(&value["result"]),
+                )
+        });
         let mut ids: Vec<&String> = recipes.keys().collect();
         ids.sort();
         loaded.smelting = ids
@@ -722,8 +845,10 @@ impl LootData {
                 &loaded.tags,
             )?;
         }
-        loaded.prepare_types()?;
-        Ok(loaded)
+        Ok(LootLoadCandidate {
+            data: loaded,
+            types,
+        })
     }
 
     /// Prepare shared loot tables, predicates and modifiers for an item catalog.
@@ -735,9 +860,9 @@ impl LootData {
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
     ) -> io::Result<Self> {
-        let mut loaded =
-            Self::load_table_candidate(root, overlay, defaults, types::Types::capture())?;
-        loaded.prepare_types()?;
+        let types = types::Types::capture();
+        let mut loaded = Self::load_table_candidate(root, overlay, defaults, &types, None, &[])?;
+        loaded.prepare_types(&types, None)?;
         Ok(loaded)
     }
 
@@ -745,12 +870,18 @@ impl LootData {
         root: &Path,
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
-        types: types::Types,
+        types: &types::Types,
+        damage: Option<&crate::damage_source::Catalog>,
+        bound_tags: &[(&str, &RegistryTags)],
     ) -> io::Result<Self> {
         let all = root.join("data");
         let tables = shared_tables(root, overlay)?;
-        let modifiers = load_resources::load_ordered_kind(root, overlay, "item_modifier")?;
-        let predicates = load_predicates(root, overlay)?;
+        let mut modifiers = load_resources::load_ordered_kind(root, overlay, "item_modifier")?;
+        modifiers
+            .retain(|id, value| retain_valid("item modifier", id, validate_item_modifier(value)));
+        let mut predicates = load_predicates(root, overlay)?;
+        predicates
+            .retain(|id, value| retain_valid("predicate", id, validate_loot_condition(value)));
         let items = defaults
             .entries()
             .iter()
@@ -794,11 +925,48 @@ impl LootData {
                         .filter_map(Value::as_str)
                         .map(str::to_owned)
                         .collect(),
-                    effects: e["effects"].clone(),
+                    effects: Arc::new(e["effects"].clone()),
                 }
             })
             .collect();
-        let mut tags = HashMap::new();
+        let binding = holder_sets::Binding::load(root, overlay, &items, &enchantments)?;
+        let builtin = crate::tag_layers::builtin_ids(root)?;
+        let standalone_damage;
+        let damage = match damage {
+            Some(damage) => damage,
+            None => {
+                // Standalone loot fixtures may omit the prepared export, but
+                // their pack damage types still enter through the same loader.
+                standalone_damage = if root.join("damage-catalog.json").try_exists()? {
+                    crate::damage_source::Catalog::load(root, overlay)?
+                } else {
+                    crate::damage_source::Catalog::default().with_packs(root, overlay)?
+                };
+                &standalone_damage
+            }
+        };
+        let mut damage_types: Vec<_> = damage
+            .entries()
+            .map(|(_, definition)| definition.name.clone())
+            .collect();
+        damage_types.sort();
+        let mut tags = HashMap::from([(
+            "damage_type".to_owned(),
+            damage
+                .tags()
+                .map(|tag| {
+                    (
+                        tag.to_owned(),
+                        damage.tag_members(tag).map(str::to_owned).collect(),
+                    )
+                })
+                .collect(),
+        )]);
+        tags.extend(
+            bound_tags
+                .iter()
+                .map(|(kind, tags)| ((*kind).to_owned(), (*tags).clone())),
+        );
         for registry in [
             "item",
             "block",
@@ -806,50 +974,57 @@ impl LootData {
             "enchantment",
             "instrument",
             "entity_type",
-            "damage_type",
             "predicate",
             "item_modifier",
             // What `location_check`'s `biomes` names.
             "worldgen/biome",
         ] {
-            let mut raw = HashMap::new();
-            load_kind(&all, &format!("tags/{registry}"), &mut raw)?;
-            for (name, value) in raw {
-                let layers = crate::tag_layers::TagLayers::from_file(&value);
-                tags.insert((registry.to_owned(), name), layers);
+            if tags.contains_key(registry) {
+                continue;
             }
-            // The packs' entries join the game's own, in pack order; a
-            // `replace` file drops what the lower sources put in and `remove`
-            // takes entries out (`TagLoader.load` walks the stack the same way).
-            for (id, files) in overlay.tag_kind(registry) {
-                for bytes in files {
-                    let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                        continue;
-                    };
-                    let slot = tags.entry((registry.to_owned(), id.clone())).or_default();
-                    slot.push(&v);
-                }
+            let raw = crate::tag_layers::layers(root, registry, overlay)?;
+            if matches!(registry, "predicate" | "item_modifier") {
+                loot_tags::check_cycles(registry, &raw)?;
             }
+            let contains = |id: &str| match registry {
+                "item" => items.contains_key(id),
+                "block" => builtin.get(registry).is_some_and(|ids| ids.contains(id)),
+                "fluid" => builtin.get(registry).map_or_else(
+                    || crate::fluid::FluidKind::from_name(id).is_some(),
+                    |ids| ids.contains(id),
+                ),
+                "predicate" => predicates.contains_key(id),
+                "item_modifier" => modifiers.contains_key(id),
+                _ => binding.ids(registry).map_or_else(
+                    || builtin.get(registry).is_none_or(|ids| ids.contains(id)),
+                    |ids| ids.iter().any(|entry| entry == id),
+                ),
+            };
+            tags.insert(
+                registry.to_owned(),
+                crate::tag_layers::TagLayers::bind(registry, &raw, contains),
+            );
         }
-        let binding = holder_sets::Binding::load(root, overlay, &items, &enchantments)?;
         let mut loaded = Self {
             holder_sets: Default::default(),
             copies_entity_nbt: false,
             component_defaults: copy::component_defaults(defaults)
                 .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))?,
-            types,
+            bindings: Default::default(),
             tables,
             global_modifiers: Arc::default(),
-            modifiers,
+            modifiers: Arc::new(modifiers),
             predicates: Arc::new(predicates),
             items,
             enchantments,
             primary_answers: Default::default(),
             support_answers: Default::default(),
-            tags,
+            item_tag_names: tags.get("item").map(ItemTagNames::bind),
+            tags: Arc::new(tags),
+            damage_types,
             smelting: Vec::new(),
         };
-        binding.snapshot(&mut loaded)?;
+        binding.snapshot(&mut loaded, types)?;
         // Both enchantment engines bind the same item holder identities before
         // a part can leave an unchanged default out of the shared answer table.
         for enchantment in &mut loaded.enchantments {
@@ -866,7 +1041,7 @@ impl LootData {
                 }
             }
         }
-        loaded.holder_sets = binding;
+        loaded.holder_sets = Arc::new(binding);
         Ok(loaded)
     }
     /// Whether any loaded function may request an entity's full saved NBT.
@@ -949,22 +1124,21 @@ impl LootData {
     /// attacker's `equipment_drops` effects (Looting) applied to `chance`.
     pub fn equipment_drop_chance(&self, params: &EntityLootParams, chance: f32) -> f32 {
         // Enchantment.damageContext: no luck and no killing player.
-        let damage_params = EntityLootParams {
-            this: params.this.clone(),
-            damage: params.damage.clone(),
+        let damage_params = EntityFacts {
             player: None,
-            luck: 0.0,
-            attacker: params.attacker.clone(),
+            ..params.into()
         };
         let mut c = Context {
             query: query::current_query(),
+            place: current_native_loot_place(),
             data: self,
+            local_bindings: None,
             random: LegacyRandom::new(0),
             biome: None,
             visited: Vec::new(),
             luck: 0.0,
             open_water: None,
-            entity: Some(&damage_params),
+            entity: Some(damage_params),
             enchanted_level: None,
         };
         let mut chance = chance;
@@ -982,7 +1156,7 @@ impl LootData {
     /// Tag members in tag order (nested tags expanded in place, duplicates
     /// dropped).
     fn tag(&self, registry: &str, name: &str) -> Vec<String> {
-        loot_tags::members(&self.tags, registry, name)
+        self.members(registry, name).unwrap_or_default()
     }
     /// A published HolderSet: "#tag", "id" or resolved IDs. Objects bind at load.
     fn holder_set(&self, registry: &str, v: &Value) -> Vec<String> {
@@ -1057,18 +1231,54 @@ impl LootData {
         };
         let mut c = Context {
             query: query::current_query(),
+            place: current_native_loot_place(),
             data: self,
+            local_bindings: None,
             random: random.clone(),
             biome: None,
             visited: Vec::new(),
             luck: params.luck,
             open_water: None,
-            entity: Some(params),
+            entity: Some(params.into()),
             enchanted_level,
         };
         let items = c.roll_root(Some(table), json);
         *random = c.random;
         items
+    }
+    /// One loot condition tested with no table around it, as an advancement's `player`
+    /// predicate does: `entity` is `this_entity`, `place` the level and origin. A parameter the
+    /// caller lacks (a damage source, a tool, a block state) makes the conditions that read it
+    /// fail, as a context without it does. `random` is advanced by the draws.
+    pub fn condition_holds<R: RandomSource + Clone>(
+        &self,
+        condition: &Value,
+        entity: Option<&LootEntity>,
+        place: LootPlace,
+        random: &mut R,
+    ) -> bool {
+        let facts = entity.map(|this| EntityFacts {
+            this,
+            damage: None,
+            player: None,
+            attacker: None,
+        });
+        let mut c = Context {
+            query: query::current_query(),
+            place: Some(Arc::new(place)),
+            data: self,
+            local_bindings: None,
+            random: random.clone(),
+            biome: None,
+            visited: Vec::new(),
+            luck: 0.0,
+            open_water: None,
+            entity: facts,
+            enchanted_level: None,
+        };
+        let holds = c.condition(condition);
+        *random = c.random;
+        holds
     }
     /// LootTable.getRandomItems with an empty context (a trial spawner's
     /// reward): the stacks after the stack splitter. `random` is the table's
@@ -1199,7 +1409,9 @@ fn shuffle_and_split(result: &mut Vec<LootStack>, slots: usize, random: &mut imp
 
 struct Context<'a, R> {
     query: std::rc::Rc<query::LootQuery>,
+    place: Option<Arc<LootPlace>>,
     data: &'a LootData,
+    local_bindings: Option<&'a types::RuleMap>,
     random: R,
     biome: Option<&'a str>,
     visited: Vec<String>,
@@ -1208,25 +1420,64 @@ struct Context<'a, R> {
     /// A fishing hook's `is_open_water` for `entity_properties` (None: no entity).
     open_water: Option<bool>,
     /// The entity, damage source and killer parameters.
-    entity: Option<&'a EntityLootParams>,
+    entity: Option<EntityFacts<'a>>,
     /// Asked for a death's enchantment levels; None for every other roll.
     enchanted_level: Option<&'a mut EnchantedLevel<'a, R>>,
 }
+/// A range predicate written as `{min?, max?}`, not as a single provider.
+/// `TimeCheck.test`'s ticks: the named clock's total in `place`'s level, modulo the condition's
+/// period. `None` when the level has no such clock or the period is zero: the check never holds.
+pub fn time_check_ticks(place: Option<&LootPlace>, condition: &Value) -> Option<i64> {
+    let total = place?
+        .level
+        .as_ref()?
+        .clocks
+        .get(condition["clock"].as_str()?)
+        .copied()?;
+    match condition["period"].as_i64() {
+        Some(0) => None,
+        Some(period) => Some(total.wrapping_rem(period)),
+        None => Some(total),
+    }
+}
+
+fn is_line(range: &Value) -> bool {
+    range.as_object().is_some_and(|o| !o.contains_key("type"))
+}
+/// A line with neither bound.
+fn is_open_range(range: &Value) -> bool {
+    is_line(range) && range["min"].is_null() && range["max"].is_null()
+}
 type Sink<'s, R> = dyn FnMut(&mut Context<'_, R>, LootStack) + 's;
+
+#[derive(Clone, Copy)]
+struct EntityFacts<'a> {
+    this: &'a LootEntity,
+    damage: Option<&'a LootDamage>,
+    player: Option<&'a LootEntity>,
+    attacker: Option<&'a LootEntity>,
+}
+
+impl<'a> From<&'a EntityLootParams> for EntityFacts<'a> {
+    fn from(params: &'a EntityLootParams) -> Self {
+        Self {
+            this: &params.this,
+            damage: params.damage.as_ref(),
+            player: params.player.as_ref(),
+            attacker: params.attacker.as_ref(),
+        }
+    }
+}
 
 impl<R: RandomSource> Context<'_, R> {
     /// A `LootContext.EntityTarget` parameter.
     fn target(&self, name: &str) -> Option<&LootEntity> {
         let p = self.entity?;
         match name {
-            "this" => Some(&p.this),
-            "attacker" => p
-                .damage
-                .as_ref()
-                .and_then(|d| d.source.as_ref())
-                .or(p.attacker.as_ref()),
-            "direct_attacker" => p.damage.as_ref()?.direct.as_ref(),
-            "attacking_player" => p.player.as_ref(),
+            "this" => Some(p.this),
+            "attacker" => p.damage.and_then(|d| d.source.as_ref()).or(p.attacker),
+            "direct_attacker" => p.damage?.direct.as_ref(),
+            "attacking_player" => p.player,
             _ => None,
         }
     }
@@ -1334,34 +1585,65 @@ impl<R: RandomSource> Context<'_, R> {
             _ => 0.,
         }
     }
+    /// `IntRangePredicate.test`: a bare provider is a point, an object with no `type` a line
+    /// whose bounds are providers read lowest first.
+    fn int_in_range(&mut self, range: &Value, input: i32) -> bool {
+        if is_line(range) {
+            (range["min"].is_null() || input >= self.int(&range["min"]))
+                && (range["max"].is_null() || input <= self.int(&range["max"]))
+        } else {
+            input == self.int(range)
+        }
+    }
+    /// `FloatRangePredicate.test`, as `int_in_range`.
+    fn float_in_range(&mut self, range: &Value, input: f32) -> bool {
+        if is_line(range) {
+            (range["min"].is_null() || input >= self.float(&range["min"]))
+                && (range["max"].is_null() || input <= self.float(&range["max"]))
+        } else {
+            input == self.float(range)
+        }
+    }
     fn condition(&mut self, c: &Value) -> bool {
-        if let Some(holds) =
-            query::condition(c, &self.query, self.query.tool.as_ref(), |item, ability| {
+        self.condition_with_bindings(c, self.local_bindings)
+    }
+    fn condition_with_bindings(&mut self, c: &Value, bindings: Option<&types::RuleMap>) -> bool {
+        if let Some(holds) = query::condition(
+            c,
+            &self.query,
+            self.query
+                .tool
+                .as_ref()
+                .map(|tool| tool as &dyn query::LootAbilityTool),
+            self.data,
+            |item, ability| {
                 crate::native_load_hooks::item_ability_default(item, ability, self.data)
-            })
-        {
+            },
+        ) {
             return holds;
         }
         let data = self.data;
         match c {
             Value::Null => true,
-            Value::Array(list) => list.iter().all(|c| self.condition(c)),
+            Value::Array(list) => list
+                .iter()
+                .all(|c| self.condition_with_bindings(c, bindings)),
             Value::String(id) => match data.predicates.get(id) {
-                Some(p) => self.condition(p),
+                Some(p) => self.condition_with_bindings(p, None),
                 None => false,
             },
             Value::Object(_) => match c["type"].as_str().unwrap_or("") {
-                "minecraft:inverted" => !self.condition(&c["term"]),
+                "minecraft:inverted" => !self.condition_with_bindings(&c["term"], bindings),
                 "minecraft:all_of" => c["terms"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .all(|t| self.condition(t)),
+                    .all(|t| self.condition_with_bindings(t, bindings)),
                 "minecraft:any_of" => c["terms"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .any(|t| self.condition(t)),
+                    .any(|t| self.condition_with_bindings(t, bindings)),
                 // FishingHookPredicate: the only entity property a hook has.
                 "minecraft:entity_properties"
                     if self.open_water.is_some()
@@ -1392,7 +1674,7 @@ impl<R: RandomSource> Context<'_, R> {
                 }
                 // DamageSourcePredicate (false without a damage source).
                 "minecraft:damage_source_properties" => {
-                    let Some(damage) = self.entity.and_then(|p| p.damage.as_ref()) else {
+                    let Some(damage) = self.entity.and_then(|p| p.damage) else {
                         return false;
                     };
                     let p = &c["predicate"];
@@ -1409,14 +1691,45 @@ impl<R: RandomSource> Context<'_, R> {
                             || self.entity_matches(&p["direct_entity"], damage.direct.as_ref()))
                         && (p["source_entity"].is_null()
                             || self.entity_matches(&p["source_entity"], damage.source.as_ref()))
-                        && p["is_direct"].as_bool().is_none_or(|want| {
-                            let direct = match (&damage.source, &damage.direct) {
-                                (Some(a), Some(b)) => a.kind == b.kind,
-                                (None, None) => true,
-                                _ => false,
-                            };
-                            direct == want
-                        })
+                        && p["is_direct"]
+                            .as_bool()
+                            .is_none_or(|want| damage.is_direct == want)
+                }
+                // WeatherCheck: the level's rain and thunder (false without a level).
+                "minecraft:weather_check" => {
+                    let Some(level) = self.place.as_deref().and_then(|p| p.level.as_ref()) else {
+                        return false;
+                    };
+                    let (raining, thundering) = (level.raining, level.thundering);
+                    c["raining"].as_bool().is_none_or(|want| want == raining)
+                        && c["thundering"]
+                            .as_bool()
+                            .is_none_or(|want| want == thundering)
+                }
+                // TimeCheck: the clock's total ticks, modulo the period, in the range. A clock
+                // the level does not have never matches.
+                "minecraft:time_check" => {
+                    let Some(time) = time_check_ticks(self.place.as_deref(), c) else {
+                        return false;
+                    };
+                    self.int_in_range(&c["value"], time as i32)
+                }
+                "minecraft:int_value_check" => {
+                    let range = &c["test"];
+                    // A range with no bound holds without reading the value, as `Line.test` does.
+                    if is_open_range(range) {
+                        return true;
+                    }
+                    let input = self.int(&c["value"]);
+                    self.int_in_range(range, input)
+                }
+                "minecraft:float_value_check" => {
+                    let range = &c["test"];
+                    if is_open_range(range) {
+                        return true;
+                    }
+                    let input = self.float(&c["value"]);
+                    self.float_in_range(range, input)
                 }
                 "minecraft:random_chance" => {
                     let chance = self.float(&c["chance"]);
@@ -1439,7 +1752,7 @@ impl<R: RandomSource> Context<'_, R> {
                 }
                 // A validated registered condition runs in the current roll's order.
                 k if k.contains(':') && !k.starts_with("minecraft:") => {
-                    self.registered_condition(k, c)
+                    self.registered_condition(bindings, k, c)
                 }
                 // An unknown type fails, as in items.rs `condition`.
                 _ => false,
@@ -1460,7 +1773,7 @@ impl<R: RandomSource> Context<'_, R> {
             Value::Object(_) => {
                 if self
                     .data
-                    .types
+                    .bindings
                     .conditional(m["type"].as_str().unwrap_or(""))
                     && !m["condition"].is_null()
                     && !self.condition(&m["condition"])
@@ -1964,7 +2277,7 @@ impl<R: RandomSource> Context<'_, R> {
             }
             // A validated registered function transforms only this stack.
             k if k.contains(':') && !k.starts_with("minecraft:") => {
-                stack = self.registered_function(k, f, stack);
+                self.registered_function(k, f, &mut stack);
             }
             // Lore and other data without random draws.
             _ => {}
@@ -2242,11 +2555,12 @@ mod namespace_tests {
         let enabled = crate::conditions::LoadConditions::new(["package_id"]);
         let off = PackOverlay {
             files: &files,
-            ..PackOverlay::NONE
+            ..PackOverlay::default()
         };
         let on = PackOverlay {
             files: &files,
             conditions: &enabled,
+            ..PackOverlay::default()
         };
         let absent = shared_tables(&root, &off).unwrap();
         assert!(!absent.contains_key("demo:base"));
@@ -2257,18 +2571,83 @@ mod namespace_tests {
         assert!(present.contains_key("demo:replaced"));
         assert!(!present.contains_key("demo:unknown"));
         assert!(Arc::ptr_eq(&absent, &shared_tables(&root, &off).unwrap()));
-        fs::write(root.join("items.json"), "{}").unwrap();
+        fs::write(root.join("items.json"), r#"{"minecraft:stone":{}}"#).unwrap();
         let defaults = crate::item_defaults::read(&root).unwrap();
         let loot = LootData::load(&root, &off, &defaults).unwrap();
+        assert_eq!(loot.tags["item"]["demo:food"], ["minecraft:stone"]);
+        assert!(loot.tags["item"].contains_key("demo:absent"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn damage_predicate_reads_only_bound_tags_of_the_frozen_registry() {
+        let root = std::env::temp_dir().join(format!("sunrise-loot-damage-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{"minecraft:stick":{},"minecraft:paper":{}}"#,
+        )
+        .unwrap();
+        let defaults = crate::item_defaults::read(&root).unwrap();
+        let initial = vec![(
+            "damage_type/test:hit".into(),
+            vec![br#"{"message_id":"hit","scaling":"never","exhaustion":0}"#.to_vec()],
+        )];
+        let damage = crate::damage_source::Catalog::default()
+            .with_packs(&root, &PackOverlay::new(&initial))
+            .unwrap();
+        let pool = |tag, item| {
+            serde_json::json!({
+                "rolls": 1,
+                "condition": {"type":"minecraft:damage_source_properties", "predicate":{
+                    "tags":[{"id":tag,"expected":true}]
+                }},
+                "entries": [{"type":"minecraft:item","name":item}]
+            })
+        };
+        let files = vec![
+            (
+                "tags/test:damage_type/good".into(),
+                vec![br#"{"values":["test:hit"]}"#.to_vec()],
+            ),
+            (
+                "tags/test:damage_type/broken".into(),
+                vec![br#"{"values":["test:hit","test:absent"]}"#.to_vec()],
+            ),
+            (
+                "loot_table/test:drop".into(),
+                vec![
+                    serde_json::to_vec(&serde_json::json!({"pools":[
+                        pool("#test:good", "minecraft:stick"),
+                        pool("#test:broken", "minecraft:paper"),
+                    ]}))
+                    .unwrap(),
+                ],
+            ),
+        ];
+        // The original pack no longer supplies the definition, but reload
+        // retains the damage registry and binds only these new tag files.
+        let overlay = PackOverlay::new(&files);
+        let damage = damage.reload_tags(&root, &overlay).unwrap();
+        let loot =
+            LootData::load_with_damage(&root, &overlay, &defaults, &damage, &[], None).unwrap();
+        let params = EntityLootParams {
+            damage: Some(LootDamage {
+                kind: "test:hit".into(),
+                source: None,
+                direct: None,
+                is_direct: true,
+            }),
+            ..EntityLootParams::default()
+        };
+        let mut random = sunrise_core::random::LegacyRandom::new(1);
+        let drops = loot.roll_entity("test:drop", &mut random, &params);
         assert_eq!(
-            loot.tags[&("item".into(), "demo:food".into())],
-            crate::tag_layers::TagLayers::from_file(
-                &serde_json::json!({"values": ["minecraft:stone"]})
-            )
-        );
-        assert!(
-            loot.tags
-                .contains_key(&("item".into(), "demo:absent".into()))
+            drops
+                .iter()
+                .map(|stack| stack.item.as_str())
+                .collect::<Vec<_>>(),
+            ["minecraft:stick"]
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -2938,7 +3317,6 @@ mod namespace_tests {
     #[test]
     fn tag_kind_yields_tag_loader_ids_for_content_id_keys() {
         let overlay = PackOverlay {
-            conditions: &crate::conditions::LoadConditions::vanilla(),
             files: &[
                 (
                     "tags/minecraft:item/food".to_owned(),
@@ -2949,6 +3327,7 @@ mod namespace_tests {
                     vec![br#"{"values": ["minecraft:infinity"]}"#.to_vec()],
                 ),
             ],
+            ..PackOverlay::default()
         };
         let item: Vec<_> = overlay.tag_kind("item").map(|(id, _)| id).collect();
         assert_eq!(item, ["minecraft:food"]);
@@ -2965,14 +3344,13 @@ mod namespace_tests {
         let root = std::env::temp_dir().join(format!("sunrise-loot-tag-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("data/minecraft/tags/item")).unwrap();
-        fs::write(root.join("items.json"), "{}").unwrap();
+        fs::write(root.join("items.json"), r#"{"minecraft:apple":{},"minecraft:bread":{},"minecraft:cookie":{},"minecraft:kelp":{}}"#).unwrap();
         fs::write(
             root.join("data/minecraft/tags/item/food.json"),
             r#"{"values": ["minecraft:bread", "minecraft:cookie"]}"#,
         )
         .unwrap();
         let overlay = PackOverlay {
-            conditions: &crate::conditions::LoadConditions::vanilla(),
             files: &[(
                 "tags/minecraft:item/food".to_owned(),
                 vec![
@@ -2980,6 +3358,7 @@ mod namespace_tests {
                     br#"{"replace": true, "values": ["minecraft:apple"]}"#.to_vec(),
                 ],
             )],
+            ..PackOverlay::default()
         };
         let defaults = crate::item_defaults::read(&root).unwrap();
         let data = LootData::load(&root, &overlay, &defaults).unwrap();
@@ -3106,7 +3485,7 @@ mod native_kinds_tests {
             min_cost: (0, 0),
             max_cost: (100, 0),
             slots: vec![],
-            effects: Value::Null,
+            effects: Arc::new(Value::Null),
         });
         data
     }
@@ -3198,7 +3577,7 @@ mod native_kinds_tests {
                     min_cost: (0, 0),
                     max_cost: (100, 0),
                     slots: vec![],
-                    effects: Value::Null,
+                    effects: Arc::new(Value::Null),
                 })
                 .collect();
             let total: i64 = weights.iter().map(|&w| i64::from(w)).sum();
@@ -3255,6 +3634,36 @@ mod native_kinds_tests {
         let data = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
         let _ = std::fs::remove_dir_all(&root);
         data
+    }
+
+    #[test]
+    fn a_direct_damage_predicate_tests_identity_not_entity_type() {
+        let loot = table(
+            "direct_damage",
+            r#"{"pools":[{"rolls":1,"condition":{"type":"minecraft:damage_source_properties","predicate":{"is_direct":true}},"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"#,
+        );
+        let mut random = LegacyRandom::new(1);
+        let entity = LootEntity::new("minecraft:zombie");
+        for (source, direct, is_direct) in [
+            (Some(entity.clone()), Some(entity.clone()), false),
+            (Some(entity.clone()), Some(entity), true),
+            (None, None, true),
+        ] {
+            let params = EntityLootParams {
+                damage: Some(LootDamage {
+                    kind: "minecraft:mob_attack".into(),
+                    source,
+                    direct,
+                    is_direct,
+                }),
+                ..EntityLootParams::default()
+            };
+            assert_eq!(
+                loot.roll_entity("minecraft:test", &mut random, &params)
+                    .len(),
+                usize::from(is_direct)
+            );
+        }
     }
 
     #[test]

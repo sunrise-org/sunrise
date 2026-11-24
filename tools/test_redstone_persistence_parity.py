@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Compare native comparator/hopper saves and resumed transfers with a headless Game."""
 import argparse
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -38,15 +37,7 @@ def main():
         return
     resources = (args.resources or lab.LOCAL / 'sunrise-client' / lock['minecraft']['version']).resolve()
     env = lab.game_env(SUNRISE_TEST_RESOURCES=resources, SUNRISE_PERSISTENCE_ORACLE=reference)
-    result = subprocess.run(['cargo', 'test', '-p', 'sunrise-client', '--lib', '--no-run',
-                             '--message-format=json'], cwd=lab.ROOT, env=env,
-                            capture_output=True, text=True, timeout=3600)
-    if result.returncode:
-        raise RuntimeError(result.stdout + result.stderr)
-    executables = [row['executable'] for line in result.stdout.splitlines()
-                   if (row := json.loads(line)).get('reason') == 'compiler-artifact'
-                   and row.get('executable') and row.get('profile', {}).get('test')]
-    assert len(executables) == 1, executables
+    executables = [lab.parity_fixtures()]
     with tempfile.TemporaryDirectory(prefix='sunrise-redstone-persistence-') as scratch:
         result = subprocess.run([executables[0], 'game::persist::tests::comparator_and_hopper_live_state_survives_chunk_reload',
                                  '--ignored', '--exact', '--nocapture'], cwd=scratch, env=env,

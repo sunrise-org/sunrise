@@ -99,6 +99,23 @@ jobs:
       # Every build and test in this job runs at the runner's size, not the host's (tools/ci/cargo_jobs.py).
       - name: Cap build parallelism to the runner
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
+      - name: Prepare and verify the dedicated server profile from Mojang's pinned jar
+        if: matrix.shard == 'daily-rows'
+        run: |
+          # Only pinned downloads persist, by SHA-1 inside this repository's private cache.
+          mkdir -p "$DYNA_CI_KEEP/mojang-server" .local
+          ln -s "$DYNA_CI_KEEP/mojang-server" .local/server-downloads
+          version=$(python3 -c 'import json; print(json.load(open("research-lock.json"))["minecraft"]["version"])')
+          profile="$PWD/game-files/sunrise-client/${version}-server"
+          cargo build --release --locked -p sunrise-prepare
+          preparer="${CARGO_TARGET_DIR:-target}/release/sunrise-prepare"
+          python3 tools/ci/preparation_step.py resource-export "$RUNNER_TEMP/server-prepare.log" \
+            "$preparer" --server --output "$profile"
+          "$preparer" --server --check --output "$profile" > "$RUNNER_TEMP/server-check.log" 2>&1 || {
+            echo '::error::sunrise-prepare --server --check refused the prepared server profile'; exit 1;
+          }
+          python3 tools/prepare_output.py check --server "$profile"
+          echo "SUNRISE_TEST_SERVER_PROFILE=$profile" >> "$GITHUB_ENV"
       # Missing data fails the leg.
       - name: Prepare checkout-keyed vanilla data
         id: data
@@ -129,14 +146,54 @@ jobs:
         run: |
           reference=$(mktemp -d "$RUNNER_TEMP/fishing-reference.XXXXXX")
           python3 tools/test_fishing_rng_parity.py --prepare-reference "$reference" --env-file "$GITHUB_ENV"
+      - name: Generate the game-mode split tests' vanilla witness
+        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#'))
+        run: |
+          witness=$(mktemp -d "$RUNNER_TEMP/gamemode-split-witness.XXXXXX")
+          python3 tools/test_gamemode_split_parity.py --prepare-witness "$witness" --env-file "$GITHUB_ENV"
+      - name: Generate the crosshair pick tests' vanilla witness
+        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#'))
+        run: |
+          witness=$(mktemp -d "$RUNNER_TEMP/crosshair-pick-witness.XXXXXX")
+          python3 tools/test_crosshair_pick_parity.py --prepare-witness "$witness" --env-file "$GITHUB_ENV"
+      - name: Generate the network parity tests' vanilla witnesses
+        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-client-lib' || startsWith(matrix.shard, 'sunrise-client-lib#') || matrix.shard == 'daily-rows')
+        run: |
+          witness=$(mktemp -d "$RUNNER_TEMP/network-witness.XXXXXX")
+          python3 tools/ci/with_xvfb.py python3 tools/test_network_parity.py --prepare-witness "$witness" --env-file "$GITHUB_ENV"
+      - name: Generate the item glint tests' vanilla witness
+        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client-lib' || startsWith(matrix.shard, 'sunrise-client-lib#') || matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#'))
+        run: |
+          python3 tools/ci/with_xvfb.py python3 tools/test_glint_parity.py --record-only
+          echo "SUNRISE_ITEM_GLINT_WITNESS=$PWD/.local/witness/26.3/glint/witness.json" >> "$GITHUB_ENV"
       - name: Run the ignored tests that need prepared data
         if: steps.data.outputs.present != 'false'
         env:
           SHARD: ${{ matrix.shard }}
           SUNRISE_DATA_LEG_TIMING: '1'
+          # The mesher and section-visibility tests read the prepared data from their own variable.
+          SUNRISE_MESH_TEST_RESOURCES: ${{ github.workspace }}/.local/sunrise-client/26.3
+          IGNORED_TESTS_PRIVATE_LOGS: ${{ runner.temp }}/ignored-tests-private
         run: |
           export SUNRISE_TEST_RESOURCES="$PWD/.local/sunrise-client/26.3"
           python3 tools/ci/with_xvfb.py python3 tools/ci/ignored_tests.py --report "$RUNNER_TEMP/daily-report.json" "$SHARD"
+      # The public log withholds panic payloads (they can carry vanilla data); a failed run's full output is copied
+      # into this host's keep, as parity.yml keeps a failed share's logs, with the same three-day retention.
+      - name: Keep a failed run's full output beyond this slot
+        if: always()
+        env:
+          PRIVATE_LOGS: ${{ runner.temp }}/ignored-tests-private
+          NAME: ${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+        run: |
+          [ -n "${DYNA_CI_KEEP:-}" ] || exit 0
+          root="$DYNA_CI_KEEP/ignored-tests-failed-logs"
+          if [ -d "$PRIVATE_LOGS" ] && [ -n "$(ls -A "$PRIVATE_LOGS")" ]; then
+            mkdir -p "$root"
+            rm -rf -- "${root:?}/$NAME"
+            cp -a "$PRIVATE_LOGS" "$root/$NAME"
+            echo "the failed tests' full output is kept in the host's keep: ignored-tests-failed-logs/$NAME"
+          fi
+          [ -d "$root" ] && find "$root" -mindepth 1 -maxdepth 1 -type d -mmin +4320 -exec rm -rf {} + || true
       # The leg's verdict for the daily summary: test names, panic locations and policy only (ignored_tests.py --report).
       - name: Upload the leg report
         if: always()

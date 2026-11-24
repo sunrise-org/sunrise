@@ -22,6 +22,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import zipfile
@@ -127,8 +128,11 @@ def main():
     parser.add_argument('--orb-water-fixture', action='store_true', help='guarded orb water/air scene')
     parser.add_argument('--orb-water-raw-diagnostic', action='store_true', help='add whole Pos/Motion records')
     parser.add_argument('--orb-lava-fixture', action='store_true', help='guarded server orb lava contact scene')
+    parser.add_argument('--falling-first-tick-fixture', action='store_true',
+                        help='summoned falling blocks and TNT tick on their first tick, after a later orb too')
     parser.add_argument('--orb-lava-raw-diagnostic', action='store_true', help='retain random Pos/Motion as exact raw diagnostics')
     parser.add_argument('--orb-fire-fixture', action='store_true', help='server orb saved Fire and its burn, tick by tick')
+    parser.add_argument('--lava-fire-fixture', action='store_true', help='lava sets Fire on projectiles, falling blocks and orbs')
     parser.add_argument('--mob-home-fixture', action='store_true')
     parser.add_argument('--mob-home-holder-removal-diagnostic', action='store_true')
     parser.add_argument('--mob-home-late-detach-control', action='store_true')
@@ -137,6 +141,7 @@ def main():
     parser.add_argument("--boat-item-hit-fixture", action="store_true")
     parser.add_argument("--stand-entity-collision-fixture", action="store_true")
     parser.add_argument("--reference-only", action="store_true")
+    parser.add_argument("--record-summon-name-witness", type=Path, help="write the Java reference records as a version-tagged JSON witness")
     parser.add_argument("--boat-leash-view-fixture", action="store_true")
     parser.add_argument("--boat-motion-diagnostic", action="store_true")
     parser.add_argument('--reinforcement-original-diagnostic', action='store_true', help='replay the original unisolated174/108 fixture, retaining its terrain prerequisite failure')
@@ -167,6 +172,7 @@ def main():
     parser.add_argument('--baby-modifier-raw-diagnostic', action='store_true', help='add the whole attributes lists and entity data')
     parser.add_argument('--mob-attribute-save-fixture', action='store_true', help='which attribute instances a pig, allay and armor stand save before and after a tick')
     parser.add_argument('--mob-attribute-save-raw-diagnostic', action='store_true', help='add the whole attributes lists and entity data')
+    parser.add_argument('--record-oxygen-bonus-witness', type=Path, help='record the vanilla underwater oxygen_bonus attribute witness JSON to this path')
     parser.add_argument('--mob-inventory-merge-fixture', action='store_true', help='Piglin and Villager saved inventories loaded as SimpleContainer.addItem does')
     parser.add_argument('--mob-inventory-merge-raw-diagnostic', action='store_true', help='add each mob\'s whole entity data')
     parser.add_argument('--summon-passengers-fixture', action='store_true', help='summon trees with Passengers entries vanilla cannot load')
@@ -195,7 +201,30 @@ def main():
                         help='leave out the sync_randoms steps: the control in which their fields differ run to run')
     parser.add_argument('--groups-file', type=Path,
                         help='run these generated [name, ops] groups after the common setup instead of the corpus')
+    parser.add_argument('--record-eye-item-witness', nargs='?',
+                        const=str(lab.LOCAL / 'witness' / lab.VERSION / 'eye_item' / 'eye_item.tsv'),
+                        help='run the 26.3 Java oracle on summoned eye of ender and write the eye Item witness TSV into .local')
+    parser.add_argument('--record-shulker-motion', nargs='?',
+                        const=lab.LOCAL / 'witness' / lab.VERSION / 'shulker_motion' / 'shulker_motion.json',
+                        type=Path, help='record the shulker motion/yaw witness into .local from VanillaCommandExecOracle only')
+    parser.add_argument('--record-moving-piston-witness', nargs='?', type=Path,
+                        const=lab.LOCAL / 'witness' / lab.VERSION / 'falling_moving_piston' / 'falling_block_moving_piston.jsonl',
+                        help='write the validated Java reference records with a version header and meta.json to this path (default under .local/witness/) and stop')
+    parser.add_argument('--record-stand-living-witness', type=Path,
+                        help='write a versioned JSON witness from the Java reference run (with --reference-only)')
+    parser.add_argument('--record-fangs-ticking-witness', nargs='?',
+                        const=lab.LOCAL / 'witness' / lab.VERSION / 'fangs_ticking_gate' / 'fangs_ominous_spawner_ticking_gate.json',
+                        type=Path,
+                        help='record the 26.3 vanilla ticking-gate witness JSON into .local (Java only)')
+    parser.add_argument('--record-thrown-item-witness', type=Path,
+                        help='write verified vanilla oracle records to this witness JSON file')
+    parser.add_argument('--record', type=Path,
+                        help='record vanilla reference steps for non-setup groups to PATH (implies --reference-only)')
     args = parser.parse_args()
+    if args.record_eye_item_witness:
+        args.reference_only = True
+        if not args.only:
+            args.only = 'summoned eye of ender'
     build = args.work_dir.resolve() if args.work_dir else lab.LOCAL / 'command-exec-parity'
     build.mkdir(parents=True, exist_ok=True)
     report_path = build / 'report.json'
@@ -377,12 +406,24 @@ def main():
             from orb_lava_corpus import orb_lava
         groups = [('setup', corpus_module.group_setup()),
                   ('orb lava contact', orb_lava(args.orb_lava_raw_diagnostic))]
+    if args.falling_first_tick_fixture:
+        try:
+            from .falling_first_tick_corpus import falling_first_tick
+        except ImportError:
+            from falling_first_tick_corpus import falling_first_tick
+        groups = [('setup', corpus_module.group_setup()), ('falling first tick', falling_first_tick())]
     if args.orb_fire_fixture:
         try:
             from .orb_fire_corpus import orb_fire
         except ImportError:
             from orb_fire_corpus import orb_fire
         groups = [('setup', corpus_module.group_setup()), ('orb fire', orb_fire())]
+    if args.lava_fire_fixture:
+        try:
+            from .lava_fire_corpus import lava_fire
+        except ImportError:
+            from lava_fire_corpus import lava_fire
+        groups = [('setup', corpus_module.group_setup()), ('lava fire', lava_fire())]
     if args.mob_home_fixture:
         try:
             from .mob_home_corpus import mob_home
@@ -456,9 +497,11 @@ def main():
     if args.baby_modifier_fixture:
         from baby_modifier_corpus import baby_modifier
         groups = [('setup', corpus_module.group_setup()), ('baby modifier mutation', baby_modifier(args.baby_modifier_raw_diagnostic))]
-    if args.mob_attribute_save_fixture:
+    if args.mob_attribute_save_fixture or args.record_oxygen_bonus_witness:
         from mob_attribute_save_corpus import mob_attribute_save
-        groups = [('setup', corpus_module.group_setup()), ('mob attribute save', mob_attribute_save(args.mob_attribute_save_raw_diagnostic))]
+        groups = [('setup', corpus_module.group_setup()),
+                  ('mob attribute save', mob_attribute_save(
+                      args.mob_attribute_save_raw_diagnostic or bool(args.record_oxygen_bonus_witness)))]
     if args.mob_inventory_merge_fixture:
         from mob_inventory_merge_corpus import mob_inventory_merge
         groups = [('setup', corpus_module.group_setup()), ('mob inventory merge', mob_inventory_merge(args.mob_inventory_merge_raw_diagnostic))]
@@ -511,6 +554,15 @@ def main():
         # Generated scripts (tools/parity_fuzz.py): the common setup, then the file's [name, ops] groups only.
         groups = [('setup', corpus_module.group_setup()),
                   *[(name, ops) for name, ops in json.loads(args.groups_file.read_text(encoding='utf-8'))]]
+    if args.record_shulker_motion:
+        groups = [('setup', corpus_module.group_setup()),
+                  (corpus_module.SHULKER_MOTION_GROUP, corpus_module.shulker_motion_and_yaw())]
+    if args.record_fangs_ticking_witness:
+        witness_cases = corpus_module.fangs_ominous_spawner_ticking_witness_cases()
+        pause_spec = corpus_module.fangs_spawner_scheduled_ticket_pause_witness_spec()
+        groups = [('setup', corpus_module.group_setup()),
+                  ('fangs and ominous spawner ticking witness',
+                   corpus_module.fangs_ominous_spawner_ticking_witness_script(witness_cases, pause_spec))]
     script = assemble(groups, args.unsynced_randoms)
     # docs/parity-workflow.md "Randoms that repeat": both engines' unseeded randoms repeat for a script that syncs them.
     synced = any(op['op'] == 'sync_randoms' for op in script)
@@ -560,8 +612,48 @@ def main():
         java_options.append('-Dsunrise.functionAdmissionFixture=true')
     if synced:
         java_options.append(seed_agent.java_option(build, lock['minecraft']['java_major']))
-    run(['java', '-Xmx3G', '-Duser.timezone=UTC', *(['-Dsunrise.loadedFixture=true'] if args.loaded_fixture else []), *java_options, '-cp', os.pathsep.join([str(classes), str(jars['server']), dependency_path]),
-         'dev.sunriselab.parity.VanillaCommandExecOracle', vanilla_dir / 'universe', script_path, build / 'vanilla.jsonl', SEED], 'java', cwd=vanilla_dir)
+    if args.record_fangs_ticking_witness:
+        (build / 'vanilla.jsonl').unlink(missing_ok=True)
+    java_cmd = [
+        'java', '-Xmx3G', '-Duser.timezone=UTC',
+        *(['-Dsunrise.loadedFixture=true'] if args.loaded_fixture or args.record_fangs_ticking_witness else []),
+        *java_options, '-cp', os.pathsep.join([str(classes), str(jars['server']), dependency_path]),
+        'dev.sunriselab.parity.VanillaCommandExecOracle', vanilla_dir / 'universe', script_path, build / 'vanilla.jsonl', SEED,
+    ]
+    run(java_cmd, 'java', cwd=vanilla_dir)
+
+    if args.record_fangs_ticking_witness:
+        witness_path = args.record_fangs_ticking_witness.resolve()
+        write_fangs_ticking_witness(
+            witness_path,
+            lock['minecraft']['version'],
+            witness_cases,
+            pause_spec,
+            [json.loads(line) for line in (build / 'vanilla.jsonl').read_text(encoding='utf-8').splitlines()],
+        )
+        java_ver_proc = subprocess.run(['java', '-version'], capture_output=True, text=True, check=True)
+        java_ver = (java_ver_proc.stderr or java_ver_proc.stdout).strip().splitlines()[0]
+        lab.write_json(witness_path.with_name('meta.json'), {
+            'game_version': lock['minecraft']['version'],
+            'java_major': lock['minecraft']['java_major'],
+            'java_version': java_ver,
+            'harness': 'tools/test_fangs_ticking_gate_parity.py',
+            'witness_env': 'SUNRISE_FANGS_TICKING_GATE_WITNESS',
+            'oracle': oracle.relative_to(lab.ROOT).as_posix(),
+            'command': [str(part) for part in java_cmd],
+            'input_hashes': {
+                'research-lock.json': lab.digest(lab.LOCK, 'sha256'),
+                'server.jar': lab.digest(jars['server'], 'sha256'),
+                oracle.relative_to(lab.ROOT).as_posix(): lab.digest(oracle, 'sha256'),
+                'tools/command_exec_corpus.py': lab.digest(lab.ROOT / 'tools/command_exec_corpus.py', 'sha256'),
+                'script.jsonl': lab.digest(script_path, 'sha256'),
+            },
+            'outputs': {
+                witness_path.name: {'sha256': lab.digest(witness_path, 'sha256'), 'bytes': witness_path.stat().st_size},
+            },
+        })
+        print(f'Recorded {lock["minecraft"]["version"]} fangs/spawner ticking witness: {witness_path}')
+        return
 
     if any(op['op'] == 'raid_state' for op in script):
         from raid_village_corpus import validate_java_inputs
@@ -573,8 +665,8 @@ def main():
                 any(len(r.get('bits', [])) != 3 or
                     any(re.fullmatch(r'[0-9a-f]{1,16}', b) is None for b in r['bits']) for r in direct)):
             sys.exit('Java direct underwater reference prerequisite failed')
-    if args.reference_only:
-        reference = [json.loads(line) for line in (build / 'vanilla.jsonl').read_text().splitlines()]
+    if args.reference_only or args.record or args.record_shulker_motion or args.record_moving_piston_witness or args.record_summon_name_witness:
+        reference = [json.loads(line) for line in (build / 'vanilla.jsonl').read_text(encoding='utf-8').splitlines()]
         recorded = [op for op in script if op['op'] in ('player_state', 'player_loop', 'map_state', 'frame_map_state', 'mob_anger', 'projectile_saved_type', 'raid_state', 'menu_state', 'craft_menu_state', 'map_files', 'merchant_state', 'merchant_saved_stats') or
                     (op['op'] == 'cmd' and op.get('record', True)) or
                     (op['op'] == 'tick' and op.get('record'))]
@@ -592,6 +684,108 @@ def main():
                 sys.exit(f'Java callback guard failed: {op}: {row.get("results")}')
             if 'expect_map' in op and row.get('messages') != [[[op['expect_map'], [None, False, False, False, False, False]]]]:
                 sys.exit(f'Java map prerequisite failed: {op}: {row}')
+        if args.record_eye_item_witness:
+            write_eye_item_witness(Path(args.record_eye_item_witness), lock['minecraft']['version'], reference)
+        if args.record_shulker_motion:
+            write_shulker_motion_witness(args.record_shulker_motion, reference, lock, jars['server'],
+                                         script_path=script_path, oracle_path=oracle)
+            print(f'Recorded {lock["minecraft"]["version"]} shulker motion witness: {args.record_shulker_motion}')
+            return
+        if args.record_oxygen_bonus_witness:
+            from mob_attribute_save_corpus import record_oxygen_bonus_witness
+            record_oxygen_bonus_witness(reference, lock['minecraft']['version'], args.record_oxygen_bonus_witness)
+            print(f'Recorded oxygen_bonus witness: {args.record_oxygen_bonus_witness}')
+        if args.record_stand_living_witness:
+            names = [name for name, _ in groups if name != 'setup']
+            if names != [corpus_module.STAND_LIVING_GROUP]:
+                sys.exit(f'--record-witness supports only {corpus_module.STAND_LIVING_GROUP!r}, got {names!r}')
+            witness = corpus_module.extract_stand_living_witness(lock['minecraft']['version'], reference)
+            args.record_stand_living_witness.parent.mkdir(parents=True, exist_ok=True)
+            args.record_stand_living_witness.write_text(json.dumps(witness, indent=2) + '\n', encoding='utf-8')
+            print(f'Recorded witness: {args.record_stand_living_witness}')
+        if args.record_thrown_item_witness:
+            write_witness(args.record_thrown_item_witness, lock, groups, reference)
+        if args.record_moving_piston_witness:
+            target = args.record_moving_piston_witness if args.record_moving_piston_witness.is_absolute() else lab.ROOT / args.record_moving_piston_witness
+            target.parent.mkdir(parents=True, exist_ok=True)
+            recorded_groups = [name for name, _ in groups if name != 'setup']
+            header = json.dumps({
+                'minecraft': lock['minecraft']['version'],
+                'oracle': 'dev.sunriselab.parity.VanillaCommandExecOracle',
+                'groups': recorded_groups,
+            }, ensure_ascii=False)
+            target.write_text(header + '\n' + (build / 'vanilla.jsonl').read_text(encoding='utf-8'), encoding='utf-8')
+            java_ver_proc = subprocess.run(['java', '-version'], capture_output=True, text=True, check=True)
+            java_version = (java_ver_proc.stderr or java_ver_proc.stdout).strip().splitlines()[0]
+            lab.write_json(target.parent / 'meta.json', {
+                'game_version': lock['minecraft']['version'],
+                'java_major': lock['minecraft']['java_major'],
+                'java_version': java_version,
+                'harness': 'tools/test_falling_moving_piston_parity.py',
+                'oracle': 'dev.sunriselab.parity.VanillaCommandExecOracle',
+                'groups': recorded_groups,
+                'witness_env': 'SUNRISE_FALLING_MOVING_PISTON_WITNESS',
+                'command': [sys.executable, *sys.argv],
+                'input_hashes': {
+                    'research-lock.json': lab.digest(lab.LOCK, 'sha256'),
+                    'server.jar': lab.digest(jars['server'], 'sha256'),
+                    'mods/sunrise/src/test/java/dev/sunriselab/parity/VanillaCommandExecOracle.java': lab.digest(oracle, 'sha256'),
+                    'tools/command_exec_corpus.py': lab.digest(lab.ROOT / 'tools/command_exec_corpus.py', 'sha256'),
+                    'tools/test_command_exec_parity.py': lab.digest(Path(__file__), 'sha256'),
+                },
+                'outputs': {
+                    target.name: {'sha256': lab.digest(target, 'sha256'), 'bytes': target.stat().st_size},
+                },
+            })
+            print(f'Recorded witness ({len(reference)} records): {target}')
+        if args.record_summon_name_witness:
+            payload = {
+                'minecraft': lock['minecraft']['version'],
+                'oracle': 'dev.sunriselab.parity.VanillaCommandExecOracle',
+                'groups': [name for name, _ in groups if name != 'setup'],
+                'records': reference,
+            }
+            args.record_summon_name_witness.parent.mkdir(parents=True, exist_ok=True)
+            args.record_summon_name_witness.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            print(f'Recorded {len(reference)} vanilla {lock["minecraft"]["version"]} witness records to {args.record_summon_name_witness}')
+        if args.record:
+            target_groups = [(name, ops) for name, ops in groups if name != 'setup']
+            ref_iter = iter(reference)
+            steps = []
+            for _, ops in target_groups:
+                for op in ops:
+                    if op['op'] == 'cmd':
+                        if op.get('record', True):
+                            row = next(ref_iter)
+                            if row['cmd'] != op['cmd']:
+                                sys.exit(f'--record command mismatch: {row["cmd"]!r} != {op["cmd"]!r}')
+                            steps.append({
+                                'op': 'cmd',
+                                'cmd': row['cmd'],
+                                'messages': row['messages'],
+                                'results': row['results'],
+                            })
+                        else:
+                            steps.append({'op': 'cmd', 'cmd': op['cmd'], 'record': False})
+                    elif op['op'] == 'tick':
+                        if op.get('record'):
+                            next(ref_iter)
+                        steps.append({'op': 'tick', 'n': op.get('n', 1)})
+                    elif op['op'] in ('sync_randoms', 'wait_chunks'):
+                        steps.append(dict(op))
+                    else:
+                        sys.exit(f'--record does not support op {op["op"]}')
+            if next(ref_iter, None) is not None:
+                sys.exit('--record left unconsumed vanilla reference records')
+            witness = {
+                'minecraft': lock['minecraft']['version'],
+                'oracle': 'VanillaCommandExecOracle',
+                'groups': [name for name, _ in target_groups],
+                'steps': steps,
+            }
+            args.record.parent.mkdir(parents=True, exist_ok=True)
+            args.record.write_text(json.dumps(witness, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+            print(f'Recorded {len(steps)} steps ({len(reference)} commands) to {args.record}')
         print(f'Java reference: {len(reference)} records, fixture guards passed')
         return
 
@@ -678,6 +872,8 @@ def main():
             sys.exit(f'Java weather guard failed: {op["label"]}: {reference.get("results")}')
         if 'expect_light' in op and reference.get('results') != [[True, n] for n in op['expect_light']]:
             sys.exit(f'Java light prerequisite failed: {op}: {reference}')
+    if args.record_thrown_item_witness:
+        write_witness(args.record_thrown_item_witness, lock, groups, vanilla)
     commands_by_group = []
     index = 0
     for name, lines in groups:
@@ -720,6 +916,25 @@ def main():
     if mismatches and not args.allow_gaps:
         sys.exit(f'{len(mismatches)} command execution mismatches; see {build}')
     print(f'Command execution parity report: {report_path}')
+
+
+def write_witness(path, lock, groups, reference):
+    witness = {
+        'minecraft': lock['minecraft']['version'],
+        'oracle': 'dev.sunriselab.parity.VanillaCommandExecOracle',
+        'seed': SEED,
+        'groups': [name for name, _ in groups if name != 'setup'],
+        'records': [
+            {
+                'cmd': row['cmd'],
+                'text': ''.join(span[0] for m in row['messages'] for span in m),
+                'results': row['results'],
+            }
+            for row in reference
+        ],
+    }
+    lab.write_json(path, witness)
+    print(f'Wrote witness: {path}')
 
 
 def assemble(groups, unsynced_randoms=False):
@@ -893,6 +1108,8 @@ def compare(v, r, comparison=None):
         return "state"
     if masked(v) != masked(r):
         return 'messages'
+    if v.get('components') != r.get('components'):
+        return 'components'
     if v['results'] != r['results']:
         if v['cmd'].startswith('/debug stop'):
             return None
@@ -900,9 +1117,239 @@ def compare(v, r, comparison=None):
     return None
 
 
+def write_shulker_motion_witness(path, reference, lock, server_jar, script_path=None, oracle_path=None):
+    # Extract exact vanilla Motion and Rotation SNBT + IEEE-754 bits from /data get records.
+    readings = {}
+    prefix = ' has the following entity data: '
+    for row in reference:
+        match = re.fullmatch(r'/data get entity (\S+) (Motion|Rotation)', row['cmd'])
+        if not match:
+            continue
+        uid, field = match.groups()
+        if len(row['messages']) != 1:
+            sys.exit(f'unexpected /data get message count for {row["cmd"]}: {row["messages"]}')
+        text = ''.join(span[0] for span in row['messages'][0])
+        if prefix not in text:
+            sys.exit(f'missing entity data prefix for {row["cmd"]}: {text!r}')
+        snbt = text.split(prefix, 1)[1]
+        readings.setdefault((uid, field), []).append(snbt)
+
+    def parse_vector(snbt, count, suffix, fmt):
+        if not (snbt.startswith('[') and snbt.endswith(']')):
+            sys.exit(f'expected SNBT list, got {snbt!r}')
+        parts = [p.strip() for p in snbt[1:-1].split(',')]
+        if len(parts) != count or any(not p.lower().endswith(suffix) for p in parts):
+            sys.exit(f'expected {count} {suffix}-suffixed values, got {snbt!r}')
+        return [struct.pack(fmt, float(p[:-1])).hex() for p in parts]
+
+    def sample(uid, idx):
+        motion_snbt = readings[(uid, 'Motion')][idx]
+        rotation_snbt = readings[(uid, 'Rotation')][idx]
+        return {
+            'motion_snbt': motion_snbt,
+            'motion_bits': parse_vector(motion_snbt, 3, 'd', '>d'),
+            'rotation_snbt': rotation_snbt,
+            'rotation_bits': parse_vector(rotation_snbt, 2, 'f', '>f'),
+        }
+
+    loaded_cases = []
+    for case in corpus_module.SHULKER_MOTION_LOADED_CASES:
+        uid = corpus_module.shulker_motion_uuid(case['uuid_index'])
+        want = 2 if case['no_ai'] else 1
+        for field in ('Motion', 'Rotation'):
+            if len(readings.get((uid, field), [])) != want:
+                sys.exit(f'expected {want} {field} readings for {case["name"]}, got {readings.get((uid, field))}')
+        entry = {
+            'name': case['name'],
+            'no_ai': case['no_ai'],
+            'nbt': case['nbt'],
+            'input_motion_bits': [struct.pack('>d', v).hex() for v in case['motion']],
+            'input_rotation_bits': [struct.pack('>f', v).hex() for v in case['rotation']],
+            'after_load': sample(uid, 0),
+        }
+        if case['no_ai']:
+            entry['after_ticks'] = {'ticks': corpus_module.SHULKER_MOTION_WATER_CASE['ticks'], **sample(uid, 1)}
+        loaded_cases.append(entry)
+
+    water = corpus_module.SHULKER_MOTION_WATER_CASE
+    water_uid = corpus_module.shulker_motion_uuid(water['uuid_index'])
+    want_water = water['ticks'] + 1
+    for field in ('Motion', 'Rotation'):
+        if len(readings.get((water_uid, field), [])) != want_water:
+            sys.exit(f'expected {want_water} {field} readings for {water["name"]}, got {readings.get((water_uid, field))}')
+    water_case = {
+        'name': water['name'],
+        'no_ai': water['no_ai'],
+        'trough_levels': list(water['trough_levels']),
+        'shulker_trough_index': water['shulker_trough_index'],
+        'input_motion_bits': [struct.pack('>d', v).hex() for v in water['motion']],
+        'input_rotation_bits': [struct.pack('>f', v).hex() for v in water['rotation']],
+        'ticks': [{'tick': tick, **sample(water_uid, tick)} for tick in range(want_water)],
+    }
+
+    java_version_proc = subprocess.run(['java', '-version'], capture_output=True, text=True, check=True)
+    java_version = (java_version_proc.stderr or java_version_proc.stdout).strip().splitlines()[0]
+    command = 'python3 tools/test_shulker_motion_parity.py --record'
+    server_jar_sha256 = lab.digest(server_jar, 'sha256')
+    witness = {
+        'schema': 1,
+        'minecraft': lock['minecraft']['version'],
+        'oracle': 'VanillaCommandExecOracle',
+        'group': corpus_module.SHULKER_MOTION_GROUP,
+        'command': command,
+        'server_jar_sha256': server_jar_sha256,
+        'java': java_version,
+        'loaded_cases': loaded_cases,
+        'flowing_water_case': water_case,
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(witness, indent=2) + '\n', encoding='utf-8')
+    oracle_file = Path(oracle_path) if oracle_path else lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity/VanillaCommandExecOracle.java'
+    input_hashes = {
+        'research-lock.json': lab.digest(lab.LOCK, 'sha256'),
+        'server.jar': server_jar_sha256,
+        oracle_file.relative_to(lab.ROOT).as_posix(): lab.digest(oracle_file, 'sha256'),
+        'tools/command_exec_corpus.py': lab.digest(lab.ROOT / 'tools/command_exec_corpus.py', 'sha256'),
+        'tools/test_command_exec_parity.py': lab.digest(lab.ROOT / 'tools/test_command_exec_parity.py', 'sha256'),
+    }
+    if script_path is not None and Path(script_path).is_file():
+        input_hashes['script.jsonl'] = lab.digest(Path(script_path), 'sha256')
+    lab.write_json(path.parent / 'meta.json', {
+        'game_version': lock['minecraft']['version'],
+        'java_major': lock['minecraft']['java_major'],
+        'java_version': java_version,
+        'harness': 'tools/test_shulker_motion_parity.py',
+        'oracle': oracle_file.relative_to(lab.ROOT).as_posix(),
+        'group': corpus_module.SHULKER_MOTION_GROUP,
+        'witness_env': 'SUNRISE_SHULKER_MOTION_WITNESS',
+        'command': command,
+        'input_hashes': input_hashes,
+        'outputs': {
+            path.name: {
+                'sha256': lab.digest(path, 'sha256'),
+                'bytes': path.stat().st_size,
+            },
+        },
+    })
+
+
+def write_fangs_ticking_witness(path, game_version, cases, pause_spec, records):
+    """Write the real-run vanilla ticking-gate witness JSON from VanillaCommandExecOracle output."""
+    pause_records = sum(9 if s['action'] == 'schedule_remove_and_tick' else 8 for s in pause_spec['stages'])
+    expected_total = 1 + 2 * len(cases) + pause_records
+    if len(records) != expected_total:
+        sys.exit(f'unexpected record count for ticking witness: got {len(records)}, expected {expected_total}')
+    distances = records[0].get('results', [])
+    if len(distances) != 2 or not all(r[0] is True for r in distances):
+        sys.exit(f'unexpected server_distances record: {records[0]}')
+    view_distance, simulation_distance = distances[0][1], distances[1][1]
+
+    def parse_warmup(rec):
+        text = ''.join(span[0] for msg in rec['messages'] for span in msg)
+        match = re.search(r'has the following entity data: (-?\d+)$', text)
+        if not match:
+            sys.exit(f'could not parse Warmup from vanilla output: {rec}')
+        warmup = int(match.group(1))
+        if rec['results'] != [[True, warmup]]:
+            sys.exit(f'Warmup callback disagreed with message: {rec}')
+        return warmup
+
+    def parse_count(rec):
+        return rec['results'][0][1] if rec['results'] and rec['results'][0][0] else 0
+
+    def parse_flag(rec):
+        return bool(rec['results'] and rec['results'][0][0] and rec['results'][0][1] > 0)
+
+    out_cases = []
+    for index, case in enumerate(cases):
+        present_rec = records[1 + 2 * index]
+        detail_rec = records[2 + 2 * index]
+        present = parse_flag(present_rec)
+        entry = dict(case)
+        entry['expected_present'] = present
+        if case['kind'] == 'evoker_fangs':
+            entry['expected_warmup'] = parse_warmup(detail_rec) if present else None
+        else:
+            entry['expected_spawned_items'] = parse_count(detail_rec)
+        out_cases.append(entry)
+
+    cursor = 1 + 2 * len(cases)
+    out_stages = []
+    for stage in pause_spec['stages']:
+        entry = dict(stage)
+        if stage['action'] == 'schedule_remove_and_tick':
+            cb_rec = records[cursor]
+            cursor += 1
+            entry['expected_command_block_success'] = parse_count(cb_rec)
+        else:
+            entry['expected_command_block_success'] = None
+        t_loaded, c_loaded, t_warmup, t_spawner, t_items, c_warmup, c_spawner, c_items = records[cursor:cursor + 8]
+        cursor += 8
+        entry['expected_target_loaded'] = parse_flag(t_loaded)
+        entry['expected_control_loaded'] = parse_flag(c_loaded)
+        entry['expected_target_warmup'] = parse_warmup(t_warmup)
+        entry['expected_target_spawner_present'] = parse_flag(t_spawner)
+        entry['expected_target_items'] = parse_count(t_items)
+        entry['expected_control_warmup'] = parse_warmup(c_warmup)
+        entry['expected_control_spawner_present'] = parse_flag(c_spawner)
+        entry['expected_control_items'] = parse_count(c_items)
+        out_stages.append(entry)
+
+    pause_out = dict(pause_spec)
+    pause_out['stages'] = out_stages
+    payload = {
+        'game_version': game_version,
+        'oracle': 'VanillaCommandExecOracle',
+        'command': 'python3 tools/test_fangs_ticking_gate_parity.py --record',
+        'player_pos': [8.5, 230.0, 8.5],
+        'view_distance': view_distance,
+        'simulation_distance': simulation_distance,
+        'cases': out_cases,
+        'scheduled_ticket_pause': pause_out,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+
+
 def render(record):
     lines = [''.join(span[0] for span in m) for m in record['messages']]
     return json.dumps({'messages': lines, 'styles': [[span[1] for span in m] for m in record['messages']], 'results': record['results']}, ensure_ascii=False)
+
+
+def write_eye_item_witness(path, version, reference):
+    """Write the recorded eye_of_ender live and reloaded Item witness from a real vanilla oracle run."""
+    prefix = ' has the following entity data: '
+    rows = [
+        f'# Recorded from real vanilla {version} (VanillaCommandExecOracle).',
+        '# Command: python3 tools/test_eye_item_parity.py --record',
+        f'# minecraft_version\t{version}',
+        '# case\tsummon_nbt\tlive_item_snbt\treloaded_item_snbt',
+    ]
+    for index, (name, nbt) in enumerate(corpus_module.EYE_ITEM_CASES, 1):
+        query = f'/data get entity {corpus_module.eye_item_uuid(index)} Item'
+        matches = [row for row in reference if row.get('cmd') == query]
+        if len(matches) != 2:
+            sys.exit(f'expected 2 records (live, reloaded) for {name} ({query}), got {len(matches)}')
+        values = []
+        for phase, row in zip(('live', 'reloaded'), matches):
+            results = row.get('results')
+            if not (isinstance(results, list) and len(results) == 1 and results[0][0] is True):
+                sys.exit(f'vanilla {version} {phase} Item query failed for {name}: {row}')
+            messages = row.get('messages') or []
+            if len(messages) != 1:
+                sys.exit(f'expected 1 message line for {name} {phase}: {row}')
+            text = ''.join(span[0] for span in messages[0])
+            if prefix not in text:
+                sys.exit(f'unexpected /data get output for {name} {phase}: {text!r}')
+            snbt = text.split(prefix, 1)[1]
+            if '\t' in snbt or '\n' in snbt or '\r' in snbt:
+                sys.exit(f'unexpected control character in witness SNBT for {name} {phase}: {snbt!r}')
+            values.append(snbt)
+        rows.append(f'{name}\t{nbt}\t{values[0]}\t{values[1]}')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    print(f'Wrote {len(corpus_module.EYE_ITEM_CASES)} eye_of_ender Item witness rows to {path}')
 
 
 if __name__ == '__main__':

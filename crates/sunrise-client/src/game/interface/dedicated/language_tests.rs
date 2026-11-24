@@ -6,7 +6,6 @@ use sunrise_client::lang::{self, Language};
 
 fn string(host: &dyn ServerHost, key: &str) -> String {
     host.text_string(&mod_api::Text::translate(key, vec![]))
-        .unwrap()
 }
 
 struct Observe(Arc<Mutex<Vec<&'static str>>>);

@@ -1,39 +1,12 @@
 //! `set_local_rotation`: a client mod turns the local player's view; the look goes out in the
 //! tick's own player sync, one move packet with vanilla's clamp, never a packet of the call's own.
-use crate::game::native_client_session::tests::logged_client;
+use crate::game::native_client_session::tests::{finish_login, logged_client};
 use crate::game::native_entity_refs::tests::with_client_game;
 use mod_api::LocalRotationError;
 use sunrise_client::motion::PlayerMotion;
 use sunrise_core::geometry::Vec3;
 use sunrise_protocol::connection::Connection;
 use sunrise_protocol::packets::play::Serverbound as S;
-
-/// The server's side of the handshake up to play, as `client_targeting`'s test drives it.
-fn finish_login(server: &mut Connection) {
-    use sunrise_protocol::packets::{Empty, configuration as cfg, login};
-    server.recv().unwrap(); // Intention.
-    server.recv().unwrap(); // Hello.
-    server
-        .send(
-            &login::Clientbound::LoginFinished(login::LoginFinished {
-                profile: login::GameProfile {
-                    uuid: 42,
-                    name: "SessionReadTest".into(),
-                    properties: vec![],
-                },
-                session: 1,
-            })
-            .encode(),
-        )
-        .unwrap();
-    server.recv().unwrap(); // Login acknowledged.
-    server.recv().unwrap(); // Brand.
-    server.recv().unwrap(); // Client information.
-    server
-        .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
-        .unwrap();
-    server.recv().unwrap(); // Finish configuration.
-}
 
 /// The move packets the client sent before a fence, as (kind, yaw, pitch).
 fn sent_moves(
@@ -69,7 +42,7 @@ fn a_mod_set_look_is_clamped_and_sent_once_by_the_tick() {
                 .reader
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.title = None;
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
             // The baseline: the first sync sends the position.
@@ -143,7 +116,7 @@ fn a_player_dead_for_twenty_ticks_sends_nothing_until_it_respawns() {
                 .reader
                 .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                 .unwrap();
-            finish_login(&mut server);
+            finish_login(game, &mut server);
             game.title = None;
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
             game.remote_send_state(0);

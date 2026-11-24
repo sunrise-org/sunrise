@@ -31,7 +31,8 @@ class PrFilesTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
             listing = Path(directory, "files")
             pr_files.main(str(listing))
-            return out.getvalue(), listed_entries(listing) if listing.exists() else None
+            count = int(dict(line.split("=", 1) for line in out.getvalue().splitlines()).get("entries", 0))
+            return out.getvalue(), listed_entries(listing, count) if listing.exists() else None
 
     def test_the_api_list_matches_gits_diff_without_renames(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -63,14 +64,14 @@ class PrFilesTests(unittest.TestCase):
                  {"status": "renamed", "filename": "docs/new.rs", "previous_filename": "old.rs"},
                  {"status": "added", "filename": "added.md"}, {"status": "copied", "filename": "copy.txt"}]
         out, listed = self.run_main(api(files), len(files))
-        self.assertEqual(out, "listed=true\n")
+        self.assertEqual(out, "listed=true\nentries=6\n")
         self.assertEqual(sorted(listed), sorted(expected))
 
     def test_the_list_is_read_for_this_runs_commits_only(self):
         # The comparison names both commit ids: a branch that moves and comes back between reads can't change it.
         files = [{"status": "added", "filename": f"docs/{n}.md"} for n in range(pr_files.API_LIMIT - 1)]
         out, listed = self.run_main(api(files), len(files))
-        self.assertEqual(out, "listed=true\n")
+        self.assertEqual(out, f"listed=true\nentries={pr_files.API_LIMIT - 1}\n")
         self.assertEqual(len(listed), pr_files.API_LIMIT - 1)
 
     def test_a_same_count_branch_round_trip_cannot_replace_the_pinned_listing(self):
@@ -84,8 +85,16 @@ class PrFilesTests(unittest.TestCase):
                 }
             return api([{"status": "modified", "filename": "src/lib.rs"}])(path)
         out, listed = self.run_main(get, 1)
-        self.assertEqual((out, listed), ("listed=true\n", [("M", "src/lib.rs")]))
+        self.assertEqual((out, listed), ("listed=true\nentries=1\n", [("M", "src/lib.rs")]))
         self.assertEqual(paths, [f"compare/{BASE}...{HEAD}?per_page=1"])
+
+    def test_a_record_with_no_usable_path_or_a_repeated_path_falls_back(self):
+        for files in ([{"status": "modified", "filename": "docs/../src/lib.rs"}],
+                      [{"status": "modified", "filename": "./src/lib.rs"}],
+                      [{"status": "renamed", "filename": "docs/new.md", "previous_filename": None}],
+                      [{"status": "modified", "filename": "docs/a.md"}, {"status": "removed", "filename": "docs/a.md"}]):
+            with self.subTest(files=files):
+                self.assertEqual(self.run_main(api(files), len(files)), ("listed=false\n", None))
 
     def test_any_doubt_falls_back_to_the_history(self):
         one = [{"status": "modified", "filename": "docs/setup.md"}]

@@ -15,8 +15,9 @@ use sunrise_world::native_load_context::LoopContext;
 use sunrise_world::{
     block_entity_push::BlockPushWorld,
     block_landing::{
-        BlockLandingRegistry, BlockLandingWorld, DamageSourceOwner, FallDefinition, LandingDamage,
-        LandingDefinition, LandingEntityKind, LandingEvent, LandingSound,
+        BlockFall, BlockLandingRegistry, BlockLandingWorld, DamageSourceOwner, FallDamageCall,
+        FallDamageTail, FallDefinition, FarmlandTrample, LandingDamage, LandingDefinition,
+        LandingEntityKind, LandingEvent, LandingSound,
     },
     entity_obstruction::EntityIdentity,
     fall_damage::FallDamageWorld,
@@ -25,19 +26,6 @@ use sunrise_world::{
     movement_properties::MovementProperties,
     registry::BlockStateId,
 };
-
-/// Called on the server before a landing converts farmland to its base block.
-#[inline(never)]
-pub fn native_farmland_trample(
-    context: &LoopContext,
-    entity: u32,
-    pos: [i32; 3],
-    state: u32,
-    distance: f64,
-    cancel: &mut bool,
-) {
-    crate::native_client_hooks::farmland_trample(context, entity, pos, state, distance, cancel);
-}
 
 /// A living entity is about to handle a fall (`LivingFallEvent`). Mods may
 /// change the distance and damage multiplier, or cancel fall handling.
@@ -404,6 +392,110 @@ impl MotionWorld<'_, '_, '_> {
         BlockLandingWorld::cause_fall_damage(self, distance, multiplier, LandingDamage::Fall)
     }
 }
+/// The owner must handle the trample or settle the hurt before the landing can continue.
+pub enum PlayerLandingPause {
+    Trample(FarmlandTrample),
+    Damage(PlayerLandingTail),
+}
+
+/// The selected block reaction and ground-hit tail, with no borrow of the player or level.
+pub struct PlayerLandingTail {
+    state: BlockStateId,
+    tail: FallDamageTail,
+    damaged: bool,
+}
+
+impl MotionWorld<'_, '_, '_> {
+    pub(crate) fn block_fall(
+        &mut self,
+        state: BlockStateId,
+        position: BlockPos,
+        distance: f64,
+        handoff: bool,
+    ) -> Result<Option<PlayerLandingPause>> {
+        match self
+            .resources
+            .landing
+            .begin_fall_on(
+                self,
+                state,
+                position,
+                LandingEntityKind::Player,
+                distance,
+                handoff,
+            )
+            .map_err(|err| err.to_string())?
+        {
+            BlockFall::Done => {
+                // Some landing rules never call causeFallDamage.
+                if crate::block_contact::fall_listens(state) {
+                    self.mod_block_fall(state, position, distance, 0.0);
+                }
+                Ok(None)
+            }
+            BlockFall::Trample(trample) => Ok(Some(PlayerLandingPause::Trample(trample))),
+            BlockFall::Damage(call) => self
+                .apply_block_fall_damage(state, position, distance, call, handoff)
+                .map(|tail| tail.map(PlayerLandingPause::Damage)),
+        }
+    }
+
+    fn apply_block_fall_damage(
+        &mut self,
+        state: BlockStateId,
+        position: BlockPos,
+        distance: f64,
+        call: FallDamageCall,
+        handoff: bool,
+    ) -> Result<Option<PlayerLandingTail>> {
+        let contact =
+            crate::block_contact::fall_listens(state).then_some((state, position, distance));
+        let previous = std::mem::replace(&mut self.player.block_landing, contact);
+        let was_dead = self.player.health.dead;
+        let damaged = call.apply(self);
+        self.player.block_landing = previous;
+        let damaged = damaged.map_err(|err| err.to_string())?;
+        let tail = call.tail();
+        // Death still needs its owner when no mod listens to Post.
+        if handoff && (self.hit_needs_owner() || (!was_dead && self.player.health.dead)) {
+            return Ok(Some(PlayerLandingTail {
+                state,
+                tail,
+                damaged,
+            }));
+        }
+        tail.after_hurt(self, damaged)
+            .map_err(|err| err.to_string())?;
+        Ok(None)
+    }
+
+    /// Resume `FarmlandBlock.fallOn` after the game's lift and write (or refusal),
+    /// still using the original block's superclass call and part contact.
+    pub fn finish_trample_fall(
+        &mut self,
+        trample: FarmlandTrample,
+    ) -> Result<Option<PlayerLandingTail>> {
+        let tail = self.apply_block_fall_damage(
+            trample.state,
+            trample.position,
+            trample.distance,
+            trample.damage_call(),
+            true,
+        )?;
+        if tail.is_none() {
+            sunrise_world::living_landing::finish_living_landing(self, trample.state)?;
+        }
+        Ok(tail)
+    }
+
+    /// Finish the selected block reaction and the ground hit after death or protection and Post.
+    pub fn finish_guest_landing(&mut self, tail: PlayerLandingTail) -> Result<()> {
+        tail.tail
+            .after_hurt(self, tail.damaged)
+            .map_err(|err| err.to_string())?;
+        sunrise_world::living_landing::finish_living_landing(self, tail.state)
+    }
+}
 impl FallDamageWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
     type State = BlockStateId;
@@ -417,25 +509,8 @@ impl FallDamageWorld for MotionWorld<'_, '_, '_> {
         self.player.fall_distance = value;
     }
     fn fall_on(&mut self, state: BlockStateId, position: BlockPos, distance: f64) -> Result<()> {
-        let previous = self.player.block_landing.take();
-        if crate::block_contact::fall_listens(state) {
-            self.player.block_landing = Some((state, position, distance));
-        }
-        // Keep template landing rules (hay, honey, slime, etc.) in control.
-        let result = self
-            .resources
-            .landing
-            .fall_on(self, state, position, LandingEntityKind::Player, distance)
-            .map_err(|e| e.to_string().into());
-        let pending = self.player.block_landing.take();
-        self.player.block_landing = previous;
-        if result.is_ok()
-            && let Some((state, position, distance)) = pending
-        {
-            // Some landing rules never call causeFallDamage.
-            self.mod_block_fall(state, position, distance, 0.0);
-        }
-        result
+        self.block_fall(state, position, distance, false)
+            .map(|_| ())
     }
 
     fn position(&self) -> Vec3 {
@@ -452,7 +527,7 @@ impl FallDamageWorld for MotionWorld<'_, '_, '_> {
         Ok(())
     }
     fn reset_fall_distance(&mut self) -> Result<()> {
-        self.player.fall_distance = 0.0;
+        self.player.reset_fall_distance();
         Ok(())
     }
 }
@@ -551,23 +626,6 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
     }
     fn entity_dimensions(&self) -> (f32, f32) {
         (self.player.dimensions.width, self.player.dimensions.height)
-    }
-    fn cancel_farmland_trample(
-        &mut self,
-        position: BlockPos,
-        state: BlockStateId,
-        distance: f64,
-    ) -> bool {
-        let mut cancel = false;
-        native_farmland_trample(
-            self.loop_context,
-            self.player.entity_id as u32,
-            [position.x, position.y, position.z],
-            state.0,
-            distance,
-            &mut cancel,
-        );
-        cancel
     }
     fn suppressing_bounce(&mut self) -> Result<bool> {
         Ok(self.player.shift_key_down)
@@ -752,7 +810,9 @@ impl LivingFallWorld for FallCall<'_, '_, '_, '_> {
                 self.world.tag_items,
                 self.world.block_registries,
                 self.world.damage_hooks,
-            ),
+            )
+            .with_player_equipment(self.world.side.player_equipment())
+            .with_reads(self.world.side.hit_reads()),
             resources,
             rules,
             resources.landing_source(self.source),
@@ -817,6 +877,7 @@ mod tests {
                     .unwrap();
                 BlockLandingWorld::cause_fall_damage(
                     &mut MotionWorld {
+                        side: sunrise_client::motion::dry_side(),
                         entities: &[],
                         player: &mut player,
                         scene: &mut scene,

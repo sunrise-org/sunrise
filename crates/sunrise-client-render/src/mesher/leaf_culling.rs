@@ -323,6 +323,7 @@ mod tests {
 
     fn info(leaves: bool, opaque: bool) -> Info {
         Info {
+            air: false,
             solid: opaque,
             full: opaque,
             permeable: false,
@@ -354,7 +355,10 @@ mod tests {
     /// State 0 is air, 1 leaves, 2 a full opaque cube, 3 a partial model.
     fn states() -> Vec<Info> {
         vec![
-            info(false, false),
+            Info {
+                air: true,
+                ..info(false, false)
+            },
             info(true, false),
             info(false, true),
             info(false, false),

@@ -44,11 +44,14 @@ pub trait LivingAirWorld {
 pub fn modified_friction(friction: f32, modifier: f32) -> f32 {
     (1.0 - (1.0 - friction) * modifier).clamp(0.0, 1.0)
 }
+/// `Entity.getInputVector` ignores input below this squared length.
+pub const MIN_INPUT_LENGTH_SQUARED: f64 = 1.0e-7;
+
 /// Entity.getInputVector: normalize only above unit length, then rotate using
 /// the native float-angle sine table. Tiny input returns canonical positive zero.
 pub fn input_vector(input: Vec3, speed: f32, yaw: f32) -> Vec3 {
     let length = input.length_squared();
-    if length < 1.0e-7 {
+    if length < MIN_INPUT_LENGTH_SQUARED {
         return Vec3::ZERO;
     }
     let input = if length > 1.0 {
@@ -80,14 +83,43 @@ pub fn escape_vector(vehicle_width: f64, passenger_width: f64, yaw: f32) -> Vec3
         f64::from(cos) * distance / max,
     )
 }
-pub fn move_relative<W: LivingAirWorld>(
+/// Input to the live travel branch. A server correcting client movement can
+/// compare an edit with the original input at the branch's `moveRelative`.
+pub struct TravelInput {
+    pub applied: Vec3,
+    pub original: Option<Vec3>,
+}
+
+impl From<Vec3> for TravelInput {
+    fn from(applied: Vec3) -> Self {
+        Self {
+            applied,
+            original: None,
+        }
+    }
+}
+
+/// Apply `Entity.moveRelative` once. Report whether the input changed the
+/// stored velocity before collision, using the same speed and yaw for both inputs.
+pub(crate) fn move_relative<W: LivingAirWorld>(
     world: &mut W,
-    input: Vec3,
+    input: TravelInput,
     speed: f32,
-) -> Result<(), W::Error> {
-    let input = input_vector(input, speed, world.yaw()?);
-    let old = world.velocity();
-    world.set_velocity(Vec3::new(old.x + input.x, old.y + input.y, old.z + input.z))
+) -> Result<bool, W::Error> {
+    let yaw = world.yaw()?;
+    let before = world.velocity();
+    world.set_velocity(before.add_vector(input_vector(input.applied, speed, yaw)))?;
+    Ok(input.original.is_some_and(|original| {
+        let original = before.add_vector(input_vector(original, speed, yaw));
+        // The comparison has no physical write. Mirror setDeltaMovement's
+        // unchanged result if the hypothetical sum would have been refused.
+        let original = if original.is_finite() {
+            original
+        } else {
+            before
+        };
+        world.velocity().components() != original.components()
+    }))
 }
 pub fn handle_on_climbable<W: LivingAirWorld>(
     world: &mut W,
@@ -130,11 +162,11 @@ pub fn friction_influenced_speed<W: LivingAirWorld>(
 pub fn relative_friction_movement<W: LivingAirWorld>(
     world: &mut W,
     gate: &mut MoveGate,
-    input: Vec3,
+    input: TravelInput,
     friction: f32,
-) -> Result<Vec3, W::Error> {
+) -> Result<(Vec3, bool), W::Error> {
     let speed = friction_influenced_speed(world, friction)?;
-    move_relative(world, input, speed)?;
+    let input_changed = move_relative(world, input, speed)?;
     let velocity = handle_on_climbable(world, world.velocity())?;
     world.set_velocity(velocity)?;
     world.move_self(gate, world.velocity())?;
@@ -145,15 +177,16 @@ pub fn relative_friction_movement<W: LivingAirWorld>(
     {
         velocity.y = 0.2;
     }
-    Ok(velocity)
+    Ok((velocity, input_changed))
 }
 /// Ground friction is captured before movement; drag and gravity are queried
 /// afterwards. This distinction preserves movement callbacks' field changes.
+/// Returns whether the original and applied input accelerated the body differently.
 pub fn travel_in_air<W: LivingAirWorld>(
     world: &mut W,
     gate: &mut MoveGate,
-    input: Vec3,
-) -> Result<(), W::Error> {
+    input: TravelInput,
+) -> Result<bool, W::Error> {
     let support = world.movement_support_position()?;
     let friction = if world.on_ground()? {
         let friction = world.block_friction(support)?;
@@ -161,7 +194,7 @@ pub fn travel_in_air<W: LivingAirWorld>(
     } else {
         1.0
     };
-    let mut velocity = relative_friction_movement(world, gate, input, friction)?;
+    let (mut velocity, input_changed) = relative_friction_movement(world, gate, input, friction)?;
     if let Some(amplifier) = world.levitation_amplifier()? {
         velocity.y += (0.05 * f64::from(amplifier.wrapping_add(1)) - velocity.y) * 0.2;
     } else if !world.is_client_side()? || world.has_chunk_at(support)? {
@@ -189,7 +222,8 @@ pub fn travel_in_air<W: LivingAirWorld>(
             velocity.z * f64::from(horizontal),
         );
     }
-    world.set_velocity(velocity)
+    world.set_velocity(velocity)?;
+    Ok(input_changed)
 }
 
 #[cfg(test)]

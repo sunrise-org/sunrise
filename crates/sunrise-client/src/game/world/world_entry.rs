@@ -1,12 +1,23 @@
 //! Entering a world without blocking the window: the deferred entry, world creation, the world
 //! resources' background load, and the world's own content tables.
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+use sunrise_client::items::{EntityTypeTags, LoadEntityTags};
+
+static BIOME_KEYS_SESSION: AtomicU64 = AtomicU64::new(1);
+
+fn next_biome_keys_session() -> u64 {
+    BIOME_KEYS_SESSION.fetch_add(1, Ordering::Relaxed)
+}
 
 impl Game<'_> {
     /// The server's data-pack enchantments, or the local world's registry.
     pub(super) fn item_enchantments(&self) -> &Arc<sunrise_client::enchant::Enchantments> {
-        match self.remote.as_ref().and_then(|r| r.enchantments.as_ref()) {
-            Some(e) => e,
+        match self.remote.as_ref() {
+            Some(remote) => remote
+                .enchantments
+                .as_ref()
+                .unwrap_or(&self.items().enchantments),
             None => &self.stations().enchantments,
         }
     }
@@ -63,11 +74,19 @@ impl Game<'_> {
             Some(PendingWorldEntry::Server {
                 address,
                 name,
+                list_name,
                 cookies,
                 lan,
                 realm,
             }) => {
-                self.connect_server_with_options(&address, &name, cookies, lan, realm)?;
+                self.connect_server_with_options(
+                    &address,
+                    &name,
+                    cookies,
+                    lan,
+                    realm,
+                    list_name.as_deref(),
+                )?;
             }
             Some(PendingWorldEntry::StudioReplay(path)) => {
                 let path_str = path.to_string_lossy().to_string();
@@ -108,7 +127,8 @@ impl Game<'_> {
                 })
                 .unwrap_or_default();
             let data_source = self.pack.data_changes.clone();
-            let job = sunrise_guest_stack::builder()
+            let job = std::thread::Builder::new()
+                .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
                 .name("world-creation".into())
                 .spawn(move || {
                     sunrise_client::vanillagen::shared_data_from(
@@ -200,6 +220,19 @@ impl Game<'_> {
             None => self.synced_recipes().unwrap_or_else(|| self.res.recipes()),
         }
     }
+    pub(in crate::game) fn active_providers(&self) -> &Providers {
+        self.world_tables
+            .as_ref()
+            .map_or_else(|| self.res.providers(), |t| &t.providers)
+    }
+    /// The station recipes menus and screens use: a client of a server numbers and draws its
+    /// stonecutter buttons by the list the server sent, else the world's own.
+    pub(super) fn station_recipes(&self) -> &sunrise_client::stations::StationRecipes {
+        self.recipe_ui
+            .server_stations
+            .as_ref()
+            .unwrap_or(&self.stations().recipes)
+    }
     pub(super) fn stations(&self) -> &sunrise_client::stations::StationData {
         match &self.world_tables {
             Some(t) => &t.stations,
@@ -207,13 +240,18 @@ impl Game<'_> {
         }
     }
 
+    /// The biome colours used by the mesher and client tint queries. On a
+    /// world without its own table, a colour refresh updates the pack's table.
+    pub(super) fn mesh_biomes(&self) -> &Arc<Biomes> {
+        self.world_biomes
+            .as_ref()
+            .unwrap_or(&self.pack.context.biomes)
+    }
+
     /// What the chunk and far-terrain workers mesh with: the pack's context,
     /// over the world's biomes when it has its own.
     pub(super) fn worker_context(&self) -> Arc<WorkerContext> {
-        match &self.world_biomes {
-            Some(table) => self.pack.context_with(table.clone()),
-            None => self.pack.context.clone(),
-        }
+        self.pack.context_with(self.mesh_biomes().clone())
     }
     pub(super) fn pack_files(&self) -> sunrise_world::loot::PackOverlay<'_> {
         pack_files(&self.world_tables)
@@ -227,16 +265,16 @@ impl Game<'_> {
         reload: bool,
         root: &std::path::Path,
     ) -> Result<super::condition_reload_state::StagedWorldTables> {
-        let phase = self.mod_phase.clone();
-        let _reload = phase
-            .reloading()
-            .expect("server tables on their owning thread");
         // The ask of this load, both here and on `/reload`: a native mod
         // recomputes the pack files it contributes every time.
         let mut contributed = Vec::new();
         self.native_data_pack_files(&mut contributed);
         let modifier_files = global_loot_modifiers::contributed(&contributed);
-        let (files, read_errors) = functions::overlay_files(
+        let functions::OverlayFiles {
+            files,
+            read_errors,
+            priority_layers,
+        } = functions::overlay_files(
             stack,
             contributed
                 .into_iter()
@@ -244,117 +282,372 @@ impl Game<'_> {
                 .collect(),
         );
         let inventory = sunrise_mod_package::enabled::EnabledMods::read(root)?;
-        let conditions = self.registered_load_conditions(&inventory, stack, root, &files)?;
-        let overlay = sunrise_world::loot::PackOverlay {
-            conditions: &conditions,
-            files: &files,
+        let base_conditions = load_conditions::conditions_for_mods(&self.mods, &inventory)?;
+        // Tag files are not conditional. Collect the candidate's static holders
+        // and pending tags before registry codecs can inspect them.
+        let tag_files = sunrise_world::loot::PackOverlay::new(&files);
+        let mut items = Items::load_registry(
+            root,
+            self.pack.assets.registry,
+            self.res.facts(),
+            &tag_files,
+            self.res.item_defaults(),
+            if reload {
+                LoadEntityTags::Reload(&self.items().entity_type_tags)
+            } else {
+                LoadEntityTags::Frozen(self.res.items().entity_type_tags.ids())
+            },
+        )?;
+        if reload {
+            items.retain_unbound_tags(self.items());
+        }
+        class_tags::install(&mut items, self.res.facts());
+        let mut view = load_conditions::RegistryView {
+            ids: Default::default(),
+            tags: items
+                .bound_tags()
+                .map(|(registry, tags)| (registry.to_owned(), tags.map(str::to_owned).collect()))
+                .collect(),
         };
-        let mut data_map_types = Vec::new();
-        self.native_data_map_types(&mut data_map_types);
+        use sunrise_client::lan::data::{BIOME_REGISTRY, PACK_REGISTRIES, SyncData};
+        let builtin = sunrise_protocol::registry::Builtin::find(root)
+            .map(|path| sunrise_protocol::registry::Builtin::load(&path))
+            .transpose()?
+            .map(sunrise_client::lan::data::with_custom_stats)
+            .unwrap_or_default();
+        for (key, ids) in &builtin.registries {
+            view.ids.insert(
+                key.clone(),
+                ids.names
+                    .iter()
+                    .filter(|id| !id.is_empty())
+                    .cloned()
+                    .collect(),
+            );
+        }
+        view.ids.insert(
+            "minecraft:item".into(),
+            items.items.keys().map(ToString::to_string).collect(),
+        );
+        view.ids.insert(
+            "minecraft:block".into(),
+            self.res
+                .facts()
+                .states
+                .iter()
+                .map(|state| state.name.to_string())
+                .collect(),
+        );
+        view.ids.insert(
+            EntityTypeTags::REGISTRY.into(),
+            items.entity_type_tags.ids().iter().cloned().collect(),
+        );
+        let mut pack_tags = HashMap::new();
+        let gameplay_tags = WorldTables::PACK_TAG_REGISTRIES
+            .into_iter()
+            .chain(sunrise_client::neoforge_mob_maps::MAPS.map(|definition| definition.directory))
+            .filter(|directory| !matches!(*directory, "item" | "entity_type" | "damage_type"))
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut bind_tags = |registry: &str,
+                             view: &mut load_conditions::RegistryView|
+         -> Result<()> {
+            let ids = view.ids.get(registry);
+            let tags = sunrise_client::lan::data::registry_tag_bindings(
+                root,
+                &tag_files,
+                registry,
+                |id| ids.is_some_and(|ids| ids.contains(id)),
+            )?;
+            view.tags.insert(
+                registry.to_owned(),
+                tags.iter()
+                    .filter(|(_, members)| !members.is_empty())
+                    .map(|(tag, _)| tag.clone())
+                    .collect(),
+            );
+            if let Some(directory) = registry
+                .strip_prefix("minecraft:")
+                .and_then(|name| gameplay_tags.get(name))
+            {
+                pack_tags.insert(
+                    *directory,
+                    tags.into_iter()
+                        .map(|(tag, members)| (tag, members.into_iter().collect::<HashSet<_>>()))
+                        .collect(),
+                );
+            }
+            Ok(())
+        };
+        // Item, block, fluid and entity type tags already came from Items' loader.
+        let static_registries = builtin
+            .registries
+            .keys()
+            .map(String::as_str)
+            .chain(gameplay_tags.iter().filter_map(|directory| {
+                view.ids
+                    .get_key_value(&format!("minecraft:{directory}"))
+                    .map(|(key, _)| key.as_str())
+            }))
+            .filter(|&key| {
+                !matches!(
+                    key,
+                    BIOME_REGISTRY | "minecraft:damage_type" | "minecraft:jukebox_song"
+                ) && !PACK_REGISTRIES.contains(&key)
+                    && !view.tags.contains_key(key)
+            })
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>();
+        for registry in &static_registries {
+            bind_tags(registry, &mut view)?;
+        }
+        // WORLD_REGISTRIES codecs see static holders (not their own pending entries)
+        // and NeoForge's ResourceManagerRegistryLoadTask uses VANILLA_SET.
+        let frozen = self.world_tables.as_ref().filter(|_| reload);
+        let fixed = PACK_REGISTRIES
+            .iter()
+            .copied()
+            .chain(["minecraft:jukebox_song"]);
+        for registry in fixed
+            .clone()
+            .chain(["minecraft:damage_type", BIOME_REGISTRY])
+        {
+            view.ids.remove(registry);
+            view.tags.remove(registry);
+        }
+        let registry_base = base_conditions.with_features(["minecraft:vanilla"]);
+        let registry_conditions = view.conditions(&registry_base);
+        let registry_overlay = sunrise_world::loot::PackOverlay {
+            conditions: &registry_conditions,
+            files: &files,
+            priority_layers: &priority_layers,
+        };
         let base = if reload {
             &self.health_resources
         } else {
             &self.res.motion().health
         };
-        let health = base.with_packs(root, &overlay, reload)?;
-        // With no pack, `res` holds the tables, unless content mods switched
-        // live since it was loaded: their data is in the new root.
-        let mut items = Items::load_registry(
-            root,
-            self.pack.assets.registry,
-            self.res.facts(),
-            &overlay,
-            self.res.item_defaults(),
-        )?;
-        class_tags::install(&mut items, self.res.facts());
-        // Tag files are read before their tags are bound, so the tag readers below keep the
-        // context without tags: there `neoforge:tag_empty` is unsupported, never answered from a
-        // part of this load's tags.
-        let tag_files = sunrise_world::loot::PackOverlay {
-            conditions: &conditions,
-            files: &files,
+        let health = base.with_packs(root, &registry_overlay, reload)?;
+        let (packed_registry_definitions, packed_admission) = if let Some(tables) = frozen {
+            items.songs.clone_from(&tables.items.songs);
+            (tables.packed_registries.clone(), Ok(()))
+        } else {
+            items.load_songs(root, &registry_overlay);
+            let (packed, admission) = SyncData::stage_registry_definitions(
+                root,
+                self.res.item_defaults(),
+                &registry_overlay,
+                &read_errors,
+                &items.component_registry,
+                |id| {
+                    items
+                        .component_registry
+                        .ids("minecraft:sound_event")
+                        .binary_search_by(|sound| sound.as_str().cmp(id))
+                        .is_ok()
+                },
+            );
+            (Arc::new(packed), admission)
         };
-        // The other tables read from here on see this load's bound tags (`neoforge:tag_empty`).
-        let conditions = conditions.with_tags(items.bound_tags());
+        let biomes = if let Some(tables) = frozen {
+            tables.biomes.clone()
+        } else {
+            Arc::new(world_loading::WorldBiomeRegistry::load(
+                self.res.biomes(),
+                root,
+                self.pack.assets.registry,
+                stack,
+                &registry_overlay,
+                &read_errors,
+            )?)
+        };
+        view.ids.insert(
+            BIOME_REGISTRY.into(),
+            biomes
+                .table
+                .registered_keys()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        );
+        for (registry, id, admitted) in packed_registry_definitions.entries() {
+            let ids = view.ids.entry(registry.to_owned()).or_default();
+            if admitted {
+                ids.insert(id);
+            } else {
+                ids.remove(&id);
+            }
+        }
+        view.ids.insert(
+            "minecraft:jukebox_song".into(),
+            items.songs.keys().cloned().collect(),
+        );
+        view.ids.insert(
+            "minecraft:damage_type".into(),
+            health
+                .damage
+                .entries()
+                .map(|(_, definition)| definition.name.clone())
+                .collect(),
+        );
+        for registry in fixed.chain([BIOME_REGISTRY]) {
+            bind_tags(registry, &mut view)?;
+        }
+        // WORLD_REGISTRIES owns the structures; its raw definitions are not holders.
+        // First open uses the same cached data as live features. Reload binds new tags
+        // to the frozen owner, just as TagLoader does before server resource reload.
+        let generator = if reload {
+            self.registry_generator_data()
+        } else {
+            // This bundle can be unavailable independently of the resource tables.
+            // Terrain preparation owns the existing diagnostics for it.
+            sunrise_client::vanillagen::shared_data_from(
+                &root.join("worldgen"),
+                &biomes.overrides,
+                self.pack.assets.registry,
+                stack.content.source(),
+            )
+            .ok()
+        };
+        if let Some(generator) = generator {
+            const STRUCTURES: &str = "minecraft:worldgen/structure";
+            let mut holders = std::collections::BTreeSet::new();
+            if generator
+                .visit_registry_ids(STRUCTURES, &mut |id| {
+                    holders.insert(id.to_owned());
+                    std::ops::ControlFlow::Continue(())
+                })
+                .is_some()
+            {
+                view.ids.insert(STRUCTURES.to_owned(), holders);
+                bind_tags(STRUCTURES, &mut view)?;
+            }
+            // Placed features are holders too: the decoded ones (the codecs live generation
+            // places with, not the source files) and their tags, for a downstream
+            // `neoforge:registered` or `neoforge:tag_empty`. Reload keeps the frozen owner's.
+            const PLACED: &str = "minecraft:worldgen/placed_feature";
+            let live = if reload {
+                self.res.behaviours().live_features()
+            } else {
+                sunrise_world::worldgen::live::LiveFeatures::new(&generator)
+                    .ok()
+                    .flatten()
+                    .map(Arc::new)
+            };
+            if let Some(ids) = live
+                .as_ref()
+                .and_then(|features| features.registry_ids(PLACED))
+            {
+                view.ids.insert(PLACED.to_owned(), ids.clone());
+                bind_tags(PLACED, &mut view)?;
+            }
+        }
+        let damage_tags: HashMap<_, HashSet<_>> = health
+            .damage
+            .tags()
+            .map(|tag| {
+                (
+                    tag.to_owned(),
+                    health.damage.tag_members(tag).map(str::to_owned).collect(),
+                )
+            })
+            .collect();
+        view.tags.insert(
+            "minecraft:damage_type".into(),
+            damage_tags
+                .iter()
+                .filter(|(_, members)| !members.is_empty())
+                .map(|(tag, _)| tag.clone())
+                .collect(),
+        );
+        pack_tags.insert("damage_type", damage_tags);
+
+        let datapack_candidate =
+            Self::stage_datapack_registries(stack, root, &registry_overlay, &mut view);
+        // The downstream reload listeners see every completed producer and the
+        // world's flags, not the codec's vanilla flags or a previous generation.
+        let conditions = view
+            .conditions(&registry_base.with_features(stack.features.iter().map(String::as_str)));
         let overlay = sunrise_world::loot::PackOverlay {
             conditions: &conditions,
             files: &files,
+            priority_layers: &priority_layers,
         };
-        let packed_registry_definitions =
-            if let Some(tables) = self.world_tables.as_ref().filter(|_| reload) {
-                Ok(tables.packed_registries.clone())
-            } else {
-                // Admit the frozen pack definitions with this candidate's bound
-                // tags, even if no peer joins and triggers the full wire load.
-                sunrise_client::lan::data::SyncData::stage_registry_definitions(
-                    root,
-                    self.res.item_defaults(),
-                    &overlay,
-                    &read_errors,
-                    &self.ui.registries,
-                    |id| {
-                        self.ui
-                            .registries
-                            .ids("minecraft:sound_event")
-                            .binary_search_by(|sound| sound.as_str().cmp(id))
-                            .is_ok()
-                    },
-                )
-                .map(Arc::new)
-            };
+        // RegistryDataLoader.RELOADABLE_REGISTRIES: providers are staged and
+        // published with the other reloadable data, including on /reload.
+        let providers = Providers::load_with(root, &overlay);
+        let mut data_map_types = Vec::new();
+        self.native_data_map_types(&mut data_map_types);
         // Visit independently readable registries before consuming any result.
         // One rejected winner must not hide the other entries' diagnostics.
-        let loot =
-            sunrise_world::loot::LootData::load(root, &overlay, self.res.core.item_data.defaults());
-        let advancements = Arc::new(sunrise_client::advancements::Tree::load_with(
-            &root.join("data"),
+        let loot = sunrise_world::loot::LootData::load_candidate_with_damage(
+            root,
             &overlay,
-        ));
-        let datapack_candidate = self.datapack_candidate(stack, &conditions);
-        // The recipe tables, the stations and the recipe book read one folder:
-        // hold its files so it is read once.
-        let _recipe_files = sunrise_client::json_folder::read(&root.join("data/minecraft/recipe"));
-        let sources = if reload {
-            lan::sync::prepare_server_sources(root, &self.res.core.item_data, &overlay)
-        } else {
-            lan::sync::load_sources(
-                root,
-                &self.res.core.item_data,
-                self.options.execution_role.data_load_origin(),
+            self.res.core.item_data.defaults(),
+            &health.damage,
+            &items.ordered_tags(),
+        );
+        let advancements = Arc::new(match &loot {
+            Ok(loot) => sunrise_client::advancements::Tree::load_with_predicates(
+                &root.join("data"),
                 &overlay,
-            )
-        };
-        let packed_registry_definitions =
-            match (packed_registry_definitions, conditions.check_errors()) {
-                (Ok(packed), Ok(())) => packed,
-                (packed, conditions) => {
-                    // A rejected registry must not hide independent load errors.
-                    let errors = [
-                        packed.err(),
-                        conditions.err(),
-                        loot.as_ref().err().map(ToString::to_string),
-                        datapack_candidate.as_ref().err().map(ToString::to_string),
-                        sources.as_ref().err().map(ToString::to_string),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                    return Err(errors.into());
-                }
-            };
-        packed_registry_definitions.install_items(
+                loot.predicates(),
+            ),
+            Err(_) => sunrise_client::advancements::Tree::load_with(&root.join("data"), &overlay),
+        });
+        let install_items_result = packed_registry_definitions.install_items(
             &mut items,
             root,
             &overlay,
             self.res.item_defaults(),
-        )?;
+        );
         // Item damage predicates use the same frozen registry as player hurt.
         Arc::make_mut(&mut items.enchantments).bind_damage_catalog(&health.damage);
         items.bind_component_damage_catalog(&health.damage);
+        if let Ok(loot) = &loot {
+            items.component_defaults = loot.component_defaults().clone();
+        }
+        // The recipe tables, the stations and the recipe book read one folder:
+        // hold its files so it is read once.
+        let _recipe_files = sunrise_client::json_folder::read(&root.join("data/minecraft/recipe"));
+        let sources = if reload {
+            lan::sync::prepare_server_sources(root, &self.res.core.item_data, &items, &overlay)
+        } else {
+            lan::sync::load_sources(
+                root,
+                &self.res.core.item_data,
+                &items,
+                self.options.execution_role.data_load_origin(),
+                &overlay,
+            )
+        };
+        // Loot preparation resolves references after the native edits. Include
+        // failures here even when a condition rejected the referenced entry.
+        let loot = loot.and_then(|loot| {
+            let context = lan::sync::server_data_load(root, &self.res.core.item_data)?;
+            let data =
+                loot.prepare((!mod_api::__private::mods().is_empty()).then_some(&context))?;
+            Ok((data, context))
+        });
+        // A rejected early registry must not hide independent late load errors.
+        // No table is installed, even if another owning loader succeeded.
+        let errors = [
+            packed_admission.err(),
+            providers.as_ref().err().cloned(),
+            install_items_result.err().map(|error| error.to_string()),
+            conditions.check_errors().err(),
+            loot.as_ref().err().map(ToString::to_string),
+            datapack_candidate.as_ref().err().cloned(),
+            sources.as_ref().err().map(ToString::to_string),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Err(errors.join("\n").into());
+        }
+        let providers = providers?;
         let sources = sources?;
-        let mut loot = loot?;
-        items.component_defaults = loot.component_defaults().clone();
+        let (mut loot, context) = loot?;
         let recipes = Recipes::from_resolved(root, &items, &overlay, &sources)?;
         let mut stations = sunrise_client::stations::StationData::from_sources(
             root,
@@ -364,45 +657,21 @@ impl Game<'_> {
             (&sources, &recipes),
         );
         self.prepare_professions(root, &items, &mut stations)?;
-        // The world's loaded datapack registries are a mod-declared registry's
-        // authority for the data maps' id checks, as the command ids are for
-        // the registries they list.
-        // Resolve membership against the very generation that will be published.
-        // In particular, generation exhaustion refuses preparation before any state changes.
-        let mut datapack_candidate = datapack_candidate?;
-        if let Some(candidate) = &mut datapack_candidate {
-            native_registry_entries::bind_datapack_tags(root, &tag_files, candidate)?;
-        }
-        let datapack_registries = datapack_candidate
-            .map(
-                |candidate| match self.mods.datapack_registries.as_ref().filter(|_| reload) {
-                    Some(old) => old
-                        .reload(candidate)
-                        .map_err(|error| format!("datapack registry reload: {error:?}")),
-                    None => Ok(mod_api::DatapackRegistrySet::first(
-                        candidate,
-                        sunrise_client::datapack_net::next_session(),
-                    )),
-                },
-            )
-            .transpose()?;
-        let received = sunrise_client::datapack_net::received();
+        // Use the same candidate's IDs and bound tags for data map targets.
+        let datapack_registries =
+            datapack_candidate?.map(mod_api::DatapackRegistrySet::from_candidate);
         let datapack_set = if self.is_logical_server() {
             datapack_registries.as_ref()
         } else {
-            received.as_deref()
+            self.remote
+                .as_ref()
+                .and_then(|remote| remote.datapacks.received())
+                .map(Arc::as_ref)
         };
-        let registries = native_data_maps::WorldRegistries::new(
-            self.ui
-                .registries
-                .by_registry
-                .iter()
-                .map(|(registry, entries)| (registry.as_str(), entries.ids.as_slice())),
-            datapack_set,
-            &items,
-            root,
-            &overlay,
-        );
+        let registries =
+            native_data_maps::WorldRegistries::new([], datapack_set, &items, root, &overlay)
+                .with_candidate(&view, &pack_tags)
+                .with_biome_keys(biomes.table.registered_keys());
         let causes_suffocation = items
             .block_tags
             .get("minecraft:causes_suffocation")
@@ -414,24 +683,6 @@ impl Game<'_> {
             self.res.core.collision.clone(),
             &causes_suffocation,
         )?;
-        // A registry whose pack tags don't load keeps the game's own tags
-        // (`in_tag` falls back to them), rather than matching no tag at all.
-        let pack_tags: HashMap<_, _> = WorldTables::PACK_TAG_REGISTRIES
-            .into_iter()
-            .chain(sunrise_client::neoforge_mob_maps::MAPS.map(|definition| definition.directory))
-            .filter(|directory| *directory != "item")
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .filter_map(|registry| {
-                match sunrise_client::items::load_tags(root, registry, &tag_files) {
-                    Ok(tags) => Some((registry, tags)),
-                    Err(e) => {
-                        log::warn!("Sunrise: the world's {registry} tags are not applied: {e}");
-                        None
-                    }
-                }
-            })
-            .collect();
         // Items already decoded the root's command export. Block-state-only
         // command metadata is not the registry universe, and professions and
         // biomes belong to the live world candidate rather than that export.
@@ -445,29 +696,20 @@ impl Game<'_> {
         }
         let builtin = neoforge_mob_maps::load(
             &overlay,
-            |directory| {
-                if directory == "item" {
-                    Some(&items.item_tags)
-                } else {
-                    pack_tags.get(directory)
-                }
+            |directory| match directory {
+                "item" => Some(&items.item_tags),
+                "entity_type" => Some(items.entity_type_tags.members()),
+                _ => pack_tags.get(directory),
             },
             |registry, id| match registry {
                 "minecraft:item" => items.items.contains_key(id),
                 "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
-                "minecraft:worldgen/biome" => self
-                    .world_biomes
-                    .as_ref()
-                    .unwrap_or_else(|| self.res.biomes())
-                    .contains(id),
-                "minecraft:entity_type" => {
-                    self.res.mob_types().contains_key(id)
-                        || items
-                            .component_registry
-                            .ids(registry)
-                            .binary_search_by(|known| known.as_str().cmp(id))
-                            .is_ok()
-                }
+                "minecraft:worldgen/biome" => biomes.table.contains(id),
+                EntityTypeTags::REGISTRY => items
+                    .entity_type_tags
+                    .ids()
+                    .binary_search_by(|known| known.as_str().cmp(id))
+                    .is_ok(),
                 _ => items
                     .component_registry
                     .ids(registry)
@@ -478,20 +720,13 @@ impl Game<'_> {
         let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries)
             .with_builtins(builtin)
             .with_biome_keys(mod_api::__private::BiomeKeys::new(
-                sunrise_client::datapack_net::next_session(),
-                self.world_biomes
-                    .as_ref()
-                    .unwrap_or_else(|| self.res.biomes())
-                    .registry_order(),
+                next_biome_keys_session(),
+                biomes.table.registered_keys().iter().cloned(),
             ));
         drop(registries);
         // The API's key order is live state as well: do not change it for a
         // candidate refused by the condition readers.
         api_values::resolve_enchantment_registry(&items)?;
-        let context = lan::sync::server_data_load(root, &self.res.core.item_data)?;
-        if !mod_api::__private::mods().is_empty() {
-            loot.apply_native_table_loads(&context)?;
-        }
         let serializers = self
             .mods
             .loot_modifier_serializers
@@ -500,6 +735,7 @@ impl Game<'_> {
             global_loot_modifiers::files(root, stack, modifier_files),
             &conditions,
             &context,
+            &loot,
         )?;
         loot.set_global_modifiers(modifiers);
         items.set_loot_data(&loot);
@@ -509,8 +745,11 @@ impl Game<'_> {
                 conditions,
                 suffocation,
                 files,
+                priority_layers,
                 items: Arc::new(items),
                 packed_registries: packed_registry_definitions,
+                providers,
+                biomes,
                 loot,
                 loot_modifier_manager,
                 recipes,
@@ -524,57 +763,16 @@ impl Game<'_> {
             datapack_registries,
         })
     }
-    /// The entries of the mods' datapack registries in the winning pack files: decoded with
-    /// each registry's schema and checked as one candidate, so a bad entry fails the load
-    /// before any table is published. `None` when no mod declared a registry: nothing is
-    /// scanned. A file whose `neoforge:conditions` fail is absent; the key is dropped before
-    /// the schema sees the file.
-    fn datapack_candidate(
-        &self,
-        stack: &functions::PackStack,
-        conditions: &sunrise_world::conditions::LoadConditions,
-    ) -> Result<Option<mod_api::DatapackCandidate>> {
-        let declarations = mod_api::__private::datapack_registry_declarations();
-        if declarations.is_empty() {
-            return Ok(None);
-        }
-        let keys: Vec<(&str, &str)> = declarations
-            .iter()
-            .filter_map(|declaration| declaration.key.split_once(':'))
-            .collect();
-        // Content files come before the world's enabled packs, lowest priority first.
-        let packs: Vec<_> = std::iter::once(&stack.content)
-            .chain(stack.enabled_packs())
-            .collect();
-        let files: Vec<_> =
-            sunrise_client::datapack::registry_files(&packs, &keys, |path, bytes| {
-                // Malformed JSON is kept for the registry's own decode diagnostic.
-                serde_json::from_slice::<serde_json::Value>(bytes)
-                    .map_or(true, |json| conditions.allows_file(&json, path))
-            })
-            .map_err(|error| {
-                format!(
-                    "datapack registry {} entry {} (pack {}, file {}): {:?}",
-                    error.registry, error.entry, error.pack, error.file, error.reason
-                )
-            })?
-            .into_iter()
-            .collect();
-        mod_api::DatapackCandidate::build(declarations, &files)
-            .map(Some)
-            .map_err(|error| {
-                format!(
-                    "datapack registry {} entry {} (pack {}, file {}): {:?}",
-                    error.registry, error.entry, error.pack, error.file, error.reason
-                )
-                .into()
-            })
-    }
     /// A world open's tables, and the first generation of the registries the mods declared.
     pub(super) fn open_world_tables(
         &mut self,
         staged: super::condition_reload_state::StagedWorldTables,
     ) -> Result<()> {
+        self.world_biomes_base = staged
+            .tables
+            .as_ref()
+            .map(|tables| tables.biomes.table.clone());
+        self.world_biomes = self.world_biomes_base.clone();
         self.world_tables = staged.tables;
         self.health_resources = staged.health;
         self.mods.datapack_registries = staged.datapack_registries.map(Arc::new);
@@ -589,6 +787,7 @@ impl Game<'_> {
         self.install_fluid_interactions()?;
         self.install_profession_save_snapshots();
         self.share_mob_maps();
+        self.share_biome_keys();
         sunrise_client::datapack_net::serve(self.mods.datapack_registries.clone());
         Ok(())
     }
@@ -619,8 +818,10 @@ impl Game<'_> {
             health,
             parts,
             wire,
+            wire_tags,
             datapack_registries,
         } = prepared;
+        self.close_stonecutters_for_reload();
         lan::sync::forget_server_sources();
         if let Some(tables) = &tables
             && let Some(sources) = &tables.reload_sources
@@ -628,6 +829,7 @@ impl Game<'_> {
             let overlay = sunrise_world::loot::PackOverlay {
                 conditions: &tables.conditions,
                 files: &tables.files,
+                priority_layers: &tables.priority_layers,
             };
             lan::sync::install_server_sources(
                 &self.options.resources,
@@ -651,6 +853,7 @@ impl Game<'_> {
         }
         self.install_profession_save_snapshots();
         self.share_mob_maps();
+        self.share_biome_keys();
         self.world.pois.clear();
         for world in self.levels.parked_worlds() {
             world.pois.clear();
@@ -674,6 +877,7 @@ impl Game<'_> {
             &self.pack_files(),
             wire.clone(),
             advancements.clone(),
+            wire_tags,
         );
         if self.lan.is_some()
             && let Some(sync) = wire
@@ -712,10 +916,7 @@ impl Game<'_> {
 
 impl Game<'_> {
     pub(super) fn active_enchantment_definitions(&self) -> &sunrise_client::enchant::Enchantments {
-        match self.remote.as_ref().and_then(|r| r.enchantments.as_ref()) {
-            Some(e) => e,
-            None => &self.stations().enchantments,
-        }
+        self.item_enchantments()
     }
     /// Build and publish one server snapshot for this world load or reload.
     pub(super) fn load_server_loot(&mut self) {
@@ -731,45 +932,36 @@ impl Game<'_> {
         }
         self.server_items = None;
         let overlay = pack_files(&self.world_tables);
-        let loot = match sunrise_world::loot::LootData::load(
+        let native = if mod_api::__private::mods().is_empty() {
+            None
+        } else {
+            match lan::sync::server_data_load(&self.options.resources, &self.res.core.item_data) {
+                Ok(context) => Some(context),
+                Err(error) => {
+                    log::warn!("Sunrise: server loot inventory unavailable: {error}");
+                    self.server_loot.set(None);
+                    return;
+                }
+            }
+        };
+        let loot = match sunrise_world::loot::LootData::load_with_damage(
             &self.options.resources,
             &overlay,
             self.res.item_defaults(),
+            &self.health_resources.damage,
+            &self.items().ordered_tags(),
+            native.as_ref(),
         ) {
-            Ok(mut loot) => {
-                if !mod_api::__private::mods().is_empty() {
-                    let context = match lan::sync::server_data_load(
-                        &self.options.resources,
-                        &self.res.core.item_data,
-                    ) {
-                        Ok(context) => context,
-                        Err(error) => {
-                            log::warn!("Sunrise: server loot inventory unavailable: {error}");
-                            self.server_loot.set(None);
-                            return;
-                        }
-                    };
-                    if let Err(error) = loot.apply_native_table_loads(&context) {
-                        log::warn!("Sunrise: native loot tables refused: {error}");
-                        self.server_loot.set(None);
-                        return;
-                    }
-                }
-                Some(Arc::new(loot))
-            }
-            Err(e) => {
-                log::warn!("Sunrise: server loot tables unavailable: {e}");
+            Ok(loot) => Some(Arc::new(loot)),
+            Err(error) => {
+                log::warn!("Sunrise: server loot tables unavailable: {error}");
                 None
             }
         };
-        if !mod_api::__private::mods().is_empty()
-            && let Some(loot) = &loot
-        {
-            let mut items = self.items().clone();
-            items.set_loot_tables(loot.tables().clone());
-            self.server_items = Some(Arc::new(items));
-        }
         if let Some(loot) = &loot {
+            let mut items = self.items().clone();
+            items.set_loot_data(loot);
+            self.server_items = Some(Arc::new(items));
             self.copy_loot_enchantment_answers(loot);
         }
         self.server_loot.set(loot);
@@ -783,7 +975,6 @@ impl Game<'_> {
         }
         let registry = self.pack.assets.registry;
         let block_tags = &items.block_tags;
-        let tags = self.block_tag_sets(items);
         let parts = mod_api::__private::prepare_parts(
             block_tags,
             &items.item_tags,
@@ -811,7 +1002,6 @@ impl Game<'_> {
         Ok(PreparedParts {
             cauldrons,
             block_states,
-            tags,
             parts,
         })
     }
@@ -831,8 +1021,9 @@ impl Game<'_> {
         } = self.stage_world_tables(stack, true, root)?;
         let items = tables
             .as_ref()
-            .map_or_else(|| self.res.items(), |tables| &tables.items);
-        let parts = self.prepare_parts(items)?;
+            .map_or_else(|| self.res.shared_items(), |tables| tables.items.clone());
+        let parts = self.prepare_parts(&items)?;
+        let wire_tags = sunrise_client::lan::data::WorldTags::new(items.clone(), &health.damage);
         let overlay = pack_files(&tables);
         let kept = self
             .lan
@@ -849,6 +1040,7 @@ impl Game<'_> {
                     let sources = lan::sync::prepare_server_sources(
                         root,
                         &self.res.core.item_data,
+                        &items,
                         &overlay,
                     )?;
                     sources.check()?;
@@ -863,6 +1055,7 @@ impl Game<'_> {
                     &kept,
                     &sources,
                     &advancements,
+                    &wire_tags,
                 )
                 .map_err(|error| format!("wire reload: {error}"))?,
             )
@@ -877,6 +1070,7 @@ impl Game<'_> {
             health,
             parts,
             wire,
+            wire_tags,
             datapack_registries,
         })
     }
@@ -907,6 +1101,17 @@ impl Game<'_> {
     /// Publish state keys and bind parts before their state-only answers are cached.
     /// A server also publishes its parts for world generation.
     pub(super) fn bind_parts(&self, prepared: PreparedParts) {
+        if self.is_logical_server()
+            && let Some(host) = &self.lan
+        {
+            cauldron_prediction::publish_registrations(
+                &prepared.cauldrons,
+                host.hub
+                    .guests
+                    .simulation_iter()
+                    .filter(|g| g.placed || g.held),
+            );
+        }
         cauldron_interactions::install(prepared.cauldrons);
         if self.is_logical_server() {
             native_worldgen_parts::publish(
@@ -916,7 +1121,6 @@ impl Game<'_> {
             );
         }
         api_values::install_block_states(&self.tick, prepared.block_states);
-        native_world_read::install_block_tags(prepared.tags);
         api_values::install_resolved_parts(&self.tick, prepared.parts);
         self.mark_collision_shape_states();
         self.resolve_block_paths();

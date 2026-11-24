@@ -1,5 +1,4 @@
 //! The `screen_render_post` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0091
 
 pub trait Hooks {
     /// The open screen has drawn itself and its tooltips (`Screen.render`,
@@ -20,10 +19,13 @@ pub trait Hooks {
     /// their `screen.id` from the title state machine and the whole window
     /// their `rect`, and no dialog or prompt over them.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_screen_render_post",
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "ScreenEvent.Render.Post",
         cancellable = false
     )]
-    fn screen_render_post();
+    fn screen_render_post(draw: &mut dyn DrawContext, screen: &ScreenView<'_>);
 }

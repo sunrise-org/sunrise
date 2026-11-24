@@ -19,11 +19,8 @@ use sunrise_client::{
 use sunrise_core::nbt::Tag;
 use sunrise_core::position::BlockPos;
 use sunrise_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
-use sunrise_world::{level::flags as level_flags, registry::BlockStateId};
-use winit::{
-    event::{ElementState, KeyEvent},
-    keyboard::{KeyCode, PhysicalKey},
-};
+use sunrise_world::level::flags as level_flags;
+use winit::keyboard::KeyCode;
 
 const BLACK: u32 = 0xFF00_0000;
 const PAGE_CHARS: usize = 1024;
@@ -355,8 +352,8 @@ impl Game<'_> {
     pub(super) fn open_book(&mut self, screen: BookScreen) {
         self.open_screen_overlay(screen.id(), |game| {
             game.book = Some(screen);
-            game.keys.clear();
-            game.right = false;
+            game.clear_device_keys();
+            game.set_mapping_held("key.use", false);
             game.capture(false);
         });
     }
@@ -386,13 +383,15 @@ impl Game<'_> {
         {
             self.remote_close_container();
         }
-        self.book = None;
+        if self.book.take().is_some() {
+            self.refresh_screen_widgets();
+        }
         self.capture(self.screen == super::Screen::Playing && !self.screen_over_playing());
     }
     /// `BookEditScreen.saveChanges` and `BookSignScreen`'s Sign and Close:
     /// trailing empty pages dropped, the book in hand updated here and, on a
     /// server's client, sent (ServerboundEditBookPacket).
-    fn save_book(&mut self, sign: bool) {
+    pub(super) fn save_book(&mut self, sign: bool) {
         let Some(BookScreen::Edit {
             slot, pages, title, ..
         }) = self.book.take()
@@ -412,6 +411,7 @@ impl Game<'_> {
             }));
         }
         self.write_book(slot, pages, title);
+        self.refresh_screen_widgets();
         self.capture(true);
     }
     /// The book and quill at `slot` takes the pages, or with a title becomes
@@ -434,6 +434,7 @@ impl Game<'_> {
             let mut written = stack.transmute("minecraft:written_book", stack.count);
             let data = written.data_mut();
             data.writable_pages = Vec::new();
+            data.writable_filtered = Vec::new();
             data.written = Some(WrittenBook {
                 title,
                 author,
@@ -446,7 +447,10 @@ impl Game<'_> {
             });
             *stack = written;
         } else {
-            stack.data_mut().writable_pages = if pages.iter().all(String::is_empty) {
+            let data = stack.data_mut();
+            // `updateBookContents`: new `Filterable` pages, unfiltered while no text filter runs.
+            data.writable_filtered = Vec::new();
+            data.writable_pages = if pages.iter().all(String::is_empty) {
                 Vec::new()
             } else {
                 pages
@@ -498,35 +502,46 @@ impl Game<'_> {
                 .update_connection(conn, |g| g.menu_sent[menu_slot] = None);
         }
     }
-    pub(super) fn book_key(&mut self, event: &KeyEvent) {
-        if event.state != ElementState::Pressed {
-            return;
-        }
-        if let Some(shortcut) = self.edit_shortcut(event) {
+    pub(super) fn book_key(
+        &mut self,
+        key: KeyCode,
+        shortcut: Option<sunrise_client::clipboard::EditShortcut>,
+    ) -> bool {
+        if let Some(shortcut) = shortcut
+            && matches!(self.book, Some(BookScreen::Edit { .. }))
+        {
             self.book_shortcut(shortcut);
-            return;
+            return true;
         }
-        let key = match event.physical_key {
-            PhysicalKey::Code(k) => Some(k),
-            _ => None,
-        };
-        self.book_input(key, event.text.as_deref());
+        self.book_input(Some(key), None)
     }
     /// A key and the text it typed in the open book (the keyboard, or a
     /// controller's on-screen keyboard).
-    pub(super) fn book_input(&mut self, key: Option<KeyCode>, text: Option<&str>) {
+    pub(super) fn book_input(&mut self, key: Option<KeyCode>, text: Option<&str>) -> bool {
         match self.book.as_mut() {
             Some(BookScreen::View { .. }) => match key {
-                Some(KeyCode::Escape) => self.close_book(),
-                Some(KeyCode::PageUp) => self.turn_page(false),
-                Some(KeyCode::PageDown) => self.turn_page(true),
-                _ => {}
+                Some(KeyCode::Escape) => {
+                    self.close_book();
+                    true
+                }
+                Some(KeyCode::PageUp) => {
+                    self.turn_page(false);
+                    true
+                }
+                Some(KeyCode::PageDown) => {
+                    self.turn_page(true);
+                    true
+                }
+                _ => false,
             },
             Some(BookScreen::Edit { signing: true, .. }) => match key {
                 // `BookSignScreen` overrides neither `onClose` nor
                 // `shouldCloseOnEsc`: Escape is `Screen.onClose`, which closes
                 // the whole book and saves nothing.
-                Some(KeyCode::Escape) => self.close_book(),
+                Some(KeyCode::Escape) => {
+                    self.close_book();
+                    true
+                }
                 // `BookSignScreen.keyPressed` signs whenever the title box is
                 // not empty, blank or not, and trims the title on send.
                 Some(KeyCode::Enter | KeyCode::NumpadEnter) => {
@@ -536,11 +551,15 @@ impl Game<'_> {
                     if !empty {
                         self.save_book(true);
                     }
+                    !empty
                 }
-                Some(key) if self.book_title_key(key) => {}
+                Some(key) if self.book_title_key(key) => true,
                 _ => {
                     if let Some(typed) = text {
                         self.book_title_insert(typed);
+                        true
+                    } else {
+                        false
                     }
                 }
             },
@@ -548,25 +567,47 @@ impl Game<'_> {
                 // `BookEditScreen` overrides neither `onClose` nor
                 // `shouldCloseOnEsc` either: Escape is `Screen.onClose`, and
                 // only Done calls `saveChanges`.
-                Some(KeyCode::Escape) => self.close_book(),
-                Some(KeyCode::PageUp) => self.turn_page(false),
-                Some(KeyCode::PageDown) => self.turn_page(true),
-                Some(KeyCode::ArrowUp) => self.book_move_line(-1),
-                Some(KeyCode::ArrowDown) => self.book_move_line(1),
+                Some(KeyCode::Escape) => {
+                    self.close_book();
+                    true
+                }
+                Some(KeyCode::PageUp) => {
+                    self.turn_page(false);
+                    true
+                }
+                Some(KeyCode::PageDown) => {
+                    self.turn_page(true);
+                    true
+                }
+                Some(KeyCode::ArrowUp) => {
+                    self.book_move_line(-1);
+                    true
+                }
+                Some(KeyCode::ArrowDown) => {
+                    self.book_move_line(1);
+                    true
+                }
                 // MultilineTextField.keyPressed: Home and End seek the caret's
                 // line; with Ctrl they go to the page's start and end.
                 Some(edge @ (KeyCode::Home | KeyCode::End)) if !self.has_control_down() => {
-                    self.book_line_edge(edge == KeyCode::End)
+                    self.book_line_edge(edge == KeyCode::End);
+                    true
                 }
-                Some(KeyCode::Enter | KeyCode::NumpadEnter) => self.page_insert("\n"),
-                Some(key) if self.book_page_key(key) => {}
+                Some(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                    self.page_insert("\n");
+                    true
+                }
+                Some(key) if self.book_page_key(key) => true,
                 _ => {
                     if let Some(typed) = text {
                         self.page_insert(typed);
+                        true
+                    } else {
+                        false
                     }
                 }
             },
-            None => {}
+            None => false,
         }
     }
     /// Typing for `sunrise-ctl type` (`\n` is a line break).
@@ -886,8 +927,7 @@ impl Game<'_> {
             self.lectern_button(key, if forward { 2 } else { 1 });
             return;
         }
-        self.audio
-            .play("minecraft:item.book.page_turn", None, 1.0, 1.0);
+        self.play_audio("minecraft:item.book.page_turn", None, 1.0, 1.0);
     }
     fn set_lectern_powered(&mut self, key: (i32, i32, i32), powered: bool) {
         self.set_lectern_property(key, "powered", powered);
@@ -987,8 +1027,7 @@ impl Game<'_> {
             f64::from(pos[1]) + 0.5,
             f64::from(pos[2]) + 0.5,
         ];
-        self.audio
-            .play("minecraft:item.book.put", Some(at), 1.0, 1.0);
+        self.play_audio("minecraft:item.book.put", Some(at), 1.0, 1.0);
         self.container_changed(key);
         if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone()) {
             self.native_player_insert_lectern_book(player, &name, pos, &book.item);
@@ -1159,25 +1198,6 @@ impl Game<'_> {
             *page = (value.max(0) as usize).min(pages.len().saturating_sub(1));
         }
     }
-    /// The server closed its lectern menu; false when none is open.
-    pub(super) fn remote_lectern_closed(&mut self) -> bool {
-        if !matches!(
-            self.book,
-            Some(BookScreen::View {
-                lectern: Some(_),
-                ..
-            })
-        ) {
-            return false;
-        }
-        if let Some(r) = self.remote.as_mut() {
-            r.menu.set(None);
-            r.set_menu_title(None);
-        }
-        self.book = None;
-        self.capture(true);
-        true
-    }
     /// `LecternMenu` over the lectern at `key` (the menu engine, for the
     /// local player and LAN guests alike): its book and page.
     pub(super) fn lectern_menu(&self, key: (i32, i32, i32)) -> Option<Menu> {
@@ -1259,7 +1279,7 @@ impl Game<'_> {
             *page = (l.page.max(0) as usize).min(pages.len().saturating_sub(1));
         }
     }
-    pub(super) fn book_click(&mut self, size: [u32; 2]) {
+    pub(super) fn book_click(&mut self, size: [u32; 2]) -> bool {
         let b = HudBatch::new(size, self.settings.gui_scale_inputs());
         let (w, left) = (b.width, ((b.width - 192.0) / 2.0).floor());
         let (mx, my) = self.cursor;
@@ -1271,10 +1291,7 @@ impl Game<'_> {
         self.book_last_click = Some(now);
         let inside =
             |x: f32, y: f32, bw: f32, bh: f32| mx >= x && my >= y && mx < x + bw && my < y + bh;
-        let click = |game: &mut Self| {
-            game.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0)
-        };
+        let click = |game: &mut Self| game.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
         match &self.book {
             Some(BookScreen::Edit {
                 signing: true,
@@ -1285,27 +1302,35 @@ impl Game<'_> {
                 if inside(w / 2.0 - 100.0, 196.0, 98.0, 20.0) && !blank {
                     click(self);
                     self.save_book(true);
+                    return true;
                 } else if inside(w / 2.0 + 2.0, 196.0, 98.0, 20.0) {
                     click(self);
                     self.set_book_signing(false);
+                    return true;
                 } else if inside(left + 36.0, 50.0, 114.0, 9.0) {
                     self.book_title_click(left + 36.0, mx);
+                    return true;
                 }
             }
             Some(BookScreen::Edit { page, .. }) => {
                 let page = *page;
                 if inside(left + 116.0, 159.0, 23.0, 13.0) {
                     self.turn_page(true);
+                    return true;
                 } else if page > 0 && inside(left + 43.0, 159.0, 23.0, 13.0) {
                     self.turn_page(false);
+                    return true;
                 } else if inside(w / 2.0 - 100.0, 196.0, 98.0, 20.0) {
                     click(self);
                     self.set_book_signing(true);
+                    return true;
                 } else if inside(w / 2.0 + 2.0, 196.0, 98.0, 20.0) {
                     click(self);
                     self.save_book(false);
+                    return true;
                 } else if inside(left + 36.0, 32.0, 114.0, 14.0 * 9.0) {
                     self.book_page_click(left + 36.0, 32.0, mx, my, double);
+                    return true;
                 }
             }
             Some(BookScreen::View {
@@ -1317,25 +1342,32 @@ impl Game<'_> {
                 // The text's click event first, then the buttons.
                 if let Some(link) = pages.get(page).and_then(|t| self.book_link_at(t, left)) {
                     self.book_follow_link(link, count, lectern);
+                    return true;
                 } else if page + 1 < count && inside(left + 116.0, 159.0, 23.0, 13.0) {
                     self.turn_page(true);
+                    return true;
                 } else if page > 0 && inside(left + 43.0, 159.0, 23.0, 13.0) {
                     self.turn_page(false);
+                    return true;
                 } else if let Some(key) = lectern.filter(|_| self.may_build()) {
                     if inside(w / 2.0 - 100.0, 196.0, 98.0, 20.0) {
                         click(self);
                         self.close_book();
+                        return true;
                     } else if inside(w / 2.0 + 2.0, 196.0, 98.0, 20.0) {
                         click(self);
                         self.take_lectern_book(key);
+                        return true;
                     }
                 } else if inside((w - 200.0) / 2.0, 196.0, 200.0, 20.0) {
                     click(self);
                     self.close_book();
+                    return true;
                 }
             }
             None => {}
         }
+        false
     }
     pub(super) fn draw_book(&mut self, batch: &mut HudBatch) {
         let mut hovered = None;
@@ -1374,9 +1406,9 @@ impl Game<'_> {
             ] {
                 if show {
                     let sprite = if hover(left + x, top + 157.0, 23.0, 13.0) {
-                        format!("gui/sprites/widget/{name}_highlighted")
+                        format!("widget/{name}_highlighted")
                     } else {
-                        format!("gui/sprites/widget/{name}")
+                        format!("widget/{name}")
                     };
                     batch.sprite(atlas, &sprite, left + x, top + 157.0);
                 }
@@ -1691,6 +1723,9 @@ impl Game<'_> {
                 hovered = pages.get(*page).and_then(|t| self.book_style_at(t, left));
             }
         }
+        if let Some(book_id) = self.book.as_ref().map(BookScreen::id) {
+            self.draw_overlay_mounted_widgets(batch, book_id);
+        }
         if let Some(style) = hovered {
             if let Some(cursor) = link_cursor(&style) {
                 sunrise_client::widgets::request_cursor(cursor);
@@ -1699,50 +1734,7 @@ impl Game<'_> {
         }
     }
 }
-/// `LecternBlock.getAnalogOutputSignal` and
-/// `LecternBlockEntity.getRedstoneSignal`: the state's `has_book` gates the
-/// answer, and an entity with no book reads 14 (a page count of 0 is a page
-/// progress of 1.0 with no book to add).
-pub(super) fn lectern_signal(
-    world: &sunrise_client::world::World,
-    registry: &sunrise_world::registry::BlockRegistry,
-    state: BlockStateId,
-    pos: BlockPos,
-) -> Option<i32> {
-    let s = registry.state(state)?;
-    if s.name != "minecraft:lectern" {
-        return None;
-    }
-    if s.properties.get("has_book").is_none_or(|v| v != "true") {
-        return Some(0);
-    }
-    match world.block_entities.get(&(pos.x, pos.y, pos.z)) {
-        Some(BlockEntity::Lectern(l)) => Some(l.book.as_ref().map_or(14, |b| {
-            let data = b.data();
-            let count = data
-                .and_then(|d| d.written.as_ref().map(|w| w.pages.len()))
-                .or_else(|| data.map(|d| d.writable_pages.len()))
-                .unwrap_or(0)
-                .max(1);
-            let f = if count > 1 {
-                l.page as f32 / (count - 1) as f32
-            } else {
-                1.0
-            };
-            // `LecternBlockEntity.hasBook`: a `written_book_content` or
-            // `writable_book_content` component, not just any stack. A book
-            // item carries its content by default, so its id counts too.
-            let has_book = matches!(
-                &*b.item,
-                "minecraft:writable_book" | "minecraft:written_book"
-            ) || data
-                .is_some_and(|d| d.written.is_some() || !d.writable_pages.is_empty());
-            (f * 14.0).floor() as i32 + i32::from(has_book)
-        })),
-        _ => None,
-    }
-}
-
+pub(super) use sunrise_gameplay::lectern::lectern_signal;
 #[cfg(test)]
 mod title_box_tests {
     use super::book_title_box;

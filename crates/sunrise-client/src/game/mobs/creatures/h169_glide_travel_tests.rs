@@ -106,7 +106,7 @@ fn h169_registered_eligible_husk_actually_travels_as_a_glider() {
         let main = indexes[0];
         let id = game.mobs[main].id;
         assert!(game.mobs[main].extra.fall_flying);
-        assert!(!game.mobs[main].no_ai && !game.mobs[main].on_ground);
+        assert!(!game.mobs[main].no_ai && !game.mobs[main].ground.on_ground);
         let stack = sunrise_client::mobs::finalize::equipment_stack(
             &game.mobs[main],
             sunrise_core::equipment_slot::EquipmentSlot::Chest,
@@ -169,7 +169,7 @@ fn h169_added_actual_wall_collision_uses_mob_damage_source() {
         game.update_chunk_tickets();
         game.tick_creature_entities().unwrap();
         let m = &game.mobs[index];
-        assert!(m.horizontal_collision, "actual wall collision");
+        assert!(m.ground.horizontal_collision, "actual wall collision");
         assert!(m.position.x > 4.5 && m.position.x < 6.0);
         assert_eq!(m.velocity.x, 0.0, "resolved collision, no damage knockback");
         assert_eq!(m.health, 3.0, "(2 - 0) * 10 - 3, bypassing the real armor");

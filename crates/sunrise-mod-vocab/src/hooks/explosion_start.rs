@@ -8,11 +8,13 @@ pub trait Hooks {
     /// damage or knockback, no sound, particles or game event. Before
     /// `explosion_prime`, which a cancel skips. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
+        version = 2,
         contract = "cancel",
         out = "cancel",
         neoforge = "ExplosionEvent.Start",
         cancellable = true
     )]
-    fn explosion_start();
+    fn explosion_start(explosion: &ExplosionStart<'_>, cancel: &mut bool);
 }

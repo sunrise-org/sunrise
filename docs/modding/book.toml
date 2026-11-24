@@ -1,6 +1,6 @@
 [book]
 title = "Modding Sunrise"
-description = "Guide and reference for making Sunrise mods: content, native and WebAssembly"
+description = "Guide and reference for making Sunrise mods: content and native"
 language = "en"
 src = "src"
 
@@ -31,6 +31,18 @@ context, book = json.load(sys.stdin)
 sys.path.insert(0, str(pathlib.Path(context["root"]).resolve().parents[1] / "tools"))
 import modding_hook_notes as notes
 print(json.dumps(notes.chapter(context, book, "counterparts", "NeoForge counterparts", "reference/neoforge-counterparts.md")))
+'"""
+before = ["concept-pages", "links"]
+
+[preprocessor.api-reference]
+command = """python3 -c '
+import json, pathlib, sys
+if sys.argv[1:2] == ["supports"]:
+    sys.exit(0)
+context, book = json.load(sys.stdin)
+sys.path.insert(0, str(pathlib.Path(context["root"]).resolve().parents[1] / "tools"))
+import modding_hook_notes as notes
+print(json.dumps(notes.chapter(context, book, "reference", "API reference", "reference/api-reference.md")))
 '"""
 before = ["concept-pages", "links"]
 
@@ -72,6 +84,9 @@ edit-url-template = "https://github.com/sunrise-org/sunrise/edit/main/docs/moddi
 # Pages that moved keep their old address.
 [output.html.redirect]
 "/start/installing.html" = "../players/installing-mods.html"
+"/concepts/injections.html" = "./hooks-and-the-host.html"
+"/concepts/injections/typed-api.html" = "../hooks-and-the-host.html"
+"/how-to/entities/named-hook-points.html" = "./entity-hooks.html"
 
 # The how-to groups are long: show each part's top chapters, open one to see its pages.
 [output.html.fold]

@@ -8,7 +8,8 @@ behaviour, the disabled block is inert rather than inheriting its vanilla templa
   to any Part, including enabled Parts. Re-enabling the owner dispatches each held occurrence once,
   with its original deadline, priority and order.
 - `can_be_hydrated` leaves the farmland's moisture and block state unchanged on random ticks
-  unless an enabled mod's session water ticket or an earlier enabled Part waters it. Rain does not
+  unless an active session water ticket (tickets attributed to a disabled mod are cleared on
+  disable) or an earlier enabled Part waters it. Rain does not
   wet held farmland, and holding does not prevent trampling. Moisture and dry-out checks resume
   when the owner is switched back on. Farmland without a hydration Part from its owner follows
   its usual rules.
@@ -34,7 +35,7 @@ state and loot retain their ordinary answers. Attacks, explosions, environmental
 player-initiated removal still use data and template rules: switching the owner off does not make a
 block immune to those actions. `piston_push_reaction` has no inert answer: the disabled owner's
 Part does not override the data or template reaction. Pistons may still move or break the block
-according to those rules. These rules are the same on native and wasm.
+according to those rules.
 
 Items and entities keep their registered data and default engine behaviour while their Part
 callbacks are disabled. They are not globally frozen by this block-specific policy. In particular,

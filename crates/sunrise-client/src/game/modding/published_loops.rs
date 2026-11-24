@@ -44,18 +44,11 @@ pub(crate) struct Attributed<N, T> {
 }
 
 impl<N: LoopMod, T> Attributed<N, T> {
-    /// Runs `call` on the slot, marked as inside the mod. Outside the world (a reload or setup) a
-    /// Host call the slot makes is refused by the phase gate: that is no answer, `None`.
+    /// Runs `call` on the slot, marked as inside the mod.
     #[inline(always)]
     pub(crate) fn call<R>(&mut self, call: impl FnOnce(&mut T) -> R) -> Option<R> {
         let _inside = mod_api::content::crash::enter_native_mod(N::CALL);
-        match mod_api::__private::contain_outside_world(|| call(&mut self.slot)) {
-            Ok(answer) => Some(answer),
-            Err(refusal) => {
-                refusal.report();
-                None
-            }
-        }
+        Some(call(&mut self.slot))
     }
 }
 

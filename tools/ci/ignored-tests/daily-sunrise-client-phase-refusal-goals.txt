@@ -1,3 +1,0 @@
-sunrise-client game::native_goal_ticks::tests::a_goal_tick_outside_the_world_is_refused_not_a_panic lib daily resources
-sunrise-client game::native_goal_ticks::behavior_tests::a_behavior_run_outside_the_world_is_refused_not_a_panic lib daily resources
-sunrise-client game::creatures::general_creature_tests::a_spawn_cluster_size_outside_the_world_is_refused_not_a_panic lib daily resources

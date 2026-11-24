@@ -1,2 +1,0 @@
-# #1395: the chunk disk hooks through the compiled wasm fixture (it needs SUNRISE_WASM_FIXTURE and SUNRISE_WASM_STD).
-sunrise-mod-wasm native_and_wasm_execute_identical_job_and_fail_closed_on_trap test:chunk_disk daily wasm-fixture

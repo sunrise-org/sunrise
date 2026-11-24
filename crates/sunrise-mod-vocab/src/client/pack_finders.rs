@@ -2,10 +2,30 @@
 //! and reload listeners (`AddPackFindersEvent`).
 use crate::{Identifier, Text};
 
-/// The largest resource [`ResourcesHost::resource`](crate::prelude::ResourcesHost::resource)
-/// returns, in bytes. A larger winning file reads as `None` rather than as a
-/// truncated or unbounded value.
-pub const MAX_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
+// no wire: native I/O errors stay in the calling process.
+/// Failure to open a pack resource. A missing resource is `Ok(None)`, not an error.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ResourceOpenError {
+    /// Resource lookup or opening failed. Preserves the original I/O cause.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for ResourceOpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ResourceOpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+        }
+    }
+}
 
 /// Which repository is being discovered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,8 +67,10 @@ pub enum PackPosition {
 /// reload read the same logical directory without extracting it.
 ///
 /// The repository id is `mod/<location>`. Optional packs remain unselected until
-/// the player selects them. Always-active packs cannot be disabled; `position`
-/// determines their default priority (later resource layers win).
+/// the player selects them. Startup recovery does not clear a newer selection
+/// the player committed while a client resource load was in progress.
+/// Always-active packs cannot be disabled; `position` determines their default
+/// priority (later resource layers win).
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -61,7 +83,8 @@ pub struct PackRegistration {
     pub title: Text,
     /// The pack's source label and experiment classification.
     pub source: PackSource,
-    /// Require this pack in every selection, preventing it from being disabled.
+    /// Require this pack in every selection, including recovery from a failed client resource
+    /// pack load. Reordering required packs alone does not trigger recovery.
     pub always_active: bool,
     /// The default insertion position of an always-active pack.
     pub position: PackPosition,
@@ -120,14 +143,29 @@ impl From<crate::TextFormError> for PackFinderError {
     }
 }
 
+/// Local text services and any available host during pack repository discovery.
+// no wire: borrows services for the callback.
+pub trait PackDiscoveryContext: crate::prelude::TextHost {
+    /// The logical side's host when a game is rediscovering packs, or `None` before
+    /// the game exists. World queries still return `None` if no world is open.
+    fn live_host(&mut self) -> Option<crate::HostSide<'_>>;
+
+    /// Client font measurement and visual order, when discovery runs on a client with a font.
+    /// `None` on startup before a font is loaded and on a logical server.
+    fn client_text(&self) -> Option<&dyn crate::prelude::ClientTextClientHost> {
+        None
+    }
+}
+
 /// The typed builder handed to `add_pack_finders`, rebuilt for each discovery.
 /// Registration performs no resource reload and does not select optional packs.
+/// A panicking callback contributes none of its packs.
 pub trait PackFinders {
     /// The kind of repository currently being discovered.
     fn pack_type(&self) -> PackType;
     /// Add a bundled pack to this repository. A registration for the other pack
     /// type is ignored, allowing one hook implementation to describe both kinds.
-    /// Refuses an invalid title with [`PackFinderError::Text`], including components
-    /// deeper than 512 nodes; a refusal leaves the repository unchanged.
+    /// The title is a local component, not a serialized field. A title with unrepresentable
+    /// metadata is refused with [`PackFinderError::Text`] without changing the repository.
     fn add_pack_finders(&mut self, pack: PackRegistration) -> Result<(), PackFinderError>;
 }

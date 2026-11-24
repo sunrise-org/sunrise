@@ -19,11 +19,10 @@ pub enum StartRidingRefusal {
     /// it reads `force`, and the player type is one: a player's save keeps no
     /// passengers, so nothing may ride a player.
     PlayerVehicle,
-    /// The rider is neither a player nor a mob (an item, a boat, a
-    /// projectile...), which the game does not seat.
+    /// The rider is not a player, mob or declared general entity.
     UnsupportedRider,
-    /// The vehicle takes no passenger: an entity that is not a mob, boat,
-    /// minecart or generic seat, or a seat that admits none (a marker).
+    /// The entity cannot carry passengers: for example, a marker, an
+    /// unsupported family, or a general type declared `NoSave`.
     UnsupportedVehicle,
     /// The rider and the vehicle are the same entity.
     SameEntity,
@@ -33,7 +32,7 @@ pub enum StartRidingRefusal {
     /// (`Entity.startRiding`'s `hasPassenger`/`isPassengerOfSameVehicle` walk).
     Cycle,
     /// Unforced, the rider may not ride now (`Entity.canRide`): a sneaking
-    /// player, a mob in its boarding cooldown, or a warden or a wither.
+    /// player, a mob or general entity in its boarding cooldown, or a warden or wither.
     /// `force` mounts it anyway.
     CannotRide,
     /// The vehicle has no room (`Entity.canAddPassenger`): a mob at its
@@ -52,7 +51,7 @@ impl std::fmt::Display for StartRidingRefusal {
         f.write_str(match self {
             Self::NoEntity => "a handle names no entity of this server level",
             Self::PlayerVehicle => "nothing may ride a player",
-            Self::UnsupportedRider => "only a player or a mob can ride",
+            Self::UnsupportedRider => "only a player, mob or general entity can ride",
             Self::UnsupportedVehicle => "the vehicle takes no passenger",
             Self::SameEntity => "an entity cannot ride itself",
             Self::AlreadyRiding => "the rider already rides this vehicle",

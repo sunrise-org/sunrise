@@ -1,10 +1,10 @@
 //! Real server/client Game owners, world publication and negotiated client registry limits.
-use super::native_entity_refs::tests::{with_client_game, with_game};
+use super::native_entity_refs::tests::{run_fresh_cases, with_client_game, with_game};
 use mod_api::{
     DatapackField, DatapackFieldKind, DatapackRegistrySync, Hooks, ModEntry, Registrar,
     RegistrationContext,
 };
-use std::{path::Path, sync::Arc};
+use std::{ops::ControlFlow, path::Path, sync::Arc};
 
 struct RegistryMod;
 #[mod_api::__subscriptions]
@@ -51,9 +51,47 @@ fn id(value: &str) -> mod_api::Identifier {
     mod_api::Identifier::parse(value).unwrap()
 }
 
+fn registry_lists(host: &dyn mod_api::Host, registry: &str, expected: &str) -> bool {
+    host.visit_registry_entries(registry, &mut |id| {
+        if id == expected {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .unwrap_or_else(|error| panic!("{registry}: {error:?}"))
+    .is_break()
+}
+
+// Feed the same server-built snapshot to both Host implementations.
+fn check_rejected_sync_tags(game: &super::Game<'_>) {
+    for (registry, name) in [
+        ("minecraft:enchantment", "minecraft:sharpness"),
+        ("minecraft:entity_type", "minecraft:zombie"),
+    ] {
+        let entry = host(game).registry_entry(registry, name).unwrap();
+        assert_eq!(
+            host(game).registry_entry_in_tag(&entry, "registry_entry_test:bound"),
+            Some(true)
+        );
+        assert_eq!(
+            host(game).registry_entry_in_tag(&entry, "registry_entry_test:rejected"),
+            Some(false)
+        );
+    }
+}
+
 #[test]
 #[ignore = "daily"]
 fn generic_entries_follow_real_server_tables_and_atomic_reload() {
+    // The lazy wire cache is process-wide; another world must not replace this world's snapshot.
+    if run_fresh_cases(
+        "game::native_registry_entries_tests::generic_entries_follow_real_server_tables_and_atomic_reload",
+        "SUNRISE_REGISTRY_ENTRIES_RELOAD_CHILD",
+        &["reload"],
+    ) {
+        return;
+    }
     let _publication = sunrise_client::datapack_net::isolate_server_publication();
     let scratch = tempfile::tempdir().unwrap();
     let pack = scratch.path().join("datapacks/entries");
@@ -97,11 +135,36 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
         &pack.join("data/registry_entry_test/tags/worldgen/structure/towns.json"),
         r#"{"values":["minecraft:village_plains"]}"#,
     );
+    write(
+        &pack.join("data/registry_entry_test/tags/worldgen/structure/rejected.json"),
+        r#"{"values":["minecraft:village_plains","registry_entry_test:missing"]}"#,
+    );
+    write(
+        &pack.join("data/registry_entry_test/tags/mob_effect/rejected.json"),
+        r#"{"values":["minecraft:speed","registry_entry_test:missing"]}"#,
+    );
+    for (kind, member) in [
+        ("enchantment", "minecraft:sharpness"),
+        ("entity_type", "minecraft:zombie"),
+    ] {
+        for (tag, values) in [
+            ("bound", vec![member]),
+            ("rejected", vec![member, "#registry_entry_test:missing"]),
+        ] {
+            write(
+                &pack.join(format!("data/registry_entry_test/tags/{kind}/{tag}.json")),
+                serde_json::json!({"values":values}).to_string(),
+            );
+        }
+    }
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_entry_test", Box::new(RegistryMod))].into(),
         || {
+            let mut wire = None;
             with_game(|game| {
                 game.load_world(request(scratch.path())).unwrap();
+                check_rejected_sync_tags(game);
+                wire = game.registry_sync();
                 let step = host(game)
                     .registry_entry("minecraft:game_event", "minecraft:step")
                     .unwrap();
@@ -113,6 +176,13 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     host(game).registry_entry_in_tag(&step, "registry_entry_test:absent"),
                     Some(false)
                 );
+                let speed = host(game)
+                    .registry_entry("minecraft:mob_effect", "minecraft:speed")
+                    .unwrap();
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&speed, "registry_entry_test:rejected"),
+                    Some(false)
+                );
                 assert_eq!(
                     host(game).registry_entry("minecraft:game_event", "minecraft:nope"),
                     None
@@ -122,12 +192,17 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     None
                 );
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:not_a_registry"),
-                    None
+                    host(game).visit_registry_entries(
+                        "registry_entry_test:not_a_registry",
+                        &mut |_| panic!("unavailable registry visited")
+                    ),
+                    Err(mod_api::RegistryReadError::UnknownRegistry)
                 );
                 assert_eq!(
-                    host(game).registry_entries("minecraft:biome"),
-                    None,
+                    host(game).visit_registry_entries("minecraft:biome", &mut |_| panic!(
+                        "unavailable registry visited"
+                    )),
+                    Err(mod_api::RegistryReadError::UnknownRegistry),
                     "no synthetic registry aliases"
                 );
                 assert_eq!(
@@ -138,18 +213,16 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     None,
                     "an unused resource is not an accepted noise-settings definition",
                 );
-                assert!(
-                    !host(game)
-                        .registry_entries("minecraft:worldgen/noise_settings")
-                        .unwrap()
-                        .contains(&id("registry_entry_test:broken"))
-                );
-                assert!(
-                    !host(game)
-                        .registry_entries("minecraft:worldgen/noise_settings")
-                        .unwrap()
-                        .contains(&id("registry_entry_test:overflow"))
-                );
+                assert!(!registry_lists(
+                    host(game),
+                    "minecraft:worldgen/noise_settings",
+                    "registry_entry_test:broken"
+                ));
+                assert!(!registry_lists(
+                    host(game),
+                    "minecraft:worldgen/noise_settings",
+                    "registry_entry_test:overflow"
+                ));
                 let village = host(game)
                     .registry_entry("minecraft:worldgen/structure", "minecraft:village_plains")
                     .unwrap();
@@ -157,6 +230,11 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     host(game).registry_entry_in_tag(&village, "registry_entry_test:towns"),
                     Some(true),
                     "an accepted structure in a loaded structure tag"
+                );
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&village, "registry_entry_test:rejected"),
+                    Some(false),
+                    "a required missing holder rejects the whole tag"
                 );
                 assert_eq!(
                     host(game).registry_entry_in_tag(&village, "registry_entry_test:absent"),
@@ -186,17 +264,24 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                         host(game).registry_entry(registry, entry).is_some(),
                         "{registry} / {entry}"
                     );
-                    assert!(
-                        host(game)
-                            .registry_entries(registry)
-                            .unwrap()
-                            .contains(&id(entry)),
-                        "{registry}"
-                    );
+                    assert!(registry_lists(host(game), registry, entry), "{registry}");
                 }
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:spell"),
-                    Some(vec![id("registry_entry_test:fire")])
+                    {
+                        let mut ids = Vec::new();
+                        assert_eq!(
+                            host(game).visit_registry_entries(
+                                "registry_entry_test:spell",
+                                &mut |id| {
+                                    ids.push(id.to_owned());
+                                    ControlFlow::Continue(())
+                                }
+                            ),
+                            Ok(ControlFlow::Continue(()))
+                        );
+                        ids
+                    },
+                    ["registry_entry_test:fire"]
                 );
                 let held = host(game)
                     .registry_entry("registry_entry_test:spell", "registry_entry_test:fire")
@@ -250,8 +335,21 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     Some(true)
                 );
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:spell"),
-                    Some(vec![id("addon:ice")])
+                    {
+                        let mut ids = Vec::new();
+                        assert_eq!(
+                            host(game).visit_registry_entries(
+                                "registry_entry_test:spell",
+                                &mut |id| {
+                                    ids.push(id.to_owned());
+                                    ControlFlow::Continue(())
+                                }
+                            ),
+                            Ok(ControlFlow::Continue(()))
+                        );
+                        ids
+                    },
+                    ["addon:ice"]
                 );
                 assert_eq!(
                     host(game).registry_entry("minecraft:damage_type", "registry_entry_test:late"),
@@ -263,6 +361,15 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                         .registry_entry("minecraft:worldgen/noise", "registry_entry_test:late"),
                     None
                 );
+            });
+            with_client_game(|game| {
+                let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+                game.connect_local(client, "Generic registries").unwrap();
+                let wire = wire.unwrap();
+                let mut received = wire.dynamic.clone();
+                received.add_tags(&wire.tags);
+                game.remote.as_mut().unwrap().registries = Arc::new(received);
+                check_rejected_sync_tags(game);
             });
         },
     );
@@ -284,6 +391,12 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     host(game).registry_entry("minecraft:game_event", "minecraft:step"),
                     None
                 );
+                assert_eq!(
+                    host(game).visit_registry_entries("minecraft:game_event", &mut |_| {
+                        panic!("visited without a registry session")
+                    }),
+                    Err(mod_api::RegistryReadError::Unavailable)
+                );
                 let (client, _server) = Pipe::pair();
                 game.connect_local(client, "Generic registries").unwrap();
                 assert_eq!(
@@ -292,8 +405,10 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     "not synchronized yet"
                 );
                 assert_eq!(
-                    host(game).registry_entries("minecraft:worldgen/noise"),
-                    None,
+                    host(game).visit_registry_entries("minecraft:worldgen/noise", &mut |_| panic!(
+                        "unavailable registry visited"
+                    )),
+                    Err(mod_api::RegistryReadError::UnknownRegistry),
                     "prepared server-only data must not leak"
                 );
                 for registry in [
@@ -301,12 +416,18 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     "minecraft:worldgen/placed_feature",
                     "minecraft:worldgen/block_state_provider",
                 ] {
-                    assert_eq!(host(game).registry_entries(registry), None);
+                    assert_eq!(
+                        host(game).visit_registry_entries(registry, &mut |_| panic!(
+                            "unavailable registry visited"
+                        )),
+                        Err(mod_api::RegistryReadError::UnknownRegistry)
+                    );
                     assert_eq!(host(game).registry_entry(registry, "minecraft:oak"), None);
                 }
                 let sync = super::lan::sync::sync_data(
                     &game.options.resources,
                     &game.res.core.item_data,
+                    game.items(),
                     &game.pack_files(),
                 )
                 .unwrap();
@@ -323,12 +444,11 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                 let fall = host(game)
                     .registry_entry("minecraft:damage_type", "minecraft:fall")
                     .unwrap();
-                assert!(
-                    host(game)
-                        .registry_entries("minecraft:damage_type")
-                        .unwrap()
-                        .contains(&fall.id)
-                );
+                assert!(registry_lists(
+                    host(game),
+                    "minecraft:damage_type",
+                    "minecraft:fall"
+                ));
                 let stone = host(game)
                     .registry_entry("minecraft:block", "minecraft:stone")
                     .unwrap();
@@ -346,8 +466,11 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     None
                 );
                 assert_eq!(
-                    host(game).registry_entries("minecraft:context_int_provider"),
-                    None
+                    host(game)
+                        .visit_registry_entries("minecraft:context_int_provider", &mut |_| panic!(
+                            "unavailable registry visited"
+                        )),
+                    Err(mod_api::RegistryReadError::UnknownRegistry)
                 );
                 let declarations = mod_api::__private::datapack_registry_declarations();
                 let mut candidate = mod_api::DatapackCandidate::build(
@@ -370,17 +493,22 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                         [("addon:hot".into(), vec!["addon:remote".into()])].into(),
                     )
                     .unwrap();
-                let server_set = mod_api::DatapackRegistrySet::first(candidate, 900);
+                let server_set = mod_api::DatapackRegistrySet::from_candidate(candidate);
                 // A same-process server snapshot is deliberately present on the client Game too.
                 game.mods.datapack_registries = Some(Arc::new(server_set.clone()));
                 sunrise_client::datapack_net::serve(Some(Arc::new(server_set)));
-                let offer = sunrise_client::datapack_net::offer().unwrap();
+                let offer = sunrise_client::datapack_net::offer()
+                    .unwrap()
+                    .expect("synchronized registry offer required");
                 let sunrise_client::datapack_net::Step::Send(bytes) =
                     sunrise_client::datapack_net::server_step(true, Some(&offer))
                 else {
                     panic!("expected negotiated snapshot");
                 };
-                sunrise_client::datapack_net::accept(&bytes).unwrap();
+                let receiver = &mut game.remote.as_mut().unwrap().datapacks;
+                for chunk in sunrise_client::datapack_net::chunks(&bytes).unwrap() {
+                    receiver.accept_chunk(&chunk).unwrap();
+                }
                 let remote = host(game)
                     .registry_entry("registry_entry_test:spell", "addon:remote")
                     .unwrap();
@@ -389,8 +517,11 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                     Some(true)
                 );
                 assert_eq!(
-                    host(game).registry_entries("registry_entry_test:secret"),
-                    None
+                    host(game)
+                        .visit_registry_entries("registry_entry_test:secret", &mut |_| panic!(
+                            "unavailable registry visited"
+                        )),
+                    Err(mod_api::RegistryReadError::UnknownRegistry)
                 );
                 assert_eq!(
                     host(game).registry_entry("registry_entry_test:secret", "addon:hidden"),
@@ -398,22 +529,54 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                 );
                 let mut replacement = game.remote.as_ref().unwrap().registries.as_ref().clone();
                 replacement.registries.remove("minecraft:damage_type");
+                replacement
+                    .registries
+                    .insert("test:empty".into(), Vec::new());
+                replacement.registries.insert(
+                    "test:protocol_order".into(),
+                    vec![("test:z".into(), None), ("test:a".into(), None)],
+                );
                 replacement.add_tags(&UpdateTags {
                     registries: vec![RegistryTags {
                         registry: "minecraft:game_event".into(),
                         tags: vec![],
                     }],
                 });
-                game.remote.as_mut().unwrap().registries = Arc::new(replacement);
-                assert_eq!(
-                    host(game).registry_entry_in_tag(&fall, "minecraft:is_fall"),
-                    None
+                let remote_state = game.remote.as_mut().unwrap();
+                remote_state.registries = Arc::new(replacement);
+                Arc::make_mut(&mut remote_state.builtin).registries.insert(
+                    "test:sparse".into(),
+                    sunrise_protocol::registry::Ids::from_names(vec![
+                        String::new(),
+                        "test:z".into(),
+                        String::new(),
+                        "test:a".into(),
+                    ]),
                 );
+                let h = host(game);
                 assert_eq!(
-                    host(game).registry_entry_in_tag(&step, "minecraft:vibrations"),
+                    h.visit_registry_entries("test:empty", &mut |_| panic!(
+                        "empty registry visited"
+                    )),
+                    Ok(ControlFlow::Continue(()))
+                );
+                for registry in ["test:protocol_order", "test:sparse"] {
+                    let mut names = Vec::new();
+                    assert_eq!(
+                        h.visit_registry_entries(registry, &mut |id| {
+                            names.push(id.to_owned());
+                            ControlFlow::Continue(())
+                        }),
+                        Ok(ControlFlow::Continue(()))
+                    );
+                    assert_eq!(names, ["test:z", "test:a"]);
+                }
+                assert_eq!(h.registry_entry_in_tag(&fall, "minecraft:is_fall"), None);
+                assert_eq!(
+                    h.registry_entry_in_tag(&step, "minecraft:vibrations"),
                     Some(false)
                 );
-                sunrise_client::datapack_net::clear_received();
+                game.remote.as_mut().unwrap().datapacks = Default::default();
                 assert_eq!(host(game).registry_entry_in_tag(&remote, "addon:hot"), None);
             });
         },
@@ -466,6 +629,18 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
             "feature_tags",
             "registry_entry_test:accepted",
             r#"{"values":["registry_entry_test:accepted"]}"#.into(),
+        );
+        overrides.add_tag(
+            "placed_feature_tags",
+            "registry_entry_test:accepted",
+            "fixture",
+            r#"{"values":["registry_entry_test:accepted"]}"#.into(),
+        );
+        overrides.add_tag(
+            "placed_feature_tags",
+            "registry_entry_test:mixed",
+            "fixture",
+            r#"{"values":["registry_entry_test:accepted","registry_entry_test:rejected"]}"#.into(),
         );
         overrides.set("carvers", "registry_entry_test:accepted",
             r#"{"type":"minecraft:cave","probability":1.0,"y":{"absolute":0},"count":1,"thickness":1.0,"room_vertical_radius_multiplier":1.0,"horizontal_radius_multiplier":1.0,"vertical_radius_multiplier":1.0,"floor_level":-0.7}"#.into());
@@ -528,15 +703,12 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
                 .unwrap_or_else(|| {
                     panic!("{registry}: decoded entry must not depend on a terrain locator")
                 });
-            let entries = host(game).registry_entries(registry).unwrap_or_else(|| {
-                panic!("{registry}: published decoded registry must be available")
-            });
             assert!(
-                entries.contains(&id("registry_entry_test:accepted")),
+                registry_lists(host(game), registry, "registry_entry_test:accepted"),
                 "{registry}"
             );
             assert!(
-                !entries.contains(&id("registry_entry_test:rejected")),
+                !registry_lists(host(game), registry, "registry_entry_test:rejected"),
                 "{registry}"
             );
             assert_eq!(
@@ -553,7 +725,15 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
             ) {
                 assert_eq!(
                     host(game).registry_entry_in_tag(&accepted, "registry_entry_test:accepted"),
-                    Some(true)
+                    Some(true),
+                    "{registry}: an admitted member of the registry's own tag"
+                );
+            }
+            if registry == "minecraft:worldgen/placed_feature" {
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&accepted, "registry_entry_test:mixed"),
+                    Some(false),
+                    "a required placed feature rejected by its codec cannot bind the tag"
                 );
             }
         }
@@ -585,10 +765,7 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
                 None
             );
             assert!(
-                !host(game)
-                    .registry_entries(registry)
-                    .unwrap()
-                    .contains(&id("registry_entry_test:accepted")),
+                !registry_lists(host(game), registry, "registry_entry_test:accepted"),
                 "{registry}"
             );
             let retired =
@@ -604,12 +781,11 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
                 "registry_entry_test:replacement",
             )
             .unwrap();
-        assert!(
-            host(game)
-                .registry_entries("minecraft:worldgen/material_condition")
-                .unwrap()
-                .contains(&id("registry_entry_test:replacement"))
-        );
+        assert!(registry_lists(
+            host(game),
+            "minecraft:worldgen/material_condition",
+            "registry_entry_test:replacement"
+        ));
         assert_eq!(
             host(game).registry_entry_in_tag(&replacement_entry, "registry_entry_test:missing"),
             Some(false)

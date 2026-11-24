@@ -2,9 +2,9 @@
 //! while the parallel tick is on (`sunrise_client::parallel`).
 //!
 //! An item's move (`ItemEntity.tick` up to its merge) reads only itself, the level's blocks, the
-//! obstacle boxes and the border, and the item loop changes none of them: so an item's move worked
-//! out on a copy before the loop is the move its turn would make. Its escape from inside a block
-//! draws the item's own random, which the copy carries. A merge before its turn can change its
+//! obstacle boxes and the border. The item loop can change blocks from inside effects, so an
+//! item with a pending effect moves on its own turn and a changed world invalidates the work.
+//! Its escape from inside a block draws the item's own random, which the copy carries. A merge before its turn can change its
 //! count, age and pickup delay: such an item moves at its turn instead. With a native mod loaded
 //! (its hooks see every item) or a mod listening to the round, every item moves at its turn.
 use super::*;
@@ -30,6 +30,7 @@ pub(in crate::game) struct ItemTables<'a> {
     registry: &'a BlockRegistry,
     border: &'a BorderGeometry,
     context: &'a sunrise_world::native_load_context::LoopContext,
+    side: crate::game::native_surface::GameSide<'a>,
 }
 
 impl<'w> Game<'w> {
@@ -42,6 +43,7 @@ impl<'w> Game<'w> {
             registry: self.pack.assets.registry,
             border: self.border.geometry(),
             context: &self.loop_context,
+            side: game_side!(self),
         }
     }
 }
@@ -55,13 +57,13 @@ impl ItemTables<'_> {
         escape_speed: Option<f32>,
         entity_boxes: &[Aabb],
         splash: &mut impl FnMut(ItemSplash),
-    ) -> ItemStep {
+    ) -> Option<ItemStep> {
         // Entity.baseTick splashes before moving, except on the first tick, at
         // the motion before the currents push it.
         let before = item.velocity;
         let heights = item.push_by_fluid(self.world, &self.motion.fluids, self.context);
         item.water_entry(heights.0 > 0.0, item.ticks == 0, before, splash);
-        item.lava_fall(heights.1 > 0.0);
+        item.lava_fall(item.ticks > 0 && heights.1 > 0.0);
         let mut step = item.tick_move_before_block_effects(
             self.world,
             self.facts,
@@ -80,7 +82,6 @@ impl ItemTables<'_> {
             }
             let reset = &self.motion.fall_reset;
             let hit = sunrise_client::entities::fall_reset_hit(
-                self.context,
                 self.world,
                 &self.motion.fluids,
                 |p| reset.contains(&*self.facts.get(self.world.block(p.x, p.y, p.z)).name),
@@ -89,7 +90,24 @@ impl ItemTables<'_> {
             );
             if hit { 0.0 } else { fall }
         });
-        step
+        if let Some(response) = item.move_restitution(
+            sunrise_client::motion::BodyMotion {
+                world: self.world,
+                collision: self.collision,
+                facts: self.facts,
+                blocks: Some(&self.motion.blocks),
+                context: self.context,
+                side: None,
+            },
+            step,
+        ) {
+            // A real bounce has synchronous level effects. Leave that move to its own turn.
+            if response.bounce.is_some() {
+                return None;
+            }
+            item.velocity = response.velocity;
+        }
+        Some(step)
     }
     /// The rest of the move after its vertical contact: block effects, bubble columns, settling
     /// and the water entry. Whether the item lives on.
@@ -100,16 +118,27 @@ impl ItemTables<'_> {
         step: ItemStep,
         splash: &mut impl FnMut(ItemSplash),
     ) -> bool {
-        item.finish_move_block_effects(
+        if !no_physics {
+            let motion = sunrise_client::motion::BodyMotion {
+                world: self.world,
+                collision: self.collision,
+                facts: self.facts,
+                blocks: Some(&self.motion.blocks),
+                context: self.context,
+                side: None,
+            };
+            item.apply_move_and_vanilla_step(motion, step);
+        }
+        item.finish_move_block_effects(self.world, self.facts, step);
+        item.push_by_bubble_column(self.world, self.registry, self.facts, self.collision);
+        let alive = item.tick_settle(
             self.world,
+            self.registry,
             self.facts,
-            no_physics,
-            Some(&self.motion.blocks),
             step,
             self.context,
+            &self.side,
         );
-        item.push_by_bubble_column(self.world, self.registry, self.facts, self.collision);
-        let alive = item.tick_settle(self.world, self.facts, no_physics, step, self.context);
         // ItemEntity.tick refreshes immersion and splashes on water entry.
         let before = item.velocity;
         let (water, _) = item.push_by_fluid(self.world, &self.motion.fluids, self.context);
@@ -135,10 +164,10 @@ pub(super) struct Ahead {
     moved: ItemEntity,
     result: Moved,
     /// What a merge before its turn can change: its count, age and pickup delay.
-    started: (u32, i32, i64),
+    started: (u32, i32, i32),
 }
 
-fn started(item: &ItemEntity) -> (u32, i32, i64) {
+fn started(item: &ItemEntity) -> (u32, i32, i32) {
     (item.stack.count, item.age, item.pickup_delay)
 }
 
@@ -149,18 +178,44 @@ fn move_alone(
     item: &mut ItemEntity,
     found: &mut Vec<u32>,
     near: &mut Vec<Aabb>,
-) -> Moved {
+) -> Option<Moved> {
+    if item.fire_ticks != 0 {
+        return None;
+    }
     obstacles.near_shared(reach(item), found, near);
     let no_physics = item.inside_block(tables.world, tables.collision, near, Some(tables.border));
     // `moveTowardsClosestSpace` draws the speed from the item's own random.
     let escape_speed = no_physics.then(|| item.random.next_float() * 0.2 + 0.1);
     let mut splashes = Vec::new();
-    let step = tables.move_item(item, escape_speed, near, &mut |s| splashes.push(s));
+    let step = tables.move_item(item, escape_speed, near, &mut |s| splashes.push(s))?;
     if step.vertical_contact.is_some() && item.stack.count == 0 {
-        return (no_physics, false, true, splashes);
+        return Some((no_physics, false, true, splashes));
+    }
+    // Contact effects need the owning level. The movement envelope is enough to
+    // rule them out; the real sweep, when needed, tests the individual shapes.
+    if !no_physics {
+        let area = item
+            .bounds()
+            .expand_towards(item.previous.subtract(item.position));
+        if !sunrise_client::block_contact::box_cells(area, |pos| {
+            let state = tables.world.block(pos.x, pos.y, pos.z);
+            !matches!(
+                &*tables.facts.get(state).name,
+                "minecraft:fire"
+                    | "minecraft:soul_fire"
+                    | "minecraft:lava_cauldron"
+                    | "minecraft:cactus"
+            ) && !matches!(
+                tables.motion.fluids.fluid(state).kind(),
+                sunrise_world::fluid::FluidKind::Lava
+                    | sunrise_world::fluid::FluidKind::FlowingLava
+            )
+        }) {
+            return None;
+        }
     }
     let alive = tables.settle_item(item, no_physics, step, &mut |s| splashes.push(s));
-    (no_physics, alive, false, splashes)
+    Some((no_physics, alive, false, splashes))
 }
 
 #[cfg(test)]
@@ -181,7 +236,10 @@ fn ahead() -> bool {
 }
 
 /// The moves worked out ahead, by the item's place in the loop.
-pub(super) struct Moves(Vec<Option<Ahead>>);
+pub(super) struct Moves {
+    planned: Vec<Option<Ahead>>,
+    revision: u64,
+}
 
 impl Moves {
     /// The moves of the items that will tick (`ticks`), on the helper threads; none while the
@@ -199,7 +257,10 @@ impl Moves {
             || round.listening()
             || !mod_api::__private::mods().is_empty()
         {
-            return Self(Vec::new());
+            return Self {
+                planned: Vec::new(),
+                revision: game.world.revision,
+            };
         }
         let todo: Vec<usize> = (0..items.len()).filter(|&i| ticks(&items[i])).collect();
         let tables = game.item_tables();
@@ -207,7 +268,11 @@ impl Moves {
             let (mut found, mut near) = (Vec::new(), Vec::new());
             for &i in part {
                 let mut moved = items[i].clone();
-                let result = move_alone(&tables, obstacles, &mut moved, &mut found, &mut near);
+                let Some(result) =
+                    move_alone(&tables, obstacles, &mut moved, &mut found, &mut near)
+                else {
+                    continue;
+                };
                 let started = started(&items[i]);
                 out.push((
                     i,
@@ -223,19 +288,23 @@ impl Moves {
         for (i, a) in done {
             moves[i] = Some(a);
         }
-        Self(moves)
+        Self {
+            planned: moves,
+            revision: game.world.revision,
+        }
     }
-    /// Item `i`'s move, put in place, when it was worked out and no merge changed the item since.
+    /// Item `i`'s move, put in place when neither its stack nor the world has changed.
     /// Under `SUNRISE_PARALLEL_TICK=verify` the move is made again at its turn, on a copy, and a
     /// difference is logged.
     pub(super) fn take(
         &mut self,
         i: usize,
         item: &mut ItemEntity,
+        revision: u64,
         again: impl FnOnce(&mut ItemEntity) -> Moved,
     ) -> Option<Moved> {
-        let a = self.0.get_mut(i)?.take()?;
-        let fits = a.started == started(item);
+        let a = self.planned.get_mut(i)?.take()?;
+        let fits = self.revision == revision && a.started == started(item);
         #[cfg(test)]
         TAKEN.with(|t| {
             let (taken, refused) = t.get();
@@ -301,8 +370,8 @@ mod tests {
         }
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(8, 8));
-        game.border.set_center([8.0, 8.0]);
-        game.border.set_size(16.0);
+        game.border.set_center([8.0, 8.0]).unwrap();
+        game.border.set_size(16.0).unwrap();
         let registry = game.pack.assets.registry;
         let stone = registry.default_state("minecraft:stone").unwrap();
         let water = registry.default_state("minecraft:water").unwrap();
@@ -401,7 +470,9 @@ mod tests {
             let before = format!("{item:?}");
             assert!(
                 moves
-                    .take(0, &mut item, |_| panic!("invalidated move was verified"))
+                    .take(0, &mut item, game.world.revision, |_| {
+                        panic!("invalidated move was verified")
+                    })
                     .is_none()
             );
             assert_eq!(format!("{item:?}"), before);
@@ -433,7 +504,7 @@ mod tests {
             }
             let landed = game.dropped.iter().find(|i| i.id == landing).unwrap();
             assert_eq!(landed.position.y, boat_top);
-            assert!(landed.on_ground);
+            assert!(landed.ground.on_ground);
             assert_eq!(format!("{:?}", game.world.random), format!("{random:?}"));
             let left: Vec<String> = game.dropped.iter().map(|i| format!("{i:?}")).collect();
             runs.push((

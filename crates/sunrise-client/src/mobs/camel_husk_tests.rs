@@ -23,7 +23,7 @@ fn a_camel_husk_never_breeds() {
             if in_love {
                 m.extra.in_love = 600;
             }
-            m.on_ground = true;
+            m.ground.on_ground = true;
             m
         };
         mobs = Some((
@@ -99,7 +99,7 @@ fn an_unsaddled_camel_sits_down_under_its_rider() {
         let mut m = camel?;
         m.age = 1000;
         m.extra.egg_time = 0;
-        m.on_ground = true;
+        m.ground.on_ground = true;
         let mut started = false;
         assert!(
             with_test_world(&[], |w, _| {

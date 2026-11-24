@@ -11,12 +11,13 @@
 //! backend through `stopped`.
 use crate::sound_events::{INTENTIONALLY_EMPTY, Sentinel, Sound, SoundRegistry};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
 };
 use sunrise_core::random::LegacyRandom;
 
 pub mod hooks;
+pub use hooks::PreparedPlay;
 
 /// `SoundSource` indices (vanilla order).
 pub const MASTER: usize = 0;
@@ -147,13 +148,13 @@ pub enum Ticking {
         y_angle: f32,
     },
 }
-/// A mod sound's fade in progress: `step` added to the volume each tick it plays, until
-/// `left` reaches 0 and the volume is `target`.
+/// A mod sound's fade in progress, from `start` to `target` over `ticks` ticks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fade {
-    pub step: f32,
-    pub target: f32,
-    pub left: u32,
+    start: f32,
+    target: f32,
+    ticks: u32,
+    left: u32,
 }
 // The volumes are finite (checked where a mod asks for the fade), so equality is total.
 impl Eq for Fade {}
@@ -179,6 +180,13 @@ pub struct CartSound {
     pub position: [f64; 3],
     /// `getDeltaMovement().horizontalDistance()`.
     pub speed: f64,
+    pub new_behavior: bool,
+    pub on_rails: bool,
+}
+impl CartSound {
+    fn can_roll(&self) -> bool {
+        self.on_rails || !self.new_behavior
+    }
 }
 /// What a bee's or a guardian's sound instance reads about it.
 #[derive(Clone, Copy, Debug)]
@@ -194,6 +202,8 @@ pub struct MobSound {
     pub silent: bool,
     /// `Guardian.getAttackAnimationScale(0)`.
     pub attack_scale: f32,
+    /// `Guardian.getTarget()`, not the synchronized beam target.
+    pub guardian_has_target: bool,
     /// `getTarget() == null && Sniffer.canPlayDiggingSound()`.
     pub sniffer_digging: bool,
 }
@@ -235,7 +245,6 @@ pub struct TickContext {
 /// `AbstractSoundInstance` and its subclasses' fields.
 #[derive(Clone, Debug)]
 pub struct SoundInstance {
-    live_settings: std::cell::OnceCell<std::cell::RefCell<hooks::LiveSettings>>,
     pub identifier: String,
     pub source: usize,
     pub volume: f32,
@@ -245,6 +254,8 @@ pub struct SoundInstance {
     pub delay: i32,
     pub attenuation: Attenuation,
     pub relative: bool,
+    /// How the mixer shapes it (`SoundPlay::effects`): none unless a mod asks.
+    pub effects: mod_api::SoundEffects,
     pub random: LegacyRandom,
     pub can_start_silent: bool,
     pub ticking: Ticking,
@@ -277,7 +288,6 @@ impl SoundInstance {
         relative: bool,
     ) -> Self {
         Self {
-            live_settings: std::cell::OnceCell::new(),
             identifier: identifier.to_owned(),
             source,
             volume,
@@ -287,6 +297,7 @@ impl SoundInstance {
             delay,
             attenuation,
             relative,
+            effects: mod_api::SoundEffects::NONE,
             random,
             can_start_silent: false,
             ticking: Ticking::No,
@@ -593,8 +604,9 @@ impl SoundInstance {
         };
         s
     }
-    /// `new GuardianAttackSoundInstance(guardian)`: the guardian's own volume
-    /// and pitch until its first tick, heard everywhere.
+    /// `new GuardianAttackSoundInstance(guardian)`: starts at the origin
+    /// (`AbstractSoundInstance` leaves x, y, z at 0) until its first tick moves
+    /// it to the guardian, with volume and pitch 1, heard everywhere.
     pub fn guardian_attack(guardian: &MobSound, random: LegacyRandom) -> Self {
         let id = "minecraft:entity.guardian.attack";
         let mut s = Self::new(
@@ -606,12 +618,17 @@ impl SoundInstance {
             true,
             0,
             Attenuation::None,
-            guardian.position,
+            [0.0; 3],
             false,
         );
         s.ticking = Ticking::GuardianAttack {
             guardian: guardian.id,
         };
+        s.bound_entity = Some(SoundEntity::new(
+            guardian.id,
+            guardian.position,
+            guardian.silent,
+        ));
         s
     }
     /// `new SnifferSoundInstance(sniffer)`: the digging sound, which sits at
@@ -707,7 +724,7 @@ impl SoundInstance {
         self.looping = false;
     }
     /// A mod's `SoundRef::fade`: the volume moves to `volume` in equal steps over the next
-    /// `ticks` ticks the sound plays, or at once for 0. A fade to 0 stops the sound when it ends,
+    /// `ticks` ticks the sound plays, or at once for 0. A nonpositive target stops it at the end,
     /// as `LoopSoundInstance.fadeOut` does. Only a mod's sound fades.
     pub fn fade_to(&mut self, volume: f32, ticks: u32) {
         let Ticking::Mod { fade } = &mut self.ticking else {
@@ -721,8 +738,9 @@ impl SoundInstance {
             }
         } else {
             *fade = Some(Fade {
-                step: (volume - self.volume) / ticks as f32,
+                start: self.volume,
                 target: volume,
+                ticks,
                 left: ticks,
             });
         }
@@ -740,7 +758,10 @@ impl SoundInstance {
                     }
                 } else {
                     *fade = Some(f);
-                    self.volume += f.step;
+                    let fraction = f64::from(f.ticks - f.left) / f64::from(f.ticks);
+                    let start = f64::from(f.start);
+                    // The difference of two finite, opposite-signed volumes can overflow f32.
+                    self.volume = (start + (f64::from(f.target) - start) * fraction) as f32;
                 }
             }
             return;
@@ -799,7 +820,7 @@ impl SoundInstance {
                 ];
                 // Its own `pitch` field shadows the instance's, which stays 1.
                 let speed = cart.speed as f32;
-                self.volume = if speed >= 0.01 && !ctx.frozen {
+                self.volume = if speed >= 0.01 && !ctx.frozen && cart.can_roll() {
                     speed.clamp(0.0, 0.5) * 0.7
                 } else {
                     0.0
@@ -895,9 +916,16 @@ impl SoundInstance {
             }
             Ticking::GuardianAttack { guardian } => {
                 let id = *guardian;
-                // The client's guardian never has a target of its own, so
-                // only its removal or silence ends the loop.
-                let Some(guardian) = ctx.mobs.iter().find(|m| m.id == id && !m.silent) else {
+                let Some(guardian) = ctx
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.guardian_has_target)
+                    .filter(|_| {
+                        self.bound_entity
+                            .as_ref()
+                            .is_none_or(|e| !e.state().removed)
+                    })
+                else {
                     self.stop();
                     return;
                 };
@@ -943,7 +971,7 @@ impl SoundInstance {
                 } else {
                     // Mth.clampedLerp(speed, 0, 0.75), amplified by 1.
                     let speed = cart.speed as f32;
-                    self.volume = if speed >= 0.01 {
+                    self.volume = if speed >= 0.01 && cart.can_roll() {
                         if speed > 1.0 { 0.75 } else { speed * 0.75 }
                     } else {
                         0.0
@@ -992,11 +1020,19 @@ pub trait Backend {
     fn unpause(&mut self, channel: ChannelId);
     /// `Channel.stopped`.
     fn stopped(&mut self, channel: ChannelId) -> bool;
-    /// Update volume, pitch, and position in a single backend call.
-    fn update_channel(&mut self, channel: ChannelId, volume: f32, pitch: f32, position: [f64; 3]) {
+    /// Update volume, pitch, position, and effects in a single backend call.
+    fn update_channel(
+        &mut self,
+        channel: ChannelId,
+        volume: f32,
+        pitch: f32,
+        position: [f64; 3],
+        effects: mod_api::SoundEffects,
+    ) {
         self.set_volume(channel, volume);
         self.set_pitch(channel, pitch);
         self.set_position(channel, position);
+        self.set_effects(channel, effects);
     }
     /// Filter which handles have stopped playing in a single pass.
     fn filter_stopped(&mut self, live: &[(u64, ChannelId)], stopped: &mut Vec<u64>) {
@@ -1009,6 +1045,9 @@ pub trait Backend {
     /// Whether the channel plays clearly through a mod's muffle (`Audio::muffle`): its sound
     /// event is one the mod exempted. A backend without a muffle ignores it.
     fn set_unmuffled(&mut self, _channel: ChannelId, _unmuffled: bool) {}
+    /// The channel's effects (`SoundPlay::effects`), gliding there from what it had. A backend
+    /// without effects ignores them.
+    fn set_effects(&mut self, _channel: ChannelId, _effects: mod_api::SoundEffects) {}
 }
 /// A `SoundEventListener.onPlaySound` call.
 #[derive(Clone, Debug, PartialEq)]
@@ -1049,9 +1088,18 @@ pub type PlaybackHook = fn(&SoundPlayback<'_>, &mut f32, &mut f32, &mut bool);
 pub struct SoundEngine {
     pub registry: SoundRegistry,
     playback_hook: Option<PlaybackHook>,
+    /// Starts a caller made without the game (an audio helper, a delayed start due at the tick),
+    /// held for the game to fire `play_sound` for before it returns control (`next_deferred`).
+    deferred: Vec<InstanceId>,
+    /// The starts the game is firing `play_sound` for right now.
+    inflight: Vec<InstanceId>,
+    /// Starts the game answered: the next `play` of each goes ahead.
+    decided: HashSet<InstanceId>,
+    /// The game's answers for the live refresh of each playing sound (`None` cancels it).
+    live_answers: HashMap<InstanceId, Option<mod_api::SoundPlay>>,
     /// `loaded`: the library opened.
     pub loaded: bool,
-    tick_count: i32,
+    tick_count: i64,
     instances: HashMap<InstanceId, SoundInstance>,
     /// Instances their owner still refers to.
     retained: HashMap<InstanceId, ()>,
@@ -1069,8 +1117,8 @@ pub struct SoundEngine {
     removed_scratch: Vec<InstanceId>,
     ticking_scratch: Vec<InstanceId>,
     /// `queuedSounds` (insertion order).
-    queued: Vec<(InstanceId, i32)>,
-    delete_time: HashMap<InstanceId, i32>,
+    queued: Vec<(InstanceId, i64)>,
+    delete_time: HashMap<InstanceId, i64>,
     queued_tickable: Vec<InstanceId>,
     used: [usize; 2],
     pub limits: [usize; 2],
@@ -1085,7 +1133,7 @@ pub struct SoundEngine {
     /// The client's loop context, rebuilt with each resource generation, for the
     /// sound hooks (`hooks`). Absent on a server, which has no sound.
     loop_context: Option<sunrise_world::native_load_context::LoopContext>,
-    unmuffled: Vec<String>,
+    unmuffled: HashSet<String>,
 }
 fn handle_channel(h: &Handle) -> Option<ChannelId> {
     h.channel
@@ -1113,6 +1161,10 @@ impl SoundEngine {
             queued: Vec::new(),
             delete_time: HashMap::new(),
             queued_tickable: Vec::new(),
+            deferred: Vec::new(),
+            inflight: Vec::new(),
+            decided: HashSet::new(),
+            live_answers: HashMap::new(),
             used: [0, 0],
             limits: [STATIC_CHANNELS, STREAMING_CHANNELS],
             source_volumes: [1.0; 11],
@@ -1120,11 +1172,11 @@ impl SoundEngine {
             listener_reserve: 0,
             notifications: Vec::new(),
             loop_context: None,
-            unmuffled: Vec::new(),
+            unmuffled: HashSet::new(),
         }
     }
     /// Sound events exempt from muffling, including channels already playing.
-    pub fn set_unmuffled(&mut self, events: Vec<String>, backend: &mut impl Backend) {
+    pub fn set_unmuffled(&mut self, events: HashSet<String>, backend: &mut impl Backend) {
         self.unmuffled = events;
         for (id, handle) in &self.instance_to_channel {
             let (Some(instance), Some(channel)) = (
@@ -1141,11 +1193,18 @@ impl SoundEngine {
     pub fn set_test_playback_hook(&mut self, hook: PlaybackHook) {
         self.playback_hook = Some(hook);
     }
-    fn playback_parameters(&self, id: InstanceId, starting: bool) -> Option<(f32, f32)> {
+    /// The volume, pitch and effects to play instance `id` with, after the mods' `play_sound`
+    /// edits; None when a hook cancelled it.
+    fn playback_parameters(
+        &self,
+        id: InstanceId,
+        starting: bool,
+    ) -> Option<(f32, f32, mod_api::SoundEffects)> {
         let instance = self.instances.get(&id)?;
-        let (mut volume, mut pitch) = (instance.volume, instance.pitch);
+        let (mut volume, mut pitch, mut effects) =
+            (instance.volume, instance.pitch, instance.effects);
         if !starting {
-            (volume, pitch) = self.playback_update_parameters(id)?;
+            (volume, pitch, effects) = self.playback_update_parameters(id)?;
         }
         if let Some(hook) = self.playback_hook {
             let sound = SoundPlayback {
@@ -1158,16 +1217,11 @@ impl SoundEngine {
             };
             let mut cancel = false;
             hook(&sound, &mut volume, &mut pitch, &mut cancel);
-            let volume_edited = volume.to_bits() != instance.volume.to_bits();
-            let pitch_edited = pitch.to_bits() != instance.pitch.to_bits();
-            if cancel
-                || (volume_edited && (!volume.is_finite() || volume < 0.0))
-                || (pitch_edited && (!pitch.is_finite() || pitch <= 0.0))
-            {
+            if cancel {
                 return None;
             }
         }
-        Some((volume, pitch))
+        Some((volume, pitch, effects))
     }
     fn cancel_playback(&mut self, id: InstanceId, backend: &mut impl Backend) {
         if let Some(instance) = self.instances.get_mut(&id) {
@@ -1197,6 +1251,8 @@ impl SoundEngine {
             || self.queued.iter().any(|(i, _)| *i == id)
             || self.queued_tickable.contains(&id)
             || self.ticking.contains(&id)
+            || self.deferred.contains(&id)
+            || self.inflight.contains(&id)
     }
     fn collect(&mut self, id: InstanceId) {
         if !self.referenced(id) {
@@ -1231,7 +1287,7 @@ impl SoundEngine {
     pub fn instance_mut(&mut self, id: InstanceId) -> Option<&mut SoundInstance> {
         self.instances.get_mut(&id)
     }
-    pub fn tick_count(&self) -> i32 {
+    pub fn tick_count(&self) -> i64 {
         self.tick_count
     }
     /// `Options.getFinalSoundSourceVolume`.
@@ -1269,7 +1325,7 @@ impl SoundEngine {
             };
             if source == instance.source || source == MASTER {
                 let original_pitch = instance.pitch;
-                let Some((base_volume, base_pitch)) = self.playback_parameters(id, false) else {
+                let Some((base_volume, base_pitch, _)) = self.playback_parameters(id, false) else {
                     self.cancel_playback(id, backend);
                     continue;
                 };
@@ -1486,7 +1542,17 @@ impl SoundEngine {
         (id, self.play(id, backend))
     }
     fn play_inner(&mut self, id: InstanceId, backend: &mut impl Backend) -> PlayResult {
-        if !self.instances.contains_key(&id) || !self.play_sound_allowed(id) || !self.loaded {
+        if !self.instances.contains_key(&id) || !self.loaded {
+            return PlayResult::NotStarted;
+        }
+        // Decide, fire, apply: with a `play_sound` listener the engine cannot fire the hook (it
+        // needs the game's `ClientHost`). The game fires it before this start, through
+        // `begin_play` and `finish_prepared`; a start that reaches here without it is held for the
+        // game's `next_deferred`, which runs before the game's call returns.
+        if self.asks_play_sound() && !self.decided.remove(&id) {
+            if !self.deferred.contains(&id) && !self.inflight.contains(&id) {
+                self.deferred.push(id);
+            }
             return PlayResult::NotStarted;
         }
         if !self.instances[&id].can_play_sound() {
@@ -1501,7 +1567,7 @@ impl SoundEngine {
         if sound.sentinel != Sentinel::None {
             return PlayResult::NotStarted;
         }
-        let Some((base_volume, base_pitch)) = self.playback_parameters(id, true) else {
+        let Some((base_volume, base_pitch, effects)) = self.playback_parameters(id, true) else {
             return PlayResult::NotStarted;
         };
         let instance = self.instances.get_mut(&id).expect("present");
@@ -1576,6 +1642,7 @@ impl SoundEngine {
         backend.set_position(channel, position);
         backend.set_relative(channel, relative);
         backend.set_unmuffled(channel, unmuffled);
+        backend.set_effects(channel, effects);
         backend.start(channel, &sound, looping);
         self.notify_source_started(id, channel, streaming);
         if tickable {
@@ -1591,8 +1658,8 @@ impl SoundEngine {
     pub fn queue_ticking(&mut self, id: InstanceId) {
         self.queued_tickable.push(id);
     }
-    /// `playDelayed`.
-    pub fn play_delayed(&mut self, id: InstanceId, delay: i32) {
+    /// `playDelayed`: use a wide tick deadline so a mod's full `u32` delay can be queued.
+    pub fn play_delayed(&mut self, id: InstanceId, delay: i64) {
         let at = self.tick_count + delay;
         if let Some(entry) = self.queued.iter_mut().find(|(i, _)| *i == id) {
             entry.1 = at;
@@ -1661,7 +1728,8 @@ impl SoundEngine {
                 self.stop(id, backend);
                 continue;
             }
-            let Some((base_volume, base_pitch)) = self.playback_parameters(id, false) else {
+            let Some((base_volume, base_pitch, effects)) = self.playback_parameters(id, false)
+            else {
                 self.cancel_playback(id, backend);
                 continue;
             };
@@ -1678,7 +1746,7 @@ impl SoundEngine {
                 h.pitch_edited = pitch_edited;
             }
             if let Some(c) = self.handles.get(&handle).and_then(handle_channel) {
-                backend.update_channel(c, volume, pitch, position);
+                backend.update_channel(c, volume, pitch, position, effects);
             }
             let instance = self.instances.get_mut(&id).expect("present");
             if instance.looping
@@ -1704,12 +1772,7 @@ impl SoundEngine {
                     && i.looping
                     && i.delay > 0
                 {
-                    let at = self.tick_count + i.delay;
-                    if let Some(entry) = self.queued.iter_mut().find(|(q, _)| *q == id) {
-                        entry.1 = at;
-                    } else {
-                        self.queued.push((id, at));
-                    }
+                    self.play_delayed(id, i64::from(i.delay));
                 }
                 self.instance_to_channel.remove(index);
                 self.handles.remove(&handle);
@@ -1858,6 +1921,7 @@ pub mod test_backend {
         pub volume: HashMap<ChannelId, f32>,
         pub pitch: HashMap<ChannelId, f32>,
         pub position: HashMap<ChannelId, [f64; 3]>,
+        pub effects: HashMap<ChannelId, mod_api::SoundEffects>,
     }
     impl Backend for Null {
         fn create(&mut self, _streaming: bool) -> Option<ChannelId> {
@@ -1888,6 +1952,9 @@ pub mod test_backend {
         fn unpause(&mut self, _: ChannelId) {}
         fn stopped(&mut self, c: ChannelId) -> bool {
             self.stopped.get(&c).copied().unwrap_or(true)
+        }
+        fn set_effects(&mut self, c: ChannelId, effects: mod_api::SoundEffects) {
+            self.effects.insert(c, effects);
         }
     }
 }
@@ -2019,6 +2086,7 @@ mod tests {
             angry: false,
             silent: false,
             attack_scale: 0.0,
+            guardian_has_target: false,
             sniffer_digging: true,
         };
         let mut s = SoundInstance::sniffer(3, crate::random_source::create());
@@ -2147,11 +2215,54 @@ mod tests {
         }
     }
     #[test]
+    fn guardian_attack_loop_is_silent_or_stops_when_its_guardian_cannot_play() {
+        let guardian = MobSound {
+            id: 21,
+            position: [1.0, 64.0, 1.0],
+            speed: 0.0,
+            baby: false,
+            angry: false,
+            silent: false,
+            attack_scale: 0.5,
+            guardian_has_target: false,
+            sniffer_digging: false,
+        };
+        let mut ctx = TickContext {
+            mobs: vec![guardian],
+            ..TickContext::default()
+        };
+        let mut live = SoundInstance::guardian_attack(&guardian, LegacyRandom::new(1));
+        assert!(live.can_play_sound());
+        live.tick(&ctx);
+        assert!(!live.stopped, "a live, targetless guardian keeps charging");
+
+        let silent = MobSound {
+            silent: true,
+            ..guardian
+        };
+        assert!(!SoundInstance::guardian_attack(&silent, LegacyRandom::new(2)).can_play_sound());
+
+        let mut removed = SoundInstance::guardian_attack(&guardian, LegacyRandom::new(3));
+        ctx.mobs.clear();
+        removed.tick(&ctx);
+        assert!(removed.stopped, "removal stops the loop");
+
+        ctx.mobs.push(MobSound {
+            guardian_has_target: true,
+            ..guardian
+        });
+        live.tick(&ctx);
+        assert!(live.stopped, "getTarget also stops the loop");
+    }
+
+    #[test]
     fn minecart_sound_volume_scales_with_speed_and_silences_when_stopped() {
         let cart = CartSound {
             id: 42,
             position: [10.0, 64.0, 5.0],
             speed: 0.0,
+            new_behavior: false,
+            on_rails: false,
         };
         let mut s = SoundInstance::minecart(&cart, crate::random_source::create());
         assert!(s.can_start_silent);
@@ -2169,11 +2280,11 @@ mod tests {
         // Moving cart scales volume with clamp(speed, 0, 0.5) * 0.7.
         ctx.carts[0].speed = 0.2;
         s.tick(&ctx);
-        assert!((s.volume - 0.2 * 0.7).abs() < 1e-6, "volume: {}", s.volume);
+        assert_eq!(s.volume.to_bits(), 0x3e0f5c29);
 
         ctx.carts[0].speed = 1.0;
         s.tick(&ctx);
-        assert!((s.volume - 0.5 * 0.7).abs() < 1e-6, "volume: {}", s.volume);
+        assert_eq!(s.volume.to_bits(), 0x3eb33333);
 
         // Frozen clock silences cart.
         ctx.frozen = true;
@@ -2192,6 +2303,8 @@ mod tests {
             id: 99,
             position: [0.0, 60.0, 0.0],
             speed: 0.4,
+            new_behavior: false,
+            on_rails: false,
         };
         let mut surface =
             SoundInstance::riding_minecart(&cart, false, crate::random_source::create());
@@ -2208,11 +2321,7 @@ mod tests {
         // Surface riding active on surface.
         surface.tick(&ctx);
         underwater.tick(&ctx);
-        assert!(
-            (surface.volume - 0.4 * 0.75).abs() < 1e-6,
-            "{}",
-            surface.volume
-        );
+        assert_eq!(surface.volume.to_bits(), 0x3e99999a);
         assert_eq!(underwater.volume, 0.0);
 
         // Submerged player switches active sound.
@@ -2220,11 +2329,7 @@ mod tests {
         surface.tick(&ctx);
         underwater.tick(&ctx);
         assert_eq!(surface.volume, 0.0);
-        assert!(
-            (underwater.volume - 0.4 * 0.75).abs() < 1e-6,
-            "{}",
-            underwater.volume
-        );
+        assert_eq!(underwater.volume.to_bits(), 0x3e99999a);
 
         // Dismounting stops both instances.
         ctx.vehicle = None;

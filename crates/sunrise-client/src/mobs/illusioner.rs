@@ -27,6 +27,12 @@ pub struct Illusions {
 pub const MIRROR: u8 = 4;
 pub const BLINDNESS_SPELL: u8 = 5;
 
+/// `Illusioner.performRangedAttack`: the skeleton's arrow (`undead::bow_shot`), shot from
+/// `BowAttack`. Not through the skeleton's replaceable `undead::perform_ranged_attack`, which
+/// a mod's row on `AbstractSkeleton.performRangedAttack` takes.
+pub(super) fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
+    super::undead::bow_shot(m, who, cx, power);
+}
 /// `Illusioner.registerGoals`.
 pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;

@@ -57,14 +57,16 @@
 //!   the server closes the view of the level entered before the travel, which then swaps nothing.
 //!
 //! Only the
-//! [`LEVEL_SCOPED`] kinds and, from revision 3, the [`SOUNDS`] may be wrapped, and a run never
-//! mixes levels. A serverbound play payload on the channel is a protocol error
-//! (`custom_payload`'s codec refuses it).
+//! [`LEVEL_SCOPED`] kinds, from revision 3 the [`SOUNDS`], and `CustomPayload` on the
+//! `sunrise:connection_groups` channel (sent only to peers that negotiated that channel) may be
+//! wrapped, and a run never mixes levels. A serverbound play payload on the channel is a protocol
+//! error (`custom_payload`'s codec refuses it).
 use crate::{
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Ident, Reader},
     ids::play::clientbound as id,
     packets::play::{Clientbound, SpawnInfo},
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// The reserved engine channel (`custom_payload::is_reserved_channel`).
 pub const CHANNEL: &str = "sunrise:levels";
@@ -287,6 +289,15 @@ pub fn read_answer(data: &[u8]) -> Result<Answer, ViewedLevelsError> {
     })
 }
 
+/// A validated entry in a viewed-level run, borrowing from the enclosing payload.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScopedPacket<'a> {
+    /// A vanilla play clientbound id and the exact bytes after it.
+    Play(i32, &'a [u8]),
+    /// The group section's body, after its validated channel identifier.
+    ConnectionGroups(&'a [u8]),
+}
+
 /// A play payload, read.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message<'a> {
@@ -297,11 +308,10 @@ pub enum Message<'a> {
         columns: u32,
         spawn: SpawnInfo,
     },
-    /// Packets of `level`, in order: each its play clientbound id and the bytes after it, for
-    /// `play::Clientbound::decode`. Every one is level-scoped and read exactly by its codec.
+    /// Validated level-scoped packets of `level`, in original order.
     Run {
         level: Level,
-        packets: Vec<(i32, &'a [u8])>,
+        packets: Vec<ScopedPacket<'a>>,
     },
     /// Every chunk of `level` was forgotten: the client drops the world.
     Close { level: Level },
@@ -368,8 +378,7 @@ impl<'a> Message<'a> {
                         }
                         continue;
                     }
-                    check_level_scoped(id, body, revision)?;
-                    packets.push((id, body));
+                    packets.push(check_level_scoped(id, body, revision)?);
                 }
                 if entries == 0 {
                     return Err(ViewedLevelsError::EmptyRun);
@@ -459,7 +468,22 @@ fn head(kind: u8, level: Level) -> Writer {
 
 /// Refuses a packet (its id and the bytes after it) that is not level-scoped at `revision`, or
 /// that its play clientbound codec does not read exactly.
-fn check_level_scoped(id: i32, body: &[u8], revision: u8) -> Result<(), ViewedLevelsError> {
+fn check_level_scoped(
+    id: i32,
+    body: &[u8],
+    revision: u8,
+) -> Result<ScopedPacket<'_>, ViewedLevelsError> {
+    if id == id::CUSTOM_PAYLOAD {
+        let mut reader = Reader::new(body);
+        let channel = Ident::read_borrowed(&mut reader)
+            .map_err(|_| ViewedLevelsError::MalformedPacket(id))?;
+        return if channel == crate::connection_groups::CHANNEL {
+            // The bundle receiver checks negotiation and decodes this section.
+            Ok(ScopedPacket::ConnectionGroups(reader.rest()))
+        } else {
+            Err(ViewedLevelsError::NotLevelScoped(id))
+        };
+    }
     let sound = revision >= REVISION_3 && SOUNDS.contains(&id);
     if !LEVEL_SCOPED.contains(&id) && !sound {
         return Err(ViewedLevelsError::NotLevelScoped(id));
@@ -471,7 +495,7 @@ fn check_level_scoped(id: i32, body: &[u8], revision: u8) -> Result<(), ViewedLe
             _ => true,
         };
     if scoped {
-        Ok(())
+        Ok(ScopedPacket::Play(id, body))
     } else {
         Err(ViewedLevelsError::NotLevelScoped(id))
     }
@@ -568,7 +592,10 @@ mod tests {
         assert_eq!(level, Level::Index(2));
         let decoded: Vec<_> = packets
             .into_iter()
-            .map(|(packet_id, body)| Clientbound::decode(packet_id, body).unwrap())
+            .map(|packet| match packet {
+                ScopedPacket::Play(id, body) => Clientbound::decode(id, body).unwrap(),
+                ScopedPacket::ConnectionGroups(_) => panic!("expected a vanilla packet"),
+            })
             .collect();
         assert_eq!(decoded, sent);
         let close = received(&close(Level::Index(1)));
@@ -768,8 +795,10 @@ mod tests {
         };
         assert_eq!(level, Level::Index(1));
         assert_eq!(packets.len(), 1);
-        assert_eq!(packets[0].0, 119);
-        assert_eq!(Clientbound::decode(119, packets[0].1).unwrap(), sound);
+        let [ScopedPacket::Play(119, body)] = packets.as_slice() else {
+            panic!("expected a sound packet");
+        };
+        assert_eq!(Clientbound::decode(119, body).unwrap(), sound);
         // A sound bound to an entity: id 118, holder 6 (registry id 5), source 4, entity 9,
         // volume 1.0, pitch 1.0, seed 0.
         let bound = [
@@ -796,7 +825,7 @@ mod tests {
             Message::decode_with(&wire, 3, false),
             Ok(Message::Run {
                 level: Level::Index(1),
-                packets: vec![(8, &block[1..])]
+                packets: vec![ScopedPacket::Play(8, &block[1..])]
             })
         );
         assert!(
@@ -903,6 +932,49 @@ mod tests {
         assert_eq!(
             Message::decode_in(&[2, 1], REVISION_4),
             Err(ViewedLevelsError::CutShort)
+        );
+    }
+
+    #[test]
+    fn a_run_carries_connection_groups_and_refuses_other_custom_payloads() {
+        use crate::connection_groups::{self, Cell, Entry, Section};
+        let valid_data = Section {
+            pos: [1, 4, -2],
+            entries: vec![Entry {
+                cell: Cell::of([3, 64, 4]),
+                group: Some(99),
+            }],
+        }
+        .encode()
+        .unwrap();
+        let valid = Clientbound::CustomPayload(CustomPayload {
+            channel: connection_groups::CHANNEL.into(),
+            data: valid_data,
+        });
+        let run = received(
+            &Run::new(Level::Bound { slot: 0, epoch: 1 }, &valid.encode())
+                .unwrap()
+                .finish(),
+        );
+        let Message::Run { level, packets } = Message::decode_in(&run.data, REVISION_4).unwrap()
+        else {
+            panic!("not a run");
+        };
+        assert_eq!(level, Level::Bound { slot: 0, epoch: 1 });
+        assert_eq!(packets.len(), 1);
+        let Clientbound::CustomPayload(payload) = valid else {
+            unreachable!();
+        };
+        assert_eq!(packets, [ScopedPacket::ConnectionGroups(&payload.data)]);
+
+        let other = Clientbound::CustomPayload(CustomPayload {
+            channel: "minecraft:brand".into(),
+            data: vec![1, b'x'],
+        })
+        .encode();
+        assert_eq!(
+            Run::new(Level::Bound { slot: 0, epoch: 1 }, &other).err(),
+            Some(ViewedLevelsError::NotLevelScoped(id::CUSTOM_PAYLOAD))
         );
     }
 }

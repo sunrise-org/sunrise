@@ -37,7 +37,7 @@ pub trait TerrainAquifer {
     fn should_schedule_fluid_update(&self) -> bool;
     /// The y above which every non-positive density is the aquifer's air. The
     /// fill skips those blocks without asking the aquifer; `None` keeps the
-    /// per-block call for aquifers whose global fluid can vary with x/z.
+    /// per-block call (a picker with no `FluidPicker::level_bound` there).
     fn air_above_y(&self) -> Option<i32> {
         None
     }
@@ -306,6 +306,15 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
     }
     pub(crate) fn registry(&self) -> &BlockRegistry {
         self.blocks.registry
+    }
+    pub(super) fn air(&self) -> BlockStateId {
+        self.blocks.air
+    }
+    pub(super) fn void_air(&self) -> BlockStateId {
+        self.blocks.void_air
+    }
+    pub(super) fn block_properties_table(&self) -> &B {
+        &self.blocks.properties
     }
     /// The indexes of the sections holding a block other than air
     /// (`LevelChunkSection.hasOnlyAir`, negated).
@@ -939,6 +948,9 @@ mod tests {
                 level: -64,
                 state: BlockStateId(3),
             }
+        }
+        fn level_bound(&self, _: [i32; 2], _: [i32; 2]) -> Option<i32> {
+            Some(-64)
         }
     }
 

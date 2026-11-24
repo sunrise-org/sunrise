@@ -9,6 +9,7 @@ from tools import check_imports
 
 
 def elf(interpreter, libraries, runpath=None):
+    """A minimal ELF64; `runpath` adds a DT_RUNPATH."""
     data = bytearray(4096)
     data[:7] = b"\x7fELF\x02\x01\x01"
     struct.pack_into("<Q", data, 32, 64)
@@ -40,29 +41,15 @@ class LinuxImportsTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 return check_imports.check(path, **options)
 
-    def test_musl_desktop(self):
-        self.assertTrue(self.check_binary("/lib/ld-musl-x86_64.so.1",
-                        ["libc.musl-x86_64.so.1", "libgcc_s.so.1", "libasound.so.2", "libudev.so.1"],
-                        musl=True))
-
-    def test_musl_requires_its_dynamic_loader(self):
-        for loader in (None, "/lib64/ld-linux-x86-64.so.2", "/nix/store/musl/lib/ld-musl-x86_64.so.1"):
-            with self.subTest(loader=loader):
-                self.assertFalse(self.check_binary(loader, [], musl=True))
-
-    def test_musl_rejects_glibc_and_unexpected_libraries(self):
-        for library in ("libc.so.6", "libpthread.so.0", "libm.so.6", "libcustom.so"):
-            with self.subTest(library=library):
-                self.assertFalse(self.check_binary("/lib/ld-musl-x86_64.so.1", [library], musl=True))
-
-    def test_glibc_policy_still_rejects_musl(self):
+    def test_the_standard_loader_and_libraries_only(self):
         self.assertTrue(self.check_binary("/lib64/ld-linux-x86-64.so.2", ["libc.so.6", "libasound.so.2"]))
         self.assertFalse(self.check_binary("/lib/ld-musl-x86_64.so.1", ["libc.musl-x86_64.so.1"]))
+        self.assertFalse(self.check_binary("/lib64/ld-linux-x86-64.so.2", ["libcustom.so"]))
 
-    def test_server_and_runpath_checks_apply_to_both_abis(self):
-        for musl, loader in ((False, "/lib64/ld-linux-x86-64.so.2"), (True, "/lib/ld-musl-x86_64.so.1")):
-            with self.subTest(musl=musl):
-                self.assertTrue(self.check_binary(loader, ["libgcc_s.so.1"], musl=musl, server=True))
-                for lib in ("libasound.so.2", "libudev.so.1"):
-                    self.assertFalse(self.check_binary(loader, [lib], musl=musl, server=True))
-                self.assertFalse(self.check_binary(loader, [], musl=musl, runpath="/nix/store/libs"))
+    def test_a_server_needs_neither_sound_nor_controllers_and_no_build_path_runs(self):
+        loader = "/lib64/ld-linux-x86-64.so.2"
+        self.assertTrue(self.check_binary(loader, ["libgcc_s.so.1"], server=True))
+        for lib in ("libasound.so.2", "libudev.so.1"):
+            with self.subTest(lib=lib):
+                self.assertFalse(self.check_binary(loader, [lib], server=True))
+        self.assertFalse(self.check_binary(loader, [], runpath="/nix/store/libs"))

@@ -72,8 +72,6 @@ mod tests {
         let mods = vec![ModEntry::new("spare", Box::new(Spare(heard.clone())))].into();
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
-                let _phase =
-                    mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
                 let context =
                     mod_api::LifecycleContext::from(mod_api::__private::built::LifecycleContext {
                         authority: mod_api::Authority::DedicatedServer,

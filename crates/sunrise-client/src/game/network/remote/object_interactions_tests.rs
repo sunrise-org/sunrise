@@ -43,7 +43,9 @@ fn transactional_bucket_hands_reach_the_owning_client() {
     use crate::game::{
         native_entity_refs::tests::with_client_game, native_guest_turn_tests::with_guests,
     };
-    use mod_api::{HostTransaction, ITEM_FLUIDS, ItemPlace, ServerHost, move_resources};
+    use mod_api::{
+        HostTransaction, ITEM_FLUIDS, ItemPlace, ServerHost, resource_util::move_resources,
+    };
     use sunrise_client::{
         items::ItemStack,
         lan::{Out, PlayerSender},
@@ -109,7 +111,7 @@ fn transactional_bucket_hands_reach_the_owning_client() {
                     let source = off.capability(host, &ITEM_FLUIDS).unwrap();
                     let target = main.capability(host, &ITEM_FLUIDS).unwrap();
                     assert_eq!(
-                        move_resources(host, &source, &target, |_| true, 1000, tx).unwrap(),
+                        move_resources(host, &source, &target, |_| true, 1000, Some(tx)).unwrap(),
                         1000
                     );
                     if commit { Ok(()) } else { Err(()) }

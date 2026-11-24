@@ -83,7 +83,7 @@ fn click_as_guest(game: &mut Game<'_>, pos: [i32; 3], stack: ItemStack) {
     *game.held_mut() = Some(stack);
     let hit = hit(pos);
     game.forced_hit = Some(hit);
-    game.guest_use = Some(GuestUse::OnBlock(Hand::Main));
+    game.guest_use = Some(GuestUse::on_block(Hand::Main));
     game.with_player_actor(|g| g.use_hand(Some(&hit))).unwrap();
     game.guest_use = None;
 }

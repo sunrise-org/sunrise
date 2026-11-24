@@ -318,7 +318,7 @@ mod tests {
             assert_eq!(loaded.display_offset(game), Some(3));
 
             // A state the registry doesn't know is refused; None clears.
-            let invalid = mod_api::BlockStateRecord::new(lit.block(), u16::MAX).into();
+            let invalid = mod_api::__private::block_state_from_ordinal(lit.block(), u16::MAX);
             assert!(!cart.set_custom_display_block(game, Some(invalid)));
             assert_eq!(cart.custom_display_block(game), Some(Some(lit)));
             assert!(cart.set_custom_display_block(game, None));
@@ -335,6 +335,13 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn minecart_handles_narrow_read_and_write_by_kind() {
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::native_minecart_refs::tests::minecart_handles_narrow_read_and_write_by_kind",
+            "SUNRISE_MINECART_HANDLES_CASE",
+            &["handles"],
+        ) {
+            return;
+        }
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
             let kinds = [
@@ -484,7 +491,7 @@ mod tests {
             let cart = &game.carts[5];
             assert_eq!(cart.command.success_count, 0);
             assert_eq!(cart.synced_command, "gamerule mob_griefing false");
-            assert_eq!(cart.synced_output, cart.command.last_output_string());
+            assert!(cart.synced_output.is_none());
             let id = command.entity().id();
             assert!(
                 game.ui

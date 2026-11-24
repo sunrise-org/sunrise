@@ -5,6 +5,9 @@
 //! (streams on a worker thread) and OpenAL Soft's mixing: mono sources panned
 //! and attenuated, multi-channel buffers (stereo music and records) played
 //! direct as OpenAL does.
+mod mic;
+mod streams;
+
 use crate::Result;
 use crate::sound_engine::{
     Attenuation, Backend, Bound, ChannelId, InstanceId, PlayResult, SoundEngine, SoundInstance,
@@ -21,6 +24,9 @@ use std::{
 };
 use sunrise_assets::resource_source::{Resource, ResourceSource};
 use sunrise_core::random::{LegacyRandom, RandomSource};
+
+mod fx;
+mod reverb;
 
 /// An OpenAL source's state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +56,8 @@ struct Channel {
     started: Option<(String, std::time::Instant)>,
     /// Its sound event plays clearly through a mod's muffle (`Audio::muffle`).
     unmuffled: bool,
+    /// Its own effects (`SoundPlay::effects`) and their filters' state.
+    fx: fx::VoiceFx,
 }
 /// The cutoff of the muffle's low-pass at full strength: the world heard through ringing ears.
 const MUFFLED_CUTOFF: f32 = 300.0;
@@ -107,15 +115,79 @@ impl Muffle {
         }
     }
 }
+/// The most frames one [`mix`] takes. The reverbs' send buffer is reserved for this many when the
+/// mixer is created, so the output callback never grows it: a device buffer larger than this (a
+/// rare default of 85 ms or more at 192 kHz) is mixed in pieces of this size.
+const MAX_MIX_FRAMES: usize = 16_384;
+/// The shared reverbs and what the sounds send to them in one buffer.
+///
+/// Everything it holds is allocated when the mixer is created (`Mixer::default`, on the game
+/// thread that opens the sound system), not on the first send and never in the output callback:
+/// each bus's delay lines are sized for 192 kHz ([`reverb::Reverb::new`]), 236,071 samples for
+/// the three buses together (944,284 bytes), and the send buffer holds [`MAX_MIX_FRAMES`] frames
+/// for each bus (196,608 bytes): 1,140,892 bytes (about 1.09 MiB) in all, whatever the output's
+/// rate. A slower output uses the start of each line.
+struct Reverbs {
+    buses: [reverb::Reverb; reverb::BUSES],
+    /// One buffer's sends, bus after bus, one mono sample a frame; reused.
+    input: Vec<f32>,
+    /// `input` is cleared for this buffer.
+    ready: bool,
+    /// What was sent to each bus this buffer.
+    sent: [bool; reverb::BUSES],
+}
+impl Default for Reverbs {
+    fn default() -> Self {
+        Self {
+            buses: reverb::ROOMS.map(reverb::Reverb::new),
+            // Room for the largest piece `mix` takes, so the callback doesn't allocate.
+            input: Vec::with_capacity(reverb::BUSES * MAX_MIX_FRAMES),
+            ready: false,
+            sent: [false; reverb::BUSES],
+        }
+    }
+}
+impl Reverbs {
+    /// The sends of a buffer of `frames` frames, cleared at the first ask.
+    fn input(&mut self, frames: usize) -> &mut [f32] {
+        debug_assert!(
+            frames <= MAX_MIX_FRAMES,
+            "a mix piece is at most MAX_MIX_FRAMES"
+        );
+        if !self.ready {
+            self.input.clear();
+            self.input.resize(reverb::BUSES * frames, 0.0);
+            self.ready = true;
+        }
+        &mut self.input
+    }
+    /// Adds every bus's reverb of this buffer's sends into `out`, then readies the next buffer.
+    /// A bus with no sends and no tail left costs nothing.
+    fn run(&mut self, out: &mut [f32], channels: usize, rate: u32) {
+        let frames = out.len() / channels.max(1);
+        if self.ready || self.buses.iter().any(|b| !b.idle()) {
+            self.input(frames);
+            for ((bus, input), sent) in self
+                .buses
+                .iter_mut()
+                .zip(self.input.chunks(frames.max(1)))
+                .zip(self.sent)
+            {
+                bus.run(input, sent, out, channels, rate);
+            }
+        }
+        self.ready = false;
+        self.sent = [false; reverb::BUSES];
+    }
+}
 #[derive(Default)]
 struct Mixer {
     channels: HashMap<ChannelId, Channel>,
     listener: [f64; 3],
-    listener_yaw: f32,
-    listener_pitch: f32,
-    /// Additional listeners' cameras (position, yaw, pitch) by owner. A world sound is
-    /// heard from the nearest camera, and panned half as wide while several share the speakers.
-    listeners: HashMap<u8, ([f64; 3], f32, f32)>,
+    listener_orientation: ListenerOrientation,
+    /// Additional listeners' cameras by owner. A world sound is heard from the nearest camera,
+    /// and panned half as wide while several share the speakers.
+    listeners: HashMap<u8, ([f64; 3], ListenerOrientation)>,
     /// Each camera's world by owner, as ids: the callback compares and copies integers.
     worlds: HashMap<u8, u32>,
     /// World names by id - 1 (`world_id`).
@@ -124,10 +196,14 @@ struct Mixer {
     cameras: Vec<([f64; 3], Basis, u32)>,
     /// Per-source gain/pan/step cache for one buffer, reused across callbacks.
     voices: Vec<(ChannelId, [f32; 3], f64)>,
-    /// Mods' audio sources (`push_voice`), each with its queue.
-    mod_audio: Vec<ModAudioSource>,
+    /// Mods' audio streams, separate from vanilla's channels.
+    streams: Vec<streams::StreamVoice>,
+    /// Each `SoundSource`'s volume for a stream: master times the group, as every sound's.
+    stream_gain: [f32; 11],
     /// A mod's muffle of the sounds it does not exempt.
     muffle: Muffle,
+    /// The shared reverbs sounds send to (`SoundPlay::effects`).
+    reverbs: Reverbs,
     limiter_peak: f32,
     /// The output device the stream was opened on (`Library.currentDeviceName`).
     #[cfg(feature = "audio")]
@@ -207,86 +283,35 @@ impl Reopen {
 }
 /// A camera's forward, up and right vectors.
 type Basis = ([f64; 3], [f64; 3], [f64; 3]);
-/// How much audio one mod source may have waiting, in seconds (`push_voice`): a burst past it
-/// is refused rather than delayed, so a stalled sender cannot pile up latency.
-const MOD_AUDIO_SECONDS: f64 = 2.0;
-/// How many mod audio sources may play at once, across mods.
-const MOD_AUDIO_SOURCES: usize = 64;
-/// The distance at which positioned mod audio has faded out, in blocks (linear, as a sound's
-/// `AL_LINEAR_DISTANCE` fades).
-const MOD_AUDIO_RANGE: f32 = 48.0;
-/// One of a mod's audio sources (`push_voice`): a speaker, keyed by the mod and its own id
-/// for it. Its chunks play one after another, oldest first, so each speaker's audio stays in
-/// order while different speakers play at the same time.
-struct ModAudioSource {
-    mod_id: String,
-    source: u128,
-    chunks: std::collections::VecDeque<ModAudioChunk>,
-    /// How far into the head chunk the callback has got, in its own samples.
-    played: f64,
+
+#[derive(Clone, Copy, PartialEq)]
+struct ListenerOrientation {
+    forward: [f32; 3],
+    up: [f32; 3],
 }
-/// A block of mono samples a mod queued.
-struct ModAudioChunk {
-    /// Mono samples, -1 to 1.
-    samples: Vec<f32>,
-    /// The rate they were sampled at.
-    rate: u32,
-    /// Where they were spoken, for distance and direction; none plays them centred.
-    at: Option<[f64; 3]>,
-}
-impl Mixer {
-    /// Queues `samples` behind what `source` of `mod_id` already has waiting. False, and
-    /// nothing queued, when they are empty or the rate is 0, when the source would hold more
-    /// than [`MOD_AUDIO_SECONDS`], or when a new source would pass [`MOD_AUDIO_SOURCES`].
-    fn push_mod_audio(
-        &mut self,
-        mod_id: &str,
-        source: u128,
-        samples: &[f32],
-        rate: u32,
-        at: Option<[f64; 3]>,
-    ) -> bool {
-        if samples.is_empty() || rate == 0 {
-            return false;
+impl Default for ListenerOrientation {
+    fn default() -> Self {
+        Self {
+            forward: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0],
         }
-        let seconds = |len: usize, rate: u32| len as f64 / f64::from(rate);
-        let added = seconds(samples.len(), rate);
-        let chunk = ModAudioChunk {
-            samples: samples.to_vec(),
-            rate,
-            at,
-        };
-        match self
-            .mod_audio
-            .iter()
-            .position(|s| s.source == source && s.mod_id == mod_id)
-        {
-            Some(i) => {
-                let s = &mut self.mod_audio[i];
-                let waiting: f64 = s
-                    .chunks
-                    .iter()
-                    .map(|c| seconds(c.samples.len(), c.rate))
-                    .sum();
-                if waiting + added > MOD_AUDIO_SECONDS {
-                    return false;
-                }
-                s.chunks.push_back(chunk);
-            }
-            None => {
-                if added > MOD_AUDIO_SECONDS || self.mod_audio.len() >= MOD_AUDIO_SOURCES {
-                    return false;
-                }
-                self.mod_audio.push(ModAudioSource {
-                    mod_id: mod_id.to_owned(),
-                    source,
-                    chunks: std::collections::VecDeque::from([chunk]),
-                    played: 0.0,
-                });
-            }
-        }
-        true
     }
+}
+impl ListenerOrientation {
+    fn basis(self) -> Basis {
+        // `Listener.setTransform` takes the camera's forward and up. OpenAL gets right from
+        // their cross product; the up component carries camera roll.
+        let forward = glam::DVec3::from_array(self.forward.map(f64::from));
+        let up = glam::DVec3::from_array(self.up.map(f64::from));
+        (
+            forward.to_array(),
+            up.to_array(),
+            forward.cross(up).to_array(),
+        )
+    }
+}
+
+impl Mixer {
     /// The id of world `name` (1 and up), given once per name.
     fn world_id(&mut self, name: &str) -> u32 {
         let i = match self.world_names.iter().position(|w| w == name) {
@@ -297,6 +322,11 @@ impl Mixer {
             }
         };
         i as u32 + 1
+    }
+    /// Some sound has effects (`SoundPlay::effects`), or a reverb's tail is still ringing.
+    fn effects_heard(&self) -> bool {
+        self.channels.values().any(|c| !c.fx.bypassed())
+            || self.reverbs.buses.iter().any(|b| !b.idle())
     }
 }
 /// A sound the player could have heard (`SoundEventListener.onPlaySound`):
@@ -326,24 +356,6 @@ impl MuffleFade {
         [self.amount * left, self.lowpass * left]
     }
 }
-impl MixerBackend {
-    /// Queues a mod's audio for the output callback (`Host::push_voice`). False when nothing
-    /// was queued: no output device, or what [`Mixer::push_mod_audio`] refuses.
-    pub fn push_voice(
-        &self,
-        mod_id: &str,
-        source: u128,
-        samples: &[f32],
-        rate: u32,
-        at: Option<[f64; 3]>,
-    ) -> bool {
-        self.live
-            && self
-                .mixer
-                .lock()
-                .is_ok_and(|mut m| m.push_mod_audio(mod_id, source, samples, rate, at))
-    }
-}
 /// The mixer side of the engine (`Backend`).
 pub struct MixerBackend {
     mixer: Arc<Mutex<Mixer>>,
@@ -353,6 +365,8 @@ pub struct MixerBackend {
     decoder: Option<std::sync::mpsc::Sender<Decode>>,
     next: ChannelId,
     live: bool,
+    /// Mods' audio streams, which every backend sharing the output shares.
+    streams: Arc<streams::StreamPool>,
     /// Whose channels these are (`Channel::owner`).
     owner: u8,
     world: u32,
@@ -463,21 +477,12 @@ pub struct CapturedSound {
     pub source: usize,
     pub entity: Option<u32>,
     pub except_entity: Option<u32>,
-}
-
-impl Audio {
-    /// Plays a mod's audio (`Host::push_voice`): mono samples, -1 to 1, at `rate`, behind what
-    /// `source` of `mod_id` already has waiting; `at` places them for distance and direction.
-    pub fn push_voice(
-        &self,
-        mod_id: &str,
-        source: u128,
-        samples: &[f32],
-        rate: u32,
-        at: Option<[f64; 3]>,
-    ) -> bool {
-        self.backend.push_voice(mod_id, source, samples, rate, at)
-    }
+    /// The seed the sound's instance takes (`SoundInstance`'s random).
+    pub seed: i64,
+    /// How many particle requests this thread's particle captures had taken when this sound
+    /// was captured (`particles::requested_count`): a test reads the two captures as one
+    /// ordered stream.
+    pub particles_before: u64,
 }
 
 pub struct Audio {
@@ -485,11 +490,11 @@ pub struct Audio {
     device_name: String,
     pub engine: SoundEngine,
     backend: MixerBackend,
+    mics: Arc<mic::MicPool>,
     /// Record `Heard` sounds (the subtitle overlay is listening).
     pub record_heard: bool,
     pub listener: [f64; 3],
-    pub listener_yaw: f32,
-    pub listener_pitch: f32,
+    listener_orientation: ListenerOrientation,
     pub master: f32,
     /// Seeds of positional plays (the client level random's `nextLong`).
     random: LegacyRandom,
@@ -508,6 +513,8 @@ pub struct Audio {
     preview: crate::sound_preview::SoundPreview,
     /// A mod's muffle fading out (`muffle`), advanced by `tick`.
     muffle: Option<MuffleFade>,
+    /// The `stream_gain` the mixer was last given: it is locked again only when this changes.
+    stream_gain_sent: [f32; 11],
     /// `SoundEngine.lastSeenDevices`: the system default output last seen.
     #[cfg(feature = "audio")]
     default_seen: Option<String>,
@@ -704,6 +711,7 @@ impl Backend for MixerBackend {
                 world: self.world,
                 started: None,
                 unmuffled: false,
+                fx: fx::VoiceFx::default(),
             },
         );
         Some(id)
@@ -734,13 +742,24 @@ impl Backend for MixerBackend {
     fn set_unmuffled(&mut self, channel: ChannelId, unmuffled: bool) {
         self.with(channel, |c| c.unmuffled = unmuffled);
     }
-    fn update_channel(&mut self, channel: ChannelId, volume: f32, pitch: f32, position: [f64; 3]) {
+    fn set_effects(&mut self, channel: ChannelId, effects: mod_api::SoundEffects) {
+        self.with(channel, |c| c.fx.target = effects);
+    }
+    fn update_channel(
+        &mut self,
+        channel: ChannelId,
+        volume: f32,
+        pitch: f32,
+        position: [f64; 3],
+        effects: mod_api::SoundEffects,
+    ) {
         if let Ok(mut m) = self.mixer.lock()
             && let Some(c) = m.channels.get_mut(&channel)
         {
             c.gain = volume;
             c.pitch = pitch;
             c.at = [position[0] as f32, position[1] as f32, position[2] as f32];
+            c.fx.target = effects;
         }
     }
     fn filter_stopped(&mut self, live: &[(u64, ChannelId)], stopped: &mut Vec<u64>) {
@@ -855,18 +874,32 @@ impl Backend for MixerBackend {
 /// behind 0.404, one above or below 0.5, one at the source's own position
 /// is panned to the front. Matches OpenAL Soft 1.25.2 (LWJGL 3.4.3, the
 /// pinned client's) rendered through `ALC_SOFT_loopback` within 1e-5.
+#[cfg(test)]
 fn stereo_gains(right: f32, up: f32, forward: f32) -> [f32; 2] {
     let length = (right * right + up * up + forward * forward).sqrt();
-    stereo_gains_with_length(right, up, forward, length)
+    stereo_gains_with_length([right, up, forward].map(f64::from), f64::from(length)).unwrap()
 }
+/// `stereo_gains` for a direction of known `length`, or `None` for unreadable geometry.
 #[inline]
-fn stereo_gains_with_length(right: f32, up: f32, forward: f32, length: f32) -> [f32; 2] {
-    if length <= f32::EPSILON {
-        return stereo_gains_with_length(0.0, 0.0, 1.0, 1.0);
-    }
-    let u = (up / length).clamp(-1.0, 1.0);
+fn stereo_gains_with_length(direction: [f64; 3], length: f64) -> Option<[f32; 2]> {
+    let [right, up, forward] = direction;
+    let narrow = [right as f32, up as f32, forward as f32, length as f32];
+    let (u, mut azimuth) = if narrow.into_iter().all(f32::is_finite) {
+        let [right, up, forward, length] = narrow;
+        if length <= f32::EPSILON {
+            (0.0, 0.0)
+        } else {
+            (up / length, right.atan2(forward))
+        }
+    } else if length.is_finite() && direction.into_iter().all(f64::is_finite) {
+        // Finite channel coordinates can have projections or a length outside f32.
+        // Compute the direction before narrowing; ordinary pans retain f32 rounding.
+        ((up / length) as f32, right.atan2(forward) as f32)
+    } else {
+        return None;
+    };
+    let u = u.clamp(-1.0, 1.0);
     let cos_elev = (1.0 - u * u).max(0.0).sqrt();
-    let mut azimuth = right.atan2(forward);
     if azimuth.abs() < std::f32::consts::FRAC_PI_2 {
         azimuth = (azimuth.abs() * 1.5)
             .min(std::f32::consts::FRAC_PI_2)
@@ -875,59 +908,126 @@ fn stereo_gains_with_length(right: f32, up: f32, forward: f32, length: f32) -> [
     let (sin_az, cos_az) = azimuth.sin_cos();
     let side = sin_az * cos_elev;
     let front = cos_az * cos_elev * 0.095_660_8;
-    [0.5 - 0.5 * side + front, 0.5 + 0.5 * side + front]
+    Some([0.5 - 0.5 * side + front, 0.5 + 0.5 * side + front])
 }
 /// The gain OpenAL applies for distance (`AL_LINEAR_DISTANCE` with reference
 /// distance 0 and rolloff 1: the distance clamps to the max distance).
-fn distance_gain(linear: Option<f32>, distance: f32) -> f32 {
+fn distance_gain(linear: Option<f32>, distance: f64) -> f32 {
     match linear {
         None => 1.0,
-        Some(max) if max > 0.0 => (1.0 - distance.min(max) / max).clamp(0.0, 1.0),
+        Some(max) if max > 0.0 => {
+            let distance = distance.min(f64::from(max));
+            let narrow = distance as f32;
+            // An unbounded reach must not turn a finite distance into infinity / infinity.
+            let fraction = if narrow.is_finite() {
+                narrow / max
+            } else {
+                (distance / f64::from(max)) as f32
+            };
+            (1.0 - fraction).clamp(0.0, 1.0)
+        }
         Some(_) => 0.0,
     }
+}
+/// One voice's buffer through its effects ([`fx::VoiceFx`]): read as the plain path reads it
+/// (linear interpolation, looping or stopping at the end), its direct sound filtered and panned
+/// by `[left, right, gain]` into `out`, and its sends, at the sound's distance gain, into the
+/// shared reverbs' input.
+fn mix_with_effects(
+    c: &mut Channel,
+    (samples, source_channels, frames, step): (&[f32], usize, usize, f64),
+    [left, right, gain]: [f32; 3],
+    out: &mut [f32],
+    channels: usize,
+    rate: u32,
+    reverbs: &mut Reverbs,
+) {
+    let buffer_frames = out.len() / channels;
+    let stereo = source_channels > 1;
+    let mut glide = c.fx.begin(buffer_frames, rate);
+    let mut input: &mut [f32] = &mut [];
+    if glide.sends {
+        for (sent, to) in reverbs.sent.iter_mut().zip(glide.sent) {
+            *sent |= to;
+        }
+        input = reverbs.input(buffer_frames);
+    }
+    for (f, frame) in out.chunks_mut(channels).enumerate() {
+        let mut i = c.position as usize;
+        if i + 1 >= frames {
+            if c.looping && frames > 1 {
+                c.position = 0.0;
+                i = 0;
+            } else {
+                c.state = State::Stopped;
+                break;
+            }
+        }
+        let t = (c.position - i as f64) as f32;
+        let mut x = if stereo {
+            [
+                samples[i * 2] + (samples[(i + 1) * 2] - samples[i * 2]) * t,
+                samples[i * 2 + 1] + (samples[(i + 1) * 2 + 1] - samples[i * 2 + 1]) * t,
+            ]
+        } else {
+            [samples[i] + (samples[i + 1] - samples[i]) * t, 0.0]
+        };
+        let send = c.fx.frame(&mut glide, &mut x, stereo);
+        let [l, r] = if stereo { x } else { [x[0], x[0]] };
+        if channels >= 2 {
+            frame[0] += l * left;
+            frame[1] += r * right;
+        } else {
+            frame[0] += (l + r) * 0.5 * gain;
+        }
+        if glide.sends {
+            for (bus, level) in send.into_iter().enumerate() {
+                input[bus * buffer_frames + f] += level * gain;
+            }
+        }
+        c.position += step;
+    }
+}
+/// [`mix`] over `data` in pieces of at most [`MAX_MIX_FRAMES`] frames: the reverbs' send buffer
+/// was sized for that when the mixer was made, so mixing never allocates, however large a buffer
+/// the device asks for. One piece, the whole buffer, for every usual buffer size, and whenever no
+/// sound has effects and no reverb is ringing: then nothing uses the send buffer, and the output
+/// is the one `mix` it was before effects existed.
+fn mix_pieces(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
+    let most = MAX_MIX_FRAMES * channels.max(1);
+    if data.len() <= most || !mixer.effects_heard() {
+        mix(mixer, data, channels, rate);
+    } else {
+        for piece in data.chunks_mut(most) {
+            mix(mixer, piece, channels, rate);
+        }
+    }
+    streams::request_pull(&mixer.streams, data.len() / channels, rate);
 }
 // Only the output stream mixes; a build without one (no `audio` feature) never does.
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
     data.fill(0.0);
-    // The camera's forward and up vectors (`Camera.forwardVector`/`upVector`)
-    // and OpenAL's right = forward x up.
-    let basis = |yaw: f32, pitch: f32| {
-        let (yaw, pitch) = (f64::from(yaw.to_radians()), f64::from(pitch.to_radians()));
-        let (yaw_sin, yaw_cos) = yaw.sin_cos();
-        let (pitch_sin, pitch_cos) = pitch.sin_cos();
-        let forward = [-yaw_sin * pitch_cos, -pitch_sin, yaw_cos * pitch_cos];
-        let up = [-yaw_sin * pitch_sin, pitch_cos, yaw_cos * pitch_sin];
-        let right = [
-            forward[1] * up[2] - forward[2] * up[1],
-            forward[2] * up[0] - forward[0] * up[2],
-            forward[0] * up[1] - forward[1] * up[0],
-        ];
-        (forward, up, right)
-    };
     // Every active listener's camera, in the mixer's scratch buffer.
     mixer.cameras.clear();
     mixer.cameras.extend(
-        std::iter::once((
-            0,
-            (mixer.listener, mixer.listener_yaw, mixer.listener_pitch),
-        ))
-        .chain(
-            mixer
-                .listeners
-                .iter()
-                .map(|(&owner, &camera)| (owner, camera)),
-        )
-        .map(|(owner, (at, yaw, pitch))| {
-            (
-                at,
-                basis(yaw, pitch),
-                mixer.worlds.get(&owner).copied().unwrap_or_default(),
+        std::iter::once((0, (mixer.listener, mixer.listener_orientation)))
+            .chain(
+                mixer
+                    .listeners
+                    .iter()
+                    .map(|(&owner, &camera)| (owner, camera)),
             )
-        }),
+            .map(|(owner, (at, orientation))| {
+                (
+                    at,
+                    orientation.basis(),
+                    mixer.worlds.get(&owner).copied().unwrap_or_default(),
+                )
+            }),
     );
     let shared = mixer.cameras.len() > 1;
-    let dot = |a: [f64; 3], b: [f64; 3]| (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) as f32;
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     // Gains and pans per source for this buffer.
     let mut voices = std::mem::take(&mut mixer.voices);
     voices.clear();
@@ -967,7 +1067,8 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 .min_by(|a, b| length_sq(away(a.0)).total_cmp(&length_sq(away(b.0))))
                 .map(|camera| (camera.0, camera.1))
         };
-        let (listener, (forward, up, right)) = camera.unwrap_or(([0.0; 3], basis(0.0, 0.0)));
+        let (listener, (forward, up, right)) =
+            camera.unwrap_or_else(|| ([0.0; 3], ListenerOrientation::default().basis()));
         let d = if c.relative { at } else { away(listener) };
         let d_sqr = length_sq(d);
 
@@ -987,23 +1088,35 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             if zero {
                 (0.0, [0.0, 0.0])
             } else {
-                let distance = d_sqr.sqrt() as f32;
-                let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
-                let [mut left, mut right] = if c.relative {
-                    stereo_gains_with_length(d[0] as f32, d[1] as f32, -d[2] as f32, distance)
+                let distance = d_sqr.sqrt();
+                let direction = if c.relative {
+                    [d[0], d[1], -d[2]]
                 } else {
-                    stereo_gains_with_length(dot(d, right), dot(d, up), dot(d, forward), distance)
+                    [dot(d, right), dot(d, up), dot(d, forward)]
                 };
-                if shared {
-                    let middle = (left + right) * 0.5;
-                    left = middle + (left - middle) * 0.5;
-                    right = middle + (right - middle) * 0.5;
+                if let Some([mut left, mut right]) = stereo_gains_with_length(direction, distance) {
+                    let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
+                    if shared {
+                        let middle = (left + right) * 0.5;
+                        left = middle + (left - middle) * 0.5;
+                        right = middle + (right - middle) * 0.5;
+                    }
+                    (gain, [left * gain, right * gain])
+                } else {
+                    (0.0, [0.0, 0.0])
                 }
-                (gain, [left * gain, right * gain])
             }
         };
+        // Keep an unreadable voice out of the shared output and reverb buses,
+        // but keep advancing its playhead.
+        let gains = [left, right, gain];
+        let gains = if gains.into_iter().all(f32::is_finite) {
+            gains
+        } else {
+            [0.0; 3]
+        };
         let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
-        voices.push((*id, [left, right, gain], step));
+        voices.push((*id, gains, step));
     }
     // A mod's muffle: the sounds it doesn't exempt mix into a bus of their own first.
     let muffling = mixer.muffle.active();
@@ -1060,6 +1173,19 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         } else {
             &mut *data
         };
+        if !c.fx.bypassed() {
+            mix_with_effects(
+                c,
+                (samples.as_slice(), source_channels, frames, step),
+                [left, right, gain],
+                out,
+                channels,
+                rate,
+                &mut mixer.reverbs,
+            );
+            continue;
+        }
+        c.fx.played(rate);
         for frame in out.chunks_mut(channels) {
             let mut i = c.position as usize;
             if i + 1 >= frames {
@@ -1094,7 +1220,21 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             c.position += step;
         }
     }
+    // Mods' audio streams join the sounds the muffle takes, as any sound does.
+    let out: &mut [f32] = if muffling { &mut bus } else { &mut *data };
+    streams::mix(
+        &mut mixer.streams,
+        &mixer.cameras,
+        &mixer.stream_gain,
+        out,
+        channels,
+        rate,
+    );
     mixer.voices = voices;
+    // The reverbs' tails, muffled with the sounds while a mod's muffle is on.
+    mixer
+        .reverbs
+        .run(if muffling { &mut bus } else { &mut *data }, channels, rate);
     if muffling {
         mixer.muffle.apply(&bus, data, channels, rate);
     } else {
@@ -1103,62 +1243,6 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         mixer.muffle.stages = [[0.0; 2]; 2];
     }
     mixer.muffle.bus = bus;
-    // A mod's audio (`push_voice`): every source at once, each playing its own chunks in order;
-    // a chunk that ends mid-buffer hands the rest of the buffer to the next one.
-    if !mixer.mod_audio.is_empty() {
-        let (forward, up, right) = basis(mixer.listener_yaw, mixer.listener_pitch);
-        let listener = mixer.listener;
-        let frames = data.len() / channels.max(1);
-        for source in &mut mixer.mod_audio {
-            let ModAudioSource { chunks, played, .. } = source;
-            let mut f = 0;
-            while f < frames {
-                let Some(chunk) = chunks.front() else {
-                    break;
-                };
-                let len = chunk.samples.len();
-                let [left, right_gain, gain] = match chunk.at {
-                    Some(at) => {
-                        let d = [
-                            at[0] - listener[0],
-                            at[1] - listener[1],
-                            at[2] - listener[2],
-                        ];
-                        let gain = distance_gain(Some(MOD_AUDIO_RANGE), dot(d, d).sqrt());
-                        let [l, r] = stereo_gains(dot(d, right), dot(d, up), dot(d, forward));
-                        [l * gain, r * gain, gain]
-                    }
-                    None => [1.0; 3],
-                };
-                let step = f64::from(chunk.rate) / f64::from(rate);
-                while f < frames && (*played as usize) < len {
-                    let i = *played as usize;
-                    let t = (*played - i as f64) as f32;
-                    let next = chunk
-                        .samples
-                        .get(i + 1)
-                        .copied()
-                        .unwrap_or(chunk.samples[i]);
-                    let s = chunk.samples[i] * (1.0 - t) + next * t;
-                    let frame = &mut data[f * channels..(f + 1) * channels];
-                    if channels >= 2 {
-                        frame[0] += s * left;
-                        frame[1] += s * right_gain;
-                    } else {
-                        frame[0] += s * gain;
-                    }
-                    *played += step;
-                    f += 1;
-                }
-                if *played as usize >= len {
-                    // The next chunk starts where this one's last step left off.
-                    *played -= len as f64;
-                    chunks.pop_front();
-                }
-            }
-        }
-        mixer.mod_audio.retain(|s| !s.chunks.is_empty());
-    }
     // Limit the whole buffer together, preserving waveform and stereo balance
     // instead of flattening each overloaded sample; release over 200 ms
     // (OpenAL Soft's output limiter, `ALC_OUTPUT_LIMITER_SOFT`, releases
@@ -1191,6 +1275,13 @@ fn output_disabled(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<S
         .components()
         .any(|c| c.as_os_str() == "vscreen")
         .then(|| "audio off on a virtual screen (vscreen); SUNRISE_AUDIO=1 opens it".into())
+}
+/// Whether microphone capture is suppressed by an explicit opt-out (`SUNRISE_NO_AUDIO`).
+/// Unlike [`output_disabled`], capture does not inherit the `WAYLAND_DISPLAY` `vscreen`
+/// speaker-suppression heuristic.
+#[cfg(any(feature = "audio", test))]
+fn capture_disabled(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    var("SUNRISE_NO_AUDIO").is_some()
 }
 /// An output stream on `device` in its default configuration, whatever its
 /// sample format: the mixer works in f32 and converts.
@@ -1366,7 +1457,7 @@ fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
         move |data: &mut [T], _| {
             scratch.resize(data.len(), 0.0f32);
             if let Ok(mut m) = mixer.lock() {
-                mix(&mut m, &mut scratch, channels, rate);
+                mix_pieces(&mut m, &mut scratch, channels, rate);
             } else {
                 scratch.fill(0.0);
             }
@@ -1425,11 +1516,20 @@ impl Audio {
         Self::with_device(root, "")
     }
     pub fn with_device(root: &ResourceSource, device_name: &str) -> Self {
-        Self::with_output(root, true, device_name)
+        Self::with_output(root, SoundRegistry::load(root), true, device_name)
     }
-    /// No output device: the dedicated server.
+    /// Keep the client's sound registry but open no output device.
     pub fn silent(root: &ResourceSource) -> Self {
-        Self::with_output(root, false, "")
+        Self::with_output(root, SoundRegistry::load(root), false, "")
+    }
+    /// Dedicated servers send sound events to clients without opening their sound files.
+    pub fn for_server() -> Self {
+        Self::with_output(
+            &ResourceSource::default(),
+            SoundRegistry::default(),
+            false,
+            "",
+        )
     }
     /// The output device asked for (`soundDevice`), empty for the system's default; the
     /// default plays when that one can't be opened, as in vanilla.
@@ -1442,12 +1542,46 @@ impl Audio {
     }
     /// Replace the loop context when a resource generation starts or reloads, and tell
     /// the sound hooks the engine is loaded with it.
+    /// Prepares the start of `id` for the game's `play_sound` (see `SoundEngine::begin_play`).
+    pub fn begin_play(&mut self, id: InstanceId) -> Option<crate::sound_engine::PreparedPlay> {
+        self.engine.begin_play(id)
+    }
+
+    /// The next start made without the game, for it to fire `play_sound` for.
+    pub fn next_deferred(&mut self) -> Option<crate::sound_engine::PreparedPlay> {
+        self.engine.next_deferred()
+    }
+
+    /// Apply the game's `play_sound` answer to a prepared start, and start it at once.
+    pub fn finish_prepared(
+        &mut self,
+        id: InstanceId,
+        answer: Option<mod_api::SoundPlay>,
+    ) -> PlayResult {
+        self.sync_volumes();
+        self.engine.finish_prepared(id, answer, &mut self.backend)
+    }
+
+    /// The live refreshes the game fires `play_sound` for this tick.
+    pub fn live_requests(&mut self) -> Vec<crate::sound_engine::PreparedPlay> {
+        self.engine.live_requests()
+    }
+
+    /// The game's `play_sound` answer to a live refresh request.
+    pub fn set_live_answer(&mut self, id: InstanceId, answer: Option<mod_api::SoundPlay>) {
+        self.engine.set_live_answer(id, answer);
+    }
+
     pub fn set_loop_context(&mut self, context: sunrise_world::native_load_context::LoopContext) {
         self.engine.set_loop_context(context);
         self.engine.notify_loaded();
     }
-    fn with_output(root: &ResourceSource, output: bool, target_device: &str) -> Self {
-        let registry = SoundRegistry::load(root);
+    fn with_output(
+        root: &ResourceSource,
+        registry: SoundRegistry,
+        output: bool,
+        target_device: &str,
+    ) -> Self {
         if output && registry.is_empty() {
             // The game then plays nothing on a working output (#1035, #1076).
             log::warn!(
@@ -1455,7 +1589,11 @@ impl Audio {
                  launcher (or run sunrise-prepare sounds)"
             );
         }
-        let mixer = Arc::new(Mutex::new(Mixer::default()));
+        let mixer = Arc::new(Mutex::new(Mixer {
+            // Room for every stream's voice, so opening one never allocates under the lock.
+            streams: Vec::with_capacity(mod_api::AUDIO_STREAMS_TOTAL as usize),
+            ..Mixer::default()
+        }));
         let opened = if output {
             Self::open_named(mixer.clone(), target_device)
         } else {
@@ -1485,6 +1623,10 @@ impl Audio {
         } else {
             Vec::new()
         };
+        #[cfg(feature = "audio")]
+        let mics_enabled = output && !capture_disabled(|k| std::env::var_os(k));
+        #[cfg(not(feature = "audio"))]
+        let mics_enabled = false;
         Self {
             _stream: stream,
             device_name: target_device.to_owned(),
@@ -1496,14 +1638,15 @@ impl Audio {
                 decoder: None,
                 next: 0,
                 live,
+                streams: Arc::default(),
                 owner: 0,
                 world: 0,
                 shares: Arc::default(),
             },
+            mics: Arc::new(mic::MicPool::new(mics_enabled)),
             record_heard: false,
             listener: [0.0; 3],
-            listener_yaw: 0.0,
-            listener_pitch: 0.0,
+            listener_orientation: ListenerOrientation::default(),
             master: 1.0,
             random: crate::random_source::create(),
             source_override: None,
@@ -1512,6 +1655,7 @@ impl Audio {
             stopped: Default::default(),
             preview: Default::default(),
             muffle: None,
+            stream_gain_sent: [f32::NAN; 11],
             #[cfg(feature = "audio")]
             default_seen: if live { default_output_name() } else { None },
             #[cfg(feature = "audio")]
@@ -1573,6 +1717,7 @@ impl Audio {
         self._stream = Some(Self::open_named(self.backend.mixer.clone(), name)?);
         self.device_name = name.to_owned();
         self.backend.live = true;
+        self.backend.streams.output_lost(false);
         self.engine.loaded = true;
         self.engine.notify_loaded();
         Ok(())
@@ -1618,30 +1763,36 @@ impl Audio {
     }
     /// World identity for this player's sources and camera. Existing channels keep their world.
     pub fn set_world(&mut self, world: &str) {
+        let mut changed = false;
         if let Ok(mut mixer) = self.backend.mixer.lock() {
             let id = mixer.world_id(world);
+            changed = self.backend.world != id;
             self.backend.world = id;
             mixer.worlds.insert(self.backend.owner, id);
         }
+        // The primary listener changed dimension: stop all mod streams (matching vanilla's
+        // `updateLevelInEngines` -> `SoundEngine.stopAll`).
+        // After the mixer's lock is released: the pool is locked before the mixer elsewhere.
+        if changed && self.backend.owner == 0 {
+            self.backend.streams.stop_all();
+        }
     }
 
-    /// `SoundManager.updateSource`: the camera position and rotation
-    /// (`Listener.setTransform` takes its forward and up vectors).
-    pub fn set_listener(&mut self, position: [f64; 3], yaw: f32, pitch: f32) {
-        if self.listener == position && self.listener_yaw == yaw && self.listener_pitch == pitch {
+    /// `SoundEngine.updateSource`: the effective camera position and its forward and up vectors.
+    pub fn set_listener(&mut self, position: [f64; 3], forward: [f32; 3], up: [f32; 3]) {
+        let orientation = ListenerOrientation { forward, up };
+        if self.listener == position && self.listener_orientation == orientation {
             return;
         }
         self.listener = position;
-        self.listener_yaw = yaw;
-        self.listener_pitch = pitch;
+        self.listener_orientation = orientation;
         if let Ok(mut m) = self.backend.mixer.lock() {
             if self.backend.owner == 0 {
                 m.listener = position;
-                m.listener_yaw = yaw;
-                m.listener_pitch = pitch;
+                m.listener_orientation = orientation;
             } else {
                 m.listeners
-                    .insert(self.backend.owner, (position, yaw, pitch));
+                    .insert(self.backend.owner, (position, orientation));
             }
         }
     }
@@ -1666,14 +1817,15 @@ impl Audio {
                 next: (SHARED_CHANNELS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1)
                     << 40,
                 live: self.backend.live,
+                streams: self.backend.streams.clone(),
                 owner,
                 world: self.backend.world,
                 shares: self.backend.shares.clone(),
             },
+            mics: self.mics.clone(),
             record_heard: false,
             listener: [0.0; 3],
-            listener_yaw: 0.0,
-            listener_pitch: 0.0,
+            listener_orientation: ListenerOrientation::default(),
             master: self.master,
             random: crate::random_source::create(),
             source_override: None,
@@ -1682,6 +1834,7 @@ impl Audio {
             stopped: Default::default(),
             preview: Default::default(),
             muffle: None,
+            stream_gain_sent: [f32::NAN; 11],
             // The primary backend owns and maintains the output device.
             #[cfg(feature = "audio")]
             default_seen: self.default_seen.clone(),
@@ -1813,13 +1966,69 @@ impl Audio {
                 }
                 self.reopen = Reopen::default();
             }
-            Err(e) if self.reopen.failed(retrying) => {
-                log::warn!("Sunrise: could not reopen the audio output ({e}); trying again soon");
-            }
             Err(e) => {
-                log::warn!("Sunrise: could not reopen the audio output ({e}); it stays off");
+                // No output now: nothing starts on it, and mods' streams stop.
+                self.backend.live = false;
+                self.backend.streams.output_lost(true);
+                if self.reopen.failed(retrying) {
+                    log::warn!(
+                        "Sunrise: could not reopen the audio output ({e}); trying again soon"
+                    );
+                } else {
+                    log::warn!("Sunrise: could not reopen the audio output ({e}); it stays off");
+                }
             }
         }
+    }
+    /// Opens a mod stream on the separate mod stream pool. The shared worker reads `source`
+    /// on demand.
+    pub fn open_stream(
+        &self,
+        owner: &'static str,
+        spec: &mod_api::StreamSpec,
+        entity_pos: Option<[f64; 3]>,
+        source: Box<dyn mod_api::AudioStream>,
+    ) -> std::result::Result<Arc<dyn mod_api::AudioStreamSource>, mod_api::AudioRefusal> {
+        if !self.backend.live {
+            mod_api::__private::game::CallbackOwner::for_mod(owner).dispose(
+                "audio stream",
+                "AudioStream::drop",
+                source,
+            );
+            return Err(mod_api::AudioRefusal::NoOutput);
+        }
+        self.backend
+            .streams
+            .open(&self.backend.mixer, owner, spec, entity_pos, source)
+    }
+    /// Lists available microphone input devices on this client.
+    pub fn microphone_devices(
+        &self,
+    ) -> std::result::Result<Vec<mod_api::MicDevice>, mod_api::MicRefusal> {
+        self.mics.devices()
+    }
+    /// Opens a live microphone capture stream on this client.
+    pub fn open_microphone(
+        &self,
+        spec: &mod_api::MicSpec,
+    ) -> std::result::Result<Arc<dyn mod_api::MicSource>, mod_api::MicRefusal> {
+        self.mics.open(spec)
+    }
+    /// Places each entity-placed stream at its entity's position as `resolve` finds it now, or
+    /// stops it where it finds none, even while mod audio gain is zero (matching vanilla
+    /// `SoundEngine.tickInGameSound`, which ticks and checks `isStopped()` before applying gain).
+    /// Called once a frame; it does nothing, and locks nothing the output callback takes, with no
+    /// stream open.
+    pub fn follow_stream_entities(
+        &self,
+        resolve: impl FnMut(mod_api::EntityRef) -> Option<[f64; 3]>,
+    ) {
+        self.backend.streams.follow_entities(resolve);
+    }
+    /// The listener left its level (`updateLevelInEngines(null)`): every vanilla sound and mod
+    /// stream stops. The one thing every way out of a level calls, so none can forget the streams.
+    pub fn leave_level(&mut self) {
+        self.stop_all();
     }
     /// `SoundManager.tick(paused)`, once per client tick.
     pub fn tick(&mut self, paused: bool, ctx: &TickContext) {
@@ -1834,6 +2043,8 @@ impl Audio {
             }
         }
         self.sync_volumes();
+        self.backend.streams.reap(&self.backend.mixer);
+        self.sync_stream_gain(sunrise_hooks::sound::engine::mod_stream_gain());
         self.engine.tick(paused, ctx, &mut self.backend);
         // A paused game holds a mod's muffle where it is, as it holds the sounds.
         if !paused && let Some(fade) = &mut self.muffle {
@@ -1841,9 +2052,23 @@ impl Audio {
             let level = fade.level();
             if fade.left == 0 {
                 self.muffle = None;
-                self.engine.set_unmuffled(Vec::new(), &mut self.backend);
+                self.engine
+                    .set_unmuffled(Default::default(), &mut self.backend);
             }
             self.set_muffle_level(level);
+        }
+    }
+    /// Gives the mixer the volume each stream plays at: the sound's own times `mod_gain`. The
+    /// mixer is locked only when the volumes changed.
+    fn sync_stream_gain(&mut self, mod_gain: f32) {
+        let gain = std::array::from_fn(|source| {
+            self.engine.final_source_volume(source).clamp(0.0, 1.0) * mod_gain
+        });
+        if gain != self.stream_gain_sent
+            && let Ok(mut m) = self.backend.mixer.lock()
+        {
+            m.stream_gain = gain;
+            self.stream_gain_sent = gain;
         }
     }
     /// A mod's muffle (`native_muffle_sounds`): `amount` (0 to 1) of every sound's volume taken
@@ -1863,7 +2088,7 @@ impl Audio {
                 .map(|e| crate::sound_events::normalize(e))
                 .collect()
         } else {
-            Vec::new()
+            Default::default()
         };
         self.engine.set_unmuffled(exempt, &mut self.backend);
         self.muffle = on.then_some(MuffleFade {
@@ -1903,6 +2128,9 @@ impl Audio {
     /// `SoundManager.stop()`: every sound.
     pub fn stop_all(&mut self) {
         self.engine.stop_all(&mut self.backend);
+        if self.backend.owner == 0 {
+            self.backend.streams.stop_all();
+        }
     }
     /// `SoundManager.reload` (resource packs changed): stop every sound, then
     /// read sound events and sound files from the new resource root.
@@ -1969,6 +2197,8 @@ impl Audio {
                 }),
                 entity: None,
                 except_entity: None,
+                seed,
+                particles_before: crate::particles::requested_count(),
             });
         }
         *self.heard.entry(event.to_owned()).or_default() += 1;
@@ -1980,7 +2210,7 @@ impl Audio {
         let instance =
             SoundInstance::at(&event, source, volume, pitch, LegacyRandom::new(seed), at);
         let id = self.engine.add(instance, false);
-        self.engine.play_delayed(id, ticks);
+        self.engine.play_delayed(id, i64::from(ticks));
     }
     /// A client mod's sound (`ClientHost::play_local_sound`), as its `SoundPlay` gives it,
     /// starting `after` sound-engine ticks from now (`SoundEngine.playDelayed`) or at once.
@@ -1995,6 +2225,8 @@ impl Audio {
                 source: sound.source.index(),
                 entity: None,
                 except_entity: None,
+                seed,
+                particles_before: crate::particles::requested_count(),
             });
         }
         *self.heard.entry(sound.identifier.clone()).or_default() += 1;
@@ -2010,7 +2242,7 @@ impl Audio {
         } else {
             self.sync_volumes();
             let id = self.engine.add(instance, false);
-            self.engine.play_delayed(id, after as i32);
+            self.engine.play_delayed(id, i64::from(after));
             id
         }
     }
@@ -2022,7 +2254,7 @@ impl Audio {
     pub fn stop_mod_sound(&mut self, id: InstanceId) {
         self.engine.stop_for_good(id, &mut self.backend);
     }
-    /// A client mod's `SoundRef::fade`; a fade to 0 at once stops it as `stop_mod_sound` does.
+    /// A client mod's `SoundRef::fade`; an immediate nonpositive target stops the sound.
     pub fn fade_mod_sound(&mut self, id: InstanceId, volume: f32, ticks: u32) {
         if ticks == 0 && volume <= 0.0 {
             self.stop_mod_sound(id);
@@ -2048,7 +2280,7 @@ impl Audio {
         *self.heard.entry(instance.identifier.clone()).or_default() += 1;
         self.sync_volumes();
         let id = self.engine.add(instance, false);
-        self.engine.play_delayed(id, ticks);
+        self.engine.play_delayed(id, i64::from(ticks));
     }
     /// `play` for this client only: a sound a packet's handler plays
     /// (`playLocalSound`), which the guests play from that packet themselves.
@@ -2109,6 +2341,7 @@ impl Audio {
         entity: crate::sound_engine::SoundEntity,
         except_entity: Option<u32>,
     ) {
+        let seed = self.random.next_long();
         if let Some(capture) = self.capture.as_mut() {
             capture.push(CapturedSound {
                 event: event.to_owned(),
@@ -2118,9 +2351,10 @@ impl Audio {
                 source,
                 entity: Some(entity.id),
                 except_entity,
+                seed,
+                particles_before: crate::particles::requested_count(),
             });
         }
-        let seed = self.random.next_long();
         self.play_entity_seeded(event, source, volume, pitch, seed, entity);
     }
     /// Removal belongs to the old object even if its numeric id is immediately reused.
@@ -2156,6 +2390,8 @@ impl Audio {
                 }),
                 entity: None,
                 except_entity: None,
+                seed,
+                particles_before: crate::particles::requested_count(),
             });
         }
         if at.is_some() {
@@ -2287,7 +2523,7 @@ impl Audio {
     /// Mixes one buffer of audio into `data` (channels: 1 or 2, rate in Hz).
     pub fn mix_buffer(&mut self, data: &mut [f32], channels: usize, rate: u32) {
         if let Ok(mut m) = self.backend.mixer.lock() {
-            mix(&mut m, data, channels, rate);
+            mix_pieces(&mut m, data, channels, rate);
         }
     }
     #[doc(hidden)]
@@ -2637,6 +2873,83 @@ mod tests {
             world: 0,
             started: None,
             unmuffled: false,
+            fx: fx::VoiceFx::default(),
+        }
+    }
+
+    #[test]
+    fn an_unreadable_pan_does_not_silence_other_voices() {
+        let clear = || stereo_channel(vec![0.25; 6], None, [0.0; 3], false);
+        let mut mixer = Mixer::default();
+        mixer.channels.insert(1, clear());
+        let mut plain = [0.0; 4];
+        mix(&mut mixer, &mut plain, 2, 48_000);
+        assert_eq!(plain, [0.25; 4]);
+
+        mixer.channels.insert(1, clear());
+        mixer
+            .channels
+            .insert(2, channel(vec![0.5; 4], None, [f32::NAN, 0.0, 0.0], false));
+        let mut mixed = [0.0; 4];
+        mix(&mut mixer, &mut mixed, 2, 48_000);
+        assert_eq!(mixed, plain);
+        assert_eq!(mixer.channels[&2].position, 2.0);
+    }
+
+    #[test]
+    fn a_readable_extreme_position_pans_alongside_an_ordinary_voice() {
+        let max = f64::from(f32::MAX);
+        let axis = f32::MAX * 0.75;
+        let poses = [
+            // Nearly level with the pitched listener: 2 MAX left, 0.75 sqrt(2) MAX forward.
+            // This exceeds the stereo decoder's 60-degree full-left angle.
+            (
+                [-max, 0.0, 0.0],
+                45.0,
+                [f32::MAX, -axis, axis],
+                false,
+                [0.75, 0.25],
+            ),
+            // Directly left at 60 degrees elevation: 1 MAX left and sqrt(3) MAX up.
+            // The elevation halves the left-right spread, so the gains are 0.75 and 0.25.
+            (
+                [0.0, (1.0 - 3.0_f64.sqrt()) * max, 0.0],
+                0.0,
+                [f32::MAX, f32::MAX, 0.0],
+                false,
+                [0.625, 0.375],
+            ),
+            // Listener-relative right and ahead (Z negated), ignoring the listener pose:
+            // length sqrt(1.25) MAX > f32::MAX, azimuth atan2(1, 0.5) > 60 degrees -> full right.
+            (
+                [max, 0.0, 0.0],
+                45.0,
+                [f32::MAX, 0.0, -(f32::MAX * 0.5)],
+                true,
+                [0.25, 0.75],
+            ),
+        ];
+        for (listener, listener_pitch, at, relative, [left, right]) in poses {
+            for (linear, expected) in [
+                (None, [left, right, left, right]),
+                (Some(f32::MAX), [0.25; 4]),
+                (Some(f32::INFINITY), [left, right, left, right]),
+            ] {
+                let mut mixer = Mixer {
+                    listener,
+                    listener_orientation: camera_orientation(0.0, listener_pitch, 0.0),
+                    ..Mixer::default()
+                };
+                mixer
+                    .channels
+                    .insert(1, stereo_channel(vec![0.25; 6], None, [0.0; 3], false));
+                let mut voice = channel(vec![0.5; 4], linear, at, false);
+                voice.relative = relative;
+                mixer.channels.insert(2, voice);
+                let mut mixed = [0.0; 4];
+                mix(&mut mixer, &mut mixed, 2, 48_000);
+                assert_eq!(mixed, expected);
+            }
         }
     }
 
@@ -2692,6 +3005,26 @@ mod tests {
         assert!(
             output_disabled(env(&[("SUNRISE_NO_AUDIO", "1"), ("SUNRISE_AUDIO", "1")])).is_some()
         );
+    }
+    #[test]
+    fn capture_ignores_virtual_screen_heuristic_but_honors_no_audio_override() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| std::ffi::OsString::from(*v))
+            }
+        };
+        const VSCREEN: &str = "/run/user/1000/vscreen/main/wayland-1";
+        assert!(!capture_disabled(env(&[])));
+        assert!(!capture_disabled(env(&[("WAYLAND_DISPLAY", "wayland-1")])));
+        assert!(!capture_disabled(env(&[("WAYLAND_DISPLAY", VSCREEN)])));
+        assert!(capture_disabled(env(&[("SUNRISE_NO_AUDIO", "1")])));
+        assert!(capture_disabled(env(&[
+            ("SUNRISE_NO_AUDIO", "1"),
+            ("SUNRISE_AUDIO", "1"),
+        ])));
     }
     #[test]
     #[cfg(feature = "audio")]
@@ -2819,6 +3152,14 @@ mod tests {
         }
     }
 
+    fn camera_orientation(yaw: f32, pitch: f32, roll: f32) -> ListenerOrientation {
+        let rotation = crate::camera::rotation_with_roll(yaw, pitch, roll);
+        ListenerOrientation {
+            forward: rotation.transform([0.0, 0.0, -1.0]),
+            up: rotation.transform([0.0, 1.0, 0.0]),
+        }
+    }
+
     #[test]
     fn stereo_sounds_play_direct_without_panning_or_distance() {
         // OpenAL Soft plays a multi-channel buffer direct (its non-spatialized path), so vanilla's
@@ -2834,7 +3175,7 @@ mod tests {
         ] {
             let mut m = Mixer {
                 listener,
-                listener_yaw: yaw,
+                listener_orientation: camera_orientation(yaw, 0.0, 0.0),
                 ..Mixer::default()
             };
             m.channels
@@ -2849,8 +3190,7 @@ mod tests {
     fn panning_follows_the_camera_rotation() {
         let gains = |yaw: f32, pitch: f32, at: [f32; 3]| {
             let mut m = Mixer {
-                listener_yaw: yaw,
-                listener_pitch: pitch,
+                listener_orientation: camera_orientation(yaw, pitch, 0.0),
                 ..Mixer::default()
             };
             m.channels.insert(1, channel(vec![1.0; 4], None, at, true));
@@ -2869,13 +3209,37 @@ mod tests {
     }
 
     #[test]
+    fn changing_only_camera_roll_changes_the_stereo_image() {
+        let mut audio = Audio::silent(&ResourceSource::indexed(Default::default()));
+        let mut gains = |roll| {
+            let orientation = camera_orientation(180.0, 0.0, roll);
+            audio.set_listener([0.0; 3], orientation.forward, orientation.up);
+            let mut mixer = audio.backend.mixer.lock().unwrap();
+            mixer
+                .channels
+                .insert(1, channel(vec![1.0; 4], None, [0.0, 1.0, 0.0], true));
+            let mut stereo = [0.0; 2];
+            mix(&mut mixer, &mut stereo, 2, 48_000);
+            stereo
+        };
+        let [left, right] = gains(0.0);
+        assert_eq!(left, right, "source directly above an upright camera");
+        let [left, right] = gains(90.0);
+        assert!(
+            left > right,
+            "the same source is to the rolled camera's left"
+        );
+    }
+
+    #[test]
     fn shared_sounds_are_heard_from_the_nearest_camera() {
         // The primary listener is far away; the nearer listener hears full, centred gain.
         let mut m = Mixer {
             listener: [100.0, 0.0, 0.0],
             ..Mixer::default()
         };
-        m.listeners.insert(1, ([0.0, 0.0, 1.0], 0.0, 0.0));
+        m.listeners
+            .insert(1, ([0.0, 0.0, 1.0], ListenerOrientation::default()));
         m.channels
             .insert(1, channel(vec![1.0; 4], Some(16.0), [0.0, 0.0, 2.0], true));
         let mut data = [0.0; 2];
@@ -2899,7 +3263,7 @@ mod tests {
         host.set_world("minecraft:overworld");
         let mut guest = host.share(1);
         guest.set_world("minecraft:overworld");
-        guest.set_listener([1.0, 2.0, 3.0], 0.0, 0.0);
+        guest.set_listener([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
         let id = guest.backend.create(false).unwrap();
         let mixer = host.backend.mixer.lock().unwrap();
         let overworld = mixer
@@ -2917,7 +3281,8 @@ mod tests {
             listener: [100.0, 0.0, 0.0],
             ..Default::default()
         };
-        m.listeners.insert(1, ([0.0, 0.0, 1.0], 0.0, 0.0));
+        m.listeners
+            .insert(1, ([0.0, 0.0, 1.0], ListenerOrientation::default()));
         let nether = m.world_id("nether");
         m.worlds.insert(1, nether);
         m.channels
@@ -3003,6 +3368,7 @@ mod tests {
             decoder: None,
             next: (u64::from(owner)) << 40,
             live: true,
+            streams: Arc::default(),
             owner,
             world: 0,
             shares: shares.clone(),
@@ -3013,7 +3379,7 @@ mod tests {
             .lock()
             .unwrap()
             .listeners
-            .insert(1, ([0.0; 3], 0.0, 0.0));
+            .insert(1, ([0.0; 3], ListenerOrientation::default()));
         let started = |b: &mut MixerBackend, at: [f64; 3]| {
             let id = b.create(false).unwrap();
             b.set_position(id, at);
@@ -3047,7 +3413,7 @@ mod tests {
         ));
         let mut guest = host.share(1);
         guest.set_world("overworld");
-        guest.set_listener([1.0, 0.0, 0.0], 0.0, 0.0);
+        guest.set_listener([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
         let old = guest.backend.create(false).unwrap();
         drop(guest);
         {
@@ -3100,6 +3466,191 @@ mod tests {
             out.extend_from_slice(&buffer);
         }
         out
+    }
+
+    /// A looping tone 2 blocks ahead, heard for `seconds` once `effects` have settled.
+    fn heard_with(hz: f32, effects: mod_api::SoundEffects, seconds: f32) -> Vec<f32> {
+        let mut m = Mixer::default();
+        let mut c = channel(sine(hz), None, [0.0, 0.0, 2.0], true);
+        c.fx.target = effects;
+        m.channels.insert(1, c);
+        listen(&mut m, 0.2);
+        listen(&mut m, seconds)
+    }
+
+    #[test]
+    fn a_sounds_low_pass_dulls_it_and_its_gain_turns_it_down() {
+        let none = mod_api::SoundEffects::NONE;
+        let plain = |hz: f32| rms(&heard_with(hz, none, 0.2));
+        let mut dull = none;
+        dull.lowpass = 500.0;
+        // Three octaves and more above the cutoff, two poles: a 6 kHz whine all but goes.
+        assert!(rms(&heard_with(6000.0, dull, 0.2)) < plain(6000.0) * 0.02);
+        assert!(rms(&heard_with(100.0, dull, 0.2)) > plain(100.0) * 0.95);
+        let mut thin = none;
+        thin.highpass = 2000.0;
+        assert!(rms(&heard_with(100.0, thin, 0.2)) < plain(100.0) * 0.01);
+        assert!(rms(&heard_with(8000.0, thin, 0.2)) > plain(8000.0) * 0.95);
+        let mut quiet = none;
+        quiet.gain = 0.5;
+        quiet.direct = 0.5;
+        let ratio = rms(&heard_with(1000.0, quiet, 0.2)) / plain(1000.0);
+        assert!((ratio - 0.25).abs() < 1e-3, "{ratio}");
+    }
+
+    #[test]
+    fn effects_back_to_none_play_the_sound_exactly_as_without_them() {
+        let mut m = Mixer::default();
+        let mut c = channel(sine(440.0), None, [1.0, 0.0, 2.0], true);
+        let mut effects = mod_api::SoundEffects::NONE;
+        effects.lowpass = 800.0;
+        effects.room = 1.0;
+        c.fx.target = effects;
+        m.channels.insert(1, c);
+        listen(&mut m, 0.1);
+        m.channels.get_mut(&1).unwrap().fx.target = mod_api::SoundEffects::NONE;
+        // One buffer glides back, the next is the plain path again.
+        listen(&mut m, 0.01);
+        assert!(m.channels[&1].fx.bypassed());
+        // Once the room's tail has died away, the output is a plain channel's, sample for sample.
+        listen(&mut m, 2.0);
+        let mut plain = Mixer::default();
+        let mut c = channel(sine(440.0), None, [1.0, 0.0, 2.0], true);
+        c.position = m.channels[&1].position;
+        plain.channels.insert(1, c);
+        assert_eq!(listen(&mut m, 0.1), listen(&mut plain, 0.1));
+    }
+
+    #[test]
+    fn a_reverb_send_rings_on_after_the_sound_ends() {
+        let tail = |send: f32| {
+            let mut m = Mixer::default();
+            // 50 ms of noise-like tone, not looping.
+            let mut c = channel(sine(1234.0)[..2400].to_vec(), None, [0.0, 0.0, 2.0], false);
+            let mut effects = mod_api::SoundEffects::NONE;
+            effects.cavern = send;
+            c.fx.target = effects;
+            m.channels.insert(1, c);
+            listen(&mut m, 0.1);
+            assert_eq!(m.channels[&1].state, State::Stopped);
+            rms(&listen(&mut m, 0.5))
+        };
+        assert_eq!(tail(0.0), 0.0);
+        assert!(tail(1.0) > 1e-3, "{}", tail(1.0));
+    }
+
+    #[test]
+    fn a_huge_buffer_with_reverb_sends_never_grows_the_send_buffer() {
+        // 0.5 s at 192 kHz in one device buffer: 96,000 frames, mixed in pieces.
+        let mut m = Mixer::default();
+        let mut c = channel(sine(440.0), None, [0.0, 0.0, 2.0], true);
+        let mut effects = mod_api::SoundEffects::NONE;
+        effects.hall = 1.0;
+        c.fx.target = effects;
+        m.channels.insert(1, c);
+        let (pointer, capacity) = (m.reverbs.input.as_ptr(), m.reverbs.input.capacity());
+        assert_eq!(capacity, reverb::BUSES * MAX_MIX_FRAMES);
+        let mut data = vec![0.0; 2 * 96_000];
+        mix_pieces(&mut m, &mut data, 2, 192_000);
+        assert!(data.iter().any(|s| *s != 0.0));
+        assert_eq!(
+            (m.reverbs.input.as_ptr(), m.reverbs.input.capacity()),
+            (pointer, capacity)
+        );
+    }
+
+    #[test]
+    fn a_sound_started_with_effects_has_them_from_its_first_frame() {
+        let mut m = Mixer::default();
+        let mut c = channel(sine(440.0), None, [0.0, 0.0, 2.0], true);
+        let mut silent = mod_api::SoundEffects::NONE;
+        silent.gain = 0.0;
+        silent.room = 1.0;
+        c.fx.target = silent;
+        m.channels.insert(1, c);
+        assert!(listen(&mut m, 0.1).iter().all(|s| *s == 0.0));
+        assert!(m.reverbs.buses.iter().all(reverb::Reverb::idle));
+    }
+
+    #[test]
+    fn a_send_to_one_reverb_leaves_the_others_idle() {
+        let mut m = Mixer::default();
+        let mut c = channel(sine(440.0), None, [0.0, 0.0, 2.0], true);
+        let mut effects = mod_api::SoundEffects::NONE;
+        effects.room = 1.0;
+        c.fx.target = effects;
+        m.channels.insert(1, c);
+        listen(&mut m, 0.1);
+        let idle = m.reverbs.buses.each_ref().map(reverb::Reverb::idle);
+        assert_eq!(idle, [false, true, true]);
+    }
+
+    #[test]
+    fn a_huge_buffer_without_effects_mixes_as_one_buffer() {
+        // 20,000 frames in one device buffer, too loud for the limiter only near the end: with no
+        // effects it is one `mix` limited as a whole, bit for bit, not two pieces limited apart.
+        let loud = || {
+            let mut m = Mixer::default();
+            let samples = sine(440.0)
+                .iter()
+                .enumerate()
+                .map(|(i, s)| if i < 18_000 { *s } else { s * 6.0 })
+                .collect();
+            m.channels
+                .insert(1, channel(samples, None, [0.0, 0.0, 2.0], true));
+            m
+        };
+        let mut pieces = vec![0.0; 2 * 20_000];
+        mix_pieces(&mut loud(), &mut pieces, 2, 48_000);
+        let mut whole = vec![0.0; 2 * 20_000];
+        mix(&mut loud(), &mut whole, 2, 48_000);
+        assert!(whole.iter().any(|s| *s != 0.0));
+        assert_eq!(
+            pieces.iter().map(|s| s.to_bits()).collect::<Vec<_>>(),
+            whole.iter().map(|s| s.to_bits()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_mono_output_plays_a_sound_with_effects_unpanned() {
+        let mut m = Mixer::default();
+        let mut c = channel(vec![0.5; 4], None, [0.0, 0.0, -3.0], true);
+        let mut effects = mod_api::SoundEffects::NONE;
+        effects.gain = 0.5;
+        c.fx.target = effects;
+        m.channels.insert(1, c);
+        let mut data = [0.0; 2];
+        mix(&mut m, &mut data, 1, 48_000);
+        assert_eq!(data, [0.25; 2]);
+    }
+
+    #[test]
+    fn changing_a_sounds_effects_glides_without_a_click() {
+        // A steady tone whose gain and cutoff jump between buffers: the output never moves more
+        // in one frame than the tone itself can (its largest step is 0.3 * TAU * 440 / 48000).
+        let mut m = Mixer::default();
+        let c = channel(sine(440.0), None, [0.0, 0.0, 2.0], true);
+        m.channels.insert(1, c);
+        let mut out = listen(&mut m, 0.05);
+        for (gain, lowpass) in [
+            (0.0, 20_000.0),
+            (1.0, 300.0),
+            (0.2, 20_000.0),
+            (1.0, 20_000.0),
+        ] {
+            let mut e = mod_api::SoundEffects::NONE;
+            e.gain = gain;
+            e.lowpass = lowpass;
+            m.channels.get_mut(&1).unwrap().fx.target = e;
+            out.extend(listen(&mut m, 0.05));
+        }
+        let largest = 0.3 * std::f32::consts::TAU * 440.0 / 48_000.0;
+        let jump = out
+            .chunks(2)
+            .zip(out.chunks(2).skip(1))
+            .map(|(a, b)| (b[0] - a[0]).abs().max((b[1] - a[1]).abs()))
+            .fold(0.0f32, f32::max);
+        assert!(jump <= largest * 1.05, "{jump} > {largest}");
     }
 
     #[test]
@@ -3212,7 +3763,12 @@ mod tests {
         // Two sounds already playing, and one exempt sound started under the muffle.
         audio.play("ambient.cave", None, 1.0, 1.0);
         audio.play("hztest:ear.ringing", None, 1.0, 1.0);
-        assert!(audio.muffle(0.8, 1.0, 4, &["hztest:ear.ringing"]));
+        let exempt: Vec<_> = (0..65)
+            .map(|n| format!("hztest:other.{n}"))
+            .chain(std::iter::once("hztest:ear.ringing".to_owned()))
+            .collect();
+        let exempt: Vec<_> = exempt.iter().map(String::as_str).collect();
+        assert!(audio.muffle(0.8, 1.0, 4, &exempt));
         audio.play("hztest:ear.ringing", None, 1.0, 1.0);
         assert_eq!(marks(&audio), [(1, false), (2, true), (3, true)]);
         assert!(close(level(&audio), [0.8, 1.0]));
@@ -3231,66 +3787,6 @@ mod tests {
         // Out of range changes nothing.
         assert!(!audio.muffle(1.5, 0.0, 10, &[]));
         assert_eq!(level(&audio), [0.0; 2]);
-    }
-
-    #[test]
-    fn each_mod_audio_source_plays_its_own_chunks_in_order() {
-        let mut m = Mixer::default();
-        // Two speakers of one mod, each queuing two chunks, interleaved.
-        for (source, level) in [(1, 0.1), (2, 0.4), (1, 0.2), (2, 0.3)] {
-            assert!(m.push_mod_audio("voice", source, &[level; 4], 48_000, None));
-        }
-        let mut data = vec![0.0f32; 8 * 2];
-        mix(&mut m, &mut data, 2, 48_000);
-        // Each speaker's first chunk, then its second: never both of one speaker at once.
-        let left: Vec<f32> = data.chunks(2).map(|f| f[0]).collect();
-        let expected = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
-        assert!(
-            left.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-6),
-            "{left:?}"
-        );
-        assert!(m.mod_audio.is_empty(), "both sources played out");
-        // Order within a source: its second chunk follows its first.
-        assert!(m.push_mod_audio("voice", 1, &[0.25; 2], 48_000, None));
-        assert!(m.push_mod_audio("voice", 1, &[0.5; 2], 48_000, None));
-        let mut data = vec![0.0f32; 4 * 2];
-        mix(&mut m, &mut data, 2, 48_000);
-        let left: Vec<f32> = data.chunks(2).map(|f| f[0]).collect();
-        assert_eq!(left, [0.25, 0.25, 0.5, 0.5]);
-    }
-
-    #[test]
-    fn mod_audio_sources_are_kept_apart_by_mod_and_capped() {
-        let mut m = Mixer::default();
-        assert!(m.push_mod_audio("a", 1, &[0.1; 48_000], 48_000, None));
-        assert!(m.push_mod_audio("b", 1, &[0.1; 48_000], 48_000, None));
-        assert_eq!(
-            m.mod_audio.len(),
-            2,
-            "the same id in two mods is two sources"
-        );
-        // Two seconds wait at most per source; a burst past that is refused, not delayed.
-        assert!(m.push_mod_audio("a", 1, &[0.1; 48_000], 48_000, None));
-        assert!(!m.push_mod_audio("a", 1, &[0.1; 1], 48_000, None));
-        assert!(!m.push_mod_audio("a", 2, &[], 48_000, None));
-        assert!(!m.push_mod_audio("a", 2, &[0.1], 0, None));
-    }
-
-    #[test]
-    fn mod_audio_is_panned_and_faded_by_where_it_was_spoken() {
-        let mut m = Mixer::default();
-        // Facing south (yaw 0), -X is the listener's right.
-        assert!(m.push_mod_audio("voice", 1, &[0.5; 16], 48_000, Some([-4.0, 0.0, 0.0])));
-        let mut data = vec![0.0f32; 16 * 2];
-        mix(&mut m, &mut data, 2, 48_000);
-        let left: f32 = data.chunks(2).map(|f| f[0]).sum();
-        let right: f32 = data.chunks(2).map(|f| f[1]).sum();
-        assert!(right > left, "right {right} should beat left {left}");
-        // Past the range it is silent.
-        assert!(m.push_mod_audio("voice", 1, &[0.5; 16], 48_000, Some([0.0, 0.0, 60.0])));
-        let mut data = vec![0.0f32; 16 * 2];
-        mix(&mut m, &mut data, 2, 48_000);
-        assert!(data.iter().all(|s| *s == 0.0));
     }
 
     #[test]
@@ -3327,8 +3823,14 @@ mod tests {
         let ctx = TickContext::default();
         let click = mod_api::SoundPlay::ui("minecraft:ui.button.click");
         let sound = audio.play_mod_sound(&click, 2);
+        let long = audio.play_mod_sound(&click, u32::MAX);
         assert_eq!(audio.mod_sound_state(sound), Waiting);
         audio.tick(false, &ctx);
+        assert_eq!(
+            audio.mod_sound_state(long),
+            Waiting,
+            "the long delay did not wrap"
+        );
         assert_eq!(audio.mod_sound_state(sound), Waiting, "one tick of two");
         audio.tick(false, &ctx);
         assert_eq!(audio.mod_sound_state(sound), Playing);
@@ -3354,17 +3856,29 @@ mod tests {
         let play = mod_api::SoundPlay::at(
             "minecraft:ui.button.click",
             mod_api::SoundSource::Blocks,
-            [1.0, 2.0, 3.0],
+            [31_000_000.0, 2.0, 3.0],
         )
-        .looping(0);
+        .with_volume(-1.0)
+        .with_pitch(3.0)
+        .looping(-1);
         let sound = audio.play_mod_sound(&play, 0);
-        audio.move_mod_sound(sound, [10.0, 20.0, 30.0]);
-        audio.set_mod_sound_pitch(sound, 1.5);
+        let channel = audio.engine.channel(sound).unwrap();
+        {
+            let mixer = audio.backend.mixer.lock().unwrap();
+            let voice = &mixer.channels[&channel];
+            assert_eq!(voice.at, [31_000_000.0, 2.0, 3.0]);
+            assert_eq!((voice.gain, voice.pitch), (0.0, 2.0));
+            assert!(voice.looping);
+        }
+        audio.move_mod_sound(sound, [10.0, 32_000_000.0, 30.0]);
+        audio.set_mod_sound_pitch(sound, -1.0);
         audio.tick(false, &ctx);
-        let instance = audio.engine.instance(sound).expect("the same instance");
-        assert_eq!(instance.position, [10.0, 20.0, 30.0]);
-        assert_eq!(instance.pitch, 1.5);
-        assert_eq!(audio.mod_sound_state(sound), Playing, "not restarted");
+        assert_eq!(audio.engine.channel(sound), Some(channel), "not restarted");
+        let mixer = audio.backend.mixer.lock().unwrap();
+        let voice = &mixer.channels[&channel];
+        assert_eq!(voice.at, [10.0, 32_000_000.0, 30.0]);
+        assert_eq!(voice.pitch, 0.5);
+        assert_eq!(audio.mod_sound_state(sound), Playing);
     }
 
     #[test]
@@ -3401,7 +3915,7 @@ mod tests {
         let other = audio.play_mod_sound(&mod_api::SoundPlay::ui("minecraft:ui.button.click"), 0);
         audio.fade_mod_sound(other, 0.3, 0);
         assert_eq!(volume_of(&audio, other), Some(0.3));
-        audio.fade_mod_sound(other, 0.0, 0);
+        audio.fade_mod_sound(other, -1.0, 0);
         for _ in 0..2 {
             audio.tick(false, &ctx);
         }
@@ -3433,6 +3947,19 @@ mod tests {
         audio.stop_mod_sound(sound);
         audio.tick(false, &ctx);
         assert_eq!(audio.mod_sound_state(sound), Stopped);
+    }
+
+    #[test]
+    fn a_fade_between_extreme_finite_volumes_stays_finite() {
+        let mut audio = live_audio();
+        let ctx = TickContext::default();
+        let play = mod_api::SoundPlay::ui("minecraft:ui.button.click").with_volume(-f32::MAX);
+        let sound = audio.play_mod_sound(&play, 0);
+        audio.fade_mod_sound(sound, f32::MAX, 2);
+        audio.tick(false, &ctx);
+        assert_eq!(volume_of(&audio, sound), Some(0.0));
+        audio.tick(false, &ctx);
+        assert_eq!(volume_of(&audio, sound), Some(f32::MAX));
     }
 
     /// A mod sound at volume 0 starts silent and keeps its handle, so a fade raises it.

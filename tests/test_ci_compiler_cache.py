@@ -27,13 +27,13 @@ class CompilerCacheTests(unittest.TestCase):
                 path.chmod(0o755)
             env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
                        CARGO_INCREMENTAL="1")
-            # Clippy on a workspace crate is cached like rustc; only mod_points is rewritten (the next test).
+            # Clippy on a workspace crate is cached like rustc.
             for compiler, args in [
                 (str(bin_dir / "clippy-driver"), ["/toolchain/rustc", "-vV"]),
                 (str(bin_dir / "clippy-driver"),
                  ["/toolchain/rustc", "--crate-name", "workspace", "--cfg", 'feature="with spaces"']),
                 (str(bin_dir / "clippy-driver"),
-                 ["/toolchain/rustc", "--crate-name", "mod_points_extra", "-C", "incremental=state"]),
+                 ["/toolchain/rustc", "--crate-name", "workspace", "-C", "incremental=state"]),
                 ("/toolchain/rustc", ["--crate-name", "dependency", "--emit=metadata"]),
                 ("/toolchain/rustc", ["-vV"]),
             ]:
@@ -44,32 +44,6 @@ class CompilerCacheTests(unittest.TestCase):
                     argv, incremental = json.loads(result.stdout)
                     self.assertEqual(argv, [str(bin_dir / "sccache"), compiler, *args])
                     self.assertIsNone(incremental)
-
-    def test_generated_points_use_cacheable_rustc_and_still_deny_warnings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            cache = Path(directory) / "sccache"
-            cache.write_text(f"#!{sys.executable}\n"
-                             "import json, os, sys\n"
-                             "print(json.dumps([sys.argv[1:], os.getenv('CARGO_INCREMENTAL')]))\n"
-                             "sys.exit(7)\n")
-            cache.chmod(0o755)
-            env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
-                       CARGO_INCREMENTAL="1")
-            for incremental in [["-C", "incremental=state with spaces"],
-                                ["-Cincremental=state with spaces"], []]:
-                with self.subTest(incremental=incremental):
-                    result = subprocess.run(
-                        [WRAPPER, "/toolchain/clippy-driver", "/toolchain/rustc",
-                         "--crate-name", "mod_points", *incremental,
-                         "-C", "debuginfo=1", "--cfg", 'feature="wasm-host"'],
-                        env=env, text=True, capture_output=True, timeout=5,
-                    )
-                    self.assertEqual(result.returncode, 7, result.stderr)
-                    argv, incremental_env = json.loads(result.stdout)
-                    self.assertEqual(argv, ["/toolchain/rustc", "--crate-name", "mod_points",
-                                            "-C", "debuginfo=1", "--cfg", 'feature="wasm-host"',
-                                            "-D", "warnings"])
-                    self.assertIsNone(incremental_env)
 
     def test_cache_errors_retry_then_fall_back_but_compiler_errors_do_not(self):
         with tempfile.TemporaryDirectory() as directory:

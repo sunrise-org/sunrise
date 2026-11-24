@@ -39,7 +39,7 @@ fn with_game(test: impl FnOnce(&mut Game<'_>)) {
     )
     .unwrap();
     game.native_lifecycle
-        .begin_open(mod_api::Authority::IntegratedServer);
+        .begin_open(Some(mod_api::Authority::IntegratedServer));
     game.build_registries();
     game.set_allow_commands(true);
 
@@ -204,6 +204,7 @@ fn default_drop_rng_continues_identically_with_table_sequence_or_level_fallback(
                     &sunrise_world::loot::PackOverlay {
                         files: &files,
                         conditions: &sunrise_world::conditions::LoadConditions::default(),
+                        ..sunrise_world::loot::PackOverlay::default()
                     },
                     game.res.item_defaults(),
                 )

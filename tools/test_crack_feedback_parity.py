@@ -48,9 +48,9 @@ def main():
                        SUNRISE_CRACK_TRACE=build / 'rust.json')
     with (build / 'rust.log').open('w') as log:
         subprocess.run(
-            ['cargo', 'test', '-p', 'sunrise-client', '--lib',
+            [lab.parity_fixtures(),
              'crack_packets_follow_start_clock_and_strict_observer_radius',
-             '--', '--ignored', '--nocapture'],
+             '--ignored', '--nocapture'],
             cwd=lab.ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
             check=True, timeout=1800)
     java = json.loads((build / 'java.json').read_text())

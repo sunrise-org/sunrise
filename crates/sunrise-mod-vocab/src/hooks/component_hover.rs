@@ -11,6 +11,8 @@ pub trait Hooks {
     /// does), and an entity hover shows its name, type and UUID while advanced tooltips are on.
     /// Asked each frame a hovered component shows, only while a mod listens. Client-side.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "client",
         contract = "cancel",
         out = "cancel",

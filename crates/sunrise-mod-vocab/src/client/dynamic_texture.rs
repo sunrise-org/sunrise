@@ -39,7 +39,8 @@ pub struct DynamicTextureBudget {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum DynamicTextureError {
-    /// The id is not in the calling mod's namespace (`mymod:dynamic/panel` for the mod `mymod`),
+    /// The id is not in a namespace owned by the calling mod (`mymod:dynamic/panel` for the mod
+    /// `mymod`, its extra manifest namespaces, or a content package it serves via `served_by`),
     /// or no mod is calling: a mod creates, updates and frees only its own images.
     NotOwned,
     /// A side is 0, or the pixels are not `width * height * 4` bytes.

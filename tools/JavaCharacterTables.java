@@ -1,11 +1,14 @@
 // Generates and dumps the tables behind crates/sunrise-core/src/java_character.rs from the public
-// java.lang.Character API (isLetterOrDigit(char), digit(char, int)); no JDK implementation source is read.
+// java.lang.Character API (isLetterOrDigit(char), digit(char, int), isWhitespace(char), isSpaceChar(char)); no JDK
+// implementation source is read.
 //
 //   java tools/JavaCharacterTables.java tables   prints LETTER_OR_DIGIT and DIGITS as Rust source
 //   java tools/JavaCharacterTables.java dump     prints "unit letterOrDigit [digit for each of 39 radices]" for
 //                                                every unit that is a letter or digit (the digits only when
 //                                                some radix accepts it), for the daily test
 //                                                java_character::tests::matches_java_character
+//   java tools/JavaCharacterTables.java spaces   prints "unit isWhitespace isSpaceChar" for every unit that is
+//                                                either, for the same test
 //
 // Tables in the repository were produced by:
 //   openjdk version "25.0.5" 2026-10-20 LTS
@@ -28,8 +31,9 @@ public final class JavaCharacterTables {
         switch (args.length == 1 ? args[0] : "") {
             case "tables" -> tables();
             case "dump" -> dump();
+            case "spaces" -> spaces();
             default -> {
-                System.err.println("usage: JavaCharacterTables tables|dump");
+                System.err.println("usage: JavaCharacterTables tables|dump|spaces");
                 System.exit(2);
             }
         }
@@ -81,6 +85,17 @@ public final class JavaCharacterTables {
             }
             if (letterOrDigit || any) {
                 System.out.println(unit + " " + letterOrDigit + (any ? digits : ""));
+            }
+        }
+    }
+
+    static void spaces() {
+        for (int unit = 0; unit <= 0xFFFF; unit++) {
+            char c = (char) unit;
+            boolean whitespace = Character.isWhitespace(c);
+            boolean spaceChar = Character.isSpaceChar(c);
+            if (whitespace || spaceChar) {
+                System.out.println(unit + " " + whitespace + " " + spaceChar);
             }
         }
     }

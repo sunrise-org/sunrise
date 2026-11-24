@@ -126,7 +126,7 @@ fn save_requested_during_pickup_keeps_lifted_items_on_disk() {
             assert_eq!(game.dropped[0].stack.count, 7);
             game.save.flush().unwrap();
             assert!(
-                game.save.load_entities(0, 0).is_empty(),
+                game.save.load_entities(0, 0).unwrap().is_empty(),
                 "refused save wrote rows"
             );
             game.save_game().unwrap();
@@ -136,7 +136,7 @@ fn save_requested_during_pickup_keeps_lifted_items_on_disk() {
             LevelShape::OVERWORLD,
             Some(Default::default()),
         );
-        let tags = disk.load_entities(0, 0);
+        let tags = disk.load_entities(0, 0).unwrap();
         std::fs::write(root.join("entity-evidence.txt"), format!("{tags:#?}")).unwrap();
         let kinds: Vec<_> = tags
             .iter()

@@ -21,11 +21,13 @@ pub trait Hooks {
     /// counts as 0. Beyond NeoForge: a mod there reads the container screen's `leftPos` but has no
     /// event to move it, so it draws in the space that's left.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "right",
         neoforge = "none (a NeoForge mod reads AbstractContainerScreen.leftPos and cannot move it)",
         cancellable = false
     )]
-    fn screen_room();
+    fn screen_room(screen: &ScreenView<'_>, right: &mut f32);
 }

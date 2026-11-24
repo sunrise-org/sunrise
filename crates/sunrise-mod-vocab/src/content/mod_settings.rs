@@ -1,6 +1,8 @@
-//! Settings a mod declares for its page in Options > Mods (NeoForge's `ModConfigSpec`): the
-//! game draws them with its own widgets and keeps the player's values; the mod reads them typed
-//! (`ConfigClientHost::setting_bool` and its siblings), never as text it has to parse.
+//! Settings a mod declares (NeoForge's `ModConfigSpec`). The game keeps their values and
+//! presents them in Options > Mods on the client. The mod reads and writes
+//! them typed through the owner-bound [`SettingKey`] returned by
+//! [`SettingsRegistrar::register_setting`](crate::SettingsRegistrar::register_setting), never by
+//! naming another mod's id or parsing raw files.
 
 /// Longest setting key, in bytes.
 pub const SETTING_KEY_MAX: usize = 64;
@@ -54,6 +56,79 @@ pub enum SettingValue {
     /// A colour, `0xRRGGBB`.
     Color(u32),
 }
+
+impl SettingValue {
+    /// Exact equality matching Java's boxed `Objects.equals` used by vanilla
+    /// `OptionInstance.set`: two `Range` values are equal only when their bit
+    /// patterns match, so `-0.0` and `+0.0` are distinct.
+    pub fn exact_eq(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Toggle(a), Self::Toggle(b)) => a == b,
+            (Self::Choice(a), Self::Choice(b)) => a == b,
+            (Self::Range(a), Self::Range(b)) => a.to_bits() == b.to_bits(),
+            (Self::Color(a), Self::Color(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// An owner-bound handle to a setting returned by
+/// [`SettingsRegistrar::register_setting`](crate::SettingsRegistrar::register_setting).
+///
+/// The handle identifies the registered setting directly without reading thread-local caller
+/// state; pass it to `setting` or `set_setting` on [`ClientHost`](crate::ClientHost) or
+/// [`ServerHost`](crate::ServerHost), or to a scoped context that exposes settings reads.
+// no wire: process-local handle minted at registration; not serialized across wire boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// exhaustive: its fields are private, so only the registration table creates a key
+pub struct SettingKey {
+    pub(crate) owner: &'static str,
+    pub(crate) slot: usize,
+}
+
+impl SettingKey {
+    /// The `[mod] id` of the mod that registered this setting.
+    pub fn owner(self) -> &'static str {
+        self.owner
+    }
+
+    /// The setting's registered key name within its owning mod, when installed.
+    pub fn key(self) -> Option<&'static str> {
+        crate::parts::setting_entry(self).map(|(_, spec)| spec.key.as_str())
+    }
+}
+
+/// Why access to an owner-bound setting was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum SettingAccessError {
+    /// Settings are unavailable in this context.
+    Unavailable,
+    /// The handle does not refer to a registered setting in this installation.
+    UnknownKey,
+    /// The setting's registered kind does not match the requested getter or written value.
+    WrongKind,
+    /// The value is outside the setting's registered bounds (choice out of range, non-finite or
+    /// out-of-range slider value, or colour with alpha bits).
+    InvalidValue,
+    /// Persisting the updated setting file failed; the previous live value was kept.
+    IoFailed,
+}
+
+impl std::fmt::Display for SettingAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => f.write_str("settings are unavailable"),
+            Self::UnknownKey => f.write_str("setting key is not registered"),
+            Self::WrongKind => f.write_str("setting has a different value kind"),
+            Self::InvalidValue => f.write_str("setting value is outside its registered bounds"),
+            Self::IoFailed => f.write_str("could not persist the setting file"),
+        }
+    }
+}
+
+impl std::error::Error for SettingAccessError {}
 
 /// A setting a mod registers with `Registrar::register_setting`: its key (unique within the
 /// mod), the translation keys of its label and tooltip, and what it is.
@@ -382,5 +457,9 @@ mod tests {
         assert_eq!(toggle.store(SettingValue::Choice(0)), None);
         assert_eq!(range.store(SettingValue::Range(4.5)), None);
         assert_eq!(color.store(SettingValue::Color(0x0100_0000)), None);
+        assert!(!SettingValue::Range(0.0).exact_eq(SettingValue::Range(-0.0)));
+        assert!(SettingValue::Range(-0.0).exact_eq(SettingValue::Range(-0.0)));
+        assert!(SettingValue::Toggle(true).exact_eq(SettingValue::Toggle(true)));
+        assert!(!SettingValue::Toggle(true).exact_eq(SettingValue::Choice(1)));
     }
 }

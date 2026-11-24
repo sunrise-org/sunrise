@@ -37,6 +37,10 @@ pub(crate) fn capture(launch: &LaunchArguments) {
         .expect("process runtime environment captured once");
 }
 
+pub(crate) fn try_get() -> Option<&'static RuntimeEnvironment> {
+    ENVIRONMENT.get()
+}
+
 pub(crate) fn get() -> &'static RuntimeEnvironment {
     ENVIRONMENT
         .get()

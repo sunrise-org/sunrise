@@ -3,10 +3,11 @@
 //! `minecraft:recipe_display` and `minecraft:slot_display` types in id order.
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader},
     item::{Stack, Template},
 };
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 
 mod update;
 pub use update::UpdateRecipes;

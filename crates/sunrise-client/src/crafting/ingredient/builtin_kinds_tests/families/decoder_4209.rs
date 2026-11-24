@@ -1,7 +1,7 @@
 use super::*;
 #[test]
 fn use_effects_component_recipe_decodes_defaults_bounds_and_matches() {
-    use crate::crafting::{Recipes, ResolvedRecipe, ResolvedSources};
+    use crate::crafting::{Recipes, ResolvedSources};
     use std::sync::Arc;
     use sunrise_world::loot::PackOverlay;
 
@@ -45,22 +45,23 @@ fn use_effects_component_recipe_decodes_defaults_bounds_and_matches() {
         r#"{"speed_multiplier":1.001}"#,
     ];
     let recipe = |name: &str, patch: &str, strict: bool| {
-        let file = Arc::new(
+        (
+            format!("fixture:{name}"),
             serde_json::from_str::<serde_json::Value>(&format!(
                 r#"{{"type":"minecraft:crafting_shaped","pattern":["A"],"key":{{"A":{{"type":"neoforge:components","items":"minecraft:stick","components":{patch},"strict":{strict}}}}},"result":{{"id":"minecraft:diamond"}}}}"#,
             ))
             .unwrap(),
-        );
-        ResolvedRecipe {
-            name: format!("fixture:{name}"),
-            resolved: file.clone(),
-            file,
-        }
+        )
     };
-    let mut sources = ResolvedSources::default();
-    for (name, patch, strict) in valid {
-        sources.recipes.push(recipe(name, patch, strict));
-    }
+    let sources = ResolvedSources::resolve(
+        valid
+            .iter()
+            .map(|(name, patch, strict)| recipe(name, patch, *strict))
+            .collect(),
+        &items,
+        &load(),
+    )
+    .unwrap();
     for payload in &invalid {
         let patch = format!(r#"{{"minecraft:use_effects":{payload}}}"#);
         super::decoder_contracts::assert_malformed_decoder_refuses_load(

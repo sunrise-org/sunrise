@@ -1,12 +1,17 @@
-//! `player_ender_chest` and `player_set_ender_chest_slot` against real LAN guests, through the
-//! public player handle.
+//! Reading and writing ender chest slots against real LAN guests through the public player handle.
 
 use super::native_guest_turn_tests::with_guests;
-use mod_api::{Host, ItemStack, PlayerDataRefusal, StackWriteError, prelude::*};
+use mod_api::{Host, InventoryView, ItemStack, PlayerDataRefusal, StackWriteError, prelude::*};
 
 fn api_item(game: &super::Game<'_>, snbt: &str) -> Option<ItemStack> {
     let host: &dyn Host = game;
     host.item_from_snbt(snbt)
+}
+
+fn contents(view: InventoryView<'_>) -> Vec<(u32, ItemStack)> {
+    view.iter()
+        .map(|(slot, stack)| (slot, stack.project().unwrap()))
+        .collect()
 }
 
 const BOOK: &str = r#"{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":{title:{raw:"Log"},author:"guest13",pages:[{raw:"one"}]}}}"#;
@@ -21,26 +26,46 @@ fn ender_chest_slots_are_read_and_written() {
         let (a, b) = (players[0], players[1]);
         let book = api_item(game, BOOK).unwrap();
         let pearls = api_item(game, r#"{id:"minecraft:ender_pearl",count:16}"#).unwrap();
-        assert_eq!(b.ender_chest(game), Some(Vec::new()));
+        assert_eq!(
+            b.with_ender_chest(game, |view| view.iter().next().is_none()),
+            Some(true)
+        );
         assert_eq!(b.set_ender_chest_slot(game, 26, Some(book.clone())), Ok(()));
         game.as_guest(12, |game| {
             assert_eq!(
                 a.set_ender_chest_slot(game, 0, Some(pearls.clone())),
                 Ok(())
             );
-            assert_eq!(a.ender_chest(game), Some(vec![(0, pearls.clone())]));
-            assert_eq!(b.ender_chest(game), Some(vec![(26, book.clone())]));
+            assert_eq!(
+                a.with_ender_chest(game, contents),
+                Some(vec![(0, pearls.clone())])
+            );
+            assert_eq!(
+                b.with_ender_chest(game, contents),
+                Some(vec![(26, book.clone())])
+            );
+
+            game.open_ender_chest((1, 64, 1));
+            game.ender_items[0] = None; // Only the open copy is authoritative now.
+            assert_eq!(
+                a.with_ender_chest(game, contents),
+                Some(vec![(0, pearls.clone())])
+            );
+            game.close_ender_chest();
         })
         .unwrap();
-        assert_eq!(b.ender_chest(game), Some(vec![(26, book.clone())]));
-        assert_eq!(a.ender_chest(game), Some(vec![(0, pearls)]));
+        assert_eq!(b.with_ender_chest(game, contents), Some(vec![(26, book)]));
+        assert_eq!(a.with_ender_chest(game, contents), Some(vec![(0, pearls)]));
         assert_eq!(b.set_ender_chest_slot(game, 26, None), Ok(()));
-        assert_eq!(b.ender_chest(game), Some(Vec::new()));
+        assert_eq!(
+            b.with_ender_chest(game, |view| view.iter().next().is_none()),
+            Some(true)
+        );
     });
 }
 
 /// Each refusal has its own name and writes nothing: a slot past 26 (never a panic), a stack
-/// the item does not allow, a dead player, and a handle whose player has left.
+/// the item does not allow, and a handle whose player has left.
 #[test]
 #[ignore = "daily"]
 fn each_ender_chest_refusal_has_its_own_name_and_writes_nothing() {
@@ -66,24 +91,24 @@ fn each_ender_chest_refusal_has_its_own_name_and_writes_nothing() {
                 maximum: 1
             }))
         );
-        assert_eq!(b.ender_chest(game), Some(Vec::new()));
-        game.lan
-            .as_mut()
-            .unwrap()
-            .hub
-            .guests
-            .update_connection(13, |g| g.dead = true);
         assert_eq!(
-            b.set_ender_chest_slot(game, 0, Some(book.clone())),
-            Err(PlayerDataRefusal::Dead)
+            b.with_ender_chest(game, |view| view.iter().next().is_none()),
+            Some(true)
         );
-        assert_eq!(b.ender_chest(game), Some(Vec::new()));
         game.lan
             .as_mut()
             .unwrap()
             .hub
             .guests
-            .update_connection(13, |g| g.dead = false);
+            .update_connection(13, |g| {
+                g.dead = true;
+                g.health = 0.0;
+            });
+        assert_eq!(b.set_ender_chest_slot(game, 0, Some(book.clone())), Ok(()));
+        assert_eq!(
+            b.with_ender_chest(game, |view| view.get(0).map(|s| s.count())),
+            Some(Some(1))
+        );
         let index = game
             .lan
             .as_ref()
@@ -97,6 +122,7 @@ fn each_ender_chest_refusal_has_its_own_name_and_writes_nothing() {
             b.set_ender_chest_slot(game, 0, Some(book)),
             Err(PlayerDataRefusal::Stale)
         );
+        assert_eq!(b.with_ender_chest(game, |_| ()), None);
     });
 }
 
@@ -128,6 +154,13 @@ fn a_written_slot_is_what_the_open_ender_chest_menu_shows_and_clicks() {
         let guest = hub.guest(13).unwrap();
         let shown = Slots::Ender.get(&game.world, guest, 3).unwrap();
         assert_eq!(shown.item.as_ref(), "minecraft:written_book");
+        assert_eq!(
+            b.with_ender_chest(game, |view| {
+                let stack = view.get(3).unwrap();
+                stack.item()
+            }),
+            mod_api::__private::item_key("minecraft:written_book")
+        );
         game.lan_guest_packet(
             13,
             Serverbound::ContainerClick(ContainerClick {

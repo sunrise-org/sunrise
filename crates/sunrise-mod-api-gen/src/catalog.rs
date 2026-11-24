@@ -44,12 +44,14 @@ pub enum HostAccess {
     /// A level host, for a receiver that is a level but not `GameLevel`: read-only on `&self`,
     /// with the random host on `&mut self`.
     Level,
+    /// A mutable random level on the server and a read-only level on the client.
+    LevelRandomSide,
     /// A hit's host: a level host that can also play level sounds and draw from the
     /// random of the entities the hit lends (`HitHost`). Server hooks only.
     Hit,
 }
 
-/// A hook fired in a load phase, which takes that phase's context instead of a host.
+/// A hook with a restricted phase context instead of a game or level host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseContext {
@@ -61,7 +63,60 @@ pub enum PhaseContext {
     Worldgen,
     /// A chunk disk job, with no live world authority.
     ChunkDisk,
+    /// A configuration registration or loading hook.
+    Config,
+    /// A server or shared data-reload hook.
+    Reload,
+    /// A client resource-reload hook.
+    ClientReload,
+    /// The client reload-listener registration hook (`add_client_reload_listeners`).
+    ClientReloadListener,
+    /// The client setup hook after initial resources load.
+    ClientSetup,
+    /// Initial client configuration, with only the join target available.
+    ClientIdentity,
+    /// Repository discovery before any world is opened.
+    PackDiscovery,
+    /// An item ability check from gameplay (`Host` + tags) or a loot predicate (tags + `LootParamsView`).
+    ItemAbility,
 }
+
+/// How a game hook borrows its receiver. Free dispatchers have no game receiver.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Receiver {
+    Read,
+    #[default]
+    Write,
+    Associated,
+}
+
+impl Receiver {
+    pub(super) fn mutability(self) -> Option<bool> {
+        match self {
+            Self::Read => Some(false),
+            Self::Write => Some(true),
+            Self::Associated => None,
+        }
+    }
+}
+
+/// How a game target calls generated dispatch. This never changes the listener event.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchStyle {
+    /// The target takes the generated engine carrier.
+    #[default]
+    Carrier,
+    /// The target already owns the converted values and takes the vocabulary carrier.
+    ApiCarrier,
+    /// The target takes individual engine parameters.
+    Flat,
+    /// The target owns the whole crossing and calls the vocabulary dispatcher itself.
+    Direct,
+}
+
+pub(super) const EFFECT_TICK_TARGET: &str = "mod_api::parts::effects::dispatch_mob_effect_tick";
 
 /// The kind of thing whose Parts a scoped hook calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -99,6 +154,19 @@ pub enum StackCount {
     Trim,
 }
 
+/// How a collector exposes its append-only output.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationAppend {
+    /// Generate an event method that stages one entry.
+    Register,
+    /// The vocabulary crate supplies the event methods in an inherent impl.
+    Custom,
+    /// The vocabulary crate supplies attributed append-only methods in an inherent impl;
+    /// dispatch sets `pub(super) mod_id: &'static str` on the event before each listener.
+    Attributed,
+}
+
 /// One hook point: a moment the game tells mods about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hook {
@@ -119,36 +187,45 @@ pub struct Hook {
     /// A listener about one mod's own things: the event field naming that mod, whose
     /// subscription alone is told.
     pub owner: Option<String>,
-    /// Validate a collector's edits at the per-listener ownership boundary.
-    pub collect_validator: Option<String>,
+    /// Hide the output vector of a collector behind append-only methods.
+    pub registration_append: Option<RegistrationAppend>,
+    /// Mutable registrar field, or `host` for a direct listener whose owner journals its writes.
+    pub staged_surface: Option<String>,
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global cancel hook whose dispatch runs every listener inside `catch_unwind`: one that
-    /// unwinds is switched off for this hook for the session, and the outputs it had written roll
-    /// back to what the game requested (#2414 ruling).
-    pub isolate: bool,
+    /// A global cancel hook's per-listener check of the outputs it wrote: a path to
+    /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
+    /// vector/scalar outputs in declaration order and naming the first refused one. A refused
+    /// result, including its cancellation, rolls back; later listeners still run.
+    pub output_validator: Option<String>,
     pub scope: Option<PartScope>,
+    /// Additional Part trait this global hook also dispatches to (same `HookId` and event).
+    pub part: Option<PartKind>,
     pub host: Option<HostAccess>,
     pub context: Option<PhaseContext>,
     pub counterparts: Counterparts,
-    /// The contract version an injection's `hook_version` names.
+    /// The hook's contract version.
     pub version: u64,
     /// Whether the NeoForge counterpart event is cancellable, written by the
     /// stamper from the counterpart's javadoc; documentation metadata, not the
     /// contract (a hook that listens can still name a cancellable event).
     pub cancellable: Option<bool>,
-    /// The parameters of a hook whose game target takes them as one generated `<Name>Call`
-    /// (name and type, in order, without a `Ticks` parameter); empty for a flat target.
+    /// Dispatch parameters (name and vocabulary type in order), apart from the Host/phase context.
     pub call: Vec<(String, String)>,
-    /// Parameter retained in a decision-scoped guest slot instead of copied per ask.
-    pub prepared: Option<String>,
+    pub receiver: Receiver,
+    pub dispatch: DispatchStyle,
+    /// The engine passes its tick queue to the level host, not to the listener.
+    pub engine_ticks: bool,
+    /// Whether dispatch signals an inactive content owner to the engine.
+    pub engine_inert: bool,
     /// Admission policy for the mutable stack-list output; placement owns trimming.
     pub stack_count: Option<StackCount>,
-    /// Keep construction and exhaustive patterns of the event inside the vocabulary crate.
-    pub non_exhaustive: bool,
     /// Rebuild a listener event from its original inputs for every subscriber.
     pub event_per_listener: bool,
+    /// A setter callback skips its own reentry. A fault quarantines that subscriber without
+    /// aborting an enclosing action that called the setter.
+    pub independent_listener: bool,
 }
 
 /// A drawing surface of the game's that drawing hooks get as a trait object (the catalog's
@@ -179,8 +256,6 @@ pub enum CatalogError {
     OwnerNeedsGlobalListener(String),
     ScopeNeedsKey(String),
     NoHooks,
-    Retired(String),
-    InvalidModule(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -188,12 +263,6 @@ impl fmt::Display for CatalogError {
         match self {
             Self::Read { path, error } => write!(f, "{path}: {error}"),
             Self::Declaration { path, error } => write!(f, "{path}: {error}"),
-            Self::Retired(path) => write!(
-                f,
-                "{path}: hooks are declared in Rust now, in {DECLARATIONS}/<area>.rs; move the entry there as a \
-                 `#[hook(...)]` declaration (the old keys are the attribute's arguments) and delete this file"
-            ),
-            Self::InvalidModule(name) => write!(f, "invalid hook declaration filename {name}"),
             Self::NamelessHook => f.write_str("hook name missing"),
             Self::DuplicateHook(name) => write!(f, "duplicate hook {name}"),
             Self::InvalidHook { hook, error } => write!(f, "hook {hook}: {error}"),
@@ -271,13 +340,17 @@ struct HookEntry {
     context: Option<PhaseContext>,
     #[serde(default)]
     call: Vec<(String, String)>,
-    /// Only `prepared = "stack"` on `can_equip` is supported; reject at parse time.
-    prepared: Option<String>,
+    #[serde(default)]
+    receiver: Receiver,
+    #[serde(default)]
+    dispatch: DispatchStyle,
+    #[serde(default)]
+    engine: Vec<(String, String)>,
     stack_count: Option<StackCount>,
     #[serde(default)]
-    non_exhaustive: bool,
-    #[serde(default)]
     event_per_listener: bool,
+    #[serde(default)]
+    independent_listener: bool,
     inert: Option<String>,
     neoforge: Option<serde_json::Value>,
     fabric: Option<serde_json::Value>,
@@ -291,10 +364,12 @@ struct ModApiEntry {
     out: Option<String>,
     scope: Option<PartKind>,
     key: Option<String>,
+    part: Option<PartKind>,
     answered_by: Option<AnsweredBy>,
     owner: Option<String>,
-    collect_validator: Option<String>,
-    isolate: Option<bool>,
+    registration_append: Option<RegistrationAppend>,
+    staged_surface: Option<String>,
+    output_validator: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -315,16 +390,6 @@ impl Hook {
                 hook: name.clone(),
                 error: error.to_string(),
             })?;
-        // This transport is implemented only for can_equip's stack. Validate here,
-        // before either host or guest generation can accept a different hook.
-        if let Some(parameter) = &entry.prepared
-            && (name != "can_equip" || parameter != "stack")
-        {
-            return Err(CatalogError::InvalidHook {
-                hook: name,
-                error: "prepared is supported only as prepared = \"stack\" on can_equip".into(),
-            });
-        }
         let doc = entry
             .doc
             .filter(|doc| !doc.trim().is_empty())
@@ -335,6 +400,41 @@ impl Hook {
             (Some(kind), Some(key)) => Some(PartScope { kind, key }),
             _ => return Err(CatalogError::ScopeNeedsKey(name)),
         };
+        if let Some(part_kind) = api.part {
+            if part_kind != PartKind::Item {
+                let kind_name = match part_kind {
+                    PartKind::Block => "block",
+                    PartKind::BlockEntity => "block_entity",
+                    PartKind::Item => "item",
+                    PartKind::Menu => "menu",
+                    PartKind::Effect => "effect",
+                    PartKind::Fluid => "fluid",
+                    PartKind::Entity => "entity",
+                };
+                return Err(CatalogError::InvalidHook {
+                    hook: name,
+                    error: format!(
+                        "part = \"{kind_name}\" is not supported; only part = \"item\" is implemented"
+                    ),
+                });
+            }
+            if scope.is_some()
+                || api.contract != Contract::Cancel
+                || api.answered_by.is_some()
+                || api.owner.is_some()
+                || api.output_validator.is_some()
+                || entry.context.is_some()
+                || entry.event_per_listener
+                || entry.independent_listener
+            {
+                return Err(CatalogError::InvalidHook {
+                    hook: name,
+                    error:
+                        "part requires a plain global cancel hook without scope or phase context"
+                            .into(),
+                });
+            }
+        }
         if matches!(
             (api.contract, &api.out),
             (Contract::Listen, Some(_))
@@ -367,14 +467,65 @@ impl Hook {
                     error: "stack_count requires a mutable Vec<ItemStack> collect output".into(),
                 });
             }
-            if !entry.call.is_empty() {
-                let output = entry
-                    .call
-                    .iter()
-                    .find(|(parameter, _)| Some(parameter) == api.out.as_ref())
-                    .and_then(|(_, ty)| syn::parse_str::<syn::Type>(ty).ok());
-                validate_stack_count_output(&name, output.as_ref())?;
+            let output = entry
+                .call
+                .iter()
+                .find(|(parameter, _)| Some(parameter) == api.out.as_ref())
+                .and_then(|(_, ty)| syn::parse_str::<syn::Type>(ty).ok());
+            validate_stack_count_output(&name, output.as_ref())?;
+        }
+        let effect = scope
+            .as_ref()
+            .is_some_and(|scope| scope.kind == PartKind::Effect);
+        let is_effect_tick = effect
+            && matches!(
+                name.as_str(),
+                "apply_effect_tick" | "should_apply_effect_tick_this_tick"
+            );
+        if is_effect_tick != (entry.target == EFFECT_TICK_TARGET) {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error: format!("effect tick hooks must target {EFFECT_TICK_TARGET}"),
+            });
+        }
+        let mut engine_ticks = false;
+        let mut engine_inert = false;
+        let mut effect_factory = false;
+        let mut effect_count = false;
+        for (param, ty) in &entry.engine {
+            match (param.as_str(), ty.as_str()) {
+                ("ticks", "& mut Ticks") if !is_effect_tick => engine_ticks = true,
+                ("inert", "& mut bool") if !is_effect_tick => engine_inert = true,
+                ("tick_count", "i32") if name == "apply_effect_tick" && is_effect_tick => {
+                    effect_count = true
+                }
+                ("make_call", "impl FnOnce (EffectKey , i32) -> ApplyEffectTickCall < '_ >")
+                    if is_effect_tick =>
+                {
+                    effect_factory = true
+                }
+                _ => {
+                    return Err(CatalogError::InvalidHook {
+                        hook: name,
+                        error: format!("unsupported #[engine] parameter: {param}: {ty}"),
+                    });
+                }
             }
+        }
+        if engine_inert != (entry.inert.as_deref() == Some("signal")) {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error: "inert = \"signal\" requires #[engine] inert: &mut bool and vice versa"
+                    .into(),
+            });
+        }
+        if is_effect_tick && (!effect_factory || effect_count != (name == "apply_effect_tick")) {
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error:
+                    "effect dispatch requires the engine-only factory and an action-only tick count"
+                        .into(),
+            });
         }
         let answered_by_mod = api.answered_by.is_some();
         if answered_by_mod
@@ -385,23 +536,42 @@ impl Hook {
         if api.owner.is_some() && (api.contract != Contract::Listen || scope.is_some()) {
             return Err(CatalogError::OwnerNeedsGlobalListener(name));
         }
-        // A validator checks the entries a mod edits in place; an answered collector's mods
-        // only push into their own batch.
-        if let Some(validator) = &api.collect_validator
-            && (api.contract != Contract::Collect
-                || scope.is_some()
-                || answered_by_mod
-                || syn::parse_str::<syn::Path>(validator).is_err())
+        if let Some(field) = &api.staged_surface
+            && (api.contract != Contract::Listen
+                || api.owner.as_ref() == Some(field)
+                || scope.as_ref().is_some_and(|scope| scope.key == *field))
         {
-            return Err(CatalogError::InvalidContract(name));
+            return Err(CatalogError::InvalidHook {
+                hook: name,
+                error:
+                    "staged_surface requires a listener and cannot be its owner filter or Part key"
+                        .into(),
+            });
         }
-        // Isolation is the cancel loop's own: a listener that unwinds rolls the outputs back
-        // to the requested ones and is skipped for the hook for the session (#2414 ruling).
-        let isolate = api.isolate.unwrap_or(false);
-        if isolate && (api.contract != Contract::Cancel || scope.is_some()) {
+        if api.registration_append == Some(RegistrationAppend::Attributed)
+            && (api.contract != Contract::Collect || scope.is_some() || answered_by_mod)
+        {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error: "isolate is for a global cancel hook".into(),
+                error:
+                    "registration_append = \"attributed\" requires a global non-answered collect hook"
+                        .into(),
+            });
+        }
+        if let Some(validator) = &api.output_validator
+            && (!matches!(api.contract, Contract::Cancel | Contract::Listen)
+                || scope.is_some()
+                || entry.event_per_listener
+                || (api.contract == Contract::Listen
+                    && (api.staged_surface.is_some()
+                        || api.owner.is_some()
+                        || entry.context.is_some()))
+                || syn::parse_str::<syn::Path>(validator).is_err())
+        {
+            return Err(CatalogError::InvalidHook {
+                hook: name.clone(),
+                error: "output_validator is a path on a global cancel or plain global listen hook with shared outputs"
+                    .into(),
             });
         }
         let counterparts = Counterparts {
@@ -419,20 +589,25 @@ impl Hook {
             out: api.out,
             answered_by_mod,
             owner: api.owner,
-            collect_validator: api.collect_validator,
+            registration_append: api.registration_append,
+            staged_surface: api.staged_surface,
             inert: entry.inert,
-            isolate,
+            output_validator: api.output_validator,
             scope,
+            part: api.part,
             host: entry.host,
             context: entry.context,
             counterparts,
             version: entry.version.unwrap_or(1),
             cancellable: entry.cancellable,
             call: entry.call,
-            prepared: entry.prepared,
+            receiver: entry.receiver,
+            dispatch: entry.dispatch,
+            engine_ticks,
+            engine_inert,
             stack_count: entry.stack_count,
-            non_exhaustive: entry.non_exhaustive,
             event_per_listener: entry.event_per_listener,
+            independent_listener: entry.independent_listener,
         })
     }
 }
@@ -479,7 +654,7 @@ pub(crate) fn validate_stack_count_output(
 /// Everything the generator reads from the catalog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
-    /// In declaration order: base first, then files by name, each file's declarations in order.
+    /// In declaration order: files by name, each file's declarations in order.
     pub hooks: Vec<Hook>,
     pub draw_contexts: Vec<DrawContext>,
     /// Prose that belongs to no one hook, from the `Notes` trait's `#[notes]`.
@@ -489,11 +664,7 @@ pub struct Catalog {
 /// Where the declarations live, relative to the checkout root.
 pub const DECLARATIONS: &str = "crates/sunrise-mod-vocab/src/hooks";
 
-/// What the catalog was declared in before the declarations: a file here is refused, never ignored.
-pub(crate) const RETIRED: &[&str] = &["native-hooks.json", "tools/native-hook-fragments"];
-
-/// A declaration's inferred target, resolved to the definition's module by `Catalog::load`.
-/// Parsing declarations alone does not require engine sources (render-record generation).
+/// The default binding for a game hook in the same-named `native_hooks` module.
 fn default_target(name: &str, area: &str) -> String {
     format!("sunrise_client::game::native_hooks::{area}::Game<'_>::native_{name}")
 }
@@ -653,23 +824,45 @@ impl Declared {
                 match kind.as_str() {
                     "Hooks" => {
                         entry.insert("name".into(), name.clone().into());
-                        let call = function
-                            .sig
-                            .inputs
-                            .iter()
-                            .map(|input| match input {
-                                syn::FnArg::Typed(input) => Ok(serde_json::json!([
-                                    input.pat.to_token_stream().to_string(),
-                                    input.ty.to_token_stream().to_string()
-                                ])),
-                                syn::FnArg::Receiver(_) => {
-                                    Err(invalid(format!("{name}: a declaration has no receiver")))
+                        let mut call = Vec::new();
+                        let mut engine = Vec::new();
+                        let mut names = HashSet::new();
+                        for input in &function.sig.inputs {
+                            let syn::FnArg::Typed(input) = input else {
+                                return Err(invalid(format!(
+                                    "{name}: a declaration has no receiver"
+                                )));
+                            };
+                            let syn::Pat::Ident(pat) = &*input.pat else {
+                                return Err(invalid(format!("{name}: expected a named parameter")));
+                            };
+                            if pat.by_ref.is_some()
+                                || pat.mutability.is_some()
+                                || pat.subpat.is_some()
+                                || !names.insert(&pat.ident)
+                            {
+                                return Err(invalid(format!(
+                                    "{name}: expected a unique parameter name"
+                                )));
+                            }
+                            let params = match &input.attrs[..] {
+                                [] => &mut call,
+                                [attr] if matches!(&attr.meta, syn::Meta::Path(path) if path.is_ident("engine")) => {
+                                    &mut engine
                                 }
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        if !call.is_empty() {
-                            entry.insert("call".into(), call.into());
+                                _ => {
+                                    return Err(invalid(format!(
+                                        "{name}: only #[engine] is allowed on parameters"
+                                    )));
+                                }
+                            };
+                            params.push(serde_json::json!([
+                                pat.ident.to_string(),
+                                input.ty.to_token_stream().to_string()
+                            ]));
                         }
+                        entry.insert("call".into(), call.into());
+                        entry.insert("engine".into(), engine.into());
                         if let Some(doc) = doc(&function.attrs) {
                             entry.insert("doc".into(), doc.into());
                         }
@@ -680,10 +873,12 @@ impl Declared {
                             "out",
                             "scope",
                             "key",
+                            "part",
                             "answered_by",
                             "owner",
-                            "collect_validator",
-                            "isolate",
+                            "registration_append",
+                            "staged_surface",
+                            "output_validator",
                         ] {
                             if let Some(value) = entry.remove(key) {
                                 api.insert(key.into(), value);
@@ -707,109 +902,26 @@ impl Declared {
 }
 
 impl Catalog {
-    /// The catalog of the checkout at `root`: every file of the declarations directory, `base.rs` first and
-    /// then by name, so the order never depends on a list a PR edits.
-    /// The retired JSON catalog is refused wherever it still exists.
+    /// The catalog of the checkout at `root`: every file of the declarations directory, sorted by
+    /// name, so the order never depends on a list a PR edits.
     pub fn load(root: &Path) -> Result<Self, CatalogError> {
-        let mut catalog = Self::load_declarations(root)?;
-        crate::hook_targets::resolve(root, &mut catalog).map_err(|error| {
-            CatalogError::Declaration {
-                path: "native hook definitions".into(),
-                error,
-            }
-        })?;
-        Ok(catalog)
-    }
-
-    pub(crate) fn load_declarations(root: &Path) -> Result<Self, CatalogError> {
-        let read_error = |path: &Path, e: std::io::Error| CatalogError::Read {
+        let read_error = |path: &Path, error: String| CatalogError::Read {
             path: path.display().to_string(),
-            error: e.to_string(),
+            error,
         };
-        for retired in RETIRED {
-            let path = root.join(retired);
-            if path.is_file() {
-                return Err(CatalogError::Retired((*retired).to_string()));
-            }
-            if path.is_dir() {
-                let mut entries = fs::read_dir(&path).map_err(|e| read_error(&path, e))?;
-                if let Some(entry) = entries.next() {
-                    let entry = entry.map_err(|e| read_error(&path, e))?;
-                    return Err(CatalogError::Retired(format!(
-                        "{retired}/{}",
-                        entry.file_name().to_string_lossy()
-                    )));
-                }
-            }
-        }
         let dir = root.join(DECLARATIONS);
-        let modules = Self::modules(&dir)?;
+        let modules =
+            sunrise_game_discovery::module_files(&dir).map_err(|error| read_error(&dir, error))?;
         let files = modules
             .iter()
             .map(|module| {
                 let path = dir.join(format!("{module}.rs"));
-                let text = fs::read_to_string(&path).map_err(|e| read_error(&path, e))?;
+                let text =
+                    fs::read_to_string(&path).map_err(|e| read_error(&path, e.to_string()))?;
                 Ok((path.display().to_string(), text))
             })
             .collect::<Result<Vec<_>, CatalogError>>()?;
         Self::parse(&files)
-    }
-
-    pub(crate) fn modules(dir: &Path) -> Result<Vec<String>, CatalogError> {
-        let read_error = |path: &Path, e: std::io::Error| CatalogError::Read {
-            path: path.display().to_string(),
-            error: e.to_string(),
-        };
-        let mut modules = fs::read_dir(dir)
-            .map_err(|e| read_error(dir, e))?
-            .map(|entry| entry.map_err(|e| read_error(dir, e)))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter_map(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                name.strip_suffix(".rs")
-                    .filter(|module| *module != "mod")
-                    .map(str::to_string)
-            })
-            .collect::<Vec<_>>();
-        // Split declarations retain their original HookId positions in per-item metadata.
-        // Unnumbered additions are discovered alphabetically, without a shared registry.
-        let mut order = std::collections::HashMap::new();
-        for module in &modules {
-            let path = dir.join(format!("{module}.rs"));
-            let source = fs::read_to_string(&path).map_err(|e| read_error(&path, e))?;
-            if let Some(value) = source
-                .lines()
-                .find_map(|line| line.strip_prefix("// catalog-order: "))
-            {
-                let ordinal = value
-                    .parse::<usize>()
-                    .map_err(|e| CatalogError::Declaration {
-                        path: path.display().to_string(),
-                        error: format!("invalid catalog-order: {e}"),
-                    })?;
-                if order.values().any(|previous| *previous == ordinal) {
-                    return Err(CatalogError::Declaration {
-                        path: path.display().to_string(),
-                        error: format!("duplicate catalog-order: {ordinal}"),
-                    });
-                }
-                order.insert(module.clone(), ordinal);
-            }
-        }
-        modules.sort_by(|a, b| {
-            (a != "base", order.get(a).copied().unwrap_or(usize::MAX), a).cmp(&(
-                b != "base",
-                order.get(b).copied().unwrap_or(usize::MAX),
-                b,
-            ))
-        });
-        for module in &modules {
-            if syn::parse_str::<syn::Ident>(module).is_err() {
-                return Err(CatalogError::InvalidModule(module.clone()));
-            }
-        }
-        Ok(modules)
     }
 
     /// The catalog of declaration files given as (path, source), in the order given.
@@ -864,20 +976,25 @@ impl Hook {
             out: None,
             answered_by_mod: false,
             owner: None,
-            collect_validator: None,
+            registration_append: None,
+            staged_surface: None,
             inert: None,
-            isolate: false,
+            output_validator: None,
             scope: None,
+            part: None,
             host: None,
             context: None,
             counterparts: Counterparts::default(),
             version: 1,
             cancellable: None,
             call: Vec::new(),
-            prepared: None,
+            receiver: Receiver::default(),
+            dispatch: DispatchStyle::default(),
+            engine_ticks: false,
+            engine_inert: false,
             stack_count: None,
-            non_exhaustive: false,
             event_per_listener: false,
+            independent_listener: false,
         }
     }
 }
@@ -931,31 +1048,6 @@ mod tests {
         assert!(!catalog.draw_contexts.is_empty());
     }
 
-    #[test]
-    fn prepared_is_rejected_on_other_hooks_at_catalog_boundary() {
-        let mut declaration = serde_json::json!({"name":"other_hook","doc":"Doc.","side":"server","target":"unused", "prepared":"stack", "mod_api":{"contract":"listen"}});
-        let error = Hook::parse(declaration.clone()).unwrap_err().to_string();
-        assert_eq!(
-            error,
-            "hook other_hook: prepared is supported only as prepared = \"stack\" on can_equip"
-        );
-        declaration["name"] = "can_equip".into();
-        assert_eq!(
-            Hook::parse(declaration.clone())
-                .unwrap()
-                .prepared
-                .as_deref(),
-            Some("stack")
-        );
-        declaration["prepared"] = "other".into();
-        assert!(
-            Hook::parse(declaration)
-                .unwrap_err()
-                .to_string()
-                .contains("only as prepared")
-        );
-    }
-
     fn checkout(files: &[(&str, &str)]) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
             "catalog-load-{}-{:?}",
@@ -976,44 +1068,75 @@ mod tests {
     const HOOK: &str = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn one(); }";
 
     #[test]
-    fn the_retired_json_catalog_is_refused_wherever_it_is() {
-        let base = format!("{DECLARATIONS}/base.rs");
-        let index = format!("{DECLARATIONS}/mod.rs");
-        for retired in ["native-hooks.json", "tools/native-hook-fragments/late.json"] {
-            let root = checkout(&[(&base, HOOK), (&index, "mod base;"), (retired, "{}")]);
-            let error = Catalog::load(&root).unwrap_err().to_string();
-            assert!(error.starts_with(retired), "{error}");
-            assert!(error.contains("declared in Rust now"), "{error}");
-            fs::remove_dir_all(root).unwrap();
-        }
+    fn metadata_generators_need_only_the_hook_declarations() {
+        let root = checkout(&[(
+            &format!("{DECLARATIONS}/base.rs"),
+            r###"
+            pub trait Hooks {
+                /// Example hook.
+                #[hook(side = "server", contract = "listen", neoforge = "ExampleEvent")]
+                #[notes = "## Example\n\nA hook note."]
+                fn example();
+            }
+        "###,
+        )]);
+        let json = crate::neoforge_catalog(&root);
+        let notes = crate::generate_hook_notes(&root);
+        fs::remove_dir_all(root).unwrap();
+
+        let actual: serde_json::Value = serde_json::from_str(&json.unwrap()).unwrap();
+        let expected: serde_json::Value =
+            serde_json::from_str(r#"{"hooks":[{"name":"example","neoforge":"ExampleEvent"}]}"#)
+                .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            notes.unwrap(),
+            "# Hook notes\n\n## Example\n\nA hook note.\n"
+        );
     }
 
     #[test]
     fn the_order_comes_from_the_directory_without_a_shared_module_list() {
-        let second = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn two(); }";
-        let base = format!("{DECLARATIONS}/base.rs");
-        let alpha = format!("{DECLARATIONS}/alpha.rs");
+        let zeta = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn zeta(); }";
+        let alpha = r#"
+            pub trait Hooks {
+                /// Doc.
+                #[hook(side = "server", contract = "listen")]
+                fn alpha_second();
+                /// Doc.
+                #[hook(side = "server", contract = "listen")]
+                fn alpha_first();
+            }
+        "#;
+        let ignored = "pub trait Hooks { /// Doc.\n #[hook(side = \"server\", contract = \"listen\")] fn ignored(); }";
         let index = format!("{DECLARATIONS}/mod.rs");
         let root = checkout(&[
-            (&alpha, second),
-            (&base, HOOK),
-            (&index, "mod base;\nmod alpha;"),
+            (&format!("{DECLARATIONS}/zeta.rs"), zeta),
+            (&format!("{DECLARATIONS}/base.rs"), HOOK),
+            (&format!("{DECLARATIONS}/alpha.rs"), alpha),
+            (&index, ignored),
         ]);
-        let catalog = Catalog::load_declarations(&root).unwrap();
-        let names = catalog
-            .hooks
-            .iter()
-            .map(|h| h.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, ["one", "two"], "base.rs first, then by name");
+        let names = |catalog: Catalog| {
+            catalog
+                .hooks
+                .into_iter()
+                .map(|h| h.name)
+                .collect::<Vec<_>>()
+        };
+        let expected = ["alpha_second", "alpha_first", "one", "zeta"];
+        assert_eq!(names(Catalog::load(&root).unwrap()), expected);
         fs::remove_file(root.join(&index)).unwrap();
-        assert_eq!(Catalog::load_declarations(&root).unwrap().hooks.len(), 2);
+        assert_eq!(names(Catalog::load(&root).unwrap()), expected);
         fs::write(root.join(DECLARATIONS).join("not-valid.rs"), HOOK).unwrap();
+        let error = Catalog::load(&root).unwrap_err();
+        let expected_dir = root.join(DECLARATIONS).display().to_string();
         assert!(
-            Catalog::load_declarations(&root)
-                .unwrap_err()
-                .to_string()
-                .contains("invalid hook declaration filename")
+            matches!(&error, CatalogError::Read { path, .. } if path.as_str() == expected_dir.as_str()),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("not a Rust identifier"),
+            "{error}"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1283,29 +1406,38 @@ mod tests {
             );
         }
     }
+
     #[test]
-    fn split_file_order_is_stable_and_validated() {
-        let dir = std::env::temp_dir().join(format!("hook-order-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("z.rs"), "// catalog-order: 1\n").unwrap();
-        fs::write(dir.join("a.rs"), "// catalog-order: 2\n").unwrap();
-        fs::write(dir.join("b.rs"), "").unwrap();
-        assert_eq!(Catalog::modules(&dir).unwrap(), ["z", "a", "b"]);
-        fs::write(dir.join("b.rs"), "// catalog-order: 2\n").unwrap();
-        assert!(
-            Catalog::modules(&dir)
-                .unwrap_err()
-                .to_string()
-                .contains("duplicate catalog-order")
-        );
-        fs::write(dir.join("b.rs"), "// catalog-order: bad\n").unwrap();
-        assert!(
-            Catalog::modules(&dir)
-                .unwrap_err()
-                .to_string()
-                .contains("invalid catalog-order")
-        );
-        fs::remove_dir_all(dir).unwrap();
+    fn part_option_requires_a_plain_global_cancel_hook() {
+        let parsed = Hook::parse(hook(
+            "stacked",
+            json!({"mod_api": {"contract": "cancel", "out": "canceled", "part": "item"}}),
+        ))
+        .unwrap();
+        assert_eq!(parsed.part, Some(PartKind::Item));
+        assert!(parsed.scope.is_none());
+
+        for bad in [
+            json!({"mod_api": {"contract": "cancel", "out": "canceled", "part": "item", "scope": "item", "key": "stack"}}),
+            json!({"mod_api": {"contract": "listen", "part": "item"}}),
+            json!({"mod_api": {"contract": "collect", "out": "drops", "part": "item"}}),
+            json!({"mod_api": {"contract": "cancel", "out": "canceled", "part": "item"}, "event_per_listener": true}),
+            json!({"mod_api": {"contract": "cancel", "out": "canceled", "part": "item"}, "independent_listener": true}),
+        ] {
+            assert!(Hook::parse(hook("bad", bad)).is_err());
+        }
+        for kind in ["block", "block_entity", "menu", "effect", "fluid", "entity"] {
+            let err = Hook::parse(hook(
+                "bad_part_kind",
+                json!({"mod_api": {"contract": "cancel", "out": "canceled", "part": kind}}),
+            ))
+            .unwrap_err()
+            .to_string();
+            assert!(
+                err.contains(kind),
+                "expected unsupported part kind {kind:?} to be named in error: {err}"
+            );
+        }
     }
 }
 

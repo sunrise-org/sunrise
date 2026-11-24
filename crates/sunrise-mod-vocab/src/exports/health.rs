@@ -1,4 +1,11 @@
-pub use crate::entity::health::DamageContainer;
 pub use crate::entity::health::{
-    DamageValues, HurtSource, KnockbackEntry, Reduction, ReductionChange, ShieldBlock, Victim,
+    DamageContainer, DamageContainerView, DamageWriteRefusal, HurtSource, LivingView, Reduction,
+    ShieldBlock, Victim,
 };
+
+mod __private {
+    pub use crate::entity::health::{
+        DamageContainerBackend, DamageContainerRead, LivingParty, LivingReads,
+        wrap_reduction_modifier,
+    };
+}

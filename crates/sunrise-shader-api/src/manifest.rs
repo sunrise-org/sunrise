@@ -14,7 +14,7 @@ pub const API: &str = Api::V0_1.as_str();
 pub enum Api {
     /// Vanilla's gamma values.
     V0_1,
-    /// Linear light (docs/design/hdr-linear-light.md). Experimental: checked, not yet drawn.
+    /// Linear light. Experimental: checked, not yet drawn.
     V0_2,
 }
 

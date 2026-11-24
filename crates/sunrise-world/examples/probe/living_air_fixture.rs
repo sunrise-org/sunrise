@@ -212,9 +212,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let input = vec(&f["input"]);
         let friction = single(&f["friction"]);
         let result: io::Result<()> = match f["mode"].as_str().unwrap() {
-            "air" => travel_in_air(&mut w, &mut MoveGate::new(), input),
-            "relative" => relative_friction_movement(&mut w, &mut MoveGate::new(), input, friction)
-                .and_then(|v| writeln!(w.out, "vector {}", vector(v))),
+            "air" => travel_in_air(&mut w, &mut MoveGate::new(), input.into()).map(|_| ()),
+            "relative" => {
+                relative_friction_movement(&mut w, &mut MoveGate::new(), input.into(), friction)
+                    .and_then(|(v, _)| writeln!(w.out, "vector {}", vector(v)))
+            }
             "climb" => handle_on_climbable(&mut w, input)
                 .and_then(|v| writeln!(w.out, "vector {}", vector(v))),
             "speed" => friction_influenced_speed(&mut w, friction)

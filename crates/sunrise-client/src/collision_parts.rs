@@ -5,7 +5,6 @@
 //! collision query that meets a state whose parts opt in asks it, once for each entity,
 //! position and tick. It runs on the thread that ticks the level and nowhere else, so a worker
 //! reads the normal shape. The part holds no `Host`: it answers from the query.
-use crate::chunk::block_entity::published_shapes::CheckedShape;
 use mod_api::{CollisionEntityKind, CollisionQuery};
 use std::{
     cell::{Cell, RefCell},
@@ -22,7 +21,7 @@ use sunrise_world::{
 
 /// The collision shape of a block state is being read for the query `query`
 /// (`BlockBehaviour.getCollisionShape`). `shape` starts as `None`, which keeps the shape the block
-/// would otherwise have, and the block's parts may answer boxes to replace it for this query.
+/// would otherwise have, and the block's parts may lend a replacement shape for this query.
 /// Fires on the side that ticks the entity, once for each distinct question in a tick, so a listener
 /// must be a pure function of its inputs and the state it keeps itself.
 #[inline(never)]
@@ -31,7 +30,7 @@ pub fn native_collision_shape(
     pos: BlockPos,
     state: BlockStateId,
     query: &CollisionQuery,
-    shape: &mut Option<Vec<[f64; 6]>>,
+    shape: &mut Option<VoxelShape>,
 ) {
     crate::native_client_hooks::collision_shape(context, pos, state, query, shape);
 }
@@ -190,17 +189,9 @@ impl PartShapes for ModParts {
         }
         self.busy.set(true);
         let running = Running(&self.busy);
-        let mut boxes = None;
-        native_collision_shape(&self.context.borrow(), position, state, &query, &mut boxes);
+        let mut answer = None;
+        native_collision_shape(&self.context.borrow(), position, state, &query, &mut answer);
         drop(running);
-        // The one check of the answer: only `CheckedShape::new` makes a shape of the boxes.
-        let answer = boxes.and_then(|boxes| match CheckedShape::new(&boxes) {
-            Ok(checked) => Some(checked.into_shape()),
-            Err(error) => {
-                crate::native_client_hooks::collision_shape_refused(state, &format!("{error:?}"));
-                None
-            }
-        });
         self.cache.borrow_mut().insert(key, answer.clone());
         answer
     }
@@ -210,7 +201,7 @@ impl PartShapes for ModParts {
 mod tests {
     use super::*;
     use crate::native_client_hooks::test_hooks::{
-        COLLISION_ANSWER, COLLISION_ASKS, COLLISION_REFUSED, install, loop_context,
+        COLLISION_ANSWER, COLLISION_ASKS, install, loop_context,
     };
     use std::rc::Rc;
     use sunrise_world::collision_context::CollisionEntity;
@@ -241,24 +232,6 @@ mod tests {
             &entity(id),
             &mut || &[],
         )
-    }
-
-    #[test]
-    fn a_refused_answer_keeps_the_normal_shape_and_the_block_is_not_asked_again() {
-        let parts = parts();
-        COLLISION_REFUSED.with_borrow_mut(Vec::clear);
-        COLLISION_ANSWER.with_borrow_mut(|answer| {
-            *answer = Some(Box::new(|_| Some(vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]; 65])));
-        });
-        assert!(
-            ask(&parts, 7, [1, 64, 1]).is_none(),
-            "the normal shape stays"
-        );
-        assert_eq!(COLLISION_REFUSED.with_borrow(Clone::clone), [1]);
-        // Another position and another entity: the refused block is not asked.
-        assert!(ask(&parts, 8, [2, 64, 1]).is_none());
-        assert_eq!(COLLISION_ASKS.get(), 1);
-        assert_eq!(COLLISION_REFUSED.with_borrow(Clone::clone), [1]);
     }
 
     #[test]
@@ -426,23 +399,6 @@ mod tests {
             );
         });
         assert_eq!(seen.borrow().as_ref().unwrap().entity(), Some(11));
-    }
-
-    #[test]
-    fn a_shape_over_the_bounds_is_refused() {
-        let unit = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-        assert!(CheckedShape::new(&[unit; 64]).is_ok());
-        assert!(
-            CheckedShape::new(&[unit; 65]).is_err(),
-            "more than 64 boxes"
-        );
-        assert!(CheckedShape::new(&[[f64::NAN, 0.0, 0.0, 1.0, 1.0, 1.0]]).is_err());
-        assert!(CheckedShape::new(&[[0.0, 0.0, 0.0, f64::INFINITY, 1.0, 1.0]]).is_err());
-        assert!(
-            CheckedShape::new(&[[0.5, 0.0, 0.0, 0.25, 1.0, 1.0]]).is_err(),
-            "inverted"
-        );
-        assert!(CheckedShape::new(&[]).unwrap().into_shape().is_empty());
     }
 }
 

@@ -19,7 +19,8 @@ fn client_host_reads_playing_and_key_mappings() {
     use super::super::Screen;
     use super::super::native_entity_refs::tests::with_game;
     use crate::game::execution_role::ExecutionRole;
-
+    use mod_api::prelude::ClientInputClientHost;
+    use mod_api::{MappingError, Text};
     use winit::keyboard::KeyCode;
 
     with_game(|game| {
@@ -30,32 +31,29 @@ fn client_host_reads_playing_and_key_mappings() {
         assert!(!mod_api::prelude::ClientInputClientHost::playing(game));
 
         // Vanilla's default bindings: forward is W, attack the left mouse button.
-        let forward = mod_api::prelude::ClientInputClientHost::mapping(game, "key.forward")
-            .unwrap()
-            .unwrap();
+        let forward = ClientInputClientHost::vanilla_key_mapping(game, "key.forward").unwrap();
+        assert_eq!(forward.is_down(game), Ok(false));
+        assert_eq!(forward.translated_key_message(game), Ok(Text::literal("W")));
+        game.insert_device_key(KeyCode::KeyW);
+        assert_eq!(forward.is_down(game), Ok(true));
+        let attack = ClientInputClientHost::vanilla_key_mapping(game, "key.attack").unwrap();
         assert_eq!(
-            (forward.down, forward.label),
-            (false, mod_api::Text::literal("W"))
+            attack.translated_key_message(game),
+            Ok(Text::translate("key.mouse.left", Vec::new()))
         );
-        game.keys.insert(KeyCode::KeyW);
-        assert!(
-            mod_api::prelude::ClientInputClientHost::mapping(game, "key.forward")
-                .unwrap()
-                .unwrap()
-                .down
-        );
-        let attack = mod_api::prelude::ClientInputClientHost::mapping(game, "key.attack")
-            .unwrap()
-            .unwrap();
         assert_eq!(
-            attack.label,
-            mod_api::Text::translate("key.mouse.left", Vec::new())
+            ClientInputClientHost::vanilla_key_mapping(game, "key.mymod.boost"),
+            Err(MappingError::Unknown {
+                key: "key.mymod.boost".into(),
+            }),
         );
-        assert!(
-            mod_api::prelude::ClientInputClientHost::mapping(game, "key.mymod.boost")
-                .unwrap()
-                .is_none()
+
+        game.options.execution_role = ExecutionRole::IntegratedServer;
+        assert_eq!(
+            ClientInputClientHost::vanilla_key_mapping(game, "key.forward"),
+            Err(MappingError::Unavailable),
         );
+        assert_eq!(forward.binding(game), Err(MappingError::Unavailable));
     });
 }
 
@@ -75,33 +73,33 @@ fn observed_overlay_prefers_first_open_screen() {
     );
 }
 
-/// A mod's own screen opens only over the world, never over another
-/// screen, an overlay (the title screen, a book, loading, no window) or
-/// another mod's; opening it again is a no-op.
+/// A mod's own screen refuses only when the client window is unavailable (no
+/// renderer, acting for a guest, neither a player nor a title screen, or
+/// loading); when available, opening the same mod's already-visible screen is a
+/// no-op (`Some(true)`), and opening over playing, another vanilla screen, an
+/// overlay (`owner: None`), or another mod's screen proceeds (`None`).
 #[test]
-fn a_mod_screen_opens_only_over_the_world() {
+fn a_mod_screen_opens_when_client_window_is_available() {
     use super::{Screen, mod_screen_opens};
     assert_eq!(mod_screen_opens(Screen::Playing, false, None, "a"), None);
-    assert_eq!(
-        mod_screen_opens(Screen::Playing, true, None, "a"),
-        Some(false)
-    );
     for other in [
         Screen::Paused,
         Screen::Inventory,
+        Screen::Creative,
         Screen::Chat,
         Screen::Options,
     ] {
-        assert_eq!(mod_screen_opens(other, false, None, "a"), Some(false));
+        assert_eq!(mod_screen_opens(other, false, None, "a"), None);
     }
     assert_eq!(
         mod_screen_opens(Screen::Mod, false, Some("a"), "a"),
         Some(true)
     );
-    assert_eq!(
-        mod_screen_opens(Screen::Mod, false, Some("b"), "a"),
-        Some(false)
-    );
+    assert_eq!(mod_screen_opens(Screen::Mod, false, Some("b"), "a"), None);
+    assert_eq!(mod_screen_opens(Screen::Mod, false, None, "a"), None);
+    for screen in [Screen::Playing, Screen::Paused, Screen::Mod] {
+        assert_eq!(mod_screen_opens(screen, true, Some("a"), "a"), Some(false));
+    }
 }
 
 /// A mod container opens a slot grid or a furnace's menu, by its slot
@@ -114,6 +112,34 @@ fn mod_menus_are_slot_grids_and_furnaces() {
     assert_eq!(mod_menu("minecraft:furnace").map(|m| m.1), Some(3));
     assert_eq!(mod_menu("minecraft:brewing_stand"), None);
     assert_eq!(mod_menu("hopper"), None);
+}
+
+#[test]
+fn block_containers_cannot_bind_an_owned_menu_type() {
+    let menu = |id: &str, limits| {
+        (
+            id.into(),
+            "test".into(),
+            1,
+            0,
+            vec![],
+            vec![],
+            None,
+            None,
+            true,
+            limits,
+        )
+    };
+    sunrise_client::containers::with_mod_menu_types(
+        [
+            menu("test:block", None),
+            menu("test:transient", Some(vec![1])),
+        ],
+        || {
+            assert_eq!(super::mod_menu("test:block"), Some(("test:block", 1)));
+            assert_eq!(super::mod_menu("test:transient"), None);
+        },
+    );
 }
 
 /// The config folder is `config/` beside `options.txt`, made when

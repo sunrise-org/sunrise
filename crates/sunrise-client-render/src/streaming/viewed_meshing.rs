@@ -378,7 +378,8 @@ impl ViewedMeshing {
                 set.drop_column(x, z, sections);
                 continue;
             }
-            let Some(region) = Streaming::region(world, x, z) else {
+            // Other levels use unmodified meshing: the visibility hook lends the current-level Host.
+            let Some(region) = Streaming::region(world, x, z, false) else {
                 world.dirty_sections.take_column(x, z);
                 continue;
             };
@@ -561,6 +562,58 @@ mod tests {
         assert_eq!(log[..8], player[..], "{log:?}");
         assert_eq!(log.len(), 8 + sections);
         assert!(log[8..].iter().all(|entry| entry.starts_with("viewed")));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn the_players_visibility_answer_does_not_hide_terrain_in_a_viewed_level() {
+        use crate::mesher::SectionPlanBuilder;
+        use crate::streaming::section_visibility::tests::fixture;
+
+        let (mut player, mut streaming, stone) = fixture();
+        let base = player.bottom_y();
+        let mut column = Chunk::empty(0, 0);
+        column.set(8, base + 4, 8, stone);
+        streaming.insert_remote(&mut player, column.clone());
+        streaming.refresh_section_visibility(&mut player, true);
+        streaming.update(&mut player);
+        let mut asked_for_stone = false;
+        for request in streaming.take_visibility_requests() {
+            asked_for_stone |= request.key == (0, 0, 0);
+            let mut answer = SectionPlanBuilder::new();
+            answer.hide_terrain();
+            streaming.submit_visibility_answer(&mut player, request, answer.finish());
+        }
+        assert!(
+            asked_for_stone,
+            "the current level's stone section must be asked"
+        );
+        let player_faces = (0..100).find_map(|_| {
+            let (uploads, _) = streaming.update(&mut player);
+            let faces = uploads
+                .iter()
+                .find(|upload| {
+                    upload.key == (0, 0, 0) && streaming.can_publish_mesh(&player, upload)
+                })
+                .map(|upload| upload.mesh.solid.len() / 4);
+            streaming.free(uploads);
+            if faces.is_none() {
+                streaming.wait(Duration::from_millis(20));
+            }
+            faces
+        });
+        assert_eq!(
+            player_faces,
+            Some(0),
+            "the player's stone mesh was suppressed"
+        );
+        let mut world = level();
+        world.chunks.insert((0, 0), Arc::new(column));
+        let pool = Pool::new(1, "viewed-visibility");
+        let mut meshing = ViewedMeshing::in_pool(&pool);
+        mesh_until(&mut meshing, &streaming.viewed_mesh_source(), &mut world, 1);
+        let (_, mesh) = meshing.sections(7).unwrap().next().unwrap();
+        assert_eq!(mesh.solid.len() / 4, 6);
     }
 
     /// Small pools retain the one-worker floor, so viewed levels always make progress.

@@ -15,12 +15,31 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def method(source, name):
+    # A method moved out of game.rs keeps its file's visibility; the fixture pastes it private.
+    plain = f"    fn {name}("
+    start = source.index(plain) if plain in source else next(
+        source.index(f"    {vis} fn {name}(") for vis in ("pub(super)", "pub(in crate::game)")
+        if f"    {vis} fn {name}(" in source)
+    opening = source.index("{", start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    body = source[start:end]
+    for vis in ("pub(super) fn", "pub(in crate::game) fn"):
+        body = body.replace(vis, "fn", 1)
+    return body
+
+
 @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
 class RemoteMiningTests(unittest.TestCase):
     def test_break_timing_and_packets(self):
-        source = (next(ROOT.glob('crates/sunrise-client/src/game/*/remote/mod.rs'))).read_text()
-        start = source.index("    pub(super) fn stop_remote_mining(")
-        end = source.index("    fn veto_mining_prediction(", start)
+        remote = ROOT / "crates/sunrise-client/src/game/network/remote"
+        breaking = method((remote / "use.rs").read_text(encoding="utf-8"), "remote_mining")
+        stopping = method((remote / "break_prediction.rs").read_text(encoding="utf-8"), "stop_remote_mining")
+        source = breaking + "\n" + stopping
         fixture = r'''
 #![allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -257,7 +276,7 @@ fn main() {
     );
     assert_eq!(game.world.broken, [[2, 64, 0], [3, 64, 0]]);
 }
-'''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn"))
+'''.replace("METHOD", source)
         with tempfile.TemporaryDirectory(prefix="remote-mining-") as directory:
             path = Path(directory)
             (path / "main.rs").write_text(fixture)

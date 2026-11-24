@@ -1,6 +1,6 @@
 #![cfg(test)]
 use super::*;
-use crate::testing::FakeHost;
+use crate::{HookList, HookListJournal, HookListStorage, testing::FakeHost};
 use std::sync::Mutex;
 
 #[test]
@@ -108,7 +108,11 @@ fn client_menu_click_refuses_a_host_without_its_backend() {
 #[test]
 fn level_family_accepts_empty_doubles() {
     struct Empty;
-    impl LevelHost for Empty {}
+    impl LevelHost for Empty {
+        fn block_entity_data(&self, _: mod_api::BlockEntityRef) -> Option<mod_api::Compound> {
+            None
+        }
+    }
     impl LevelRandomHost for Empty {}
     impl LevelTicksHost for Empty {}
     impl LevelWriteHost for Empty {}
@@ -157,7 +161,9 @@ fn server_services_forward_commands_messages_and_player_identity() {
     assert!(result.success);
     assert!(result.feedback.is_empty());
     assert!(!host.commands().run_command_with_output("missing").success);
-    host.commands().feedback(Text::literal("answer")).unwrap();
+    host.commands()
+        .feedback(Text::literal("answer"), false)
+        .unwrap();
     host.messages()
         .broadcast(Text::literal("everyone"))
         .unwrap();
@@ -184,6 +190,9 @@ fn render_hand_chains_pose_and_draw_until_cancelled() {
         fn push(&mut self) {
             self.0 += 1;
         }
+    }
+    impl crate::HandDrawContext for Draw {
+        fn render_arm(&mut self, _: crate::MainHand) {}
     }
     #[mod_api::__subscriptions]
     impl Hooks for HandMod {
@@ -482,6 +491,28 @@ fn player_turn_mods_receive_identity_and_chain_changes() {
 }
 
 #[test]
+fn player_turn_deltas_receive_identity_and_chain_changes() {
+    struct ScaleTurn;
+    #[mod_api::__subscriptions]
+    impl Hooks for ScaleTurn {
+        fn player_turn(&self, _host: &dyn ClientHost, event: &mut PlayerTurnEvent) {
+            assert_eq!((event.player_entity_id, event.player_uuid), (42, 123));
+            event.x *= 0.5;
+            event.y += 2.0;
+        }
+    }
+    let host = FakeHost::new();
+    let mods: Vec<ModEntry> = vec![
+        ModEntry::new("turn-1", Box::new(ScaleTurn)),
+        ModEntry::new("turn-2", Box::new(ScaleTurn)),
+    ];
+    install(mods.into());
+    let (mut x, mut y) = (8.0, -1.0);
+    dispatch_player_turn(&host, 42, 123, &mut x, &mut y);
+    assert_eq!((x, y), (2.0, 3.0));
+}
+
+#[test]
 fn a_part_reads_the_clicked_block_and_tells_the_acting_player() {
     // Another test installs parts with tags: a dispatch must run on a game thread.
     mark_game_thread();
@@ -609,10 +640,15 @@ fn an_inventory_tick_reaches_only_the_parts_of_the_ticked_item() {
     let mut host = FakeHost::new();
     let stone = crate::__private::part_tests::stack("minecraft:stone", 1, 0);
     let diamond = crate::__private::part_tests::stack("minecraft:diamond", 1, 0);
-    dispatch_inventory_tick(&mut host, &stick(), 4, true);
-    dispatch_inventory_tick(&mut host, &stone, -106, false);
-    dispatch_inventory_tick(&mut host, &stick(), 100, false);
-    dispatch_inventory_tick(&mut host, &diamond, 0, false);
+    for (item, slot, selected) in [
+        (stick().item(), 4, true),
+        (stone.item(), -106, false),
+        (stick().item(), 100, false),
+        (diamond.item(), 0, false),
+    ] {
+        let place = crate::ItemPlace::PlayerSlot { player: 1, slot };
+        dispatch_inventory_tick(&mut host, item, &place, slot, selected);
+    }
     assert_eq!(*sticks.0.lock().unwrap(), [(4, true), (100, false)]);
     assert_eq!(*stones.0.lock().unwrap(), [(-106, false)]);
 }
@@ -687,12 +723,12 @@ fn an_item_update_reaches_only_the_parts_of_the_ticked_item_and_cancels_for_its_
     struct Updated(Arc<Mutex<Vec<EntityRef>>>, bool);
     #[mod_api::sunrise_part]
     impl ItemPart for Updated {
-        fn on_entity_item_update(
-            &self,
-            _: &mut dyn ServerHost,
-            event: &mut OnEntityItemUpdateEvent<'_>,
-        ) -> Flow {
-            self.0.lock().unwrap().push(event.item.entity());
+        fn on_entity_item_update(&self, event: &mut OnEntityItemUpdateEvent<'_>) -> Flow {
+            let entity = event
+                .subject
+                .with_view(|view| view.handle().entity())
+                .expect("live resident item entity");
+            self.0.lock().unwrap().push(entity);
             if self.1 { Flow::Cancel } else { Flow::Continue }
         }
     }
@@ -720,25 +756,70 @@ fn an_item_update_reaches_only_the_parts_of_the_ticked_item_and_cancels_for_its_
     })
     .unwrap();
     let mut host = FakeHost::new();
-    let stone = crate::__private::part_tests::stack("minecraft:stone", 1, 0);
-    let diamond = crate::__private::part_tests::stack("minecraft:diamond", 1, 0);
     let entity = |id| EntityRef::new(WorldEpoch::new(1), id);
-    let mut update = |stack: &ItemStack, id| {
+    struct TestItemData;
+    impl crate::ResidentItemEntity for TestItemData {
+        fn position(&self) -> [f64; 3] {
+            [0.0; 3]
+        }
+        fn velocity(&self) -> [f64; 3] {
+            [0.0; 3]
+        }
+        fn with_stack(&self, _: &mut dyn for<'a> FnMut(crate::ItemStackView<'a>)) {}
+        fn pickup_delay(&self) -> i32 {
+            0
+        }
+        fn age(&self) -> i32 {
+            0
+        }
+        fn target(&self) -> Option<u128> {
+            None
+        }
+        fn owner(&self) -> Option<EntityRef> {
+            None
+        }
+        fn set_stack(&mut self, _: Option<ItemStack>) -> Result<bool, crate::StackWriteError> {
+            Ok(false)
+        }
+        fn set_pickup_delay(&mut self, _: i32) -> bool {
+            false
+        }
+        fn set_target(&mut self, _: Option<u128>) -> bool {
+            false
+        }
+        fn set_velocity(&mut self, _: [f64; 3]) -> bool {
+            false
+        }
+    }
+    struct TestItemAccess<'a> {
+        host: &'a mut FakeHost,
+        subject: ItemEntityRef,
+    }
+    impl crate::ItemEntityServerAccess for TestItemAccess<'_> {
+        fn with_view(&mut self, f: &mut dyn FnMut(crate::ItemEntitySubjectView<'_>)) {
+            let mut data = TestItemData;
+            f(crate::ItemEntitySubjectView::new(self.subject, &mut data));
+        }
+        fn host(&mut self) -> &mut dyn ServerHost {
+            self.host
+        }
+    }
+    let mut update = |item_id: &str, id| {
         let mut canceled = false;
-        dispatch_on_entity_item_update(
-            &mut host,
-            crate::__private::OnEntityItemUpdateCall {
-                stack,
-                item: ItemEntityRef::new(entity(id)),
-                canceled: &mut canceled,
-            },
-        );
+        let mut access = TestItemAccess {
+            host: &mut host,
+            subject: ItemEntityRef::new(entity(id)),
+        };
+        dispatch_on_entity_item_update(crate::__private::OnEntityItemUpdateCall {
+            subject: crate::ItemEntityServerScope::new(&mut access, item_id),
+            canceled: &mut canceled,
+        });
         canceled
     };
-    assert!(update(&stick(), 11));
-    assert!(!update(&stone, 12));
-    assert!(!update(&diamond, 13));
-    assert!(update(&stick(), 14));
+    assert!(update("minecraft:stick", 11));
+    assert!(!update("minecraft:stone", 12));
+    assert!(!update("minecraft:diamond", 13));
+    assert!(update("minecraft:stick", 14));
     assert_eq!(*sticks.0.lock().unwrap(), [entity(11), entity(14)]);
     assert_eq!(*stones.0.lock().unwrap(), [entity(12)]);
     assert!(crate::__private::item_listens(
@@ -756,7 +837,6 @@ fn an_item_update_reaches_only_the_parts_of_the_ticked_item_and_cancels_for_its_
 }
 
 #[test]
-#[should_panic(expected = "Commands::run_command")]
 fn an_unexpected_host_call_names_the_method() {
     /// A mod's own double, with only the services the hook reaches.
     struct Silent;
@@ -789,6 +869,21 @@ fn an_unexpected_host_call_names_the_method() {
             result: &mut result,
         },
     );
+    assert_eq!(result, None);
+    assert_eq!(
+        mod_vocab::__private::take_hook_panics(),
+        [mod_vocab::__private::HookPanicReport {
+            mod_id: "chatty",
+            hook: "use_on",
+        }]
+    );
+
+    // Test the default Host service outside dispatch, which contains the original panic.
+    let diagnostic = mod_vocab::__private::game::contain_unwind(|| {
+        Commands::run_command(&mut host, "say hello")
+    })
+    .unwrap_err();
+    assert!(diagnostic.contains("Commands::run_command"), "{diagnostic}");
 }
 
 /// The top of the block at the origin, clicked in its middle.
@@ -947,15 +1042,11 @@ impl Hooks for Recorder {
 
 #[test]
 fn game_rule_change_reports_optional_actor() {
-    struct ActorRecorder(Arc<Mutex<Vec<Option<(u128, i32, String)>>>>);
+    struct ActorRecorder(Arc<Mutex<Vec<Option<PlayerRef>>>>);
     #[mod_api::__subscriptions]
     impl Hooks for ActorRecorder {
         fn game_rule_changed(&self, _: &mut dyn ServerHost, event: &mut GameRuleChangedEvent<'_>) {
-            self.0.lock().unwrap().push(
-                event
-                    .actor
-                    .map(|actor| (actor.uuid, actor.entity_id, actor.name.to_owned())),
-            );
+            self.0.lock().unwrap().push(event.actor);
         }
     }
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -965,16 +1056,12 @@ fn game_rule_change_reports_optional_actor() {
     )];
     install(mods.into());
     let mut host = FakeHost::new();
-    let actor = GameRuleActor {
-        uuid: 123,
-        entity_id: 42,
-        name: "Alex",
-    };
+    let actor = crate::__private::game::player_ref(EntityRef::new(WorldEpoch::new(1), 42), 123);
     dispatch_game_rule_changed(
         &mut host,
         "minecraft:keep_inventory",
         GameRuleValue::Bool(true),
-        Some(&actor),
+        Some(actor),
     );
     dispatch_game_rule_changed(
         &mut host,
@@ -982,10 +1069,7 @@ fn game_rule_change_reports_optional_actor() {
         GameRuleValue::Bool(false),
         None,
     );
-    assert_eq!(
-        *seen.lock().unwrap(),
-        [Some((123, 42, "Alex".into())), None]
-    );
+    assert_eq!(*seen.lock().unwrap(), [Some(actor), None]);
 }
 
 /// API dispatch preserves each accepted rule's id and typed value for every mod.
@@ -1047,7 +1131,7 @@ struct CodKeeper;
 
 #[mod_api::__subscriptions]
 impl Hooks for CodKeeper {
-    fn item_fished(&self, _host: &mut dyn ServerHost, event: &mut ItemFishedEvent<'_>) -> Flow {
+    fn item_fished(&self, _host: &mut dyn ServerHost, event: &mut ItemFishedEvent<'_, '_>) -> Flow {
         event.rod_damage = 4;
         let cod = event
             .drops
@@ -1062,7 +1146,11 @@ struct Unreached;
 
 #[mod_api::__subscriptions]
 impl Hooks for Unreached {
-    fn item_fished(&self, _host: &mut dyn ServerHost, _event: &mut ItemFishedEvent<'_>) -> Flow {
+    fn item_fished(
+        &self,
+        _host: &mut dyn ServerHost,
+        _event: &mut ItemFishedEvent<'_, '_>,
+    ) -> Flow {
         panic!("asked after a cancel");
     }
 }
@@ -1082,16 +1170,13 @@ fn a_fishing_catch_keeps_the_mods_rod_damage_and_its_cancel() {
         let mut drops = vec![crate::__private::part_tests::stack(item, 1, 0)];
         let fished = mod_vocab::__private::parts_installation::item_fished(9, [0.5, 62.0, 0.5]);
         let (mut rod_damage, mut cancel) = (1, false);
-        dispatch_item_fished(
-            host,
-            7,
-            3,
-            &fished,
-            &mut rod_damage,
-            &mut cancel,
-            &mut drops,
-            &mut |_: &Vec<crate::ItemStack>| -> Result<(), crate::StackWriteError> { Ok(()) },
+        let mut journal = HookListJournal::new(
+            HookListStorage::Resizable(&mut drops),
+            |value: &crate::ItemStack| Some(value.clone()),
+            |value| Ok(value.clone()),
         );
+        let mut list = HookList::new(&mut journal, "item_fished", "drops");
+        dispatch_item_fished(host, 7, 3, &fished, &mut rod_damage, &mut cancel, &mut list);
         (rod_damage, cancel)
     };
     assert_eq!(ask(&mut host, "minecraft:cod"), (4, true));
@@ -1104,6 +1189,12 @@ fn a_fishing_catch_keeps_the_mods_rod_damage_and_its_cancel() {
     )];
     let fished = mod_vocab::__private::parts_installation::item_fished(9, [0.5, 62.0, 0.5]);
     let (mut rod_damage, mut cancel) = (2, false);
+    let mut journal = HookListJournal::new(
+        HookListStorage::Resizable(&mut drops),
+        |value: &crate::ItemStack| Some(value.clone()),
+        |value| Ok(value.clone()),
+    );
+    let mut list = HookList::new(&mut journal, "item_fished", "drops");
     dispatch_item_fished(
         &mut host,
         7,
@@ -1111,8 +1202,7 @@ fn a_fishing_catch_keeps_the_mods_rod_damage_and_its_cancel() {
         &fished,
         &mut rod_damage,
         &mut cancel,
-        &mut drops,
-        &mut |_: &Vec<crate::ItemStack>| -> Result<(), crate::StackWriteError> { Ok(()) },
+        &mut list,
     );
     assert_eq!((rod_damage, cancel), (4, false));
 }
@@ -1128,7 +1218,12 @@ fn an_ability_question_reaches_only_the_parts_of_the_asked_item_and_names_the_ab
     }
     #[mod_api::sunrise_part]
     impl ItemPart for Abilities {
-        fn can_perform_action(&self, _: &dyn Host, event: &mut CanPerformActionEvent<'_>) {
+        fn can_perform_action(
+            &self,
+            _: &ItemAbilityContext<'_>,
+            event: &mut CanPerformActionEvent<'_>,
+        ) {
+            assert_eq!(event.stack.count(), 1);
             self.asked.lock().unwrap().push(event.ability.to_owned());
             if event.ability == self.granted {
                 event.can_perform = true;
@@ -1170,7 +1265,23 @@ fn an_ability_question_reaches_only_the_parts_of_the_asked_item_and_names_the_ab
     let diamond = crate::parts::tests::stack("minecraft:diamond", 1, 0);
     let ask = |stack: &ItemStack, ability: &str, vanilla: bool| {
         let mut can_perform = vanilla;
-        dispatch_can_perform_action(&host, stack, ability, &mut can_perform);
+        let context = ItemAbilityContext::new((&host as &dyn crate::Host).tags());
+        let project = |_| -> Option<ItemStack> {
+            panic!("ability routing and scalar reads must not project the stack")
+        };
+        let metadata = (
+            stack.item(),
+            std::num::NonZeroU32::new(stack.count()).unwrap(),
+            None,
+        );
+        dispatch_can_perform_action(
+            &context,
+            crate::__private::CanPerformActionCall {
+                stack: ItemStackView::resident(metadata, &project),
+                ability,
+                can_perform: &mut can_perform,
+            },
+        );
         can_perform
     };
     // The part answers per ability: a grant, a denial and what it leaves alone.
@@ -1279,4 +1390,171 @@ fn piglin_answers_reach_only_the_asked_items_parts_and_write_back_both_ways() {
     assert!(!currency(&coin("minecraft:gold_ingot"), false));
     assert!(!neutral(&coin("minecraft:gold_ingot"), false));
     assert_eq!(wearers.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn scoped_views_reborrow_and_invalidate_after_removal() {
+    let mut host = FakeHost::new();
+    let entity_handle = EntityRef::new(WorldEpoch::new(1), 42);
+    let item_handle = ItemEntityRef::new(EntityRef::new(WorldEpoch::new(1), 99));
+
+    struct FakeGeneral {
+        velocity: [f64; 3],
+        rotation: [f32; 2],
+        fall_reset: bool,
+    }
+    impl crate::ResidentGeneralEntity for FakeGeneral {
+        fn kind(&self) -> &str {
+            "mymod:robot"
+        }
+        fn position(&self) -> [f64; 3] {
+            [1.0, 2.0, 3.0]
+        }
+        fn velocity(&self) -> [f64; 3] {
+            self.velocity
+        }
+        fn rotation(&self) -> [f32; 2] {
+            self.rotation
+        }
+        fn uuid(&self) -> u128 {
+            0x1234
+        }
+        fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
+            self.velocity = velocity;
+            true
+        }
+        fn set_rotation(&mut self, yaw: f32, pitch: f32) -> bool {
+            self.rotation = [yaw, pitch];
+            true
+        }
+        fn reset_fall_distance(&mut self) {
+            self.fall_reset = true;
+        }
+    }
+    struct GeneralScopeAccess<'a> {
+        host: &'a mut FakeHost,
+        handle: EntityRef,
+        live: bool,
+        data: FakeGeneral,
+    }
+    impl crate::EntityServerAccess for GeneralScopeAccess<'_> {
+        fn with_view(&mut self, f: &mut dyn FnMut(crate::EntitySubjectView<'_>)) {
+            if self.live {
+                f(crate::EntitySubjectView::new(self.handle, &mut self.data));
+            }
+        }
+        fn host(&mut self) -> &mut dyn ServerHost {
+            self.live = false;
+            self.host
+        }
+    }
+
+    let mut access = GeneralScopeAccess {
+        host: &mut host,
+        handle: entity_handle,
+        live: true,
+        data: FakeGeneral {
+            velocity: [0.0; 3],
+            rotation: [0.0; 2],
+            fall_reset: false,
+        },
+    };
+    let mut scope = crate::EntityServerScope::new(&mut access);
+    let seen = scope.with_view(|mut view| {
+        assert_eq!(view.handle(), entity_handle);
+        assert_eq!(view.kind(), "mymod:robot");
+        assert_eq!(view.position(), [1.0, 2.0, 3.0]);
+        assert!(view.set_velocity([0.5, 0.0, -0.5]));
+        assert!(view.set_rotation(90.0, 15.0));
+        view.reset_fall_distance();
+        (view.velocity(), view.rotation())
+    });
+    assert_eq!(seen, Some(([0.5, 0.0, -0.5], [90.0, 15.0])));
+    // Borrowing host invalidates the fake subject; reborrowing the view returns None.
+    let _ = scope.host();
+    assert!(scope.with_view(|_| ()).is_none());
+    assert!(access.data.fall_reset);
+
+    struct FakeItem {
+        pickup_delay: i32,
+        velocity: [f64; 3],
+        owner: EntityRef,
+    }
+    impl crate::ResidentItemEntity for FakeItem {
+        fn position(&self) -> [f64; 3] {
+            [4.0, 5.0, 6.0]
+        }
+        fn velocity(&self) -> [f64; 3] {
+            self.velocity
+        }
+        fn with_stack(&self, _: &mut dyn for<'a> FnMut(crate::ItemStackView<'a>)) {}
+        fn pickup_delay(&self) -> i32 {
+            self.pickup_delay
+        }
+        fn age(&self) -> i32 {
+            12
+        }
+        fn target(&self) -> Option<u128> {
+            None
+        }
+        fn owner(&self) -> Option<EntityRef> {
+            Some(self.owner)
+        }
+        fn set_stack(&mut self, _: Option<ItemStack>) -> Result<bool, crate::StackWriteError> {
+            Ok(false)
+        }
+        fn set_pickup_delay(&mut self, ticks: i32) -> bool {
+            self.pickup_delay = ticks;
+            true
+        }
+        fn set_target(&mut self, _: Option<u128>) -> bool {
+            true
+        }
+        fn set_velocity(&mut self, velocity: [f64; 3]) -> bool {
+            self.velocity = velocity;
+            true
+        }
+    }
+    struct ItemScopeAccess<'a> {
+        host: &'a mut FakeHost,
+        handle: ItemEntityRef,
+        live: bool,
+        data: FakeItem,
+    }
+    impl crate::ItemEntityServerAccess for ItemScopeAccess<'_> {
+        fn with_view(&mut self, f: &mut dyn FnMut(crate::ItemEntitySubjectView<'_>)) {
+            if self.live {
+                f(crate::ItemEntitySubjectView::new(
+                    self.handle,
+                    &mut self.data,
+                ));
+            }
+        }
+        fn host(&mut self) -> &mut dyn ServerHost {
+            self.live = false;
+            self.host
+        }
+    }
+
+    let mut item_access = ItemScopeAccess {
+        host: &mut host,
+        handle: item_handle,
+        live: true,
+        data: FakeItem {
+            pickup_delay: 10,
+            velocity: [0.0; 3],
+            owner: entity_handle,
+        },
+    };
+    let mut item_scope = crate::ItemEntityServerScope::new(&mut item_access, "minecraft:stick");
+    let delay = item_scope.with_view(|mut view| {
+        assert_eq!(view.handle(), item_handle);
+        assert_eq!(view.age(), 12);
+        assert_eq!(view.owner(), Some(entity_handle));
+        assert!(view.set_pickup_delay(7));
+        view.pickup_delay()
+    });
+    assert_eq!(delay, Some(7));
+    let _ = item_scope.host();
+    assert!(item_scope.with_view(|_| ()).is_none());
 }

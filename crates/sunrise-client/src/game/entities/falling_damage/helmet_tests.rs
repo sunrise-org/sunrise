@@ -1,10 +1,14 @@
 use crate::game::{Audio, FallingBlock, Game, Options, Progress, Settings, load_resources};
-use sunrise_client::{items::ItemStack, motion::PlayerMotion};
+use sunrise_client::{falling_block::bounds, items::ItemStack, motion::PlayerMotion};
 use sunrise_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 
 #[test]
 #[ignore = "daily"]
 fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
+    run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduction();
+}
+
+pub(in crate::game) fn run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
     let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
     let loaded = load_resources(
@@ -43,6 +47,7 @@ fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
     game.lan_acting = Some(1);
     let position = Vec3::new(4.5, 100.0, 4.5);
     game.falling.push(FallingBlock {
+        size_answer: None,
         id: 71,
         state: game
             .pack
@@ -50,11 +55,14 @@ fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
             .registry
             .default_state("minecraft:anvil")
             .unwrap(),
+        blocks_building: true,
         start_pos: BlockPos::new(4, 100, 4),
         position,
         previous: position,
         velocity: Vec3::ZERO,
-        on_ground: false,
+        ground: Default::default(),
+        fire_ticks: 0,
+        sync_velocity: false,
         attachment_lifetime: Default::default(),
         rotation: [0.0; 2],
         join: Default::default(),
@@ -114,7 +122,7 @@ fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
             game.world.random.set_seed(case["seed"].as_i64().unwrap());
             let source = format!("minecraft:{}", case["source"].as_str().unwrap());
             if path == 0 {
-                game.falling_hurt_player(entity, position, 8.0, &source);
+                game.falling_hurt_player(entity, position, bounds(position), 8.0, &source);
             } else {
                 // This is the authoritative player path used by /damage. A
                 // position avoids unrelated random-direction knockback draws.
@@ -157,8 +165,20 @@ fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
         game.armor = [Some(helmet), None, None, None];
         game.apply_equipment();
         game.apply_effect_status();
-        game.falling_hurt_player(entity, position, 8.0, "minecraft:falling_anvil");
-        game.falling_hurt_player(entity, position, 8.0, "minecraft:falling_anvil");
+        game.falling_hurt_player(
+            entity,
+            position,
+            bounds(position),
+            8.0,
+            "minecraft:falling_anvil",
+        );
+        game.falling_hurt_player(
+            entity,
+            position,
+            bounds(position),
+            8.0,
+            "minecraft:falling_anvil",
+        );
         assert_eq!(game.armor[0].as_ref().map(|s| s.damage), expected);
         assert_eq!(
             game.player.as_ref().unwrap().health.health(),
@@ -167,7 +187,13 @@ fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
         if expected.is_none() {
             // The hit that breaks the helmet still gets its 0.75 reduction;
             // only the next hit compares an unprotected 8 against lastHurt=6.
-            game.falling_hurt_player(entity, position, 8.0, "minecraft:falling_anvil");
+            game.falling_hurt_player(
+                entity,
+                position,
+                bounds(position),
+                8.0,
+                "minecraft:falling_anvil",
+            );
             assert_eq!(game.player.as_ref().unwrap().health.health(), 12.096_f32);
         }
     }
@@ -192,7 +218,13 @@ fn falling_impacts_wear_the_helmet_before_normal_armor_and_reduction() {
         )
         .unwrap();
     player.set_health(4.0, true).unwrap();
-    game.falling_hurt_player(entity, position, 8.0, "minecraft:falling_anvil");
+    game.falling_hurt_player(
+        entity,
+        position,
+        bounds(position),
+        8.0,
+        "minecraft:falling_anvil",
+    );
     assert_eq!(game.player.as_ref().unwrap().health.health(), 18.096_f32);
     assert_eq!(game.player.as_ref().unwrap().health.absorption(), 0.0);
     std::fs::remove_dir_all(scratch).unwrap();

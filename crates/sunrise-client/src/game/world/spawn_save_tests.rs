@@ -59,9 +59,7 @@ fn spawn_batches_refuse_saves_until_all_rows_are_published() {
                 mod_api::__private::mark_game_thread();
                 if planned {
                     game.add_planned(
-                        mobs.into_iter()
-                            .map(|m| spawner::Planned::Finalized(m, None))
-                            .collect(),
+                        mobs.into_iter().map(spawner::Planned::Finalized).collect(),
                         Vec::new(),
                         Vec::new(),
                     );
@@ -73,9 +71,9 @@ fn spawn_batches_refuse_saves_until_all_rows_are_published() {
             assert_eq!(succeeded.load(Ordering::SeqCst), 0);
             assert_eq!(game.mobs.len(), 2);
             game.save.flush().unwrap();
-            assert!(game.save.load_entities(0, 0).is_empty());
+            assert!(game.save.load_entities(0, 0).unwrap().is_empty());
             game.save_game().unwrap();
-            assert_eq!(game.save.load_entities(0, 0).len(), 2);
+            assert_eq!(game.save.load_entities(0, 0).unwrap().len(), 2);
         });
     }
 }

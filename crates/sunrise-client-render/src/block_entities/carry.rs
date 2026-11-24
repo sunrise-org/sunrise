@@ -3,7 +3,8 @@
 //! piston's position, and installed where their block lands as a new holder.
 //! Each has one owner at a time: it is moved, never cloned, so what it holds
 //! can't be duplicated.
-use super::{BlockEntities, BlockEntity, Pos, identity};
+use super::{BlockEntities, BlockEntity, Pos, chunk_of, identity};
+use std::collections::hash_map::Entry;
 use sunrise_mod_runtime::attachments::Attachments;
 
 /// A block entity out of the world while a piston moves its block.
@@ -24,7 +25,7 @@ impl BlockEntities {
         let Some(owned) = self.extract_owned(from) else {
             return false;
         };
-        self.carried.insert(to, owned);
+        self.hold_carried(to, owned);
         true
     }
 
@@ -72,7 +73,7 @@ impl BlockEntities {
 
     /// Install the moving piston's payload as a new ordinary holder.
     pub fn land(&mut self, at: Pos) -> bool {
-        let Some(owned) = self.carried.remove(&at) else {
+        let Some(owned) = self.take_carried(&at) else {
             return false;
         };
         // Preserve the existing piston replacement rule. Checked general handoffs call
@@ -81,14 +82,14 @@ impl BlockEntities {
         match self.install_owned(at, owned) {
             Ok(_) => true,
             Err(owned) => {
-                self.carried.insert(at, *owned);
+                self.hold_carried(at, *owned);
                 false
             }
         }
     }
     /// The block entity carried to `at`, for its moving piston's save.
     pub fn carried(&self, at: &Pos) -> Option<&Carried> {
-        self.carried.get(at)
+        self.carried.get(&chunk_of(*at))?.get(at)
     }
     /// An in-flight tick owns the payload: a piston must refuse rather than replace its lease.
     pub fn is_taken(&self, at: &Pos) -> bool {
@@ -96,16 +97,33 @@ impl BlockEntities {
     }
     /// The owning adapter updates position-owned state before a save or landing.
     pub fn carried_mut(&mut self, at: &Pos) -> Option<&mut Carried> {
-        self.carried.get_mut(at)
+        self.touch_contents();
+        self.carried.get_mut(&chunk_of(*at))?.get_mut(at)
     }
     /// Holds `carried` for the moving piston at `at`, loaded with it.
     pub fn hold_carried(&mut self, at: Pos, carried: Carried) {
-        self.carried.insert(at, carried);
+        self.touch_contents();
+        self.carried
+            .entry(chunk_of(at))
+            .or_default()
+            .insert(at, carried);
     }
     /// Drops the block entity carried to `at` without installing it: a
     /// client's copy once the server's block took the moving piston's place.
     pub fn discard_carried(&mut self, at: &Pos) -> bool {
-        self.carried.remove(at).is_some()
+        self.take_carried(at).is_some()
+    }
+
+    fn take_carried(&mut self, at: &Pos) -> Option<Carried> {
+        self.touch_contents();
+        let Entry::Occupied(mut column) = self.carried.entry(chunk_of(*at)) else {
+            return None;
+        };
+        let payload = column.get_mut().remove(at);
+        if column.get().is_empty() {
+            column.remove();
+        }
+        payload
     }
 }
 
@@ -124,7 +142,7 @@ mod tests {
         default: || 0,
         codec: None,
         copy_on_death: false,
-        sync: false,
+        sync_codec: None,
     };
 
     #[test]
@@ -177,6 +195,32 @@ mod tests {
         entities.unload(|p| p.0 >> 4 == 1);
         assert!(entities.carried(&(17, 64, 1)).is_none());
         assert!(!entities.land((17, 64, 1)));
+    }
+
+    #[test]
+    fn unloading_columns_drops_only_their_destined_payloads() {
+        let mut entities = BlockEntities::default();
+        let (west, east, retained) = ((-1, 64, 1), (16, 64, 1), (0, 64, 2));
+        entities.insert((0, 64, 1), BlockEntity::Chest(vec![]));
+        assert!(entities.carry((0, 64, 1), west));
+        entities.insert((15, 64, 1), BlockEntity::Chest(vec![]));
+        assert!(entities.carry((15, 64, 1), east));
+        entities.insert((-1, 64, 2), BlockEntity::Chest(vec![None; 3]));
+        assert!(entities.carry((-1, 64, 2), retained));
+
+        entities.insert((17, 64, 1), BlockEntity::Chest(vec![]));
+        for column in [(-1, 0), (1, 0), (2, 0)] {
+            entities.unload_column(column);
+        }
+
+        assert_eq!(entities.take_column_unload_entries(), 3);
+        assert!(!entities.contains_key(&(17, 64, 1)));
+        assert!(!entities.land(west));
+        assert!(!entities.land(east));
+        assert!(entities.land(retained));
+        assert!(
+            matches!(entities.get(&retained), Some(BlockEntity::Chest(slots)) if slots.len() == 3)
+        );
     }
 }
 

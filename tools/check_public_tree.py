@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 import subprocess
 import sys
 
-PRIVATE_ROOTS = {".local", "decompiled", "minecraft", "assets", "run", "logs"}
+PRIVATE_ROOTS = {".local", "game-files", "decompiled", "minecraft", "assets", "run", "logs"}
 PRIVATE_EXTENSIONS = {".jar", ".class", ".jfr", ".hprof", ".java"}
 ORIGINAL_JDK_TOOLS = {
     # Original observer of public Paper API events, with no server implementation code.
@@ -22,6 +22,9 @@ ORIGINAL_JDK_TOOLS = {
     # Original differential-fuzz driver for vanilla's math helpers: no game source; it calls the 26.3 jar's methods at
     # run time (public ones, and Entity's private getInputVector by reflection) from the player's own prepared jars.
     "tools/jmath_fuzz/VanillaMathFuzz.java",
+    # HISTORY-ONLY: the modified UTF-8 speed driver moved to mods/sunrise/src/test/java/dev/sunriselab/parity/.
+    # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
+    "tools/modified_utf8_kit/java/Mutf8Bench.java",
     # HISTORY-ONLY: this original comparison driver is no longer in the current tree.
     # Keep its old path allowed so --history/--pre-push accept its legitimate historical addition.
     "tools/refactors/api-pr3/JsonNbtOracle.java",
@@ -100,20 +103,30 @@ def copied_tables():
 
 
 def paths_in_repository(history=False, revisions=None):
+    """The set of paths in the tree, or in the history of `revisions` (every ref when None)."""
     if not history:
         result = subprocess.check_output(["git", "ls-files", "-z"])
-        return result.decode("utf-8").split("\0")
+        return set(result.decode("utf-8").split("\0"))
     # An empty push (including deletions only) must not fall back to HEAD or --all.
     if revisions is not None and not revisions:
-        return []
+        return set()
     roots = ["--all"] if revisions is None else revisions
     # Include diffs against merge parents so merge-resolution-only artifacts are caught.
     # --no-renames: a rename is listed as a deletion and an addition, so both paths still show, and git skips its
     # rename search on every large merge diff (53 s -> 8 s on main's whole history).
     # Git pushes the stored objects, not the history presented by local replace refs.
-    result = subprocess.check_output(["git", "--no-replace-objects", "log", "--format=", "--name-only",
-                                      "-z", "-m", "--no-renames", *roots, "--"])
-    return [path.lstrip("\n") for path in result.decode("utf-8").split("\0")]
+    # Millions of entries in a long history repeat a few thousand paths: read the log as a stream into a set, so
+    # memory follows the distinct paths, not the length of the history (main's whole log held at once took 1.9 GB).
+    paths, pending = set(), b""
+    with subprocess.Popen(["git", "--no-replace-objects", "log", "--format=", "--name-only",
+                           "-z", "-m", "--no-renames", *roots, "--"], stdout=subprocess.PIPE) as log:
+        while chunk := log.stdout.read(1 << 20):
+            *entries, pending = (pending + chunk).split(b"\0")
+            paths.update(entries)
+    if log.returncode:
+        raise subprocess.CalledProcessError(log.returncode, log.args)
+    paths.add(pending)
+    return {path.decode("utf-8").lstrip("\n") for path in paths}
 
 
 def pushed_revisions(stream):
@@ -138,8 +151,8 @@ def main():
     revisions = (pushed_revisions(sys.stdin) if args.pre_push else [args.range] if args.range
                  else ["HEAD"] if args.history else None)
     history = args.history or args.pre_push or bool(args.range)
-    # Millions of entries in a long history repeat a few thousand paths: judge each path once.
-    tracked = set(paths_in_repository(history, revisions))
+    # Each path is judged once.
+    tracked = paths_in_repository(history, revisions)
     rejected = sorted(path for path in tracked if path and prohibited(path))
     tables = [] if history else sorted(copied_tables())
     # The current tree only: history still contains the pre-removal paths.

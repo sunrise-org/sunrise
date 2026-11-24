@@ -80,9 +80,9 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 /// Reads the checkout's declarations and renders the page.
 ///
 /// The declared names alone make this page, so it reads declarations without resolving their
-/// targets into game sources; `mod-api notes` already refuses a target the game no longer has.
+/// targets into game sources. Game-side generation still resolves and validates native targets.
 pub fn generate(root: &Path) -> Result<String, String> {
-    let catalog = Catalog::load_declarations(root).map_err(|error| error.to_string())?;
+    let catalog = Catalog::load(root).map_err(|error| error.to_string())?;
     Ok(render(&catalog))
 }
 

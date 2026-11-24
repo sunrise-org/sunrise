@@ -20,6 +20,11 @@ macro_rules! classes {
     };
 }
 
+/// The reserved namespace for tags generated from block classes, not loaded from packs.
+pub fn is_generated_tag(tag: &str) -> bool {
+    tag.starts_with("sunrise:class/")
+}
+
 classes! {
     Block = "Block" => "sunrise:class/block",
     Air = "AirBlock" => "sunrise:class/air",

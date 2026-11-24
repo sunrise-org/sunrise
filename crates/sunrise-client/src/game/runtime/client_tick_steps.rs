@@ -63,6 +63,7 @@ impl Game<'_> {
                 self.on_tick_rate_changed();
             }
         }
+        self.clock.update_animation_phase(self.texture_ticks);
         Ok(())
     }
     /// The window's own lead of a tick: debug keys and charts, the tutorial and the creative screen.

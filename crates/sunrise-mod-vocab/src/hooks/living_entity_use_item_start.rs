@@ -1,5 +1,4 @@
 //! The `living_entity_use_item_start` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0104
 
 pub trait Hooks {
     /// NeoForge's `LivingEntityUseItemEvent.Start`: `entity` starts using
@@ -16,11 +15,19 @@ pub trait Hooks {
     /// and change the world only on the server (`native_window` is false
     /// there), not on a server's client.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_entity_use_item_start",
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
         neoforge = "LivingEntityUseItemEvent.Start",
         cancellable = true
     )]
-    fn living_entity_use_item_start();
+    fn living_entity_use_item_start(
+        stack: &ItemStack,
+        entity: Option<i32>,
+        hand: Hand,
+        duration: &mut i32,
+        canceled: &mut bool,
+    );
 }

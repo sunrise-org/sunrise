@@ -31,97 +31,183 @@ impl Items {
     }
 }
 
-/// Load-owned custom damage effect slots. Installed before resources load.
-static DAMAGE_EFFECT_IDS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+use mod_vocab::__private::{
+    BorrowedRandom, BoundEnchantmentEntityEffect, BoundEnchantmentValueEffect,
+    EnchantmentEffectRegistry, builtin_enchantment_entity_kind, builtin_enchantment_value_kind,
+};
 
-/// Publish registered identifiers before enchantment content is read.
-pub fn register_damage_effects(ids: Vec<String>) {
+static EFFECT_TYPES: std::sync::OnceLock<EnchantmentEffectRegistry> = std::sync::OnceLock::new();
+
+/// Freeze the two effect type registries before loading any enchantment definitions.
+pub fn install_effect_types(types: EnchantmentEffectRegistry) {
     assert!(
-        DAMAGE_EFFECT_IDS.set(ids).is_ok(),
-        "damage effects already registered"
+        EFFECT_TYPES.set(types).is_ok(),
+        "enchantment effect types already registered"
     );
 }
 
-/// A value node compiled at content load. Slots never enter content JSON or network data.
+const VALUE_LISTS: &[&str] = &[
+    "minecraft:damage_protection",
+    "minecraft:damage",
+    "minecraft:smash_damage_per_fallen_block",
+    "minecraft:knockback",
+    "minecraft:armor_effectiveness",
+    "minecraft:item_damage",
+    "minecraft:equipment_drops",
+    "minecraft:ammo_use",
+    "minecraft:projectile_piercing",
+    "minecraft:projectile_spread",
+    "minecraft:projectile_count",
+    "minecraft:trident_return_acceleration",
+    "minecraft:fishing_time_reduction",
+    "minecraft:fishing_luck_bonus",
+    "minecraft:block_experience",
+    "minecraft:mob_experience",
+    "minecraft:repair_with_xp",
+];
+const SINGLE_VALUES: &[&str] = &[
+    "minecraft:crossbow_charge_time",
+    "minecraft:trident_spin_attack_strength",
+];
+const ENTITY_LISTS: &[&str] = &[
+    "minecraft:post_attack",
+    "minecraft:post_piercing_attack",
+    "minecraft:hit_block",
+    "minecraft:tick",
+    "minecraft:projectile_spawned",
+];
+
 #[derive(Clone)]
-enum DamageValueEffect {
+enum ValueEffect {
     Builtin(Value),
     AllOf(Vec<Self>),
-    Custom {
-        slot: usize,
-        config: sunrise_core::nbt::Tag,
-    },
+    Native(BoundEnchantmentValueEffect),
 }
-impl DamageValueEffect {
-    fn resolve(effect: &Value, ids: &[String]) -> Result<Self, String> {
-        match effect["type"].as_str().unwrap_or("") {
-            "minecraft:all_of" => effect["effects"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|effect| Self::resolve(effect, ids))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Self::AllOf),
-            kind if kind.is_empty() || !kind.contains(':') || kind.starts_with("minecraft:") => {
-                Ok(Self::Builtin(effect.clone()))
-            }
-            kind => ids
+
+/// One decoded entity-effect node, including ordered composition.
+#[derive(Clone)]
+pub enum EntityEffect {
+    /// An engine effect and its data.
+    Builtin(Value),
+    /// Consecutive child effects on the same target.
+    AllOf(Vec<Self>),
+    /// A native codec's bound behavior.
+    Native(BoundEnchantmentEntityEffect),
+}
+
+fn effect_kind(effect: &Value) -> Result<std::borrow::Cow<'_, str>, String> {
+    let kind = effect["type"]
+        .as_str()
+        .ok_or("enchantment effect is missing its type")?;
+    Ok(if kind.contains(':') {
+        kind.into()
+    } else {
+        format!("minecraft:{kind}").into()
+    })
+}
+
+fn effect_children(effect: &Value) -> Result<&[Value], String> {
+    effect["effects"]
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| "all_of.effects must be a list".into())
+}
+
+impl ValueEffect {
+    fn decode(effect: &Value, types: &EnchantmentEffectRegistry) -> Result<Self, String> {
+        let kind = effect_kind(effect)?;
+        match kind.as_ref() {
+            "minecraft:all_of" => effect_children(effect)?
                 .iter()
-                .position(|id| id == kind)
-                .ok_or_else(|| format!("unknown enchantment damage value effect {kind}"))
-                .and_then(|slot| {
-                    sunrise_core::json_nbt::json_to_tag(effect)
-                        .map(|config| Self::Custom { slot, config })
-                        .map_err(|error| error.to_string())
-                }),
+                .map(|child| Self::decode(child, types))
+                .collect::<Result<_, _>>()
+                .map(Self::AllOf),
+            kind if builtin_enchantment_value_kind(kind) => Ok(Self::Builtin(effect.clone())),
+            kind => types.decode_value(kind, effect).map(Self::Native),
         }
     }
-    fn is_custom(&self) -> bool {
-        match self {
-            Self::Custom { .. } => true,
-            Self::AllOf(nodes) => nodes.iter().any(Self::is_custom),
-            Self::Builtin(_) => false,
-        }
-    }
-    fn apply(
-        &self,
-        level: u32,
-        random: &mut LegacyRandom,
-        value: f32,
-        custom: &mut impl FnMut(usize, &sunrise_core::nbt::Tag, u32, f32) -> f32,
-    ) -> f32 {
+
+    fn process(&self, level: u32, random: &mut LegacyRandom, value: f32) -> f32 {
         match self {
             Self::Builtin(effect) => apply_value_effect(effect, level, random, value),
-            Self::AllOf(nodes) => nodes.iter().fold(value, |value, node| {
-                node.apply(level, random, value, custom)
-            }),
-            Self::Custom { slot, config } => {
-                let result = custom(*slot, config, level, value);
-                // Bound mod output before a subsequent per-unit built-in effect.
-                if result.is_nan() {
-                    value
-                } else {
-                    result.clamp(0.0, 1024.0)
-                }
-            }
+            Self::AllOf(nodes) => nodes
+                .iter()
+                .fold(value, |value, node| node.process(level, random, value)),
+            Self::Native(effect) => effect.process(level, &mut BorrowedRandom(random), value),
         }
     }
 }
 
-fn resolve_damage_effects(
-    effects: &Value,
-    ids: &[String],
-) -> Result<Option<Vec<DamageValueEffect>>, String> {
-    let nodes = effects["minecraft:damage"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|entry| DamageValueEffect::resolve(&entry["effect"], ids))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(nodes
-        .iter()
-        .any(DamageValueEffect::is_custom)
-        .then_some(nodes))
+impl EntityEffect {
+    /// Test only engine-owned payloads; native fields were validated by their codec.
+    pub fn all_builtins_match(&self, predicate: fn(&Value) -> bool) -> bool {
+        match self {
+            Self::Builtin(effect) => predicate(effect),
+            Self::AllOf(effects) => effects
+                .iter()
+                .all(|effect| effect.all_builtins_match(predicate)),
+            Self::Native(_) => true,
+        }
+    }
+
+    fn decode(effect: &Value, types: &EnchantmentEffectRegistry) -> Result<Self, String> {
+        let kind = effect_kind(effect)?;
+        match kind.as_ref() {
+            "minecraft:all_of" => effect_children(effect)?
+                .iter()
+                .map(|child| Self::decode(child, types))
+                .collect::<Result<_, _>>()
+                .map(Self::AllOf),
+            kind if builtin_enchantment_entity_kind(kind) => Ok(Self::Builtin(effect.clone())),
+            kind => types.decode_entity(kind, effect).map(Self::Native),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct BoundEffects {
+    values: HashMap<&'static str, Vec<ValueEffect>>,
+    entities: HashMap<&'static str, Vec<EntityEffect>>,
+}
+
+impl BoundEffects {
+    fn decode(effects: &Value, types: &EnchantmentEffectRegistry) -> Result<Self, String> {
+        let entries = |component: &str| -> Result<&[Value], String> {
+            effects[component]
+                .as_array()
+                .map(Vec::as_slice)
+                .ok_or_else(|| format!("{component} expects a list of effects"))
+        };
+        let mut bound = Self::default();
+        for &component in VALUE_LISTS {
+            if effects.get(component).is_some() {
+                let nodes = entries(component)?
+                    .iter()
+                    .map(|entry| ValueEffect::decode(&entry["effect"], types))
+                    .collect::<Result<_, _>>()
+                    .map_err(|err| format!("{component}: {err}"))?;
+                bound.values.insert(component, nodes);
+            }
+        }
+        for &component in SINGLE_VALUES {
+            if let Some(effect) = effects.get(component) {
+                let effect = ValueEffect::decode(effect, types)
+                    .map_err(|err| format!("{component}: {err}"))?;
+                bound.values.insert(component, vec![effect]);
+            }
+        }
+        for &component in ENTITY_LISTS {
+            if effects.get(component).is_some() {
+                let nodes = entries(component)?
+                    .iter()
+                    .map(|entry| EntityEffect::decode(&entry["effect"], types))
+                    .collect::<Result<_, _>>()
+                    .map_err(|err| format!("{component}: {err}"))?;
+                bound.entities.insert(component, nodes);
+            }
+        }
+        Ok(bound)
+    }
 }
 
 /// Levels as numbers in enchantment names ("Sharpness 5"): Sunrise's PvP & HUD option, off by
@@ -150,8 +236,10 @@ impl Cost {
             per_level: per_level.unwrap_or(0),
         }
     }
+    /// `Enchantment.Cost.calculate`: arithmetic wraps like Java `int`.
     pub fn calculate(self, level: u32) -> i32 {
-        self.base + self.per_level * (level as i32 - 1)
+        self.base
+            .wrapping_add(self.per_level.wrapping_mul((level as i32).wrapping_sub(1)))
     }
 }
 #[derive(Clone, Debug)]
@@ -173,8 +261,6 @@ pub struct Enchantment {
     pub exclusive: HashSet<Arc<str>>,
     pub slots: Vec<String>,
     pub effects: Value,
-    /// Mod-owned post-attack payloads, converted once when the definition loads.
-    pub native_post_attack: HashMap<usize, Arc<sunrise_core::nbt::Tag>>,
 }
 /// Item components the enchanting, anvil and smithing rules read.
 #[derive(Clone, Debug, Default)]
@@ -194,11 +280,11 @@ pub struct ItemProps {
 #[derive(Clone, Default)]
 pub struct Enchantments {
     pub list: Vec<Enchantment>,
-    index: HashMap<Arc<str>, usize>,
-    custom_damage: HashMap<Arc<str>, Vec<DamageValueEffect>>,
+    index: BTreeMap<Arc<str>, usize>,
+    bound_effects: HashMap<Arc<str>, BoundEffects>,
     /// Enchantment tags in vanilla `HolderSet` order (nested tags expanded in place).
     pub tags: HashMap<String, Vec<Arc<str>>>,
-    pub entity_tags: HashMap<String, HashSet<String>>,
+    pub entity_tags: Arc<HashMap<String, HashSet<String>>>,
     pub damage_tags: HashMap<String, HashSet<String>>,
     pub props: HashMap<Arc<str>, ItemProps>,
     lang: HashMap<String, String>,
@@ -217,59 +303,6 @@ fn string_list(v: &Value) -> Vec<String> {
             .filter_map(|e| e.as_str().map(str::to_owned))
             .collect(),
         _ => vec![],
-    }
-}
-fn read_tag_dir(dir: &Path) -> HashMap<String, sunrise_world::tag_layers::TagLayers> {
-    read_tag_dir_in(dir, "minecraft")
-}
-/// The resource root's `data/` namespaces other than `minecraft`, in name
-/// order: content mods' files land there (`sunrise_client::mod_content`'s
-/// overlay), as a data pack's namespaces do in `RegistryDataLoader`.
-fn other_namespaces(root: &Path) -> Vec<String> {
-    let mut out = sunrise_world::json_folder::namespaces(&root.join("data"));
-    out.retain(|ns| ns != "minecraft");
-    out
-}
-fn read_tag_dir_in(
-    dir: &Path,
-    namespace: &str,
-) -> HashMap<String, sunrise_world::tag_layers::TagLayers> {
-    let Ok(folder) = sunrise_world::json_folder::read(dir) else {
-        return HashMap::new();
-    };
-    folder
-        .files
-        .iter()
-        .filter_map(|file| {
-            let v = serde_json::from_slice::<Value>(file.bytes().ok()?).ok()?;
-            Some((
-                format!("{namespace}:{}", file.name),
-                sunrise_world::tag_layers::TagLayers::from_file(&v),
-            ))
-        })
-        .collect()
-}
-/// Expand a tag keeping first-seen order and applying removals before its parent uses it.
-fn expand_ordered(
-    name: &str,
-    raw: &HashMap<String, sunrise_world::tag_layers::TagLayers>,
-    out: &mut Vec<String>,
-    depth: u32,
-) {
-    if depth > 16 {
-        return;
-    }
-    if let Some(layers) = raw.get(name) {
-        let members = layers.build(|tag| {
-            let mut child = Vec::new();
-            expand_ordered(tag, raw, &mut child, depth + 1);
-            child
-        });
-        for member in members {
-            if !out.contains(&member) {
-                out.push(member);
-            }
-        }
     }
 }
 /// Roman numerals as in `enchantment.level.N` (falls back to the number).
@@ -386,6 +419,18 @@ pub fn decode_pack_definition(mut value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
+impl Enchantment {
+    /// Whether `Enchantment.matchingSlot` admits this equipment slot.
+    pub fn matches_slot(&self, slot: &str) -> bool {
+        self.slots.iter().any(|group| match group.as_str() {
+            "any" => true,
+            "armor" => matches!(slot, "head" | "chest" | "legs" | "feet" | "body"),
+            "hand" => matches!(slot, "mainhand" | "offhand"),
+            group => group == slot,
+        })
+    }
+}
+
 /// One registry entry from its definition (`Enchantment.DIRECT_CODEC`).
 fn parse_entry(
     id: &str,
@@ -402,21 +447,6 @@ fn parse_entry(
         )
         .into());
     }
-    let native_post_attack = v["effects"]["minecraft:post_attack"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .enumerate()
-        .filter(|(_, e)| {
-            e["effect"]["type"].as_str().is_some_and(|k| {
-                k.contains(':') && !k.starts_with("minecraft:") && !k.starts_with(':')
-            })
-        })
-        .map(|(i, e)| {
-            sunrise_core::json_nbt::json_to_tag(&e["effect"]).map(|tag| (i, Arc::new(tag)))
-        })
-        .collect::<Result<HashMap<_, _>, _>>()
-        .map_err(|error| format!("{id}: {error}"))?;
     let exclusive = match &v["exclusive_set"] {
         Value::String(s) if s.starts_with('#') => tags.get(&s[1..]).cloned().unwrap_or_default(),
         other => string_list(other)
@@ -432,7 +462,6 @@ fn parse_entry(
     };
     let key = v["description"]["translate"].as_str().unwrap_or("");
     Ok(Enchantment {
-        native_post_attack,
         id: Arc::from(id),
         description: lang.get(key).cloned().unwrap_or_else(|| {
             // A data pack's entry may name itself with a literal component
@@ -470,8 +499,7 @@ impl Enchantments {
             })
             .collect();
     }
-    /// Refuse the load if a mod effect payload cannot be represented as NBT.
-    /// Errors identify the enchantment; arbitrary JSON payloads had no prior refusal message.
+    /// Load and bind the selected enchantment effects; decode errors name the definition.
     pub fn load(
         root: &Path,
         defaults: &sunrise_world::item_defaults::ItemDefaults,
@@ -482,6 +510,18 @@ impl Enchantments {
     /// files) overrides definitions and joins enchantment tags in pack order, a
     /// `replace` file dropping the lower sources' (`TagLoader.load`).
     pub fn load_with(
+        root: &Path,
+        overlay: &sunrise_world::loot::PackOverlay,
+        defaults: &sunrise_world::item_defaults::ItemDefaults,
+    ) -> crate::Result<Self> {
+        let mut enchantments = Self::load_definitions(root, overlay, defaults)?;
+        use crate::items::ingredient_defaults::{LoadEntityTags, component_tables};
+        let (_, tags) = component_tables(root, overlay, LoadEntityTags::Prepared)?;
+        enchantments.entity_tags = tags.members().clone();
+        Ok(enchantments)
+    }
+
+    pub(crate) fn load_definitions(
         root: &Path,
         overlay: &sunrise_world::loot::PackOverlay,
         defaults: &sunrise_world::item_defaults::ItemDefaults,
@@ -513,46 +553,14 @@ impl Enchantments {
         defaults: &sunrise_world::item_defaults::ItemDefaults,
         files: impl IntoIterator<Item = (&'a str, &'a Value)>,
     ) -> crate::Result<Self> {
-        let data = root.join("data/minecraft");
-        let mut raw_tags = read_tag_dir(&data.join("tags/enchantment"));
-        let namespaces = other_namespaces(root);
-        // Mods' own enchantment tags (`data/<ns>/tags/enchantment/`): an
-        // `exclusive_set` or a tag of the mod's enchantments.
-        for ns in &namespaces {
-            let dir = root.join("data").join(ns).join("tags/enchantment");
-            for (id, values) in read_tag_dir_in(&dir, ns) {
-                raw_tags.insert(id, values);
-            }
-        }
-        for (id, files) in overlay.tag_kind("enchantment") {
-            for bytes in files {
-                let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                    continue;
-                };
-                raw_tags.entry(id.clone()).or_default().push(&v);
-            }
-        }
-        let tags: HashMap<String, Vec<Arc<str>>> = raw_tags
-            .keys()
-            .map(|k| {
-                let mut v = Vec::new();
-                expand_ordered(k, &raw_tags, &mut v, 0);
-                (
-                    k.clone(),
-                    v.into_iter().map(|s| Arc::from(s.as_str())).collect(),
-                )
-            })
-            .collect();
-        let unordered = |raw: HashMap<String, sunrise_world::tag_layers::TagLayers>| -> HashMap<String, HashSet<String>> {
-            raw.keys()
-                .map(|k| {
-                    let mut v = Vec::new();
-                    expand_ordered(k, &raw, &mut v, 0);
-                    (k.clone(), v.into_iter().collect())
-                })
-                .collect()
-        };
-        let entity_tags = unordered(read_tag_dir(&data.join("tags/entity_type")));
+        let files: Vec<_> = files.into_iter().collect();
+        let admitted: HashSet<_> = files.iter().map(|&(id, _)| id).collect();
+        let tags = sunrise_world::tag_layers::load(root, "enchantment", overlay, |id| {
+            admitted.contains(id)
+        })?
+        .into_iter()
+        .map(|(name, ids)| (name, ids.into_iter().map(Arc::from).collect()))
+        .collect();
         let damage_tags = match sunrise_world::damage_source::Catalog::load(root, overlay) {
             Ok(catalog) => catalog
                 .tags()
@@ -564,7 +572,7 @@ impl Enchantments {
                 })
                 .collect(),
             // Small tools/fixtures may not carry the prepared catalog.
-            Err(_) => unordered(read_tag_dir(&data.join("tags/damage_type"))),
+            Err(_) => crate::items::load_tags(root, "damage_type", overlay)?,
         };
         let lang: HashMap<String, String> =
             sunrise_core::prepared_files::read(&root.join("assets/minecraft/lang/en_us.json"))
@@ -597,7 +605,10 @@ impl Enchantments {
         // Mods' English names for their enchantments (`assets/<ns>/lang/`),
         // under vanilla's, which win a clash.
         let mut lang = lang;
-        for ns in &namespaces {
+        for ns in sunrise_world::json_folder::namespaces(&root.join("data"))
+            .into_iter()
+            .filter(|ns| ns != "minecraft")
+        {
             let path = root.join("assets").join(ns).join("lang/en_us.json");
             let Some(map) = sunrise_core::prepared_files::read(&path)
                 .ok()
@@ -611,24 +622,17 @@ impl Enchantments {
                 }
             }
         }
-        let mut custom_damage = HashMap::new();
+        let mut bound_effects = HashMap::new();
+        let empty = EnchantmentEffectRegistry::default();
+        let types = EFFECT_TYPES.get().unwrap_or(&empty);
         let list = files
             .into_iter()
-            .filter_map(|(id, v)| {
-                match resolve_damage_effects(
-                    &v["effects"],
-                    DAMAGE_EFFECT_IDS.get().map_or(&[], Vec::as_slice),
-                ) {
-                    Ok(Some(nodes)) => {
-                        custom_damage.insert(Arc::from(id), nodes);
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        eprintln!("enchantment {id}: {error}");
-                        return None;
-                    }
-                }
-                Some(parse_entry(id, v, &tags, &lang))
+            .map(|(id, value)| {
+                let entry = parse_entry(id, value, &tags, &lang)?;
+                let effects = BoundEffects::decode(&entry.effects, types)
+                    .map_err(|err| format!("enchantment {id}: {err}"))?;
+                bound_effects.insert(entry.id.clone(), effects);
+                Ok(entry)
             })
             .collect::<crate::Result<Vec<_>>>()?;
         let index = list
@@ -658,9 +662,9 @@ impl Enchantments {
         Ok(Self {
             list,
             index,
-            custom_damage,
+            bound_effects,
             tags,
-            entity_tags,
+            entity_tags: Default::default(),
             damage_tags,
             props,
             lang,
@@ -680,6 +684,10 @@ impl Enchantments {
     pub fn get(&self, id: &str) -> Option<&Enchantment> {
         self.index.get(id).map(|&i| &self.list[i])
     }
+    /// The accepted registry IDs in lexical order, independent of gameplay's slot order.
+    pub fn registry_ids(&self) -> impl Iterator<Item = &str> {
+        self.index.keys().map(AsRef::as_ref)
+    }
     /// The table a client plays a server with: this one and the server's
     /// entries it lacks (a data pack's), from the definitions the registry
     /// sync sent; `None` when there are none. The names then come from the
@@ -693,21 +701,10 @@ impl Enchantments {
             if self.index.contains_key(id) {
                 continue;
             }
-            let nodes = match resolve_damage_effects(
-                &v["effects"],
-                DAMAGE_EFFECT_IDS.get().map_or(&[], Vec::as_slice),
-            ) {
-                Ok(nodes) => nodes,
-                Err(error) => {
-                    eprintln!("synced enchantment {id}: {error}; retaining display definition");
-                    None
-                }
-            };
             let t = table.get_or_insert_with(|| self.clone());
+            // A remote definition supplies display data; only the authoritative
+            // side binds and invokes its native handlers.
             let e = parse_entry(id, v, &t.tags, &t.lang)?;
-            if let Some(nodes) = nodes {
-                t.custom_damage.insert(e.id.clone(), nodes);
-            }
             t.index.insert(e.id.clone(), t.list.len());
             t.list.push(e);
         }
@@ -1075,61 +1072,146 @@ impl Enchantments {
         random: &mut LegacyRandom,
         mut value: f32,
     ) -> f32 {
-        let Some(e) = self.get(id) else { return value };
-        for effect in e.effects[component].as_array().into_iter().flatten() {
-            if let Some(req) = effect.get("requirements")
-                && !self.condition(req, level, ctx, random)
+        for (index, entry) in self.conditional_value_entries(id, component).enumerate() {
+            if entry
+                .get("requirements")
+                .is_none_or(|req| self.condition(req, level, ctx, random))
             {
-                continue;
+                value = self.process_value(
+                    id,
+                    component,
+                    index,
+                    &entry["effect"],
+                    level,
+                    random,
+                    value,
+                );
             }
-            value = apply_value_effect(&effect["effect"], level, random, value);
         }
         value
     }
-    /// Evaluate damage with a gameplay-owned callback for resolved custom nodes.
-    pub fn modify_damage(
+
+    fn conditional_value_entries<'a>(
+        &'a self,
+        id: &str,
+        component: &str,
+    ) -> impl Iterator<Item = &'a Value> {
+        self.get(id)
+            .and_then(|enchantment| enchantment.effects[component].as_array())
+            .into_iter()
+            .flatten()
+    }
+
+    /// Process a value node selected by its component's vanilla iteration.
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_value(
         &self,
-        levels: &[(Arc<str>, u32)],
+        id: &str,
+        component: &str,
+        index: usize,
+        effect: &Value,
+        level: u32,
+        random: &mut LegacyRandom,
+        value: f32,
+    ) -> f32 {
+        match self
+            .bound_effects
+            .get(id)
+            .and_then(|items| items.values.get(component))
+            .and_then(|nodes| nodes.get(index))
+        {
+            Some(node) => node.process(level, random, value),
+            None => apply_value_effect(effect, level, random, value),
+        }
+    }
+
+    /// Find the effect bound for this selected definition, component and entry.
+    pub fn entity_effect(&self, id: &str, component: &str, index: usize) -> Option<&EntityEffect> {
+        self.bound_effects
+            .get(id)?
+            .entities
+            .get(component)?
+            .get(index)
+    }
+
+    /// Read the vanilla portions of a value component without invoking a native callback.
+    /// The player's equipment display cache carries no live damage source or entity random.
+    pub fn preview_value(
+        &self,
+        stack: &ItemStack,
+        component: &str,
         ctx: &EffectContext<'_>,
         random: &mut LegacyRandom,
-        mut value: f32,
-        custom: &mut impl FnMut(usize, &sunrise_core::nbt::Tag, u32, f32) -> f32,
     ) -> f32 {
-        for (id, level) in levels.iter() {
-            let Some(nodes) = self.custom_damage.get(id.as_ref()) else {
-                value = self.modify_value_with(id, *level, "minecraft:damage", ctx, random, value);
-                continue;
-            };
-            let enchantment = self.get(id).expect("compiled enchantment exists");
-            for (entry, node) in enchantment.effects["minecraft:damage"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .zip(nodes)
-            {
+        let mut value = 0.0;
+        for (id, level) in stack.enchantments() {
+            for entry in self.conditional_value_entries(id, component) {
                 if entry
                     .get("requirements")
                     .is_none_or(|req| self.condition(req, *level, ctx, random))
                 {
-                    value = node.apply(*level, random, value, custom);
+                    value = apply_value_effect(&entry["effect"], *level, random, value);
                 }
             }
         }
         value
     }
-    /// Whether this stack needs the gameplay callback evaluator. Keys were resolved at load.
-    pub fn has_custom_damage(&self, levels: &[(Arc<str>, u32)]) -> bool {
-        if self.custom_damage.is_empty() {
-            return false;
+
+    /// Check requirements on the level stream and apply on the subject's own stream.
+    pub fn modify_entity_value(
+        &self,
+        levels: &[(Arc<str>, u32)],
+        component: &str,
+        ctx: &EffectContext<'_>,
+        level_random: &mut LegacyRandom,
+        entity_random: &mut LegacyRandom,
+        mut value: f32,
+    ) -> f32 {
+        for (id, level) in levels {
+            for (index, entry) in self.conditional_value_entries(id, component).enumerate() {
+                if entry
+                    .get("requirements")
+                    .is_none_or(|req| self.condition(req, *level, ctx, level_random))
+                {
+                    value = self.process_value(
+                        id,
+                        component,
+                        index,
+                        &entry["effect"],
+                        *level,
+                        entity_random,
+                        value,
+                    );
+                }
+            }
         }
-        levels
-            .iter()
-            .any(|(id, _)| self.custom_damage.contains_key(id.as_ref()))
+        value
     }
-    /// Whether loaded content contains any custom damage nodes.
-    pub fn has_custom_damage_effects(&self) -> bool {
-        !self.custom_damage.is_empty()
+    /// Chain `damage_protection` from one equipped stack in vanilla slot order.
+    pub fn equipment_protection(
+        &self,
+        stack: &ItemStack,
+        slot: &str,
+        ctx: &EffectContext<'_>,
+        level_random: &mut LegacyRandom,
+        entity_random: &mut LegacyRandom,
+        mut value: f32,
+    ) -> f32 {
+        for (id, level) in stack.all_enchantments().iter() {
+            if self.get(id).is_some_and(|def| def.matches_slot(slot)) {
+                value = self.modify_entity_value(
+                    std::slice::from_ref(&(id.clone(), *level)),
+                    "minecraft:damage_protection",
+                    ctx,
+                    level_random,
+                    entity_random,
+                    value,
+                );
+            }
+        }
+        value
     }
+
     /// `EnchantmentHelper.has`: whether `stack` has any enchantment providing
     /// `component`. It reads the stack's own component.
     pub fn has_component(&self, stack: &ItemStack, component: &str) -> bool {
@@ -1198,19 +1280,79 @@ impl Enchantments {
                 .sum()
         })
     }
+    /// A resolved entity-type tag from the same pack stack as these enchantments.
+    pub fn entity_in_tag(&self, entity: &str, tag: &str) -> bool {
+        self.entity_tags
+            .get(tag)
+            .is_some_and(|set| set.contains(entity))
+    }
+
+    /// `EnchantmentHelper.runIterationOnEquipment`, restricted to enchantments
+    /// that can answer `isImmuneToDamage`.
+    pub fn damage_immunities<'a>(
+        &'a self,
+        equipment: impl IntoIterator<Item = (&'a [(Arc<str>, u32)], &'a str)> + 'a,
+    ) -> impl Iterator<Item = (&'a Arc<str>, u32)> + 'a {
+        equipment.into_iter().flat_map(move |(levels, slot)| {
+            levels.iter().filter_map(move |(id, level)| {
+                let enchantment = self.get(id)?;
+                (enchantment.matches_slot(slot)
+                    && enchantment
+                        .effects
+                        .get("minecraft:damage_immunity")
+                        .is_some())
+                .then_some((id, *level))
+            })
+        })
+    }
+
+    /// `Enchantment.isImmuneToDamage`: a registered, active enchantment must
+    /// match the current source, not just declare a damage immunity effect.
+    pub fn is_damage_immune<'a>(
+        &self,
+        active: impl IntoIterator<Item = (&'a Arc<str>, u32)>,
+        context: &EffectContext<'_>,
+        random: &mut LegacyRandom,
+    ) -> bool {
+        active.into_iter().any(|(id, level)| {
+            self.get(id).is_some_and(|enchantment| {
+                enchantment.effects["minecraft:damage_immunity"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|entry| {
+                        entry.get("requirements").is_none_or(|requirement| {
+                            self.condition(requirement, level, context, random)
+                        })
+                    })
+            })
+        })
+    }
+
     fn entity_matches(&self, spec: &Value, entity: Option<&str>) -> bool {
         let Some(entity) = entity else { return false };
         match spec.as_str() {
             Some(s) => match s.strip_prefix('#') {
-                Some(tag) => self
-                    .entity_tags
-                    .get(tag)
-                    .is_some_and(|t| t.contains(entity)),
+                Some(tag) => self.entity_in_tag(entity, tag),
                 None => s == entity,
             },
             None => string_list(spec).iter().any(|s| s == entity),
         }
     }
+    fn entity_predicate_matches(
+        &self,
+        predicate: &Value,
+        entity: Option<&str>,
+        motion: Option<(f64, bool)>,
+    ) -> bool {
+        let spec = predicate
+            .get("minecraft:entity_type")
+            .unwrap_or(&predicate["type"]);
+        entity.is_some()
+            && (spec.is_null() || self.entity_matches(spec, entity))
+            && movement_matches(predicate, motion)
+    }
+
     /// The loot-condition subset enchantment `requirements` use.
     pub fn condition(
         &self,
@@ -1247,36 +1389,83 @@ impl Enchantments {
                     })
             }
             "minecraft:damage_source_properties" => {
-                let p = &c["predicate"];
-                if let Some(direct) = p["is_direct"].as_bool()
-                    && direct != ctx.is_direct
-                {
+                let Some(damage_type) = ctx.damage_type else {
                     return false;
-                }
+                };
+                let p = &c["predicate"];
                 p["tags"].as_array().into_iter().flatten().all(|t| {
                     let tag = t["id"].as_str().unwrap_or("").trim_start_matches('#');
-                    let has = ctx
-                        .damage_type
-                        .is_some_and(|d| self.damage_tags.get(tag).is_some_and(|s| s.contains(d)));
+                    let has = self
+                        .damage_tags
+                        .get(tag)
+                        .is_some_and(|s| s.contains(damage_type));
                     has == t["expected"].as_bool().unwrap_or(true)
-                })
+                }) && p.get("direct_entity").is_none_or(|predicate| {
+                    self.entity_predicate_matches(predicate, ctx.direct_attacker, ctx.direct_motion)
+                }) && p.get("source_entity").is_none_or(|predicate| {
+                    self.entity_predicate_matches(predicate, ctx.attacker, ctx.attacker_motion)
+                }) && p["is_direct"]
+                    .as_bool()
+                    .is_none_or(|direct| direct == ctx.is_direct)
             }
             "minecraft:entity_properties" => {
-                let entity = match c["entity"].as_str().unwrap_or("this") {
-                    "this" => ctx.this,
-                    "attacker" => ctx.attacker,
-                    "direct_attacker" => ctx.direct_attacker,
-                    _ => None,
+                let (entity, motion) = match c["entity"].as_str().unwrap_or("this") {
+                    "this" => (ctx.this, ctx.this_motion),
+                    "attacker" => (ctx.attacker, ctx.attacker_motion),
+                    "direct_attacker" => (ctx.direct_attacker, ctx.direct_motion),
+                    _ => (None, None),
                 };
-                let spec = &c["predicate"]["minecraft:entity_type"];
-                let spec = if spec.is_null() {
-                    &c["predicate"]["type"]
-                } else {
-                    spec
-                };
-                (spec.is_null() && entity.is_some() || self.entity_matches(spec, entity))
-                    && movement_matches(&c["predicate"], role_state(c, ctx))
+                let predicate = &c["predicate"];
+                if !self.entity_predicate_matches(predicate, entity, motion) {
+                    return false;
+                }
+                if c["entity"].as_str().unwrap_or("this") != "this" {
+                    return true;
+                }
+                let location = &predicate["minecraft:location"];
+                let grounded = predicate["minecraft:flags"]["is_on_ground"].as_bool();
+                let speed = &predicate["minecraft:movement"]["horizontal_speed"];
+                let affected_by = &predicate["minecraft:movement_affected_by"]["block"];
+                let period = predicate["minecraft:periodic_tick"].as_u64();
+                location["can_see_sky"]
+                    .as_bool()
+                    .is_none_or(|sky| ctx.sees_sky == Some(sky))
+                    && grounded.is_none_or(|grounded| ctx.grounded == Some(grounded))
+                    && (speed.is_null()
+                        || ctx
+                            .horizontal_speed
+                            .is_some_and(|v| matches_double(speed, v)))
+                    && (affected_by.is_null()
+                        || effect_block_matches(affected_by, ctx.movement_block, ctx.items))
+                    && period.is_none_or(|period| {
+                        period != 0 && ctx.tick.is_some_and(|tick| u64::from(tick) % period == 0)
+                    })
             }
+            "minecraft:weather_check" => ctx.weather.is_some_and(|(raining, thundering)| {
+                c["raining"].as_bool().is_none_or(|v| v == raining)
+                    && c["thundering"].as_bool().is_none_or(|v| v == thundering)
+            }),
+            "minecraft:location_check" => {
+                let predicate = &c["predicate"];
+                predicate["can_see_sky"]
+                    .as_bool()
+                    .is_none_or(|sky| ctx.sees_sky == Some(sky))
+                    && (predicate["block"].is_null()
+                        || effect_block_matches(&predicate["block"], ctx.hit_block, ctx.items))
+            }
+            "minecraft:block_state_property" => ctx.hit_state.is_some_and(|state| {
+                c["block"]
+                    .as_str()
+                    .is_some_and(|name| state.name.as_str() == name)
+                    && c["properties"].as_object().is_none_or(|properties| {
+                        properties.iter().all(|(key, value)| {
+                            state
+                                .properties
+                                .get(key)
+                                .is_some_and(|actual| value.as_str() == Some(actual.as_str()))
+                        })
+                    })
+            }),
             "minecraft:random_chance" => {
                 let chance = match &c["chance"] {
                     Value::Object(o)
@@ -1308,16 +1497,40 @@ pub struct EffectContext<'a> {
     pub this: Option<&'a str>,
     pub attacker: Option<&'a str>,
     pub direct_attacker: Option<&'a str>,
-    /// The direct attacker's fall distance and whether it flies (elytra or
-    /// abilities), for `movement` and `flags` predicates.
+    /// The roles' fall distance and flying state, where the game knows them.
+    pub this_motion: Option<(f64, bool)>,
+    pub attacker_motion: Option<(f64, bool)>,
     pub direct_motion: Option<(f64, bool)>,
+    /// Weather and sky at the context's origin, where available.
+    pub weather: Option<(bool, bool)>,
+    pub sees_sky: Option<bool>,
+    pub hit_block: Option<&'a str>,
+    pub hit_state: Option<&'a sunrise_world::chunk::BlockState>,
+    pub movement_block: Option<&'a str>,
+    pub grounded: Option<bool>,
+    pub horizontal_speed: Option<f64>,
+    pub tick: Option<u32>,
 }
-/// The fall distance and flying flag known for an `entity_properties` role.
-fn role_state(c: &Value, ctx: &EffectContext<'_>) -> Option<(f64, bool)> {
-    match c["entity"].as_str().unwrap_or("this") {
-        "direct_attacker" => ctx.direct_motion,
-        _ => None,
+
+fn effect_block_matches(predicate: &Value, block: Option<&str>, items: Option<&Items>) -> bool {
+    block.is_some_and(|block| {
+        let blocks = &predicate["blocks"];
+        blocks.is_null()
+            || string_list(blocks).iter().any(|name| {
+                name.strip_prefix('#').map_or_else(
+                    || name == block,
+                    |tag| items.is_some_and(|items| items.block_in_tag(tag, block)),
+                )
+            })
+    })
+}
+
+fn matches_double(bounds: &Value, value: f64) -> bool {
+    if let Some(exact) = bounds.as_f64() {
+        return exact == value;
     }
+    bounds["min"].as_f64().is_none_or(|min| min <= value)
+        && bounds["max"].as_f64().is_none_or(|max| value <= max)
 }
 /// `EntityPredicate`'s `minecraft:movement` fall distance and
 /// `minecraft:flags` is_flying (the parts enchantment requirements use); an
@@ -1386,31 +1599,46 @@ pub fn apply_value_effect(
     random: &mut LegacyRandom,
     value: f32,
 ) -> f32 {
-    match effect["type"].as_str().unwrap_or("") {
-        "minecraft:add" => value + level_value(&effect["value"], level),
-        "minecraft:multiply" => value * level_value(&effect["factor"], level),
-        "minecraft:set" => level_value(&effect["value"], level),
-        "minecraft:remove_binomial" => {
+    let kind = effect["type"].as_str().unwrap_or("");
+    match kind.strip_prefix("minecraft:").unwrap_or(kind) {
+        "add" => value + level_value(&effect["value"], level),
+        "multiply" => value * level_value(&effect["factor"], level),
+        "set" => level_value(&effect["value"], level),
+        "exponential" => {
+            (f64::from(value)
+                * sunrise_core::jmath::pow(
+                    f64::from(level_value(&effect["base"], level)),
+                    f64::from(level_value(&effect["exponent"], level)),
+                )) as f32
+        }
+        "remove_binomial" => {
             let p = level_value(&effect["chance"], level);
             let n = value;
-            // Normal approximation for large counts (written as vanilla's negated tests).
-            let large = n > 128.0 && n * p >= 20.0 && n * (1.0 - p) >= 20.0;
-            let removed = if large {
-                let miu = (f64::from(n) * f64::from(p)).floor();
-                let sigma = (f64::from(n) * f64::from(p) * f64::from(1.0 - p)).sqrt();
-                ((miu + random.next_gaussian() * sigma).round() as i32).clamp(0, n as i32)
+            let mean = n * p;
+            let other = 1.0 - p;
+            use std::cmp::Ordering::{Equal, Less};
+            let removed = if !matches!(n.partial_cmp(&128.0), Some(Less | Equal))
+                && mean.partial_cmp(&20.0) != Some(Less)
+                && (n * other).partial_cmp(&20.0) != Some(Less)
+            {
+                let mu = f64::from(mean).floor();
+                let sigma = f64::from(mean * other).sqrt();
+                (sunrise_core::jmath::round(mu + random.next_gaussian() * sigma) as i32)
+                    .clamp(0, n as i32)
             } else {
-                let mut d = 0;
-                for _ in 0..n as i32 {
+                let mut removed = 0_i32;
+                let mut draw = 0_i32;
+                while (draw as f32) < n {
                     if random.next_float() < p {
-                        d += 1;
+                        removed = removed.wrapping_add(1);
                     }
+                    draw = draw.wrapping_add(1);
                 }
-                d
+                removed
             };
             n - removed as f32
         }
-        "minecraft:all_of" => effect["effects"]
+        "all_of" => effect["effects"]
             .as_array()
             .into_iter()
             .flatten()
@@ -1425,30 +1653,6 @@ pub mod tests {
     use serde_json::json;
 
     #[test]
-    fn custom_damage_output_is_bounded_before_builtin_nodes() {
-        let node = DamageValueEffect::resolve(
-            &json!({"type":"minecraft:all_of", "effects":[
-                {"type":"test:damage"}, {"type":"minecraft:remove_binomial","chance":0},
-                {"type":"minecraft:add","value":2}
-            ]}),
-            &["test:damage".into()],
-        )
-        .unwrap();
-        for (output, expected) in [
-            (f32::NAN, 9.0),
-            (f32::INFINITY, 1026.0),
-            (f32::NEG_INFINITY, 2.0),
-            (-1.0, 2.0),
-            (f32::MAX, 1026.0),
-        ] {
-            assert_eq!(
-                node.apply(1, &mut LegacyRandom::new(0), 7.0, &mut |_, _, _, _| output),
-                expected
-            );
-        }
-    }
-
-    #[test]
     fn synced_unknown_damage_retains_enchantment_definition() {
         let definition = json!({"description":"Remote", "effects":{"minecraft:damage":[
             {"effect":{"type":"remote:damage"}}
@@ -1461,93 +1665,56 @@ pub mod tests {
     }
 
     #[test]
-    fn legacy_value_types_remain_noops() {
-        for kind in ["minecraft:exponential", "minecraft:unknown", "add", ""] {
-            let node = DamageValueEffect::resolve(&json!({"type":kind}), &[]).unwrap();
-            assert_eq!(
-                node.apply(1, &mut LegacyRandom::new(0), 7.0, &mut |_, _, _, _| panic!(
-                    "not custom"
-                )),
-                7.0
-            );
+    fn damage_requirements_and_value_effects_advance_different_owners() {
+        let mut enchantments = sample();
+        let index = enchantments.index["minecraft:sharpness"];
+        enchantments.list[index].effects = json!({"minecraft:damage":[{
+            "effect":{"type":"minecraft:remove_binomial", "chance":0.5},
+            "requirements":{"condition":"minecraft:random_chance", "chance":1.0}
+        }]});
+        let mut level = LegacyRandom::new(42);
+        let mut victim = LegacyRandom::new(0);
+        let value = enchantments.modify_entity_value(
+            &[("minecraft:sharpness".into(), 1)],
+            "minecraft:damage",
+            &EffectContext::default(),
+            &mut level,
+            &mut victim,
+            2.0,
+        );
+        // Java Random(0) first two floats are greater than 0.5.
+        assert_eq!(value, 2.0);
+        assert_eq!(level.next_int(), 234_785_527);
+        assert_eq!(victim.next_int(), 1_033_096_058);
+    }
+
+    #[test]
+    fn unknown_nested_effect_identifies_its_component_and_kind() {
+        for component in ["minecraft:damage", "minecraft:post_attack"] {
+            let effects = json!({(component): [{"effect":{"type":"all_of", "effects":[{"type":"missing:effect"}]}}]});
+            let error = BoundEffects::decode(&effects, &EnchantmentEffectRegistry::default())
+                .err()
+                .unwrap();
+            assert!(error.starts_with(component));
+            assert!(error.ends_with("missing:effect"));
         }
     }
 
     #[test]
-    fn custom_damage_nodes_compose_with_vanilla_in_order() {
-        let mut enchantments = sample();
-        let node = json!({"type":"minecraft:all_of", "effects":[
-            {"type":"minecraft:add", "value":2},
-            {"type":"test:scale", "factor":3},
-            {"type":"minecraft:all_of", "effects":[
-                {"type":"test:offset", "value":4},
-                {"type":"minecraft:multiply", "factor":2}
-            ]}
-        ]});
-        let compiled =
-            DamageValueEffect::resolve(&node, &["test:scale".into(), "test:offset".into()])
-                .unwrap();
-        enchantments
-            .custom_damage
-            .insert("minecraft:sharpness".into(), vec![compiled]);
-        let index = enchantments.index["minecraft:sharpness"];
-        enchantments.list[index].effects = json!({"minecraft:damage":[{"effect":node}]});
-        let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
-        stack.data_mut().enchantments = vec![("minecraft:sharpness".into(), 2)];
-        let mut calls = Vec::new();
-        let result = enchantments.modify_damage(
-            &stack.all_enchantments(),
-            &EffectContext::default(),
-            &mut LegacyRandom::new(0),
-            5.0,
-            &mut |slot, config, level, value| {
-                calls.push((slot, level, value));
-                let config = sunrise_core::json_nbt::tag_to_json(config).unwrap();
-                match slot {
-                    0 => value * config["factor"].as_f64().unwrap() as f32,
-                    1 => value + config["value"].as_f64().unwrap() as f32,
-                    _ => panic!("unresolved slot"),
-                }
-            },
-        );
-        // ((5 + 2) * 3 + 4) * 2, including both nested custom nodes.
-        assert_eq!(result, 50.0);
-        assert_eq!(calls, [(0, 2, 7.0), (1, 2, 21.0)]);
-    }
-
-    #[test]
-    fn custom_damage_requirements_skip_callbacks_and_keep_random_order() {
-        let mut enchantments = sample();
-        let effect = json!({"type":"test:damage"});
-        enchantments.custom_damage.insert(
-            "minecraft:sharpness".into(),
-            vec![DamageValueEffect::resolve(&effect, &["test:damage".into()]).unwrap()],
-        );
-        let index = enchantments.index["minecraft:sharpness"];
-        enchantments.list[index].effects = json!({"minecraft:damage":[{
-            "effect":effect, "requirements":{"condition":"minecraft:random_chance", "chance":0.0}
-        }]});
-        let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
-        stack.data_mut().enchantments = vec![("minecraft:sharpness".into(), 1)];
+    fn binomial_draws_for_fractional_and_unordered_inputs() {
+        let effect = json!({"type":"remove_binomial", "chance":0.0});
         let mut random = LegacyRandom::new(42);
-        let value = enchantments.modify_damage(
-            &stack.all_enchantments(),
-            &EffectContext::default(),
-            &mut random,
-            7.0,
-            &mut |_, _, _, _| panic!("a refused node must not run"),
-        );
-        assert_eq!(value, 7.0);
-        // java.util.Random(42): nextFloat for the condition, then nextInt.
+        assert_eq!(apply_value_effect(&effect, 1, &mut random, 0.5), 0.5);
         assert_eq!(random.next_int(), 234_785_527);
-    }
-
-    #[test]
-    fn unknown_custom_damage_is_refused_with_its_identifier() {
-        let node = json!({"type":"minecraft:all_of", "effects":[{"type":"missing:damage"}]});
+        let mut random = LegacyRandom::new(42);
+        let mut gaussian = random.clone();
+        gaussian.next_gaussian();
+        assert!(apply_value_effect(&effect, 1, &mut random, f32::NAN).is_nan());
+        assert_eq!(random.next_int(), gaussian.next_int());
+        let effect = json!({"type":"exponential", "base":4, "exponent":0.5});
         assert_eq!(
-            DamageValueEffect::resolve(&node, &[]).err().unwrap(),
-            "unknown enchantment damage value effect missing:damage"
+            apply_value_effect(&effect, 1, &mut random, 2_000.0),
+            4_000.0
         );
     }
 
@@ -1555,7 +1722,6 @@ pub mod tests {
     fn damage_without_custom_nodes_preserves_vanilla_values_and_random() {
         let enchantments = sample();
         let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
-        let mut calls = 0;
         for (levels, expected) in [
             (vec![], 7.0),
             (vec![("minecraft:sharpness".into(), 3)], 9.0),
@@ -1568,21 +1734,18 @@ pub mod tests {
             };
             let mut random = LegacyRandom::new(42);
             assert_eq!(
-                enchantments.modify_damage(
+                enchantments.modify_entity_value(
                     &stack.all_enchantments(),
+                    "minecraft:damage",
                     &context,
                     &mut random,
+                    &mut LegacyRandom::new(0),
                     7.0,
-                    &mut |_, _, _, value| {
-                        calls += 1;
-                        value
-                    }
                 ),
                 expected
             );
             assert_eq!(random.next_int(), -1_170_105_035);
         }
-        assert_eq!(calls, 0);
     }
 
     #[test]
@@ -1656,13 +1819,14 @@ pub mod tests {
             ("tags/wpenchant:enchantment/fixture".to_owned(), vec![tag]),
         ];
         write("items.json", &json!({}));
+        write("entity-types.json", &json!({"minecraft:pig": {}}));
         let defaults = sunrise_world::item_defaults::read(&root).unwrap();
         let base = Enchantments::load(&root, &defaults).unwrap();
         let loaded = Enchantments::load_with(
             &root,
             &sunrise_world::loot::PackOverlay {
                 files: &files,
-                ..sunrise_world::loot::PackOverlay::NONE
+                ..sunrise_world::loot::PackOverlay::default()
             },
             &defaults,
         )
@@ -1809,84 +1973,6 @@ pub mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn native_payloads_are_retained_and_invalid_definitions_refused() {
-        let tags = HashMap::new();
-        let lang = HashMap::new();
-        let definition = json!({"effects":{"minecraft:post_attack":[
-            {"effect":{"type":"minecraft:ignite","duration":4}},
-            {"effect":{"type":"example:charge","amount":42}}
-        ]}});
-        let entry = parse_entry("example:charge", &definition, &tags, &lang).unwrap();
-        assert!(!entry.native_post_attack.contains_key(&0));
-        let payload = &entry.native_post_attack[&1];
-        assert_eq!(
-            payload.get("amount"),
-            Some(&sunrise_core::nbt::Tag::Byte(42))
-        );
-        assert!(Arc::ptr_eq(payload, &entry.clone().native_post_attack[&1]));
-        let bad = json!({"effects":{"minecraft:post_attack":[{"effect":{"type":"example:charge","bad":null}}]}});
-        assert!(parse_entry("example:charge", &bad, &tags, &lang).is_err());
-        let base = sample();
-        let before = base.list.len();
-        let error = base
-            .with_entries([("example:valid", &definition), ("example:invalid", &bad)])
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("example:invalid"));
-        assert_eq!(base.list.len(), before);
-        assert!(base.get("example:valid").is_none());
-
-        let root = std::env::temp_dir().join(format!(
-            "sunrise-enchant-refusal-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(root.join("data/example/enchantment")).unwrap();
-        std::fs::write(root.join("items.json"), "{}").unwrap();
-        std::fs::write(
-            root.join("data/example/enchantment/invalid.json"),
-            bad.to_string(),
-        )
-        .unwrap();
-        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
-        let error = Enchantments::load(&root, &defaults).err().unwrap();
-        assert!(error.to_string().contains("example:invalid"));
-        std::fs::remove_file(root.join("data/example/enchantment/invalid.json")).unwrap();
-        let files = vec![(
-            "enchantment/example:charge".to_owned(),
-            vec![serde_json::to_vec(&definition).unwrap()],
-        )];
-        let overlay = sunrise_world::loot::PackOverlay {
-            files: &files,
-            ..sunrise_world::loot::PackOverlay::NONE
-        };
-        let loaded = Enchantments::load_with(&root, &overlay, &defaults).unwrap();
-        assert_eq!(
-            loaded.get("example:charge").unwrap().native_post_attack[&1].get("amount"),
-            Some(&sunrise_core::nbt::Tag::Byte(42))
-        );
-        let files = vec![(
-            "enchantment/example:invalid".to_owned(),
-            vec![serde_json::to_vec(&bad).unwrap()],
-        )];
-        let overlay = sunrise_world::loot::PackOverlay {
-            files: &files,
-            ..sunrise_world::loot::PackOverlay::NONE
-        };
-        assert!(
-            Enchantments::load_with(&root, &overlay, &defaults)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("example:invalid")
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
     /// A small registry built from literal JSON matching the vanilla files.
     pub fn sample() -> Enchantments {
         let defs = [
@@ -1945,7 +2031,6 @@ pub mod tests {
                 },
                 slots: vec![],
                 effects: v["effects"].clone(),
-                native_post_attack: HashMap::new(),
             })
             .collect();
         let index = list
@@ -2003,9 +2088,9 @@ pub mod tests {
         Enchantments {
             list,
             index,
-            custom_damage: HashMap::new(),
+            bound_effects: HashMap::new(),
             tags,
-            entity_tags,
+            entity_tags: Arc::new(entity_tags),
             damage_tags,
             props,
             lang: HashMap::new(),
@@ -2160,6 +2245,15 @@ pub mod tests {
     }
 
     #[test]
+    fn enchantment_cost_wraps_like_java_int() {
+        let cost = Cost {
+            base: i32::MAX,
+            per_level: 1,
+        };
+        assert_eq!(cost.calculate(2), i32::MIN);
+    }
+
+    #[test]
     fn enchanting_cost_matches_vanilla_formula() {
         let e = sample();
         // Replays EnchantmentHelper.getEnchantmentCost draws by hand.
@@ -2239,6 +2333,84 @@ pub mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn damage_source_requirements_match_each_entity_role_and_refuse_absent_entities() {
+        let mut enchantments = sample();
+        let id: Arc<str> = "minecraft:sharpness".into();
+        let requirements = json!({"condition":"minecraft:damage_source_properties","predicate":{
+            "source_entity":{"minecraft:entity_type":"minecraft:skeleton"},
+            "direct_entity":{"minecraft:entity_type":"minecraft:arrow"},
+            "is_direct":false
+        }});
+        let index = enchantments.index[id.as_ref()];
+        enchantments.list[index].slots = vec!["hand".into()];
+        enchantments.list[index].effects = json!({
+            "minecraft:damage_immunity":[{"requirements":requirements}],
+            "minecraft:damage":[{"requirements":requirements,"effect":{"type":"minecraft:add","value":3}}]
+        });
+        let levels = [(id, 1)];
+        let arrow = EffectContext {
+            damage_type: Some("minecraft:arrow"),
+            attacker: Some("minecraft:skeleton"),
+            direct_attacker: Some("minecraft:arrow"),
+            ..Default::default()
+        };
+        for (ctx, matches) in [
+            (arrow, true),
+            (
+                EffectContext {
+                    attacker: None,
+                    ..arrow
+                },
+                false,
+            ),
+            (
+                EffectContext {
+                    direct_attacker: None,
+                    ..arrow
+                },
+                false,
+            ),
+            (
+                EffectContext {
+                    attacker: arrow.direct_attacker,
+                    direct_attacker: arrow.attacker,
+                    ..arrow
+                },
+                false,
+            ),
+            (
+                EffectContext {
+                    damage_type: Some("minecraft:cactus"),
+                    is_direct: true,
+                    ..Default::default()
+                },
+                false,
+            ),
+        ] {
+            let mut random = LegacyRandom::new(0);
+            assert_eq!(
+                enchantments.is_damage_immune(
+                    enchantments.damage_immunities([(&levels[..], "mainhand")]),
+                    &ctx,
+                    &mut random,
+                ),
+                matches
+            );
+            assert_eq!(
+                enchantments.modify_entity_value(
+                    &levels,
+                    "minecraft:damage",
+                    &ctx,
+                    &mut random,
+                    &mut LegacyRandom::new(0),
+                    2.0,
+                ),
+                if matches { 5.0 } else { 2.0 }
+            );
+        }
     }
 
     #[test]
@@ -2422,6 +2594,11 @@ mod ignite_tests {
             std::process::id()
         ));
         std::fs::create_dir_all(root.join("data/minecraft/tags/enchantment")).unwrap();
+        let entries = root.join("data/minecraft/enchantment");
+        std::fs::create_dir_all(&entries).unwrap();
+        for id in ["sharpness", "smite"] {
+            std::fs::write(entries.join(format!("{id}.json")), "{}").unwrap();
+        }
         std::fs::write(root.join("items.json"), "{}").unwrap();
         std::fs::write(root.join("data/minecraft/tags/enchantment/conditional.json"), json!({"neoforge:conditions":[{"type":"neoforge:never"}],"values":["minecraft:sharpness"]}).to_string()).unwrap();
         let files = vec![("tags/minecraft:enchantment/conditional".into(), vec![json!({"neoforge:conditions":[{"type":"neoforge:never"}],"values":["minecraft:smite"],"remove":["minecraft:sharpness"]}).to_string().into_bytes()])];
@@ -2454,7 +2631,6 @@ mod ignite_tests {
     /// Fire Aspect as the data pack has it: 4 seconds per level.
     fn registry() -> Enchantments {
         let fire_aspect = Enchantment {
-            native_post_attack: HashMap::new(),
             id: Arc::from("minecraft:fire_aspect"),
             description: "fire_aspect".into(),
             description_key: String::new(),

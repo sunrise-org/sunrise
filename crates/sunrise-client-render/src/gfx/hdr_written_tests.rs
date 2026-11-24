@@ -712,6 +712,7 @@ impl<'a> Draw<'a> {
 }
 
 #[test]
+#[ignore = "daily"]
 fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -807,6 +808,7 @@ fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn float_stars_keep_the_original_rgb_with_brightness_as_coverage() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -913,22 +915,24 @@ fn float_stars_keep_the_original_rgb_with_brightness_as_coverage() {
 /// A device for the real material layout, which binds the terrain arrays and the pack's frame
 /// together.
 fn material_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = super::super::test_gpu::instance();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
+    let adapter = crate::gfx::test_gpu::adapter()?;
     if adapter.limits().max_sampled_textures_per_shader_stage < 19 {
         return None;
     }
-    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_limits: wgpu::Limits {
-            max_sampled_textures_per_shader_stage: 19,
+    crate::gfx::test_gpu::optional_device_with(
+        &adapter,
+        &wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits {
+                max_sampled_textures_per_shader_stage: 19,
+                ..Default::default()
+            },
             ..Default::default()
         },
-        ..Default::default()
-    }))
-    .ok()
+    )
 }
 
 #[test]
+#[ignore = "daily"]
 fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = material_gpu() else {
@@ -973,6 +977,7 @@ fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn material_coverage_is_the_texture_s_unless_the_pack_declares_its_own() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = material_gpu() else {
@@ -1026,6 +1031,7 @@ fn material_coverage_is_the_texture_s_unless_the_pack_declares_its_own() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn actual_opaque_writers_match_the_legacy_non_float_oracle() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -1105,6 +1111,7 @@ fn actual_opaque_writers_match_the_legacy_non_float_oracle() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn actual_translucent_writers_blend_their_own_light() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -1170,6 +1177,7 @@ fn actual_translucent_writers_blend_their_own_light() {
 /// float frame and through the compatibility frame's marks alike; a light source's tier still
 /// gains.
 #[test]
+#[ignore = "daily"]
 fn lit_surfaces_stay_at_their_sdr_light() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -1232,6 +1240,7 @@ fn lit_surfaces_stay_at_their_sdr_light() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn unmarked_entity_users_keep_their_source_gain() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -1277,6 +1286,7 @@ fn unmarked_entity_users_keep_their_source_gain() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn additive_texels_below_the_mark_cutoff_keep_their_gain() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
@@ -1318,8 +1328,7 @@ fn additive_texels_below_the_mark_cutoff_keep_their_gain() {
 }
 
 fn check_oit_writer(terrain: bool, kind: &str, overlay: u32, tier: u32, alphas: &[u8]) {
-    let instance = crate::gfx::test_gpu::instance();
-    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+    let Some(adapter) = crate::gfx::test_gpu::adapter() else {
         eprintln!("OIT GPU unavailable");
         return;
     };
@@ -1398,21 +1407,25 @@ fn check_oit_writer(terrain: bool, kind: &str, overlay: u32, tier: u32, alphas: 
 }
 
 #[test]
+#[ignore = "daily"]
 fn actual_oit_terrain_writes_its_own_light_including_clear_glass() {
     let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(true, "terrain", 0, 0, &[180, 100]);
 }
 #[test]
+#[ignore = "daily"]
 fn actual_oit_particle_writes_its_own_light() {
     let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(false, "entity", 0, 3, &[180]);
 }
 #[test]
+#[ignore = "daily"]
 fn actual_oit_cloud_writes_its_own_light() {
     let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(false, "cloud", 4, 0, &[180]);
 }
 #[test]
+#[ignore = "daily"]
 fn actual_oit_additive_adds_converted_light_without_coverage() {
     let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(false, "lightning", 0, 4, &[180]);

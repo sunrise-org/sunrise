@@ -273,7 +273,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 }
 // CRUMBLING_UV_END
 @fragment fn fs_entity(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return entity_written_color(in, entity_color(in, front));
+    return entity_written_color(in, entity_color(in, front, true));
 }
 // Takes entity_color's result rather than calling it: FXC (DX12) fails with "argument pulled into
 // unrelated predicate" when entity_color's discards sit a function call below the entry point.
@@ -296,13 +296,51 @@ struct ClippedEntity {
     @builtin(frag_depth) depth: f32,
 }
 @fragment fn fs_entity_clipped(in: Out, @builtin(front_facing) front: bool) -> ClippedEntity {
-    let color = entity_written_color(in, entity_color(in, front));
+    let color = entity_written_color(in, entity_color(in, front, true));
     return ClippedEntity(color, min(in.clip.z + globals.world_view.y / in.proj.w, 1.0));
 }
 @fragment fn fs_entity_unmarked(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return frame_stored(entity_color(in, front));
+    return frame_stored(entity_color(in, front, true));
 }
-fn entity_color(in: Out, front: bool) -> vec4<f32> {
+// Sign glyphs retain their glow tier in both the NORMAL and POLYGON_OFFSET text paths.
+@fragment fn fs_entity_text(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let color = entity_color(in, front, true);
+    if in.tier != 0u { return entity_written_color(in, color); }
+    return frame_stored(color);
+}
+@fragment fn fs_text_hdr_mark(in: Out) -> @location(0) vec4<f32> {
+    if in.tier == 0u || textureSample(atlas, atlas_sampler, in.uv).a * in.color.a < 0.1 { discard; }
+    return vec4(0.0, 0.0, 0.0, hdr_entity_mark(in));
+}
+// core/glint.fsh (`RenderPipelines.GLINT`, e.g. `RenderTypes.patternedShieldGlint`):
+// samples the glint texture alone, fades by fog and `GlintAlpha`, and squares RGB
+// to match `BlendFunction.GLINT` (`SRC_COLOR, ONE, ZERO, ONE`) under additive colour blend.
+@fragment fn fs_glint(in: Out) -> @location(0) vec4<f32> {
+    let color = tinted_glint(
+        textureSample(glint_tex, glint_sampler, in.glint_uv),
+        globals.colored_count.z,
+    );
+    if color.a < 0.1 { discard; }
+    let f = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
+                linear_fog(in.fog_distance.y, globals.fog.z, globals.fog.w));
+    let fade = (1.0 - f * globals.fog_color.a) * globals.fog_ends.w;
+    let rgb = color.rgb * fade;
+    return frame_stored(vec4(rgb * rgb, 0.0));
+}
+// core/entity.fsh (`RenderPipelines.BANNER_PATTERN`): NO_OVERLAY and no ALPHA_CUTOUT,
+// alpha-blended without depth writes over the shield or banner base model.
+@fragment fn fs_banner_pattern(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let texel = textureSample(atlas, atlas_sampler, in.uv);
+    var color = texel * select(in.back_color, in.color, front);
+    color *= in.light_color;
+    let f = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
+                linear_fog(in.fog_distance.y, globals.fog.z, globals.fog.w));
+    color = vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+    let written = entity_written_color(in, color);
+    if in.cull != 0u && !front { discard; }
+    return written;
+}
+fn entity_color(in: Out, front: bool, apply_glint: bool) -> vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
@@ -331,22 +369,24 @@ fn entity_color(in: Out, front: bool) -> vec4<f32> {
         // clouds.fsh: alpha fades out towards the cloud fog end.
         return vec4(color.rgb, color.a * (1.0 - linear_fog(in.fog_distance.x, 0.0, globals.fog_ends.y)));
     }
-    if color.a < 0.1 || (in.cull != 0u && !front) { discard; }
+    if color.a < 0.1 || ((in.cull != 0u || in.overlay == EXPLICIT_PARTICLE_OVERLAY) && !front) { discard; }
     // entity.fsh calculateFinalColor: the overlay (hurt red, TNT white) over the
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
     color *= in.light_color;
-    if in.overlay == 7u || in.overlay == 8u || in.overlay == 33u {
-        // 33: a translucent item with the glint.
-        // Enchantment glint: item.fsh's GLINT path, sampled from
-        // enchanted_glint_item at the `GLINT_TEXTURING` UV.
-        color = glint_over(color, textureSample(glint_tex, glint_sampler, in.glint_uv));
-    } else if in.overlay == 36u {
-        // Enchanted armour (mobs::render::ARMOR_GLINT): enchanted_glint_armor at the scrolling model UV.
-        color = glint_over(
-            color,
-            textureSample(glint_armor_tex, glint_sampler, armor_glint_uv(in.glint_uv)),
-        );
+    if apply_glint {
+        if in.overlay == 7u || in.overlay == 8u || in.overlay == 33u {
+            // 33: a translucent item with the glint.
+            // Enchantment glint: item.fsh's GLINT path, sampled from
+            // enchanted_glint_item at the `GLINT_TEXTURING` UV.
+            color = glint_over(color, textureSample(glint_tex, glint_sampler, in.glint_uv));
+        } else if in.overlay == 36u {
+            // Enchanted armour (mobs::render::ARMOR_GLINT): enchanted_glint_armor at the scrolling model UV.
+            color = glint_over(
+                color,
+                textureSample(glint_armor_tex, glint_sampler, armor_glint_uv(in.glint_uv)),
+            );
+        }
     }
     let f = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
                 linear_fog(in.fog_distance.y, globals.fog.z, globals.fog.w));
@@ -381,7 +421,8 @@ fn shadow_color(in: Out) -> vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     let texel = textureSample(atlas, atlas_sampler, uv);
-    if texel.a < 0.1 { discard; }
+    let alpha = select(texel.a, texel.a * in.color.a, in.overlay == EXPLICIT_PARTICLE_OVERLAY);
+    if alpha < 0.1 { discard; }
     return vec4(0.0, 0.0, 0.0, hdr_entity_mark(in));
 }
 fn hdr_entity_mark(in: Out) -> f32 {

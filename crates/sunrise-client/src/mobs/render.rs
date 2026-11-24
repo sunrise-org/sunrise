@@ -6,16 +6,33 @@ use super::{
     Mob, MobData, ModelNormals, Part, Species,
     anim::{self, Poses},
     living::wrap,
+    skin::Paint,
 };
 use crate::mesher::Vertex;
 use std::borrow::Cow;
 use std::f32::consts::PI;
 use sunrise_core::geometry::trig::Mth;
 
+mod frame_model;
+use frame_model::FrameBody;
+pub use frame_model::{BakedFrameModel, BakedFrameModels, BakedFrameNode, FrameModelPose};
+
+mod equipment;
+pub use equipment::{ArmorSlot, EquipmentModel, WornLayer, WornModel};
+
 // The invisible body a viewer still sees (`Entity.isInvisibleTo`), beside this file.
 #[path = "invisible_body.rs"]
 mod invisible_body;
 pub use invisible_body::render_seen_invisible;
+
+/// Whether a mixin build installed a patched copy of the free function `$function` of this
+/// module. The prebuilt game's staging pass answers it from the function's replacement slot; a
+/// build without replacement slots has no patched functions.
+macro_rules! replaced {
+    ($function:ident) => {
+        false
+    };
+}
 
 /// Immutable resources and the optional frame-local gameplay animation observer.
 /// Ordinary tools and probes use MobData directly, with no callbacks.
@@ -130,11 +147,12 @@ fn eyes_layer(m: &Mob, layer: &Layer) -> bool {
 
 /// One draw of a model with a texture.
 pub struct Layer {
+    /// Final sprite UVs bound at reload; the texture name still identifies its emissive sprite.
+    pub equipment_uv: Option<[f32; 4]>,
     /// Equipment owns its overlay; other layers inherit the body overlay.
-    pub equipment_texture_final: bool,
     pub equipment_overlay: Option<u32>,
     /// Reload-baked, slot-clipped replacement; never geometry supplied by a frame.
-    pub equipment_model: Option<std::sync::Arc<Part>>,
+    pub equipment_model: Option<(std::sync::Arc<EquipmentModel>, ArmorSlot)>,
     pub model: Cow<'static, str>,
     pub texture: Cow<'static, str>,
     pub color: u32,
@@ -609,7 +627,7 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
         v.push(Layer {
             equipment_overlay: None,
             equipment_model: None,
-            equipment_texture_final: false,
+            equipment_uv: None,
             model: model.into(),
             texture: texture.into(),
             color,
@@ -698,7 +716,7 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
             v.push(Layer {
                 equipment_overlay: None,
                 equipment_model: None,
-                equipment_texture_final: false,
+                equipment_uv: None,
                 model: "breeze#wind".into(),
                 texture: "entity/breeze/breeze_wind".into(),
                 color: white,
@@ -999,7 +1017,7 @@ impl Layer {
             color,
             equipment_overlay: Some(overlay),
             equipment_model: None,
-            equipment_texture_final: false,
+            equipment_uv: None,
             full_bright: false,
             scroll: 0.0,
         }
@@ -1045,8 +1063,8 @@ fn enderman_render_offset(m: &Mob, alpha: f32) -> glam::DVec3 {
     let z = random.next_gaussian() * d;
     glam::DVec3::new(x, 0.0, z)
 }
-/// `base_transform` from a pose of the entity's origin (`EntityRenderDispatcher.submit`
-/// under a pose stack, as `SpawnerRenderer` draws the mob inside a spawner).
+/// `LivingEntityRenderer.setupRotations` and the rest of the model transform, from the
+/// entity's origin pose (`EntityRenderDispatcher.submit`, including mobs drawn in spawners).
 #[sunrise_mod_api_macros::replaceable]
 pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 {
     let mut body = anim::body_rot(m, alpha);
@@ -1096,9 +1114,10 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     // every living entity, after the sleeping offset and before
     // setupRotations, so a pose translation scales with the model but the bed
     // it lies in does not.
+    let entity_scale = m.model_scale();
     let mut base = origin
         * sleep_offset
-        * glam::Mat4::from_scale(glam::Vec3::splat(m.model_scale()))
+        * glam::Mat4::from_scale(glam::Vec3::splat(entity_scale))
         * pufferfish_bob(m, alpha)
         * rotation;
     if m.death_time > 0 && !super::creaking::tearing_down(m) {
@@ -1111,9 +1130,11 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
         base *= glam::Mat4::from_rotation_x((-90.0 - pitch).to_radians())
             * glam::Mat4::from_rotation_y(((m.age as f32 + alpha) * -75.0).to_radians());
-    } else if anim::upside_down(m) {
-        // isEntityUpsideDown
-        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
+    } else if anim::upside_down(m) && m.pose() != mod_api::Pose::Sleeping {
+        // The box height already includes entity scale. Undo the pose's scale
+        // for the whole offset, including the 0.1-block clearance.
+        let lift = (m.height() + 0.1) / entity_scale;
+        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, lift, 0.0))
             * glam::Mat4::from_rotation_z(PI);
     }
     // IronGolemRenderer.setupRotations, after LivingEntityRenderer's: the body
@@ -1318,31 +1339,46 @@ pub fn draw_scrolled(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
-    draw_normals(
-        part,
-        base,
-        ModelNormals::new(base),
-        poses,
+    let paint = Paint {
         uv,
         scroll,
         color,
         light,
         overlay,
-        out,
+    };
+    draw_normals(
+        part,
+        base,
+        ModelNormals::new(base),
+        poses,
+        paint,
+        part.layer.as_deref(),
+        compiler(),
+        &mut Quads::new(out),
     );
 }
+/// [`compile_part`]'s signature, for a draw that goes through it.
+pub(super) type CompilePart =
+    fn(Option<&str>, &Part, glam::Mat4, ModelNormals, Paint, &Poses, &mut Quads<'_>);
+/// The replaced [`compile_part`], when a mod installed one. Asked once per draw, not per part:
+/// while no mod replaced it, the parts' polygons are pushed as they always were, without going
+/// through it.
+pub(super) fn compiler() -> Option<CompilePart> {
+    replaced!(compile_part).then_some(compile_part as CompilePart)
+}
+/// `ModelPart.render`: the part and its children under their poses. `layer` is the model
+/// layer of the tree drawn (its root's), `compile` the replaced [`compile_part`] when a mod
+/// installed one.
 #[allow(clippy::too_many_arguments)]
 fn draw_normals(
     part: &Part,
     base: glam::Mat4,
     normals: ModelNormals,
     poses: &Poses,
-    uv: [f32; 4],
-    scroll: f32,
-    color: u32,
-    light: u32,
-    overlay: u32,
-    out: &mut Vec<Vertex>,
+    paint: Paint,
+    layer: Option<&str>,
+    compile: Option<CompilePart>,
+    quads: &mut Quads<'_>,
 ) {
     let p = poses.pose(part);
     let m = posed(base, p);
@@ -1353,34 +1389,137 @@ fn draw_normals(
     // `skips` is a name lookup: ask once per part, not once per polygon. A part
     // hidden this way still draws its children, so only the polygons are gated.
     if !poses.skips(part) {
-        for poly in &part.polygons {
-            let normal = poly.vertex_normal(normals);
-            for v in poly.vertices {
-                let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
-                // The armour glint scrolls the layer's model UV in the shader;
-                // the item path already passed its transformed UV.
-                let glint_uv = if overlay == ARMOR_GLINT {
-                    [v[3], v[4]]
-                } else {
-                    [0.0, 0.0]
-                };
-                out.push(Vertex {
-                    normal,
-                    pos: pos.to_array(),
-                    uv: [
-                        uv[0] + (uv[2] - uv[0]) * scroll_u(v[3], scroll),
-                        uv[1] + (uv[3] - uv[1]) * v[4],
-                    ],
-                    layer: overlay,
-                    color,
-                    light,
-                    glint_uv,
-                });
-            }
-        }
+        emit_part(compile, layer, part, (m, normals), paint, poses, quads);
     }
     for c in &part.children {
-        draw_normals(c, m, normals, poses, uv, scroll, color, light, overlay, out);
+        draw_normals(c, m, normals, poses, paint, layer, compile, quads);
+    }
+}
+/// One part's own geometry, as every draw of a baked model emits it: through the replaced
+/// [`compile_part`] when `compile` holds it, its polygons as they are otherwise. A part with
+/// neither polygons nor children (an empty leaf) has nothing a replacement could change, and
+/// is never handed to it. `posed` is the part's matrix and normals, as [`posed`] and
+/// `ModelNormals::part` give them.
+pub(super) fn emit_part(
+    compile: Option<CompilePart>,
+    layer: Option<&str>,
+    part: &Part,
+    (matrix, normals): (glam::Mat4, ModelNormals),
+    paint: Paint,
+    poses: &Poses,
+    quads: &mut Quads<'_>,
+) {
+    match compile {
+        Some(compile) if !(part.polygons.is_empty() && part.children.is_empty()) => {
+            compile(layer, part, matrix, normals, paint, poses, quads);
+        }
+        _ => push_polygons(&part.polygons, matrix, normals, paint, quads),
+    }
+}
+/// Where [`compile_part`] puts a part's geometry: whole quads, appended after what the draw
+/// already holds, which it can neither read nor remove.
+pub struct Quads<'a> {
+    out: &'a mut Vec<Vertex>,
+}
+impl<'a> Quads<'a> {
+    /// Quads appended to `out`.
+    pub(super) fn new(out: &'a mut Vec<Vertex>) -> Self {
+        Self { out }
+    }
+    /// Appends one quad, its four vertices in order.
+    pub fn push(&mut self, quad: [Vertex; 4]) {
+        self.out.extend_from_slice(&quad);
+    }
+}
+/// `ModelPart.compile` (`ModelPart.Cube.compile` per cube): emits one part's own geometry,
+/// posed by `matrix` (the part's, as [`posed`] gives it under its parents) with the normals of
+/// its pose, painted with `paint`. Its children are drawn after it, each through this function
+/// too. Parts hidden, scaled to nothing, with `skipDraw` set or with neither polygons nor
+/// children don't come here.
+///
+/// A native mod replaces this through `[[native.mixin]]` to emit a part's geometry its own
+/// way while the rest of the draw stays the game's: a limb bent in two segments, a squashed or
+/// stretched part, another mesh. `layer` is the model layer of the tree being drawn
+/// (`minecraft:player#main`; None for a model not read from `entity-models.json`) and
+/// `part.name` the part. An entity's own state reaches the replacement through `poses`, where
+/// the mod's mixin on `anim::setup` stores it ([`Poses::set_data`]); a draw posed without
+/// `anim` (an arrow, the first-person arm) passes empty poses. The replacement appends whole
+/// quads to `quads` and sees nothing drawn before; it can call [`push_polygons`] for the
+/// polygons it leaves as they are. A model is drawn on the GPU without this function unless
+/// one of its parts is taken by [`takes_part`], so a mod that replaces this function replaces
+/// that one too. Without a replacement, the same vertices in the same order as before this
+/// function existed.
+#[sunrise_mod_api_macros::replaceable]
+pub fn compile_part(
+    layer: Option<&str>,
+    part: &Part,
+    matrix: glam::Mat4,
+    normals: ModelNormals,
+    paint: Paint,
+    poses: &Poses,
+    quads: &mut Quads<'_>,
+) {
+    let _ = (layer, poses);
+    push_polygons(&part.polygons, matrix, normals, paint, quads);
+}
+/// Whether a native mod draws the part `part` of the model layer `layer`
+/// (`minecraft:player#main`) itself, in its replacement of [`compile_part`]. A model with a
+/// part taken is drawn on the CPU, where [`compile_part`] runs. The mob's other eligible models
+/// stay on the GPU, in the same draw order.
+///
+/// The answer must be fixed per (layer, part) for the whole session: it is asked once per
+/// model, the first time the GPU path sees it, and kept. What changes per entity or per frame
+/// (a bend that is on or off) belongs in the replacement of [`compile_part`], which can push
+/// the part's own polygons when that entity has nothing to change.
+#[sunrise_mod_api_macros::replaceable]
+pub fn takes_part(layer: &str, part: &str) -> bool {
+    let _ = (layer, part);
+    false
+}
+/// Whether a mixin replaced [`takes_part`]: while none has, no model is asked about.
+pub(super) fn parts_taken_hooked() -> bool {
+    replaced!(takes_part)
+}
+/// The quads of `polygons` posed by `m`: [`compile_part`]'s own body, which a replacement
+/// can call for the parts or polygons it leaves as they are.
+pub fn push_polygons(
+    polygons: &[super::Polygon],
+    m: glam::Mat4,
+    normals: ModelNormals,
+    paint: Paint,
+    quads: &mut Quads<'_>,
+) {
+    let Paint {
+        uv,
+        scroll,
+        color,
+        light,
+        overlay,
+    } = paint;
+    for poly in polygons {
+        let normal = poly.vertex_normal(normals);
+        quads.push(poly.vertices.map(|v| {
+            let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+            // The armour glint scrolls the layer's model UV in the shader;
+            // the item path already passed its transformed UV.
+            let glint_uv = if overlay == ARMOR_GLINT {
+                [v[3], v[4]]
+            } else {
+                [0.0, 0.0]
+            };
+            Vertex {
+                normal,
+                pos: pos.to_array(),
+                uv: [
+                    uv[0] + (uv[2] - uv[0]) * scroll_u(v[3], scroll),
+                    uv[1] + (uv[3] - uv[1]) * v[4],
+                ],
+                layer: overlay,
+                color,
+                light,
+                glint_uv,
+            }
+        }));
     }
 }
 /// A part's matrix under `base` for its pose (`ModelPart.translateAndRotate`
@@ -1417,7 +1556,7 @@ pub fn put(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
-    let paint = super::skin::Paint {
+    let paint = Paint {
         uv,
         scroll,
         color,
@@ -1454,10 +1593,10 @@ pub fn render_with(
     atlas: Atlas,
     light: u32,
     data: &dyn RenderDataSource,
-    extra: &[(&Part, [f32; 4], u32, u32, bool)],
+    extra: &[WornLayer<'_>],
     out: &mut Vec<Vertex>,
 ) {
-    render_with_hidden(
+    render_with_frame(
         m,
         alpha,
         camera,
@@ -1465,27 +1604,79 @@ pub fn render_with(
         light,
         data,
         extra,
-        Default::default(),
-        None,
+        &mut FrameDraw::default(),
         out,
     );
 }
-/// [`render_with`], with the parts a mod's `render_player_pre` hid left out of the body (after Skin
-/// Customization) and the layers on its own model; the armour in `extra` and the other layers keep
-/// every part. `parts`, given while the mods' post hooks want them, gets the humanoid parts as the
-/// body was drawn ([`PosedParts`](mod_api::PosedParts)); it stays None for a mob that isn't a
-/// humanoid or isn't drawn.
+/// Inputs and captured output for one render of a living model.
+#[derive(Default)]
+pub struct FrameDraw<'a> {
+    prepared: Option<(FrameBody<'a>, FrameModelPose)>,
+    pre_vertices_start: Option<u32>,
+    /// Whether the post hooks or mod layers need the final model.
+    pub capture_model: bool,
+    model: Option<FrameModelPose>,
+}
+
+impl<'a> FrameDraw<'a> {
+    /// Track the final pose only if a layer or Post hook will read it.
+    pub fn new(capture_model: bool) -> Self {
+        Self {
+            capture_model,
+            ..Self::default()
+        }
+    }
+
+    /// Select this mob's body for Pre, lending its tree and unanimated bind pose. Call only for
+    /// draws with a Pre listener, and pass this same draw state on to the renderer. Unbaked
+    /// models (e.g. standalone probes without client resources) have no view to lend.
+    pub fn prepare(
+        &mut self,
+        mob: &'a Mob,
+        data: &MobData,
+    ) -> Option<&mut dyn mod_api::FrameModelEdit> {
+        let body = FrameBody::select(mob, data);
+        let layout = body.layout(data)?.clone();
+        let mut poses = Poses::pooled();
+        poses.reset(body.model());
+        poses.prepare_frame_visibility(layout.clone());
+        let (_, model) = self.prepared.insert((
+            body,
+            FrameModelPose {
+                layout,
+                poses,
+                bind: true,
+            },
+        ));
+        Some(model)
+    }
+
+    /// Keep this draw's Pre geometry ahead of its posed body and layers.
+    pub fn mark_pre_vertices(&mut self, start: usize) {
+        self.pre_vertices_start = Some(start as u32);
+    }
+
+    /// Borrow the captured body model for layer and Post callbacks.
+    pub fn model(&self) -> Option<&dyn mod_api::FrameModel> {
+        self.model
+            .as_ref()
+            .map(|model| model as &dyn mod_api::FrameModel)
+    }
+}
+
+/// [`render_with`], applying Pre edits to the body after Skin Customization and to the
+/// layers on its own model, but not to armour or other layers. `frame.capture_model`
+/// keeps the pose the draw used for Post hooks and mod layers.
 #[allow(clippy::too_many_arguments)]
-pub fn render_with_hidden(
+pub fn render_with_frame(
     m: &Mob,
     alpha: f32,
     camera: glam::DVec3,
     atlas: Atlas,
     light: u32,
     data: &dyn RenderDataSource,
-    extra: &[(&Part, [f32; 4], u32, u32, bool)],
-    hidden: mod_api::HiddenParts,
-    mut parts: Option<&mut Option<mod_api::PosedParts>>,
+    extra: &[WornLayer<'_>],
+    frame: &mut FrameDraw<'_>,
     out: &mut Vec<Vertex>,
 ) {
     let paint = Some(body_color(m, alpha));
@@ -1494,47 +1685,41 @@ pub fn render_with_hidden(
     if m.is_invisible() {
         if m.species() == Species::Illusioner {
             let age = m.age as f32 + alpha;
-            for (i, off) in super::illusioner::offsets(m, alpha).iter().enumerate() {
-                let w = super::illusioner::wobble(i, age);
-                let shifted =
-                    camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
-                let base = base_transform(m, alpha, shifted);
-                render_visible(
-                    m,
-                    alpha,
-                    base,
-                    atlas,
-                    light,
-                    data,
-                    extra,
-                    paint,
-                    hidden,
-                    parts.as_deref_mut(),
-                    out,
-                    None,
-                );
-            }
+            let bases = super::illusioner::offsets(m, alpha)
+                .into_iter()
+                .enumerate()
+                .map(|(i, off)| {
+                    let w = super::illusioner::wobble(i, age);
+                    let shifted =
+                        camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
+                    base_transform(m, alpha, shifted)
+                });
+            render_visible(
+                m, alpha, bases, atlas, light, data, extra, paint, frame, out, None,
+            );
+        } else {
+            frame.model = None;
+            frame.prepared = None;
         }
         return;
     }
     render_visible(
         m,
         alpha,
-        base_transform(m, alpha, camera),
+        [base_transform(m, alpha, camera)],
         atlas,
         light,
         data,
         extra,
         paint,
-        hidden,
-        parts,
+        frame,
         out,
         None,
     );
 }
 /// `render` with the model's ordinary draws posed on the GPU when the mob
 /// allows it (`super::skin`): the same picture, no vertices on the CPU.
-/// `hidden` and `parts` as for [`render_with_hidden`].
+/// `frame` is used as in [`render_with_frame`].
 #[allow(clippy::too_many_arguments)]
 pub fn render_skinned(
     m: &Mob,
@@ -1543,37 +1728,24 @@ pub fn render_skinned(
     atlas: Atlas,
     light: u32,
     data: &dyn RenderDataSource,
-    hidden: mod_api::HiddenParts,
-    parts: Option<&mut Option<mod_api::PosedParts>>,
+    frame: &mut FrameDraw<'_>,
     out: &mut Vec<Vertex>,
     skin: &mut super::skin::Skin,
 ) {
     if m.is_invisible() {
-        render_with_hidden(
-            m,
-            alpha,
-            camera,
-            atlas,
-            light,
-            data,
-            &[],
-            hidden,
-            parts,
-            out,
-        );
+        render_with_frame(m, alpha, camera, atlas, light, data, &[], frame, out);
         return;
     }
     render_visible(
         m,
         alpha,
-        base_transform(m, alpha, camera),
+        [base_transform(m, alpha, camera)],
         atlas,
         light,
         data,
         &[],
         Some(body_color(m, alpha)),
-        hidden,
-        parts,
+        frame,
         out,
         Some(skin),
     );
@@ -1759,8 +1931,8 @@ pub fn stuck_in_body(
         );
         let dxz = f64::from(dx * dx + dz * dz).sqrt() as f32;
         let degrees = |y: f32, x: f32| {
-            (sunrise_core::jmath::atan2(f64::from(y), f64::from(x)) * 180.0
-                / f64::from(std::f32::consts::PI)) as f32
+            (sunrise_core::jmath::atan2(f64::from(y), f64::from(x))
+                * f64::from(sunrise_core::geometry::trig::RAD_TO_DEG)) as f32
         };
         let y_rot = degrees(dx, dz);
         let x_rot = degrees(dy, dxz);
@@ -1820,8 +1992,8 @@ fn shoulder_parrot_texture(variant: i32) -> String {
 /// `render_with` without the body, for an avatar the viewer can't see:
 /// `LivingEntityRenderer.submit` gets no render type for an invisible body
 /// (`isBodyVisible`, `isInvisibleTo`), but its layers still draw
-/// (`HumanoidArmorLayer`: the armour in `extra`). `parts` as for [`render_with_hidden`], posed as
-/// the layers draw over the unseen body.
+/// (`HumanoidArmorLayer`: the armour in `extra`). The captured model, if requested,
+/// includes Pre's edits even when the body wasn't submitted.
 #[allow(clippy::too_many_arguments)]
 pub fn render_layers(
     m: &Mob,
@@ -1830,22 +2002,21 @@ pub fn render_layers(
     atlas: Atlas,
     light: u32,
     data: &dyn RenderDataSource,
-    extra: &[(&Part, [f32; 4], u32, u32, bool)],
-    parts: Option<&mut Option<mod_api::PosedParts>>,
+    extra: &[WornLayer<'_>],
+    frame: &mut FrameDraw<'_>,
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform(m, alpha, camera);
     render_visible(
         m,
         alpha,
-        base,
+        [base],
         atlas,
         light,
         data,
         extra,
         None,
-        Default::default(),
-        parts,
+        frame,
         out,
         None,
     );
@@ -1865,14 +2036,13 @@ pub fn render_posed(
     render_visible(
         m,
         alpha,
-        base,
+        [base],
         atlas,
         light,
         data,
         &[],
         Some(body_color(m, alpha)),
-        Default::default(),
-        None,
+        &mut FrameDraw::default(),
         out,
         None,
     );
@@ -1915,7 +2085,7 @@ pub fn drawn_textures(m: &Mob, data: &dyn RenderDataSource) -> Vec<String> {
             all_layers.push(Layer {
                 equipment_overlay: None,
                 equipment_model: None,
-                equipment_texture_final: false,
+                equipment_uv: None,
                 model: model.into(),
                 texture: texture.into(),
                 color: 0,
@@ -1933,17 +2103,16 @@ pub fn drawn_textures(m: &Mob, data: &dyn RenderDataSource) -> Vec<String> {
     }
     names
 }
-/// The texture a model drawn as `custom` takes: the `.jem`'s when the atlas has it, else
-/// `vanilla` (a texture the atlas lacks would hide the model).
+/// The `.jem`'s replacement for `vanilla`, only if the atlas has it (a texture the
+/// atlas lacks would hide the model).
 fn cem_texture<'a>(
     custom: Option<&'a super::cem::CemLayer>,
-    vanilla: &'a str,
+    vanilla: &str,
     atlas: Atlas<'_>,
-) -> &'a str {
+) -> Option<&'a str> {
     custom
         .and_then(|c| c.texture_for(vanilla))
         .filter(|t| atlas(t).is_some())
-        .unwrap_or(vanilla)
 }
 /// Whether `layers[i]` is the layer its model's `.jem` was made for, so the `.jem`'s texture
 /// paints it: the first drawn with that model (`sheep#wool`, a wolf's armour). Later layers
@@ -1989,112 +2158,94 @@ fn posed_body(
     let anchors = custom.map_or(Vec::new(), |c| c.anchors.clone());
     (model, poses, anchors)
 }
-/// The humanoid parts of a body drawn with `poses`, for the mods' post hooks and layers: read from the poses the
-/// draw already made, so nothing is posed twice; fixed-size, nothing allocated.
-fn posed_parts(poses: &Poses) -> Option<mod_api::PosedParts> {
-    mod_api::PosedParts::new(|part| {
-        let name = part.model_name();
-        Some((poses.pose_of(name)?, !poses.is_hidden_named(name)))
-    })
-}
-// Validate names against this frame's model before mutating its body poses.
-// Return the borrowed name so a repeated refusal never allocates an error string.
-fn hide_parts<'a>(poses: &mut Poses, hidden: &'a mod_api::HiddenParts) -> Result<(), &'a str> {
-    for name in hidden.names() {
-        if poses.pose_of(name).is_none() {
-            return Err(name);
+#[allow(clippy::too_many_arguments)]
+fn render_visible(
+    m: &Mob,
+    alpha: f32,
+    bases: impl IntoIterator<Item = glam::Mat4>,
+    atlas: Atlas,
+    light: u32,
+    data: &dyn RenderDataSource,
+    extra: &[WornLayer<'_>],
+    // `submit`'s `tintedColor` to draw the body in, or `None` for its layers only.
+    paint: Option<u32>,
+    frame: &mut FrameDraw<'_>,
+    out: &mut Vec<Vertex>,
+    mut skin: Option<&mut super::skin::Skin>,
+) {
+    frame.model = None;
+    let (body, mut poses, layout) = match frame.prepared.take() {
+        Some((body, prepared)) => (body, prepared.poses, Some(prepared.layout)),
+        None => {
+            let body = FrameBody::select(m, data.mob_data());
+            let mut poses = Poses::pooled();
+            poses.reset(body.model());
+            (body, poses, None)
         }
-    }
-    for name in hidden.names() {
-        poses.visible(name, false);
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct HiddenPartReports {
-    names: std::collections::HashMap<String, std::collections::HashSet<String>>,
-    count: usize,
-}
-
-impl HiddenPartReports {
-    // Mods can change their eight hidden names between frames. Never evict an entry (which
-    // would report it again); after this process-wide budget, suppress new diagnostics too.
-    const LIMIT: usize = 4096;
-
-    fn first(&mut self, kind: &str, name: &str) -> bool {
-        if self.count >= Self::LIMIT
-            || self
-                .names
-                .get(kind)
-                .is_some_and(|names| names.contains(name))
-        {
-            return false;
+    };
+    let texture = body.texture(atlas);
+    let pre_vertices_start = frame.pre_vertices_start.take();
+    for (i, base) in bases.into_iter().enumerate() {
+        if i != 0 {
+            // Each illusioner mirror runs vanilla setup and CEM from bind pose, with the same
+            // overrides from the entity's single Pre call.
+            poses.reset_animation(body.model());
         }
-        self.names
-            .entry(kind.to_owned())
-            .or_default()
-            .insert(name.to_owned());
-        self.count += 1;
-        true
+        poses.apply_frame_visibility(false);
+        render_selected(
+            m,
+            alpha,
+            base,
+            atlas,
+            light,
+            data,
+            extra,
+            paint,
+            &body,
+            texture,
+            &mut poses,
+            pre_vertices_start.unwrap_or(out.len() as u32),
+            out,
+            skin.as_deref_mut(),
+        );
     }
-}
-
-fn report_unknown_hidden_part(kind: &str, name: &str) {
-    // Shared by every renderer, including mirror views and different render threads.
-    static REPORTS: std::sync::Mutex<Option<HiddenPartReports>> = std::sync::Mutex::new(None);
-    let mut reports = REPORTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if reports
-        .get_or_insert_with(HiddenPartReports::default)
-        .first(kind, name)
+    if frame.capture_model
+        && let Some(layout) = layout.or_else(|| body.layout(data.mob_data()).cloned())
     {
-        eprintln!("mob {kind}: unknown hidden part {name}");
+        // Leave the last mirror's actual draw pose, not a temporary independent-layer pose.
+        poses.apply_frame_visibility(true);
+        frame.model = Some(FrameModelPose {
+            layout,
+            poses,
+            bind: false,
+        });
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_visible(
+fn render_selected(
     m: &Mob,
     alpha: f32,
     base: glam::Mat4,
     atlas: Atlas,
     light: u32,
     data: &dyn RenderDataSource,
-    extra: &[(&Part, [f32; 4], u32, u32, bool)],
-    // `submit`'s `tintedColor` to draw the body in, or `None` for its layers only.
+    extra: &[WornLayer<'_>],
     paint: Option<u32>,
-    hidden: mod_api::HiddenParts,
-    parts: Option<&mut Option<mod_api::PosedParts>>,
+    body: &FrameBody<'_>,
+    texture: &str,
+    poses: &mut Poses,
+    mut cpu_cut: u32,
     out: &mut Vec<Vertex>,
-    skin: Option<&mut super::skin::Skin>,
+    mut skin: Option<&mut super::skin::Skin>,
 ) {
     // The armour is a layer: none for a spectator.
     let equipment = data.equipment_layers(m);
     let extra = if layers_shown(m) { extra } else { &[] };
     let overlay = u32::from(red_overlay(m));
     let s = anim::state(m, alpha).observed(m, data.humanoid_setup());
-    let (model_key, texture) = body(m);
-    // The packs' custom entity models replace a layer's parts and maybe its texture. The read
-    // guard, not a clone of the Arc: one uncontended lock per mob, nothing else without a pack.
-    let cem = data
-        .mob_data()
-        .cem
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let cem_key = cem_key(&model_key);
-    let custom_body = cem.layer(cem_key);
-    let body_animation = custom_body.and_then(|c| c.animation.as_ref());
-    let model = match custom_body {
-        Some(custom) => custom.model.clone(),
-        None => m
-            .kind
-            .layer(&model_key)
-            .cloned()
-            .unwrap_or_else(|| m.kind.model.clone()),
-    };
-    let texture = cem_texture(custom_body, &texture, atlas);
+    let cem = &body.cem;
+    let body_model = body.model();
     // OptiFine random textures and ETF blinking: the sprite a texture draws with instead, when
     // the atlas has it: the variant the mob wears, then its blink frame while it blinks (or
     // sleeps). The texture keeps its name for everything else.
@@ -2140,11 +2291,13 @@ fn render_visible(
         }
         atlas(emissive.overlay(drawn)?)
     };
-    let mut poses = Poses::pooled();
-    poses.reset(&model);
-    anim::setup(m, &s, &mut poses, &data.mob_data().animations);
-    if let Some(animation) = body_animation {
-        animation.run(m, &s, &mut poses);
+    anim::setup(m, &s, poses, &data.mob_data().animations);
+    if let Some(animation) = body
+        .custom
+        .as_deref()
+        .and_then(|layer| layer.animation.as_ref())
+    {
+        animation.run(m, &s, poses);
     }
     let mut all_layers = layers(m, s.age);
     all_layers.extend(equipment);
@@ -2155,7 +2308,7 @@ fn render_visible(
                 all_layers.push(Layer {
                     equipment_overlay: None,
                     equipment_model: None,
-                    equipment_texture_final: false,
+                    equipment_uv: None,
                     model: model.into(),
                     texture: texture.into(),
                     color: ((a.clamp(0.0, 1.0) * 255.0) as u32) << 24 | 0x00FF_FFFF,
@@ -2165,59 +2318,26 @@ fn render_visible(
             }
         }
     }
-    // The GPU path takes the whole mob or none of it, so its draws keep their
-    // order: only plain draws of models it can pose (no custom models,
-    // translucent body or energy swirl, which the CPU path changes after
-    // drawing), and with improved transparency off the tagged layers too.
-    let mut skin = skin;
-    let posable = match skin.as_deref_mut() {
-        Some(skin) => {
-            custom_body.is_none()
-                && extra.is_empty()
-                && m.species() != Species::SulfurCube
-                && !translucent_body(m)
-                && energy_swirl(m, s.age).is_none()
-                && skin.supports(&model)
-                && all_layers.iter().all(|layer| {
-                    // With improved transparency off, a translucent layer's tag
-                    // is the only difference from a plain draw.
-                    (skin.models.tagged && (eyes_layer(m, layer) || !layer.full_bright)
-                        || !layer.full_bright && !translucent_layer(m, layer))
-                        && cem.layer(&layer.model).is_none()
-                        && layer
-                            .equipment_model
-                            .as_ref()
-                            .or_else(|| m.kind.layer(&layer.model))
-                            .is_none_or(|part| skin.supports(part))
-                })
-        }
-        None => false,
-    };
-    if !posable {
+    // Only ordinary models can share the posed stream: no custom models, translucent
+    // body or energy swirl (which the CPU path changes after drawing). With improved
+    // transparency off, the layers' tags are the only difference from an ordinary draw.
+    if skin.as_deref().is_some_and(|skin| {
+        body.custom.is_some()
+            || !extra.is_empty()
+            || m.species() == Species::SulfurCube
+            || translucent_body(m)
+            || energy_swirl(m, s.age).is_some()
+            || all_layers.iter().any(|layer| {
+                !(skin.models.tagged && (eyes_layer(m, layer) || !layer.full_bright)
+                    || !layer.full_bright && !translucent_layer(m, layer))
+                    || cem.layer(&layer.model).is_some()
+                    || layer.equipment_model.is_some()
+            })
+    }) {
         skin = None;
     }
-    // The parts a mod's `render_player_pre` or `render_living_pre` hid this frame: the body and the
-    // layers over its own model (`getParentModel`) draw without them, the armour and the other
-    // layers below with every part.
-    let mut hidden_poses = Poses::pooled();
-    let body_poses: &Poses = if hidden.is_empty() {
-        &poses
-    } else {
-        hidden_poses.copy_from(&poses);
-        if let Err(name) = hide_parts(&mut hidden_poses, &hidden) {
-            report_unknown_hidden_part(&m.kind.id, name);
-            return;
-        }
-        &hidden_poses
-    };
-    // The mods' post hooks' snapshot: the body's parts as drawn, for `HumanoidMobRenderer`'s families
-    // (`anim::extracts_humanoid`) only.
-    if let Some(parts) = parts
-        && anim::extracts_humanoid(m)
-    {
-        *parts = posed_parts(body_poses);
-    }
-    let draw_body = |out: &mut Vec<Vertex>, skin: &mut Option<&mut super::skin::Skin>| {
+    let draw_body = |poses: &mut Poses, out: &mut Vec<Vertex>, skin: &mut Option<_>| {
+        poses.apply_frame_visibility(true);
         // A player or mannequin whose skin has no atlas sprite (an evicted or
         // never stored download) draws with its default skin, not invisibly.
         let drawn = sprite(texture).or_else(|| Some((texture, atlas(texture)?)));
@@ -2232,9 +2352,9 @@ fn render_visible(
             let start = out.len();
             put(
                 skin,
-                &model,
+                body_model,
                 base,
-                body_poses,
+                poses,
                 uv,
                 0.0,
                 tint,
@@ -2245,9 +2365,9 @@ fn render_visible(
             if let Some(glow) = drawn.and_then(|(name, _)| emissive_uv(name)) {
                 put(
                     skin,
-                    &model,
+                    body_model,
                     base,
-                    body_poses,
+                    poses,
                     glow,
                     0.0,
                     tint,
@@ -2265,42 +2385,68 @@ fn render_visible(
     // The translucent shell writes depth: draw the opaque core before it.
     let shell_last = m.species() == Species::SulfurCube;
     if !shell_last {
-        draw_body(out, &mut skin);
+        let start = out.len() as u32;
+        let first_job = skin
+            .as_deref()
+            .filter(|_| cpu_cut < start)
+            .map(|skin| skin.frame.jobs.len());
+        draw_body(poses, out, &mut skin);
+        // NeoForge's RenderLivingEvent.Pre submits before the body. If the body
+        // stays on the CPU, that prefix travels with it before the next GPU layer.
+        if let (Some(skin), Some(first)) = (skin.as_deref_mut(), first_job)
+            && let Some(job) = skin.frame.jobs.get(first)
+        {
+            skin.frame.insert_cpu_before(job.dst, cpu_cut..start);
+            cpu_cut = start;
+        }
     }
     // The worn armour's layers (and their emissive overlays, full bright).
-    for (part, uv, color, layer_overlay, glows) in extra {
-        let light = if *glows { FULL_BRIGHT } else { light };
-        draw(part, base, &poses, *uv, *color, light, *layer_overlay, out);
+    if !extra.is_empty() {
+        poses.apply_frame_visibility(false);
+        for (part, uv, color, layer_overlay, glows) in extra {
+            let light = if *glows { FULL_BRIGHT } else { light };
+            part.submit(
+                &mut None,
+                base,
+                poses,
+                Paint {
+                    uv: *uv,
+                    scroll: 0.0,
+                    color: *color,
+                    light,
+                    overlay: *layer_overlay,
+                },
+                out,
+            );
+        }
     }
-    // One Poses refilled for every layer (armour draws up to seven): it keeps
-    // its maps' capacity.
+    // Refill one pooled pose map for layers that run their own setupAnim.
     let mut layer_poses = Poses::pooled();
-    let body_keys = [&*model_key, cem_key];
+    let body_keys = body.keys();
     for (i, layer) in all_layers.iter().enumerate() {
         let custom = cem.layer(&layer.model);
         // `layer.texture` stays the vanilla name (the villager hats below look for its
         // `/type/` folder).
-        let texture = cem_texture(
-            custom.filter(|_| {
-                !layer.equipment_texture_final && paints_with_jem(&all_layers, i, body_keys)
-            }),
-            &layer.texture,
-            atlas,
-        );
-        let part = if let Some(part) = &layer.equipment_model {
-            part.clone()
+        let part = if let Some((model, slot)) = &layer.equipment_model {
+            WornModel::Override(model, *slot)
         } else {
-            match custom {
-                Some(custom) => custom.model.clone(),
-                None => match m.kind.layer(&layer.model) {
-                    Some(part) => part.clone(),
-                    None => continue,
-                },
-            }
+            let Some(part) = custom
+                .map(|c| &c.model)
+                .or_else(|| m.kind.layer(&layer.model))
+            else {
+                continue;
+            };
+            WornModel::Vanilla(part)
         };
-        let Some((drawn, uv)) = (if layer.equipment_texture_final {
-            atlas(texture).map(|uv| (texture, uv))
+        let Some((drawn, uv)) = (if let Some(uv) = layer.equipment_uv {
+            Some((layer.texture.as_ref(), uv))
         } else {
+            let texture = cem_texture(
+                custom.filter(|_| paints_with_jem(&all_layers, i, body_keys)),
+                &layer.texture,
+                atlas,
+            )
+            .unwrap_or(&layer.texture);
             sprite(texture).or_else(|| Some((texture, atlas(texture)?)))
         }) else {
             continue;
@@ -2321,23 +2467,29 @@ fn render_visible(
         } else {
             true
         };
-        if layer.equipment_model.is_some() {
-            layer_poses.copy_from(&poses);
-        } else if custom.is_none() && custom_body.is_none() && std::sync::Arc::ptr_eq(&part, &model)
-        {
-            // A layer over the body's own model (a villager's type, profession
-            // and level, a spider's eyes): `setupAnim` gives the body's poses,
-            // without the parts a mod hid on it.
-            layer_poses.copy_from(if type_hat_shown { body_poses } else { &poses });
-        } else {
-            layer_poses.reset(&part);
-            anim::setup(m, &s, &mut layer_poses, &data.mob_data().animations);
-            if let Some(animation) = custom.and_then(|c| c.animation.as_ref()) {
-                animation.run(m, &s, &mut layer_poses);
+        let on_parent = custom.is_none()
+            && body.custom.is_none()
+            && matches!(part, WornModel::Vanilla(part) if std::sync::Arc::ptr_eq(part, body_model));
+        let uses_body_pose = matches!(part, WornModel::Override(..)) || on_parent;
+        let draw_poses = match part {
+            WornModel::Vanilla(part) if !uses_body_pose => {
+                layer_poses.reset(part);
+                anim::setup(m, &s, &mut layer_poses, &data.mob_data().animations);
+                if let Some(animation) = custom.and_then(|c| c.animation.as_ref()) {
+                    animation.run(m, &s, &mut layer_poses);
+                }
+                &mut layer_poses
             }
-        }
+            _ => {
+                poses.apply_frame_visibility(on_parent && type_hat_shown);
+                &mut *poses
+            }
+        };
+        // When the no-hat alternate borrows the body pose, its head visibility
+        // change lasts only through this layer and its emissive overlay.
+        let restore_head = !type_hat_shown && uses_body_pose && !draw_poses.is_hidden_named("head");
         if !type_hat_shown {
-            layer_poses.visible("head", false);
+            draw_poses.visible("head", false);
         }
         let light = if layer.full_bright {
             FULL_BRIGHT
@@ -2349,31 +2501,30 @@ fn render_visible(
         let overlay = layer.equipment_overlay.unwrap_or(overlay);
         let start = out.len();
         let first_job = skin.as_deref().map(|skin| skin.frame.jobs.len());
-        put(
-            &mut skin,
-            &part,
-            base,
-            &layer_poses,
+        let paint = Paint {
             uv,
-            layer.scroll,
-            layer.color,
+            scroll: layer.scroll,
+            color: layer.color,
             light,
             overlay,
-            out,
-        );
+        };
+        part.submit(&mut skin, base, draw_poses, paint, out);
         if let Some(glow) = emissive_uv(drawn) {
-            put(
+            part.submit(
                 &mut skin,
-                &part,
                 base,
-                &layer_poses,
-                glow,
-                layer.scroll,
-                layer.color,
-                FULL_BRIGHT,
-                0,
+                draw_poses,
+                Paint {
+                    uv: glow,
+                    light: FULL_BRIGHT,
+                    overlay: 0,
+                    ..paint
+                },
                 out,
             );
+        }
+        if restore_head {
+            draw_poses.visible("head", true);
         }
         if translucent_layer(m, layer) {
             mark_oit(&mut out[start..]);
@@ -2382,6 +2533,14 @@ fn render_visible(
         // layers get there among the marked ones): the tags in the overlay word,
         // no normal.
         if let (Some(skin), Some(first)) = (skin.as_deref_mut(), first_job) {
+            // Each model chooses its own route in `put`. Submit CPU draws accumulated
+            // since this mob's last posed draw before the new posed layer, not after it.
+            if let Some(job) = skin.frame.jobs.get(first)
+                && cpu_cut < start as u32
+            {
+                skin.frame.insert_cpu_before(job.dst, cpu_cut..start as u32);
+                cpu_cut = start as u32;
+            }
             let tagged = translucent_layer(m, layer);
             let eyes = layer.full_bright && m.species() != Species::Warden;
             for job in &mut skin.frame.jobs[first..] {
@@ -2435,7 +2594,7 @@ fn render_visible(
         }
     }
     if shell_last {
-        draw_body(out, &mut skin);
+        draw_body(poses, out, &mut skin);
     }
 }
 /// `EnergySwirlLayer`'s model, texture and `xOffset(t)` for a charged creeper
@@ -2548,6 +2707,75 @@ fn allay_hand(model: &Part, base: glam::Mat4, poses: &Poses) -> Option<glam::Mat
             * glam::Mat4::from_translation(glam::Vec3::new(0.0625, 0.0, 0.0)),
     )
 }
+/// `ArmedModel.translateToHand`: a mob's hand in model space, as
+/// `ItemInHandLayer.submitArmWithItem` has it before its item rotations. That is the
+/// arm's part matrix, moved by the slim or skeleton offset, or the Allay's, Vex's or
+/// Copper Golem's own hand. `hand_base` applies vanilla's item rotations and the hand
+/// offset after it. A native mod takes the hand here through `[[native.mixin]]`, where a
+/// Java mod's mixin on `submitArmWithItem` turns the pose stack before those rotations
+/// (#3970). A pack's `attachments` anchor replaces the whole hand and doesn't come
+/// through here.
+#[sunrise_mod_api_macros::replaceable]
+pub fn translate_to_hand(
+    m: &Mob,
+    model: &Part,
+    base: glam::Mat4,
+    poses: &Poses,
+    left: bool,
+) -> Option<glam::Mat4> {
+    let skeleton = skeleton_arms(m.species());
+    let arm = if left { "left_arm" } else { "right_arm" };
+    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
+    // by 0.5 for slim arms: the hand is the middle of the arm.
+    let offset = if skeleton {
+        if left { -1.0 } else { 1.0 }
+    } else if avatar(m) && m.slim {
+        if left { -0.5 } else { 0.5 }
+    } else {
+        0.0
+    };
+    // The arm's matrix, `None` when the model has no such part. The function's only exit is
+    // its value (no `?`, no early `return`), so a `RETURN` row applies to every call.
+    let arm_matrix = if m.species() == Species::Allay {
+        allay_hand(model, base, poses)
+    } else {
+        part_matrix(model, base, poses, arm, offset)
+    };
+    arm_matrix.map(|mut t| {
+        if m.species() == Species::Vex {
+            // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
+            t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
+            t *= glam::Mat4::from_translation(glam::Vec3::new(
+                if left { -0.046_875 } else { 0.046_875 },
+                -0.156_25,
+                0.078_125,
+            ));
+        }
+        if m.species() == Species::CopperGolem {
+            // `CopperGolemModel.translateToHand`: a still golem holds the item
+            // across the arm, a working one scaled down in front of it.
+            if m.extra.variant3 == super::copper_golem::IDLE {
+                t *= glam::Mat4::from_rotation_y((if left { 90.0f32 } else { -90.0 }).to_radians())
+                    * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
+            } else {
+                t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55))
+                    * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.3125, -0.1875));
+            }
+        }
+        t
+    })
+}
+/// The skeleton family, whose `SkeletonModel.translateToHand` shifts the arm by 1.
+fn skeleton_arms(species: Species) -> bool {
+    matches!(
+        species,
+        Species::Skeleton
+            | Species::Stray
+            | Species::Bogged
+            | Species::Parched
+            | Species::WitherSkeleton
+    )
+}
 /// The hand of a mob in model space, up to the item's own transform
 /// (`ItemInHandLayer.submitArmWithItem`).
 fn hand_base(
@@ -2575,49 +2803,12 @@ fn hand_base(
     ) {
         return Some(t);
     }
-    let skeleton = matches!(
-        m.species(),
-        Species::Skeleton
-            | Species::Stray
-            | Species::Bogged
-            | Species::Parched
-            | Species::WitherSkeleton
-    );
-    let arm = if left { "left_arm" } else { "right_arm" };
-    // `SkeletonModel.translateToHand` shifts the arm by 1, `PlayerModel.translateToHand`
-    // by 0.5 for slim arms: the hand is the middle of the arm.
-    let offset = if skeleton {
-        if left { -1.0 } else { 1.0 }
-    } else if avatar(m) && m.slim {
-        if left { -0.5 } else { 0.5 }
-    } else {
-        0.0
-    };
-    let mut t = if m.species() == Species::Allay {
-        allay_hand(model, base, poses)?
-    } else {
-        part_matrix(model, base, poses, arm, offset)?
-    };
-    if m.species() == Species::Vex {
-        // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
-        t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
-        t *= glam::Mat4::from_translation(glam::Vec3::new(
-            if left { -0.046_875 } else { 0.046_875 },
-            -0.156_25,
-            0.078_125,
-        ));
-    }
-    if m.species() == Species::CopperGolem {
-        // `CopperGolemModel.translateToHand`: a still golem holds the item
-        // across the arm, a working one scaled down in front of it.
-        if m.extra.variant3 == super::copper_golem::IDLE {
-            t *= glam::Mat4::from_rotation_y((if left { 90.0f32 } else { -90.0 }).to_radians())
-                * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
-        } else {
-            t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55))
-                * glam::Mat4::from_translation(glam::Vec3::new(-0.125, 0.3125, -0.1875));
-        }
-    }
+    let hand = translate_to_hand(m, model, base, poses, left)?;
+    Some(item_from_hand(hand, m, left))
+}
+/// `ItemInHandLayer.submitArmWithItem` after `translateToHand`: the two item rotations,
+/// then the baby or adult hand offset, applied to the hand `translate_to_hand` gives.
+fn item_from_hand(mut t: glam::Mat4, m: &Mob, left: bool) -> glam::Mat4 {
     let (ox, oy, oz) = if m.is_baby() {
         (0.0, 1.0, -4.5)
     } else {
@@ -2629,7 +2820,7 @@ fn hand_base(
         oy / 16.0,
         oz / 16.0,
     ));
-    Some(t)
+    t
 }
 /// The transform of one of a mob's model parts, in camera space
 /// (`ModelPart.translateAndRotate` down the tree).
@@ -2840,29 +3031,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_hidden_parts_report_once_per_kind_and_name() {
-        let mut reports = HiddenPartReports::default();
-        assert!(reports.first("minecraft:cow", "nose"));
-        for _ in 0..10 {
-            assert!(!reports.first("minecraft:cow", "nose"));
-        }
-        assert!(reports.first("minecraft:pig", "nose"));
-        assert!(reports.first("minecraft:cow", "hat_rim"));
-        assert!(!reports.first("minecraft:pig", "nose"));
-        assert!(!reports.first("minecraft:cow", "hat_rim"));
-        assert_eq!(reports.count, 3);
-
-        for i in 3..HiddenPartReports::LIMIT {
-            assert!(reports.first("minecraft:cow", &format!("part_{i}")));
-        }
-        assert!(!reports.first("minecraft:cow", "over_budget"));
-        assert!(!reports.first("minecraft:sheep", "nose"));
-        assert!(!reports.first("minecraft:cow", "nose"));
-        assert_eq!(reports.count, HiddenPartReports::LIMIT);
-        assert_eq!(reports.names.len(), 2);
-    }
-
-    #[test]
     fn profession_texture_preserves_nested_namespaces() {
         assert_eq!(
             villager_client::profession_texture("entity/villager", "minecraft:farmer"),
@@ -2878,9 +3046,9 @@ mod tests {
     }
 
     /// A zombie whose model is a humanoid built here (head with its hat, body, arms, legs: one
-    /// face each), and empty mob data: what the posed-parts tests draw, without `.local`.
+    /// face each), and baked mob data: what the frame-model tests draw, without `.local`.
     fn humanoid_zombie() -> (Mob, MobData) {
-        let cube = |x: f32| serde_json::json!({ "pose": [x, 0.0, 0.0], "polygons": [[[x, 0.0, 0.0, 0.0, 0.0], [x + 1.0, 0.0, 0.0, 1.0, 0.0], [x + 1.0, 1.0, 0.0, 1.0, 1.0], [x, 1.0, 0.0, 0.0, 1.0]]] });
+        let cube = pose_test_cube;
         let mut head = cube(0.0);
         head["children"] = serde_json::json!({ "hat": cube(0.0) });
         let model = serde_json::json!({ "children": {
@@ -2904,8 +3072,8 @@ mod tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: BakedFrameModels::bake([mob.kind.as_ref()]),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -2914,11 +3082,12 @@ mod tests {
             species_placements: Default::default(),
             resolved: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
         };
         (mob, data)
     }
 
-    // The mods' post hooks' posed parts are kept from the body's own draw, on every entry the game draws
+    // The final model and pose come from the body's own draw, on every entry the game draws
     // a mob or player through (CPU, GPU, layers only), and keeping them changes nothing drawn
     // (#2060, #2464).
     include!("render_pose_tests.rs");
@@ -2930,16 +3099,18 @@ mod tests {
         let (mob, data) = humanoid_zombie();
         let atlas = |_: &str| Some([0.0, 0.0, 1.0, 1.0]);
         let armour = mob.kind.model.clone();
-        let extra = [(&*armour, [0.0, 0.0, 1.0, 1.0], 0xFFFF_FFFF, 0, false)];
-        let hide = |parts: &[mod_api::HumanoidPart]| {
-            let mut hidden = mod_api::HiddenParts::default();
-            parts.iter().for_each(|part| hidden.hide(*part));
-            hidden
-        };
-        let draw_parts = |hidden: mod_api::HiddenParts,
-                          extra: &[(&Part, [f32; 4], u32, u32, bool)]| {
-            let (mut out, mut parts) = (Vec::new(), None);
-            render_with_hidden(
+        let extra = [(
+            WornModel::Vanilla(&armour),
+            [0.0, 0.0, 1.0, 1.0],
+            0xFFFF_FFFF,
+            0,
+            false,
+        )];
+        let draw_parts = |names: &[&str], extra: &[WornLayer<'_>]| {
+            let mut out = Vec::new();
+            let mut frame = FrameDraw::new(true);
+            hide_in_draw(&mut frame, &mob, &data, names);
+            render_with_frame(
                 &mob,
                 0.5,
                 glam::DVec3::ZERO,
@@ -2947,49 +3118,42 @@ mod tests {
                 0xf0f0,
                 &data,
                 extra,
-                hidden,
-                Some(&mut parts),
+                &mut frame,
                 &mut out,
             );
-            (out.len(), parts.expect("a humanoid"))
+            (out.len(), frame.model.expect("the body model"))
         };
-        let draw =
-            |hidden, extra: &[(&Part, [f32; 4], u32, u32, bool)]| draw_parts(hidden, extra).0;
-        let whole = draw(hide(&[]), &[]);
+        let draw = |names: &[&str], extra: &[WornLayer<'_>]| draw_parts(names, extra).0;
+        let whole = draw(&[], &[]);
         let one_face = 4;
+        assert_eq!(draw(&["right_arm"], &[]), whole - one_face);
         assert_eq!(
-            draw(hide(&[mod_api::HumanoidPart::RightArm]), &[]),
-            whole - one_face
-        );
-        assert_eq!(
-            draw(hide(&[mod_api::HumanoidPart::Head]), &[]),
+            draw(&["head"], &[]),
             whole - 2 * one_face,
             "the head's child, the hat, goes with it"
         );
         assert_eq!(
-            draw(hide(&[]), &extra),
+            draw(&[], &extra),
             2 * whole,
             "the armour layer copies every part"
         );
         assert_eq!(
-            draw(hide(&[mod_api::HumanoidPart::RightArm]), &extra),
+            draw(&["right_arm"], &extra),
             2 * whole - one_face,
             "only the body loses the arm"
         );
 
-        // `render_living_post` reads the parts as the body drew them: the hidden arm doesn't draw, and
-        // nothing else changed (#2464).
-        let (_, shown) = draw_parts(hide(&[]), &[]);
-        let (_, armless) = draw_parts(hide(&[mod_api::HumanoidPart::RightArm]), &[]);
-        for part in mod_api::HumanoidPart::ALL {
-            let (a, b) = (shown.get(part), armless.get(part));
-            if part == mod_api::HumanoidPart::RightArm {
-                let (a, b) = (a.unwrap(), b.unwrap());
-                assert!(a.visible && !b.visible, "the hidden arm doesn't draw");
-                assert_eq!(a.pose, b.pose, "still posed where vanilla posed it");
-            } else {
-                assert_eq!(a, b, "{part:?}");
-            }
+        // The final pose stays in place when a pre hook hides a part, and visibility
+        // propagates to all its children even though only the head was marked hidden.
+        use mod_api::FrameModel;
+        let (_, shown) = draw_parts(&[], &[]);
+        let (_, headless) = draw_parts(&["head"], &[]);
+        for name in ["head", "hat", "body", "right_arm"] {
+            let original = shown.part(name).unwrap();
+            let edited = headless.part(name).unwrap();
+            assert!(original.visible);
+            assert_eq!(edited.visible, !matches!(name, "head" | "hat"), "{name}");
+            assert_eq!(edited.pose(), original.pose(), "{name}");
         }
     }
 
@@ -3067,6 +3231,7 @@ mod tests {
 
         let model = Arc::new(Part::parse("root", &json!({"children": {"head": {}}})));
         let kind = Arc::new(MobType {
+            type_key: Default::default(),
             shadow: None,
             id: "minecraft:player".into(),
             species: Species::Zombie,
@@ -3163,6 +3328,7 @@ mod tests {
             pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
             polygons,
             children: Vec::new(),
+            layer: None,
         };
         assert_eq!(
             cube_bounds(&part),
@@ -3244,8 +3410,8 @@ mod tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -3253,6 +3419,7 @@ mod tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         };
         let atlas = |name: &str| {
@@ -3339,8 +3506,8 @@ mod tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -3348,6 +3515,7 @@ mod tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         };
         let atlas = |name: &str| {
@@ -3398,8 +3566,8 @@ mod tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -3407,6 +3575,7 @@ mod tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         };
         for left in [false, true] {
@@ -3437,8 +3606,10 @@ mod tests {
         let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let data = MobData::load(
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-            &facts,
-        );
+            facts.states.len(),
+            true,
+        )
+        .unwrap();
         for id in ["minecraft:villager", "minecraft:wandering_trader"] {
             let kind = std::sync::Arc::new(types.types[id].clone());
             let mut mob = Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0);
@@ -3486,8 +3657,8 @@ mod tests {
         // mask, draws depth only): the glint must not be one of them.
         use crate::gfx::{
             ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TEXT_POLYGON_OFFSET_OVERLAY,
-            TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
-            WATER_MASK_OVERLAY,
+            TEXT_POLYGON_OFFSET_SOLID_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY,
+            TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
         };
         assert!(
             ![
@@ -3498,6 +3669,7 @@ mod tests {
                 TRANSLUCENT_GLINT_ITEM_OVERLAY,
                 ENERGY_SWIRL_OVERLAY,
                 TEXT_POLYGON_OFFSET_OVERLAY,
+                TEXT_POLYGON_OFFSET_SOLID_OVERLAY,
             ]
             .contains(&ARMOR_GLINT)
         );
@@ -3516,8 +3688,8 @@ mod tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -3525,6 +3697,7 @@ mod tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         };
         let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
@@ -3538,7 +3711,13 @@ mod tests {
                 &atlas,
                 0xf0f0,
                 &data,
-                &[(part, [0.5, 0.5, 0.75, 0.75], 0xFFFF_FFFF, overlay, false)],
+                &[(
+                    WornModel::Vanilla(part),
+                    [0.5, 0.5, 0.75, 0.75],
+                    0xFFFF_FFFF,
+                    overlay,
+                    false,
+                )],
                 &mut vertices,
             );
             let (armour, body): (Vec<&Vertex>, Vec<&Vertex>) =
@@ -3824,8 +4003,8 @@ mod scroll_tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -3833,6 +4012,7 @@ mod scroll_tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         };
         let atlas = |name: &str| {
@@ -3947,6 +4127,7 @@ mod emissive_tests {
                 ],
             }],
             children: Vec::new(),
+            layer: None,
         });
         Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0)
     }
@@ -3992,8 +4173,8 @@ mod emissive_tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: RwLock::new(random),
             emissive: RwLock::new(Arc::new(emissive)),
@@ -4001,6 +4182,7 @@ mod emissive_tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         }
     }
@@ -4205,8 +4387,20 @@ mod emissive_tests {
         let atlas = |_: &str| Some([0.0, 0.0, 0.5, 0.5]);
         let part = m.kind.model.clone();
         let extra = [
-            (part.as_ref(), [0.5, 0.0, 1.0, 0.5], 0xFFFF_FFFF, 0, false),
-            (part.as_ref(), [0.5, 0.5, 1.0, 1.0], 0xFFFF_FFFF, 0, true),
+            (
+                WornModel::Vanilla(&part),
+                [0.5, 0.0, 1.0, 0.5],
+                0xFFFF_FFFF,
+                0,
+                false,
+            ),
+            (
+                WornModel::Vanilla(&part),
+                [0.5, 0.5, 1.0, 1.0],
+                0xFFFF_FFFF,
+                0,
+                true,
+            ),
         ];
         let mut out = Vec::new();
         render_with(
@@ -4252,6 +4446,7 @@ mod random_texture_tests {
                 ],
             }],
             children: Vec::new(),
+            layer: None,
         });
         Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0)
     }
@@ -4275,15 +4470,16 @@ mod random_texture_tests {
             heightmaps: Default::default(),
             animations: Default::default(),
             villager_hats: Default::default(),
+            frame_models: Default::default(),
             cem: Default::default(),
             random_textures: RwLock::new(random),
             emissive: Default::default(),
             blinks: Default::default(),
             biome_tags: Default::default(),
-            entity_tags: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
             resolved: Default::default(),
         }
     }
@@ -4385,6 +4581,8 @@ mod random_texture_tests {
                 want[i]
             );
         }
+        m.custom_name = Some("Dinnerbone".into());
+        assert_eq!(base_transform_at(&m, 0.5, glam::Mat4::IDENTITY), scaled);
     }
 
     /// A sleeping avatar's bed offset is `getEyeHeight(Pose.STANDING) - 0.1`,
@@ -4437,6 +4635,633 @@ mod random_texture_tests {
                 (length - 1.875).abs() < 1.0e-5,
                 "{axis:?} scales by {length}, not 2 * 0.9375"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod translate_to_hand_tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// A zombie whose model is a root with two posed arms.
+    fn armed() -> (Mob, Part) {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        Arc::make_mut(&mut kind).species = Species::Zombie;
+        let model = Part::parse(
+            "root",
+            &json!({"children": {
+                "right_arm": {"pose": [-5.0, 2.0, 0.0, -0.4, 0.1, 0.05, 1.0, 1.0, 1.0]},
+                "left_arm": {"pose": [5.0, 2.0, 0.0, 0.3, -0.1, -0.05, 1.0, 1.0, 1.0]}
+            }}),
+        );
+        (
+            Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0),
+            model,
+        )
+    }
+
+    /// `ItemInHandLayer.submitArmWithItem`: `translateToHand`, then the two item rotations
+    /// and the hand offset. The hand `hand_base` places an item in is the one
+    /// `translate_to_hand` returns, with only those three steps after it, so a mixin that
+    /// turns the returned matrix turns the item before vanilla's rotations (#3970).
+    #[test]
+    fn the_item_rotations_and_hand_offset_come_after_translate_to_hand() {
+        let (m, model) = armed();
+        let poses = Poses::new(&model);
+        let base = glam::Mat4::from_translation(glam::Vec3::new(0.25, 1.5, -0.75))
+            * glam::Mat4::from_rotation_y(0.7);
+        for left in [false, true] {
+            let hand = translate_to_hand(&m, &model, base, &poses, left).unwrap();
+            let arm = if left { "left_arm" } else { "right_arm" };
+            // A zombie's `translateToHand` is its arm's own `translateAndRotate`.
+            assert_eq!(hand, part_matrix(&model, base, &poses, arm, 0.0).unwrap());
+            let expected = hand
+                * (glam::Mat4::from_rotation_x((-90.0f32).to_radians())
+                    * glam::Mat4::from_rotation_y(PI))
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    if left { -1.0 } else { 1.0 } / 16.0,
+                    2.0 / 16.0,
+                    -10.0 / 16.0,
+                ));
+            assert_eq!(
+                hand_base(&m, &model, base, &poses, &[], left).unwrap(),
+                expected
+            );
+        }
+    }
+
+    /// `held_item_transform`, the held item's pose the renderer draws, goes through
+    /// `translate_to_hand`: it is exactly the hand that function returns for the posed model,
+    /// then the item rotations and hand offset. If the renderer stopped calling it, a row on
+    /// `translate_to_hand` would no longer move the item, and this test would fail.
+    #[test]
+    fn the_held_item_is_placed_from_translate_to_hand() {
+        let (mut m, model) = armed();
+        Arc::make_mut(&mut m.kind).model = Arc::new(model);
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            villager_hats: Default::default(),
+            cem: Default::default(),
+            random_textures: Default::default(),
+            emissive: Default::default(),
+            blinks: Default::default(),
+            pois: Default::default(),
+            species_placements: Default::default(),
+            vanilla_spawn_placements: Default::default(),
+            mod_spawns: Default::default(),
+            frame_models: Default::default(),
+            resolved: Default::default(),
+        };
+        let (alpha, camera) = (0.5, glam::DVec3::new(-2.0, 1.0, 3.0));
+        let (posed, poses, _) = posed_body(&m, alpha, &data);
+        let base = base_transform(&m, alpha, camera);
+        for left in [false, true] {
+            let hand = translate_to_hand(&m, &posed, base, &poses, left).unwrap();
+            assert_eq!(
+                held_item_transform(&m, alpha, camera, &data, left).unwrap(),
+                item_from_hand(hand, &m, left)
+            );
+        }
+    }
+
+    /// What a `RETURN` row on `translate_to_hand` does to the item: the turn it multiplies
+    /// into the hand comes before vanilla's item rotations, as a Java mixin's
+    /// `poseStack.rotate` at `submitArmWithItem`'s first `rotateDegrees` does
+    /// (BendableCuboids' forearm: about X, 0.25 below the arm's pivot). Turning after the
+    /// rotations instead puts the item elsewhere for this pose.
+    #[test]
+    fn a_turn_of_the_hand_comes_before_the_item_rotations() {
+        let (m, model) = armed();
+        let poses = Poses::new(&model);
+        let base = glam::Mat4::from_rotation_y(0.7);
+        let elbow = glam::Vec3::new(0.0, 0.25, 0.0);
+        let turn = glam::Mat4::from_translation(elbow)
+            * glam::Mat4::from_rotation_x(0.5)
+            * glam::Mat4::from_translation(-elbow);
+        for left in [false, true] {
+            let hand = translate_to_hand(&m, &model, base, &poses, left).unwrap();
+            let turned = item_from_hand(hand * turn, &m, left);
+            // The Java pose stack: translateToHand, the mixin's turn, the two item rotations,
+            // the hand offset.
+            let java = hand
+                * turn
+                * (glam::Mat4::from_rotation_x((-90.0f32).to_radians())
+                    * glam::Mat4::from_rotation_y(PI))
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    if left { -1.0 } else { 1.0 } / 16.0,
+                    2.0 / 16.0,
+                    -10.0 / 16.0,
+                ));
+            assert_eq!(turned, java);
+            let after = item_from_hand(hand, &m, left) * turn;
+            assert!(
+                !turned.abs_diff_eq(after, 1.0e-3),
+                "a turn before the item rotations differs from one after them"
+            );
+        }
+    }
+
+    /// The skeleton family's `translateToHand` shifts the arm by 1 (outwards on each side).
+    #[test]
+    fn a_skeleton_hand_is_its_arm_shifted_by_one() {
+        let (mut m, model) = armed();
+        Arc::make_mut(&mut m.kind).species = Species::Skeleton;
+        let poses = Poses::new(&model);
+        let base = glam::Mat4::IDENTITY;
+        for (left, arm, shift) in [(false, "right_arm", 1.0), (true, "left_arm", -1.0)] {
+            assert_eq!(
+                translate_to_hand(&m, &model, base, &poses, left).unwrap(),
+                part_matrix(&model, base, &poses, arm, shift).unwrap()
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod compile_part_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A humanoid layer's tree: five parts of one quad each (facing +x, their texture corners
+    /// apart), drawn body, head, left_arm, right_arm, right_leg (children in name order), so
+    /// `right_arm`'s four vertices are the 13th to the 16th.
+    fn humanoid_tree() -> serde_json::Value {
+        let part = |name: &str, u: f32, pose: [f32; 9]| {
+            let v = json!({
+                "pose": pose,
+                "polygons": [[[0, 0, 0, u, 0.25], [0, 12, 0, u, 0.35],
+                              [0, 12, 4, u + 0.1, 0.35], [0, 0, 4, u + 0.1, 0.25]]],
+                "normals": [[1, 0, 0]]
+            });
+            (name.to_owned(), v)
+        };
+        let children: serde_json::Map<_, _> = [
+            part("body", 0.0, [0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 1.0, 1.0, 1.0]),
+            part("head", 0.1, [0.0, -2.0, 0.0, 0.0, 0.3, 0.0, 1.0, 1.0, 1.0]),
+            part(
+                "left_arm",
+                0.2,
+                [5.0, 2.0, 0.0, 0.3, -0.1, 0.0, 1.0, 1.0, 1.0],
+            ),
+            part(
+                "right_arm",
+                0.3,
+                [-5.0, 2.0, 0.0, -0.4, 0.1, 0.05, 1.0, 1.0, 1.0],
+            ),
+            part(
+                "right_leg",
+                0.4,
+                [-2.0, 12.0, 0.0, 0.2, 0.0, 0.0, 1.0, 1.25, 1.0],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        json!({ "children": children })
+    }
+
+    /// The player layer on [`humanoid_tree`].
+    fn humanoid() -> Part {
+        Part::parse_layer("minecraft:player#main", &humanoid_tree())
+    }
+
+    fn paint() -> Paint {
+        Paint {
+            uv: [0.125, 0.25, 0.75, 0.875],
+            scroll: 0.0,
+            color: 0xff80_c0ff,
+            light: 0x70a0,
+            overlay: 0,
+        }
+    }
+
+    fn drawn(model: &Part, poses: &Poses, compile: Option<CompilePart>) -> Vec<Vertex> {
+        let base = glam::Mat4::from_translation(glam::Vec3::new(0.25, 1.5, -0.75))
+            * glam::Mat4::from_rotation_y(0.7);
+        let mut out = Vec::new();
+        draw_normals(
+            model,
+            base,
+            ModelNormals::new(base),
+            poses,
+            paint(),
+            model.layer.as_deref(),
+            compile,
+            &mut Quads::new(&mut out),
+        );
+        out
+    }
+
+    fn bytes(vertices: &[Vertex]) -> &[u8] {
+        bytemuck::cast_slice(vertices)
+    }
+
+    /// `draw_normals` as it was before `compile_part` was split out of it: the reference
+    /// for "with no replacement, a model draws as before".
+    fn before_split(
+        part: &Part,
+        base: glam::Mat4,
+        normals: ModelNormals,
+        poses: &Poses,
+        paint: Paint,
+        out: &mut Vec<Vertex>,
+    ) {
+        let Paint {
+            uv,
+            scroll,
+            color,
+            light,
+            overlay,
+        } = paint;
+        let p = poses.pose(part);
+        let m = posed(base, p);
+        if poses.is_hidden(part) || p[6] == 0.0 && p[7] == 0.0 && p[8] == 0.0 {
+            return;
+        }
+        let normals = normals.part(p);
+        if !poses.skips(part) {
+            for poly in &part.polygons {
+                let normal = poly.vertex_normal(normals);
+                for v in poly.vertices {
+                    let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                    let glint_uv = if overlay == ARMOR_GLINT {
+                        [v[3], v[4]]
+                    } else {
+                        [0.0, 0.0]
+                    };
+                    out.push(Vertex {
+                        normal,
+                        pos: pos.to_array(),
+                        uv: [
+                            uv[0] + (uv[2] - uv[0]) * scroll_u(v[3], scroll),
+                            uv[1] + (uv[3] - uv[1]) * v[4],
+                        ],
+                        layer: overlay,
+                        color,
+                        light,
+                        glint_uv,
+                    });
+                }
+            }
+        }
+        for c in &part.children {
+            before_split(c, m, normals, poses, paint, out);
+        }
+    }
+
+    /// Without a replacement, `draw_scrolled` pushes the bytes the loop before the split
+    /// pushed, through a nonuniform scale, a skipped part, a hidden one, a scroll and the
+    /// armour glint; `compile_part`'s own body pushes those bytes too; and `render_model`,
+    /// which now emits through the same step, pushes what it pushed before.
+    #[test]
+    fn without_a_replacement_a_model_draws_as_before_the_split() {
+        let model = humanoid();
+        let mut poses = Poses::new(&model);
+        poses.get("right_arm")[6] = 0.5;
+        poses.skip_draw("head");
+        poses.visible("left_arm", false);
+        let base = glam::Mat4::from_translation(glam::Vec3::new(0.25, 1.5, -0.75))
+            * glam::Mat4::from_rotation_y(0.7)
+            * glam::Mat4::from_scale(glam::Vec3::new(0.9375, 0.9375, -0.9375));
+        for (scroll, overlay) in [(0.0, 0), (0.375, 0), (0.0, ARMOR_GLINT)] {
+            let p = Paint {
+                scroll,
+                overlay,
+                ..paint()
+            };
+            let mut expected = Vec::new();
+            before_split(
+                &model,
+                base,
+                ModelNormals::new(base),
+                &poses,
+                p,
+                &mut expected,
+            );
+            let mut now = Vec::new();
+            draw_scrolled(
+                &model, base, &poses, p.uv, p.scroll, p.color, p.light, p.overlay, &mut now,
+            );
+            assert_eq!(expected.len(), 12);
+            assert_eq!(bytes(&now), bytes(&expected));
+            let mut through = Vec::new();
+            draw_normals(
+                &model,
+                base,
+                ModelNormals::new(base),
+                &poses,
+                p,
+                model.layer.as_deref(),
+                Some(compile_part),
+                &mut Quads::new(&mut through),
+            );
+            assert_eq!(bytes(&through), bytes(&expected));
+        }
+        // `render_model` draws every part at its own pose, white, unscrolled.
+        let plain = Poses::new(&model);
+        for overlay in [0, ARMOR_GLINT] {
+            let p = Paint {
+                color: 0xFFFF_FFFF,
+                overlay,
+                ..paint()
+            };
+            let mut expected = Vec::new();
+            before_split(
+                &model,
+                base,
+                ModelNormals::new(base),
+                &plain,
+                p,
+                &mut expected,
+            );
+            let mut now = Vec::new();
+            crate::mobs::render_model(
+                &model,
+                base,
+                &|part| part.pose,
+                p.uv,
+                p.light,
+                overlay,
+                &mut now,
+            );
+            assert_eq!(expected.len(), 20);
+            assert_eq!(bytes(&now), bytes(&expected));
+        }
+    }
+
+    /// The `lower` fn-replace-check fixture's crate, as its helpers name it: its own `Bend`
+    /// type, and `note`.
+    mod fnr_lower {
+        include!("../../../../tools/ci/fn-replace-check/lower/src/shared.rs");
+        pub fn note(_: &str) {}
+    }
+    // The fixture's `pose`, `bend` and `takes` helpers, compiled here in `render`'s scope as the
+    // installer compiles them into its copy of this module.
+    include!("../../../../tools/ci/fn-replace-check/lower/src/mixins/pose.rs");
+    include!("../../../../tools/ci/fn-replace-check/lower/src/mixins/bend.rs");
+    include!("../../../../tools/ci/fn-replace-check/lower/src/mixins/takes.rs");
+
+    /// `anim::setup` with the fixture's `pose` RETURN row.
+    fn setup_installed(
+        m: &Mob,
+        s: &anim::State<'_>,
+        p: &mut Poses,
+        animations: &std::collections::HashMap<String, super::super::keyframes::Animation>,
+    ) {
+        // The row hands the helper the game's return value: `()` here.
+        anim::setup(m, s, p, animations);
+        pose((), m, p)
+    }
+    /// `compile_part` with the fixture's cancellable `bend` HEAD row.
+    fn compile_part_installed(
+        layer: Option<&str>,
+        part: &Part,
+        matrix: glam::Mat4,
+        normals: ModelNormals,
+        paint: Paint,
+        poses: &Poses,
+        quads: &mut Quads<'_>,
+    ) {
+        if bend(layer, part, matrix, normals, paint, poses, quads).is_break() {
+            return;
+        }
+        compile_part(layer, part, matrix, normals, paint, poses, quads);
+    }
+    /// `takes_part` with the fixture's `takes` RETURN row.
+    fn takes_part_installed(layer: &str, part: &str) -> bool {
+        takes(takes_part(layer, part), layer, part)
+    }
+
+    /// A zombie-animated mob drawn with `model`.
+    fn mob(species: Species, model: Part, layers: &[(&str, Part)]) -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = species;
+        kind.anim = super::super::Anim::Zombie;
+        kind.model = std::sync::Arc::new(model);
+        kind.layers = layers
+            .iter()
+            .map(|(key, part)| ((*key).to_owned(), std::sync::Arc::new(part.clone())))
+            .collect();
+        let mut mob = Mob::new(
+            1,
+            std::sync::Arc::new(kind),
+            sunrise_core::geometry::Vec3::ZERO,
+            0.0,
+        );
+        mob.age = 37;
+        mob
+    }
+
+    /// The fixture's rows from the pose write to the emitted quads: its `pose` row stores the
+    /// bend after the game's `setupAnim`, and its `bend` row draws `right_arm` of the player
+    /// layer as two segments with the lower one turned by the stored angle at the elbow; every
+    /// other part's bytes, and the arm's texture, colour, light and overlay, stay the game's.
+    /// Its `takes` row takes that arm, so the player model leaves the GPU and a zombie's stays.
+    #[test]
+    fn the_lower_fixture_bends_the_right_forearm_from_pose_write_to_quads() {
+        let model = humanoid();
+        let m = mob(Species::Zombie, model.clone(), &[]);
+        let state = anim::state(&m, 0.5);
+        let mut poses = Poses::new(&model);
+        setup_installed(&m, &state, &mut poses, &Default::default());
+        let mut game = Poses::new(&model);
+        anim::setup(&m, &state, &mut game, &Default::default());
+        let plain = drawn(&model, &game, None);
+        assert_eq!(plain.len(), 20);
+        assert_eq!(
+            bytes(&drawn(&model, &poses, None)),
+            bytes(&plain),
+            "the stored bend changes no pose"
+        );
+        let bent = drawn(&model, &poses, Some(compile_part_installed));
+        assert_eq!(bent.len(), 24);
+        assert_eq!(
+            bytes(&bent[..12]),
+            bytes(&plain[..12]),
+            "body, head, left_arm"
+        );
+        assert_eq!(bytes(&bent[20..]), bytes(&plain[16..]), "right_leg");
+        let arm = &plain[12..16];
+        for segment in [&bent[12..16], &bent[16..20]] {
+            for (v, a) in segment.iter().zip(arm) {
+                assert_eq!(
+                    (v.uv, v.color, v.light, v.layer, v.normal),
+                    (a.uv, a.color, a.light, a.layer, a.normal)
+                );
+            }
+        }
+        // The quad's first two corners run down the arm, 12 pixels. The upper segment starts
+        // at the shoulder and runs 6 of them; the lower one starts where it ends and runs 6
+        // more, turned 0.8 radians away from it.
+        let pos = |v: &Vertex| glam::Vec3::from_array(v.pos);
+        let (upper, lower) = (&bent[12..16], &bent[16..20]);
+        assert_eq!(upper[0].pos, arm[0].pos);
+        let along = pos(&upper[1]) - pos(&upper[0]);
+        let forearm = pos(&lower[1]) - pos(&lower[0]);
+        assert!(pos(&lower[0]).distance(pos(&upper[1])) < 1e-6, "the elbow");
+        assert!((along.length() - 6.0 / 16.0).abs() < 1e-6);
+        assert!((forearm.length() - 6.0 / 16.0).abs() < 1e-6);
+        let turned = along.angle_between(forearm);
+        assert!((turned - 0.8).abs() < 1e-4, "turned by {turned}");
+        // A model of another layer keeps its arm, bend stored or not.
+        let mut zombie = model.clone();
+        zombie.layer = Some("minecraft:zombie#main".into());
+        assert_eq!(
+            bytes(&drawn(&zombie, &poses, Some(compile_part_installed))),
+            bytes(&drawn(&zombie, &game, None))
+        );
+        // The `takes` row: the player model is drawn on the CPU, the zombie's on the GPU.
+        let mut models = super::super::skin::SkinModels::default();
+        models.takes = Some(takes_part_installed);
+        let mut frame = crate::gfx::entity_skin::SkinFrame::default();
+        let mut skin = super::super::skin::Skin::new(&mut models, &mut frame);
+        use super::super::skin::Route;
+        assert_eq!(skin.route(&std::sync::Arc::new(model)), Route::Taken);
+        assert_eq!(skin.route(&std::sync::Arc::new(zombie)), Route::Gpu);
+    }
+
+    /// The ordinary pass submits Pre, body and layer in order even when a draw is taken.
+    /// Placement is decided once per model and kept across frames.
+    #[test]
+    fn a_taken_model_leaves_the_gpu_and_the_mobs_other_models_keep_their_order() {
+        thread_local! {
+            static ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        fn none(_: &str, _: &str) -> bool {
+            ASKED.with(|asked| asked.set(asked.get() + 1));
+            false
+        }
+        fn body_arm(layer: &str, part: &str) -> bool {
+            ASKED.with(|asked| asked.set(asked.get() + 1));
+            layer == "minecraft:drowned#main" && part == "right_arm"
+        }
+        fn outer_arm(layer: &str, part: &str) -> bool {
+            ASKED.with(|asked| asked.set(asked.get() + 1));
+            layer == "minecraft:drowned#outer" && part == "right_arm"
+        }
+        let main = Part::parse_layer("minecraft:drowned#main", &humanoid_tree());
+        let outer = Part::parse_layer("minecraft:drowned#outer", &humanoid_tree());
+        let m = mob(
+            Species::Drowned,
+            main.clone(),
+            &[("drowned#main", main), ("drowned#outer", outer)],
+        );
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            villager_hats: Default::default(),
+            frame_models: BakedFrameModels::bake([m.kind.as_ref()]),
+            cem: Default::default(),
+            random_textures: Default::default(),
+            emissive: Default::default(),
+            blinks: Default::default(),
+            pois: Default::default(),
+            species_placements: Default::default(),
+            resolved: Default::default(),
+            mod_spawns: Default::default(),
+            vanilla_spawn_placements: None,
+        };
+        // The outer layer's sprite apart from the body's, so the two draws differ.
+        let atlas = |texture: &str| {
+            Some(if texture.contains("outer") {
+                [0.5, 0.0, 0.75, 0.5]
+            } else {
+                [0.0, 0.0, 0.25, 0.5]
+            })
+        };
+        // The whole mob on the CPU: the body's 20 vertices, then the outer layer's 20.
+        let mut cpu = Vec::new();
+        render_with_frame(
+            &m,
+            0.5,
+            glam::DVec3::ZERO,
+            &atlas,
+            0xf0f0,
+            &data,
+            &[],
+            &mut FrameDraw::new(false),
+            &mut cpu,
+        );
+        assert_eq!(cpu.len(), 40);
+        let (body, layer) = cpu.split_at(20);
+        assert_ne!(bytes(body), bytes(layer), "two draws apart");
+        // Simulate a Pre listener submitting an ordinary quad before either model, as the
+        // game marks the callback's output on the prepared frame draw.
+        let pre = body.first_chunk::<4>().unwrap().map(|v| Vertex {
+            uv: [v.uv[0] * 0.5 + 0.875, v.uv[1]],
+            ..v
+        });
+        let drawn_by = |u: f32| {
+            if u >= 0.875 {
+                "pre"
+            } else if u < 0.5 {
+                "body"
+            } else {
+                "layer"
+            }
+        };
+        for (takes, cpu, lanes, asked) in [
+            (none as fn(&str, &str) -> bool, &[][..], ["GPU", "GPU"], 12),
+            (body_arm, body, ["CPU", "GPU"], 11),
+            (outer_arm, layer, ["GPU", "CPU"], 11),
+        ] {
+            ASKED.with(|a| a.set(0));
+            let mut models = super::super::skin::SkinModels::default();
+            models.takes = Some(takes);
+            let mut frame = crate::gfx::entity_skin::SkinFrame::default();
+            for prefix in [&[][..], &pre[..]] {
+                frame.clear_draws();
+                let mut frame_draw = FrameDraw::new(false);
+                let mut out = Vec::new();
+                if !prefix.is_empty() {
+                    assert!(frame_draw.prepare(&m, &data).is_some());
+                    out.extend_from_slice(prefix);
+                    frame_draw.mark_pre_vertices(0);
+                }
+                let mut skin = super::super::skin::Skin::new(&mut models, &mut frame);
+                render_skinned(
+                    &m,
+                    0.5,
+                    glam::DVec3::ZERO,
+                    &atlas,
+                    0xf0f0,
+                    &data,
+                    &mut frame_draw,
+                    &mut out,
+                    &mut skin,
+                );
+                assert_eq!(bytes(&out[..prefix.len()]), bytes(prefix));
+                assert_eq!(bytes(&out[prefix.len()..]), bytes(cpu));
+                // Both models use ordinary quads; the entity batch leaves this CPU stream as-is.
+                // Use the production upload and skin job destinations. The ordinary pass's
+                // indices visit these buffer positions in order.
+                let mut order = crate::gfx::entity_skin::OrdinaryOrder::default();
+                order.prepare(&out, Some(&frame), false);
+                let mut submitted = vec![("", ""); prefix.len() + 40];
+                for (dst, range) in order.cpu_uploads(out.len() as u32) {
+                    let src = &out[range.start as usize..range.end as usize];
+                    for (slot, vertex) in submitted[dst as usize..].iter_mut().zip(src) {
+                        *slot = ("CPU", drawn_by(vertex.uv[0]));
+                    }
+                }
+                for job in order.posed_jobs(&frame) {
+                    submitted[job.dst as usize..(job.dst + job.count) as usize]
+                        .fill(("GPU", drawn_by(job.rect[0])));
+                }
+                let (pre, models) = submitted.split_at(prefix.len());
+                assert!(pre.iter().all(|draw| *draw == ("CPU", "pre")));
+                assert_eq!(models[..20], [(lanes[0], "body"); 20]);
+                assert_eq!(models[20..], [(lanes[1], "layer"); 20]);
+            }
+            // Each model's parts asked once, on its first frame (a taken part ends its walk).
+            assert_eq!(ASKED.with(std::cell::Cell::get), asked);
         }
     }
 }

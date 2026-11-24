@@ -153,7 +153,7 @@ fn golem_dies(game: &mut super::Game<'_>, at: [f64; 3]) -> Vec<ItemEntity> {
     golem.health = 0.0;
     game.mobs.push(golem.clone());
     let before = game.dropped.len();
-    game.mob_died(&golem);
+    game.mob_die(&golem);
     game.dropped[before..].to_vec()
 }
 
@@ -222,7 +222,7 @@ fn a_targeted_drop_is_picked_up_only_by_its_target() {
 fn item_world(game: &mut super::Game<'_>) {
     game.load_server_loot();
     game.native_lifecycle
-        .begin_open(mod_api::Authority::IntegratedServer);
+        .begin_open(Some(mod_api::Authority::IntegratedServer));
     game.world = sunrise_client::world::World::new(game.res.facts().air, 1);
     let column = Arc::new(sunrise_client::chunk::Chunk::empty(0, 0));
     game.world.chunks.insert((0, 0), column);

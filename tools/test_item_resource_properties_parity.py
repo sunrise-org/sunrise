@@ -62,18 +62,7 @@ def main():
         if expected is not None:
             assert values == expected, 'Vanilla client/server outcomes differ'
         expected = values
-    # Parse Cargo's artifact stream instead of guessing its target directory or binary hash.
-    harness.run_logged(['cargo', 'test', '--locked', '-p', 'sunrise-client',
-        '--no-default-features', '--lib', '--no-run', '--message-format=json'],
-        build, 'compile-rust', timeout=3600)
-    artifacts = [json.loads(line) for line in (build / 'compile-rust.log').read_text().splitlines()
-                 if line.startswith('{')]
-    executables = {record['executable'] for record in artifacts
-        if record.get('reason') == 'compiler-artifact' and record.get('executable')
-        and record.get('profile', {}).get('test') and record['target']['name'] == 'sunrise_client'
-        and 'lib' in record['target']['kind']}
-    assert len(executables) == 1, executables
-    executable = executables.pop()
+    executable = lab.parity_fixtures(default_features=False)
     with tempfile.TemporaryDirectory(prefix='sunrise-item-properties-') as scratch:
         env = integration_env.game_environment(os.environ, scratch)
         for key in ('XDG_CACHE_HOME', 'SUNRISE_LAUNCHER_TRASH', 'SUNRISE_LAUNCHER_CLIPBOARD',
@@ -102,7 +91,7 @@ def main():
         scope='Seven effective ItemResource reads against real client/server ItemStacks with '
               'loaded registry defaults and tags. Rust uses a resource-backed Game and its existing '
               'duration, damageability, glint, rarity and repair consumers; changed-default HUD calculations and '
-              'patched mod-item use completion. Bar colors are RGB24. Does not draw a GUI or exercise guest transport.'))
+              'patched mod-item use completion. Bar colors are RGB24. Does not draw a GUI.'))
     print(f'{len(rows)} effective item property cases match both vanilla jars: {report}', flush=True)
 
 

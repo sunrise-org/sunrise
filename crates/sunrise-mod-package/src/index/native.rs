@@ -65,6 +65,7 @@ impl Bundle {
                 None => format!("native-1/{}", native.sunrise),
             },
             game: Some(native.game.clone()),
+            sunrise_pin: Some(native.sunrise.clone()),
             dependencies: super::manifest_dependencies(&self.manifest),
             ..Facts::default()
         }
@@ -100,8 +101,12 @@ mod tests {
         .into_iter()
         .chain(extras.iter().copied())
         {
-            zip.start_file(name, options).unwrap();
-            zip.write_all(bytes).unwrap();
+            if name.ends_with('/') {
+                zip.add_directory(name, options).unwrap();
+            } else {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
         }
         zip.finish().unwrap();
         let result = Bundle::read(&path);
@@ -167,18 +172,33 @@ mod tests {
     }
 
     #[test]
-    fn refuses_old_paths_unsafe_entries_and_unknown_fields() {
+    fn an_empty_archive_directory_is_allowed_but_its_unlisted_files_are_not() {
+        let manifest = manifest();
+        let bundle = read("empty-dirs", &manifest, &[("native/", b""), ("rust/", b"")]).unwrap();
+        assert_eq!(bundle.manifest.id, "veinminer");
+        assert_eq!(bundle.files.len(), 3);
         for (i, name) in [
             "sunrise-native.json",
             "horizon-mixin.toml",
             "native/rust/src/lib.rs",
             "rust/src/lib.rs",
-            "../escape.rs",
-            "src/../escape.rs",
-            "src/blob.bin",
         ]
-        .iter()
+        .into_iter()
         .enumerate()
+        {
+            let result = read(&format!("not-allowed-{i}"), &manifest, &[(name, b"bad")]);
+            assert_eq!(
+                result.err().unwrap(),
+                format!("unexpected package path: {name}")
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_unsafe_entries_and_unknown_fields() {
+        for (i, name) in ["../escape.rs", "src/../escape.rs", "src/blob.bin"]
+            .iter()
+            .enumerate()
         {
             assert!(
                 read(&format!("invalid-{i}"), &manifest(), &[(name, b"bad")]).is_err(),

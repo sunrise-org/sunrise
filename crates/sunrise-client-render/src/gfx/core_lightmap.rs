@@ -4,10 +4,10 @@
 //! texture is computed natively ([`native_lightmap`]). `Renderer::update_lightmap` is the one
 //! entry point for the frame's light texture, either way.
 
-use crate::core_shader::{CoreProgram, Glue};
 use crate::polytone_post::ExpressionUniform;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use sunrise_glsl::{Glue, Translated};
 
 /// `core/screenquad`: no vertex input, three vertices from `gl_VertexIndex`. GL's framebuffer
 /// rows run from the bottom and wgpu's from the top: the flip keeps row `n` at sky level `n`.
@@ -17,6 +17,7 @@ pub(crate) const GLUE: Glue = Glue {
     setup: "",
     finish: "gl_Position.y = -gl_Position.y;",
     vertex_id: "int(gl_VertexIndex)",
+    interface: sunrise_shaders::DEVICELESS_INTERFACE_LIMITS,
 };
 
 /// The block `Lightmap.render` fills, beside the vanilla ones.
@@ -79,6 +80,13 @@ impl LightmapInfo {
 
 /// The light texture `lightmap.fsh` draws for `info`, computed here: RGBA rows of sky level by
 /// block level, what the native path uploads.
+/// `lightmap.fsh`'s `notGamma` scale, its four multiplies in the shader's order: `powi(4)`
+/// squares twice and rounds differently.
+fn max_scaled(max: f32) -> f32 {
+    let inverted = 1.0 - max;
+    1.0 - inverted * inverted * inverted * inverted
+}
+
 pub(crate) fn native_lightmap(info: &LightmapInfo) -> [u8; 16 * 16 * 4] {
     use glam::Vec3;
     let brightness = |level: f32| level / (4.0 - 3.0 * level);
@@ -92,7 +100,7 @@ pub(crate) fn native_lightmap(info: &LightmapInfo) -> [u8; 16 * 16 * 4] {
             let mut color = Vec3::from(info.ambient_color)
                 .max(Vec3::from(info.night_vision_color) * info.night_vision);
             color += Vec3::from(info.sky_light_color) * sky_brightness;
-            let parabolic = (2.0 * block_level - 1.0).powi(2);
+            let parabolic = (2.0 * block_level - 1.0) * (2.0 * block_level - 1.0);
             let block_color = Vec3::from(info.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
             color += block_color * block_brightness;
             // A boss bar mixes the light toward 70/60/60%.
@@ -100,9 +108,7 @@ pub(crate) fn native_lightmap(info: &LightmapInfo) -> [u8; 16 * 16 * 4] {
             color -= Vec3::splat(info.darkness);
             color = color.clamp(Vec3::ZERO, Vec3::ONE);
             let max = color.max_element().max(1e-6);
-            let inverted = 1.0 - max;
-            let scaled = 1.0 - inverted.powi(4);
-            let not_gamma = color * (scaled / max);
+            let not_gamma = color * (max_scaled(max) / max);
             color = color.lerp(not_gamma, info.brightness);
             let i = (s * 16 + b) * 4;
             pixels[i] = (color.x * 255.0) as u8;
@@ -166,7 +172,7 @@ impl Readback {
 ///
 /// It holds nothing of the level: a level change keeps it, and a pack change or reload makes a
 /// new renderer, which loads the packs' shader again (`set_lightmap_shader`).
-pub(super) struct CoreLightmap {
+pub(crate) struct CoreLightmap {
     pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
@@ -186,14 +192,14 @@ impl CoreLightmap {
     /// block is bound only to the stages that read it: one only declared takes no binding.
     pub(super) fn new(
         device: &wgpu::Device,
-        program: &CoreProgram,
+        program: &Translated,
         expressions: &[ExpressionUniform],
     ) -> Option<Self> {
         let info_binding = program
             .other
             .iter()
             .position(|n| n == INFO_BLOCK)
-            .map(crate::core_shader::other_binding);
+            .map(|i| program.other_binding(i));
         // A pack's shader is untrusted: the backend failing to compile it is an internal error.
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -205,7 +211,11 @@ impl CoreLightmap {
         };
         let vertex = module("Resource pack lightmap (vertex)", &program.vertex);
         let fragment = module("Resource pack lightmap (fragment)", &program.fragment);
-        let extra = super::expression_blocks::ExpressionBlocks::new(expressions, INFO_OFFSET + 256);
+        let extra = super::expression_blocks::ExpressionBlocks::new(
+            program,
+            expressions,
+            INFO_OFFSET + 256,
+        );
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Resource pack lightmap"),
             size: extra.size(),
@@ -217,27 +227,11 @@ impl CoreLightmap {
         let info = info_binding.map(|b| (b, INFO_OFFSET, INFO_SIZE, program.stages_reading(b)));
         let mut blocks = super::expression_blocks::vanilla_blocks(program);
         blocks.extend(info.filter(|(.., stages)| !stages.is_empty()));
-        let entries: Vec<wgpu::BindGroupLayoutEntry> = (blocks.iter())
-            .map(|&(binding, _, size, stages)| {
-                super::expression_blocks::block_entry(binding, size, stages)
-            })
-            .chain(extra.layout())
-            .collect();
+        let (entries, resources) = super::expression_blocks::bindings(&blocks, &extra, &uniform);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Resource pack lightmap"),
             entries: &entries,
         });
-        let resources: Vec<wgpu::BindGroupEntry> = (blocks.iter())
-            .map(|&(binding, offset, size, _)| wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform,
-                    offset,
-                    size: wgpu::BufferSize::new(size),
-                }),
-            })
-            .chain(extra.entries(&uniform))
-            .collect();
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Resource pack lightmap"),
             layout: &layout,
@@ -506,7 +500,7 @@ impl super::Renderer {
     /// (they decode their result at the end, `linear_blend`), as they do the native one.
     pub fn set_lightmap_shader(
         &mut self,
-        program: Option<&CoreProgram>,
+        program: Option<&Translated>,
         expressions: &[ExpressionUniform],
     ) {
         self.core_lightmap = program.and_then(|p| CoreLightmap::new(&self.device, p, expressions));

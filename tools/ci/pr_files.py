@@ -4,14 +4,16 @@ job can select checks without fetching the history.
 
 usage: pr_files.py OUT    (env: GITHUB_API_URL, GITHUB_REPOSITORY, GH_TOKEN, BASE_SHA, HEAD_SHA, CHANGED_FILES)
 
-Writes OUT as `git diff --name-status --no-renames -z BASE_SHA...HEAD_SHA` would, and prints `listed=true`. The list
+Writes OUT as `git diff --name-status --no-renames -z BASE_SHA...HEAD_SHA` would, and prints `listed=true` and
+`entries=N`, the number of records it wrote, which rust_changes.py --entries checks the listing against. The list
 is GitHub's comparison of those two commits (`compare/BASE_SHA...HEAD_SHA`), the same three-dot diff, so it is tied to
 this run's pair whatever the pull request's branches do meanwhile. A rename is a deletion and an addition, as with
 --no-renames; a copy is an addition. Prints `listed=false` (and the reason on stderr) whenever the list may differ
 from git's, so the job falls back to the history:
 - an API error, or a file status other than added, removed, modified, renamed or copied;
 - a comparison of other commits than the pair asked for;
-- the list reaches the comparison's 300 files, or its count differs from the event's changed_files.
+- the list reaches the comparison's 300 files, or its count differs from the event's changed_files;
+- a record with no usable path (empty, a `.` or `..` component, a NUL) or a path listed twice.
 Never fails the step.
 """
 
@@ -26,6 +28,11 @@ API_LIMIT = 300
 STATUS = {"added": "A", "removed": "D", "modified": "M", "copied": "A"}
 
 
+def repo_path(path):
+    """Whether `path` is a repository-relative path as git prints one: no empty, `.` or `..` component, no NUL."""
+    return isinstance(path, str) and "\0" not in path and not {"", ".", ".."}.intersection(path.split("/"))
+
+
 def get(path):
     request = urllib.request.Request(
         f"{os.environ.get('GITHUB_API_URL', 'https://api.github.com')}/repos/{os.environ['GITHUB_REPOSITORY']}/{path}",
@@ -37,16 +44,20 @@ def get(path):
 
 
 def entries(files):
-    """git's (status, path) pairs for the API's file list, or None if a status has no exact git equivalent."""
+    """git's (status, path) pairs for the API's file list, or None for an incomplete or unrecognized record or a
+    path listed twice."""
     out = []
     for item in files:
-        if item["status"] == "renamed":
-            out += [("D", item["previous_filename"]), ("A", item["filename"])]
-        elif item["status"] in STATUS:
-            out.append((STATUS[item["status"]], item["filename"]))
+        if not isinstance(item, dict) or not repo_path(item.get("filename")):
+            return None
+        status, path = item.get("status"), item["filename"]
+        if status == "renamed" and repo_path(item.get("previous_filename")):
+            out += [("D", item["previous_filename"]), ("A", path)]
+        elif isinstance(status, str) and status in STATUS:
+            out.append((STATUS[status], path))
         else:
             return None
-    return out
+    return out if len({path for _, path in out}) == len(out) else None
 
 
 def listed():
@@ -68,12 +79,7 @@ def listed():
         return "the comparison has no file list"
     if len(files) != expected:
         return f"the comparison lists {len(files)} files, the event {expected}"
-    changes = entries(files)
-    if changes is None:
-        return "a file status with no exact git equivalent: " + ", ".join(sorted({f["status"] for f in files}))
-    if any(not isinstance(path, str) or not path or "\0" in path for _, path in changes):
-        return "the comparison has an invalid file path"
-    return changes
+    return entries(files) or "the comparison has an incomplete or unrecognized file record"
 
 
 def main(out):
@@ -88,7 +94,7 @@ def main(out):
     with open(out, "wb") as stream:
         stream.write(b"".join(f"{status}\0{path}\0".encode("utf-8") for status, path in changes))
     print(f"pr_files: {len(changes)} entries from the API", file=sys.stderr)
-    print("listed=true")
+    print(f"listed=true\nentries={len(changes)}")
 
 
 if __name__ == "__main__":

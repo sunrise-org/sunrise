@@ -130,7 +130,8 @@ fn shoot(m: &mut Mob, head: usize, at: [f64; 3], dangerous: bool, events: &mut V
         Vec3::new(h[0], h[1], h[2]),
         Some(Who::Mob(m.id)),
         dir,
-    );
+    )
+    .facing_shooter(m.yaw, m.head_pitch);
     events.push(MobEvent::Projectile(p));
 }
 /// `WitherBoss.aiStep` before travel: climb above and close in on the
@@ -803,7 +804,7 @@ mod upstream_sync_tests {
         let mut m = mob(Species::Wither, 150.0);
         let attack = crate::health::Attack {
             projectile: Some(2),
-            projectile_is_arrow: true,
+            projectile_kind: crate::health::DirectEntity::Arrow,
             ..Default::default()
         };
         assert!(!m.damage(
@@ -1018,6 +1019,7 @@ mod upstream_sync_tests {
                     let cow = Mob::new(2, Arc::new(cow_kind), Vec3::new(5.5, 65.0, 0.5), 0.0);
                     let seen = [cow.seen(None, &crate::items::Items::empty())];
                     let world = crate::mobs::MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         others: &seen,
                         ..w.clone()
                     };

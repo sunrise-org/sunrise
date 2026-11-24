@@ -21,7 +21,7 @@ fn is_dead(game: &super::Game<'_>, conn: u32) -> bool {
 }
 
 /// Records each `player_respawned`.
-struct Heard(Arc<Mutex<Vec<(u128, String)>>>);
+struct Heard(Arc<Mutex<Vec<(u128, String, bool)>>>);
 
 #[mod_api::__subscriptions]
 impl Hooks for Heard {
@@ -29,7 +29,7 @@ impl Hooks for Heard {
         self.0
             .lock()
             .unwrap()
-            .push((event.player, event.name.to_owned()));
+            .push((event.player, event.name.to_owned(), event.end_conquered));
     }
 }
 
@@ -51,50 +51,40 @@ fn a_dead_player_is_respawned_once() {
             assert_eq!(b.respawn(game), Ok(()));
             assert!(!is_dead(game, 13));
             assert_eq!(b, game.player(b.uuid()).unwrap());
-            assert_eq!(*heard.lock().unwrap(), [(13, "guest13".to_owned())]);
+            assert_eq!(*heard.lock().unwrap(), [(13, "guest13".to_owned(), false)]);
             assert_eq!(b.respawn(game), Err(RespawnRefusal::Alive));
             assert_eq!(heard.lock().unwrap().len(), 1, "not respawned twice");
         });
     });
 }
 
-/// `Alive` is health above 0 and the game not won: a player who has won the game is respawned
-/// on the button even alive (the request is taken on the next server tick, as the client's own
-/// is), and a dead one is still respawned at once.
+/// A removed End player can use the same API as the Respawn button.
 #[test]
 #[ignore = "daily"]
 fn a_player_who_won_the_game_is_respawned_alive_as_the_button_does() {
-    with_guests(|game| {
-        let b = game.players().server_players()[1];
-        game.lan
-            .as_mut()
-            .unwrap()
-            .play
-            .entry(13)
-            .or_default()
-            .won_game = true;
-        assert!(!is_dead(game, 13));
-        assert_eq!(b.respawn(game), Ok(()));
-        assert!(
-            game.lan.as_ref().unwrap().play[&13].respawn_requested,
-            "the poem's exit is requested, as the packet does"
-        );
-        assert!(!is_dead(game, 13), "still alive, not respawned in place");
-        game.lan
-            .as_mut()
-            .unwrap()
-            .play
-            .get_mut(&13)
-            .unwrap()
-            .won_game = false;
-        game.lan
-            .as_mut()
-            .unwrap()
-            .play
-            .get_mut(&13)
-            .unwrap()
-            .respawn_requested = false;
-        assert_eq!(b.respawn(game), Err(RespawnRefusal::Alive));
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "heard",
+        Box::new(Heard(heard.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_guests(|game| {
+            let b = game.players().server_players()[1];
+            game.lan.as_mut().unwrap().hub.update_guest(13, |g| {
+                g.spawn = Some([3.5, 64.0, 5.5]);
+            });
+            game.remove_old_player_for_clone(13, false);
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(13, |guest| guest.won_game = true);
+            assert!(!is_dead(game, 13));
+            assert_eq!(b.respawn(game), Ok(()));
+            assert_eq!(*heard.lock().unwrap(), [(13, "guest13".to_owned(), true)]);
+            assert_eq!(b.respawn(game), Err(RespawnRefusal::Alive));
+        });
     });
 }
 

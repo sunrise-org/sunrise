@@ -178,9 +178,27 @@ def target_order_cases():
     yield f'trial/target_reloaded mode=trial {w.tokens()}'
 
 
+# Real blocks on the line from a survival player's eye to the spawner at (0,64,0):
+# (name, block, block y, player y, sees). The ray enters the fence's cell below its outline top (63.0), crosses
+# its 24 px collider above that (63.06 at x=4.5) and misses the 16 px outline; four snow layers have outline top
+# 64.5, collision top 64.375, and the ray passes between them.
+SIGHT_BLOCKS = [('fence', 'minecraft:oak_fence', 62, 60.08, True), ('powder_snow', 'minecraft:powder_snow', 64, 62.88, True),
+                ('snow_layers', 'minecraft:snow[layers=4]', 64, 62.818, False)]
+
+
+def sight_block_cases():
+    for name, block, by, y, _ in SIGHT_BLOCKS:
+        w = natural.World(None)
+        w.kv.update(spos='0,64,0', state='waiting_for_players', t0=1, seed=13, ticks=40, difficulty='normal')
+        w.block(box(4, by, 0, 4, by, 0), block)
+        w.players = [f'8.5,{y},0.5/survival']
+        w.kv['snbt'] = base64.b64encode(b'{required_player_range:20,normal_config:"minecraft:trial_chamber/melee/zombie/normal"}').decode()
+        yield f'trial/sight_{name} mode=trial {w.tokens()}'
+
+
 def corpus():
     rng = random.Random(0x54524941)
-    cases = list(target_order_cases())
+    cases = list(target_order_cases()) + list(sight_block_cases())
     for k in range(2500):
         w, spos, half, height = room(rng)
         players(w, rng, spos, half, height)
@@ -218,6 +236,7 @@ def main():
     sources = [oracle, Path(__file__), lab.ROOT / 'crates/sunrise-client/examples/probe/natural_spawn_fixture.rs',
                lab.ROOT / 'crates/sunrise-client/src/mobs/trial_spawner.rs',
                lab.ROOT / 'crates/sunrise-client/src/mobs/spawner.rs',
+               lab.ROOT / 'crates/sunrise-client/src/mobs/world.rs',
                lab.ROOT / 'crates/sunrise-client-render/src/chunk/block_entity.rs',
                lab.ROOT / 'crates/sunrise-client-core/src/identifier.rs',
                lab.ROOT / 'crates/sunrise-client/src/mobs/spawn_selection.rs',
@@ -254,6 +273,11 @@ def main():
         targets = [event.split()[4] for event in log.split(' ; ') if event.startswith('0 ispawner ')]
         if targets != [x]:
             raise SystemExit(f'{name}: expected exactly one item spawner at x={x}, got {targets}')
+    # The player is detected (levent 3013) only where vanilla's visual shape lets the ray through.
+    for name, _, _, _, sees in SIGHT_BLOCKS:
+        log = next((line for line in vanilla if line.startswith(f'trial/sight_{name} ')), '')
+        if (' levent 3013 ' in log) != sees:
+            raise SystemExit(f'trial/sight_{name}: expected the player to be {"detected" if sees else "hidden"}: {log[:500]}')
     rust = (build / 'rust.txt').read_text().splitlines()
     bad = [(a, b) for a, b in zip(vanilla, rust) if a != b]
     if bad or len(vanilla) != len(rust):

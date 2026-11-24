@@ -45,7 +45,7 @@ impl ChunkGenerator for Saved {
         chunk.light_loaded = true;
         Some(chunk)
     }
-    fn proto(&self, _: &mut (), _: i32, _: i32) -> Proto {
+    fn proto(&self, _: &mut (), _: i32, _: i32) -> std::result::Result<Proto, String> {
         unreachable!("every column is saved")
     }
     fn finish(&self, _: Proto) -> Chunk {
@@ -97,7 +97,7 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
             assert!(Instant::now() < deadline, "streaming never settled");
             let before = (world.chunks.len(), meshed.len());
             let (uploads, _) = streaming.update(world);
-            meshed.extend(uploads.iter().map(|(key, _)| *key));
+            meshed.extend(uploads.iter().map(|upload| upload.key));
             // As the game does once they are uploaded: a worker frees them,
             // and nothing comes back (`pending` empties).
             streaming.free(uploads);
@@ -221,7 +221,7 @@ fn relit_columns_keep_every_mesh_current() {
             assert!(Instant::now() < deadline, "streaming never settled");
             let (uploads, _) = streaming.update(world);
             let idle = uploads.is_empty() && !streaming.busy();
-            meshes.extend(uploads);
+            meshes.extend(uploads.into_iter().map(|upload| (upload.key, upload.mesh)));
             thread::sleep(Duration::from_millis(5));
             quiet = if idle { quiet + 1 } else { 0 };
         }
@@ -409,7 +409,7 @@ fn meshes_waiting_for_upload_hold_back_new_mesh_jobs() {
             assert!(Instant::now() < deadline, "streaming never settled");
             let before = (world.chunks.len(), meshed.len());
             let (uploads, _) = streaming.update(world);
-            meshed.extend(uploads.iter().map(|(key, _)| *key));
+            meshed.extend(uploads.iter().map(|upload| upload.key));
             streaming.free(uploads);
             thread::sleep(Duration::from_millis(5));
             let idle = !streaming.busy() && before == (world.chunks.len(), meshed.len());

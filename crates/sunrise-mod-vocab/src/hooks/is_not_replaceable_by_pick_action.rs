@@ -15,6 +15,8 @@ pub trait Hooks {
     /// and its guests), with a read-only `Host`. The contract beyond the method's name and
     /// parameters is Sunrise's reading, not checked against NeoForge's.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "item",
@@ -22,5 +24,10 @@ pub trait Hooks {
         host = "read",
         neoforge = "IItemExtension.isNotReplaceableByPickAction"
     )]
-    fn is_not_replaceable_by_pick_action();
+    fn is_not_replaceable_by_pick_action(
+        player: u128,
+        stack: &ItemStack,
+        slot: u32,
+        not_replaceable: &mut bool,
+    );
 }

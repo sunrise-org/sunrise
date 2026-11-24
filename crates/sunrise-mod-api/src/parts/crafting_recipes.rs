@@ -1,14 +1,36 @@
-//! Validate ownership and freeze crafting-kind registrations.
+//! Validate and freeze crafting-kind registrations.
 use super::*;
+
+/// Vanilla 26.3 `RecipeType` built-ins (`BuiltInRegistries.RECIPE_TYPE`).
+const VANILLA_RECIPE_TYPES: &[&str] = &[
+    "minecraft:crafting",
+    "minecraft:smelting",
+    "minecraft:blasting",
+    "minecraft:smoking",
+    "minecraft:campfire_cooking",
+    "minecraft:stonecutting",
+    "minecraft:smithing",
+    "minecraft:brewing",
+];
+
 impl RecipeSerializersRegistrar for PartRegistrar {
     fn register_recipe_type(&mut self, name: &str) {
-        let id = match self.owned_declaration_id(name) {
+        let id = match self.declaration_id(name) {
             Ok(id) => id,
             Err(error) => {
                 self.refused.push(error);
                 return;
             }
         };
+        if VANILLA_RECIPE_TYPES.contains(&id.as_str())
+            || self.has_builtin_entry("minecraft:recipe_type", &id)
+        {
+            self.refused.push(format!(
+                "{} registered built-in recipe type {id}",
+                self.mod_id
+            ));
+            return;
+        }
         if self.parts.recipe_types.contains_key(id.as_str()) {
             self.refused
                 .push(format!("{} registered recipe type {id} twice", self.mod_id));
@@ -21,22 +43,22 @@ impl RecipeSerializersRegistrar for PartRegistrar {
         &mut self,
         name: &str,
         recipe_type: &str,
-        handler: Option<Arc<dyn crate::CraftingRecipeHandler>>,
+        handler: RegisteredRecipeSerializer,
     ) {
-        let id = match self.owned_declaration_id(name) {
+        let id = match self.declaration_id(name) {
             Ok(id) => id,
             Err(error) => {
                 self.refused.push(error);
                 return;
             }
         };
-        let Some(handler) = handler else {
+        if self.has_builtin_entry("minecraft:recipe_serializer", &id) {
             self.refused.push(format!(
-                "{} recipe serializer {id} requires a Wire value codec",
+                "{} registered built-in recipe serializer {id}",
                 self.mod_id
             ));
             return;
-        };
+        }
         if self.parts.recipe_serializers.contains_key(id.as_str()) {
             self.refused.push(format!(
                 "{} registered recipe serializer {id} twice",
@@ -44,6 +66,7 @@ impl RecipeSerializersRegistrar for PartRegistrar {
             ));
             return;
         }
+        let handler = handler.bind(self.mod_id, self.mod_index, id.as_str());
         self.parts
             .recipe_serializers
             .insert(id.into(), (self.mod_index, recipe_type.into(), handler));
@@ -58,22 +81,19 @@ mod tests {
         fn is_in_tag(&self, _: crate::ItemKey, _: crate::TagKey) -> Option<bool> {
             None
         }
-        fn item_count(&self, _: crate::TagKey) -> Option<usize> {
-            None
-        }
-        fn item_at(&self, _: crate::TagKey, _: usize) -> Option<crate::ItemKey> {
+        fn items_in_tag(&self, _: crate::TagKey) -> Option<&[crate::ItemKey]> {
             None
         }
         fn side(&self) -> crate::LoopSide {
             crate::LoopSide::Server
         }
-        fn registry(&self, _: &str) -> Option<Arc<[String]>> {
+        fn registry(&self, _: &str) -> Option<&[String]> {
             None
         }
-        fn setting(&self, _: &str, _: &str) -> Option<String> {
+        fn setting(&self, _: &str, _: &str) -> Option<&str> {
             None
         }
-        fn mods(&self) -> crate::LoadedMods {
+        fn mods(&self) -> &crate::LoadedMods {
             unreachable!("not used by this fixture")
         }
         fn mod_recipe_property_contains(&self, _: &str, _: crate::ItemKey) -> bool {
@@ -85,32 +105,30 @@ mod tests {
             None
         }
     }
+    struct Count(u32);
     struct Literal {
         result: crate::ItemKey,
     }
     impl crate::CraftingRecipeKind for Literal {
-        type Value = u32;
-        fn codec(&self) -> Option<crate::CraftingRecipeCodec<u32>> {
-            Some(crate::CraftingRecipeCodec::wire())
-        }
-        fn decode(&self, json: &str) -> Result<u32, String> {
+        type Value = Count;
+        fn decode(&self, json: &str) -> Result<Count, String> {
             let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
             value["count"]
                 .as_u64()
                 .filter(|n| *n == 3)
-                .map(|n| n as u32)
+                .map(|n| Count(n as u32))
                 .ok_or("count must be 3".into())
         }
-        fn write(&self, value: &u32) -> Result<String, String> {
-            Ok(format!("{{\"count\":{value}}}"))
+        fn write(&self, value: &Count) -> Result<String, String> {
+            Ok(format!("{{\"count\":{}}}", value.0))
         }
         fn matches(
             &self,
             _: &dyn crate::LoopContext,
-            value: &u32,
+            value: &Count,
             grid: crate::CraftingGrid,
         ) -> bool {
-            *value == 3
+            value.0 == 3
                 && grid.width == 3
                 && grid.height == 3
                 && grid
@@ -122,19 +140,19 @@ mod tests {
         fn assemble(
             &self,
             _: &dyn crate::LoopContext,
-            value: &u32,
+            value: &Count,
             _: crate::CraftingGrid,
         ) -> Option<crate::ItemStack> {
-            crate::ItemStack::new(self.result, *value)
+            crate::ItemStack::new(self.result, value.0)
         }
         fn remaining_items(
             &self,
             _: &dyn crate::CraftingRemainders,
-            _: &u32,
+            value: &Count,
             _: crate::CraftingGrid,
         ) -> Option<Vec<Option<crate::ItemStack>>> {
             let mut cells = vec![None; 9];
-            cells[4] = crate::ItemStack::new(self.result, 1);
+            cells[4] = crate::ItemStack::new(self.result, value.0 / 2);
             Some(cells)
         }
     }
@@ -154,65 +172,32 @@ mod tests {
         )])
         .unwrap();
         mod_vocab::__private::resolve_items(["test:result"]).unwrap();
-        let handler =
-            mod_vocab::__private::parts_installation::crafting_recipe("test:diagonal").unwrap();
-        let value = handler.decode(r#"{"count":3}"#).unwrap();
-        let out = handler
-            .assemble(
-                &Context,
-                &value,
-                crate::CraftingGrid::new(1, 1, vec![None]).unwrap(),
-            )
-            .unwrap();
-        assert_eq!(out.count(), 3);
-        assert_eq!(
-            Some(out.item()),
-            mod_vocab::__private::item_key("test:result")
-        );
+        let (kind, serializer) =
+            mod_vocab::__private::parts_installation::recipe_serializer("test:diagonal").unwrap();
+        assert_eq!(kind, "minecraft:crafting");
+        let loaded = serializer.decode(r#"{"count":3}"#).unwrap();
+        let key = mod_vocab::__private::item_key("test:result").unwrap();
         let mut cells = vec![None; 9];
         for i in [0, 4, 8] {
-            cells[i] = Some(out.clone());
+            cells[i] = crate::ItemStack::new(key, 1);
         }
         let grid = crate::CraftingGrid::new(3, 3, cells).unwrap();
-        assert!(handler.matches(&Context, &value, grid.clone()));
-        assert_eq!(handler.write(&value).unwrap(), r#"{"count":3}"#);
+        assert!(loaded.matches(&Context, grid.clone()));
+        let out = loaded.assemble(&Context, grid.clone()).unwrap();
+        assert_eq!(out.count(), 3);
+        assert_eq!(out.item(), key);
+        assert_eq!(loaded.write().unwrap().as_deref(), Some(r#"{"count":3}"#));
         let mut expected = vec![None; 9];
-        expected[4] = crate::ItemStack::new(out.item(), 1);
+        expected[4] = crate::ItemStack::new(key, 1);
         assert_eq!(
-            handler.remaining_items(&Context, &value, grid.clone()),
+            loaded.remaining_items(&Context, grid.clone()),
             Some(expected)
         );
         let mut wrong = grid;
         wrong.cells[4] = None;
-        assert!(!handler.matches(&Context, &value, wrong));
-        assert!(handler.decode("{").is_err());
-        assert!(handler.decode(r#"{"count":2}"#).is_err());
-    }
-    struct NoWire;
-    impl crate::CraftingRecipeKind for NoWire {
-        type Value = std::sync::Mutex<()>;
-        fn decode(&self, _: &str) -> Result<Self::Value, String> {
-            Ok(std::sync::Mutex::new(()))
-        }
-        fn write(&self, _: &Self::Value) -> Result<String, String> {
-            Ok("{}".into())
-        }
-        fn matches(
-            &self,
-            _: &dyn crate::LoopContext,
-            _: &Self::Value,
-            _: crate::CraftingGrid,
-        ) -> bool {
-            false
-        }
-        fn assemble(
-            &self,
-            _: &dyn crate::LoopContext,
-            _: &Self::Value,
-            _: crate::CraftingGrid,
-        ) -> Option<crate::ItemStack> {
-            None
-        }
+        assert!(!loaded.matches(&Context, wrong));
+        assert!(serializer.decode("{").is_err());
+        assert!(serializer.decode(r#"{"count":2}"#).is_err());
     }
     struct Invalid;
     #[mod_api::__subscriptions]
@@ -221,11 +206,10 @@ mod tests {
             let key = r.item_key("test:result");
             r.register_crafting_recipe_serializer("diagonal", Literal { result: key });
             r.register_crafting_recipe_serializer("diagonal", Literal { result: key });
-            r.register_crafting_recipe_serializer("missing_wire", NoWire);
         }
     }
     #[test]
-    fn duplicate_and_non_wire_kinds_refuse_by_name() {
+    fn duplicate_kinds_refuse_by_name() {
         let errors = crate::parts::tests::install_parts_fixture(&[crate::ModEntry::new(
             "test",
             Box::new(Invalid),
@@ -235,12 +219,6 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.contains("test:diagonal") && e.contains("twice")),
-            "{errors:?}"
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("test:missing_wire") && e.contains("Wire")),
             "{errors:?}"
         );
     }
@@ -291,5 +269,73 @@ mod identity_tests {
                 .any(|e| e.contains("machine:grinder_json twice")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn explicit_namespaces_stand_and_builtin_recipe_types_and_serializers_refuse() {
+        let data = mod_vocab::__private::RegistrationData::new(
+            [
+                (
+                    "minecraft:recipe_type".into(),
+                    vec![
+                        "minecraft:crafting".into(),
+                        "minecraft:custom_builtin".into(),
+                    ],
+                ),
+                (
+                    "minecraft:recipe_serializer".into(),
+                    vec!["minecraft:crafting_shaped".into()],
+                ),
+            ]
+            .into(),
+            Default::default(),
+            crate::InstanceDirectory::from_path(std::path::Path::new("unused")).unwrap(),
+            crate::RuntimeEnvironment::new(
+                crate::Dist::Client,
+                "26.3".into(),
+                "test".into(),
+                false,
+            ),
+        );
+        crate::load_state::with_test_registration_data(data, || {
+            let mut registrar = super::PartRegistrar::new("machine");
+            let r = &mut registrar as &mut dyn crate::Registrar;
+            r.register_recipe_type("other:grinding");
+            r.register_recipe_type("minecraft:grinding");
+            r.register_raw_recipe_serializer("other:grinding_json", "other:grinding");
+            r.register_raw_recipe_serializer("minecraft:grinding_json", "minecraft:grinding");
+            assert!(registrar.refused.is_empty(), "{:?}", registrar.refused);
+            assert!(registrar.parts.recipe_types.contains_key("other:grinding"));
+            assert!(
+                registrar
+                    .parts
+                    .recipe_types
+                    .contains_key("minecraft:grinding")
+            );
+            assert!(
+                registrar
+                    .parts
+                    .recipe_serializers
+                    .contains_key("other:grinding_json")
+            );
+            assert!(
+                registrar
+                    .parts
+                    .recipe_serializers
+                    .contains_key("minecraft:grinding_json")
+            );
+
+            let r = &mut registrar as &mut dyn crate::Registrar;
+            r.register_recipe_type("minecraft:smelting");
+            r.register_recipe_type("minecraft:custom_builtin");
+            r.register_raw_recipe_serializer("minecraft:crafting_shaped", "other:grinding");
+            assert_eq!(registrar.refused.len(), 3, "{:?}", registrar.refused);
+            assert!(registrar.refused[0].contains("built-in recipe type minecraft:smelting"));
+            assert!(registrar.refused[1].contains("built-in recipe type minecraft:custom_builtin"));
+            assert!(
+                registrar.refused[2]
+                    .contains("built-in recipe serializer minecraft:crafting_shaped")
+            );
+        });
     }
 }

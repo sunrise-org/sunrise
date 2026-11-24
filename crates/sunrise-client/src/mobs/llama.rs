@@ -198,7 +198,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
 }
 /// The llama's own save fields, over the horse ones: `Variant` (the coat id),
 /// `Strength` and a trader llama's `DespawnDelay`.
-pub fn to_nbt(m: &Mob, map: &mut sunrise_core::nbt::Compound) {
+pub fn to_nbt(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     use sunrise_core::nbt::Tag;
     map.insert("Variant".into(), Tag::Int(i32::from(m.extra.variant)));
     map.insert("Strength".into(), Tag::Int(strength(m)));
@@ -299,7 +299,7 @@ mod tests {
         let Some(kind) = kind else { return };
         let llama = |id, x| {
             let mut m = Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.5), 0.0);
-            m.on_ground = true;
+            m.ground.on_ground = true;
             // AbstractHorse.canParent: tame and in love.
             m.extra.tame = true;
             m.extra.in_love = 600;
@@ -312,6 +312,7 @@ mod tests {
                 [(false, true), (true, true), (false, false), (true, false)]
             {
                 let w = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     goal_host: None,
                     asks_baby_spawn: ask_mods,
                     mob_drops,

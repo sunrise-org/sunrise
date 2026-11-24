@@ -243,48 +243,47 @@ pub fn main() -> sunrise_client::Result<()> {
                 kind: kind.to_owned(),
                 ..LootEntity::default()
             };
-            let damage =
-                |kind: &str, source: Option<LootEntity>, direct: Option<LootEntity>| LootDamage {
-                    kind: kind.to_owned(),
-                    source,
-                    direct,
-                };
+            let damage = |kind: &str, source, direct, is_direct| LootDamage {
+                kind: kind.to_owned(),
+                source,
+                direct,
+                is_direct,
+            };
+            let melee =
+                |kind, entity: Option<LootEntity>| damage(kind, entity.clone(), entity, true);
             let source = match get("source", "attack").as_str() {
                 "attack" => match &killer {
-                    None => damage("minecraft:generic", None, None),
+                    None => melee("minecraft:generic", None),
                     Some(k) if k.kind == "minecraft:player" => {
-                        damage("minecraft:player_attack", Some(k.clone()), Some(k.clone()))
+                        melee("minecraft:player_attack", killer)
                     }
-                    Some(k) => damage("minecraft:mob_attack", Some(k.clone()), Some(k.clone())),
+                    Some(_) => melee("minecraft:mob_attack", killer),
                 },
                 "arrow" => damage(
                     "minecraft:arrow",
-                    killer.clone(),
+                    killer,
                     Some(projectile("minecraft:arrow")),
+                    false,
                 ),
-                "fireball" => match &killer {
+                "fireball" => match killer {
                     Some(k) => damage(
                         "minecraft:fireball",
-                        Some(k.clone()),
+                        Some(k),
                         Some(projectile("minecraft:fireball")),
+                        false,
                     ),
-                    None => damage(
+                    None => melee(
                         "minecraft:unattributed_fireball",
                         Some(projectile("minecraft:fireball")),
-                        Some(projectile("minecraft:fireball")),
                     ),
                 },
-                "explosion" => match &killer {
-                    Some(k) => damage(
-                        "minecraft:player_explosion",
-                        Some(k.clone()),
-                        Some(k.clone()),
-                    ),
-                    None => damage("minecraft:explosion", None, None),
+                "explosion" => match killer {
+                    Some(_) => melee("minecraft:player_explosion", killer),
+                    None => melee("minecraft:explosion", None),
                 },
-                "lightning" => damage("minecraft:lightning_bolt", None, None),
-                "fire" => damage("minecraft:on_fire", None, None),
-                _ => damage("minecraft:generic", None, None),
+                "lightning" => melee("minecraft:lightning_bolt", None),
+                "fire" => melee("minecraft:on_fire", None),
+                _ => melee("minecraft:generic", None),
             };
             let death = drops::Death {
                 loot: &loot,

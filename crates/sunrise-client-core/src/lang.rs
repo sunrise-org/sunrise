@@ -6,7 +6,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
     sync::{
-        Arc, RwLock,
+        Arc, LazyLock, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -26,7 +26,7 @@ impl LanguageInfo {
 }
 #[derive(Default)]
 pub struct Language {
-    pub code: String,
+    pub code: Arc<str>,
     /// `LanguageInfo.bidirectional`: text without a strong character reads
     /// right to left (`ClientLanguage.defaultRightToLeft`).
     bidirectional: bool,
@@ -548,7 +548,7 @@ impl Language {
     /// language a text needs, carried where no language is loaded.
     pub fn of(code: &str, entries: impl IntoIterator<Item = (String, String)>) -> Self {
         Self {
-            code: code.to_owned(),
+            code: code.into(),
             map: entries.into_iter().collect(),
             ..Self::default()
         }
@@ -569,7 +569,7 @@ impl Language {
         decode: impl Fn(&serde_json::Value) -> Option<serde_json::Value>,
     ) -> Self {
         let mut language = Self {
-            code: DEFAULT.to_owned(),
+            code: DEFAULT.into(),
             literal_keybinds: true,
             ..Self::default()
         };
@@ -707,18 +707,20 @@ impl Language {
         let bidirectional = available(sources)
             .iter()
             .any(|info| info.code == code && info.bidirectional);
+        let code: Arc<str> = code.into();
+        let vanilla = engine_keys.then(|| {
+            Arc::new(Self {
+                code: Arc::clone(&code),
+                bidirectional,
+                map: vanilla,
+                ..Self::default()
+            })
+        });
         Self {
-            code: code.to_owned(),
+            code,
             bidirectional,
             map,
-            vanilla: engine_keys.then(|| {
-                Arc::new(Self {
-                    code: code.to_owned(),
-                    bidirectional,
-                    map: vanilla,
-                    ..Self::default()
-                })
-            }),
+            vanilla,
             ..Self::default()
         }
     }
@@ -926,7 +928,16 @@ pub fn bidirectional() -> bool {
     BIDIRECTIONAL.load(Ordering::Relaxed)
 }
 pub fn code() -> String {
-    current().map_or_else(|| DEFAULT.to_owned(), |l| l.code.clone())
+    current().map_or_else(|| DEFAULT.to_owned(), |language| language.code.to_string())
+}
+
+/// Snapshot the current language code without copying its text or keeping a publication guard.
+pub fn code_snapshot() -> Arc<str> {
+    static DEFAULT_CODE: LazyLock<Arc<str>> = LazyLock::new(|| DEFAULT.into());
+    current().map_or_else(
+        || Arc::clone(&DEFAULT_CODE),
+        |language| Arc::clone(&language.code),
+    )
 }
 /// Language.getOrDefault: the translation, or the key itself.
 pub fn get(key: &str) -> String {

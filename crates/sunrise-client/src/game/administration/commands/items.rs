@@ -96,14 +96,6 @@ fn matches_name(pattern: &str, name: &str) -> bool {
 }
 
 impl Game<'_> {
-    /// The item's default `minecraft:rarity` ("common" when it has none).
-    pub(in crate::game) fn item_rarity(&self, item: &str) -> String {
-        self.items()
-            .enchantments
-            .props
-            .get(item)
-            .map_or_else(|| "common".into(), |props| props.rarity.clone())
-    }
     fn owner_of(&mut self, ctx: &Context, prefix: &str, many: bool) -> R<Vec<Owner>> {
         let kind = ctx
             .literals
@@ -441,7 +433,11 @@ impl Game<'_> {
             Slot::Contents(..) => None,
             Slot::ContentItem(parent, component, index) => {
                 let stack = self.slot_get(parent)?;
-                component.items(&stack).get(*index).cloned().flatten()
+                component
+                    .items(self.res.items(), &stack)
+                    .get(*index)
+                    .cloned()
+                    .flatten()
             }
             Slot::Guest(conn, slot) => self
                 .for_player(Target::Guest(*conn), |g| g.slot_get(slot))
@@ -497,7 +493,6 @@ impl Game<'_> {
     }
     fn block_container_size(&self, p: [i32; 3]) -> Option<usize> {
         let size = match self.world.block_entities.get(&(p[0], p[1], p[2]))? {
-            BlockEntity::Mod(m) if m.id().is_empty() => 0,
             BlockEntity::Mod(_) => self
                 .world
                 .block_entities
@@ -509,7 +504,7 @@ impl Game<'_> {
     }
     fn block_slot_set(&mut self, p: [i32; 3], i: usize, stack: Option<ItemStack>) -> bool {
         let key = (p[0], p[1], p[2]);
-        let Some(size) = self.block_container_size(p).filter(|&size| i < size) else {
+        let Some(_) = self.block_container_size(p).filter(|&size| i < size) else {
             return false;
         };
         self.unpack_loot(crate::game::container_loot::LootTarget::Block(key), None);
@@ -551,10 +546,7 @@ impl Game<'_> {
                 c.items[i] = stack;
             }
             Some(BlockEntity::Mod(m)) => {
-                if m.items.len() < size {
-                    m.items.resize(size, None);
-                }
-                *m.item_slot_mut(i).unwrap() = stack;
+                *m.item_slot_mut(i) = stack;
             }
             Some(entity) => entity.slots_mut()[i] = stack,
             None => return false,
@@ -643,12 +635,12 @@ impl Game<'_> {
                 let Some(mut outer) = self.slot_get(parent) else {
                     return false;
                 };
-                let mut slots = component.items(&outer);
+                let mut slots = component.items(self.res.items(), &outer);
                 let Some(slot) = slots.get_mut(*index) else {
                     return false;
                 };
                 *slot = stack;
-                component.store(&mut outer, slots);
+                component.store(self.res.items(), &mut outer, slots);
                 self.slot_set(parent, Some(outer))
             }
             Slot::Guest(conn, slot) => self
@@ -1233,6 +1225,14 @@ impl Game<'_> {
         }
         self.items().get(&s.item).map_or(64, |i| i.max_stack)
     }
+    fn parse_inline_item_modifier(raw: &str) -> R<serde_json::Value> {
+        let (tag, _) =
+            sunrise_core::nbt::parse_snbt(raw).map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+        let value = sunrise_client::scoreboard::tag_to_json(&tag);
+        sunrise_world::loot::validate_item_modifier(&value)
+            .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+        Ok(value)
+    }
     /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
     /// a registered one.
     pub(super) fn item_modifier_arg(&mut self, ctx: &Context, name: &str) -> R<serde_json::Value> {
@@ -1241,9 +1241,7 @@ impl Game<'_> {
             _ => return Err(err("command.failed", &[])),
         };
         if raw.starts_with('{') || raw.starts_with('[') {
-            let (tag, _) = sunrise_core::nbt::parse_snbt(&raw)
-                .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
-            return Ok(sunrise_client::scoreboard::tag_to_json(&tag));
+            return Self::parse_inline_item_modifier(&raw);
         }
         let id = if raw.contains(':') {
             raw
@@ -1269,7 +1267,10 @@ impl Game<'_> {
             return Ok(0);
         };
         let modifier = self.item_modifier_arg(ctx, "modifier")?;
-        let source = self.command_source.unwrap_or_else(|| self.player_source());
+        let source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| self.entity_view_asked(t, &modifier));
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1433,7 +1434,10 @@ impl Game<'_> {
             // ItemCommands.applyModifier on each source stack.
             if ctx.get("modifier").is_some() {
                 let modifier = self.item_modifier_arg(ctx, "modifier")?;
-                let source = self.command_source.unwrap_or_else(|| self.player_source());
+                let source = self
+                    .command_source
+                    .clone()
+                    .unwrap_or_else(|| self.player_source());
                 let view = source.entity.map(|t| self.entity_view_asked(t, &modifier));
                 let mut rng = sunrise_core::random::LegacyRandom::new(0);
                 found = found
@@ -1643,7 +1647,7 @@ fn edit_components(stack: &mut ItemStack, f: impl FnOnce(&mut sunrise_core::nbt:
 fn set_custom_data(stack: &mut ItemStack, value: &Tag) {
     edit_components(stack, |c| {
         let mut data = match c.get(&"minecraft:custom_data".into()) {
-            Some(t @ Tag::Compound(_)) => t.clone(),
+            Some(t @ Tag::Compound(_)) => sunrise_core::nbt::copy_tag(t),
             _ => Tag::Compound(Default::default()),
         };
         merge_compound(&mut data, value);
@@ -1664,7 +1668,7 @@ fn merge_compound(into: &mut Tag, from: &Tag) {
         match (a.get_mut(k), v) {
             (Some(existing @ Tag::Compound(_)), Tag::Compound(_)) => merge_compound(existing, v),
             _ => {
-                a.insert(k.clone(), v.clone());
+                a.insert(k.clone(), sunrise_core::nbt::copy_tag(v));
             }
         }
     }
@@ -2529,8 +2533,9 @@ mod builtin_component_delivery_tests {
     };
     use sunrise_core::nbt::Tag;
     use sunrise_core::position::ChunkPos;
+    use sunrise_core::vanilla_bytes::Writer;
     use sunrise_protocol::{
-        buf::{Codec, Reader, Writer},
+        buf::{Codec, Reader},
         item::{Slot, component},
         packets::{configuration::ClientInformation, play},
     };
@@ -3119,6 +3124,28 @@ mod set_custom_data_tests {
         set_custom_data(&mut stack, &Tag::Compound(Default::default()));
         let saved = sunrise_client::item_data::component_snapshot(&stack);
         assert!(saved.is_none_or(|c| c.get("minecraft:custom_data").is_none()));
+    }
+}
+
+#[cfg(test)]
+mod transient_modifier_tests {
+    use super::*;
+    #[test]
+    fn inline_command_modifier_refuses_whole_sequence_before_execution() {
+        let error = Game::parse_inline_item_modifier(
+            r#"[{type:"minecraft:set_count",count:2},{type:"minecraft:set_components",components:{"!minecraft:creative_slot_lock":{}}}]"#,
+        ).unwrap_err();
+        let message = format!("{error:?}");
+        assert!(message.contains("minecraft:creative_slot_lock"));
+        assert!(message.contains("not a persistent component"));
+        let accepted = Game::parse_inline_item_modifier(
+            r#"[{type:"minecraft:copy_components",source:"block_entity",include:["minecraft:additional_trade_cost"]},{type:"minecraft:set_custom_data",tag:{components:{"minecraft:map_post_processing":"opaque"}}}]"#,
+        ).unwrap();
+        assert_eq!(accepted.as_array().unwrap().len(), 2);
+        assert_eq!(
+            accepted[1]["tag"]["components"]["minecraft:map_post_processing"],
+            "opaque"
+        );
     }
 }
 

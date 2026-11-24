@@ -1,7 +1,5 @@
-//! Painting a whole command buffer, items and every blit blend included: the hotbar's items and
-//! a mod's `gui_paint`. A mod's buffer is checked first ([`undrawable`]): one op the paint
-//! cannot draw refuses the buffer, and nothing of it is drawn.
-use super::{Blend, GuiDraw, paint_with};
+//! Painting the engine's HUD draw list with items and every blit blend included.
+use super::{GuiDraw, paint_with};
 use crate::hud::{HudAtlas, HudBatch};
 
 /// What draws a `GuiDraw::Item`: the stack of hotbar slot `slot` (0-8, 40 = the off hand).
@@ -14,103 +12,6 @@ pub trait GuiItems {
     fn decorations(&mut self, batch: &mut HudBatch, slot: u32, x: i32, y: i32);
 }
 
-/// Why [`paint_checked`] drew nothing: the op it could not draw.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Undrawable {
-    /// An `Item` of a slot that is not a hotbar slot (0-8) or the off hand (40).
-    ItemSlot(u32),
-    /// An `Item` whose scale or pivot is NaN or infinite.
-    ItemNotFinite,
-    /// A `Blit` of a texture the GUI atlas does not hold.
-    BlitTexture(String),
-    /// A `Blit` whose texture size is not positive, or whose `uv` is NaN or infinite.
-    BlitSize,
-    /// A `Sprite` or `AtlasSprite` the GUI atlas does not hold, a mob effect sprite included.
-    Sprite(String),
-    /// A `Sprite` whose `region` has a zero (or negative) sprite width or height.
-    SpriteRegion,
-    /// A `Sprite` with a blend the sprite painter cannot draw (`Nausea`, `Vignette`).
-    SpriteBlend(Blend),
-}
-
-/// Whether `slot` names a hotbar slot or the off hand, as `GuiDraw::Item` takes it.
-pub fn item_slot(slot: u32) -> bool {
-    slot <= 8 || slot == 40
-}
-
-/// The first op of `draws` [`paint_checked`] cannot draw, with its index. It reads the buffer
-/// and allocates only a sprite's name, once.
-pub fn undrawable(atlas: &HudAtlas, draws: &[GuiDraw]) -> Option<(usize, Undrawable)> {
-    let mut name = String::new();
-    draws
-        .iter()
-        .enumerate()
-        .find_map(|(i, d)| refusal(atlas, d, &mut name).map(|why| (i, why)))
-}
-
-fn refusal(atlas: &HudAtlas, draw: &GuiDraw, name: &mut String) -> Option<Undrawable> {
-    match draw {
-        GuiDraw::Item {
-            slot, scale, pivot, ..
-        } => {
-            if !item_slot(*slot) {
-                Some(Undrawable::ItemSlot(*slot))
-            } else if !scale.iter().chain(pivot).all(|v| v.is_finite()) {
-                Some(Undrawable::ItemNotFinite)
-            } else {
-                None
-            }
-        }
-        GuiDraw::Blit {
-            texture, uv, tex, ..
-        } => {
-            if !atlas.sprites.contains_key(texture.as_ref()) {
-                Some(Undrawable::BlitTexture(texture.to_string()))
-            } else if tex[0] <= 0 || tex[1] <= 0 || !uv.iter().all(|v| v.is_finite()) {
-                Some(Undrawable::BlitSize)
-            } else {
-                None
-            }
-        }
-        GuiDraw::Sprite {
-            sprite,
-            region,
-            blend,
-            ..
-        } => {
-            if matches!(blend, Blend::Nausea | Blend::Vignette) {
-                return Some(Undrawable::SpriteBlend(*blend));
-            }
-            if region.is_some_and(|[sw, sh, ..]| sw <= 0 || sh <= 0) {
-                return Some(Undrawable::SpriteRegion);
-            }
-            // As `paint` looks it up: a mob effect sprite (namespaced or not) by its own name,
-            // the others under `gui/sprites/`. A mod's missing effect sprite is refused, not
-            // drawn as the missing texture.
-            let effect = sprite.starts_with("mob_effect/")
-                || sprite
-                    .split_once(':')
-                    .is_some_and(|(_, path)| path.starts_with("mob_effect/"));
-            name.clear();
-            if !effect {
-                name.push_str("gui/sprites/");
-            }
-            name.push_str(sprite);
-            let known = atlas.sprites.contains_key(name.as_str());
-            (!known).then(|| Undrawable::Sprite(sprite.to_string()))
-        }
-        GuiDraw::AtlasSprite { sprite, .. } => {
-            let known = atlas.sprites.contains_key(sprite.as_ref());
-            (!known).then(|| Undrawable::Sprite(sprite.to_string()))
-        }
-        GuiDraw::Fill { .. }
-        | GuiDraw::FillGradient { .. }
-        | GuiDraw::Text { .. }
-        | GuiDraw::Push(_)
-        | GuiDraw::Pop => None,
-    }
-}
-
 /// [`super::paint`], with each `Item` drawn by `items` (scaled about its pivot, then its
 /// decorations) and the blits of every blend: `Vignette` darkens what is under it, `Nausea`
 /// adds to it and `Crosshair` inverts it. The hotbar draws its items with it.
@@ -121,21 +22,6 @@ pub fn paint_items(
     items: &mut dyn GuiItems,
 ) {
     paint_with(batch, atlas, draws, Some(items));
-}
-
-/// [`paint_items`] for a buffer a mod sent: an op it cannot draw ([`undrawable`]) refuses the
-/// whole buffer, with that op's index, and nothing of it is drawn.
-pub fn paint_checked(
-    batch: &mut HudBatch,
-    atlas: &HudAtlas,
-    draws: &[GuiDraw],
-    items: &mut dyn GuiItems,
-) -> Result<(), (usize, Undrawable)> {
-    if let Some(refused) = undrawable(atlas, draws) {
-        return Err(refused);
-    }
-    paint_items(batch, atlas, draws, items);
-    Ok(())
 }
 
 #[cfg(test)]

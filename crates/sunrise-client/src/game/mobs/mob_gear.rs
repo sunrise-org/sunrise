@@ -25,33 +25,36 @@ const MAX_COST_SPAN: f32 = 17.0;
 /// The mobs that call `populateDefaultEquipmentEnchantments` when they spawn.
 impl Game<'_> {
     /// `Mob.equip(EquipmentTable)` for a spawner's `equipment`: the loot table
-    /// (the mob as `this`, its random sequence) is rolled and each stack goes
-    /// in the slot `EquipmentUser.resolveSlot` picks, with the table's drop
-    /// chance for that slot.
-    pub(super) fn equip_from_table(&mut self, id: u32, table: &Tag) {
+    /// (the mob as `this`, its random sequence or the level's random) is rolled
+    /// and each stack goes in the slot `EquipmentUser.resolveSlot` picks, with
+    /// the table's drop chance for that slot.
+    pub(super) fn equip_mob_from_table(
+        &self,
+        mob: &mut sunrise_client::mobs::Mob,
+        table: &Tag,
+        random: &mut sunrise_core::random::LegacyRandom,
+        sequences: &mut sunrise_client::random_sequences::RandomSequences,
+    ) {
         let Some((name, chances)) = equipment_table(table) else {
             return;
         };
         let Some(loot) = self.server_loot.get() else {
             return;
         };
-        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
-            return;
-        };
         if !loot.has_table(&name) {
             return;
         }
         let params = EntityLootParams {
-            this: drops::loot_entity(m, None),
+            this: drops::loot_entity(mob, None),
             ..EntityLootParams::default()
         };
         let seed = self.level.seed;
         let stacks = match loot.random_sequence(&name) {
             Some(sequence) => {
-                let random = self.rand_sequences.get(sequence, seed);
+                let random = sequences.get(sequence, seed);
                 loot.roll_entity(&name, random, &params)
             }
-            None => loot.roll_entity(&name, &mut self.world.random, &params),
+            None => loot.roll_entity(&name, random, &params),
         };
         let mut inserted: Vec<usize> = Vec::new();
         for stack in stacks.iter().filter(|s| !s.is_empty()) {
@@ -69,9 +72,7 @@ impl Game<'_> {
             let Some(slot) = slot.filter(|s| !inserted.contains(s)) else {
                 continue;
             };
-            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                equip_stack(m, slot, stack, chances[slot]);
-            }
+            equip_stack(mob, slot, stack, chances[slot]);
             inserted.push(slot);
         }
     }

@@ -22,9 +22,11 @@ mod tests {
     #[mod_api::__subscriptions]
     impl Hooks for Probe {
         fn items(&self, _: &RegistrationContext, event: &mut ItemsEvent<'_>) {
-            event.items.extend(
-                ["numbers:z_item", "numbers:a_item"].map(|id| Item::new(id, "minecraft:stick")),
-            );
+            for item in
+                ["numbers:z_item", "numbers:a_item"].map(|id| Item::new(id, "minecraft:stick"))
+            {
+                event.register(item).unwrap();
+            }
         }
     }
 

@@ -12,7 +12,11 @@ use sunrise_world::loot::PackOverlay;
 mod offer;
 pub use offer::{ItemCost, MerchantOffer};
 use serde_json::Value;
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::Arc,
+};
 
 /// `VillagerData.NEXT_LEVEL_XP_THRESHOLDS`.
 pub const LEVEL_XP: [i32; 5] = [0, 10, 70, 150, 250];
@@ -47,41 +51,61 @@ pub struct Trader {
     /// generated when first asked for, keeping the experience.
     pub unset: bool,
 }
-impl Trader {
-    fn update_demand(&mut self) {
-        for o in &mut self.offers {
-            o.update_demand();
+/// What a restock step does to the offers (`Villager.restock`, and the
+/// `catchUpDemand` of `shouldRestock` with the restocks it missed).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RestockStep {
+    CatchUp(i32),
+    Restock,
+}
+impl RestockStep {
+    pub fn apply(self, offers: &mut [MerchantOffer]) {
+        match self {
+            Self::CatchUp(missed) => {
+                if missed > 0 {
+                    offers.iter_mut().for_each(MerchantOffer::reset_uses);
+                }
+                for _ in 0..missed {
+                    offers.iter_mut().for_each(MerchantOffer::update_demand);
+                }
+            }
+            Self::Restock => {
+                offers.iter_mut().for_each(MerchantOffer::update_demand);
+                offers.iter_mut().for_each(MerchantOffer::reset_uses);
+            }
         }
     }
+}
+impl Trader {
     /// `Villager.shouldRestock`.
     pub fn should_restock(&mut self, game_time: i64, day: i64) -> bool {
+        let _ = self.catch_up(game_time, day);
+        self.restock_due(game_time)
+    }
+    /// The new-day half of `Villager.shouldRestock` (`resetNumberOfRestocks` /
+    /// `catchUpDemand`). Returns the step applied to the offers on a new day.
+    pub fn catch_up(&mut self, game_time: i64, day: i64) -> Option<RestockStep> {
         let mut new_day = game_time > self.last_restock + 12000;
         new_day |= self.check_day > 0 && day > self.check_day;
         self.check_day = day;
-        if new_day {
-            self.last_restock = game_time;
-            // resetNumberOfRestocks / catchUpDemand.
-            let missed = 2 - self.restocks_today;
-            if missed > 0 {
-                for o in &mut self.offers {
-                    o.uses = 0;
-                }
-            }
-            for _ in 0..missed {
-                self.update_demand();
-            }
-            self.restocks_today = 0;
+        if !new_day {
+            return None;
         }
+        self.last_restock = game_time;
+        let step = RestockStep::CatchUp(2_i32.wrapping_sub(self.restocks_today));
+        step.apply(&mut self.offers);
+        self.restocks_today = 0;
+        Some(step)
+    }
+    /// `allowedToRestock && needsToRestock`.
+    pub fn restock_due(&self, game_time: i64) -> bool {
         let allowed = self.restocks_today == 0
             || self.restocks_today < 2 && game_time > self.last_restock + 2400;
         allowed && self.offers.iter().any(|o| o.uses > 0)
     }
     /// `Villager.restock`.
     pub fn restock(&mut self, game_time: i64) {
-        self.update_demand();
-        for o in &mut self.offers {
-            o.uses = 0;
-        }
+        RestockStep::Restock.apply(&mut self.offers);
         self.last_restock = game_time;
         self.restocks_today += 1;
     }
@@ -95,12 +119,13 @@ pub fn update_special_prices(offers: &mut [MerchantOffer], reputation: i32, hero
     for offer in offers {
         offer.special_price_diff = 0;
         if reputation != 0 {
-            offer.special_price_diff -= (reputation as f32 * offer.price_multiplier).floor() as i32;
+            let change = (reputation as f32 * offer.price_multiplier).floor() as i32;
+            offer.add_special_price_diff(change.wrapping_neg());
         }
         if hero_modifier > 0.0 {
             let reduction =
                 (hero_modifier * f64::from(offer.base_cost_a.stack.count)).floor() as i32;
-            offer.special_price_diff -= reduction.max(1);
+            offer.add_special_price_diff(-reduction.max(1));
         }
     }
 }
@@ -208,6 +233,8 @@ pub struct Session {
     pub future_xp: i32,
     /// `Mob.ambientSoundTime`.
     pub ambient_sound_time: i32,
+    /// The merchant's `Mob.getAmbientSoundInterval` (80 unless a content type declares one).
+    pub ambient_interval: i32,
     /// `Villager.lastTradedPlayer` is set: the TRADE reputation event is due.
     pub last_traded: bool,
     /// A server's merchant on its client (`ClientSideMerchant`): a trade only counts the
@@ -233,10 +260,23 @@ impl Session {
             active: None,
             future_xp: 0,
             ambient_sound_time: 0,
+            ambient_interval: 80,
             last_traded: false,
             client_side: false,
             events: Vec::new(),
         }
+    }
+    /// The trading mob's random and ambient sound clock, which the session draws
+    /// from and resets while it trades (the mob ticks meanwhile).
+    pub fn take_mob_clock(&mut self, m: &crate::mobs::Mob) {
+        self.random.clone_from(&m.random);
+        self.ambient_sound_time = m.ambient_timer;
+        self.ambient_interval = m.ambient_interval();
+    }
+    /// The random and ambient sound clock back to the mob after a trade.
+    pub fn give_mob_clock(&self, m: &mut crate::mobs::Mob) {
+        m.random = self.random.clone();
+        m.ambient_timer = self.ambient_sound_time;
     }
     /// `Merchant.showProgressBar` / `canRestock`.
     pub fn show_progress(&self) -> bool {
@@ -267,19 +307,19 @@ impl Session {
         let Some(offer) = self.offers.get_mut(index) else {
             return false;
         };
-        offer.uses += 1;
+        offer.uses = offer.uses.wrapping_add(1);
         // ClientSideMerchant.notifyTrade: increaseUses alone.
         if self.client_side {
             return false;
         }
         let offer = offer.clone();
-        self.ambient_sound_time = -80;
+        self.ambient_sound_time = self.ambient_interval.wrapping_neg();
         self.events
             .push(Event::Traded(index, Box::new(offer.clone())));
         let mut prices = false;
         if self.villager {
             let mut pop = 3 + self.random.next_int_bound(4).unwrap_or(0);
-            self.xp += offer.xp;
+            self.xp = self.xp.wrapping_add(offer.xp);
             self.last_traded = true;
             if can_level_up(self.level) && self.xp >= max_xp(self.level) {
                 self.level += 1;
@@ -328,45 +368,103 @@ impl Session {
         self.sequences.insert(sequence, random);
         out
     }
-    /// `AbstractVillager.notifyTradeUpdated`.
-    pub fn notify_trade_updated(&mut self, has_result: bool) {
+    /// `MerchantContainer.updateSellItem` with only its payment and result slots.
+    /// Returns the optional feedback so the owner can play it after publishing the menu.
+    pub fn update_sell_item(
+        &mut self,
+        items: &Items,
+        a: Option<&ItemStack>,
+        b: Option<&ItemStack>,
+        result: &mut Option<ItemStack>,
+        feedback: TradeFeedback,
+    ) -> Option<(bool, f32)> {
+        let (a, b) = if a.is_none() { (b, None) } else { (a, b) };
+        self.active = None;
+        if a.is_none() {
+            *result = None;
+            self.future_xp = 0;
+            return None;
+        }
+        if !self.offers.is_empty() {
+            (self.active, *result) =
+                sell_item(&self.offers, items, a, b, Some(self.selection_hint));
+            self.future_xp = if result.is_some() {
+                self.active.map_or(0, |i| self.offers[i].xp)
+            } else {
+                0
+            };
+        }
         // ClientSideMerchant.notifyTradeUpdated does nothing.
         if self.client_side {
-            return;
+            return None;
         }
-        if self.ambient_sound_time > -80 + 20 {
-            self.ambient_sound_time = -80;
-            let pitch = self.voice_pitch();
-            self.events.push(Event::TradeUpdated(has_result, pitch));
-        }
+        let pitch = match feedback {
+            TradeFeedback::Current => trade_update_pitch(
+                &mut self.ambient_sound_time,
+                self.ambient_interval,
+                &mut self.random,
+            ),
+            TradeFeedback::AtHurt(pitch) | TradeFeedback::AtWork(pitch) => pitch,
+        };
+        pitch.map(|pitch| (result.is_some(), pitch))
     }
-    /// `LivingEntity.getVoicePitch` of an adult merchant.
-    pub fn voice_pitch(&mut self) -> f32 {
-        (self.random.next_float() - self.random.next_float()) * 0.2 + 1.0
+}
+
+/// Which tick owns `AbstractVillager.notifyTradeUpdated`'s voice draw.
+#[derive(Clone, Copy)]
+pub enum TradeFeedback {
+    Current,
+    /// An accepted player hit already settled the living villager's timer and RNG.
+    AtHurt(Option<f32>),
+    /// A work-step restock already settled the living villager's timer and RNG.
+    AtWork(Option<f32>),
+}
+
+/// `AbstractVillager.notifyTradeUpdated`: a reply resets the clock to the negated interval.
+pub(crate) fn reset_trade_update_clock(ambient_time: &mut i32, interval: i32) -> bool {
+    let reset = interval.wrapping_neg();
+    if *ambient_time <= reset.wrapping_add(20) {
+        return false;
     }
+    *ambient_time = reset;
+    true
+}
+
+/// The reply pitch at a trade update if `AbstractVillager.notifyTradeUpdated` makes a sound.
+pub fn trade_update_pitch(
+    ambient_time: &mut i32,
+    interval: i32,
+    random: &mut sunrise_core::random::LegacyRandom,
+) -> Option<f32> {
+    reset_trade_update_clock(ambient_time, interval)
+        .then(|| (random.next_float() - random.next_float()) * 0.2 + 1.0)
 }
 
 /// The trade registries.
 pub struct Trades {
     pub professions: std::sync::Arc<crate::mobs::villager::ResolvedProfessions>,
-    pub trades: HashMap<String, Value>,
+    pub trades: BTreeMap<String, Value>,
     /// villager_trade tags, ordered.
     pub tags: HashMap<String, Vec<String>>,
-    pub sets: HashMap<String, Value>,
+    pub sets: BTreeMap<String, Value>,
     /// potion tags, ordered (`set_random_potion` options).
     pub potion_tags: HashMap<String, Vec<String>>,
 }
 /// The `.json` files under `dir` as `minecraft:<path>` ids, through `json_folder` (from the
 /// prepared data file when there is one); a file that doesn't parse is left out.
-fn walk(dir: &Path, out: &mut HashMap<String, Value>) {
+fn walk(dir: &Path) -> BTreeMap<String, Value> {
     let Ok(folder) = sunrise_world::json_folder::read(dir) else {
-        return;
+        return BTreeMap::new();
     };
-    for file in &folder.files {
-        if let Ok(value) = serde_json::from_slice(file.bytes().unwrap_or_default()) {
-            out.insert(format!("minecraft:{}", file.name), value);
-        }
-    }
+    folder
+        .files
+        .iter()
+        .filter(|file| sunrise_world::json_folder::valid_resource_path("minecraft", &file.name))
+        .filter_map(|file| {
+            let value = serde_json::from_slice(file.bytes().unwrap_or_default()).ok()?;
+            Some((format!("minecraft:{}", file.name), value))
+        })
+        .collect()
 }
 impl Trades {
     /// Load from a resource root; `overlay` (the world's data packs'
@@ -374,12 +472,10 @@ impl Trades {
     /// (`SimpleJsonResourceReloadListener`, `TagLoader`).
     pub fn load(root: &Path, overlay: &sunrise_world::loot::PackOverlay) -> Self {
         let data = root.join("data/minecraft");
-        let (mut trades, mut raw_tags, mut sets) = (HashMap::new(), HashMap::new(), HashMap::new());
-        walk(&data.join("villager_trade"), &mut trades);
-        walk(&data.join("tags/villager_trade"), &mut raw_tags);
-        walk(&data.join("trade_set"), &mut sets);
-        let mut raw_potions = HashMap::new();
-        walk(&data.join("tags/potion"), &mut raw_potions);
+        let mut trades = walk(&data.join("villager_trade"));
+        let raw_tags = walk(&data.join("tags/villager_trade"));
+        let mut sets = walk(&data.join("trade_set"));
+        let raw_potions = walk(&data.join("tags/potion"));
         // The packs' trade files: a trade or set's top pack file replaces
         // the game's own (`SimpleJsonResourceReloadListener` sees one
         // resource per id), a tag's entries join in pack order with a
@@ -938,6 +1034,45 @@ mod tests {
         }
     }
 
+    /// `AbstractVillager.notifyTrade` and `notifyTradeUpdated` reset the clock to
+    /// `-getAmbientSoundInterval()`: a content merchant's declared interval reaches
+    /// the mob's clock after a trade.
+    #[test]
+    fn a_trade_resets_the_mobs_ambient_clock_to_its_interval() {
+        let items = items();
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.ambient_interval = 200;
+        let mut m = crate::mobs::Mob::new(
+            1,
+            std::sync::Arc::new(kind),
+            sunrise_core::geometry::Vec3::ZERO,
+            0.0,
+        );
+        m.ambient_timer = 37;
+        let mut s = Session::new(vec![offer(4, None)], true);
+        s.take_mob_clock(&m);
+        s.notify_trade(0, None, &items);
+        s.give_mob_clock(&mut m);
+        assert_eq!(m.ambient_timer, -200);
+        // The yes/no voice waits until the clock is past `-interval + 20`.
+        let payment = ItemStack::new("minecraft:emerald", 4);
+        let recalculate = |s: &mut Session| {
+            s.update_sell_item(
+                &items,
+                Some(&payment),
+                None,
+                &mut None,
+                TradeFeedback::Current,
+            )
+            .map(|(yes, _)| yes)
+        };
+        s.ambient_sound_time = -180;
+        assert_eq!(recalculate(&mut s), None);
+        assert_eq!(s.ambient_sound_time, -180);
+        s.ambient_sound_time = -179;
+        assert_eq!(recalculate(&mut s), Some(true));
+        assert_eq!(s.ambient_sound_time, -200);
+    }
     /// A shift-click trades several times in one session: each `Traded`
     /// event keeps the offer as it was right after its own trade, which is
     /// what the mods hear (`TradeWithVillagerEvent` per `onTake`).
@@ -972,6 +1107,93 @@ mod tests {
         assert_eq!(o.cost_a_count(&items), 13);
         o.special_price_diff = -20;
         assert_eq!(o.cost_a_count(&items), 1);
+    }
+
+    #[test]
+    fn extreme_offer_arithmetic_matches_vanilla_26_3() {
+        // Values observed from offer_int i0..i3 in VanillaTradingOracle on 26.3.
+        let items = items();
+        for (base, uses, max, demand, multiplier, special, delta, xp, start, expected) in [
+            (
+                3,
+                i32::MAX,
+                i32::MIN,
+                i32::MAX,
+                1.0,
+                i32::MAX,
+                1,
+                i32::MAX,
+                1,
+                [1, -3, i32::MIN, 1, i32::MIN, 0, i32::MAX, i32::MIN],
+            ),
+            (
+                1,
+                i32::MIN,
+                i32::MAX,
+                i32::MIN,
+                -1.0,
+                i32::MIN,
+                -1,
+                i32::MIN,
+                -1,
+                [1, 1, i32::MAX, 1, i32::MIN + 1, 0, i32::MIN, i32::MAX],
+            ),
+            (
+                7,
+                i32::MAX,
+                i32::MAX,
+                i32::MIN,
+                f32::MAX,
+                100,
+                i32::MIN,
+                i32::MAX,
+                i32::MAX,
+                [64, -1, i32::MIN + 100, 1, i32::MIN, 0, i32::MAX, -2],
+            ),
+            (
+                12,
+                5,
+                3,
+                i32::MAX,
+                1.0,
+                0,
+                -i32::MAX,
+                i32::MIN,
+                i32::MIN,
+                [12, i32::MIN + 6, -i32::MAX, 1, 6, 0, i32::MIN, 0],
+            ),
+        ] {
+            let mut o = offer(base, None);
+            o.uses = uses;
+            o.max_uses = max;
+            o.demand = demand;
+            o.price_multiplier = multiplier;
+            o.special_price_diff = special;
+            o.xp = xp;
+            let before = o.cost_a_count(&items);
+            o.update_demand();
+            o.add_special_price_diff(delta);
+            let mut session = Session::new(vec![o], true);
+            session.level = 5;
+            session.xp = start;
+            session.notify_trade(0, None, &items);
+            let o = &mut session.offers[0];
+            let used = o.uses;
+            o.reset_uses();
+            assert_eq!(
+                [
+                    before as i32,
+                    o.demand,
+                    o.special_price_diff,
+                    o.cost_a_count(&items) as i32,
+                    used,
+                    o.uses,
+                    o.xp,
+                    session.xp
+                ],
+                expected,
+            );
+        }
     }
 
     #[test]
@@ -1087,7 +1309,7 @@ mod tests {
     fn offers_follow_the_trade_data() {
         let items = items();
         let e = crate::enchant::tests::sample();
-        let mut trades = HashMap::new();
+        let mut trades = BTreeMap::new();
         trades.insert("minecraft:t/boots".into(), json!({"gives":{"id":"minecraft:iron_boots"},"max_uses":12,"reputation_discount":0.2,"wants":{"count":4,"id":"minecraft:emerald"}}));
         trades.insert("minecraft:t/helmet".into(), json!({"gives":{"id":"minecraft:iron_helmet"},"max_uses":12,"reputation_discount":0.2,"wants":{"count":5,"id":"minecraft:emerald"}}));
         trades.insert("minecraft:t/desert".into(), json!({"gives":{"id":"minecraft:sand"},"wants":{"id":"minecraft:emerald"},"merchant_predicate":{"entity":"this","predicate":{"minecraft:predicates":{"minecraft:villager/variant":"minecraft:desert"}},"type":"minecraft:entity_properties"}}));
@@ -1100,7 +1322,7 @@ mod tests {
                 "minecraft:t/desert".into(),
             ],
         );
-        let mut sets = HashMap::new();
+        let mut sets = BTreeMap::new();
         sets.insert(
             "minecraft:t/level_1".into(),
             json!({"amount": 5, "trades": "#minecraft:t/level_1"}),
@@ -1158,10 +1380,10 @@ mod tests {
         let items = items();
         let e = crate::enchant::tests::sample();
         let t = Trades {
-            trades: HashMap::new(),
+            trades: BTreeMap::new(),
             tags: HashMap::new(),
             professions: std::sync::Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
-            sets: HashMap::new(),
+            sets: BTreeMap::new(),
             potion_tags: HashMap::new(),
         };
         let ctx = TradeContext {
@@ -1199,9 +1421,9 @@ mod enchant_select_tests {
         let items = crate::enchant::tests::sample_items();
         let e = crate::enchant::tests::sample();
         let trades = Trades {
-            trades: HashMap::new(),
+            trades: BTreeMap::new(),
             tags: HashMap::new(),
-            sets: HashMap::new(),
+            sets: BTreeMap::new(),
             professions: std::sync::Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
             potion_tags: HashMap::new(),
         };

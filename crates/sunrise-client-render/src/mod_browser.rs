@@ -1,6 +1,5 @@
-//! What Options > Mods > Browse mods shows (docs/design/mod-hotload.md): the
-//! registry's content mods this game installs, a search over them, and the one
-//! whose page is open. The game fills it from a worker
+//! What Options > Mods > Browse mods shows: the registry's content mods this game installs, a
+//! search over them, and the one whose page is open. The game fills it from a worker
 //! (`sunrise_client::mod_registry`, `game/interface/mod_browser.rs`); the options screen
 //! only reads it and asks for installs through its events.
 

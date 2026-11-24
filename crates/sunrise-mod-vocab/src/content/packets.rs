@@ -5,12 +5,15 @@ use crate::Identifier;
 /// A serverbound play packet encoded in the connected game's vanilla protocol.
 ///
 /// The game resolves the type name and validates its body once at submission. The packet
-/// reserves outgoing credit and becomes visible only when the current root transaction
-/// commits. A phase change or disconnect before publication cancels it. Registered and
-/// engine-reserved custom payload channels require their payload/service API instead.
+/// reserves outgoing credit and can publish only after the current root transaction
+/// commits and any covering packet holds release it. A phase change or disconnect
+/// before publication cancels it. Registered and engine-reserved custom payload
+/// channels require their payload/service API instead.
 /// This is not a connection or protocol implementation; submission applies no local effects.
+/// Typed play packets are built from a [`PlayPacketRequest`](crate::PlayPacketRequest) by
+/// [`NetworkClientHost::build_play_packet`](crate::prelude::NetworkClientHost::build_play_packet).
 /// A `container_click`, whose carried stacks the game hashes, is built by
-/// [`NetworkClientHost::container_click`](crate::NetworkClientHost::container_click).
+/// [`NetworkClientHost::container_click`](crate::prelude::NetworkClientHost::container_click).
 /// Signed chat, signed commands and chat sessions have no typed builders:
 /// ```compile_fail
 /// mod_vocab::ServerboundPlayPacket::chat("hello");
@@ -21,9 +24,9 @@ use crate::Identifier;
 /// ```compile_fail
 /// mod_vocab::ServerboundPlayPacket::chat_session_update();
 /// ```
+// no wire: the local submission envelope carries an already-encoded vanilla body.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct ServerboundPlayPacket {
     /// Packet type, for example `minecraft:pong` or `minecraft:custom_payload`.
     pub id: Identifier,
@@ -39,9 +42,9 @@ impl ServerboundPlayPacket {
 }
 
 /// Why the client could not submit a play packet.
+// no wire: returned locally by the client packet service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum SendPacketError {
     /// There is no server connection.
     NotConnected,
@@ -83,13 +86,14 @@ pub enum SendPacketError {
     },
 }
 
-/// Opaque identity of one connection's packet hold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+/// Opaque identity of a mod's packet hold for one physical play incarnation.
+// no wire: only the issuing connection's local hold table resolves this ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: the private field prevents mods constructing or destructuring the id
 pub struct HoldId(pub(crate) u64);
 impl HoldId {
     /// Construct an identity for the game implementation.
-    // hidden: game-side identity construction, matching the other opaque Wire ids
+    // hidden: game-side identity construction
     #[doc(hidden)]
     pub fn new(value: u64) -> Self {
         Self(value)
@@ -97,22 +101,20 @@ impl HoldId {
 }
 
 /// Why a hold operation was refused.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+// no wire: returned locally by packet-hold operations.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HoldError {
-    /// No joined client world is available.
+    /// The Host call is unavailable, or no joined physical play connection is available to start a hold.
     NoWorld,
-    /// The hold ended or belongs to a different connection.
+    /// The call has no owning native mod.
+    NoOwner,
+    /// The hold ended or does not belong to the current play incarnation.
     Unknown,
-    /// Another hold is active, or this hold overflowed and was flushed.
-    /// These are the configured bounds.
-    Limit {
-        /// Maximum held packets.
-        packets: usize,
-        /// Maximum held encoded bytes, including packet type ids.
-        bytes: usize,
-    },
-    /// Publication failed. The remaining packets were discarded.
+    /// The hold belongs to another mod. Nothing changed.
+    WrongOwner,
+    /// Publication failed. The rest of the newly unblocked prefix was discarded.
+    /// A closed connection or protocol change also invalidates the other holds on it.
     Send {
         /// Packets successfully published before the failure.
         sent: usize,
@@ -127,9 +129,9 @@ impl crate::NoBackend for HoldError {
 }
 
 /// Why a client mod's `disconnect` was refused.
+// no wire: returned locally by the client disconnect operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum DisconnectError {
     /// No server or world is joined: there is nothing to leave.
     Unavailable,
@@ -147,52 +149,5 @@ impl crate::NoBackend for DisconnectError {
     /// No game: nothing is joined.
     fn no_backend() -> Self {
         Self::Unavailable
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::wire::{Reader, Writer};
-    #[test]
-    fn hold_errors_keep_literal_ordinals_and_partial_send_fields() {
-        for (error, ordinal) in [
-            (HoldError::NoWorld, 0u32),
-            (HoldError::Unknown, 1),
-            (
-                HoldError::Limit {
-                    packets: 256,
-                    bytes: 1_048_576,
-                },
-                2,
-            ),
-            (
-                HoldError::Send {
-                    sent: 1,
-                    error: SendPacketError::Backpressure,
-                },
-                3,
-            ),
-        ] {
-            let mut writer = Writer::new();
-            writer.put(&error);
-            assert_eq!(&writer.bytes()[..4], &ordinal.to_le_bytes());
-            assert_eq!(
-                Reader::new(writer.bytes()).take::<HoldError>().unwrap(),
-                error
-            );
-        }
-        let mut writer = Writer::new();
-        writer.put(&HoldError::Send {
-            sent: 1,
-            error: SendPacketError::Backpressure,
-        });
-        assert_eq!(
-            writer.bytes(),
-            &[3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0]
-        );
-        let mut writer = Writer::new();
-        writer.put(&HoldId::new(4178));
-        assert_eq!(writer.bytes(), &[82, 16, 0, 0, 0, 0, 0, 0]);
     }
 }

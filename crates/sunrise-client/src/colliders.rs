@@ -46,7 +46,7 @@ impl CarryAge {
 
 #[derive(Clone, Debug)]
 pub struct ColliderState {
-    wire: Vec<WireBox>,
+    wire: Arc<Vec<WireBox>>,
     rotation: [f32; 4],
     geometry: Arc<ColliderBoxes>,
     /// Changes whenever the boxes or the rotation do, so a placement made from this state can
@@ -84,7 +84,7 @@ impl ColliderState {
     pub fn new(wire: Vec<WireBox>, rotation: [f32; 4]) -> Self {
         let geometry = Arc::new(ColliderBoxes::new(wire.iter().map(aabb).collect()));
         Self {
-            wire,
+            wire: Arc::new(wire),
             rotation,
             geometry,
             serial: next_serial(),
@@ -199,7 +199,9 @@ impl ColliderState {
                     Vec::new()
                 } else {
                     match held.take() {
-                        Some(state) if state.wire.len() == *first as usize => state.wire,
+                        Some(state) if state.wire.len() == *first as usize => {
+                            Arc::unwrap_or_clone(state.wire)
+                        }
                         _ => return,
                     }
                 };
@@ -216,7 +218,7 @@ impl ColliderState {
                 ..
             } => {
                 let Some(state) = held.as_mut() else { return };
-                let mut wire = std::mem::take(&mut state.wire);
+                let mut wire = Arc::unwrap_or_clone(std::mem::take(&mut state.wire));
                 if let Some(n) = truncate {
                     wire.truncate(*n as usize);
                 }
@@ -241,7 +243,7 @@ impl ColliderState {
     /// The collider as a save holds it: the rotation, and the box corners as big-endian `f32`s.
     pub fn to_nbt(&self) -> Compound {
         let mut corners = Vec::with_capacity(self.wire.len() * 24);
-        for b in &self.wire {
+        for b in self.wire.iter() {
             b.min
                 .iter()
                 .chain(&b.max)

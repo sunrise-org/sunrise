@@ -1,5 +1,4 @@
 //! The `tooltip` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0036
 
 pub trait Hooks {
     /// `Item.appendHoverText`: an item's own lines in its tooltip, after its
@@ -17,13 +16,20 @@ pub trait Hooks {
     /// Afterwards [`Hooks::item_tooltip`]
     /// sees the finished list, including these parts' lines.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_tooltip",
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "lines",
         scope = "item",
         key = "stack",
         neoforge = "ItemTooltipEvent",
-        version = 2
+        version = 3
     )]
-    fn tooltip();
+    fn tooltip(
+        stack: &ItemStack,
+        context: &mod_api::TooltipAppendContext,
+        lines: &mut Vec<(Text, u32)>,
+    );
 }

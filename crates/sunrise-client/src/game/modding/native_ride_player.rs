@@ -52,7 +52,9 @@ impl Game<'_> {
     pub(in crate::game) fn vehicle_of_any(&self, id: u32) -> Option<u32> {
         match self.player_vehicle(id) {
             Some(player) => self.native_player_vehicle_id(player),
-            None => self.mob_object(id).filter(|m| !m.removed)?.extra.mount,
+            None => self
+                .native_vehicle_id(Target::Mob(id))
+                .or_else(|| self.native_vehicle_id(Target::General(id))),
         }
     }
 
@@ -173,7 +175,7 @@ impl Game<'_> {
     /// Whether `player` rides the mob `rider`, through any number of vehicles.
     fn player_rides(&self, player: Target, rider: u32) -> bool {
         let mut current = self.native_player_vehicle_id(player);
-        for _ in 0..=self.mobs.len() + self.persist.off_level.len() + 1 {
+        for _ in 0..=self.riding_link_limit() {
             let Some(id) = current else {
                 return false;
             };
@@ -214,7 +216,7 @@ impl Game<'_> {
         sunrise_client::mobs::living::teleports::set_pos(m, Vec3::new(x, high[1] - offset, z));
         m.velocity = Vec3::ZERO;
         m.fall_distance = 0.0;
-        m.on_ground = false;
+        m.ground.on_ground = false;
         m.extra.passenger = true;
         m.ai.nav.stop();
         true
@@ -265,6 +267,7 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::game::native_entity_refs::tests::{collect_entity_visit, fixture_resident_column};
     use mod_api::RidePlayerRefusal as Refusal;
     use mod_api::{EntityMountEvent, Flow, Hooks, ServerHost};
     use std::sync::{Arc, Mutex};
@@ -391,11 +394,10 @@ mod tests {
     #[ignore = "daily"]
     fn an_unload_save_ejects_a_mob_riding_a_player() {
         ejected(|game, _| {
-            let chunk =
-                game.world.chunks.get(&(0, 0)).cloned().unwrap_or_else(|| {
-                    std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0))
-                });
-            game.unload_entities(&[chunk]);
+            let keys = [(0, 0)].into_iter().collect();
+            let (records, _) = game.unloading_entity_snapshots(&keys);
+            game.save.save_entities_later(records).unwrap();
+            game.remove_unloading_entities(&keys);
         });
     }
 
@@ -431,7 +433,7 @@ mod tests {
     #[ignore = "daily"]
     fn a_dimension_change_ejects_a_mob_riding_the_player() {
         ejected(|game, conn| {
-            game.start_server_trip(conn, super::super::Dim::Nether, None, false);
+            game.start_server_trip(conn, super::super::Dim::Nether, None);
         });
     }
 
@@ -442,6 +444,7 @@ mod tests {
     #[ignore = "daily"]
     fn a_mob_rides_a_guest_sits_on_it_and_the_guest_is_told() {
         super::super::native_entity_refs::tests::with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for id in [80, 81] {
                 game.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
@@ -464,7 +467,10 @@ mod tests {
             assert_eq!(game.entity_ride_player(first, player, false), Ok(()));
             assert_eq!(game.mobs[0].extra.mount, Some(player.id()));
             assert_eq!(game.entity_vehicle(first), Some(player));
-            assert_eq!(game.entity_passengers(player), Some(vec![first]));
+            assert_eq!(
+                collect_entity_visit(|visit| game.entity_visit_passengers(player, visit)),
+                Ok(vec![first])
+            );
             assert_eq!(
                 game.entity_ride_player(first, player, false),
                 Err(Refusal::AlreadyRiding)

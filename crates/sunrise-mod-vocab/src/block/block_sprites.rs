@@ -141,31 +141,23 @@ pub enum TextureAtlas {
     Gui,
 }
 
-/// A mod-generated PNG to stitch into the next client resource generation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-// exhaustive: mods submit declarations by value
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct RuntimeSprite {
-    /// The target client atlas.
-    pub atlas: TextureAtlas,
-    /// A namespaced texture id including the `block/` or `gui/` path prefix.
-    pub id: Identifier,
-    /// A static PNG. Images must be at most 256 pixels wide and high.
-    pub png: Vec<u8>,
-}
-
 /// An atlas a client mod adds beside the game's (`RegisterTextureAtlasesEvent`), as
 /// `register_texture_atlases` declares it: its id and the atlas definition listing its sprites.
-/// Sunrise stitches its sprites into the GUI atlas, each under [`Self::sprite_name`].
+/// Sunrise stitches its sprites into a texture of their own, each under [`Self::sprite_name`], and
+/// the UVs of its sprites are local to that texture, not the shared GUI atlas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 // exhaustive: mods submit declarations by value
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct TextureAtlasRegistration {
-    /// The atlas's id, in the mod's own namespace (`mymod:icons`).
+    /// The atlas's id (`mymod:icons`). Any namespace is allowed except collisions with vanilla
+    /// 26.3's built-in engine atlases (`AtlasManager.KNOWN_ATLASES`, such as `minecraft:blocks` or
+    /// `minecraft:gui`).
     pub atlas: Identifier,
     /// Its definition, `assets/<namespace>/atlases/<path>.json` (`mymod:icons`): a `sources` list
     /// like vanilla's atlas definitions (`directory`, `single`, `filter`, `unstitch`,
-    /// `paletted_permutations`), which resource packs can change like theirs.
+    /// `paletted_permutations`), which resource packs can change like theirs. Must not reuse a
+    /// built-in engine atlas definition (`AtlasManager.KNOWN_ATLASES`) or a definition already
+    /// registered by an earlier mod.
     pub definition: Identifier,
 }
 
@@ -192,7 +184,9 @@ impl TextureAtlasRegistration {
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct AtlasRegion {
-    /// `[u0, v0, u1, v1]`: the sprite's corners, from 0 to 1 across the atlas.
+    /// `[u0, v0, u1, v1]`: the sprite's corners, from 0 to 1 across the texture that holds it:
+    /// the shared GUI atlas, or the sprite's own atlas texture for one of a registered atlas
+    /// (`TextureAtlasRegistration`). Draw it by its name so the owning texture is selected.
     pub uv: [f32; 4],
     /// The sprite's size in its own pixels: the default resources' texture's size whatever the
     /// resolution of a pack that replaced it (the units vanilla's GUI code draws it in), the
@@ -204,5 +198,26 @@ impl AtlasRegion {
     /// A region, from the game's atlas.
     pub fn new(uv: [f32; 4], size: [u32; 2]) -> Self {
         Self { uv, size }
+    }
+}
+
+/// An emissive overlay sprite pair a client mod registers during resource load and reload
+/// (`Hooks::emissive`). Transparent pixels in `overlay` leave `base` unchanged; opaque pixels
+/// draw full-bright without illuminating surrounding blocks or changing gameplay light.
+#[derive(Clone, Debug, PartialEq, Eq)]
+// exhaustive: mods submit declarations by value
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct EmissiveSpriteRegistration {
+    /// The base block sprite id (`minecraft:block/redstone_ore` or `mymod:block/reactor`).
+    pub base: Identifier,
+    /// The overlay texture id (`mymod:block/reactor_e` or `mymod:emissive/reactor_glow`),
+    /// resolved from `assets/<namespace>/textures/<path>.png`.
+    pub overlay: Identifier,
+}
+
+impl EmissiveSpriteRegistration {
+    /// Pair a base block sprite with an emissive overlay texture.
+    pub fn new(base: Identifier, overlay: Identifier) -> Self {
+        Self { base, overlay }
     }
 }

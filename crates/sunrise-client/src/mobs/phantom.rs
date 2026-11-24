@@ -288,7 +288,7 @@ impl Goal for SweepAttack {
                     data: 0,
                 });
             }
-        } else if m.horizontal_collision || m.hurt_time > 0 {
+        } else if m.ground.horizontal_collision || m.hurt_time > 0 {
             m.extra.flag = false;
         }
     }
@@ -308,7 +308,7 @@ fn wrap(d: f32) -> f32 {
 /// line.
 pub fn move_control(m: &mut Mob) {
     let mut speed = m.extra.phantom_move_speed;
-    if m.horizontal_collision {
+    if m.ground.horizontal_collision {
         m.yaw += 180.0;
         speed = 0.1;
     }
@@ -461,7 +461,7 @@ mod tests {
                 assert!(
                     events
                         .iter()
-                        .any(|e| matches!(e, MobEvent::AttackPlayer(_, _))),
+                        .any(|e| matches!(e, MobEvent::AttackPlayer(..))),
                     "the swoop should bite through the pane: {events:?}"
                 );
             }),

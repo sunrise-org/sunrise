@@ -17,7 +17,7 @@
 #   and they share one cargo home (registry and git sources).
 # - sunrise-light-<n> (labels playsunrise-light and sunrise-light, LIGHT_RUNNERS, default 12): the bots that run main's
 #   own scripts on pull_request_target, comment, schedule and main's push events (pr labels, overlap note,
-#   cancel-on-close, claim command...). No Rust. Their jobs last seconds, so they are many; sunrise-light is the label
+#   cancel-on-close...). No Rust. Their jobs last seconds, so they are many; sunrise-light is the label
 #   the workflows ask for.
 # All of them run nice, pinned to CPUs 4-7 inside sunrise-ci.slice (linux-runner.sh: CPU quota and memory cap for
 # all CI on the machine), so CPUs 0-3 stay for tools/remote.sh runs, benchmarks and the servers.

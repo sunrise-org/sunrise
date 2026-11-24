@@ -14,6 +14,8 @@ pub trait Hooks {
     /// client alike). Only the `ItemPart`s attached to `stack`'s item are
     /// asked. Client-side.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         version = 2,
         contract = "listen",
@@ -21,5 +23,9 @@ pub trait Hooks {
         key = "stack",
         neoforge = "IItemExtension.shouldCauseBlockBreakReset"
     )]
-    fn should_cause_block_break_reset();
+    fn should_cause_block_break_reset(
+        stack: &ItemStack,
+        held: Option<&ItemStack>,
+        reset: &mut bool,
+    );
 }

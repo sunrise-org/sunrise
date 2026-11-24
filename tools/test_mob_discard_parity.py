@@ -48,8 +48,8 @@ def main():
                            stdout=log, stderr=subprocess.STDOUT, check=True)
     cp = os.pathsep.join(map(str, [jars['server'], *libraries]))
     run('compile-java', [javac, '-proc:none', '-cp', cp, '-d', build, source])
-    run('rust', ['cargo', 'test', '--offline', '--locked', '-p', 'sunrise-client', '--lib',
-                 'discarded_mob_leaves_selectors_and_saves_while_frozen', '--', '--ignored', '--nocapture'])
+    run('rust', [lab.parity_fixtures(), 'discarded_mob_leaves_selectors_and_saves_while_frozen',
+                 '--ignored', '--nocapture'])
     actual = json.loads(rust.read_text())
     for side, jar in jars.items():
         output = build / (side + '.json')

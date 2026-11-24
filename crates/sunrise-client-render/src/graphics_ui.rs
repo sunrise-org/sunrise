@@ -72,7 +72,6 @@ pub enum H {
     Preset,
     LodDistance,
     FarDetail,
-    BlueMapAutoDetect,
     BlueMapRadius,
     CaveCulling,
     GpuCulling,
@@ -203,11 +202,6 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.",
                         ),
                         h(H::FarDetail, Medium, far),
-                        h(
-                            H::BlueMapAutoDetect,
-                            None,
-                            "On servers, finds their BlueMap web map for far terrain. Next join.",
-                        ),
                         h(
                             H::BlueMapRadius,
                             None,
@@ -660,9 +654,9 @@ const BLUE_MAP_RADII: [u32; 5] = [16, 32, 64, 128, 256];
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 /// What the LOD Distance slider stops at, in chunks: off, fine steps up to 256
 /// for a short ring of far terrain past a small render distance (a phone or an
-/// integrated GPU at 8 chunks wants LOD to 12 or 16, not 64), then each doubling
-/// up to the whole world.
-const LOD_STEPS: [u32; 24] = [
+/// integrated GPU at 8 chunks wants LOD to 12 or 16, not 64), then 512 and the
+/// farthest far terrain plans.
+const LOD_STEPS: [u32; 12] = [
     0,
     16,
     24,
@@ -674,18 +668,6 @@ const LOD_STEPS: [u32; 24] = [
     192,
     256,
     512,
-    1024,
-    2048,
-    4096,
-    8192,
-    16384,
-    32768,
-    65536,
-    131072,
-    262144,
-    524288,
-    1048576,
-    2097152,
     crate::lod::MAX_CHUNKS,
 ];
 
@@ -824,6 +806,7 @@ impl H {
     }
     pub fn slider_steps(self) -> Option<u32> {
         match self {
+            H::LodDistance => Some((LOD_STEPS.len() - 1) as u32),
             H::ChunkUpdates => Some(64),
             H::EntityCullingPrecheck => Some(32),
             H::UploadBudget => Some((UPLOAD_STEPS.len() - 1) as u32),
@@ -860,7 +843,6 @@ impl H {
                 n => labelled("LOD Distance", lang::tr("%s chunks", &[&n])),
             },
             H::FarDetail => labelled("Far Detail", g.far_detail.label()),
-            H::BlueMapAutoDetect => labelled("Find BlueMap", on_off(g.blue_map.auto_detect)),
             H::BlueMapRadius => labelled(
                 "BlueMap Radius",
                 lang::tr("%s chunks", &[&g.blue_map.radius_chunks()]),
@@ -1022,7 +1004,6 @@ impl H {
             H::FarDetail => {
                 g.far_detail = step(&[FarDetail::Full, FarDetail::Reduced], g.far_detail, back)
             }
-            H::BlueMapAutoDetect => g.blue_map.auto_detect = !g.blue_map.auto_detect,
             H::BlueMapRadius => {
                 g.blue_map.radius = step(&BLUE_MAP_RADII, g.blue_map.radius_chunks(), back)
             }
@@ -1184,7 +1165,6 @@ impl Item {
     pub fn switch(self, s: &Settings, out: &EffectiveOutput) -> Option<bool> {
         let g = &s.sunrise;
         Some(match self {
-            Item::Sunrise(H::BlueMapAutoDetect) => g.blue_map.auto_detect,
             Item::Sunrise(H::CaveCulling) => g.cave_culling,
             Item::Sunrise(H::OpaqueIce) => g.opaque_ice,
             Item::Sunrise(H::CacheShulkerBoxes) => g.cache_shulker_boxes,
@@ -1276,7 +1256,6 @@ impl Item {
             Item::Extra(_)
                 | Item::Sunrise(
                     H::Preset
-                        | H::BlueMapAutoDetect
                         | H::BlueMapRadius
                         | H::ScreenshotQuality
                         | H::Pacing
@@ -1343,6 +1322,31 @@ fn parts(item: Item, s: &Settings, out: &EffectiveOutput) -> (String, Option<Str
     shell::name_and_value(&item.label(s, out).plain())
 }
 
+/// Render distances up to this one get no memory hint; vanilla's slider stops at 32.
+const MEMORY_HINT_ABOVE: i32 = 48;
+/// Section mesh bytes per loaded column, from one world (#3299's capture: 13.4 GiB for 52,653 columns at 128).
+const MESH_BYTES_PER_COLUMN: f64 = 256.0 * 1024.0;
+
+/// About how many GB (10^9 bytes) of section meshes a render distance keeps; none up to `MEMORY_HINT_ABOVE`.
+fn render_distance_mesh_gb(distance: i32) -> Option<f64> {
+    if distance <= MEMORY_HINT_ABOVE {
+        return None;
+    }
+    // Vanilla's ChunkTrackingView keeps the columns within distance + 1 of the centre's.
+    let columns = std::f64::consts::PI * f64::from(distance + 1).powi(2);
+    Some(columns * MESH_BYTES_PER_COLUMN / 1e9)
+}
+
+/// What a render distance past `MEMORY_HINT_ABOVE` can cost in memory, and what to use instead.
+fn render_distance_memory(distance: i32) -> Option<Text> {
+    render_distance_mesh_gb(distance).map(|gb| {
+        Text::tr(
+            "sunrise.options.renderDistance.memory",
+            &[&format!("{gb:.1}")],
+        )
+    })
+}
+
 /// A setting's row: its control, what it does (and what its chosen value does), what it costs,
 /// and why it can't be used now.
 fn row(setting: Setting, s: &Settings, out: &EffectiveOutput) -> Row<Item> {
@@ -1358,9 +1362,14 @@ fn row(setting: Setting, s: &Settings, out: &EffectiveOutput) -> Row<Item> {
         _ => value.map_or(Value::Press, Value::Choice),
     };
     let about = lang::get(setting.text);
-    let chosen = lang::get(description(item, s, out, setting.text));
+    let chosen = match item {
+        Item::Vanilla(Opt::RenderDistance) => {
+            render_distance_memory(s.render_distance).map(|t| t.plain())
+        }
+        _ => Some(lang::get(description(item, s, out, setting.text))).filter(|c| *c != about),
+    };
     Row {
-        chosen: (chosen != about).then_some(chosen),
+        chosen,
         ..Row::new(item, name, value)
             .about(about)
             .cost(setting.cost)
@@ -1577,6 +1586,33 @@ mod tests {
     pub(super) const DRAGGED: Output = Output::Event(Event::SliderDrag);
     /// A renderer whose destination offers nothing and whose display reports nothing.
     pub(super) const NONE: EffectiveOutput = EffectiveOutput::NONE;
+
+    #[test]
+    fn render_distance_row_gives_its_memory_past_48_only() {
+        let setting = v(
+            Opt::RenderDistance,
+            Cost::High,
+            "Full-detail terrain range.",
+        );
+        let mut s = Settings {
+            render_distance: 32,
+            ..Settings::default()
+        };
+        assert_eq!(super::row(setting, &s, &NONE).chosen, None);
+        s.render_distance = 128;
+        let (shown, _) = lang::scoped(lang::Language::load(&[], "en_us"), || {
+            super::row(setting, &s, &NONE).chosen.unwrap()
+        });
+        assert!(shown.contains("about 13.7 GB"), "{shown}");
+    }
+
+    #[test]
+    fn render_distance_memory_estimate_matches_a_measured_world() {
+        assert_eq!(render_distance_mesh_gb(48), None);
+        // #3299's capture at distance 128: the section buffer arena held 13.4 GiB, 14.4 GB.
+        let at_128 = render_distance_mesh_gb(128).unwrap();
+        assert!((13.0..15.5).contains(&at_128), "{at_128}");
+    }
 
     pub(super) type Ui = Shell<GraphicsScreen>;
     pub(super) fn ui() -> Ui {
@@ -1931,23 +1967,24 @@ mod tests {
         let item = Item::Vanilla(Opt::AttackIndicator);
         let r = row(&mut ui, &s, item);
         let before = format!("{s:?}");
-        let outputs = ui.wheel(&mut s, SIZE, (r[0] + 4.0, r[1] + 4.0), -1.0);
+        let (handled, outputs) = ui.wheel(&mut s, SIZE, (r[0] + 4.0, r[1] + 4.0), -1.0);
+        assert!(handled);
         assert_eq!(format!("{s:?}"), before, "the hovered value stays put");
         assert!(outputs.is_empty());
 
         s.extras.wheel_cycles_settings = true;
         let r = row(&mut ui, &s, item);
         let before = format!("{s:?}");
-        let outputs = ui.wheel(&mut s, SIZE, (r[0] + 4.0, r[1] + 4.0), -1.0);
+        let (handled, outputs) = ui.wheel(&mut s, SIZE, (r[0] + 4.0, r[1] + 4.0), -1.0);
+        assert!(handled);
         assert_ne!(format!("{s:?}"), before, "the hovered value steps");
         assert_eq!(outputs, [CLICK, CHANGED]);
         // A tick box leaves it to scroll the list.
         let vsync = row(&mut ui, &s, Item::Vanilla(Opt::Vsync));
         let before = s.vsync;
-        assert!(
-            ui.wheel(&mut s, SIZE, (vsync[0] + 4.0, vsync[1] + 4.0), -1.0)
-                .is_empty()
-        );
+        let (handled, outputs) = ui.wheel(&mut s, SIZE, (vsync[0] + 4.0, vsync[1] + 4.0), -1.0);
+        assert!(handled);
+        assert!(outputs.is_empty());
         assert_eq!(s.vsync, before);
     }
 
@@ -2137,7 +2174,7 @@ mod tests {
             assert_eq!(item.slider(&s), Some(f64::from(at)));
             assert_eq!(s.render_distance, near);
         }
-        // The ends are off and the whole world, which the far terrain plans.
+        // The ends are off and the farthest far terrain plans.
         item.set_slider(&mut s, 0.0, &NONE);
         assert_eq!(s.sunrise.lod_distance, 0);
         item.set_slider(&mut s, 1.0, &NONE);
@@ -2146,21 +2183,18 @@ mod tests {
             item.label(&s, &NONE).plain(),
             format!("LOD Distance: {} chunks", crate::lod::MAX_CHUNKS)
         );
-        item.set_slider(&mut s, 11.0 / 23.0, &NONE);
-        assert_eq!(s.sunrise.lod_distance, 1024);
-        assert_eq!(item.label(&s, &NONE).plain(), "LOD Distance: 1024 chunks");
         // The fine stops: a ring of far terrain just past a small render
         // distance, which the doubling steps skipped (#9694).
-        item.set_slider(&mut s, 1.0 / 23.0, &NONE);
+        item.set_slider(&mut s, 1.0 / 11.0, &NONE);
         assert_eq!(s.sunrise.lod_distance, 16);
         assert_eq!(item.label(&s, &NONE).plain(), "LOD Distance: 16 chunks");
-        item.set_slider(&mut s, 2.0 / 23.0, &NONE);
+        item.set_slider(&mut s, 2.0 / 11.0, &NONE);
         assert_eq!(s.sunrise.lod_distance, 24);
         // A distance between stops (from the file) sits on the next one.
-        s.sunrise.lod_distance = 3000;
-        assert_eq!(item.slider(&s), Some(f64::from(13.0_f32 / 23.0)));
+        s.sunrise.lod_distance = 300;
+        assert_eq!(item.slider(&s), Some(f64::from(10.0_f32 / 11.0)));
         s.sunrise.lod_distance = 12;
-        assert_eq!(item.slider(&s), Some(f64::from(1.0_f32 / 23.0)));
+        assert_eq!(item.slider(&s), Some(f64::from(1.0_f32 / 11.0)));
     }
 
     /// With far terrain on, Render Distance reads "Full Detail Distance" but keeps vanilla's
@@ -2196,7 +2230,6 @@ mod tests {
     #[test]
     fn blue_map_settings_sit_with_far_terrain() {
         let mut s = Settings::default();
-        let find = Item::Sunrise(H::BlueMapAutoDetect);
         let radius = Item::Sunrise(H::BlueMapRadius);
         let distance: Vec<Item> = rows()
             .into_iter()
@@ -2207,12 +2240,9 @@ mod tests {
             .iter()
             .map(|r| r.item)
             .collect();
-        assert!(distance.contains(&find) && distance.contains(&radius));
+        assert!(distance.contains(&radius));
         assert!(distance.contains(&Item::Sunrise(H::FarDetail)));
-        assert_eq!(find.switch(&s, &NONE), Some(false), "off by default");
         assert_eq!(radius.label(&s, &NONE).plain(), "BlueMap Radius: 64 chunks");
-        find.cycle(&mut s, false, FB, &NONE);
-        assert!(s.sunrise.blue_map.auto_detect);
         radius.cycle(&mut s, false, FB, &NONE);
         assert_eq!(s.sunrise.blue_map.radius, 128);
         radius.cycle(&mut s, true, FB, &NONE);
@@ -2716,6 +2746,7 @@ mod tests {
         // HDR's sliders step only where the display offers HDR.
         let out = offering(true, None);
         let options = [
+            H::LodDistance,
             H::ChunkUpdates,
             H::UploadBudget,
             H::Workers,

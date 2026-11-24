@@ -8,6 +8,7 @@ use std::{
 use sunrise_world::{
     combat_rules::ArmorWorld,
     damage_reduction::{self, Bypass, DamageReductionWorld},
+    living_damage::DamageContainer,
 };
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
@@ -131,7 +132,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             let r = if mode == "armor" {
                 damage_reduction::after_armor(&mut w, d)
             } else {
-                damage_reduction::after_magic(&mut w, d).map(|m| m.damage)
+                damage_reduction::after_magic(&mut w, &mut DamageContainer::new(d), d)
             };
             r.and_then(|v| writeln!(w.out, "float {:08x}", f32_bits(v)))
         };

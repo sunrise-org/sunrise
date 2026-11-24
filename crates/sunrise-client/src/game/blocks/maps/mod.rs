@@ -655,7 +655,7 @@ fn map_read<T>(
 pub(super) struct Maps {
     pub data: HashMap<i32, MapData>,
     /// The highest map id handed out (`maps/last_id.dat`), loaded on first use.
-    last_id: Option<i32>,
+    pub(super) last_id: Option<i32>,
     /// The atlas slots holding map textures.
     pub slots: super::atlas_slots::AtlasSlots<i32>,
     missing: std::collections::HashSet<i32>,
@@ -1298,8 +1298,7 @@ impl Game<'_> {
         }
         let at = [x, y, z].map(|v| f64::from(v) + 0.5);
         self.trigger_block("minecraft:item_used_on_block", hit.pos, before);
-        self.audio
-            .play("minecraft:item.lodestone_compass.lock", Some(at), 1.0, 1.0);
+        self.play_audio("minecraft:item.lodestone_compass.lock", Some(at), 1.0, 1.0);
         let target = Tag::compound([
             (
                 "target",
@@ -1797,7 +1796,7 @@ impl Game<'_> {
             if show_only_frame && !shown_on_frame(d.sprite) {
                 continue;
             }
-            let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
+            let Some(s) = self.gui.atlas.gui_rect(d.sprite).copied() else {
                 continue;
             };
             let dm = decoration_pose(d, -0.02 - count as f32 * 0.001);
@@ -1860,7 +1859,7 @@ impl Game<'_> {
         }
         // A native mod's own icons, over the vanilla ones.
         for d in self.mod_map_decorations(id, show_only_frame) {
-            let Some(s) = self.gui.atlas.sprites.get(d.sprite.as_str()).copied() else {
+            let Some(s) = self.gui.atlas.gui_rect(d.sprite.as_str()).copied() else {
                 continue;
             };
             let dm = decoration_pose_at(d.x, d.y, d.rot, -0.02 - count as f32 * 0.001);
@@ -1974,7 +1973,7 @@ mod live_frame_tests;
 #[cfg(test)]
 mod native_read_tests;
 #[cfg(test)]
-mod save_tests;
+pub(in crate::game) mod save_tests;
 
 #[cfg(test)]
 mod tests {

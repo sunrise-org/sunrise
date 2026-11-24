@@ -7,7 +7,7 @@ use crate::*;
 /// refuse. Current-level access keeps the ordinary rules; a parked target must be an open
 /// runtime level owned by the calling enabled mod. Reads/decodes/defaults and writes share
 /// the existing Host transaction and exact target-level undo, without switching context.
-// no wire: caller-side borrowed adapter; its generated backend primitives cross the same native/wasm boundary.
+// no wire: caller-side borrowed adapter; each operation borrows the server backend.
 #[non_exhaustive]
 pub struct LevelAttachments<'a> {
     level: LevelRef,
@@ -22,79 +22,63 @@ impl LevelRef {
         LevelAttachments { level: *self, host }
     }
 }
-fn level_holder(holder: Holder) -> AttachmentResult<()> {
-    if holder == Holder::Level {
-        Ok(())
-    } else {
-        Err(AttachmentError::MissingHolder)
+impl LevelAttachments<'_> {
+    fn access<T>(
+        &mut self,
+        holder: Holder,
+        f: impl FnOnce(&mut dyn BackendMut, LevelRef) -> Result<AttachmentResult<T>, LevelWriteError>,
+    ) -> AttachmentResult<T> {
+        if holder != Holder::Level {
+            return Err(AttachmentError::MissingHolder);
+        }
+        let backend = backend_mut_of(self.host).ok_or(AttachmentError::MissingHolder)?;
+        f(backend, self.level).map_err(|_| AttachmentError::MissingHolder)?
     }
 }
+
 impl AttachmentStore for LevelAttachments<'_> {
-    fn validate_attachment(
+    fn holds(&mut self, holder: Holder, key: &AttachmentStoreKey<'_>) -> AttachmentResult<bool> {
+        self.access(holder, |backend, level| {
+            backend.level_attachment_holds(level, key)
+        })
+    }
+
+    fn lend_decoded(
         &mut self,
-        namespace: &str,
-        name: &str,
-        sync: bool,
+        holder: Holder,
+        key: &AttachmentStoreKey<'_>,
+        read: AttachmentLoan<'_>,
     ) -> AttachmentResult<()> {
-        crate::__private::validate_attachment_use(namespace, name, sync)
+        self.access(holder, |backend, level| {
+            backend.level_attachment_lend_decoded(level, key, read)
+        })
     }
-    fn holds(&mut self, holder: Holder, namespace: &str, name: &str) -> AttachmentResult<bool> {
-        level_holder(holder)?;
-        self.level
-            .attachment_holds(self.host, namespace, name)
-            .map_err(|_| AttachmentError::MissingHolder)?
-    }
-    fn decoded(
+
+    fn binding(
         &mut self,
         holder: Holder,
-        namespace: &str,
-        name: &str,
-    ) -> AttachmentResult<Option<AttachmentValue>> {
-        level_holder(holder)?;
-        self.level
-            .attachment_decoded(self.host, namespace, name)
-            .map_err(|_| AttachmentError::MissingHolder)?
+        key: &AttachmentStoreKey<'_>,
+    ) -> AttachmentResult<Option<AttachmentBinding>> {
+        self.access(holder, |backend, level| {
+            backend.level_attachment_binding(level, key)
+        })
     }
-    fn saved(
-        &mut self,
-        holder: Holder,
-        namespace: &str,
-        name: &str,
-    ) -> AttachmentResult<Option<Compound>> {
-        level_holder(holder)?;
-        self.level
-            .attachment_saved(self.host, namespace, name)
-            .map_err(|_| AttachmentError::MissingHolder)?
+
+    fn store(&mut self, holder: Holder, write: AttachmentStoreWrite<'_>) -> AttachmentResult<()> {
+        self.access(holder, |backend, level| {
+            backend.level_attachment_store(level, write)
+        })
     }
-    fn store(
-        &mut self,
-        holder: Holder,
-        namespace: &str,
-        name: &str,
-        value: AttachmentValue,
-        form: AttachmentForm,
-    ) -> AttachmentResult<()> {
-        level_holder(holder)?;
-        self.level
-            .attachment_store_value(self.host, namespace, name, value, form)
-            .map_err(|_| AttachmentError::MissingHolder)?
+
+    fn discard(&mut self, holder: Holder, key: &AttachmentStoreKey<'_>) -> AttachmentResult<()> {
+        self.access(holder, |backend, level| {
+            backend.level_attachment_discard(level, key)
+        })
     }
-    fn discard(
-        &mut self,
-        holder: Holder,
-        namespace: &str,
-        name: &str,
-        sync: bool,
-    ) -> AttachmentResult<()> {
-        level_holder(holder)?;
-        self.level
-            .attachment_discard(self.host, namespace, name, sync)
-            .map_err(|_| AttachmentError::MissingHolder)?
-    }
-    fn queue_sync(&mut self, holder: Holder, namespace: &str, name: &str) -> AttachmentResult<()> {
-        level_holder(holder)?;
-        self.level
-            .attachment_queue_sync(self.host, namespace, name)
-            .map_err(|_| AttachmentError::MissingHolder)?
+
+    fn queue_sync(&mut self, holder: Holder, key: &AttachmentStoreKey<'_>) -> AttachmentResult<()> {
+        self.access(holder, |backend, level| {
+            backend.level_attachment_queue_sync(level, key)
+        })
     }
 }

@@ -118,6 +118,7 @@ impl Game<'_> {
             * glam::Mat4::from_scale(glam::Vec3::new(k, -k, -k))
             * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.56, 3.5));
         let poses = sunrise_client::mobs::anim::Poses::new(&kind.model);
+        self.mark_entity(out.len(), &kind.id);
         render::draw(
             &kind.model,
             m,
@@ -378,17 +379,16 @@ impl Game<'_> {
             }
         }
     }
-    /// `ItemInHandLayer`: both hands through the item model pipeline; `lit`
-    /// applies the level's diffuse lighting (off for GUI previews, which
-    /// light the projected quads themselves).
-    /// `skin`: the mob's GPU path draws, which a lit item joins when it can.
+    /// `ItemInHandLayer`: both hands through the item model pipeline. World
+    /// draws take the held-item tint, level lighting and the mob's GPU path
+    /// when supported. GUI previews light the projected quads themselves.
     pub(super) fn held_item_geometry(
         &self,
         mob: &Mob,
         camera: glam::DVec3,
         alpha: f64,
         light: u32,
-        lit: bool,
+        in_world: bool,
         mut skin: Option<&mut super::creatures::Skinned>,
         out: &mut Vec<Vertex>,
     ) {
@@ -397,17 +397,19 @@ impl Game<'_> {
             (sunrise_items::equipment::MAINHAND, false),
             (sunrise_items::equipment::OFFHAND, true),
         ] {
-            let Some(item) = mob.extra.slot_stack(slot).map(|s| &s.item) else {
+            let Some(stack) = mob.extra.slot_stack(slot) else {
                 continue;
             };
+            let item = &stack.item;
             let left = off_hand != mob.main_arm_left();
             // PlayerItemInHandLayer.submitArmWithItem (avatars only): a spyglass
             // in use, with no swing in progress, is held to the eye (`heldOnHead`).
-            let spyglass_to_eye = &**item == "minecraft:spyglass"
-                && (&*mob.kind.id == "minecraft:player" || mob.species() == Species::Mannequin)
+            let spyglass_to_eye = (&*mob.kind.id == "minecraft:player"
+                || mob.species() == Species::Mannequin)
                 && off_hand == mob.extra.using_off_hand
                 && mob.extra.using_item > 0
-                && sunrise_client::mobs::anim::state(mob, alpha as f32).swing < 1.0e-5;
+                && sunrise_client::mobs::anim::state(mob, alpha as f32).swing < 1.0e-5
+                && self.stack_scopes(stack);
             let t = if spyglass_to_eye {
                 render::held_to_eye_matrix(mob, alpha as f32, camera, self, left)
             } else {
@@ -468,7 +470,13 @@ impl Game<'_> {
                 fishing_cast_item(
                     mob.id,
                     active.map(|hook| hook.owner),
-                    mob.extra.main_hand_id() == Some("minecraft:fishing_rod"),
+                    mob.extra.main_hand_stack().is_some_and(|s| {
+                        self.stack_can_perform(
+                            s,
+                            super::item_abilities::ability::FISHING_ROD_CAST,
+                            &*s.item == "minecraft:fishing_rod",
+                        )
+                    }),
                     off_hand,
                 )
             };
@@ -498,14 +506,24 @@ impl Game<'_> {
             } else {
                 sunrise_client::cit::Hand::Main
             };
-            let state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, hand);
-            if lit
-                && let Some(skinned) = skin.as_deref_mut()
-                && self.skin_item_into(&state, t, light, skinned)
-            {
-                continue;
-            }
-            if lit {
+            let mut state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, hand);
+            if in_world {
+                let entity_id = if local_player {
+                    self.own_entity_id() as u32
+                } else {
+                    mob.id
+                };
+                let hand = if off_hand {
+                    mod_api::Hand::Off
+                } else {
+                    mod_api::Hand::Main
+                };
+                self.tint_held_item(&mut state, &stack, entity_id, hand, alpha as f32);
+                if let Some(skinned) = skin.as_deref_mut()
+                    && self.skin_item_into(&state, t, light, skinned)
+                {
+                    continue;
+                }
                 self.submit_item_world(&state, t, light, out);
             } else {
                 self.submit_item_unlit(&state, t, light, out);

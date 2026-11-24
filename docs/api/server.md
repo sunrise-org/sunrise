@@ -79,7 +79,7 @@ inventory contract below is an explicit exception: the old build-only reply is r
 
 `GET /api/v1/mods` asks the running engine over its authenticated control connection for its canonical
 `LoadedMods` package inventory. `mods` lists package ids and versions in inventory order, including
-native code, wasm code and content packages installed in that inventory. This is the startup inventory,
+native code and content packages installed in that inventory. This is the startup inventory,
 not a new package rescan or a list inferred from resource namespaces.
 
 ```json
@@ -105,7 +105,7 @@ answer on this fork; those fields now live only under `provenance`.
 ## Not there yet
 
 - **Mods on a dedicated server**: turn on and off, and their settings, once native mods can be built for the
-  server ([content mods](../modding/src/how-to/content-mods.md), [native mods](../modding/src/how-to/native-mods/11-multiplayer.md)).
+  server ([content mods](../modding/src/how-to/content-mods.md), [native mods](../modding/src/how-to/native-mods/12-standalone-server-export.md#multiplayer)).
 - **Vanilla's management protocol**: `serversettings/*` (the live settings not yet done) and the world
   upgrade's notifications (the others are sent). The methods answer
   an internal error saying so; a kick's translatable message is sent as its key.

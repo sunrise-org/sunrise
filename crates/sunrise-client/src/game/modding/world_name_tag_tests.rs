@@ -1,7 +1,7 @@
 //! `WorldDrawContext::name_tag` (#4171): a mod's label hides behind a wall unless it is
-//! see-through, shrinks with distance as a name tag does, is refused whole for text too deep
+//! see-through, shrinks with distance as a name tag does, supports deep in-memory text
 //! or a position that is not finite, draws as vanilla's name tags in its light and the
-//! player's text background opacity, and draws the same from a compiled wasm mod.
+//! player's text background opacity.
 use super::host::draw::GameWorldDrawContext;
 use super::native_entity_refs::tests::with_client_game;
 use glam::{DVec3, Mat4, Vec3};
@@ -9,7 +9,7 @@ use mod_api::{DrawError, Hooks, NameTagOptions, Text, WorldDrawContext};
 use sunrise_client::block_entity_render::vertex_light;
 use sunrise_client::{mesher::Vertex, world_geometry::WorldGeometry};
 
-#[path = "../../../../sunrise-mod-wasm/tests/fixture/src/world_name_tags.rs"]
+#[path = "world_name_tag_tests/scene.rs"]
 mod scene;
 
 /// Four blocks in front of the label's anchor (0.5 above (0.5, 70, 0.5)), facing south (+Z).
@@ -122,6 +122,20 @@ fn a_label_hides_behind_a_wall_unless_it_is_see_through() {
         assert!(!world.is_empty() && through.is_empty());
         let empty = pixels(game, &[], &[]);
         assert_ne!(pixels(game, &world, &[]), empty, "visible without a wall");
+        // An alpha under 26 draws no text (its fragments are discarded); 26 does. `exact_light`
+        // has no effect without `see_through`.
+        let faded = |game: &mut super::Game<'_>, alpha| {
+            let options = NameTagOptions::new(false, false, 0xF0).with_faded_alpha(alpha);
+            let copy = labels(game, [0.5, 70.0, 0.5], &text, options).1[0].clone();
+            pixels(game, &copy, &[])
+        };
+        assert_eq!(faded(game, 25), empty);
+        assert_ne!(faded(game, 26), empty);
+        let plain = NameTagOptions::new(false, true, 0x00);
+        assert_eq!(
+            bytes(&labels(game, [0.5, 70.0, 0.5], &text, plain.with_exact_light()).1[0]),
+            bytes(&labels(game, [0.5, 70.0, 0.5], &text, plain).1[0]),
+        );
         let wall = wall(game);
         let only_wall = pixels(game, &wall, &[]);
         let behind = [wall.clone(), world].concat();
@@ -210,6 +224,51 @@ fn a_see_through_label_is_lit_at_least_2_in_the_world_and_unlit_over_it() {
             pixels(game, &[], &through),
             pixels(game, &[], &through_full)
         );
+        // `with_exact_light`: the copy in the world is lit by light 0 itself, darker than
+        // light 2's, and nothing else changes.
+        let exact = {
+            let options = NameTagOptions::new(true, true, 0x00).with_exact_light();
+            let (ok, copies) = labels(game, [0.5, 70.0, 0.5], &text, options);
+            assert_eq!(ok, Ok(()));
+            copies
+        };
+        assert!(exact[0].iter().all(|v| v.light == vertex_light(0x00)));
+        assert_eq!(
+            bytes(&exact[1]),
+            bytes(&through),
+            "the faded copy is unchanged"
+        );
+        assert_eq!(without_light(&exact[0]), without_light(&world));
+        let (dim, lit) = (
+            brightness(&pixels(game, &exact[0], &[])),
+            brightness(&pixels(game, &world, &[])),
+        );
+        // A smoke check of the rendering; the vertex light assertions above pin the contract.
+        assert!(dim < lit, "{dim} < {lit}");
+        // `with_faded_alpha`: the faded text at alpha 0x20 whichever copy it is, on the same
+        // backdrop, and fainter on screen than at the default 0x7F.
+        let faint = {
+            let options = NameTagOptions::new(true, true, 0x00).with_faded_alpha(0x20);
+            let (ok, copies) = labels(game, [0.5, 70.0, 0.5], &text, options);
+            assert_eq!(ok, Ok(()));
+            copies
+        };
+        assert_eq!(alphas(&faint[1]), (vec![0x20], vec![0x3F]));
+        assert_eq!(
+            bytes(&faint[0]),
+            bytes(&world),
+            "the copy in the world is unchanged"
+        );
+        let single = {
+            let options = NameTagOptions::new(false, true, 0x00).with_faded_alpha(0x20);
+            labels(game, [0.5, 70.0, 0.5], &text, options).1[0].clone()
+        };
+        assert_eq!(alphas(&single), (vec![0x20], vec![0x3F]));
+        let (faint_light, normal) = (
+            brightness(&pixels(game, &[], &faint[1])),
+            brightness(&pixels(game, &[], &through)),
+        );
+        assert!(faint_light < normal, "{faint_light} < {normal}");
         let wall = wall(game);
         let only_wall = pixels(game, &wall, &[]);
         let behind = pixels(game, &[wall.clone(), world].concat(), &through);
@@ -251,12 +310,11 @@ fn the_text_background_opacity_sets_the_backdrop_and_the_faded_text() {
     });
 }
 
-/// A label refused for capacity after its layout rasterized a new glyph still uploads that
-/// glyph's pixels: a later accepted label with the glyph needs none of its own and samples
-/// atlas texels that are queued.
+/// Labels grow past the initial 4,096 quad pre-reservation hint alongside plain quads,
+/// and newly rasterized glyphs upload their atlas patches.
 #[test]
 #[ignore = "daily"]
-fn glyphs_of_a_label_refused_for_capacity_still_upload() {
+fn labels_grow_past_initial_quad_hint_and_upload_glyphs() {
     with_client_game(|game| {
         face_south(game);
         // The default font's runes are already packed bitmap glyphs, not runtime uploads, and
@@ -292,7 +350,7 @@ fn glyphs_of_a_label_refused_for_capacity_still_upload() {
         let atlas = &mut game.gui.atlas;
         atlas.font = sunrise_client::font::Font::load(
             &source,
-            &Default::default(),
+            &atlas.sprites,
             &[],
             (atlas.width, atlas.height),
             (atlas.height / 2, atlas.height / 2),
@@ -304,31 +362,22 @@ fn glyphs_of_a_label_refused_for_capacity_still_upload() {
         let mut draw = WorldGeometry::default();
         draw.reset(CAMERA, Mat4::IDENTITY, [0.5, 0.5]);
         let quad = mod_api::WorldQuad::new([[0.5, 70.5, 0.0]; 4], !0, mod_api::WorldDepth::Tested);
-        let capacity = draw.usage().quad_capacity as usize;
-        draw.quads(&vec![quad; capacity - 1]).unwrap();
+        draw.quads(&vec![
+            quad;
+            sunrise_client::gfx::world_primitives::DEFAULT_CAPACITY
+                as usize
+        ])
+        .unwrap();
         game.text_patches.borrow_mut().clear();
-        let refused = GameWorldDrawContext::new(game, &mut draw).name_tag(at, &text, options);
-        assert_eq!(refused, Err(DrawError::CapacityExceeded));
-        assert!(draw.labels().iter().all(|label| label.is_empty()));
+        let accepted = GameWorldDrawContext::new(game, &mut draw).name_tag(at, &text, options);
+        assert_eq!(accepted, Ok(()));
         let queued: Vec<[u32; 4]> = game
             .text_patches
             .borrow()
             .iter()
             .map(|p| [p.x, p.y, p.width, p.height])
             .collect();
-        assert!(
-            !queued.is_empty(),
-            "the refused label's new glyphs still upload"
-        );
-
-        draw.reset(CAMERA, Mat4::IDENTITY, [0.5, 0.5]);
-        let accepted = GameWorldDrawContext::new(game, &mut draw).name_tag(at, &text, options);
-        assert_eq!(accepted, Ok(()));
-        assert_eq!(
-            game.text_patches.borrow().len(),
-            queued.len(),
-            "the glyphs were cached by the refused label"
-        );
+        assert!(!queued.is_empty(), "new glyphs upload their atlas patches");
         let size = [game.gui.atlas.width as f32, game.gui.atlas.height as f32];
         let glyphs: Vec<&[Vertex; 4]> = draw.labels()[0]
             .as_chunks::<4>()
@@ -422,16 +471,32 @@ fn labels_four_times_as_far_are_a_quarter_the_size_on_screen() {
 
 #[test]
 #[ignore = "daily"]
-fn a_label_too_deep_or_not_finite_is_refused_and_draws_nothing() {
+fn a_deep_label_renders_and_non_finite_is_refused() {
     with_client_game(|game| {
-        let mut too_deep = Text::literal("leaf");
-        for _ in 1..513 {
-            too_deep = Text::literal("parent").append(too_deep);
+        let mut deep = Text::literal("leaf");
+        for _ in 1..520 {
+            deep = Text::literal("").append(deep);
         }
         let options = NameTagOptions::new(true, true, 0xF0);
-        let (refused, drawn) = labels(game, [0.5, 70.0, 0.5], &too_deep, options);
-        assert_eq!(refused, Err(DrawError::TextTooDeep));
-        assert!(drawn.iter().all(Vec::is_empty));
+        let (ok, [world, through]) = labels(game, [0.5, 70.0, 0.5], &deep, options);
+        assert_eq!(ok, Ok(()));
+        assert!(!world.is_empty() && !through.is_empty());
+        let mut bad_nbt = Text::literal("x");
+        bad_nbt.metadata = sunrise_core::nbt::Tag::compound([(
+            "deep",
+            (0..512).fold(sunrise_core::nbt::Tag::Byte(1), |t, _| {
+                sunrise_core::nbt::Tag::List(vec![t])
+            }),
+        )]);
+        let (ok, drawn) = labels(game, [0.5, 70.0, 0.5], &bad_nbt, options);
+        let (_, expected) = labels(game, [0.5, 70.0, 0.5], &Text::literal("x"), options);
+        assert_eq!(ok, Ok(()));
+        for (actual, expected) in drawn.iter().zip(&expected) {
+            assert_eq!(
+                bytemuck::cast_slice::<Vertex, u8>(actual),
+                bytemuck::cast_slice::<Vertex, u8>(expected)
+            );
+        }
         for at in [[f64::NAN, 70.0, 0.5], [0.5, f64::INFINITY, 0.5]] {
             let (refused, drawn) = labels(game, at, &Text::literal("x"), options);
             assert_eq!(refused, Err(DrawError::NonFinite));
@@ -447,32 +512,52 @@ fn a_label_too_deep_or_not_finite_is_refused_and_draws_nothing() {
     });
 }
 
-/// The wasm fixture's scene, run natively.
+/// Adds labels to the actual frame via a native render hook.
 struct Native;
 #[mod_api::__subscriptions]
 impl Hooks for Native {
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         _: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        scene::render_level_stage(event);
+        scene::submit_custom_geometry(event);
     }
 }
 
-/// The scene drawn by a whole world view (`fill_world_geometry`, every stage): the name-tag
-/// vertices it adds to the entities, its see-through vertices, and their pixels in front of
-/// a wall that hides the labels that are not see-through.
-fn scene_frame(game: &mut super::Game<'_>) -> ([Vec<Vertex>; 2], Vec<u8>, Vec<u32>) {
+/// The world pass and see-through pass receive the scene's labels.
+fn scene_frame(game: &mut super::Game<'_>) -> ([Vec<Vertex>; 2], Vec<u32>) {
     face_south(game);
     game.world.game_time = scene::SCENE_TIME;
     game.see_through_vertices.clear();
     let mut draw = WorldGeometry::default();
     let mut entities = Vec::new();
-    game.fill_world_geometry(false, CAMERA, Mat4::IDENTITY, 0.0, &mut draw, &mut entities);
+    let frame_camera = mod_api::Camera {
+        position: CAMERA,
+        eye_height: 1.62,
+        partial_tick: 0.0,
+        yaw: 0.0,
+        pitch: 0.0,
+        roll: 0.0,
+        fov_degrees: 70.0,
+        near: 0.05,
+        far: 128.0,
+        view: Mat4::IDENTITY.to_cols_array(),
+        projection: Mat4::IDENTITY.to_cols_array(),
+        dimension: "minecraft:overworld".into(),
+    };
+    game.fill_world_geometry(
+        false,
+        Some(&frame_camera),
+        CAMERA,
+        Mat4::IDENTITY,
+        0.0,
+        false,
+        &[],
+        &mut draw,
+        &mut entities,
+    );
     let see_through = std::mem::take(&mut game.see_through_vertices);
-    let open = pixels(game, &entities, &see_through);
-    let walled = pixels(game, &[wall(game), entities.clone()].concat(), &see_through);
     // Each call's result, from the scene's marker lines: `code` across, the call's index up.
     let mut results: Vec<(f32, u32)> = draw
         .batch()
@@ -482,89 +567,20 @@ fn scene_frame(game: &mut super::Game<'_>) -> ([Vec<Vertex>; 2], Vec<u8>, Vec<u3
         .collect();
     results.sort_by(|a, b| a.0.total_cmp(&b.0));
     let results = results.into_iter().map(|(_, code)| code).collect();
-    ([entities, see_through], [open, walled].concat(), results)
+    ([entities, see_through], results)
 }
 
-/// The same `name_tag` calls from the compiled wasm fixture (through the generated import)
-/// and from a native mod draw the same vertices and the same pixels (#4171's done-when).
 #[test]
 #[ignore = "daily"]
-fn a_wasm_mods_labels_draw_the_same_pixels_as_a_native_mods() {
-    crate::game::in_own_process(
-        "game::world_name_tag_tests::a_wasm_mods_labels_draw_the_same_pixels_as_a_native_mods",
-        || {
-            sunrise_guest_stack::run_on_guest_stack(|| {
-                sunrise_mod_wasm::copy_probe::with_load_budget(|| {
-                    // The native control only draws labels; leave the process-wide block entity
-                    // table unset until the wasm fixture loads its declared types.
-                    let native: mod_api::Mods =
-                        vec![mod_api::ModEntry::new("native_labels", Box::new(Native))].into();
-                    let mut expected = None;
-                    mod_platform::testing::with_mods(native, || {
-                        with_client_game(|game| expected = Some(scene_frame(game)));
-                    });
-                    let (expected_vertices, expected_pixels, native_results) = expected.unwrap();
-                    assert_eq!(
-                        native_results,
-                        scene::RESULT_CODES,
-                        "native name_tag results"
-                    );
-                    let [world, through] = &expected_vertices;
-                    // Hidden (one copy), Through (two) and Bold (one) drew; NaN was refused.
-                    assert!(!world.is_empty() && !through.is_empty());
-
-                    let mods: mod_api::Mods = wasm_mods().into();
-                    let mut actual = None;
-                    mod_platform::testing::with_mods(mods.clone(), || {
-                        crate::game::api_values::install_parts(&mods).unwrap();
-                        let base = std::path::PathBuf::from(
-                            std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap(),
-                        );
-                        let root = super::mods::content_root(&base, &Default::default()).unwrap();
-                        super::native_entity_refs::tests::with_game_role(
-                            root.prepared().to_owned(),
-                            crate::game::execution_role::ExecutionRole::Client,
-                            |game| actual = Some(scene_frame(game)),
-                        );
-                    });
-                    let (actual_vertices, actual_pixels, wasm_results) = actual.unwrap();
-                    assert_eq!(wasm_results, scene::RESULT_CODES, "wasm name_tag results");
-                    for (copy, (native, wasm)) in ["world", "see-through"]
-                        .iter()
-                        .zip(expected_vertices.iter().zip(&actual_vertices))
-                    {
-                        assert_eq!(bytes(native), bytes(wasm), "the {copy} vertices");
-                    }
-                    assert!(expected_pixels == actual_pixels, "the same pixels");
-                })
-            })
-        },
-    );
-}
-
-/// The compiled wasm fixture (`SUNRISE_WASM_FIXTURE`, on `SUNRISE_WASM_STD`), loaded.
-fn wasm_mods() -> Vec<mod_api::ModEntry> {
-    use sunrise_mod_package::manifest::Package;
-    use sunrise_mod_wasm::{WasmPackage, load};
-    let path = std::path::PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-    let manifest = Package::read(&path).unwrap().manifest;
-    let info = mod_api::PackageInfo::new(
-        manifest.id.clone(),
-        manifest.version.to_string(),
-        mod_api::PackageKind::Code,
-        mod_api::Side::Both,
-        vec![manifest.id.clone()],
-        vec![],
-    );
-    let loaded = load(
-        &std::fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap(),
-        vec![WasmPackage {
-            manifest,
-            module: Package::read_wasm(&path).unwrap(),
-        }],
-    );
-    assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-    assert_eq!(loaded.mods.len(), 1);
-    loaded.initialize(&[info]).unwrap();
-    loaded.mods
+fn a_render_hook_can_add_labels_to_both_depth_passes() {
+    let mods = vec![mod_api::ModEntry::new("native_labels", Box::new(Native))].into();
+    mod_platform::testing::with_mods(mods, || {
+        with_client_game(|game| {
+            let ([world, through], results) = scene_frame(game);
+            assert_eq!(results, scene::RESULT_CODES);
+            // Hidden (one copy), Through (two) and Bold (one) drew; NaN was refused.
+            assert!(!world.is_empty() && !through.is_empty());
+            assert!(world.len() > through.len());
+        });
+    });
 }

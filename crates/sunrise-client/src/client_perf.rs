@@ -267,6 +267,10 @@ impl ClientPerf {
         self.perf.memory_snapshot(t, label, rows)
     }
 
+    pub fn memory_cost(&self) -> Option<crate::server_perf::MemoryCost> {
+        self.perf.memory_cost()
+    }
+
     /// Records `code` in the running capture; false when none runs.
     pub fn warn(&mut self, t: f64, code: WarningCode) -> bool {
         self.perf.warn(t, code)

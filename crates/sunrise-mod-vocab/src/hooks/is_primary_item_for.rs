@@ -21,6 +21,8 @@ pub trait Hooks {
     /// a component-dependent answer is not supported by this hook or its
     /// `supports_enchantment` pair.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         scope = "item",
@@ -29,5 +31,5 @@ pub trait Hooks {
         version = 2,
         neoforge = "IItemExtension.isPrimaryItemFor"
     )]
-    fn is_primary_item_for();
+    fn is_primary_item_for(stack: &ItemStack, enchantment: &str, primary: &mut bool);
 }

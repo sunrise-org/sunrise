@@ -64,7 +64,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
             "position {at:?}, expected [{x}, {y}, {z}]"
         );
     };
-    assert!(game.remote_ride(Keys::default(), 0).unwrap());
+    assert!(game.remote_ride(Keys::default()));
     close(game.player.as_ref().unwrap().position, 2.0, 65.7, 3.0);
     close(
         game.mobs.iter().find(|m| m.id == 41).unwrap().position,
@@ -82,7 +82,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     .unwrap();
     for _ in 0..4 {
         game.tick_remote_entities(true);
-        game.remote_ride(Keys::default(), 0).unwrap();
+        game.remote_ride(Keys::default());
     }
     close(game.player.as_ref().unwrap().position, 12.0, 68.7, -4.0);
     close(
@@ -109,7 +109,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     );
     // A direct stack has no intermediary's 0.5-height offset.
     set(&mut game, 40, vec![7, 41]);
-    game.remote_ride(Keys::default(), 0).unwrap();
+    game.remote_ride(Keys::default());
     close(game.player.as_ref().unwrap().position, 12.0, 68.2, -4.0);
     close(
         game.mobs.iter().find(|m| m.id == 41).unwrap().position,
@@ -124,6 +124,61 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
         game.mobs.iter().find(|m| m.id == 41).unwrap().extra.mount,
         None
     );
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_stand_position_snap_keeps_the_first_draws_body_yaw() {
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_client_game};
+    use sunrise_core::geometry::Vec3;
+    use sunrise_protocol::packets::play::{self, Clientbound as C};
+
+    if run_fresh_cases(
+        "game::remote::tests::movement_snap_tests::a_stand_position_snap_keeps_the_first_draws_body_yaw",
+        "SUNRISE_STAND_SNAP_TEST",
+        &["snap"],
+    ) {
+        return;
+    }
+    with_client_game(|game| {
+        let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+        game.connect_local(client, "StandSnap").unwrap();
+        let kind = game
+            .remote
+            .as_ref()
+            .unwrap()
+            .builtin
+            .get("minecraft:entity_type")
+            .unwrap()
+            .id("minecraft:armor_stand")
+            .unwrap();
+        game.handle_packet(C::AddEntity(play::AddEntity {
+            id: 40,
+            uuid: 1234,
+            kind,
+            position: [0.5, 64.0, 0.5],
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 32,      // 45°
+            head_yaw: 64, // 90°
+            data: 0,
+        }))
+        .unwrap();
+        // Far enough for handleEntityPositionSync to snap, before any client tick.
+        game.handle_packet(C::EntityPositionSync(play::EntityPositionSync {
+            id: 40,
+            path: play::PositionPath::Linear([80.5, 64.0, 0.5]),
+            yaw: 135.0,
+            pitch: 0.0,
+            on_ground: false,
+        }))
+        .unwrap();
+        let stand = game.armor_stands.iter().find(|a| a.id == 40).unwrap();
+        assert_eq!(stand.render_position(0.25), Vec3::new(80.5, 64.0, 0.5));
+        assert_eq!([stand.previous_yaw, stand.yaw], [135.0; 2]);
+        assert_eq!([stand.render_yaw(0.0), stand.render_yaw(1.0)], [90.0; 2]);
+        assert_eq!([stand.previous_head_yaw, stand.head_yaw], [90.0; 2]);
+    });
 }
 
 /// `Entity.isColliding` and the snap `ClientLevel.syncBlockState` makes: a

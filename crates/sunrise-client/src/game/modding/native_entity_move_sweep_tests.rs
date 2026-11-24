@@ -131,8 +131,11 @@ impl Hooks for DeclareGeneral {
             mod_api::GeneralEntityCategory::Misc,
             0.8,
             1.9,
+            None,
             mod_api::GeneralSavePolicy::NoSave,
             false,
+            false,
+            None,
             8,
             3,
             1,
@@ -162,8 +165,7 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
     mod_platform::__private::initialize().unwrap();
     // The registration phase owns the general type the General case loads;
     // the ticks run in World, as the server's own do.
-    let _registration =
-        mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Registration);
+    let _registration = mod_platform::__private::RegistrationGuard::open();
     let log = Arc::new(Mutex::new(Vec::new()));
     let mods: mod_api::Mods = vec![
         mod_api::ModEntry::new("counter", Box::new(Counter(log.clone()))),
@@ -176,7 +178,6 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
             game.native_level_opened(crate::game::Dim::Overworld);
             game.build_registries();
             game.reset_entity_residency();
-            let _world = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
             game.set_allow_commands(true);
             let registry = &game.pack.assets.registry;
             let stone = registry.default_state("minecraft:stone").unwrap();
@@ -214,13 +215,18 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
             // its tick's gravity.
             assert!(game.run_command(&format!("summon experience_orb {} 40.5 5.5", at(7)[0])));
             // The falling block: thrown by the game's own spawn, eastbound.
-            assert!(game.spawn_falling_block(
-                "minecraft:overworld",
-                stone,
-                at(6),
-                [0.5, 0.0, 0.0],
-                mod_api::Falling::default()
-            ));
+            let level = game.level("minecraft:overworld").unwrap();
+            assert!(
+                game.level_spawn_falling_block(
+                    level,
+                    stone,
+                    at(6),
+                    [0.5, 0.0, 0.0],
+                    mod_api::Falling::default(),
+                )
+                .unwrap()
+                .is_some()
+            );
             // The trident: a thrown one in flight, a `setPos` flyer.
             let id = game.take_entity_id();
             let mut trident = super::trident::ThrownTrident::remote(
@@ -404,8 +410,7 @@ fn the_off_walk_movers_fire_too() {
                 "the dragon is an off-walk mover"
             );
             log.lock().unwrap().clear();
-            // Overworld: no fight, so the fight tick runs `aiStep` directly.
-            game.tick_fight();
+            game.tick_dragon();
             let heard = std::mem::take(&mut *log.lock().unwrap());
             assert!(
                 heard.iter().any(|(kind, cause)| {
@@ -439,6 +444,7 @@ fn the_off_walk_movers_fire_too() {
                 let mut world =
                     std::mem::replace(&mut game.world, sunrise_client::world::World::new(stone, 0));
                 MotionWorld {
+                    side: sunrise_client::motion::dry_side(),
                     entities: &[],
                     player: &mut player,
                     scene: &mut world,

@@ -7,8 +7,13 @@ use crate::{
     Error, Result,
     packets::configuration::{RegistryData, UpdateTags},
 };
-use std::{collections::HashMap, path::Path};
-use sunrise_core::identifier::Identifier;
+use serde::{Deserialize, Deserializer, de};
+use std::{
+    collections::{BTreeMap, HashMap, btree_map::Entry},
+    fmt,
+    path::Path,
+};
+use sunrise_core::identifier::{self, Identifier};
 use sunrise_core::nbt::{JavaString, Tag};
 
 /// One registry: names by network id and the reverse lookup.
@@ -49,7 +54,19 @@ pub struct SyncedNames<'a> {
     pub dynamic: &'a Dynamic,
 }
 impl crate::item::Names for SyncedNames<'_> {
+    fn consume_effect_kind(&self, id: i32) -> Option<crate::item::consume_effects::Kind> {
+        self.dynamic.consume_effect_kind(id)
+    }
+
     fn name(&self, registry: &str, id: i32) -> Option<String> {
+        if registry == crate::item::consume_effects::REGISTRY {
+            return match self.consume_effect_kind(id)? {
+                crate::item::consume_effects::Kind::Builtin(id) => {
+                    crate::item::consume_effects::builtin_name(id).map(str::to_owned)
+                }
+                crate::item::consume_effects::Kind::Native(name, _) => Some(name.to_string()),
+            };
+        }
         self.builtin
             .get(registry)
             .and_then(|ids| ids.name(id))
@@ -61,6 +78,17 @@ impl crate::item::Names for SyncedNames<'_> {
             })
             .map(str::to_owned)
     }
+
+    fn registry_entry(&self, registry: &str, id: i32) -> Option<(&str, Option<&Tag>)> {
+        self.dynamic.entry(registry, id)
+    }
+
+    fn contains_entry(&self, registry: &str, name: &str) -> bool {
+        self.builtin
+            .get(registry)
+            .is_some_and(|ids| ids.id(name).is_some())
+            || self.dynamic.has_entry(registry, name)
+    }
 }
 
 impl SyncedNames<'_> {
@@ -69,6 +97,11 @@ impl SyncedNames<'_> {
     /// None for an unknown registry or name. Compares the identifiers' parts in place: nothing is
     /// allocated, and a gap in a built-in report (an empty name) matches nothing.
     pub fn id(&self, registry: &Identifier, name: &Identifier) -> Option<i32> {
+        if names(crate::item::consume_effects::REGISTRY, registry) {
+            return self
+                .dynamic
+                .consume_effect_id_parts(name.namespace(), name.path());
+        }
         let index = |i: usize| i32::try_from(i).ok();
         self.builtin
             .registries
@@ -101,6 +134,86 @@ fn names(text: &str, id: &Identifier) -> bool {
     text.split_once(':') == Some((id.namespace(), id.path()))
 }
 
+struct ReportRegistry {
+    entries: Option<ReportEntries>,
+}
+
+impl<'de> Deserialize<'de> for ReportRegistry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = ReportRegistry;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a registry report object")
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut entries: Option<Option<ReportEntries>> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "entries" {
+                        if entries.is_some() {
+                            return Err(de::Error::duplicate_field("entries"));
+                        }
+                        entries = Some(map.next_value()?);
+                    } else {
+                        map.next_value::<de::IgnoredAny>()?;
+                    }
+                }
+                Ok(ReportRegistry {
+                    entries: entries.flatten(),
+                })
+            }
+        }
+
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
+/// Read keys directly from the JSON object, before a map can overwrite a duplicate.
+struct ReportEntries(BTreeMap<String, serde_json::Value>);
+
+impl<'de> Deserialize<'de> for ReportEntries {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = ReportEntries;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a registry entries object with unique keys")
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut entries = BTreeMap::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    match entries.entry(key) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(map.next_value()?);
+                        }
+                        Entry::Occupied(entry) => {
+                            return Err(de::Error::custom(format!(
+                                "duplicate report key {}",
+                                entry.key()
+                            )));
+                        }
+                    }
+                }
+                Ok(ReportEntries(entries))
+            }
+        }
+
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
 impl Builtin {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
@@ -108,17 +221,15 @@ impl Builtin {
         Self::parse(&text)
     }
     pub fn parse(text: &str) -> Result<Self> {
-        let json: serde_json::Value = serde_json::from_str(text)
+        let report: BTreeMap<String, ReportRegistry> = serde_json::from_str(text)
             .map_err(|e| Error::new(format!("registries report: {e}")))?;
         let mut registries = HashMap::new();
-        for (name, registry) in json
-            .as_object()
-            .ok_or_else(|| Error::new("registries report is not an object"))?
-        {
-            let Some(entries) = registry["entries"].as_object() else {
+        for (name, registry) in report {
+            let Some(ReportEntries(entries)) = registry.entries else {
                 continue;
             };
-            let mut names = vec![String::new(); entries.len()];
+            let mut slots = vec![None; entries.len()];
+            let mut ids = HashMap::with_capacity(entries.len());
             for (entry, value) in entries {
                 let id = value["protocol_id"]
                     .as_u64()
@@ -132,15 +243,31 @@ impl Builtin {
                         "{entry}: protocol_id {id} out of range"
                     )));
                 }
-                if id >= names.len() {
-                    names.resize(id + 1, String::new());
+                if id >= slots.len() {
+                    slots.resize(id + 1, None);
                 }
-                if !names[id].is_empty() {
+                if slots[id].is_some() {
                     return Err(Error::new(format!("{entry}: duplicate protocol_id {id}")));
                 }
-                names[id] = entry.clone();
+                slots[id] = (!entry.is_empty()).then_some(entry);
             }
-            registries.insert(name.clone(), Ids::from_names(names));
+            // Publish canonical IDs in numeric slot order. Invalid IDs leave gaps;
+            // like MappedRegistry.register, reject repeated identifier keys.
+            let mut names = Vec::with_capacity(slots.len());
+            for (slot, entry) in slots.into_iter().enumerate() {
+                let key = entry
+                    .and_then(|entry| identifier::canonicalize(entry).ok())
+                    .unwrap_or_default();
+                if let Some(previous) = ids.insert(key.clone(), slot as i32)
+                    && !key.is_empty()
+                {
+                    return Err(Error::new(format!(
+                        "{name}: duplicate registry key {key} at protocol_ids {previous} and {slot}"
+                    )));
+                }
+                names.push(key);
+            }
+            registries.insert(name, Ids { names, ids });
         }
         Ok(Self { registries })
     }
@@ -165,10 +292,13 @@ pub struct Dynamic {
     pub registries: HashMap<String, Vec<(String, Option<Tag>)>>,
     /// The tags the server sent, by registry: each tag's entries by id.
     pub tags: HashMap<String, HashMap<String, Vec<i32>>>,
+    /// RegistryData's effect IDs resolved to the local codecs during configuration.
+    #[doc(hidden)]
+    pub consume_effect_codecs: Option<crate::item::consume_effects::Snapshot>,
     /// The peer confirmed the native component registry identity.
     pub custom_components: bool,
-    /// The `sunrise:menu_extra` payload layout the peer serves: the revision its
-    /// configuration query carried, 0 when it never asked (the legacy layout).
+    /// The `sunrise:menu_extra` revision negotiated during configuration, or 0 when the
+    /// peer never sent a query.
     pub menu_extra_revision: u8,
 }
 /// The most registries whose tags one connection keeps. Vanilla names well under a hundred; a
@@ -176,7 +306,50 @@ pub struct Dynamic {
 /// client's memory with every packet.
 pub const MAX_TAG_REGISTRIES: usize = 512;
 
+impl crate::item::Names for Dynamic {
+    fn name(&self, registry: &str, id: i32) -> Option<String> {
+        self.name(registry, id).map(str::to_owned)
+    }
+
+    fn consume_effect_kind(&self, id: i32) -> Option<crate::item::consume_effects::Kind> {
+        use crate::item::consume_effects::{Kind, builtin_name};
+        match &self.consume_effect_codecs {
+            Some(snapshot) => snapshot.kind(id),
+            None => builtin_name(id).map(|_| Kind::Builtin(id)),
+        }
+    }
+
+    fn registry_entry(&self, registry: &str, id: i32) -> Option<(&str, Option<&Tag>)> {
+        self.entry(registry, id)
+    }
+
+    fn contains_entry(&self, registry: &str, name: &str) -> bool {
+        self.has_entry(registry, name)
+    }
+}
+
 impl Dynamic {
+    /// Admit the server snapshot using the local codecs, but keep its ID order.
+    pub fn add_consume_effects(&mut self, packet: RegistryData) -> crate::Result<()> {
+        self.consume_effect_codecs = Some(crate::item::consume_effects::Snapshot::resolve(
+            &packet.entries,
+        )?);
+        self.add(packet);
+        Ok(())
+    }
+
+    pub fn consume_effect_id(&self, name: &str) -> Option<i32> {
+        let (namespace, path) = name.split_once(':')?;
+        self.consume_effect_id_parts(namespace, path)
+    }
+
+    fn consume_effect_id_parts(&self, namespace: &str, path: &str) -> Option<i32> {
+        match &self.consume_effect_codecs {
+            Some(snapshot) => snapshot.id(namespace, path),
+            None => crate::item::consume_effects::builtin_id_parts(namespace, path),
+        }
+    }
+
     /// Retained heap charge for a frozen configuration snapshot built by
     /// [`Self::add`] and [`Self::add_tags`] with insertion/replacement only.
     ///
@@ -191,6 +364,7 @@ impl Dynamic {
         let Self {
             registries,
             tags,
+            consume_effect_codecs,
             custom_components: _,
             menu_extra_revision: _,
         } = self;
@@ -203,6 +377,11 @@ impl Dynamic {
         );
         tags.iter().fold(
             registry_bytes
+                .saturating_add(
+                    consume_effect_codecs
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.owned_heap_bytes()),
+                )
                 .saturating_add(
                     fresh_hash_table_bytes::<(String, HashMap<String, Vec<i32>>)>(tags.capacity()),
                 ),
@@ -246,6 +425,18 @@ impl Dynamic {
             .get(registry)?
             .get(i)
             .map(|(n, _)| n.as_str())
+    }
+    pub fn entry(&self, registry: &str, id: i32) -> Option<(&str, Option<&Tag>)> {
+        let i = usize::try_from(id).ok()?;
+        self.registries
+            .get(registry)?
+            .get(i)
+            .map(|(n, tag)| (n.as_str(), tag.as_ref()))
+    }
+    pub fn has_entry(&self, registry: &str, name: &str) -> bool {
+        self.registries
+            .get(registry)
+            .is_some_and(|entries| entries.iter().any(|(n, _)| n == name))
     }
     /// The id of an entry by name, the reverse of `name`. A registry has one
     /// entry per id, so the first match is the only one.
@@ -552,6 +743,12 @@ mod tests {
         assert_eq!(items.name(2), None);
     }
 
+    #[test]
+    fn rejects_positional_registry_report_records() {
+        let report = r#"{"minecraft:item":[{"minecraft:stick":{"protocol_id":0}}]}"#;
+        assert!(Builtin::parse(report).is_err());
+    }
+
     /// A crafted huge protocol_id must error instead of allocating a
     /// name table of that size, and duplicate ids must error instead of
     /// silently overwriting.
@@ -567,6 +764,20 @@ mod tests {
         let b = Builtin::parse(sparse).unwrap();
         let x = b.get("minecraft:block_entity_type").unwrap();
         assert_eq!(x.name(7), Some("minecraft:sign"));
+    }
+
+    #[test]
+    fn rejects_duplicate_canonical_report_keys() {
+        for first_key in ["stick", "minecraft:stick"] {
+            let report = format!(
+                r#"{{"minecraft:item":{{"entries":{{
+                    "{first_key}":{{"protocol_id":1}},
+                    "minecraft:stick":{{"protocol_id":5}}
+                }}}}}}"#
+            );
+            let error = Builtin::parse(&report).unwrap_err();
+            assert!(error.0.contains("duplicate"), "{error}");
+        }
     }
 
     #[test]

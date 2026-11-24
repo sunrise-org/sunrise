@@ -35,7 +35,7 @@ pub struct Unpacked {
     pub target: String,
     /// The Cargo home of builds.
     pub cargo_home: PathBuf,
-    /// `--config` values every cargo command gets (the launcher's Windows ARM64 flags).
+    /// `--config` values every cargo command gets.
     #[serde(default)]
     pub cargo_config: Vec<String>,
     /// The folder of its C and link programs, when it brings them (Windows).
@@ -226,9 +226,9 @@ pub fn missing_system_libraries(text: &str) -> bool {
         .iter()
         .any(|said| {
             text.match_indices(said).any(|(at, _)| {
-                let flag = text[at + said.len()..]
-                    .split(|c: char| c.is_whitespace() || c == ':')
-                    .next();
+                let flag = text[at + said.len()..].split_whitespace().next();
+                // GNU ld ends the flag with one colon; a colon inside it names another library.
+                let flag = flag.map(|flag| flag.strip_suffix(':').unwrap_or(flag));
                 matches!(flag, Some("-ludev" | "-lasound"))
             })
         })
@@ -245,12 +245,10 @@ pub(crate) mod tests {
     use super::*;
 
     /// Every host the launcher ships a toolchain for: commands are checked for each, on any machine.
-    pub const HOSTS: [&str; 5] = [
+    pub const HOSTS: [&str; 3] = [
         "aarch64-apple-darwin",
-        "x86_64-apple-darwin",
         "x86_64-unknown-linux-gnu",
         WINDOWS_X64_TARGET,
-        "aarch64-pc-windows-gnullvm",
     ];
 
     pub fn unpacked(dir: impl Into<PathBuf>, target: &str) -> Unpacked {
@@ -282,7 +280,7 @@ pub(crate) mod tests {
     /// dependency in the build's own Cargo home, so every build command turns it off.
     #[test]
     fn build_commands_turn_off_nix_purity_filtering() {
-        let cmd = unpacked("toolchain", HOSTS[2]).command(Path::new("cargo"));
+        let cmd = unpacked("toolchain", HOSTS[1]).command(Path::new("cargo"));
         let purity = cmd
             .get_envs()
             .find(|(name, _)| *name == "NIX_ENFORCE_PURITY")
@@ -303,6 +301,9 @@ pub(crate) mod tests {
         for line in [
             "rust-lld: error: unable to find library -lasound_extra",
             "/usr/bin/ld: cannot find -ludev2: No such file or directory",
+            "rust-lld: error: unable to find library -lasound:plugin",
+            "/usr/bin/ld: cannot find -ludev:plugin: No such file or directory",
+            "/usr/bin/ld: cannot find -ludev:plugin:: No such file or directory",
             "rust-lld: error: unable to find library -lz",
             "error: linking with `cc` failed: exit status: 1",
         ] {

@@ -55,7 +55,7 @@ fn a_boat_the_listener_filled_skips_the_mob() {
             gate.arm();
             game.boat_contacts(0);
             assert!(gate.fired());
-            assert_eq!(game.boat_passengers(boat), 2, "a boat seats two");
+            assert_eq!(game.seated_passenger_count(boat), 2, "a boat seats two");
             let pig = mob_id(game, "minecraft:pig");
             assert_eq!(game.mob_object(pig).unwrap().extra.mount, None);
         },

@@ -1,2 +1,0 @@
-The game's side of one package's runtime data files, handed to the mod in its RegistrationContext and
-held by id: the mod calls it for the names, the checked bytes and the path of a file its manifest lists.

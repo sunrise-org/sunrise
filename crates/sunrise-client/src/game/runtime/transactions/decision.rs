@@ -10,7 +10,7 @@
 #![allow(dead_code)]
 
 use super::After as Effect;
-use mod_api::{EntityRef, WorldEpoch};
+use mod_api::{__private::TransactionFrame, EntityRef, WorldEpoch};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use sunrise_client::items::ItemStack;
 
@@ -167,7 +167,7 @@ pub(in crate::game) struct Reads {
 
 struct Proposed<T, R, P> {
     identity: Identity,
-    savepoint: u64,
+    savepoint: TransactionFrame,
     target: T,
     reads: R,
     plan: P,
@@ -435,11 +435,11 @@ impl<H: ActionHost> ActionTarget<H> for Menu {
 }
 
 /// No mutable borrow crosses decide or fire. The guard aborts on unwind in
-/// decide/apply as well as dispatch; native unwind and a recoverable wasm trap
-/// both become ListenerFailed. Process abort and failed rollback are not caught.
+/// decide/apply as well as dispatch. An unwind becomes ListenerFailed.
+/// Process abort and failed rollback are not caught.
 struct ActionGuard<'a, H: ActionHost> {
     host: &'a mut H,
-    savepoint: u64,
+    savepoint: TransactionFrame,
     closed: bool,
 }
 
@@ -509,7 +509,11 @@ pub(in crate::game) fn run<H: ActionHost, T: ActionTarget<H>>(
             return outcome;
         }
         guard.host.dispatched();
+        let failures = mod_api::runtime::isolated_failures();
         let reply = fire(guard.host);
+        if mod_api::runtime::isolated_failures() != failures {
+            return Outcome::ListenerFailed;
+        }
         apply(guard.host, token, reply)
     }))
     .unwrap_or(Outcome::ListenerFailed);

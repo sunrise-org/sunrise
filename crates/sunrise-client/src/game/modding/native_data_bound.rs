@@ -14,8 +14,8 @@ impl Game<'_> {
 mod tests {
     use crate::game::native_entity_refs::tests::with_game;
     use mod_api::{
-        DataLoadContext, DefaultComponentsBoundEvent, Hooks, Host, HostSide, Identifier, ModEntry,
-        ModifyDefaultComponentsEvent, TagsUpdateCause, TagsUpdatedEvent,
+        DataLoadContext, DefaultComponentsBoundEvent, Hooks, Identifier, ModEntry,
+        ModifyDefaultComponentsEvent, ReloadContext, TagsUpdateCause, TagsUpdatedEvent,
     };
     use std::sync::{Arc, Mutex};
     use sunrise_protocol::packets::{
@@ -28,12 +28,12 @@ mod tests {
     impl Hooks for Probe {
         fn default_components_bound(
             &self,
-            _: HostSide<'_>,
+            _: &dyn ReloadContext,
             event: &mut DefaultComponentsBoundEvent,
         ) {
             self.0.lock().unwrap().push(("bound", event.cause));
         }
-        fn tags_updated(&self, _: HostSide<'_>, event: &mut TagsUpdatedEvent) {
+        fn tags_updated(&self, _: &dyn ReloadContext, event: &mut TagsUpdatedEvent) {
             self.0.lock().unwrap().push(("tags", event.cause));
         }
     }
@@ -58,9 +58,9 @@ mod tests {
 
     /// The bound notice's default read: the value the mod's
     /// `modify_default_components` set, off the published defaults.
-    fn dirt_stack_size(host: &dyn Host) -> Option<mod_api::Tag> {
-        let key = host.item_key(&Identifier::parse("minecraft:dirt").unwrap())?;
-        host.item_default_component(key, "minecraft:max_stack_size")
+    fn dirt_stack_size(context: &dyn ReloadContext) -> Option<mod_api::Tag> {
+        let key = context.item_key(&Identifier::parse("minecraft:dirt").unwrap())?;
+        context.item_default_component(key, "minecraft:max_stack_size")
     }
 
     /// The load boundary a test's defaults edit flows through: the same
@@ -69,7 +69,7 @@ mod tests {
         let _ = sunrise_world::native_load_hooks::install(
             sunrise_world::native_load_hooks::NativeLoadHooks {
                 item_ability_default: sunrise_items::item_abilities::vanilla_can_perform,
-                loot_ability: |_, _, _| {},
+                loot_ability: |_, _, _, _| {},
                 loot_table_load: |_, _, _| {},
                 modify_default_components: |context, item, components| {
                     if !mod_api::__private::listened(mod_api::HookId::ModifyDefaultComponents) {
@@ -101,13 +101,10 @@ mod tests {
         }
         fn default_components_bound(
             &self,
-            host: HostSide<'_>,
+            context: &dyn ReloadContext,
             event: &mut DefaultComponentsBoundEvent,
         ) {
-            let stack = match host {
-                HostSide::Server(host) => dirt_stack_size(host),
-                HostSide::Client(host) => dirt_stack_size(host),
-            };
+            let stack = dirt_stack_size(context);
             self.0.lock().unwrap().push((event.cause, stack));
         }
     }
@@ -146,7 +143,6 @@ mod tests {
                     game.res.clone(),
                     game.pack.clone(),
                     game.options.clone(),
-                    game.settings.clone(),
                     Arc::new(sunrise_world::datafix::progress::UpgradeProgress::new()),
                 )
                 .unwrap();
@@ -198,14 +194,10 @@ mod tests {
             }
             fn default_components_bound(
                 &self,
-                host: HostSide<'_>,
+                context: &dyn ReloadContext,
                 event: &mut DefaultComponentsBoundEvent,
             ) {
-                assert!(matches!(&host, HostSide::Client(_)));
-                let stack = match host {
-                    HostSide::Server(host) => dirt_stack_size(host),
-                    HostSide::Client(host) => dirt_stack_size(host),
-                };
+                let stack = dirt_stack_size(context);
                 assert_eq!(
                     stack,
                     Some(mod_api::Tag::Int(99)),
@@ -220,7 +212,7 @@ mod tests {
                 assert!(event.cause.should_update_static_data());
                 self.0.lock().unwrap().push("bound");
             }
-            fn tags_updated(&self, _: HostSide<'_>, _: &mut TagsUpdatedEvent) {
+            fn tags_updated(&self, _: &dyn ReloadContext, _: &mut TagsUpdatedEvent) {
                 self.0.lock().unwrap().push("tags");
             }
         }

@@ -38,10 +38,17 @@ impl Game<'_> {
         if event.state != ElementState::Pressed {
             return None;
         }
+        self.edit_shortcut_for_letter(clipboard::shortcut_letter(
+            &event.logical_key,
+            event.physical_key,
+        ))
+    }
+
+    pub(super) fn edit_shortcut_for_letter(&self, letter: Option<char>) -> Option<EditShortcut> {
         let m = self.modifiers;
         let held = |keys: [KeyCode; 2]| keys.iter().any(|k| self.physical_keys.contains(k));
         clipboard::edit_shortcut(
-            clipboard::shortcut_letter(&event.logical_key, event.physical_key),
+            letter,
             self.has_control_down_with_quirk(),
             m.shift_key() || held([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
             m.alt_key() || held([KeyCode::AltLeft, KeyCode::AltRight]),
@@ -81,7 +88,8 @@ impl Game<'_> {
     /// fields, the LAN port, a dialog's input, the command box and the edit
     /// screens of the jigsaw, structure and test blocks.
     pub(super) fn text_input_focused(&self) -> bool {
-        (self.screen == Screen::Chat && self.title.is_none())
+        self.mounted_widget_captures_input()
+            || (self.screen == Screen::Chat && self.title.is_none())
             || self.sign_edit.is_some()
             || matches!(self.book, Some(super::books::BookScreen::Edit { .. }))
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)

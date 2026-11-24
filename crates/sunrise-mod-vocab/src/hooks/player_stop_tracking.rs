@@ -1,5 +1,4 @@
 //! The `player_stop_tracking` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0148
 
 pub trait Hooks {
     /// A client stopped tracking an entity (NeoForge's
@@ -15,14 +14,15 @@ pub trait Hooks {
     /// next tracking pass. The entity is not necessarily still there, and a
     /// player who left is gone. As in `player_start_tracking`, the engine is
     /// walking its tracker: don't spawn, remove or teleport entities from
-    /// here. No player's state is swapped in. Server-side. Named injections
-    /// request `hook_version = 2`.
+    /// here. No player's state is swapped in. Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_player_stop_tracking",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         version = 2,
         neoforge = "PlayerEvent.StopTracking",
         cancellable = false
     )]
-    fn player_stop_tracking();
+    fn player_stop_tracking(player: u128, name: &str, entity: u32, uuid: u128, kind: &str);
 }

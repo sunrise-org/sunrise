@@ -14,7 +14,6 @@ pub trait LevelBlockUpdatesBackend {
     /// block state there. Only the change means anything, not the number. Reads parked
     /// levels. None for a stale handle, a client, an unloaded position and one outside build
     /// height. Constant time, no allocation.
-    #[access(WorldOnly)]
     fn level_capability_generation(&self, level: LevelRef, pos: [i32; 3]) -> Option<u64>;
 }
 /// The handles' writes of the `level_block_updates` area, implemented by the game and reached through [`BackendMut`].
@@ -31,7 +30,6 @@ pub trait LevelBlockUpdatesBackendMut {
     /// one changes nothing. Block and block entity changes, chunk unloads and mod switches
     /// need no call: the cache sees them itself. False, with nothing changed, off the level in
     /// place, for a stale handle, on a client and for a position that isn't loaded.
-    #[access(WorldOnly)]
     fn level_invalidate_capabilities(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
     /// Side: server.
     /// Send `ServerLevel.destroyBlockProgress` in this level: stages 0..9 show a crack,
@@ -39,7 +37,6 @@ pub trait LevelBlockUpdatesBackendMut {
     /// Inside a transaction, notices wait for the root commit in call order; abort publishes
     /// no notice. Outside a transaction this executes immediately. True means accepted or
     /// queued, not already delivered.
-    #[access(WorldOnly)]
     fn level_set_break_progress(
         &mut self,
         level: LevelRef,
@@ -57,7 +54,6 @@ pub trait LevelBlockUpdatesBackendMut {
     /// Inside a transaction this waits for the root commit; abort publishes no notice.
     /// Outside a transaction this executes immediately. True means accepted or queued,
     /// not already delivered.
-    #[access(WorldOnly)]
     fn level_send_block_updated(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
     /// Side: server.
     /// Queues block event `a`, `b` for `block` at `pos`, as `ServerLevel.blockEvent(pos, block,
@@ -68,7 +64,6 @@ pub trait LevelBlockUpdatesBackendMut {
     /// that isn't ticking waits for it. True means queued, not handled. False for a block
     /// key no block has, a position outside the level's build height, a parked level, a stale
     /// handle or a client.
-    #[access(WorldOnly)]
     fn level_block_event(
         &mut self,
         level: LevelRef,
@@ -86,7 +81,6 @@ pub trait LevelBlockUpdatesBackendMut {
     /// changes without its state changing). `source` is the state whose block vanilla passes as
     /// the one that changed. Typed errors refuse stale/unavailable levels or invalid states
     /// without mutation; Ok(false) means an unloaded or out-of-height position.
-    #[access(WorldOnly)]
     fn level_update_neighbors(
         &mut self,
         level: LevelRef,
@@ -99,7 +93,6 @@ pub trait LevelBlockUpdatesBackendMut {
     /// as a diode tells the block in front of it before updating that block's neighbours.
     /// Typed errors refuse stale/unavailable levels or invalid states; Ok(false) means an
     /// unloaded or out-of-height position. Errors never mutate the level.
-    #[access(WorldOnly)]
     fn level_neighbor_changed(
         &mut self,
         level: LevelRef,

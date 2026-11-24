@@ -36,7 +36,7 @@ use sunrise_client::{
     collisions::{self, LookupCollisions, no_collision_empty},
     items::{ItemStack, Items},
     mobs::{
-        MobTypes, Species,
+        MobType, MobTypes, Species,
         data::MobData,
         spawn_rules::SpawnLevel,
         spawn_selection::{
@@ -46,7 +46,7 @@ use sunrise_client::{
         },
         spawner::{
             SpawnDataExt, Spawner, SpawnerAdded, SpawnerEvent, SpawnerExt, SpawnerLevel,
-            SpawnerSpawn,
+            SpawnerSpawn, SpawnerTypeFacts,
         },
         species::{self, Baby},
         trial_spawner::{
@@ -99,8 +99,8 @@ struct Shared<'a> {
     structures: &'a StructureSpawns,
     collision: &'a BlockCollisionRegistry<'a>,
     air: BlockStateId,
-    /// Every entity type id (`entity-types.json`).
-    entity_types: &'a HashSet<String>,
+    /// Every entity type's registry row (`entity-types.json`).
+    entity_types: &'a HashMap<String, SpawnerTypeFacts>,
 }
 struct World<'a> {
     border: sunrise_core::geometry::border::BorderGeometry,
@@ -261,14 +261,8 @@ impl NaturalLevel for World<'_> {
     fn has_ceiling(&self) -> bool {
         self.dimension.id == "minecraft:the_nether"
     }
-    fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)> {
-        let t = self.s.types.types.get(entity)?;
-        Some((
-            t.species,
-            t.width as f32,
-            t.height as f32,
-            Category::from_name(&t.category),
-        ))
+    fn mob_type(&self, entity: &str) -> Option<&MobType> {
+        self.s.types.types.get(entity)
     }
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
         self.biome_info(x, y, z).map(|b| &b.spawns)
@@ -341,11 +335,14 @@ impl NaturalLevel for World<'_> {
                 .any(|(id, b)| id == "minecraft:shulker" && b.intersects(grown))
     }
     fn unobstructed(&self, bounds: Aabb) -> bool {
+        let Ok(shape) = sunrise_core::geometry::VoxelShape::from_box(bounds) else {
+            return false;
+        };
         !self
             .entities
             .borrow()
             .iter()
-            .any(|(_, b)| b.intersects(bounds))
+            .any(|(_, b)| spawn_selection::blocks_spawn_shape(&shape, bounds, *b))
     }
     fn spawn_mobs(&self) -> bool {
         self.spawn_mobs
@@ -374,8 +371,8 @@ impl SpawnerLevel for World<'_> {
     fn spawner_blocks_work(&self) -> bool {
         self.spawners_work
     }
-    fn entity_exists(&self, id: &str) -> bool {
-        self.s.types.types.contains_key(id) || self.s.entity_types.contains(id)
+    fn spawner_type(&self, id: &str) -> Option<SpawnerTypeFacts> {
+        self.s.entity_types.get(id).copied()
     }
     fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
         self.entities
@@ -535,8 +532,9 @@ pub fn main() -> sunrise_client::Result<()> {
     let facts = BlockFacts::load(root, registry)?;
     let data = MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        &facts,
-    );
+        facts.states.len(),
+        false,
+    )?;
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     // Trial spawner rewards: the loot tables and the configs.
@@ -556,17 +554,15 @@ pub fn main() -> sunrise_client::Result<()> {
     ))?;
     let structures = StructureSpawns::load(root);
     let collision = collisions::load(root, registry)?;
-    let entity_types: HashSet<String> = fs::read(root.join("entity-types.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .and_then(|v| {
-            v.as_object().map(|o| {
-                o.keys()
-                    .map(|k| sunrise_client::command::args::normalize(k))
-                    .collect()
-            })
-        })
-        .unwrap_or_default();
+    let builtin = sunrise_protocol::registry::Builtin::load(&root.join("registries.json"))?;
+    let ids = &builtin
+        .get("minecraft:entity_type")
+        .ok_or("missing entity type registry")?
+        .names;
+    let entity_types = SpawnerTypeFacts::load_registered(
+        root,
+        ids.iter().map(String::as_str).filter(|id| !id.is_empty()),
+    )?;
     let shared = Shared {
         facts: &facts,
         data: &data,
@@ -714,9 +710,10 @@ pub fn main() -> sunrise_client::Result<()> {
                 .collect();
             // EntityType.create makes no monsters in peaceful.
             if get("difficulty", "normal") == "peaceful"
-                && types.types.get(parts[0]).is_some_and(|t| {
-                    !sunrise_client::mobs::spawn_rules::allowed_in_peaceful(t.species)
-                })
+                && types
+                    .types
+                    .get(parts[0])
+                    .is_some_and(|t| !t.allowed_in_peaceful())
             {
                 continue;
             }
@@ -792,11 +789,7 @@ pub fn main() -> sunrise_client::Result<()> {
         let mut spawn = |l: &World, r: &SpawnRequest, _: &mut LegacyRandom| -> Option<Spawned> {
             let bounds = neutral_box(l, r);
             l.entities.borrow_mut().push((r.entity.to_owned(), bounds));
-            Some(Spawned {
-                bounds,
-                school: true,
-                cluster_size: None,
-            })
+            Some(Spawned { school: true })
         };
         let mode = get("mode", "chunk");
         if mode == "spawner" {
@@ -910,6 +903,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     chunk,
                     [v[0], v[1], v[2]],
                     &mut spawn,
+                    &mut |_, _, vanilla| vanilla,
                     &mut trace,
                 );
             } else {
@@ -924,6 +918,7 @@ pub fn main() -> sunrise_client::Result<()> {
                         &categories,
                         chunk,
                         &mut spawn,
+                        &mut |_, _, vanilla| vanilla,
                         &mut trace,
                     );
                 }
@@ -980,7 +975,6 @@ fn spawner_case(
                 ));
                 Some(SpawnerAdded {
                     id: spawned.len() as u32,
-                    bounds,
                     mob: true,
                 })
             };

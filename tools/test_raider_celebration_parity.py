@@ -52,9 +52,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='sunrise-raider-parity-') as scratch:
         env = integration_env.game_environment(os.environ, scratch)
         env.update(SUNRISE_RAIDER_SYNC_INPUT=str(inputs), SUNRISE_RAIDER_SYNC_OUTPUT=str(build / 'rust.txt'))
-        harness.run_logged(['cargo', 'test', '--locked', '-p', 'sunrise-client', '--lib',
+        harness.run_logged([lab.parity_fixtures(),
                             'game::remote_mob_data::tests::raider_celebration_parity_fixture',
-                            '--', '--exact', '--ignored'], build, 'rust', env=env)
+                            '--exact', '--ignored'], build, 'rust', env=env)
     matched = harness.compare(build / 'client.txt', build / 'rust.txt', len(rows))
     base.ensure_sources_unchanged(sources, hashes)
     if lab.digest(inputs, 'sha256') != input_hash:

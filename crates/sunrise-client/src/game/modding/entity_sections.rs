@@ -16,49 +16,65 @@
 //! filed under and tells it before the write returns, so two moves told apart are two crossings,
 //! and a move out and back is two.
 //!
-//! A listener runs synchronously after the new section is filed. What it moves or removes is
-//! deferred by the surrounding entity write and is never re-entered from its own call; listeners
-//! should queue such work themselves until the write completes.
+//! A listener runs synchronously after the new section is filed. Crossings from nested writes
+//! wait for the current event's listeners to return, then are told in write order before the
+//! owning boundary releases its rows. Each crossing carries the placement of the move that filed
+//! it: a read of that entity while it is told answers that placement, and a later move, or the
+//! entity's removal, neither rewrites nor deletes a crossing already filed (the no-reentry rule
+//! rules out telling it at its write). Listeners should defer moving or removing the crossing
+//! entity itself until its write completes.
 //!
-//! With no listener each boundary is one subscription check and nothing is filed. With one, a
-//! boundary is a hash lookup and the reusable crossing record is told without a per-frame scan.
+//! Section entry order (`EntitySection` keeps its entities in the order they entered it, which
+//! a chunk's save follows) does not depend on a listener: a server boundary that knows both
+//! ends of the write compares their section coordinates (integers) and, only on a crossing,
+//! tells the residency table (`EntityTable::entered_section`, one hash lookup per crossing).
+//! A write inside one section costs the compare alone.
+//!
+//! With no listener a boundary is that compare and one subscription check, and nothing is
+//! filed. With one, a boundary is a hash lookup and the reusable crossing record is told
+//! without a per-frame scan.
 
 #[path = "entity_sections/observer_cache.rs"]
 pub(super) mod observer_cache;
+#[path = "entity_sections/player.rs"]
+mod player;
+pub(super) use player::PlayerSectionObserver;
 
 use super::Game;
 use crate::mobs::living::section_writes::PositionWrite;
 use mod_api::__private::game::BackendRefOf;
-use mod_api::{DimensionKey, EntityRef, WorldEpoch};
-use std::collections::HashMap;
+use mod_api::{DimensionKey, EntityRef, EntityResidency, WorldEpoch};
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
 
 #[cfg(test)]
 #[path = "entity_sections/tests.rs"]
 mod tests;
 
-/// `SectionPos.blockToSectionCoord(Mth.floor(v))`: `Mth.floor` truncates (saturating, NaN to 0,
-/// as Java's cast does) and steps down for a negative fraction with Java's wrapping `int`.
+/// `SectionPos.blockToSectionCoord(Mth.floor(v))`.
 fn section_coord(v: f64) -> i32 {
-    let truncated = v as i32;
-    let block = if v < f64::from(truncated) {
-        truncated.wrapping_sub(1)
-    } else {
-        truncated
-    };
-    block >> 4
+    sunrise_core::mth::floor(v) >> 4
 }
 
 fn section_of([x, y, z]: [f64; 3]) -> [i32; 3] {
     [section_coord(x), section_coord(y), section_coord(z)]
 }
 
-/// A section change a boundary found: the entity, its old and its new section.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether a write from `from` to `to` leaves the section it was in: six integer shifts and a
+/// compare, no allocation and no lookup.
+pub(super) fn crossed(from: [f64; 3], to: [f64; 3]) -> bool {
+    section_of(from) != section_of(to)
+}
+
+/// A section change a boundary found: the entity, its old and its new section, and where it
+/// was put by the move that filed it. A crossing queued behind a listener keeps its own
+/// placement: a later move or removal of the entity neither rewrites nor deletes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Crossing {
     pub(super) id: u32,
     pub(super) old: [i32; 3],
     pub(super) new: [i32; 3],
+    pub(super) at: [f64; 3],
 }
 
 /// Where a boundary is: the world open and the level the entity is in.
@@ -75,15 +91,16 @@ pub(super) struct EntitySections {
     epoch: Option<WorldEpoch>,
     /// Each entity's level and section.
     filed: HashMap<u32, (DimensionKey, [i32; 3])>,
-    /// Crossings raised while a listener is already running. Ordinary writes are told
-    /// immediately; a nested write waits until the current callback returns.
-    queue: Vec<Crossing>,
-    /// The batch being told; kept for its capacity.
-    telling: Vec<Crossing>,
-    /// A telling is under way: a listener's moves wait for the next one.
+    /// Not-yet-told crossings. Keep them in the table so a nested removal can forget
+    /// its pending moves even while an earlier one is being told.
+    queue: VecDeque<Crossing>,
+    /// A telling is under way: crossings from nested writes join the end of the queue.
     busy: bool,
     /// The mobs' position updates during their family's tick; kept for its capacity.
     pub(super) ticked: Vec<PositionWrite>,
+    /// Mobs that crossed into another section during their family's tick, in the order of the
+    /// writes; told to the residency table once the pass has its rows back. Kept for its capacity.
+    pub(super) entered: Vec<(u32, [f64; 3])>,
     /// A projectile row is lent during its individual tick. Position reads during its write
     /// boundary use this value until the row is restored.
     pub(super) write_position: Option<(u32, [f64; 3])>,
@@ -113,8 +130,15 @@ impl EntitySections {
     /// `setPosRaw`: entity `id` is at `to` now. Filed under another section of the same level,
     /// that is a crossing. One not filed in this level yet (it changed level, or its join is
     /// still to be told) is filed where it was, `from` when the boundary knows it, so a move
-    /// before its join is told is a crossing too; otherwise it is filed untold.
-    pub(super) fn moved(&mut self, scope: Scope, id: u32, from: Option<[f64; 3]>, to: [f64; 3]) {
+    /// before its join is told is a crossing too; otherwise it is filed untold. Returns
+    /// whether a crossing was queued.
+    pub(super) fn moved(
+        &mut self,
+        scope: Scope,
+        id: u32,
+        from: Option<[f64; 3]>,
+        to: [f64; 3],
+    ) -> bool {
         let new = section_of(to);
         let old = match self.table(scope).entry(id) {
             Entry::Occupied(mut entry) => {
@@ -122,7 +146,7 @@ impl EntitySections {
                 if *level != scope.level {
                     *level = scope.level;
                     *section = new;
-                    return;
+                    return false;
                 }
                 std::mem::replace(section, new)
             }
@@ -130,63 +154,180 @@ impl EntitySections {
                 entry.insert((scope.level, new));
                 match from {
                     Some(from) => section_of(from),
-                    None => return,
+                    None => return false,
                 }
             }
         };
-        if old != new {
-            self.queue.push(Crossing { id, old, new });
+        if old == new {
+            return false;
         }
+        self.queue.push_back(Crossing {
+            id,
+            old,
+            new,
+            at: to,
+        });
+        true
     }
 
     /// `id` is gone (removed, or respawned as a new entity under the same id): it is filed
     /// again where it next appears, untold.
     pub(super) fn forget(&mut self, id: u32) {
+        // Crossings already filed stay queued: each was a committed move (`onMove` posts at
+        // the filed move, before any later removal).
         self.filed.remove(&id);
-        // A nested listener may have queued a crossing immediately before it
-        // removed this entity.  Do not deliver that stale write on the next
-        // boundary (the hook never fires for an entity being removed).
-        self.queue.retain(|crossing| crossing.id != id);
     }
 
-    /// The crossings to tell now, or none while a telling is under way.
-    fn begin_telling(&mut self) -> Option<Vec<Crossing>> {
+    /// Claim dispatch until the queue runs out; never re-enter a listener's dispatch.
+    fn begin_telling(&mut self) -> bool {
         if self.busy || self.queue.is_empty() {
-            return None;
+            return false;
         }
         self.busy = true;
-        let mut batch = std::mem::take(&mut self.telling);
-        std::mem::swap(&mut batch, &mut self.queue);
-        Some(batch)
+        true
     }
 
-    /// The telling is over; `batch` goes back for its capacity.
-    fn end_telling(&mut self, mut batch: Vec<Crossing>) {
-        batch.clear();
-        self.telling = batch;
+    fn end_telling(&mut self) {
         self.busy = false;
     }
 }
 
-/// The lightweight host used while a mob's world view is borrowed.  Entity
-/// reads are answered from the write that is currently being delivered; all
-/// other host operations retain their normal typed refusal instead of trying
-/// to borrow the game through the live mob view.
-struct LiveSectionHost {
-    epoch: WorldEpoch,
-    current: Option<(u32, [f64; 3])>,
+#[derive(Clone, Copy)]
+struct SectionWriter {
+    entity: EntityRef,
+    residency: EntityResidency,
+    position: [f64; 3],
+    player: Option<PlayerMoveState>,
 }
 
-mod_api::impl_host_areas!(LiveSectionHost);
-mod_api::impl_server_host_areas!(LiveSectionHost);
-mod_api::impl_backend_areas!(LiveSectionHost, except(entity_position));
+#[derive(Clone, Copy)]
+struct PlayerMoveState {
+    local_player: Option<mod_api::PlayerRef>,
+    on_ground: bool,
+    velocity: [f64; 3],
+}
 
-impl mod_api::prelude::EntityPositionBackend for LiveSectionHost {
+/// The Host used while the entity's world view is borrowed. It answers only
+/// reads from the current write and immutable startup paths; other operations
+/// retain their typed refusal.
+struct LiveSectionHost {
+    writer: Option<SectionWriter>,
+    config_root: std::sync::Arc<std::path::Path>,
+}
+
+impl LiveSectionHost {
+    fn new(writer: Option<SectionWriter>) -> Self {
+        Self {
+            writer,
+            config_root: mod_api::__private::RegistrationData::resolved_config_dir(),
+        }
+    }
+}
+
+mod_api::impl_host_areas!(LiveSectionHost, except(config, datafix));
+impl mod_api::prelude::ConfigHost for LiveSectionHost {
+    fn config_dir(&self) -> &std::path::Path {
+        &self.config_root
+    }
+}
+impl mod_api::prelude::DatafixHost for LiveSectionHost {
+    fn upgrade_nbt(
+        &self,
+        kind: mod_api::NbtDataType,
+        data_version: i32,
+        nbt: mod_api::Compound,
+    ) -> Result<mod_api::Compound, mod_api::NbtUpgradeError> {
+        super::Game::upgrade_nbt(kind, data_version, nbt)
+    }
+}
+mod_api::impl_server_host_areas!(LiveSectionHost);
+mod_api::impl_client_host_areas!(
+    LiveSectionHost,
+    except(client_render, menus, network, scoreboard, services)
+);
+impl mod_api::prelude::ScoreboardClientHost for LiveSectionHost {
+    fn client_scoreboard(
+        &self,
+    ) -> Result<Option<&dyn mod_api::ClientScoreboard>, mod_api::ClientSessionReadError> {
+        Err(mod_api::NoBackend::no_backend())
+    }
+}
+mod_api::impl_backend_areas!(
+    LiveSectionHost,
+    partial(
+        entity_position,
+        entity_residency,
+        entity_on_ground,
+        entity_velocity
+    )
+);
+
+impl mod_api::prelude::NetworkClientHost for LiveSectionHost {
+    fn build_play_packet(
+        &self,
+        request: &mod_api::PlayPacketRequest,
+    ) -> Result<mod_api::ServerboundPlayPacket, mod_api::PacketBuildError> {
+        Game::build_play_packet(request)
+    }
+
+    fn container_click(
+        &self,
+        _: &mod_api::ContainerClickRequest,
+    ) -> Result<mod_api::ServerboundPlayPacket, mod_api::PacketBuildError> {
+        Err(mod_api::NoBackend::no_backend())
+    }
+}
+
+impl mod_api::prelude::ClientRenderClientHost for LiveSectionHost {
+    fn biome_tint(
+        &self,
+        _: [i32; 3],
+        _: mod_api::ColorResolver,
+    ) -> Result<u32, mod_api::LevelReadError> {
+        Err(mod_api::LevelReadError::Unavailable)
+    }
+}
+
+impl mod_api::prelude::MenusClientHost for LiveSectionHost {
+    fn local_player(&self) -> Option<mod_api::PlayerRef> {
+        self.writer?.player?.local_player
+    }
+}
+
+impl mod_api::prelude::ServicesClientHost for LiveSectionHost {
+    fn client_executor(&self) -> Option<mod_api::ClientExecutor> {
+        None
+    }
+}
+
+// The generated read backend forwards these snapshots and answers the
+// standard no-backend result for reads that would need the borrowed world.
+impl LiveSectionHost {
     fn entity_position(&self, entity: EntityRef) -> Option<[f64; 3]> {
-        (entity.epoch() == self.epoch)
-            .then_some(self.current)
-            .flatten()
-            .and_then(|(id, position)| (id == entity.id()).then_some(position))
+        let writer = self.writer.filter(|writer| writer.entity == entity)?;
+        Some(writer.position)
+    }
+
+    fn entity_residency(&self, entity: EntityRef) -> EntityResidency {
+        self.writer
+            .filter(|writer| writer.entity == entity)
+            .map_or(EntityResidency::Gone, |writer| writer.residency)
+    }
+
+    fn entity_on_ground(&self, entity: EntityRef) -> Option<bool> {
+        let player = self
+            .writer
+            .filter(|writer| writer.entity == entity)?
+            .player?;
+        Some(player.on_ground)
+    }
+
+    fn entity_velocity(&self, entity: EntityRef) -> Option<[f64; 3]> {
+        let player = self
+            .writer
+            .filter(|writer| writer.entity == entity)?
+            .player?;
+        Some(player.velocity)
     }
 }
 
@@ -199,6 +340,44 @@ impl mod_api::Host for LiveSectionHost {
 }
 
 impl mod_api::ServerHost for LiveSectionHost {}
+impl mod_api::ClientHost for LiveSectionHost {}
+
+fn tell_live(sections: &std::cell::RefCell<EntitySections>, writer: SectionWriter, server: bool) {
+    if !sections.borrow_mut().begin_telling() {
+        return;
+    }
+    for crossing in std::iter::from_fn(|| sections.borrow_mut().queue.pop_front()) {
+        let entity = EntityRef::new(writer.entity.epoch(), crossing.id);
+        // The crossing's own placement is what a read of that entity answers.
+        let at = SectionWriter {
+            entity,
+            position: crossing.at,
+            ..if entity == writer.entity {
+                writer
+            } else {
+                SectionWriter {
+                    residency: EntityResidency::Gone,
+                    player: None,
+                    ..writer
+                }
+            }
+        };
+        let mut host = LiveSectionHost::new(Some(at));
+        let host = if server {
+            mod_api::HostSide::Server(&mut host)
+        } else {
+            mod_api::HostSide::Client(&mut host)
+        };
+        mod_api::dispatch_entity_entering_section(
+            host,
+            entity,
+            crossing.old,
+            crossing.new,
+            crossing.old[0] != crossing.new[0] || crossing.old[2] != crossing.new[2],
+        );
+    }
+    sections.borrow_mut().end_telling();
+}
 
 /// Delivers a mob's captured teleport at the write boundary.  The observer
 /// owns only the section table, so it can run while the mob's borrowed world
@@ -206,7 +385,7 @@ impl mod_api::ServerHost for LiveSectionHost {}
 pub(crate) struct LiveSectionObserver {
     sections: std::rc::Rc<std::cell::RefCell<EntitySections>>,
     scope: Scope,
-    current: Option<(u32, [f64; 3])>,
+    current: Option<(u32, EntityResidency)>,
 }
 
 impl LiveSectionObserver {
@@ -221,30 +400,12 @@ impl LiveSectionObserver {
         }
     }
 
-    fn tell(&mut self) {
-        let Some(mut batch) = self.sections.borrow_mut().begin_telling() else {
-            return;
-        };
-        let mut host = LiveSectionHost {
-            epoch: self.scope.epoch,
-            current: self.current,
-        };
-        for crossing in &batch {
-            host.current = self.current.filter(|(id, _)| *id == crossing.id);
-            let chunk_changed =
-                crossing.old[0] != crossing.new[0] || crossing.old[2] != crossing.new[2];
-            mod_api::dispatch_entity_entering_section(
-                mod_api::HostSide::Server(&mut host),
-                EntityRef::new(self.scope.epoch, crossing.id),
-                crossing.old,
-                crossing.new,
-                chunk_changed,
-            );
-        }
-        batch.clear();
-        let mut sections = self.sections.borrow_mut();
-        sections.telling = batch;
-        sections.busy = false;
+    pub(in crate::game) fn epoch(&self) -> WorldEpoch {
+        self.scope.epoch
+    }
+
+    pub(in crate::game) fn set_residency(&mut self, id: u32, residency: EntityResidency) {
+        self.current = Some((id, residency));
     }
 }
 
@@ -255,15 +416,32 @@ impl crate::mobs::living::section_writes::WriteObserver for LiveSectionObserver 
         from: sunrise_core::geometry::Vec3,
         to: sunrise_core::geometry::Vec3,
     ) {
-        self.current = Some((id, [to.x, to.y, to.z]));
-        self.sections.borrow_mut().moved(
-            self.scope,
-            id,
-            Some([from.x, from.y, from.z]),
-            [to.x, to.y, to.z],
+        let residency = self
+            .current
+            .filter(|(current_id, _)| *current_id == id)
+            .map_or_else(
+                || {
+                    if id == 0 {
+                        EntityResidency::Gone
+                    } else {
+                        EntityResidency::Busy
+                    }
+                },
+                |(_, residency)| residency,
+            );
+        self.sections
+            .borrow_mut()
+            .moved(self.scope, id, Some(from.components()), to.components());
+        tell_live(
+            &self.sections,
+            SectionWriter {
+                entity: EntityRef::new(self.scope.epoch, id),
+                residency,
+                position: to.components(),
+                player: None,
+            },
+            true,
         );
-        self.tell();
-        self.current = None;
     }
 }
 
@@ -279,8 +457,25 @@ impl Game<'_> {
         })
     }
 
+    /// `Callback.onMove` for the residency table: a server entity's write from `from` to `to`
+    /// that leaves its section puts it at the end of the section it enters, whether or not a
+    /// hook listens. Cost: the integer compare of [`crossed`]; the table is touched only on a
+    /// crossing.
+    pub(super) fn entity_section_entered(&mut self, id: u32, from: [f64; 3], to: [f64; 3]) {
+        if crossed(from, to) && self.is_logical_server() {
+            self.resident_entities
+                .table
+                .get_mut()
+                .entered_section(id, to);
+        }
+    }
+
     /// Entity `id` was put from `from` (when known) at `to`; tell it immediately after filing.
     pub(super) fn entity_section_moved(&mut self, id: u32, from: Option<[f64; 3]>, to: [f64; 3]) {
+        self.pick_section_move(id, to);
+        if let Some(from) = from {
+            self.entity_section_entered(id, from, to);
+        }
         if let Some(scope) = self.entity_section_scope() {
             self.native_lifecycle
                 .entity_sections
@@ -289,32 +484,9 @@ impl Game<'_> {
         }
     }
 
-    /// A server player's moves this tick (`moves`: each one's delta, in order), which left it at
-    /// `end`: each is one `setPos`, so a move out of a section and one back are two crossings.
-    pub(super) fn entity_section_walked(
-        &mut self,
-        id: u32,
-        end: [f64; 3],
-        moves: impl Iterator<Item = [f64; 3]> + Clone,
-    ) {
-        let Some(scope) = self.entity_section_scope() else {
-            return;
-        };
-        let mut from = moves
-            .clone()
-            .fold(end, |p, d| [p[0] - d[0], p[1] - d[1], p[2] - d[2]]);
-        for d in moves {
-            let to = [from[0] + d[0], from[1] + d[1], from[2] + d[2]];
-            self.native_lifecycle
-                .entity_sections
-                .moved(scope, id, Some(from), to);
-            self.tell_entity_sections();
-            from = to;
-        }
-    }
-
     /// Entity `id`'s position was written: it is wherever it is now (any kind, either side).
     pub(super) fn entity_section_moved_id(&mut self, id: u32) {
+        self.pick_section_sync_moved_id(id);
         let Some(scope) = self.entity_section_scope() else {
             return;
         };
@@ -328,6 +500,7 @@ impl Game<'_> {
 
     /// Entity `id` is gone, or replaced under the same id: it starts over untold.
     pub(super) fn entity_section_forget(&mut self, id: u32) {
+        self.pick_section_remove(id);
         self.native_lifecycle.entity_sections.forget(id);
         self.native_lifecycle
             .entity_sections
@@ -341,60 +514,84 @@ impl Game<'_> {
     /// caller restores the pass before entering here. The resident row is
     /// temporarily moved to each recorded write while its crossing is told;
     /// this gives listeners the same position they would see at the write and
-    /// preserves a listener's own position change.
+    /// preserves a listener's own position change. Returns whether callbacks
+    /// wrote the mob list, excluding the temporary position staging itself.
     pub(super) fn entity_sections_ticked_live(
         &mut self,
-        sections: &mut EntitySections,
         moves: &mut Vec<PositionWrite>,
-    ) {
+        mut hint: Option<usize>,
+    ) -> bool {
         let Some(scope) = self.entity_section_scope() else {
             moves.clear();
-            return;
+            return false;
         };
-        let mut indices = sunrise_client::fast_hash::FxHashMap::default();
-        indices.extend(
-            self.mobs
-                .iter()
-                .enumerate()
-                .map(|(index, mob)| (mob.join, index)),
-        );
+        let mut written = false;
         for write in moves.drain(..) {
             if write.delivered {
                 continue;
             }
-            let Some(&index) = indices.get(&write.join) else {
-                sections.forget(write.id);
+            let Some(index) = hint
+                .filter(|&index| {
+                    self.mobs
+                        .get(index)
+                        .is_some_and(|mob| mob.join == write.join)
+                })
+                .or_else(|| self.mobs.locate(write.join))
+            else {
+                self.entity_section_forget(write.id);
                 continue;
             };
-            let final_position = self.mobs[index].position;
-            self.mobs.update(index, |mob| mob.position = write.to);
-            sections.moved(
+            if self.mobs[index].removed {
+                self.entity_section_forget(write.id);
+                continue;
+            }
+            hint = Some(index);
+            let sections = &mut self.native_lifecycle.entity_sections;
+            let crossed = sections.moved(
                 scope,
                 write.id,
-                write.from.map(|from| [from.x, from.y, from.z]),
-                [write.to.x, write.to.y, write.to.z],
+                write.from.map(|from| from.components()),
+                write.to.components(),
             );
-            self.tell_entity_sections_in(sections);
-            indices.clear();
-            indices.extend(
-                self.mobs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, mob)| (mob.join, index)),
-            );
-            if let Some(&index) = indices.get(&write.join) {
-                self.mobs.update(index, |mob| {
-                    if mob.position == write.to {
-                        mob.position = final_position;
+            if !crossed || sections.busy {
+                continue;
+            }
+            let final_position = self.mobs[index].position;
+            let staged = final_position != write.to;
+            if staged {
+                self.mobs.update(index, |mob| mob.position = write.to);
+            }
+            let staged_stamp = self.mobs.stamp();
+            self.tell_entity_sections();
+            written |= self.mobs.stamp() != staged_stamp;
+            if staged {
+                let restore = if self
+                    .mobs
+                    .get(index)
+                    .is_some_and(|mob| mob.join == write.join)
+                {
+                    Some(index)
+                } else {
+                    self.mobs.locate(write.join)
+                };
+                if let Some(index) = restore {
+                    hint = Some(index);
+                    if !self.mobs[index].removed && self.mobs[index].position == write.to {
+                        self.mobs.update(index, |mob| mob.position = final_position);
                     }
-                });
+                }
             }
         }
+        written
     }
 
     /// Entity `id`'s position was written from `from` to `to` (`setPosRaw`) inside a family tick
     /// or while a rider is carried by a vehicle teleport. File and tell it at this write.
     pub(super) fn entity_section_step(&mut self, id: u32, from: [f64; 3], to: [f64; 3]) {
+        if crossed(from, to) {
+            self.pick_section_move(id, to);
+        }
+        self.entity_section_entered(id, from, to);
         if id != 0
             && let Some(scope) = self.entity_section_scope()
         {
@@ -491,8 +688,8 @@ impl Game<'_> {
     }
 
     /// A client handles one packet from its server ([`Game::apply_packet`]). A packet that adds,
-    /// moves or removes an entity is a position-update boundary: `handleAddEntity` files the
-    /// entity untold, a move (`handleMoveEntity`, `handleEntityPositionSync`,
+    /// moves or removes an entity is a position-update boundary. The add handler files an
+    /// admitted entity untold; a move (`handleMoveEntity`, `handleEntityPositionSync`,
     /// `handleTeleportEntity`, `handleMovePlayer`'s `PlayerPosition`, a vehicle's) is told when
     /// it put the entity in another section, and `handleRespawn`'s new player starts over.
     /// An entity a move only starts interpolating moves at the client's entity tick.
@@ -509,62 +706,39 @@ impl Game<'_> {
                 self.entity_section_forget(id as u32);
             }
         }
-        let packet_section = match &packet {
-            C::AddEntity(p) => Some((true, p.id as u32, p.position)),
-            _ => None,
-        };
         let respawned = matches!(packet, C::Respawn(_));
         let result = self.apply_packet(packet);
-        if result.is_ok()
-            && let Some((joined, id, at)) = packet_section
-        {
-            if joined {
-                self.entity_section_joined(id, at);
-            } else {
-                self.entity_section_moved_id(id);
-            }
-        }
         if respawned {
             self.entity_section_forget(self.own_entity_id() as u32);
         }
         result
     }
 
-    /// Tells `entity_entering_section` each crossing queued by a nested write, in order. Called
-    /// from inside a listener it does nothing: the outer write is still in progress.
+    /// Deliver all crossings while their owning rows are available. A nested write only
+    /// enqueues; this dispatch picks it up after the current callback, with the full Host.
     pub(super) fn tell_entity_sections(&mut self) {
-        let Some(batch) = self.native_lifecycle.entity_sections.begin_telling() else {
+        if !self.native_lifecycle.entity_sections.begin_telling() {
             return;
-        };
-        if let Some(epoch) = self.native_lifecycle.epoch() {
-            for c in &batch {
+        }
+        while let Some(c) = self.native_lifecycle.entity_sections.queue.pop_front() {
+            if let Some(epoch) = self.native_lifecycle.epoch() {
                 let chunk_changed = c.old[0] != c.new[0] || c.old[2] != c.new[2];
+                // Reads of the crossing entity answer where this move put it, not where a
+                // later queued move has since put it.
+                let lent = self
+                    .native_lifecycle
+                    .entity_sections
+                    .write_position
+                    .replace((c.id, c.at));
                 self.native_entity_entering_section(
                     EntityRef::new(epoch, c.id),
                     c.old,
                     c.new,
                     chunk_changed,
                 );
+                self.native_lifecycle.entity_sections.write_position = lent;
             }
         }
-        self.native_lifecycle.entity_sections.end_telling(batch);
-    }
-
-    fn tell_entity_sections_in(&mut self, sections: &mut EntitySections) {
-        let Some(batch) = sections.begin_telling() else {
-            return;
-        };
-        if let Some(epoch) = self.native_lifecycle.epoch() {
-            for c in &batch {
-                let chunk_changed = c.old[0] != c.new[0] || c.old[2] != c.new[2];
-                self.native_entity_entering_section(
-                    EntityRef::new(epoch, c.id),
-                    c.old,
-                    c.new,
-                    chunk_changed,
-                );
-            }
-        }
-        sections.end_telling(batch);
+        self.native_lifecycle.entity_sections.end_telling();
     }
 }

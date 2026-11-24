@@ -182,7 +182,7 @@ fn navigation_flags_closed_door_path_reaches_goal_only_when_passable() {
                 .spawn_mob_raw("minecraft:zombie", [3.5, 65.0, 3.5], true)
                 .unwrap();
             let mob = game.mob(game.entity(id).unwrap()).unwrap(); // start block [3, 65, 3]
-            game.mobs[0].on_ground = true;
+            game.mobs[0].ground.on_ground = true;
             game.mobs[0].persistent = true;
             game.mobs[0].ai.goals = GoalSelector::default();
             game.mobs[0].ai.targets = GoalSelector::default();

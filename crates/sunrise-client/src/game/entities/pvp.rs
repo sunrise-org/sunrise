@@ -45,10 +45,8 @@ pub(in crate::game) struct PvpState {
     pub(in crate::game) boxes: Vec<(pvp_hud::WidgetId, [f32; 4])>,
     /// The HUD editor, while it is open.
     pub(in crate::game) editor: Option<crate::game::hud_editor::HudEditor>,
-    /// The open chat's box holds a chat search's query (Ctrl+F).
-    pub(in crate::game) chat_search: bool,
-    /// What the chat box held when the search borrowed it.
-    pub(in crate::game) chat_search_aside: String,
+    /// While the chat box holds the search query (Ctrl+F), its message text and draft state.
+    pub(in crate::game) chat_search_aside: Option<(String, bool)>,
 }
 /// `GuiGraphicsExtractor`'s grey for a detail line (an effect's time left).
 const DETAIL: u32 = 0xFF7F_7F7F;
@@ -773,7 +771,7 @@ impl Game<'_> {
                 }
                 Icon::Slot(slot) => {
                     if let Some(stack) = self.stack_in(*slot) {
-                        self.draw_item_model(batch, stack, ix, iy);
+                        self.draw_item_model(batch, stack, ix, iy, 0);
                     }
                 }
                 Icon::Sprite(name) => {

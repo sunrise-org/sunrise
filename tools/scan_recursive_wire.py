@@ -1,15 +1,18 @@
 """Discover recursive public vocabulary types, including indirect cycles.
 
-Uses the Wire declaration guard's Rust lexer so comments, strings and test-only
+Uses the shared Rust lexer so comments, strings and test-only
 items cannot introduce phantom types. Run directly to print the inventory.
 """
 from pathlib import Path
 import re
-from check_mod_api_wire import ROOT, code_tokens
+from rust_tokens import code_tokens
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def recursive_types(root=ROOT / "crates/sunrise-mod-vocab/src", extra_paths=()):
     declarations = {}
+    public = set()
     external_json = set()
     for path in sorted([*Path(root).rglob("*.rs"), *extra_paths]):
         ts = [value for value, _ in code_tokens(path.read_text())]
@@ -17,11 +20,15 @@ def recursive_types(root=ROOT / "crates/sunrise-mod-vocab/src", extra_paths=()):
         # declarations live in a dependency, not the public vocabulary source.
         external_json.update("serde_json::" + name for name in re.findall(
             r"impl (?:crate : : wire : : )?Wire for serde_json : : (\w+)", " ".join(ts)))
-        for i in range(len(ts) - 3):
-            if ts[i:i + 2] not in (["pub", "struct"], ["pub", "enum"], ["pub", "type"]):
+        for i, kind in enumerate(ts[:-2]):
+            exported = i > 0 and ts[i - 1] == "pub"
+            # A private wrapper can close a cycle without becoming a public entry.
+            if kind not in ("struct", "enum") and not (kind == "type" and exported):
                 continue
-            name = ts[i + 2]
-            j = i + 3
+            name = ts[i + 1]
+            if exported:
+                public.add(name)
+            j = i + 2
             angle = 0
             while j < len(ts):
                 if not angle and ts[j] in ("{", "(", ";", "="):
@@ -51,7 +58,7 @@ def recursive_types(root=ROOT / "crates/sunrise-mod-vocab/src", extra_paths=()):
                     depth += 1
                 elif token == "}" or token == ")":
                     depth -= 1
-                elif ts[i + 1] == "enum" and depth == 1 and (k == 1 or parts[k - 1] == ","):
+                elif kind == "enum" and depth == 1 and (k == 1 or parts[k - 1] == ","):
                     excluded.add(k)
                 if k + 1 < len(parts) and parts[k + 1] == ":" and (k + 2 == len(parts) or parts[k + 2] != ":"):
                     excluded.add(k)
@@ -64,7 +71,7 @@ def recursive_types(root=ROOT / "crates/sunrise-mod-vocab/src", extra_paths=()):
             declarations.setdefault(name, set()).update(body)
     graph = {name: refs & declarations.keys() for name, refs in declarations.items()}
     result = []
-    for name in sorted(graph):
+    for name in sorted(public & graph.keys()):
         pending, seen = list(graph[name]), set()
         while pending:
             current = pending.pop()

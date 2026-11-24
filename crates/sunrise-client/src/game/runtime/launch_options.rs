@@ -63,6 +63,8 @@ pub(crate) struct Options {
     pub(super) mods: mods::ModsState,
     /// What this Game executes; independent of its current server connection.
     pub(super) execution_role: execution_role::ExecutionRole,
+    /// The server's report source survives returned errors until the launch reports them.
+    pub(crate) save_failure_diagnostics: sunrise_client::chunk_io::SaveFailureDiagnostics,
     /// `--fullscreen` (vanilla's): the window opens fullscreen whatever options.txt says,
     /// as vanilla's DisplayData does, without saving it there.
     pub(super) fullscreen: bool,
@@ -228,6 +230,7 @@ impl Options {
                 ..Default::default()
             },
             execution_role: execution_role::ExecutionRole::Client,
+            save_failure_diagnostics: Default::default(),
             fullscreen: false,
             game_dir: Some(context.game_dir),
             quick_play: None,

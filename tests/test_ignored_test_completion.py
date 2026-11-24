@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import subprocess
@@ -10,6 +11,9 @@ import unittest
 from unittest.mock import patch
 
 from tools.ci import ignored_tests
+
+# What precedes a test run's own command: GNU timeout and the run's limit, where the platform has them.
+LIMIT = len(ignored_tests.time_limit())
 
 
 def target(count, results, summary):
@@ -28,6 +32,33 @@ class IgnoredTests(unittest.TestCase):
             result = ignored_tests.run("example", [])
         return result, log.getvalue()
 
+    def test_test_threads_get_the_harnesses_stack(self):
+        # A server Game held by value overflowed libtest's 2 MiB test thread (#3744).
+        output = target(1, "test first ... ok\n", summary(passed=1))
+        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as run, \
+                contextlib.redirect_stdout(io.StringIO()):
+            ignored_tests.run("sunrise-client", [])
+        stacks = [call.kwargs["env"].get("RUST_MIN_STACK") for call in run.call_args_list if call.args[0][LIMIT:LIMIT + 2] == ["cargo", "test"]]
+        self.assertTrue(stacks)
+        self.assertEqual(set(stacks), {str(16 * 1024 * 1024)})
+
+    def test_daily_tests_require_a_gpu_adapter_in_cargo_and_prebuilt_binaries(self):
+        output = target(1, "test gpu_case ... ok\n", summary(passed=1))
+        result = subprocess.CompletedProcess([], 0, output)
+        with patch.dict(os.environ, {"SUNRISE_GPU_TESTS_REQUIRE_ADAPTER": "0"}), \
+                patch.object(ignored_tests.subprocess, "run", return_value=result) as run, \
+                patch.object(ignored_tests.ignored_shards, "workspace_members",
+                             return_value={"example": ("crates/example", ".")}), \
+                patch.object(ignored_tests, "workspace_features", return_value={}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            ignored_tests.run("example", [])
+            ignored_tests.run("example", [], only=(["lib"], ["gpu_case"]),
+                              binaries={"lib": "/fake/example-tests"})
+        commands = {tuple(call.args[0][LIMIT:])[:2]: call.kwargs["env"]
+                    for call in run.call_args_list if len(call.args[0]) > LIMIT}
+        self.assertEqual(commands[("cargo", "test")]["SUNRISE_GPU_TESTS_REQUIRE_ADAPTER"], "1")
+        self.assertEqual(commands[("/fake/example-tests", "--ignored")]["SUNRISE_GPU_TESTS_REQUIRE_ADAPTER"], "1")
+
     def test_success_and_multiple_targets(self):
         output = target(1, "test first ... ok\n", summary(passed=1))
         output += target(2, "test second ... ok\ntest third ... ok\n", summary(passed=2))
@@ -42,6 +73,36 @@ class IgnoredTests(unittest.TestCase):
                   "test synced ... ok\n" + summary(passed=1))
         result, _ = self.run_output(output)
         self.assertEqual(result, {"synced": True})
+
+    def test_a_failed_runs_full_output_is_kept_privately_and_not_printed(self):
+        panic = ("\n---- bad stdout ----\nthread 'bad' panicked at crates/example/src/lib.rs:3:5:\n"
+                 "synthetic payload 4.2 from the data\n")
+        failed = target(1, "test bad ... FAILED\n", summary(failed=1)) + panic
+        with tempfile.TemporaryDirectory() as private, \
+                patch.dict(os.environ, {"IGNORED_TESTS_PRIVATE_LOGS": private}):
+            kept = Path(private)
+            # A non-zero exit, and a run that exited 0 although a test reported FAILED: both keep the output.
+            for code in (101, 0):
+                with self.subTest(code=code):
+                    _, log = self.run_output(failed, code)
+                    self.assertEqual((kept / "example.test.log").read_text(), failed)
+                    self.assertEqual(re.findall(r"kept privately on the runner: (\S+)", log), ["example.test.log"])
+                    self.assertNotIn("synthetic payload", log)
+                    (kept / "example.test.log").unlink()
+            # A split leg whose listing fails keeps the listing's output under the leg's name.
+            listing = subprocess.CompletedProcess([], 101, "listed text on stdout\n",
+                                                  "error[E0425]: private compiler text\n")
+            with patch.object(ignored_tests.subprocess, "run", return_value=listing), \
+                    contextlib.redirect_stdout(io.StringIO()) as log:
+                self.assertIsNone(ignored_tests.run("example", [], 1, 2))
+            self.assertEqual((kept / "example#1of2.list.log").read_text(),
+                             "listed text on stdout\nerror[E0425]: private compiler text\n")
+            self.assertNotIn("private compiler text", log.getvalue())
+            self.assertNotIn("listed text on stdout", log.getvalue())
+            (kept / "example#1of2.list.log").unlink()
+            # A passing run keeps nothing.
+            self.run_output(target(1, "test good ... ok\n", summary(passed=1)))
+            self.assertEqual(list(kept.iterdir()), [])
 
     def test_known_failure_is_still_available_to_policy(self):
         result, _ = self.run_output(target(2, "test good ... ok\ntest bad ... FAILED\n", summary(passed=1, failed=1)), 101)
@@ -166,6 +227,40 @@ class IgnoredTests(unittest.TestCase):
             self.assertIsNone(ignored_tests.run("example", []))
         self.assertEqual(ignored_tests._stopped["still_running"],
                          [f"identity withheld (longer than {ignored_tests.IDENTITY_CHARS} characters)"])
+
+    def test_a_run_stopped_at_its_time_limit_names_the_tests_still_running(self):
+        # A hung test held both client halves until the job limit cancelled them, naming nothing (daily 44814607973).
+        output = (target(3, "test done ... ok\ntest game::dragon::hangs has been running for over 60 seconds\n"
+                            "test game::wind::finished_late has been running for over 60 seconds\n"
+                            "test game::wind::finished_late ... ok\n", ""))
+        with patch.object(ignored_tests.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], ignored_tests.TIMED_OUT, output)) as run, \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertIsNone(ignored_tests.run("example", []))
+        if LIMIT:
+            self.assertEqual(run.call_args.args[0][:LIMIT], ["timeout", f"{ignored_tests.TEST_RUN_LIMIT}s"])
+        self.assertEqual(ignored_tests._stopped["reason"], "tests still running at the time limit (a hung test)")
+        self.assertEqual(ignored_tests._stopped["ended_by"], f"the {ignored_tests.TEST_RUN_LIMIT} s limit")
+        self.assertEqual(ignored_tests._stopped["still_running"], ["game::dragon::hangs"])
+        # What finished before the limit still counts.
+        self.assertEqual(ignored_tests._reported, {"done": True, "game::wind::finished_late": True})
+        self.assertIn("still running past 60 s: game::dragon::hangs", log.getvalue())
+
+    def test_one_executable_stopped_at_the_limit_stops_the_daily_rows_run_but_not_the_next_executable(self):
+        ran = []
+
+        def execute(command, **_):
+            executable = command[LIMIT]
+            ran.append(Path(executable).name)
+            code = ignored_tests.TIMED_OUT if executable.endswith("/a") else 0
+            return subprocess.CompletedProcess(command, code, "")
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ignored_tests.ignored_shards, "workspace_members", return_value={"pkg": (folder, ".")}), \
+                patch.object(ignored_tests.subprocess, "run", side_effect=execute):
+            done = ignored_tests.run_binaries("pkg", {"lib": f"{folder}/a", "test:b": f"{folder}/b"}, ["--ignored"], {})
+        self.assertEqual(ran, ["a", "b"])
+        self.assertEqual(done.returncode, ignored_tests.TIMED_OUT)
 
     def test_the_report_names_the_run_in_progress_before_it_ends(self):
         # A job stopped at its time limit kills this script too: what it wrote before the run is what is uploaded.
@@ -352,7 +447,7 @@ class IgnoredTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ignored_tests.run("sunrise-relay", [], only=(["lib", "test:tunnel"], ["a", "b"])),
                              {"a": True, "b": True})
-        command = execute.call_args.args[0]
+        command = execute.call_args.args[0][LIMIT:]
         # The features the workspace build turns on, as verify compiled the test.
         self.assertEqual(command[:command.index("--")],
                          ["cargo", "test", "-p", "sunrise-relay", "--features", "fixture,index", "--lib", "--test", "tunnel",
@@ -374,17 +469,18 @@ class IgnoredTests(unittest.TestCase):
             self.assertEqual(ignored_tests.run("sunrise-mod-package", [], only=(["lib"], ["holder::tests::slow"])),
                              {"holder::tests::slow": True})
         self.assertEqual(execute.call_args_list[0].args[0], prepare)
-        self.assertEqual(execute.call_args_list[1].args[0][:2], ["cargo", "test"])
-        # A failed build stops the run, saying why, before any test runs.
-        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 101, "error: x\n")) as execute, \
-                patch.object(ignored_tests, "workspace_features", return_value={}), contextlib.redirect_stdout(io.StringIO()):
+        self.assertEqual(execute.call_args_list[1].args[0][LIMIT:LIMIT + 2], ["cargo", "test"])
+        # A failed build stops the run, saying why, before any test runs, and keeps the build's output privately.
+        with tempfile.TemporaryDirectory() as private, \
+                patch.dict(os.environ, {"IGNORED_TESTS_PRIVATE_LOGS": private}), \
+                patch.object(ignored_tests.subprocess, "run",
+                             return_value=subprocess.CompletedProcess([], 101, "error: private build text\n")) as execute, \
+                patch.object(ignored_tests, "workspace_features", return_value={}), \
+                contextlib.redirect_stdout(io.StringIO()):
             self.assertIsNone(ignored_tests.run("sunrise-mod-package", [], only=(["lib"], ["holder::tests::slow"])))
+            self.assertEqual((Path(private) / "sunrise-mod-package.build.log").read_text(), "error: private build text\n")
         self.assertEqual(execute.call_count, 1)
         self.assertEqual(ignored_tests._stopped["reason"], "what the tests need could not be built")
-        # verify builds it with the same command.
-        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/dyna-ci.yml").read_text()
-        self.assertEqual(workflow.count("ignored_shards.py --prepare sunrise-mod-package"), 1)
-        self.assertNotIn("--example holder_actor", workflow)
 
     def test_a_parent_that_crashes_after_its_childs_same_count_summary_did_not_complete(self):
         # A fixture reruns its own test in a child, which reports FAILED and a one-test summary;

@@ -10,7 +10,7 @@ fn registration_context_reaches_collectors_in_order_without_a_game_host() {
             event: &mut ComponentTypesEvent<'_>,
         ) {
             assert_eq!(context.0, "bootstrap");
-            event.types.push(self.0.into());
+            event.register(self.0.into());
         }
     }
     install(
@@ -22,7 +22,13 @@ fn registration_context_reaches_collectors_in_order_without_a_game_host() {
     );
     let mut types = Vec::new();
     dispatch_component_types(&RegistrationContext("bootstrap"), &mut types);
-    assert_eq!(types, ["first:component", "second:component"]);
+    assert_eq!(
+        types
+            .iter()
+            .map(|row| (row.mod_id, row.answer.as_str()))
+            .collect::<Vec<_>>(),
+        [("first", "first:component"), ("second", "second:component")],
+    );
 }
 
 #[test]
@@ -105,34 +111,6 @@ fn empty_dispatch_checks_before_event_construction() {
 }
 
 #[test]
-fn command_dispatch_forwards_typed_input_and_source() {
-    struct Observer(Arc<Mutex<Vec<i32>>>);
-    #[mod_api::__subscriptions]
-    impl Hooks for Observer {
-        fn run_mod_command(
-            &self,
-            _: &mut dyn ServerHost,
-            event: &mut RunModCommandEvent<'_>,
-        ) -> Flow {
-            self.0
-                .lock()
-                .unwrap()
-                .push(event.command.amount * event.source.sign);
-            Flow::Cancel
-        }
-    }
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    install(vec![ModEntry::new("commands", Box::new(Observer(calls.clone())))].into());
-    let command = CommandInvocation { amount: 37 };
-    for sign in [1, -1] {
-        let mut ran = false;
-        dispatch_run_mod_command(&mut TestHost, &CommandSource { sign }, &command, &mut ran);
-        assert!(ran);
-    }
-    assert_eq!(*calls.lock().unwrap(), vec![37, -37]);
-}
-
-#[test]
 fn advancement_progress_reports_grant_and_revoke_identity() {
     struct Observer(Arc<Mutex<Vec<ProgressType>>>);
     #[mod_api::__subscriptions]
@@ -186,20 +164,50 @@ fn advancement_progress_reports_grant_and_revoke_identity() {
 fn menu_button_mutates_entity_and_cursor_once() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     install_parts(Parts {
-        block_entities: vec![part(1, &calls)],
+        menus: vec![part(1, &calls)],
         ..Parts::default()
     });
     let context = generated::mod_api::item::menu::MenuButtonContext {
         player: 123,
         player_entity_id: 42,
-        pos: [1, 2, 3],
+        pos: Some([1, 2, 3]),
         id: 9,
     };
     let mut entity = ModBlockEntity::new("machine");
     let mut carried = None;
-    dispatch_menu_button(&mut TestHost, &context, &mut entity, &mut carried);
+    dispatch_menu_button(
+        "test:menu",
+        None,
+        &context,
+        generated::mod_api::BlockEntityScope(Some(&mut entity)),
+        &mut carried,
+    );
     assert_eq!(entity.id(), "machine");
     assert_eq!(entity.data, [9]);
+    assert_eq!(carried.unwrap().item.as_ref(), "bucket");
+}
+
+#[test]
+fn menu_button_reaches_a_blockless_menu() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    install_parts(Parts {
+        menus: vec![part(1, &calls)],
+        ..Parts::default()
+    });
+    let context = generated::mod_api::item::menu::MenuButtonContext {
+        player: 123,
+        player_entity_id: 42,
+        pos: None,
+        id: 9,
+    };
+    let mut carried = None;
+    dispatch_menu_button(
+        "test:menu",
+        None,
+        &context,
+        generated::mod_api::BlockEntityScope(None),
+        &mut carried,
+    );
     assert_eq!(carried.unwrap().item.as_ref(), "bucket");
 }
 
@@ -210,7 +218,10 @@ fn general_entity_tick_tells_each_part_of_the_row_in_order() {
         entities: vec![part(1, &calls), part(2, &calls)],
         ..Parts::default()
     });
-    dispatch_general_entity_tick(&mut TestHost, "mymod:robot", generated::mod_api::EntityRef);
+    dispatch_general_entity_tick(calls::GeneralEntityTickCall {
+        kind: "mymod:robot",
+        subject: generated::mod_api::EntityServerScope(std::marker::PhantomData),
+    });
     assert_eq!(*calls.lock().unwrap(), [1, 2]);
 }
 
@@ -218,7 +229,10 @@ fn general_entity_tick_tells_each_part_of_the_row_in_order() {
 fn general_entity_tick_without_parts_names_no_table() {
     let calls: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
     install_parts(Parts::default());
-    dispatch_general_entity_tick(&mut TestHost, "mymod:robot", generated::mod_api::EntityRef);
+    dispatch_general_entity_tick(calls::GeneralEntityTickCall {
+        kind: "mymod:robot",
+        subject: generated::mod_api::EntityServerScope(std::marker::PhantomData),
+    });
     assert!(calls.lock().unwrap().is_empty());
 }
 
@@ -235,7 +249,7 @@ fn block_entity_submit_dispatches_in_order_with_shared_draw() {
         [1, 2, 3],
         "example:machine",
         BlockState::new(BlockKey::Test, 0),
-        &ModBlockEntity::default(),
+        generated::mod_api::BlockEntityDataView(&ModBlockEntity::new("example:subject")),
         &mut draw,
     );
     assert_eq!(draw.0, [1, 2]);
@@ -265,11 +279,12 @@ fn slot_rules_mutate_and_item_tick_can_cancel() {
             slot: 0,
             container: MenuContainer::Grid,
             stack: &ItemStack::default(),
-            context: &MenuSlotContext {
-                player: Some(7),
-                pos: Some([1, 2, 3]),
-                slots: vec![vec![None], vec![None, Some(ItemStack::default())]],
-            },
+            context: &MenuSlotContext::new(Some(7), Some([1, 2, 3]), &|container, index| {
+                (container == MenuContainer::Grid && index == 1).then(|| ItemStack {
+                    item: "planks".into(),
+                    count: 4,
+                })
+            }),
             may_place: &mut may_place,
             may_pickup: &mut may_pickup,
             max_stack: &mut max_stack,
@@ -315,6 +330,7 @@ fn item_finish_can_clear_vanilla_result() {
             Hand::Main,
             0,
             &mut result,
+            &mut |_| Ok(()),
         );
         assert!(result.is_none(), "client={client}");
     }
@@ -408,6 +424,7 @@ fn placement_replacement_can_refuse_and_stops_later_mods() {
                 source: false,
             },
             &mut answer,
+            &mut |_| Ok(()),
         );
         assert_eq!(answer, None);
         assert!(calls.lock().unwrap().is_empty());
@@ -424,9 +441,16 @@ fn placement_replacement_can_refuse_and_stops_later_mods() {
             source: false,
         },
         &mut answer,
+        &mut |_| {
+            if calls.lock().unwrap().as_slice() == [1] {
+                Err("first proposal refused".into())
+            } else {
+                Ok(())
+            }
+        },
     );
     assert_eq!(answer, Some(None));
-    assert_eq!(*calls.lock().unwrap(), vec![1]);
+    assert_eq!(*calls.lock().unwrap(), vec![1, 2]);
     dispatch_state_for_placement(
         LevelSide::Server(&Level),
         LevelDimension,
@@ -439,8 +463,9 @@ fn placement_replacement_can_refuse_and_stops_later_mods() {
             source: false,
         },
         &mut answer,
+        &mut |_| Ok(()),
     );
-    assert_eq!(*calls.lock().unwrap(), vec![1]);
+    assert_eq!(*calls.lock().unwrap(), vec![1, 2]);
 }
 
 #[test]
@@ -454,9 +479,9 @@ fn incoming_damage_carries_the_attack_data() {
             event: &mut LivingIncomingDamageEvent<'_>,
         ) -> Flow {
             assert_eq!(event.source.damage_type, "minecraft:player_attack");
-            assert_eq!(event.causing_weapon.unwrap().item.as_ref(), "test:sword");
+            assert_eq!(event.causing_weapon.unwrap().item().0, "test:sword");
             if let Some(weapon) = event.weapon {
-                assert_eq!(weapon.item.as_ref(), "test:crossbow");
+                assert_eq!(weapon.item().0, "test:crossbow");
             }
             let (from, at, look) = (
                 event.source.position.unwrap(),
@@ -467,7 +492,7 @@ fn incoming_damage_carries_the_attack_data() {
                 .map(|axis| (from[axis] - at[axis]) * look[axis])
                 .sum::<f64>();
             if behind < 0.0 && event.weapon.is_some() {
-                event.container.0 *= 3.0;
+                *event.container.0 *= 3.0;
             }
             Flow::Continue
         }
@@ -483,6 +508,8 @@ fn incoming_damage_carries_the_attack_data() {
         item: "test:sword".into(),
         count: 1,
     };
+    let held = ItemStackView(&held);
+    let causing = ItemStackView(&causing);
     for (source_z, weapon, expected) in [
         (-1.0, Some(&held), 12.0),
         (1.0, Some(&held), 4.0),
@@ -496,7 +523,7 @@ fn incoming_damage_carries_the_attack_data() {
             position: [0.0; 3],
             view: [0.0, 0.0, 1.0],
         };
-        let (mut container, mut canceled) = (DamageContainer(4.0), false);
+        let (mut amount, mut canceled) = (4.0, false);
         dispatch_living_incoming_damage(
             &mut TestLevel,
             calls::LivingIncomingDamageCall {
@@ -506,11 +533,11 @@ fn incoming_damage_carries_the_attack_data() {
                 victim: &victim,
                 weapon,
                 causing_weapon: Some(&causing),
-                container: &mut container,
+                container: DamageContainer(&mut amount),
                 canceled: &mut canceled,
             },
         );
-        assert_eq!((container.0, canceled), (expected, false));
+        assert_eq!((amount, canceled), (expected, false));
     }
 }
 
@@ -572,7 +599,6 @@ fn dispatch_contracts() {
             assert!(event.attacker_main.is_none() && event.attacker_off.is_none());
             assert_eq!(event.kill_credit, 19);
             assert!(event.kill_credit_main.is_none());
-            assert_eq!(event.entry, KnockbackEntry::Full);
             assert_eq!(event.strength, 0.4);
             event.strength *= 2.0;
             event.x = -event.x;
@@ -598,7 +624,6 @@ fn dispatch_contracts() {
             attacker_off: None,
             kill_credit: 19,
             kill_credit_main: None,
-            entry: KnockbackEntry::Full,
             strength: &mut strength,
             x: &mut x,
             z: &mut z,
@@ -631,23 +656,35 @@ fn dispatch_contracts() {
     dispatch_level_tick_pre(HostSide::Server(&mut host), LevelRef);
     assert_eq!(*calls.lock().unwrap(), [1, 2]);
     calls.lock().unwrap().clear();
-    let mut zoom = None;
-    dispatch_zoom(&host, &mut zoom);
-    assert_eq!(zoom, Some(Zoom(1)));
+    let mut crafted = None;
+    dispatch_prepare_item_craft(&mut host, 0, "alex", None, &mut crafted, &mut |_| Ok(()));
+    assert_eq!(
+        crafted,
+        Some(ItemStack {
+            item: "test:crafted".into(),
+            count: 1,
+        })
+    );
     assert_eq!(*calls.lock().unwrap(), [1]);
     calls.lock().unwrap().clear();
-    dispatch_zoom(&host, &mut zoom);
+    dispatch_prepare_item_craft(&mut host, 0, "alex", None, &mut crafted, &mut |_| Ok(()));
     assert!(calls.lock().unwrap().is_empty());
     install_parts(Parts {
         items: vec![part(1, &calls), part(2, &calls)],
         ..Parts::default()
     });
     let mut lines = Vec::new();
+    let mut journal = HookListJournal::new(
+        HookListStorage::Resizable(&mut lines),
+        |value: &(Text, u32)| Some(value.clone()),
+        |value| Ok(value.clone()),
+    );
+    let mut list = HookList::new(&mut journal, "tooltip", "lines");
     dispatch_tooltip(
         &host,
         &ItemStack::default(),
         &mod_api::mod_api::TooltipAppendContext,
-        &mut lines,
+        &mut list,
     );
     assert_eq!(lines.iter().map(|line| line.1).collect::<Vec<_>>(), [1, 2]);
     let source = HurtSource {
@@ -658,7 +695,7 @@ fn dispatch_contracts() {
         position: [0.0; 3],
         view: [0.0; 3],
     };
-    let mut container = DamageContainer(1.0);
+    let mut amount = 1.0;
     let mut canceled = false;
     dispatch_living_incoming_damage(
         &mut TestLevel,
@@ -669,12 +706,12 @@ fn dispatch_contracts() {
             victim: &victim,
             weapon: None,
             causing_weapon: None,
-            container: &mut container,
+            container: DamageContainer(&mut amount),
             canceled: &mut canceled,
         },
     );
     // Each mod sees the one before: (1 × 2 + 1) × 2 + 2, kept though mod 2 cancels.
-    assert_eq!(container.0, 8.0);
+    assert_eq!(amount, 8.0);
     assert!(canceled);
     let chained: Vec<ModEntry> = [1, 3]
         .map(|id| {
@@ -689,7 +726,7 @@ fn dispatch_contracts() {
         .into();
     let chained: Arc<[ModEntry]> = chained.into();
     install(chained.clone());
-    let mut container = DamageContainer(1.0);
+    let mut amount = 1.0;
     let mut canceled = false;
     dispatch_living_incoming_damage(
         &mut TestLevel,
@@ -700,11 +737,11 @@ fn dispatch_contracts() {
             victim: &victim,
             weapon: None,
             causing_weapon: None,
-            container: &mut container,
+            container: DamageContainer(&mut amount),
             canceled: &mut canceled,
         },
     );
-    assert_eq!(container.0, 9.0);
+    assert_eq!(amount, 9.0);
     assert!(!canceled);
     install(mods.clone());
     calls.lock().unwrap().clear();
@@ -768,13 +805,11 @@ mod stubs {
         Held,
     }
     pub(super) struct MobRender<'a>(pub &'a ());
-    pub(super) struct Shake;
     pub(super) struct Music;
     pub(super) struct MusicLayer;
     pub(super) struct BlockRim;
     pub(super) struct ColoredLight;
     pub(super) struct PanelEvent;
-    pub(super) struct Screen;
     pub(super) struct ModContainer;
     pub(super) struct MerchantOffer;
     pub(super) struct ModFluidTanks;
@@ -783,22 +818,13 @@ mod stubs {
     pub(super) struct MapDecoration;
     pub(super) struct MapInfo<'a>(pub &'a ());
     pub(super) struct PlayerRender<'a>(pub &'a ());
-    pub(super) struct PosedParts;
-    pub(super) struct HiddenParts;
+    pub(super) trait FrameModel {}
+    pub(super) trait FrameModelEdit: FrameModel {}
     pub(super) struct Command;
     pub(super) struct LifecycleContext;
     pub(super) struct Load(pub &'static str);
-    pub(super) struct ServerPlayer;
-    pub(super) struct CommandSource {
-        pub(super) sign: i32,
-    }
-    pub(super) struct CommandInvocation {
-        pub(super) amount: i32,
-    }
     #[derive(Clone, Copy)]
     pub(super) struct ServerTickPhase;
-    #[derive(Clone, Copy)]
-    pub(super) struct WorldPhase;
 }
 
 mod api {

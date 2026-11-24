@@ -1,4 +1,31 @@
 use super::*;
+
+type EffectParts = HashMap<Box<str>, Vec<Attached<dyn MobEffectPart>>>;
+
+struct ResolvedEffects {
+    ticks: EffectParts,
+    added: EffectParts,
+}
+
+// no wire: the load-owned table contains process-local trait objects.
+// hidden: opaque resolution slot carried by the installation record.
+/// Effect Parts subscribed to ticks or `on_effect_added`, frozen after effect keys and owners resolve.
+#[doc(hidden)]
+#[derive(Default)]
+#[non_exhaustive]
+pub struct ResolvedEffectTicks(OnceLock<ResolvedEffects>);
+
+impl HookParts {
+    pub(crate) fn effect<'k>(
+        &self,
+        id: impl FnOnce() -> Option<&'k str>,
+    ) -> &[Attached<dyn MobEffectPart>] {
+        installed()
+            .and_then(|installed| installed.effect_ticks.0.get())
+            .map_or(&[], |resolved| attached(&resolved.added, id))
+    }
+}
+
 pub(crate) fn resolved_effects() -> &'static OnceLock<sunrise_mod_runtime::registry_keys::Effects> {
     static EMPTY: OnceLock<sunrise_mod_runtime::registry_keys::Effects> = OnceLock::new();
     installed().map_or(&EMPTY, |installed| &installed.effects)
@@ -6,10 +33,12 @@ pub(crate) fn resolved_effects() -> &'static OnceLock<sunrise_mod_runtime::regis
 
 /// Registrar operations for effects.
 pub trait EffectsRegistrar {
-    /// Request an effect by canonical registry id. All mods' declarations are checked at load.
+    /// Request an effect by registry ID. A missing effect in the complete registry refuses load.
     fn effect_key(&mut self, id: &str) -> crate::EffectKey;
-    /// Attach tick behaviour. The declaring package or a declared dependent may attach.
-    /// Missing optional dependencies skip their Parts; other unknown effects refuse loading.
+    /// Attach first-insertion and tick behaviour to an effect declared by this package, by a content package it
+    /// serves (`served_by`), or by an active dependency.
+    /// An absent package with an active optional dependency row skips its Parts; other unknown
+    /// effects refuse loading.
     fn attach_mob_effect_part(
         &mut self,
         effect: &crate::EffectKey,
@@ -19,10 +48,18 @@ pub trait EffectsRegistrar {
 }
 
 /// A refused effect Part registration.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+///
+/// This is a process-local registration error, not a `Wire` type.
+///
+/// ```compile_fail,E0277
+/// fn requires_wire<T: mod_api::wire::Wire>() {}
+/// requires_wire::<mod_api::MobEffectPartError>();
+/// ```
+// no wire: local mob-effect Part registration error.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MobEffectPartError {
-    /// Vanilla effects keep vanilla tick behaviour.
+    /// Vanilla effects keep vanilla behaviour.
     VanillaEffect {
         /// The vanilla effect that was requested.
         effect: crate::EffectKey,
@@ -42,9 +79,12 @@ pub enum MobEffectPartError {
 }
 
 impl dyn crate::Registrar + '_ {
-    /// Attach a Part to an effect declared by this package or a dependency.
-    /// Parts execute in dependency dispatch order, then registration order;
-    /// each Part's cadence applies only to that Part. Vanilla types refuse immediately.
+    /// Attach a Part to an effect declared by this package, by a content package it serves
+    /// (`served_by`), or by an active dependency.
+    /// The owning package's effect Parts (or, for a `served_by` content package, its serving
+    /// native host's) run first. Other Parts execute in
+    /// dispatch order, then registration order. Each Part keeps its own tick cadence.
+    /// Vanilla effects refuse immediately.
     pub fn mob_effect_part<P: MobEffectPart>(
         &mut self,
         effect: &crate::EffectKey,
@@ -54,51 +94,91 @@ impl dyn crate::Registrar + '_ {
     }
 }
 
-/// Validate Part permissions against the actual package that declared each effect.
+/// Validate Part permissions against the actual effect owners and freeze Part dispatch order.
 /// Call after effect-key completion, so unknown effects retain their ordinary refusal.
 pub fn validate_effect_part_owners<'a>(
     owner: impl Fn(&str) -> Option<&'a str>,
+    provider_admitted: impl Fn(&str) -> bool,
 ) -> Result<(), Vec<String>> {
     let Some(installed) = installed() else {
         return Ok(());
     };
+    if installed.effect_ticks.0.get().is_some() {
+        return Ok(());
+    }
     let mut ids: Vec<_> = installed.keys.effects.keys().collect();
     ids.sort_unstable();
     let mut refused = Vec::new();
+    let mut ticks = EffectParts::new();
+    let mut added = EffectParts::new();
+    let subscribed_ticks = installed
+        .keys
+        .for_hook(HookId::ShouldApplyEffectTickThisTick);
+    let subscribed_added = installed.keys.for_hook(HookId::OnEffectAdded);
     for id in ids {
+        let lost = |mod_id: &str| {
+            optional_provider_lost(&installed.dependencies, &provider_admitted, mod_id, id)
+        };
+        let parts: Vec<_> = installed.keys.effects[id]
+            .iter()
+            .filter(|part| !lost(part.mod_id))
+            .collect();
+        if parts.is_empty() {
+            continue;
+        }
         let Some(owner) = owner(id) else {
-            for part in &installed.keys.effects[id] {
+            for part in parts {
                 refused.push(format!("mod {} requested unknown effect {id}", part.mod_id));
             }
             continue;
         };
-        for part in &installed.keys.effects[id] {
-            if part.mod_id == owner {
-                continue;
-            }
-            let allowed = installed
-                .effect_part_packages
-                .iter()
-                .find(|package| package.id() == part.mod_id)
-                .is_some_and(|package| {
-                    package.dependencies().iter().any(|dependency| {
-                        dependency.id() == owner
-                            && matches!(
-                                dependency.kind(),
-                                crate::DependencyKind::Required | crate::DependencyKind::Optional
-                            )
-                    })
-                });
-            if !allowed {
+        for part in &parts {
+            if !installed.dependencies.permits(part.mod_id, owner) {
                 refused.push(format!("mod {} attached {} to effect {id}, declared by package {owner}; declare {owner} as a dependency", part.mod_id, part.type_name));
             }
         }
+        if let Some(parts) = subscribed_ticks.and_then(|table| table.effects.get(id)) {
+            let mut parts: Vec<_> = parts
+                .iter()
+                .filter(|part| !lost(part.mod_id))
+                .cloned()
+                .collect();
+            parts.sort_by_key(|part| (part.mod_id != owner, part.mod_index, part.order));
+            ticks.insert(id.clone(), parts);
+        }
+        if let Some(parts) = subscribed_added.and_then(|table| table.effects.get(id)) {
+            let mut parts: Vec<_> = parts
+                .iter()
+                .filter(|part| !lost(part.mod_id))
+                .cloned()
+                .collect();
+            parts.sort_by_key(|part| (part.mod_id != owner, part.mod_index, part.order));
+            added.insert(id.clone(), parts);
+        }
     }
     if refused.is_empty() {
+        let _ = installed
+            .effect_ticks
+            .0
+            .set(ResolvedEffects { ticks, added });
         Ok(())
     } else {
         Err(refused)
     }
+}
+
+/// Whether `mod_id` is an optional dependent of the package that owns the namespace of the
+/// effect `id`, and that package was not admitted: its Part is dropped, not refused.
+pub(crate) fn optional_provider_lost(
+    dependencies: &crate::__private::EffectiveDependencies,
+    provider_admitted: &dyn Fn(&str) -> bool,
+    mod_id: &str,
+    id: &str,
+) -> bool {
+    let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
+    mod_id != namespace
+        && dependencies.kind(mod_id, namespace) == Some(crate::DependencyKind::Optional)
+        && !provider_admitted(namespace)
 }
 
 /// Run each effect Part's cadence and action as one pair, sharing the holder snapshots.
@@ -110,49 +190,72 @@ pub fn dispatch_mob_effect_tick<'a>(
     amplifier: i32,
     make_call: impl FnOnce(crate::EffectKey, i32) -> crate::__private::ApplyEffectTickCall<'a>,
 ) {
-    if !has_part_hook(HookId::ShouldApplyEffectTickThisTick) {
-        return;
-    }
-    let Some(id) = crate::content::registry_keys::effect_id(effect) else {
+    let Some(resolved) = installed().and_then(|installed| installed.effect_ticks.0.get()) else {
         return;
     };
-    let hook = HookId::ShouldApplyEffectTickThisTick;
-    let table = parts(hook, "effect tick routing");
-    let Some(attached) = table.for_hook(hook).and_then(|table| table.effects.get(id)) else {
+    let Some(attached) =
+        crate::content::registry_keys::effect_id(effect).and_then(|id| resolved.ticks.get(id))
+    else {
         return;
     };
-    let mut due = crate::entered_parts(attached, "mob_effect_tick").filter(|part| {
+    let mut due = crate::entered_parts(
+        HookId::ShouldApplyEffectTickThisTick,
+        attached,
+        "should_apply_effect_tick_this_tick",
+    )
+    .filter(|&(mod_id, part)| {
         let mut should = crate::ShouldApplyEffectTickThisTickEvent {
             effect,
             tick_count,
             amplifier,
             apply: false,
         };
-        part.should_apply_effect_tick_this_tick(host, &mut should);
-        should.apply
+        crate::runtime::invoke(
+            HookId::ShouldApplyEffectTickThisTick,
+            "should_apply_effect_tick_this_tick",
+            mod_id,
+            || {
+                part.should_apply_effect_tick_this_tick(host, &mut should);
+                should.apply
+            },
+        )
+        .unwrap_or_default()
     });
     let Some(first) = due.next() else {
         return;
     };
     let call = make_call(effect, amplifier);
-    for part in std::iter::once(first).chain(due) {
-        let mut event = crate::ApplyEffectTickEvent {
-            effect: call.effect,
-            dimension: call.dimension,
-            entity: call.entity,
-            amplifier: call.amplifier,
-            holder: call.holder,
-            health: call.health,
-            max_health: call.max_health,
-            food: call.food,
-            active_effects: call.active_effects,
-            changes: &mut *call.changes,
-            keep: *call.keep,
-        };
-        part.apply_effect_tick(host, &mut event);
-        *call.keep = event.keep;
-        if !*call.keep {
-            break;
+    for (mod_id, part) in std::iter::once(first).chain(due) {
+        if crate::runtime::poisoned(HookId::ApplyEffectTick, mod_id) {
+            continue;
+        }
+        let changes_len = call.changes.len();
+        match crate::runtime::invoke(HookId::ApplyEffectTick, "apply_effect_tick", mod_id, || {
+            let mut event = crate::ApplyEffectTickEvent {
+                effect: call.effect,
+                dimension: call.dimension,
+                entity: call.entity,
+                amplifier: call.amplifier,
+                holder: call.holder,
+                health: call.health,
+                max_health: call.max_health,
+                food: call.food,
+                active_effects: call.active_effects,
+                changes: &mut *call.changes,
+                keep: *call.keep,
+            };
+            part.apply_effect_tick(host, &mut event);
+            event.keep
+        }) {
+            Some(keep) => {
+                *call.keep = keep;
+                if !*call.keep {
+                    break;
+                }
+            }
+            None => {
+                call.changes.truncate(changes_len);
+            }
         }
     }
 }

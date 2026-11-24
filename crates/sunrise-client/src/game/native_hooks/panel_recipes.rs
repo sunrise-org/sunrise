@@ -1,4 +1,4 @@
-//! `RecipesClientHost::panel_recipes`: a native or wasm mod's `RecipePage` shown in its item
+//! `RecipesClientHost::panel_recipes`: a mod's `RecipePage` shown in its item
 //! panel's place, on the one path the panel's recipe view has (`native_panel_recipes`, then
 //! `Panel::show_recipes`). The API's types are converted to the renderer's here, at the boundary.
 use super::*;

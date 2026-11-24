@@ -210,7 +210,7 @@ impl<'r> BlockSupportRegistry<'r> {
         // Only a state that may publish asks the block entity, for the shape it holds.
         if self.cached.publishes_shapes(state)
             && let Some(shape) = world
-                .published_collision_shape(position)
+                .published_collision_shape(position, state)
                 .map_err(|e| SupportQueryError::Dynamic(DynamicSupportError::World(e)))?
         {
             return support

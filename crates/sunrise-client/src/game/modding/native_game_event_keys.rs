@@ -7,7 +7,7 @@ impl Game<'_> {
     pub(in crate::game) fn game_event_key_id(
         &self,
         key: mod_api::GameEventKey,
-    ) -> Result<String, mod_api::GameEventKeyError> {
+    ) -> Result<mod_api::RegistryName, mod_api::GameEventKeyError> {
         mod_api::__private::game_event_key_id(key).ok_or(mod_api::GameEventKeyError::InvalidKey)
     }
 }

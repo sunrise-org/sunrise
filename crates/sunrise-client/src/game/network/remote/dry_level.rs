@@ -66,11 +66,13 @@ impl<'w> DryLevel<'w> {
 
 impl crate::game::Game<'_> {
     /// Ask for the candidate state without spending the level random or scheduling live ticks.
+    /// A directional context's `replace_clicked` is read from the level; a question vanilla
+    /// throws on is refused (`Behaviours::state_for_resolved_placement`).
     pub(in crate::game) fn preview_state_for_placement(
         &mut self,
         block: BlockId,
         context: &PlacementContext,
-    ) -> Option<BlockStateId> {
+    ) -> std::result::Result<Option<BlockStateId>, sunrise_world::level::DirectionalRefusal> {
         self.with_placement_preview_level(|behaviours, level, ticks| {
             let mut dry = DryLevel::new(level);
             dry.random = (*level.world.random).clone();
@@ -182,9 +184,11 @@ impl sunrise_world::level::LevelAccess for DryLevel<'_> {
         {
             let source = match source {
                 // Block-use prediction already plays uncategorized sounds on Blocks.
-                None | Some(sunrise_world::level::LevelSoundSource::Blocks) => {
-                    mod_api::SoundSource::Blocks
-                }
+                None
+                | Some(
+                    sunrise_world::level::LevelSoundSource::Blocks
+                    | sunrise_world::level::LevelSoundSource::BlockPlacement { .. },
+                ) => mod_api::SoundSource::Blocks,
             };
             self.sounds.push((pos, sound, source, volume, pitch));
         }
@@ -468,17 +472,6 @@ impl sunrise_world::level::LevelAccess for DryLevel<'_> {
                 ground_pos,
                 may,
             )
-    }
-    fn placement_context(
-        &self,
-        item: &str,
-        context: &sunrise_world::level::PlacementContext,
-    ) -> Option<Option<sunrise_world::level::PlacementContext>> {
-        if self.asks_mods {
-            self.base.placement_context(item, context)
-        } else {
-            None
-        }
     }
     fn must_survive(&self, item: &str) -> Option<bool> {
         if self.asks_mods {

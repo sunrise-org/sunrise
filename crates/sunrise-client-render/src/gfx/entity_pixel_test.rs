@@ -213,18 +213,26 @@ fn software_frame_lit(
 }
 
 fn readback(frame: &Frame, encoder: wgpu::CommandEncoder) -> std::result::Result<Vec<u8>, String> {
-    let (width, height) = (frame.color.width(), frame.color.height());
+    readback_texture(&frame.device, &frame.queue, &frame.color, encoder)
+}
+
+fn readback_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    color: &wgpu::Texture,
+    mut encoder: wgpu::CommandEncoder,
+) -> std::result::Result<Vec<u8>, String> {
+    let (width, height) = (color.width(), color.height());
     let row_bytes = width * 4;
     let pitch = row_bytes.div_ceil(256) * 256;
-    let readback = frame.device.create_buffer(&wgpu::BufferDescriptor {
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: u64::from(pitch) * u64::from(height),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = encoder;
     encoder.copy_texture_to_buffer(
-        frame.color.as_image_copy(),
+        color.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &readback,
             layout: wgpu::TexelCopyBufferLayout {
@@ -233,12 +241,11 @@ fn readback(frame: &Frame, encoder: wgpu::CommandEncoder) -> std::result::Result
                 rows_per_image: None,
             },
         },
-        frame.color.size(),
+        color.size(),
     );
-    frame.queue.submit([encoder.finish()]);
+    queue.submit([encoder.finish()]);
     readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    frame
-        .device
+    device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(|error| error.to_string())?;
     let mapped = readback
@@ -1130,7 +1137,12 @@ pub fn render_pack(
         [SIZE; 2],
         &[],
         &mut |_, _, _, _| {},
-    );
+        Default::default(),
+        |_, _| false,
+        &std::sync::atomic::AtomicBool::new(false),
+        super::in_flight::poll_live,
+    )
+    .unwrap();
     let (color, read) = (screen.texture(), SIZE * 4);
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -1176,16 +1188,21 @@ fn probe_frame(hud: &HudBatch) -> super::Frame<'_> {
         camera: glam::DVec3::new(0.5, 100.0, 0.5),
         yaw: 0.0,
         pitch: 0.0,
+        roll: 0.0,
         fov_degrees: 90.0,
+        cull_fov_degrees: 90.0,
         bob: Mat4::IDENTITY,
+        view_transform: Mat4::IDENTITY,
         spin: Mat4::IDENTITY,
         sky: crate::environment::Sky::default(),
         distance: 12.0,
         detail_distance: 12.0,
+        shadow_distance: None,
         depth_far: 1000.0,
         underwater: false,
         cave_culling: false,
         title: false,
+        sky_pass: false,
         sky_blocked: false,
         skybox: false,
         end_sky: false,
@@ -1207,6 +1224,7 @@ fn probe_frame(hud: &HudBatch) -> super::Frame<'_> {
         glint_ticks: 0.0,
         nether_lighting: false,
         entities: &[],
+        explicit_particles: None,
         static_block_entities: &[],
         visible_static_block_entity_sections: &[],
         static_block_entity_stats: crate::block_entity_render::StaticCacheFrameStats::default(),
@@ -1225,6 +1243,7 @@ fn probe_frame(hud: &HudBatch) -> super::Frame<'_> {
         see_through: &[],
         world_primitives: Default::default(),
         celestial: &[],
+        celestial_bodies: &[],
         stars: None,
         hand: &[],
         hand_items: &[],
@@ -1274,6 +1293,531 @@ mod scrgb {
             "instanced scRGB {gpu} != cpu {cpu} at tint 0xFF3040 light 0x00F0 (ratio {ratio})"
         );
     }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_display_83224_has_no_seam_at_x1026() {
+        use super::super::*;
+        use bytemuck::Zeroable;
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+
+        // Pack a minimal HudAtlas containing opaque block/lime_concrete so its UV placement
+        // and border padding match real client builds.
+        let root = std::env::temp_dir().join(format!("sunrise-83224-seam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let blocks = root.join("assets/minecraft/textures/block");
+        std::fs::create_dir_all(&blocks).unwrap();
+        let file = std::fs::File::create(blocks.join("lime_concrete.png")).unwrap();
+        let mut enc = png::Encoder::new(file, 16, 16);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header()
+            .unwrap()
+            .write_image_data(&[100u8, 180, 30, 255].repeat(16 * 16))
+            .unwrap();
+        let atlas = crate::hud::HudAtlas::build(
+            &crate::resource_source::ResourceSource::directory(root.clone()),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let sprite = atlas.sprites["block/lime_concrete"];
+
+        // Build EID 83224's exact 6 faces from its deterministic center-billboard pose.
+        let ent_y = f64::from_bits(0x4072_d9eb_851e_b852);
+        let cam_y = f64::from_bits(0x4072_d9eb_94c0_0000);
+        let mut pose = crate::camera::joml::Mat4::IDENTITY;
+        pose.translate(0.0, (ent_y - cam_y) as f32, 0.0);
+        pose.rotate(crate::camera::joml::Quat::rotation_y(-std::f32::consts::PI));
+        let mut tx = crate::camera::joml::Mat4::IDENTITY;
+        tx.translate(
+            f32::from_bits(0x4039_c28f),
+            f32::from_bits(0x4001_0000),
+            f32::from_bits(0xc089_eb85),
+        );
+        tx.scale(
+            f32::from_bits(0x3fce_6666),
+            f32::from_bits(0x3d5c_28f6),
+            f32::from_bits(0x3ca3_d70a),
+        );
+        pose = pose.mul_affine(&tx);
+
+        let faces: [([[f32; 3]; 4], [i8; 4]); 6] = [
+            // down, up, north, south, west, east after 180° Y billboard orientation.
+            (
+                [
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 1.0],
+                ],
+                [0, -127, 0, crate::mesher::SHADED_CULL_W],
+            ),
+            (
+                [
+                    [0.0, 1.0, 0.0],
+                    [0.0, 1.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 1.0, 0.0],
+                ],
+                [0, 127, 0, crate::mesher::SHADED_CULL_W],
+            ),
+            (
+                [
+                    [1.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                ],
+                [0, 0, 127, crate::mesher::SHADED_CULL_W],
+            ),
+            (
+                [
+                    [0.0, 1.0, 1.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                [0, 0, -127, crate::mesher::SHADED_CULL_W],
+            ),
+            (
+                [
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+                [127, 0, 0, crate::mesher::SHADED_CULL_W],
+            ),
+            (
+                [
+                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                ],
+                [-127, 0, 0, crate::mesher::SHADED_CULL_W],
+            ),
+        ];
+        let mut verts = Vec::with_capacity(24);
+        let uvs = [
+            [sprite.u0, sprite.v0],
+            [sprite.u0, sprite.v1],
+            [sprite.u1, sprite.v1],
+            [sprite.u1, sprite.v0],
+        ];
+        for (corners, nb) in faces {
+            for (k, c) in corners.into_iter().enumerate() {
+                verts.push(Vertex {
+                    pos: pose.transform_position(c),
+                    uv: uvs[k],
+                    layer: 0,
+                    color: u32::MAX,
+                    light: 0x00F0_00F0,
+                    normal: nb,
+                    glint_uv: [0.0, 0.0],
+                });
+            }
+        }
+
+        let view_proj =
+            world_projection(70.0, 1280.0 / 800.0, 2048.0) * crate::camera::view_matrix(0.0, 0.0);
+
+        let mut limits = wgpu::Limits::default();
+        limits.max_texture_dimension_2d = limits
+            .max_texture_dimension_2d
+            .max(atlas.width)
+            .max(atlas.height);
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: limits,
+            ..Default::default()
+        }))
+        .expect("device");
+
+        let tex = |w, h, fmt, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: fmt,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let color = tex(
+            1280,
+            800,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth = tex(
+            1280,
+            800,
+            wgpu::TextureFormat::Depth32Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let atlas_tex = tex(
+            atlas.width,
+            atlas.height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        queue.write_texture(
+            atlas_tex.as_image_copy(),
+            &atlas.pixels(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(atlas.width * 4),
+                rows_per_image: None,
+            },
+            atlas_tex.size(),
+        );
+        let lm_tex = tex(
+            16,
+            16,
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        queue.write_texture(
+            lm_tex.as_image_copy(),
+            &[255u8; 16 * 16 * 4],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(64),
+                rows_per_image: None,
+            },
+            lm_tex.size(),
+        );
+        let sampler = device.create_sampler(&Default::default());
+        let mut globals = Globals::zeroed();
+        globals.view_proj = view_proj.to_cols_array_2d();
+        globals.fog = [1000.0, 2000.0, 1000.0, 2000.0];
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&globals),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &entity_binding_entries(),
+        });
+        let atlas_view = atlas_tex.create_view(&Default::default());
+        let lm_view = lm_tex.create_view(&Default::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lm_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(entity_shader().into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bindings)],
+            immediate_size: 0,
+        });
+        let buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ENTITY_ATTRIBUTES,
+        })];
+        let reuse = reuse::Reuse::default();
+        let kept = reuse.on(&device);
+        let pipeline = entity_pipeline_factory(
+            &kept,
+            &layout,
+            &layout,
+            &shader,
+            &buffers,
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        )(EntityPipelineOptions {
+            label: "Entities",
+            cull_mode: None,
+            depth_write: true,
+            compare: wgpu::CompareFunction::GreaterEqual,
+            bias: wgpu::DepthBiasState {
+                constant: 128,
+                slope_scale: 0.0,
+                clamp: 0.0,
+            },
+            blend: wgpu::BlendState::ALPHA_BLENDING,
+            clouds: false,
+            vertex: "vs_entity",
+            fragment: "fs_entity",
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let indices: Vec<u32> = (0..6u32)
+            .flat_map(|i| [4 * i, 4 * i + 1, 4 * i + 2, 4 * i, 4 * i + 2, 4 * i + 3])
+            .collect();
+        let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let cv = color.create_view(&Default::default());
+            let dv = depth.create_view(&Default::default());
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &cv,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &dv,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_vertex_buffer(0, vbuf.slice(..));
+            pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..36, 0, 0..1);
+        }
+        let pitch = (1280 * 4u32).div_ceil(256) * 256;
+        let rb = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(pitch) * 800,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            color.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &rb,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: None,
+                },
+            },
+            color.size(),
+        );
+        queue.submit([enc.finish()]);
+        rb.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let mapped = rb.slice(..).get_mapped_range().unwrap();
+        let px_at = |x: u32, y: u32| -> [u8; 3] {
+            let off = (y * pitch + x * 4) as usize;
+            [mapped[off], mapped[off + 1], mapped[off + 2]]
+        };
+        assert_ne!(px_at(1025, 126), [0, 0, 0], "shaded west face at x=1025");
+        assert_ne!(px_at(1026, 132), [0, 0, 0], "shaded down face at y=132");
+        for y in 124..=131 {
+            assert_eq!(
+                px_at(1026, y),
+                px_at(1027, y),
+                "seam at (1026, {y}) on {}: got {:?}, front face at x=1027 is {:?}",
+                adapter.get_info().name,
+                px_at(1026, y),
+                px_at(1027, y),
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn explicit_particle_layers_render_in_device_sized_draws() {
+    use super::particle_draws::{EXPLICIT_PARTICLE_OVERLAY, ParticleDraws, ParticlePipelines};
+    let _gpu = crate::gfx::test_gpu::lock();
+    let frame = software_frame_lit(
+        [1, 1],
+        &[255; 4],
+        Mat4::IDENTITY,
+        0.0,
+        [SIZE; 2],
+        &[255; 16 * 16 * 4],
+    )
+    .expect("software Vulkan frame");
+    let shader = frame
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(entity_shader().into()),
+        });
+    let layout = frame
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&frame.bindings)],
+            immediate_size: 0,
+        });
+    let buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: size_of::<Vertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &ENTITY_ATTRIBUTES,
+    })];
+    let reuse = reuse::Reuse::default();
+    let kept = reuse.on(&frame.device);
+    let pipelines = ParticlePipelines::new(entity_pipeline_factory(
+        &kept,
+        &layout,
+        &layout,
+        &shader,
+        &buffers,
+        wgpu::TextureFormat::Rgba8Unorm,
+        false,
+    ));
+    let quad = |x: f32, y: f32, z, color, back: bool| {
+        let mut corners = [(0.25, -0.25), (0.25, 0.25), (-0.25, 0.25), (-0.25, -0.25)];
+        if back {
+            corners.reverse();
+        }
+        corners.map(|(dx, dy)| Vertex {
+            pos: [x + dx, y + dy, z],
+            uv: [0.5; 2],
+            layer: EXPLICIT_PARTICLE_OVERLAY,
+            color,
+            light: 0,
+            normal: [0; 4],
+            glint_uv: [0.0; 2],
+        })
+    };
+    let opaque = [
+        quad(-0.5, 0.5, 0.75, 0x8000_00ff, false),
+        quad(-0.5, 0.5, 0.5, 0xff00_ff00, false),
+        quad(-0.5, -0.5, 0.75, 0x08ff_ffff, false),
+        quad(0.5, -0.5, 0.75, 0xffff_ffff, true),
+        quad(0.0, -0.5, 0.75, 0xffff_0000, false),
+    ];
+    let translucent = [
+        quad(0.5, 0.5, 0.75, 0x8000_00ff, false),
+        quad(0.5, 0.5, 0.5, 0xff00_ff00, false),
+    ];
+    let mut draws = [ParticleDraws::default(), ParticleDraws::default()];
+    let mut uploads = super::upload::Uploads::new(&frame.device);
+    let mut encoder = frame.device.create_command_encoder(&Default::default());
+    for (draws, vertices) in draws
+        .iter_mut()
+        .zip([opaque.as_flattened(), translucent.as_flattened()])
+    {
+        let limit = size_of::<[Vertex; 4]>() as u64;
+        assert_eq!(
+            draws.prepare(&frame.device, &mut uploads, &mut encoder, vertices, limit),
+            1
+        );
+    }
+    let index = super::Renderer::quad_indices(&frame.device, 1);
+    {
+        let color = frame.color.create_view(&Default::default());
+        let depth = frame.depth.create_view(&Default::default());
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth,
+                stencil_ops: None,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+            }),
+            ..Default::default()
+        });
+        pass.set_bind_group(0, &frame.group, &[]);
+        pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
+        for (draws, pipeline) in draws
+            .iter()
+            .zip([&pipelines.opaque, &pipelines.translucent])
+        {
+            pass.set_pipeline(pipeline);
+            draws.draw(&mut pass);
+        }
+    }
+    uploads.finish(&encoder);
+    let pixels = readback(&frame, encoder).expect("particle output readback");
+    let rgb = |x, y| {
+        let at = ((y * SIZE + x) * 4) as usize;
+        &pixels[at..at + 3]
+    };
+    assert_eq!(
+        rgb(SIZE / 4, SIZE / 4),
+        [255, 0, 0],
+        "opaque replaces covered pixels and writes depth"
+    );
+    assert_eq!(
+        rgb(SIZE * 3 / 4, SIZE / 4),
+        [128, 0, 0],
+        "translucent blends and writes depth"
+    );
+    assert_eq!(rgb(SIZE / 4, SIZE * 3 / 4), [0, 0, 0], "alpha cutout");
+    assert_eq!(
+        rgb(SIZE * 3 / 4, SIZE * 3 / 4),
+        [0, 0, 0],
+        "back face culling"
+    );
+    assert_eq!(
+        rgb(SIZE / 2, SIZE * 3 / 4),
+        [0, 0, 255],
+        "the final upload partition was drawn"
+    );
 }
 
 /// Draws a real screen batch through the engine HUD pipeline on software Vulkan.
@@ -1300,6 +1844,7 @@ pub fn render_hud(
         &frame.atlas,
         &sampler,
         false,
+        Vec::new(),
     )
     .map_err(|error| error.to_string())?;
     // As the game's renderer has it (gfx.rs): the batch's atlas patches, a map's or a mod's
@@ -1327,4 +1872,697 @@ pub fn render_hud(
     uploads.finish(&encoder);
     hud.draw(&mut encoder, &color, &depth, batch, size);
     readback(&frame, encoder)
+}
+
+/// Exposed reversed-Z world projection for cross-crate entity and OIT pixel tests.
+pub fn test_world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
+    super::world_projection(fov_degrees, aspect, far)
+}
+
+/// Inputs for [`render_entity_world`], running `EntityBatch`, banner-pattern / glint-only
+/// overlays, and (when `oit` is true) the production improved-transparency stages on software Vulkan.
+pub struct EntityWorldDraw<'a> {
+    pub vertices: &'a [Vertex],
+    pub atlas_size: [u32; 2],
+    pub atlas: &'a [u8],
+    pub glint_size: [u32; 2],
+    pub glint: &'a [u8],
+    pub view_proj: Mat4,
+    pub glint_alpha: f32,
+    pub oit: bool,
+}
+
+/// Renders world entity quads through `EntityBatch`, the production entity / banner-pattern /
+/// glint-only pipelines, and (when `draw.oit` is true) the production OIT shaders.
+pub fn render_entity_world(draw: EntityWorldDraw<'_>) -> std::result::Result<Vec<u8>, String> {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let adapter = software_adapter()?;
+    let required_features = if draw.oit {
+        super::oit::features(&adapter)
+    } else {
+        wgpu::Features::empty()
+    };
+    let mut required_limits = wgpu::Limits::default();
+    required_limits.max_texture_dimension_2d = required_limits
+        .max_texture_dimension_2d
+        .max(draw.atlas_size[0])
+        .max(draw.atlas_size[1])
+        .max(draw.glint_size[0])
+        .max(draw.glint_size[1]);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features,
+        required_limits,
+        ..Default::default()
+    }))
+    .map_err(|error| format!("software Vulkan device request failed: {error}"))?;
+    if draw.oit && !super::oit::supported(&device) {
+        return Err("software Vulkan adapter does not support OIT (FLOAT32_BLENDABLE)".into());
+    }
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let texture = |width, height, format, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let upload = |tex: &wgpu::Texture, size: [u32; 2], pixels: &[u8]| {
+        queue.write_texture(
+            tex.as_image_copy(),
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] * 4),
+                rows_per_image: None,
+            },
+            tex.size(),
+        );
+    };
+    let color = texture(
+        SIZE,
+        SIZE,
+        format,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let depth = texture(
+        SIZE,
+        SIZE,
+        wgpu::TextureFormat::Depth32Float,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    );
+    let atlas_tex = texture(
+        draw.atlas_size[0],
+        draw.atlas_size[1],
+        format,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    );
+    upload(&atlas_tex, draw.atlas_size, draw.atlas);
+    let glint_tex = texture(
+        draw.glint_size[0],
+        draw.glint_size[1],
+        format,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    );
+    upload(&glint_tex, draw.glint_size, draw.glint);
+    let lightmap = texture(
+        16,
+        16,
+        format,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    );
+    upload(&lightmap, [16, 16], &[255u8; 4].repeat(16 * 16));
+    let sampler = device.create_sampler(&Default::default());
+    let glint_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        ..Default::default()
+    });
+    let mut globals = Globals::zeroed();
+    globals.view_proj = draw.view_proj.to_cols_array_2d();
+    globals.fog = [1000.0, 2000.0, 1000.0, 2000.0];
+    globals.fog_ends[3] = draw.glint_alpha;
+    globals.hdr_light = [0.0, 0.0, 1.0, 0.0];
+    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::bytes_of(&globals),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &entity_binding_entries(),
+    });
+    let atlas_view = atlas_tex.create_view(&Default::default());
+    let glint_view = glint_tex.create_view(&Default::default());
+    let light_view = lightmap.create_view(&Default::default());
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &bindings,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&atlas_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&light_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&glint_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::Sampler(&glint_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(&glint_view),
+            },
+        ],
+    });
+    let mut batch = EntityBatch::default();
+    let counts = batch
+        .update_within(draw.vertices, &[], &[], &[], &[], draw.oit, usize::MAX)
+        .materials;
+    let [
+        entity_quads,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        translucent_item_quads,
+        oit_entity_quads,
+        fluid_quads,
+        world_text_quads,
+        world_text_offset_quads,
+        native_solid_quads,
+        native_cutout_quads,
+        native_cutout_mipped_quads,
+        native_translucent_quads,
+        banner_pattern_quads,
+        glint_only_quads,
+        text_offset_solid_quads,
+        text_normal_solid_quads,
+    ] = counts;
+    let text_solid_quads = text_offset_solid_quads + text_normal_solid_quads;
+    let world_quads: u32 = counts.iter().sum();
+    let base_quads = world_quads
+        - oit_entity_quads
+        - fluid_quads
+        - world_text_quads
+        - world_text_offset_quads
+        - native_solid_quads
+        - native_cutout_quads
+        - native_cutout_mipped_quads
+        - native_translucent_quads
+        - banner_pattern_quads
+        - glint_only_quads
+        - text_solid_quads;
+    let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&batch.combined),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let indices: Vec<u32> = (0..world_quads)
+        .flat_map(|i| [4 * i, 4 * i + 1, 4 * i + 2, 4 * i, 4 * i + 2, 4 * i + 3])
+        .collect();
+    let index = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(entity_shader().into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&bindings)],
+        immediate_size: 0,
+    });
+    let buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Vertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &ENTITY_ATTRIBUTES,
+    })];
+    let reuse = reuse::Reuse::default();
+    let kept = reuse.on(&device);
+    let make_pipeline = |fragment, depth_write, compare, bias, blend| {
+        entity_pipeline_factory(&kept, &layout, &layout, &shader, &buffers, format, false)(
+            EntityPipelineOptions {
+                label: fragment,
+                cull_mode: None,
+                depth_write,
+                compare,
+                bias,
+                blend,
+                clouds: false,
+                vertex: "vs_entity",
+                fragment,
+                write_mask: wgpu::ColorWrites::ALL,
+            },
+        )
+    };
+    let entity_bias = wgpu::DepthBiasState {
+        constant: 128,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    };
+    let glint_blend = wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+    };
+    let entity_pipeline = make_pipeline(
+        "fs_entity",
+        true,
+        wgpu::CompareFunction::GreaterEqual,
+        entity_bias,
+        wgpu::BlendState::ALPHA_BLENDING,
+    );
+    let banner_pattern_pipeline = make_pipeline(
+        "fs_banner_pattern",
+        false,
+        wgpu::CompareFunction::GreaterEqual,
+        entity_bias,
+        wgpu::BlendState::ALPHA_BLENDING,
+    );
+    let glint_only_pipeline = make_pipeline(
+        "fs_glint",
+        false,
+        wgpu::CompareFunction::Equal,
+        entity_bias,
+        glint_blend,
+    );
+    let translucent_item_pipeline = make_pipeline(
+        "fs_entity",
+        true,
+        wgpu::CompareFunction::GreaterEqual,
+        wgpu::DepthBiasState::default(),
+        wgpu::BlendState::ALPHA_BLENDING,
+    );
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let color_view = color.create_view(&Default::default());
+    let depth_view = depth.create_view(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        if world_quads > 0 {
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_vertex_buffer(0, vertex.slice(..));
+            pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
+            if entity_quads > 0 {
+                pass.set_pipeline(&entity_pipeline);
+                pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
+            }
+            if banner_pattern_quads > 0 {
+                pass.set_pipeline(&banner_pattern_pipeline);
+                pass.draw_indexed(
+                    0..banner_pattern_quads * 6,
+                    ((world_quads - text_solid_quads - glint_only_quads - banner_pattern_quads) * 4)
+                        as i32,
+                    0..1,
+                );
+            }
+            if glint_only_quads > 0 {
+                pass.set_pipeline(&glint_only_pipeline);
+                pass.draw_indexed(
+                    0..glint_only_quads * 6,
+                    ((world_quads - text_solid_quads - glint_only_quads) * 4) as i32,
+                    0..1,
+                );
+            }
+            if !draw.oit && translucent_item_quads > 0 {
+                pass.set_pipeline(&translucent_item_pipeline);
+                pass.draw_indexed(
+                    0..translucent_item_quads * 6,
+                    ((base_quads - translucent_item_quads) * 4) as i32,
+                    0..1,
+                );
+            }
+        }
+    }
+    if draw.oit && (translucent_item_quads > 0 || oit_entity_quads > 0) {
+        let oit_entity_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                (entity_shader()
+                    + include_str!("../oit.wgsl")
+                    + include_str!("../oit_features.wgsl"))
+                .into(),
+            ),
+        });
+        let oit_world_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                (terrain_shader()
+                    + include_str!("../oit.wgsl")
+                    + include_str!("../oit_world.wgsl"))
+                .into(),
+            ),
+        });
+        let oit_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[
+                draw.view_proj.z_axis.z,
+                draw.view_proj.w_axis.z,
+                0.0f32,
+                0.0f32,
+            ]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let att = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let bounds = texture(
+            SIZE,
+            SIZE,
+            wgpu::TextureFormat::Rgba32Float,
+            att | wgpu::TextureUsages::COPY_SRC,
+        );
+        let culled = texture(
+            SIZE,
+            SIZE,
+            wgpu::TextureFormat::Rgba32Float,
+            att | wgpu::TextureUsages::COPY_DST,
+        );
+        let coeff0 = texture(SIZE, SIZE, wgpu::TextureFormat::Rgba16Float, att);
+        let coeff1 = texture(SIZE, SIZE, wgpu::TextureFormat::Rgba16Float, att);
+        let accumulated = texture(SIZE, SIZE, wgpu::TextureFormat::Rgba16Float, att);
+        let bounds_view = bounds.create_view(&Default::default());
+        let culled_view = culled.create_view(&Default::default());
+        let coeff0_view = coeff0.create_view(&Default::default());
+        let coeff1_view = coeff1.create_view(&Default::default());
+        let accum_view = accumulated.create_view(&Default::default());
+        let oit_entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        };
+        let oit_tex = |binding| {
+            oit_entry(
+                binding,
+                wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+            )
+        };
+        let oit_params = oit_entry(
+            0,
+            wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+        );
+        let make_oit_layout = |entries: &[wgpu::BindGroupLayoutEntry]| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries,
+            })
+        };
+        let oit_layouts = [
+            make_oit_layout(&[oit_params]),
+            make_oit_layout(&[oit_params, oit_tex(1)]),
+            make_oit_layout(&[oit_params, oit_tex(1), oit_tex(2), oit_tex(3)]),
+            make_oit_layout(&[oit_params, oit_tex(1), oit_tex(2), oit_tex(3), oit_tex(4)]),
+        ];
+        let make_oit_bg = |idx: usize, views: &[&wgpu::TextureView]| {
+            let mut entries = Vec::with_capacity(1 + views.len());
+            entries.push(wgpu::BindGroupEntry {
+                binding: 0,
+                resource: oit_uniform.as_entire_binding(),
+            });
+            for (i, view) in views.iter().enumerate() {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: (i + 1) as u32,
+                    resource: wgpu::BindingResource::TextureView(view),
+                });
+            }
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &oit_layouts[idx],
+                entries: &entries,
+            })
+        };
+        let bg_bounds = make_oit_bg(0, &[]);
+        let bg_cull = make_oit_bg(1, &[&bounds_view]);
+        let bg_transmittance = make_oit_bg(1, &[&culled_view]);
+        let bg_accumulate = make_oit_bg(2, &[&culled_view, &coeff0_view, &coeff1_view]);
+        let bg_composite = make_oit_bg(3, &[&culled_view, &coeff0_view, &coeff1_view, &accum_view]);
+        let oit_entity = [
+            (super::oit::Stage::DepthBounds, "fs_oit_entity_bounds"),
+            (
+                super::oit::Stage::Transmittance,
+                "fs_oit_entity_transmittance",
+            ),
+            (super::oit::Stage::Accumulate, "fs_oit_entity_accumulate"),
+        ]
+        .map(|(stage, fragment)| {
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&bindings), None, Some(&oit_layouts[stage as usize])],
+                ..Default::default()
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &oit_entity_shader,
+                    entry_point: Some("vs_entity"),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &oit_entity_shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &super::oit::stage_targets(stage),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+        let oit_screen = |group_idx: usize,
+                          fragment: &str,
+                          targets: &[Option<wgpu::ColorTargetState>],
+                          depth_compare: wgpu::CompareFunction| {
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[None, None, Some(&oit_layouts[group_idx])],
+                ..Default::default()
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &oit_world_shader,
+                    entry_point: Some("vs_sky"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(depth_compare),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &oit_world_shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let cull_pipeline = oit_screen(
+            1,
+            "fs_oit_cull",
+            &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba32Float,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            wgpu::CompareFunction::GreaterEqual,
+        );
+        let premultiplied = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let composite_pipeline = oit_screen(
+            3,
+            "fs_oit_composite",
+            &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState {
+                    color: premultiplied,
+                    alpha: premultiplied,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            wgpu::CompareFunction::Always,
+        );
+        let color_att = |view, load| {
+            Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })
+        };
+        let draw_stage = |pass: &mut wgpu::RenderPass<'_>,
+                          pipeline: &wgpu::RenderPipeline,
+                          oit_bg: &wgpu::BindGroup| {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(2, oit_bg, &[]);
+            pass.set_vertex_buffer(0, vertex.slice(..));
+            pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
+            if translucent_item_quads > 0 {
+                pass.draw_indexed(
+                    0..translucent_item_quads * 6,
+                    ((base_quads - translucent_item_quads) * 4) as i32,
+                    0..1,
+                );
+            }
+            if oit_entity_quads > 0 {
+                pass.draw_indexed(0..oit_entity_quads * 6, (base_quads * 4) as i32, 0..1);
+            }
+        };
+        let read_depth = || {
+            Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: None,
+                stencil_ops: None,
+            })
+        };
+        let rw_depth = || {
+            Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            })
+        };
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[color_att(
+                    &bounds_view,
+                    wgpu::LoadOp::Clear(wgpu::Color {
+                        r: -(f32::MAX as f64),
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.0,
+                    }),
+                )],
+                depth_stencil_attachment: read_depth(),
+                ..Default::default()
+            });
+            draw_stage(&mut pass, &oit_entity[0], &bg_bounds);
+        }
+        encoder.copy_texture_to_texture(
+            bounds.as_image_copy(),
+            culled.as_image_copy(),
+            bounds.size(),
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[color_att(&culled_view, wgpu::LoadOp::Load)],
+                depth_stencil_attachment: rw_depth(),
+                ..Default::default()
+            });
+            pass.set_pipeline(&cull_pipeline);
+            pass.set_bind_group(2, &bg_cull, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[
+                    color_att(&coeff0_view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)),
+                    color_att(&coeff1_view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)),
+                ],
+                depth_stencil_attachment: read_depth(),
+                ..Default::default()
+            });
+            draw_stage(&mut pass, &oit_entity[1], &bg_transmittance);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[color_att(
+                    &accum_view,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                )],
+                depth_stencil_attachment: read_depth(),
+                ..Default::default()
+            });
+            draw_stage(&mut pass, &oit_entity[2], &bg_accumulate);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[color_att(&color_view, wgpu::LoadOp::Load)],
+                depth_stencil_attachment: rw_depth(),
+                ..Default::default()
+            });
+            pass.set_pipeline(&composite_pipeline);
+            pass.set_bind_group(2, &bg_composite, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+    readback_texture(&device, &queue, &color, encoder)
 }

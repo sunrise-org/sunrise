@@ -11,7 +11,8 @@ pub mod play;
 pub mod recipes;
 pub mod status;
 
-use crate::buf::{Codec, Reader, Writer};
+use crate::buf::{Codec, Reader};
+use sunrise_core::vanilla_bytes::Writer;
 
 /// Generate a state's packet enum from (Variant(Type) = ID) entries.
 #[macro_export]
@@ -56,28 +57,36 @@ macro_rules! packet_enum {
             pub fn decode_with_payload_codecs(id: i32, payload: &[u8], codecs: &$crate::packets::custom_payload::PayloadCodecs) -> $crate::Result<Self> {
                 Self::decode_reader(id, $crate::buf::Reader::with_payload_codecs(payload, codecs))
             }
-            fn decode_reader(id: i32, mut r: $crate::buf::Reader<'_>) -> $crate::Result<Self> {
+            /// Decode a packet with the supplied connection context.
+            pub fn decode_reader(id: i32, mut r: $crate::buf::Reader<'_>) -> $crate::Result<Self> {
                 use $ids as ids;
                 let packet = match id {
                     $(ids::$id => Self::$variant(<$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::read(&mut r)?),)*
-                    _ => return Ok(Self::Unknown(id, r.rest().to_vec())),
+                    _ if usize::try_from(id).ok().is_some_and(|i| i < ids::NAMES.len()) => {
+                        return Ok(Self::Unknown(id, r.rest().to_vec()));
+                    }
+                    _ => return Err($crate::Error::unknown_packet_id(id)),
                 };
                 if r.remaining() != 0 {
-                    return Err($crate::Error::new(format!(
-                        "packet {} ({}) was larger than expected: {} extra bytes",
+                    return Err($crate::Error::packet_extra_bytes(
                         id,
                         stringify!($name),
-                        r.remaining()
-                    )));
+                        r.remaining(),
+                    ));
                 }
                 Ok(packet)
             }
-            /// Validate directional constraints before allocating an encoded body.
-            pub fn try_encode(&self) -> $crate::Result<Vec<u8>> {
+            /// Validate directional and codec field constraints without allocating an encoded body.
+            pub fn validate(&self) -> $crate::Result<()> {
                 match self {
                     $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::validate(p)?,)*
                     Self::Unknown(_, _) => {}
                 }
+                Ok(())
+            }
+            /// Validate directional constraints before allocating an encoded body.
+            pub fn try_encode(&self) -> $crate::Result<Vec<u8>> {
+                self.validate()?;
                 Ok(self.encode())
             }
             /// Validate registered custom payloads in this connection's codec context.
@@ -88,15 +97,18 @@ macro_rules! packet_enum {
                 }
                 Ok(self.encode())
             }
+            fn write_payload(&self, w: &mut ::sunrise_core::vanilla_bytes::Writer) {
+                match self {
+                    $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::write(p, w),)*
+                    Self::Unknown(_, payload) => w.bytes(payload),
+                }
+            }
             /// The packet body: VarInt id then payload, for trusted values.
             /// Use `try_encode` for values supplied by mods or other untrusted producers.
             pub fn encode(&self) -> Vec<u8> {
-                let mut w = $crate::buf::Writer::new();
+                let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
                 w.varint(self.id());
-                match self {
-                    $(Self::$variant(p) => <$crate::packet_codec!($ty $(, $codec)?) as $crate::buf::Codec<$ty>>::write(p, &mut w),)*
-                    Self::Unknown(_, payload) => w.bytes(payload),
-                }
+                self.write_payload(&mut w);
                 w.data
             }
         }

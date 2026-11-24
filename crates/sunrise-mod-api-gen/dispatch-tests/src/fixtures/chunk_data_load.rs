@@ -1,31 +1,53 @@
-//! `chunk_data_load` and `chunk_data_save`: the disk hooks run each mod through the disk runtime's
-//! `invoke` and stop at the first failed job. Stand-ins for the restricted host and the store.
+//! Chunk disk edits use the same per-listener panic boundary as other borrowed outputs.
 mod stubs {
     pub(super) trait ChunkDiskHost {}
-    #[derive(Clone, Debug, Default)]
-    pub(super) struct ChunkDiskFailure {
-        pub mod_id: String,
-    }
-    #[derive(Default)]
+    #[derive(Clone)]
     pub(super) struct ChunkDiskData {
-        failure: Option<ChunkDiskFailure>,
-    }
-    impl ChunkDiskData {
-        pub(super) fn failure(&self) -> Option<&ChunkDiskFailure> {
-            self.failure.as_ref()
-        }
-        pub(super) fn refuse(&mut self, error: ChunkDiskFailure) {
-            self.failure.get_or_insert(error);
-        }
-        pub(super) fn attribute_failure(&mut self, error: ChunkDiskFailure) {
-            self.failure = Some(error);
-        }
-    }
-    pub(super) mod chunk_disk {
-        pub(crate) fn invoke(_: &str, call: impl FnOnce()) -> Result<(), super::ChunkDiskFailure> {
-            call();
-            Ok(())
-        }
+        pub value: i32,
     }
 }
-use stubs::chunk_disk;
+
+impl ChunkDiskHost for TestHost {}
+
+#[test]
+fn a_panicking_listener_cannot_discard_other_chunk_edits() {
+    struct Listener {
+        input: i32,
+        output: i32,
+        unwind: bool,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Listener {
+        fn chunk_data_load(&self, _: &dyn ChunkDiskHost, event: &mut ChunkDataLoadEvent<'_>) {
+            assert_eq!(event.data.value, self.input);
+            event.data.value = self.output;
+            assert!(!self.unwind, "tentative chunk edit");
+        }
+    }
+
+    install(
+        [
+            ("disk_first", 7, 8, false),
+            ("disk_panic", 8, 99, true),
+            ("disk_last", 8, 9, false),
+        ]
+        .into_iter()
+        .map(|(id, input, output, unwind)| {
+            ModEntry::new(
+                id,
+                Box::new(Listener {
+                    input,
+                    output,
+                    unwind,
+                }),
+            )
+        })
+        .collect(),
+    );
+    let mut job = ChunkDiskData { value: 7 };
+    mod_api::dispatch_chunk_data_load(&TestHost, &mut job);
+    assert_eq!(job.value, 9);
+    assert!(runtime::poisoned(HookId::ChunkDataLoad, "disk_panic"));
+    assert!(!runtime::poisoned(HookId::ChunkDataLoad, "disk_first"));
+    assert!(!runtime::poisoned(HookId::ChunkDataLoad, "disk_last"));
+}

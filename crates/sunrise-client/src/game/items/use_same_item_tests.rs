@@ -14,7 +14,7 @@ fn eating(ticks: u32, f: impl FnOnce(&mut Game<'_>)) -> Vec<String> {
         game.build_registries();
         game.ui.registries.permission = 4;
         game.screen = Screen::Playing;
-        game.right = true;
+        game.set_mapping_held("key.use", true);
         game.inventory[9] = Some(ItemStack::new("minecraft:arrow", 64));
         assert!(game.start_using_item());
         for _ in 0..ticks {
@@ -43,7 +43,7 @@ fn a_bow_put_in_place_of_the_apple_stops_the_use() {
         *game.held_mut() = Some(ItemStack::new("minecraft:bow", 1));
         game.tick_using();
         assert!(game.using.is_none());
-        game.right = false;
+        game.set_mapping_held("key.use", false);
         assert!(!game.release_using_item());
         assert_eq!(arrows(game), 64, "no arrow is fired");
     });
@@ -91,7 +91,7 @@ fn another_apple_stack_goes_on_with_the_use() {
 fn releasing_right_after_a_bow_replaced_the_apple_fires_nothing() {
     let lines = eating(20, |game| {
         *game.held_mut() = Some(ItemStack::new("minecraft:bow", 1));
-        game.right = false;
+        game.set_mapping_held("key.use", false);
         assert!(game.release_using_item());
         assert!(game.using.is_none());
         assert_eq!(arrows(game), 64, "no arrow is fired");

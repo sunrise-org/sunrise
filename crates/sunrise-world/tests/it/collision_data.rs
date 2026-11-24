@@ -510,6 +510,7 @@ fn declared_shape_offsets_match_vanilla_xz_xyz_and_clamp_without_moving_the_cach
         fn published_collision_shape(
             &mut self,
             _: [i32; 3],
+            _: BlockStateId,
         ) -> Result<Option<VoxelShape>, Self::Error> {
             Ok(self.published.then(VoxelShape::block))
         }

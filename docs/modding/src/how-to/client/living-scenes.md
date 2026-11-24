@@ -7,28 +7,17 @@ GuideME's living scene: a lit furnace shows its flames and smoke, a campfire smo
 flickers, and dripstone and leaves drip, the way the client's animate tick makes these
 particles for blocks near the player.
 
+When a scene block includes a mod block entity, `block_entity_submit` draws it using
+a read-only borrow of the supplied entity data (`event.entity.nbt()`, `item_slot`,
+`copy_item_slot`) and full-bright lighting. The hook's `pos` is relative to
+the scene; it does not identify a block in the client level.
+
+For a menu screen, use the draw context from `MenuScreen::with_draw(|host, frame, draw| ...)`.
+Build a scene in the factory and capture it by value in the draw callback so its state belongs to
+one opening. Offset the scene rectangle by `frame.origin` if the scene should follow the panel.
+
 ```rust
-use mod_api::{GuiEntity, Scene, SceneClock, SceneEntity, SceneView};
-
-// Blocks alone: no clock, no state.
-event.batch.draw_scene(rect, &Scene::new(blocks.clone()), view)?;
-
-// Build a living scene once and keep it. Change only its clock from frame to frame.
-let mut scene = Scene::new(blocks)
-    .with_clock(SceneClock::new(1, 0, 0.0))
-    .with_entities(vec![
-        SceneEntity::new(GuiEntity::kind("minecraft:cow"), [1.5, 0.0, 0.5]).turned(135.0, 150.0, 0.0),
-    ]);
-
-// In `screen_draw`: the page's own tick count, 20 a second, and the frame's partial tick.
-if let Some(clock) = &mut scene.clock {
-    clock.tick = page_ticks;
-    clock.partial = partial;
-}
-let view = SceneView::new([1.0, 0.5, 0.5], 225.0, 30.0, 18.0);
-if let Err(why) = event.batch.draw_scene([12.0, 20.0, 140.0, 110.0], &scene, view) {
-    log::warn!("scene not drawn whole: {why:?}");
-}
+{{#include ../../../examples/src/client_rendering.rs:draw_living_scene}}
 ```
 
 ## Entities
@@ -38,9 +27,11 @@ of a living type, with optional saved data (a baby, a sheep's colour), or an ent
 client's level as it is this frame. It is prepared and drawn by that same path: its type's
 renderer as in the world (a mod's `register_entity_renderers` renderer in place of the
 vanilla model, then the `register_entity_layers` layers), full bright, shaded by face like
-the scene's blocks and sorted with them by depth. Its feet stand at `pos` in the scene's
-coordinates, turned by `yaw`, `head_yaw` and `head_pitch` in entity degrees (yaw 0 faces
-south).
+the scene's blocks and sorted with them by depth. A layer borrows the
+[final body model](model-drawing.md#read-the-final-body-model) as in the world, or receives
+`model: None` if a registered replacement drew instead. Scene draws do not run the world
+Player or Living Pre/Post hooks. The entity's feet stand at `pos` in the scene's coordinates,
+turned by `yaw`, `head_yaw` and `head_pitch` in entity degrees (yaw 0 faces south).
 
 The entity is made for drawing only. It never joins a level and never ticks, and no mod
 part's `register_goals` runs for it. Its age is the clock's tick, so the model's idle

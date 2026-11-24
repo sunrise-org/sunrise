@@ -20,6 +20,9 @@ use sunrise_client::{
 /// Nothing but the entity: these predicates read only its type and components.
 struct Empty;
 impl World for Empty {
+    fn is_loaded(&self, _: [i32; 3]) -> bool {
+        false
+    }
     fn dimension(&self) -> &str {
         "minecraft:overworld"
     }

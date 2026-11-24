@@ -146,6 +146,19 @@ pub fn set_world_looks<'a>(looks: impl IntoIterator<Item = &'a FluidLook>) {
         .set_looks(looks);
 }
 
+/// The name of the flat white sprite [`insert_flat`](crate::sprites::Sprites::insert_flat) makes
+/// for fluids whose look names no sprite.
+pub const FLAT_SPRITE: &str = "sunrise:flat_color";
+
+/// Whether some fluid's look names no sprite, so a box of it draws its tint flat.
+pub fn any_flat_look() -> bool {
+    let data = data();
+    data.looks
+        .iter()
+        .chain(&data.tank_looks)
+        .any(|look| look.sprite.is_none())
+}
+
 /// Replaces the models recollected before each resource bake, including reloads.
 pub fn register(models: Vec<FluidModel>) {
     DATA.write()
@@ -258,6 +271,8 @@ mod tests {
             sprite: sprite.map(Into::into),
             tint,
             world: Some(WorldFluid::default()),
+            bucket_item: None,
+            measures: Default::default(),
         }
     }
     fn model(fluid: &str) -> FluidModel {

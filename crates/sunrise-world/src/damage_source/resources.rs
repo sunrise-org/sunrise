@@ -28,7 +28,9 @@ pub fn resource_files(root: &Path, kind: &str) -> io::Result<BTreeMap<String, Ve
             Err(e) => return Err(e),
         };
         for file in &folder.files {
-            files.insert(format!("{ns}:{}", file.name), file.bytes()?.to_vec());
+            if crate::json_folder::valid_resource_path(&ns, &file.name) {
+                files.insert(format!("{ns}:{}", file.name), file.bytes()?.to_vec());
+            }
         }
     }
     Ok(files)
@@ -220,6 +222,8 @@ impl Catalog {
                 }
             }
         }
+        // A fresh registry load must not inherit another snapshot's bindings.
+        catalog.tags.clear();
         catalog.reload_tags(root, overlay)
     }
 
@@ -227,10 +231,11 @@ impl Catalog {
     /// only tags change, including when a pack containing a type is disabled.
     pub fn reload_tags(&self, root: &Path, overlay: &PackOverlay<'_>) -> io::Result<Self> {
         let mut catalog = self.clone();
-        catalog.tags = resource_tags(root, overlay, |id, _| catalog.ids.get(id).copied())?
-            .into_iter()
-            .map(|(id, values)| (id, values.into_iter().collect()))
-            .collect();
+        let tags = resource_tags(root, overlay, |id, _| catalog.ids.get(id).copied())?;
+        // TagLoader.loadPendingTags leaves the registry alone if no tag bound.
+        if !tags.is_empty() {
+            catalog.tags = tags;
+        }
         Ok(catalog)
     }
 }

@@ -1,5 +1,4 @@
 //! The `living_heal` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0347
 
 pub trait Hooks {
     /// A living entity is about to heal. Mods may change the amount or cancel.
@@ -13,5 +12,5 @@ pub trait Hooks {
         version = 2,
         target = "sunrise_client_lib::hunger::native_living_heal"
     )]
-    fn living_heal();
+    fn living_heal(entity: u32, amount: &mut f32, cancel: &mut bool);
 }

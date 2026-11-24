@@ -50,9 +50,19 @@ struct Out {
         }
         return vec4(glint.rgb * glint.rgb, mask);
     }
+    return textured(in);
+}
+// The bound texture, tinted: what `fs_main` draws below its glint markers.
+fn textured(in: Out) -> vec4<f32> {
     let c = textureSample(atlas, atlas_sampler, in.uv) * in.color;
     if c.a < 0.004 { discard; }
     return c;
+}
+// A standalone picture (hud/pictures.rs) with its own texture and sampler bound as `atlas`:
+// every UV is the picture's, unclamped (`innerBlit`), so a repeating picture at u >= 2 is not
+// read as a glint marker.
+@fragment fn fs_picture(in: Out) -> @location(0) vec4<f32> {
+    return textured(in);
 }
 // OptiFine CIT glint layers (hud/cit_glint.rs): every rule's texture in one array, the slot in
 // the vertex colour's red and the layer's intensity in its alpha. Masked by the item's texture

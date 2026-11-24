@@ -43,7 +43,10 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{fishing::Hook, native_entity_refs::tests::with_game};
+    use super::super::{
+        fishing::Hook,
+        native_entity_refs::tests::{collect_game_entities_in, with_game},
+    };
     use super::*;
     use mod_api::WorldEpoch;
     use sunrise_client::{mobs::Mob, motion::PlayerMotion};
@@ -62,7 +65,7 @@ mod tests {
             default: || 0,
             codec: None,
             copy_on_death: false,
-            sync: false,
+            sync_codec: None,
         };
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -130,9 +133,8 @@ mod tests {
 
             // A box query finds it, as `Level.getEntities` does.
             let level = game.level(game.dim.id()).unwrap();
-            let found = game
-                .level_entities_in(level, [0.0, 60.0, 0.0], [6.0, 70.0, 6.0])
-                .unwrap();
+            let found =
+                collect_game_entities_in(game, level, [0.0, 60.0, 0.0], [6.0, 70.0, 6.0]).unwrap();
             assert_eq!(found, vec![entity]);
 
             let stale = FishingHookRef::new(EntityRef::new(

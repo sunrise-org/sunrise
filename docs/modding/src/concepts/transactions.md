@@ -1,142 +1,126 @@
 # Transactions
 
-Use `HostTransaction` on a `ServerHost` to group capability writes. The closure's
-`Ok` commits; `Err` aborts. Pass the borrowed `&Transaction` to each handler or
-place write.
+Use a transaction when related **journaled** changes should succeed or fail together. Import
+`HostTransaction` and use the server host and borrowed `TransactionContext` from the same closure:
 
 ```rust,ignore
-use mod_api::{HostTransaction, ServerHost};
+use mod_api::{HostTransaction, ServerHost, TransactionError};
 
-fn update(host: &mut dyn ServerHost) -> Result<(), ()> {
+fn update(host: &mut dyn ServerHost) -> Result<(), TransactionError<()>> {
     host.transaction(|host, tx| {
-        // Pass host and tx to your capability writes.
+        // Pass this host and tx to each capability write.
         Ok(())
     })
 }
 ```
 
+`Ok(value)` requests a commit; you get the value back only if it commits. `Err(error)` aborts
+and returns `TransactionError::Aborted(error)`. `Unavailable` means the closure never ran;
+`CommitRefused` means it ran but the host rolled back its work. The closure takes
+`&mut dyn ServerHost`, even when you open it on a concrete host.
+
+Resident subject scopes also offer `transaction`: use it when the same operation needs both a
+live subject view and other host access. End one borrow before starting the next and abort if
+any required write or view is refused; see
+[Combining subject and world writes in one transaction](../how-to/world/machine-menu-data.md#combining-subject-and-world-writes-in-one-transaction)
+for a worked example. A server main-thread payload handler can use its context's
+transaction to stage replies with its world writes; configuration-task completion remains immediate.
+See the [API reference](../reference/api.md) and
+[Scratch stacks and wrapped places](capabilities/item-places-and-components.md#scratch-stacks-and-wrapped-places)
+for other scoped entry points.
+
 ## Commit and rollback
 
-- Writes apply immediately, so subsequent steps in the transaction see them.
-- The game snapshots each storage before its first write. Handlers use the game's
-  journal rather than keeping their own.
-- A nested commit merges into its parent. Only the outermost commit makes storage
-  changes final and publishes deferred game-held vanilla container effects.
-- An abort restores recorded storage without publishing those commit effects.
-- Raw mod-owned storage writes and restores issue no synthetic notifications.
-- Explicit changed/comparator/neighbour/data-send notifications run when issued,
-  including inside a transaction, and survive abort.
-- A panic unwinding out of the closure aborts its transaction. The parent remains
-  open if you catch the panic inside the parent closure.
-- Closing a transaction aborts any transactions left open inside it before closing
-  the parent.
+Writes are visible inside the transaction. The engine records storage before its first write in
+that frame. A nested commit merges into the parent for that level; only the outermost commit
+makes the changes final and publishes the deferred effects. Returning an error or unwinding out
+of a frame restores its recorded state without publishing those effects.
 
-The journal covers writes through capability handlers to these storages:
-
-| Storage | Recorded state |
-|---|---|
-| Block entity | Item slots, saved compound, custom name and attachments |
+| Storage | Examples of journaled state |
+| --- | --- |
+| Block entity | Item slots, data slots, saved data, one-shot client update fields, custom name and attachments |
 | Hopper | Cooldown |
 | Cauldron | Block state |
-| Composter | Block state and composter-local random stream; fill feedback, game events and maturation scheduling wait for outer commit |
-| World fluid pickup and placement | Block state, and a block entity the new block removes |
-| Player | Inventory slots, armour, offhand, body, saddle, cursor, ender chest and persistent data, for host and guest players |
-| Entity inventory | Chest or hopper minecart, chest boat, chested donkey, mule or llama inventory |
-| Item entity | Stack; an emptied entity remains until the outermost commit removes it |
+| Composter | Block state and its own random stream |
+| World edits | Changed blocks and the block entities they replace, including block writes and fluid pickup or placement |
+| Player | Inventory and equipment slots, cursor, ender chest and persistent data, including guest and fake players |
+| Entity inventory | Vehicle and pack-animal slots |
+| Item entity | Stack; an emptied item entity is removed at root commit |
 
-At the outermost commit, game-held vanilla containers publish their implicit change
-notifications. Other deferred effects include jukebox playback, cauldron and composter block updates and
-item drops, including items placed at a block, thrown by a player or entity, or split off an
-item entity. Explicit mod-issued world notifications are not deferred with these effects.
+The transaction is not a snapshot of the world. Level-local work joins only the journal for its
+own level; a command that enters another level does not carry that journal along. Player-owned
+storage can be restored even if the player moved, died or left before the transaction closed;
+restoring the storage does not rewind their movement or death.
 
-A world pickup or placement of fluid (`level.pickup_fluid`, `level.place_fluid`) writes
-its block at the call and the rest at the outermost commit; an aborted one leaves the world
-unchanged, where NeoForge's may not. `level.play_fluid_effects` queues a fluid's sound and
-game event the same way: they play only at the outermost commit and are dropped on abort,
-unlike `trigger_sound_and_game_event`, which acts at once. The `block_drops` listeners of a
-replaced block see it as it was, and a cancelled drop keeps the replacement.
+Default engine-managed storage defers its implicit change notices. Explicit changed, comparator,
+neighbour and data-send notices are immediate and survive abort. Rollback writes do not issue
+notices. Mod-owned memory, live level random draws, and direct operations such as non-player
+`LivingRef::set_equipment` are not made reversible by a transaction. Use journaled
+[capabilities](capabilities.md) instead when an operation must be reversible.
 
-Direct writes are not journaled: direct item-entity stack writes,
-`LivingRef::set_equipment`, and the armor-stand `slot_set` paths take
-effect immediately, even inside a transaction. Equipment sounds and equip/unequip
-events from `LivingRef::set_equipment` also happen immediately. An abort does not
-undo these writes or effects. Use journaled capability handlers when you need rollback.
+Ordinary block and fluid writes expose tentative states before publishing replacement effects.
+Bulk block edits have their own publication rules; `destroy_block` prepares loot and experience
+against the still-standing block, and its item entities, experience, break effects and game event
+publish only on commit. See [Block Parts](parts/block-parts.md)
+and [World fluid](capabilities/block-fluids.md#world-fluid) for examples.
+
+## Deferred level, entity, and player effects
+
+Server presentation effects such as sounds, particles and explicit level, entity or player
+effects join the innermost transaction **in the level active at the call**. They publish in journal
+order on that level's outermost commit, or disappear on abort. Delivery still uses the level named
+by the request, even if that level is parked. A `game_event` for vibration listeners is different:
+it runs at the call.
+
+Arguments and handles are checked at the call. An accepted request does not promise a client
+will receive it: a directed sound can lose its player before commit. Level-sound hooks run at
+request time, with the transaction still open, so they can edit or cancel it. The commit delivers
+the resolved record without running the hooks again. A deferred sound draws its seed only on
+publication. See [Level sounds](../how-to/world/level-sounds.md),
+[Level events](../how-to/world/level-events.md) and [Particles and movement queries](../how-to/client/particles-and-movement-queries.md).
 
 ## Spawning and removing entities
 
-Entities a transaction spawns or removes follow the same commit and rollback rules:
-
-- A spawn builds the entity at the call: its handle works, its attachments and Parts exist,
-  `entity_constructing` has run and selectors find it. Its `entity_join_level` does not run
-  until the outermost commit, in the order the entities were added, before any removal
-  of the transaction takes effect. A listener reads the entity at the commit, not during the
-  call. A join a listener cancels at the commit means the entity was never announced and the
-  handle the spawn returned reads stale from then on.
-- An abort takes out every entity the transaction spawned, with its attachments and saved data, and
-  tells no mod: neither `entity_join_level` nor `entity_leave_level` runs. An entity id is
-  never reused, so the aborted entity's id stays burnt and a stale handle never names a later entity.
-- A removal (`EntityRef::discard`, a kill) marks the entity at the call: its handle and selectors
-  stop finding it, and a mob reads as removed (it is flagged at the call; any other entity is
-  listed as removed until the commit has run its removal, joins told by then included).
-  Passengers dismount, the leave
-  is told and the other effects of removal wait for the outermost commit; an abort puts the
-  entity back as it was and tells no one. An entity spawned and removed in the same
-  transaction is never announced, so it never leaves.
-- A spawn is refused, inside a transaction as outside one, once the entity ids run out.
-- A transaction covers the entities of the level it was opened in; with transactions of several levels open (a command run `in` another level can open one), an entity belongs to the innermost one of its own level. A command it runs in another
-  level (`execute in`) spawns or removes there as it would outside a transaction when no
-  transaction is open in that level: the join and the leave are told at once, and an abort does
-  not take the entity back. With one open there, the innermost of that level journals it, as above. A join listener that
-  spawns, removes or commits a transaction while a commit is telling its joins is told about its
-  own entities after the commit's batch, in the order it asked.
-- Travel between levels is not journaled: an entity that arrives in another level during an aborted
-  transaction stays where it arrived.
+A spawn is available to handles and selectors immediately, but joins aren't announced until root
+commit. Joins are processed in spawn order before removal effects. A refused join or aborted
+spawn leaves a stale handle, not an ID that can be reused. Removing an entity makes it unavailable
+immediately, while dismounts, leave and other removal effects wait for commit. Abort restores the
+resident entity without a leave or join; a spawn removed within the same transaction is never
+announced. Join notifications in the same level requested while a commit is announcing its joins
+are delivered after that announcing batch, in request order. Travel between levels is not
+journaled. See [Spawning](../how-to/world/spawning.md) and
+[Hook notes](../reference/hook-notes.md).
 
 ## Transaction authority
 
-`Transaction` identifies an open transaction with a game-issued write token. It
-does not grant permission to close it. A write with a token that does not name an
-open transaction changes nothing, including a token retained past its closure.
+`TransactionContext` is a loan, not a handle to store, send, share or encode. Use the context for
+the **innermost** open frame on that host. Using an ancestor or a foreign context returns
+`InvalidContext` before the handler runs, even for a zero-amount write. Resource helpers that take
+an optional context use `Some(tx)` for the current frame or `None` to open a root when none is open.
 
-Closing requires a separate `TransactionSeal`. The `host.transaction` guard holds
-that seal; its closure receives only the write token. If you use the raw
-`transaction_open` method, you receive the seal and must close it with
-`transaction_close`. The game refuses a seal that does not match an open
-transaction and logs `Sunrise: refused to close a transaction the seal does not end`.
+## Joining an open transaction
+
+Use `current_transaction` to borrow the innermost frame without opening a child. It returns
+`None` without calling the closure if there is no frame. Returning or unwinding from the borrowed
+closure does not close the frame. Use `transaction` when the work needs an independent savepoint.
 
 ## Inspecting a transaction
 
-These methods are server-only:
+| Query | What it tells you |
+| --- | --- |
+| `tx.depth()` | Nesting depth, zero at the root; not proof that this context is current. |
+| `host.transaction_matches(...)` | Whether the supplied context is current, or no frame is open when passed `None`. |
+| `host.transaction_lifecycle()` | The server's process-local phase, not a transferable value. |
 
-| Method | Result |
-|---|---|
-| `host.transaction_current()` | Innermost open `Transaction`, or `None`; not a closing seal |
-| `host.transaction_depth(tx)` | `Some(0)` for the outermost transaction, increasing by one per nesting level; `None` if it is not open |
-| `host.transaction_lifecycle()` | `TransactionLifecycle` describing the open or closing phase |
+| `TransactionLifecycle` | Meaning |
+| --- | --- |
+| `None` | No transaction is open. |
+| `Open` | A frame is open and none is closing. |
+| `Closing` | A nested frame is committing into its parent or aborting. |
+| `RootClosing` | The outermost frame is closing. |
 
-| `TransactionLifecycle` variant | Meaning |
-|---|---|
-| `None` | No transaction is open |
-| `Open` | A transaction is open and none is closing |
-| `Closing` | A nested transaction is committing into its parent or aborting |
-| `RootClosing` | The outermost transaction is closing |
+Implicit engine-managed container notices run during `RootClosing`, outside the transaction that
+triggered them. Explicit mod notices issued in an open frame run immediately, during `Open`.
 
-Implicit vanilla container notices run during `RootClosing`, outside the transaction whose
-commit triggered them. Explicit mod notices issued during a transaction run during `Open`.
-
-## Entity inventory slots
-
-`ItemPlace::EntitySlot { entity, slot }` addresses an entity inventory slot, like
-NeoForge's `Capabilities.Item.ENTITY`. Read and write it like any other item place.
-Reading or writing a minecart's slots unpacks its loot table without a player,
-as vanilla's `getChestVehicleItem` does.
-
-The player `set_inventory_slot`, `set_ender_chest_slot`, `give_stack` and
-`set_persistent_data` writes use the open transaction journal. Aborting restores
-the old values; equipment effects and given-stack overflow wait for root commit.
-
-These writes reach a player in another level than the hook's: their inventory and data
-change at once, wherever they are. What would land in the world at them does not happen
-there: `give_stack` returns what did not fit instead of dropping it (drop it from a hook in
-the player's own level if you want), `drop_stack` returns the stack, `destroy_block` breaks
-nothing, and no pickup or equip sound plays.
+For slot addressing and player writes, see [Entity item handling](capabilities/entity-items.md) and
+[Server player services](../how-to/entities/server-services-and-players.md#inventory-ender-chest-and-saved-data).

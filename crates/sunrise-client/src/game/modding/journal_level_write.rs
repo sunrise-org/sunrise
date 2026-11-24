@@ -8,11 +8,11 @@ use super::native_level_signals::ReadLevel;
 use super::transactions::After;
 use mod_api::{
     AttachmentBatch, AttachmentStore, BlockEntityRef, BlockKey, BlockPos, BlockSide, BlockState,
-    BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStack, LegacyRandomSource,
-    LevelHost, LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer,
-    PartStateError, ParticleOptions, Tags,
+    BlockUpdateFlags, Compound, Direction, FeatureFlags, FluidState, ItemStackView, LevelHost,
+    LevelRandomHost, LevelRef, LevelTicksHost, LevelWriteHost, LightLayer, PartStateError,
+    ParticleOptions, PlayerRef, RandomDraw, SoundSource, Tags,
 };
-use sunrise_core::ticks::TickPriority;
+use sunrise_core::{random::RandomSource, ticks::TickPriority};
 use sunrise_world::{
     fluid::FluidKind,
     level::{FluidWrite, LevelAccess as _, flags, states::BlockId},
@@ -26,8 +26,7 @@ pub(super) struct JournalLevelWrite<'g, 'a> {
 
 impl<'g, 'a> JournalLevelWrite<'g, 'a> {
     pub(super) fn new(game: &'g mut Game<'a>, level: LevelRef) -> Option<Self> {
-        (game.level_in_place(level) && game.transaction_current().is_some())
-            .then_some(Self { game, level })
+        (game.level_in_place(level) && game.has_level_transaction()).then_some(Self { game, level })
     }
 
     fn read(&self) -> ReadLevel<'_, 'a> {
@@ -37,28 +36,123 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
         }
     }
 
-    fn write_block(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
+    pub(super) fn write_block(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
+        let old = self.game.world.block(pos[0], pos[1], pos[2]);
+        self.can_replace_block(pos, old, state) && self.replace_block(pos, old, state, flags)
+    }
+
+    fn can_replace_block(&self, pos: [i32; 3], old: BlockStateId, state: BlockStateId) -> bool {
         let [x, y, z] = pos;
-        if self.game.world_debug
-            || !(-30_000_000..30_000_000).contains(&x)
-            || !(-30_000_000..30_000_000).contains(&z)
-            || !self.game.world.is_loaded_at(x, y, z)
-            || self.game.world.carrier_fences.locks_cell(&pos)
-            || self.game.pack.assets.registry.state(state).is_none()
-        {
+        old != state
+            && !self.game.world_debug
+            && (-30_000_000..30_000_000).contains(&x)
+            && (-30_000_000..30_000_000).contains(&z)
+            && self.game.world.shape.contains_y(y)
+            && self
+                .game
+                .world
+                .chunks
+                .get(&(x >> 4, z >> 4))
+                .is_some_and(|chunk| chunk.section_index(y).is_some())
+            && !self.game.world.carrier_fences.locks_cell(&pos)
+            && self.game.pack.assets.registry.state(state).is_some()
+    }
+
+    fn replace_block(
+        &mut self,
+        pos: [i32; 3],
+        old: BlockStateId,
+        state: BlockStateId,
+        flags: i32,
+    ) -> bool {
+        if !self.game.journal_set_block_flags(pos, state, flags, true) {
             return false;
         }
-        let old = self.game.world.block(x, y, z);
-        if old == state || !self.game.journal_set_block_flags(pos, state, flags, true) {
-            return false;
-        }
-        let b = self.game.res.behaviours();
-        if !b.keeps_block_entity(old, state)
-            && self.game.world.block_entities.get(&(x, y, z)).is_some()
+        let [x, y, z] = pos;
+        if !self.game.res.behaviours().keeps_block_entity(old, state)
+            && self.game.world.block_entities.contains_key(&(x, y, z))
         {
             self.game.journal_block_replacement((x, y, z));
         }
         true
+    }
+
+    /// `Level.destroyBlock` in this level's journal. Resolve the loot and experience while
+    /// the old state and block entity are still visible; publication follows vanilla order.
+    pub(super) fn destroy_block(
+        &mut self,
+        pos: [i32; 3],
+        drop: bool,
+        tool: Option<&sunrise_client::items::ItemStack>,
+        collect: bool,
+    ) -> Option<Vec<sunrise_client::items::ItemStack>> {
+        let [x, y, z] = pos;
+        let old = self.game.world.block(x, y, z);
+        let behaviours = self.game.res.behaviours();
+        let replacement = behaviours.legacy_block(behaviours.fluid(old));
+        if behaviours.is_air(old) || !self.can_replace_block(pos, old, replacement) {
+            return None;
+        }
+        if let Some(id) = behaviours.destroy_particle_event(old) {
+            self.queue(PendingWrite::Event {
+                level: self.game.dim,
+                id,
+                pos,
+                data: old.0 as i32,
+            });
+        }
+        let mut collected = Vec::new();
+        if drop && self.game.level_rules().block_drops {
+            self.game.journal_block_loot_random();
+            // First access to container loot can fill the inventory and consume its loot table.
+            let key = (x, y, z);
+            if self.game.world.block_entities.contains_key(&key)
+                && self
+                    .game
+                    .world
+                    .chunks
+                    .get(&(x >> 4, z >> 4))
+                    .and_then(|chunk| chunk.saved.as_ref())
+                    .is_some_and(|saved| saved.pending_loot.contains_key(&key))
+            {
+                self.game.journal_attachments(
+                    sunrise_mod_runtime::attachments::Holder::BlockEntity(pos),
+                );
+            }
+            self.game.ensure_stateful_entity_table();
+            let (kept, items, orbs) = self.game.with_level_access(false, |b, level, ticks| {
+                let items = level.spill.spawns.len();
+                let orbs = level.spill.orbs.len();
+                level.drop_tool = Some((key, tool.cloned()));
+                level.drop_into = collect.then(Vec::new);
+                b.drop_resources(
+                    level,
+                    ticks,
+                    sunrise_core::position::BlockPos::new(x, y, z),
+                    old,
+                );
+                (
+                    level.drop_into.take().unwrap_or_default(),
+                    level.spill.spawns.split_off(items),
+                    level.spill.orbs.split_off(orbs),
+                )
+            });
+            collected = kept;
+            if !items.is_empty() || !orbs.is_empty() {
+                self.game.after_commit(After::BlockDropSpawns(items, orbs));
+            }
+        }
+        // Only storage (not listeners) is touched by this already-validated write.
+        if !self.replace_block(pos, old, replacement, flags::UPDATE_ALL) {
+            return None;
+        }
+        self.game.after_commit(After::BlockGameEvent(
+            "minecraft:block_destroy",
+            pos,
+            None,
+            old,
+        ));
+        Some(collected)
     }
 
     fn queue(&mut self, write: PendingWrite) -> bool {
@@ -68,18 +162,25 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
 }
 
 macro_rules! read_level {
-    ($(fn $method:ident(&self $(, $arg:ident: $ty:ty)*) -> $result:ty;)*) => {$(
-        fn $method(&self $(, $arg: $ty)*) -> $result {
+    ($(fn $method:ident(&self $(, $arg:ident: $ty:ty)*) $(-> $result:ty)?;)*) => {$(
+        fn $method(&self $(, $arg: $ty)*) $(-> $result)? {
             self.read().$method($($arg),*)
         }
     )*};
 }
 
 impl LevelHost for JournalLevelWrite<'_, '_> {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        mod_api::BlockStates::of(&*self.game)
+    }
+    fn attachment_read_scope(&self) -> mod_api::AttachmentReadScope<'_> {
+        self.game.attachment_frame_borrow()
+    }
     read_level! {
         fn block_entity(&self, pos: [i32; 3]) -> Option<BlockEntityRef>;
+        fn has_item_capability(&self, pos: [i32; 3], side: Option<Direction>) -> Option<bool>;
         fn container_size(&self, at: BlockSide) -> Option<usize>;
-        fn container_stack(&self, at: BlockSide, slot: usize) -> Option<ItemStack>;
+        fn lend_container_stack(&self, at: BlockSide, slot: usize, read: &mut dyn for<'a> FnMut(ItemStackView<'a>));
         fn block_entity_part_snapshot(&self, entity: BlockEntityRef, namespace: &str, name: &str) -> Result<AttachmentBatch, PartStateError>;
         fn block_state(&self, pos: [i32; 3]) -> Option<BlockState>;
         fn block_state_id(&self, name: &str) -> Option<BlockState>;
@@ -87,15 +188,14 @@ impl LevelHost for JournalLevelWrite<'_, '_> {
         fn state_string(&self, state: BlockState) -> Option<String>;
         fn min_y(&self) -> i32;
         fn height(&self) -> i32;
-        fn block_in_tag(&self, block: BlockKey, tag: &str) -> Option<bool>;
         fn fluid_state(&self, pos: [i32; 3]) -> Option<FluidState>;
-        fn state_fluid_state(&self, state: BlockState) -> Option<FluidState>;
-        fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool>;
         fn state_with_property(&self, state: BlockState, key: &str, value: &str) -> Option<BlockState>;
         fn brightness(&self, layer: LightLayer, pos: [i32; 3]) -> i32;
         fn raw_brightness(&self, pos: [i32; 3], sky_darken: i32) -> i32;
         fn is_loaded(&self, pos: [i32; 3]) -> bool;
         fn is_raining_at(&self, pos: [i32; 3]) -> bool;
+        fn is_raining(&self) -> Option<bool>;
+        fn sky_darken(&self) -> Option<i32>;
         fn enabled_features(&self) -> FeatureFlags;
     }
     fn state_block(&self, state: BlockState) -> Option<&str> {
@@ -127,15 +227,15 @@ impl LevelHost for JournalLevelWrite<'_, '_> {
     fn has_neighbor_signal(&self, pos: [i32; 3]) -> Option<bool> {
         Some(self.game.level_has_neighbor_signal(self.level, pos))
     }
-    fn collision_shape(&self, pos: [i32; 3]) -> Option<Vec<[f64; 6]>> {
+    fn collision_shape(&self, pos: [i32; 3]) -> Option<mod_api::VoxelShape> {
         self.is_loaded(pos).then(|| {
             let [x, y, z] = pos;
-            super::native_state_shapes::collision_boxes(
+            mod_api::__private::voxel_shape_from_core(super::native_state_shapes::collision_shape(
                 self.game.collision,
                 &self.game.world,
                 self.game.world.block(x, y, z),
                 pos,
-            )
+            ))
         })
     }
 }
@@ -148,13 +248,8 @@ impl LevelRandomHost for JournalLevelWrite<'_, '_> {
     fn attachments(&mut self) -> &mut dyn AttachmentStore {
         self.game
     }
-    fn random(&mut self) -> Option<LegacyRandomSource> {
-        Some(super::api_values::random_to_api(&self.game.world.random))
-    }
-    fn set_random(&mut self, random: LegacyRandomSource) -> bool {
-        self.game
-            .journal_set_level_random(super::api_values::random_to_engine(&random));
-        true
+    fn lend_random(&mut self, draw: RandomDraw<'_>) {
+        super::api_values::with_live_level_random(&mut self.game.world.random, draw);
     }
 }
 
@@ -165,16 +260,18 @@ impl LevelTicksHost for JournalLevelWrite<'_, '_> {
         else {
             return false;
         };
+        let level = super::Dim::from_id(self.level.dimension_id());
         self.game.block_ticks.blocks.chunk(pos.chunk()).is_some()
-            && self.queue(PendingWrite::BlockTick(pos, block, delay))
+            && self.queue(PendingWrite::BlockTick(level, pos, block, delay))
     }
     fn schedule_fluid_tick(&mut self, [x, y, z]: [i32; 3], fluid: &str, delay: i32) -> bool {
         let pos = BlockPos::new(x, y, z);
         let Some(fluid) = FluidKind::from_name(fluid) else {
             return false;
         };
+        let level = super::Dim::from_id(self.level.dimension_id());
         self.game.block_ticks.fluids.chunk(pos.chunk()).is_some()
-            && self.queue(PendingWrite::FluidTick(pos, fluid, delay))
+            && self.queue(PendingWrite::FluidTick(level, pos, fluid, delay))
     }
 }
 
@@ -188,21 +285,16 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
         if !self.is_loaded(pos) {
             return false;
         }
-        let [x, y, z] = pos;
-        let at = BlockPos::new(x, y, z);
-        let state = self.game.world.block(x, y, z);
-        let replacement = self.game.with_level(|b, level, _| {
-            level.adjust_remove_block(at, state, moved, b.legacy_block(b.fluid(state)))
-        });
-        let flags = flags::UPDATE_ALL
-            | if moved {
-                flags::UPDATE_MOVE_BY_PISTON
-            } else {
-                0
-            };
+        let (replacement, flags) = self.game.level_removal_write(pos, moved);
         self.write_block(pos, replacement, flags)
     }
-    fn set_block_property(&mut self, pos: [i32; 3], key: &str, value: &str, flags: i32) -> bool {
+    fn set_block_property(
+        &mut self,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: BlockUpdateFlags,
+    ) -> bool {
         let [x, y, z] = pos;
         super::native_hooks::with_property(
             self.game.pack.assets.registry,
@@ -210,32 +302,36 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
             key,
             value,
         )
-        .is_some_and(|state| self.write_block(pos, state, flags))
+        .is_some_and(|state| self.write_block(pos, state, flags.bits()))
     }
     fn play_sound(
         &mut self,
         sound: &str,
         at: [f64; 3],
-        source: usize,
+        source: SoundSource,
         volume: f32,
         pitch: f32,
     ) -> bool {
-        if self.game.lan.is_none()
-            || !super::native_hooks::mod_sound_ok(sound, at, source, volume, pitch)
-        {
+        if self.game.lan.is_none() || !super::native_hooks::sound_id(sound) {
             return false;
         }
-        self.queue(PendingWrite::Sound(NativeSound {
-            dimension: self.level.dimension_id(),
-            sound: sound.to_owned(),
-            at,
-            source: source as i32,
-            volume,
-            pitch,
-            seed: 0,
-            except: None,
-            entity: None,
-        }))
+        self.game.emit_level_effect(PendingWrite::Sound {
+            sound: NativeSound {
+                dimension: self.level.dimension_id(),
+                sound: sound.to_owned(),
+                inline_range: None,
+                at,
+                source: source.index() as i32,
+                volume,
+                pitch,
+                seed: 0,
+                except: None,
+                entity: None,
+                skip_hooks: false,
+            },
+            seed: None,
+        });
+        true
     }
     fn send_particles(
         &mut self,
@@ -257,7 +353,7 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
             &options,
             state,
             |id| registry.state(id).is_some(),
-            at,
+            std::slice::from_ref(&at),
             spread,
             speed,
         ) {
@@ -279,51 +375,272 @@ impl LevelWriteHost for JournalLevelWrite<'_, '_> {
             id,
             data,
             self.game.res.facts().states.len(),
-        ) && self.queue(PendingWrite::Event(id, pos, data))
+        ) && self.queue(PendingWrite::Event {
+            level: super::Dim::from_id(self.level.dimension_id()),
+            id,
+            pos,
+            data,
+        })
     }
 }
 
 pub(super) enum PendingWrite {
-    BlockTick(BlockPos, BlockId, i32),
-    FluidTick(BlockPos, FluidKind, i32),
-    Sound(NativeSound),
+    BlockTick(super::Dim, BlockPos, BlockId, i32),
+    FluidTick(super::Dim, BlockPos, FluidKind, i32),
+    /// A level or entity-bound sound. `seed` is the caller's (`ServerLevel.playSeededSound`), or
+    /// `None` to draw the level's next sound seed when the sound is published (`Level.playSound`).
+    Sound {
+        sound: NativeSound,
+        seed: Option<i64>,
+    },
     Particles(QueuedParticle),
-    Event(i32, [i32; 3], i32),
+    Event {
+        level: super::Dim,
+        id: i32,
+        pos: [i32; 3],
+        data: i32,
+    },
+    GlobalEvent {
+        level: super::Dim,
+        id: i32,
+        pos: [i32; 3],
+        data: i32,
+    },
+    EntityEvent {
+        level: super::Dim,
+        entity_id: i32,
+        event: i8,
+        at: [f64; 3],
+    },
+    PlayerSound {
+        level: super::Dim,
+        player: PlayerRef,
+        sound: String,
+        at: [f64; 3],
+        source: usize,
+        volume: f32,
+        pitch: f32,
+    },
+    PlayerStopSound {
+        level: super::Dim,
+        player: PlayerRef,
+        sound: Option<String>,
+        source: Option<usize>,
+    },
 }
 
 impl Game<'_> {
+    pub(super) fn level_removal_write(
+        &mut self,
+        pos: [i32; 3],
+        moved: bool,
+    ) -> (BlockStateId, i32) {
+        let [x, y, z] = pos;
+        let at = BlockPos::new(x, y, z);
+        let state = self.world.block(x, y, z);
+        let replacement = self.with_level(|b, level, _| {
+            level.adjust_remove_block(at, state, moved, b.legacy_block(b.fluid(state)))
+        });
+        let flags = flags::UPDATE_ALL
+            | if moved {
+                flags::UPDATE_MOVE_BY_PISTON
+            } else {
+                0
+            };
+        (replacement, flags)
+    }
+
+    /// Run `f` with `level` in place, temporarily swapping in a parked level and restoring the
+    /// active level on exit (including unwind). Never opens an unloaded level from disk; returns
+    /// `None` if `level` is neither active nor parked.
+    pub(super) fn with_effect_level<R>(
+        &mut self,
+        level: super::Dim,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if self.dim == level {
+            return Some(f(self));
+        }
+        if self.options.execution_role.is_client() || !self.levels.parked.contains_key(&level) {
+            return None;
+        }
+        let back = self.dim;
+        if let Err(e) = self.enter_level(level) {
+            log::error!("could not switch to {} for effect replay: {e}", level.id());
+            return None;
+        }
+        struct Restore<'g, 'a> {
+            game: &'g mut Game<'a>,
+            back: super::Dim,
+        }
+        impl Drop for Restore<'_, '_> {
+            fn drop(&mut self) {
+                if self.game.dim != self.back
+                    && let Err(e) = self.game.enter_level(self.back)
+                {
+                    log::error!(
+                        "could not restore {} after effect replay: {e}",
+                        self.back.id()
+                    );
+                }
+            }
+        }
+        let guard = Restore { game: self, back };
+        Some(f(guard.game))
+    }
+
+    /// Queue a validated level, entity, or player effect immediately, or defer pure delivery to
+    /// root commit when a transaction is open in the active level so rolled-back transactions and
+    /// aborted savepoints never publish sounds, particles, or level/global/entity events.
+    ///
+    /// For transactional sounds, `play_level_sound_at_*` hooks run synchronously here inside the
+    /// open transaction so listeners can edit/cancel the sound and have their own writes journaled;
+    /// only the resolved packet record is deferred to commit.
+    pub(super) fn emit_level_effect(&mut self, write: PendingWrite) {
+        if self.has_level_transaction() {
+            let write = match write {
+                PendingWrite::Sound { sound, seed } => match self.resolve_native_sound(sound) {
+                    Some(resolved) => PendingWrite::Sound {
+                        sound: resolved,
+                        seed,
+                    },
+                    None => return,
+                },
+                other => other,
+            };
+            self.after_commit(super::transactions::After::LevelWrite(Box::new(write)));
+            return;
+        }
+        self.publish_level_effect(write, false);
+    }
+
     pub(super) fn commit_level_write(&mut self, write: PendingWrite) {
+        self.publish_level_effect(write, true);
+    }
+
+    /// Shared publication path for immediate calls (`deliver_now = false`) and pure root-commit
+    /// replay (`deliver_now = true`). When `deliver_now` is true, each effect replays in its
+    /// recorded `Dim` and writes packets directly in journal order without running mod callbacks
+    /// or draining unrelated queued effects.
+    fn publish_level_effect(&mut self, write: PendingWrite, deliver_now: bool) {
         match write {
-            PendingWrite::BlockTick(pos, block, delay) => {
-                self.block_ticks.schedule_block(
-                    self.world.game_time,
-                    pos,
-                    block,
-                    delay,
-                    TickPriority::Normal,
-                );
+            PendingWrite::BlockTick(level, pos, block, delay) => {
+                let _ = self.with_effect_level(level, |game| {
+                    game.block_ticks.schedule_block(
+                        game.world.game_time,
+                        pos,
+                        block,
+                        delay,
+                        TickPriority::Normal,
+                    );
+                });
             }
-            PendingWrite::FluidTick(pos, fluid, delay) => {
-                self.block_ticks
-                    .schedule_fluid(self.world.game_time, pos, fluid, delay);
+            PendingWrite::FluidTick(level, pos, fluid, delay) => {
+                let _ = self.with_effect_level(level, |game| {
+                    game.block_ticks
+                        .schedule_fluid(game.world.game_time, pos, fluid, delay);
+                });
             }
-            PendingWrite::Sound(mut sound) => {
-                // The network's sound seed advances only for a published sound.
+            PendingWrite::Sound { mut sound, seed } => {
+                // The network's sound seed advances only for a published sound, and not for one
+                // whose caller gave its seed.
                 if let Some(host) = &self.lan {
-                    sound.seed = host.hub.next_sound_seed();
-                    self.creatures.lan_sounds.push(sound);
-                    self.flush_native_sounds();
+                    sound.seed = seed.unwrap_or_else(|| host.hub.next_sound_seed());
+                    if deliver_now {
+                        self.send_resolved_native_sound(&sound);
+                    } else if self.creatures.asking_level_sound {
+                        if let Some(resolved) = self.resolve_native_sound(sound) {
+                            self.send_resolved_native_sound(&resolved);
+                        }
+                    } else {
+                        self.creatures.lan_sounds.push(sound);
+                    }
                 }
             }
             PendingWrite::Particles(particles) => {
-                self.creatures.lan_particles.push(particles);
-                self.flush_lan_particles();
+                if deliver_now {
+                    self.lan_send_particles(particles);
+                } else {
+                    self.creatures.lan_particles.push(particles);
+                }
             }
-            PendingWrite::Event(id, pos, data) => self.level_event_at(id, pos, data),
+            PendingWrite::Event {
+                level,
+                id,
+                pos,
+                data,
+            } => {
+                let _ = self.with_effect_level(level, |game| {
+                    if deliver_now {
+                        game.deliver_level_event(id, pos, data);
+                    } else {
+                        game.level_event_at(id, pos, data);
+                    }
+                });
+            }
+            PendingWrite::GlobalEvent {
+                level,
+                id,
+                pos,
+                data,
+            } => {
+                let _ = self.with_effect_level(level, |game| {
+                    if deliver_now {
+                        game.deliver_global_level_event(id, pos, data);
+                    } else {
+                        game.global_level_event(id, pos, data);
+                    }
+                });
+            }
+            PendingWrite::EntityEvent {
+                level,
+                entity_id,
+                event,
+                at,
+            } => {
+                let _ = self.with_effect_level(level, |game| {
+                    if deliver_now {
+                        game.deliver_entity_event(entity_id, event, at);
+                    } else {
+                        game.lan_entity_event(entity_id, event, at);
+                    }
+                });
+            }
+            PendingWrite::PlayerSound {
+                level,
+                player,
+                sound,
+                at,
+                source,
+                volume,
+                pitch,
+            } => {
+                let _ = self.with_effect_level(level, |game| {
+                    let Some(target) = game.native_player_sound_target(player) else {
+                        return;
+                    };
+                    let seed = game.world.random.next_long();
+                    game.deliver_player_sound(target, &sound, at, volume, pitch, source, seed);
+                });
+            }
+            PendingWrite::PlayerStopSound {
+                level,
+                player,
+                sound,
+                source,
+            } => {
+                let _ = self.with_effect_level(level, |game| {
+                    let Some(target) = game.native_player_sound_target(player) else {
+                        return;
+                    };
+                    game.deliver_player_stop_sound(target, sound.as_deref(), source);
+                });
+            }
         }
     }
 
-    /// A part that refuses or falls through does not keep its tentative writes.
+    /// `LiquidBlockContainer.placeLiquid`: what the part writes stays in the ambient transaction
+    /// whatever it answers. A panicking part's scope aborts with it.
     pub(super) fn journalled_place_liquid(
         &mut self,
         level: LevelRef,
@@ -339,12 +656,13 @@ impl Game<'_> {
         let mut answer = None;
         mod_api::dispatch_place_liquid_with(write.pos, state, fluid, &mut answer, |part, event| {
             // For a player bucket this can be the root scope; the fluid
-            // utility already has an outer transaction.
-            let seal = self.transaction_open();
-            let reply = JournalLevelWrite::new(self, level)
-                .and_then(|mut host| part.place_liquid(&mut host, event));
-            self.transaction_close(&seal, reply == Some(true));
-            reply
+            // utility already has an outer transaction. Unwinding aborts this
+            // scope before the owner dispatcher catches a Part panic.
+            self.storage_scope(|game, _| {
+                let reply = JournalLevelWrite::new(game, level)
+                    .and_then(|mut host| part.place_liquid(&mut host, event));
+                (reply, true)
+            })
         });
         answer
     }

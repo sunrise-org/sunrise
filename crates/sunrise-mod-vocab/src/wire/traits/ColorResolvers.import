@@ -1,1 +1,0 @@
-The colour resolver registry `register_color_resolvers` hands out: NeoForge's `RegisterColorHandlersEvent.ColorResolvers`.

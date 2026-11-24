@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use crate::game::remote::RemoteDimensionEntry;
     use crate::game::{
         Game,
         native_entity_refs::tests::{run_fresh_cases, with_game_role},
@@ -11,7 +12,7 @@ mod tests {
     };
     use sunrise_client::{chunk::Chunk, containers::BlockEntity};
     type Log = Arc<Mutex<Vec<(&'static str, i32)>>>;
-    type Payloads = Arc<Mutex<Vec<(BlockEntityRef, i32)>>>;
+    type Payloads = Arc<Mutex<Vec<(BlockEntityRef, i32, [i32; 3], LevelRef)>>>;
     struct Listener {
         air: BlockKey,
         replacement: BlockKey,
@@ -26,25 +27,17 @@ mod tests {
         fn block_entity(&self, _: LevelSide<'_>, _: &mut BlockEntityEvent<'_>) -> Option<Compound> {
             Some(Compound::from([("count".into(), Tag::Int(7))]))
         }
-        fn block_entity_ticks(&self, _: &dyn Host, event: &mut BlockEntityTicksEvent<'_>) {
-            event.ticks = true;
-        }
-        fn block_entity_tick(&self, _: &mut dyn ServerHost, _: &mut BlockEntityTickEvent<'_>) {
+        fn block_entity_tick(&self, _: &mut BlockEntityTickEvent<'_>) {
             self.log.lock().unwrap().push(("tick", -1));
         }
-        fn block_entity_load_additional(
-            &self,
-            host: &dyn LevelHost,
-            event: &mut BlockEntityLoadAdditionalEvent<'_>,
-        ) {
+        fn block_entity_load_additional(&self, event: &mut BlockEntityLoadAdditionalEvent<'_>) {
             if self.report_payload {
                 let count = event.tag.get(&"count".into()).unwrap();
-                assert_eq!(
-                    host.block_entity_data(event.entity)
-                        .unwrap()
-                        .get(&"count".into()),
-                    Some(count)
-                );
+                let seen = event
+                    .subject
+                    .with_view(|view| view.nbt().get(&"count".into()).cloned())
+                    .expect("live resident block entity");
+                assert_eq!(seen.as_ref(), Some(count));
                 let Tag::Int(count) = count else {
                     panic!("save count is an int")
                 };
@@ -54,21 +47,31 @@ mod tests {
                 event.tag = OTHER.get_or_init(Compound::new);
             }
         }
-        fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
-            let (label, data) = match &host {
-                HostSide::Server(h) => ("load", event.entity.data(&**h).unwrap()),
-                HostSide::Client(h) => ("client_load", event.entity.data(&**h).unwrap()),
+        fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
+            let (label, count, pos, level) = match &mut event.subject {
+                BlockEntitySideScope::Server(scope) => scope
+                    .with_view(|view| {
+                        let Some(Tag::Int(count)) = view.nbt().get(&"count".into()) else {
+                            panic!("missing saved count")
+                        };
+                        ("load", *count, view.position(), view.level())
+                    })
+                    .expect("live resident server block entity"),
+                BlockEntitySideScope::Client(scope) => scope
+                    .with_view(|view| {
+                        let Some(Tag::Int(count)) = view.nbt().get(&"count".into()) else {
+                            panic!("missing saved count")
+                        };
+                        ("client_load", *count, view.position(), view.level())
+                    })
+                    .expect("live resident client block entity"),
             };
-            let Some(Tag::Int(count)) = data.get(&"count".into()) else {
-                panic!("missing saved count")
-            };
-            self.log.lock().unwrap().push((label, *count));
+            self.log.lock().unwrap().push((label, count));
             if self.replace.load(Ordering::SeqCst) {
-                let HostSide::Server(host) = host else {
+                let BlockEntitySideScope::Server(scope) = &mut event.subject else {
                     panic!()
                 };
-                let pos = event.entity.position(host).unwrap();
-                let level = event.entity.level(host).unwrap();
+                let host = scope.host();
                 let state = BlockState::of(&host.block_states(), self.replacement, &[]).unwrap();
                 let air = BlockState::of(&host.block_states(), self.air, &[]).unwrap();
                 assert_eq!(
@@ -87,15 +90,15 @@ mod tests {
     impl BlockPart for PayloadPeer {}
     #[mod_api::sunrise_part]
     impl BlockEntityPart for PayloadPeer {
-        fn block_entity_load_additional(
-            &self,
-            _: &dyn LevelHost,
-            event: &mut BlockEntityLoadAdditionalEvent<'_>,
-        ) {
+        fn block_entity_load_additional(&self, event: &mut BlockEntityLoadAdditionalEvent<'_>) {
             let Some(Tag::Int(count)) = event.tag.get(&"count".into()) else {
                 panic!("the second Part did not read the applied payload");
             };
-            self.0.lock().unwrap().push((event.entity, *count));
+            let (entity, pos, level) = event
+                .subject
+                .with_view(|view| (view.handle(), view.position(), view.level()))
+                .expect("live resident block entity");
+            self.0.lock().unwrap().push((entity, *count, pos, level));
         }
     }
 
@@ -132,14 +135,15 @@ mod tests {
         fn items(&self, _: &RegistrationContext, e: &mut ItemsEvent<'_>) {
             let mut item = Item::new("test:box_shulker_box", "minecraft:purple_shulker_box");
             item.block = Some("test:box_shulker_box".into());
-            e.items.push(item);
+            e.register(item).unwrap();
         }
         fn blocks(&self, _: &RegistrationContext, e: &mut BlocksEvent<'_>) {
             // Its item is the shulker box item above, not a block item of its own.
-            e.blocks
-                .push(Block::new("test:box_shulker_box", "minecraft:barrel").with_item(false));
-            e.blocks
-                .extend(["test:a", "test:b"].map(|id| Block::new(id, "minecraft:white_banner")));
+            e.register(Block::new("test:box_shulker_box", "minecraft:barrel").with_item(false))
+                .unwrap();
+            for block in ["test:a", "test:b"].map(|id| Block::new(id, "minecraft:white_banner")) {
+                e.register(block).unwrap();
+            }
         }
     }
     fn with_fixture(replace: bool, f: impl FnOnce(&mut Game<'_>, Log, Arc<AtomicBool>)) {
@@ -306,7 +310,7 @@ mod tests {
                     Ok(true)
                 );
                 assert_eq!(*log.lock().unwrap(), [("load", 7), ("payload", 19)]);
-                assert_eq!(*payloads.lock().unwrap(), [(entity, 19)]);
+                assert_eq!(*payloads.lock().unwrap(), [(entity, 19, [1, 64, 1], level)]);
 
                 let stone = game
                     .pack
@@ -318,7 +322,13 @@ mod tests {
                 assert!(game.run_command("clone 1 64 1 1 64 1 2 64 1"));
                 let clone = game.block_entity(level, [2, 64, 1]).unwrap();
                 assert_ne!(clone, entity);
-                assert_eq!(*payloads.lock().unwrap(), [(entity, 19), (clone, 29)]);
+                assert_eq!(
+                    *payloads.lock().unwrap(),
+                    [
+                        (entity, 19, [1, 64, 1], level),
+                        (clone, 29, [2, 64, 1], level)
+                    ]
+                );
                 game.fire_pending_block_entity_loads();
                 assert_eq!(
                     *log.lock().unwrap(),
@@ -374,7 +384,7 @@ mod tests {
                     sunrise_client::items::ItemStack::new("test:box_shulker_box", 1),
                 )
                 .unwrap();
-            assert!(left.is_none());
+            assert_eq!(left.continue_value(), Some(None));
             assert!(matches!(
                 game.world.block_entities.get(&(1, 64, 1)),
                 Some(BlockEntity::Mod(_))
@@ -390,14 +400,19 @@ mod tests {
             return;
         }
         with_fixture(false, |game, log, _| {
+            let level = game.level("minecraft:overworld").unwrap();
             let state = game.pack.assets.registry.default_state("test:a").unwrap();
-            assert!(game.spawn_falling_block(
-                "minecraft:overworld",
-                state,
-                [1.5, 66.0, 1.5],
-                [0.0; 3],
-                Falling::default()
-            ));
+            assert!(
+                game.level_spawn_falling_block(
+                    level,
+                    state,
+                    [1.5, 66.0, 1.5],
+                    [0.0; 3],
+                    Falling::default(),
+                )
+                .unwrap()
+                .is_some()
+            );
             let join = game.falling[0].join;
             let mut block = game.falling.extract(join).unwrap();
             let id = block.id;
@@ -466,7 +481,7 @@ mod tests {
                         portal_cooldown: 0,
                         sea_level: 63,
                     },
-                    false,
+                    RemoteDimensionEntry::Login,
                     sunrise_client::level_loading::Reason::Other,
                 );
                 let remote = game.remote.as_mut().unwrap();

@@ -41,11 +41,11 @@ class ProcessTests(unittest.TestCase):
         source = """\
             use crate::runtime_leases::isolated_test as isolated;
             #[test] fn by_alias() { if isolated() { return; } }
-            #[test] fn by_path() { sunrise_mod_wasm::fixture::cached_answer(&root, exe, &bytes); }
+            #[test] fn by_path() { mod_tool::fixture::build_a_mod(&root, exe); }
             #[test] fn unrelated() { other::answer(); }
             """
-        self.assertEqual(names(source, ["isolated_test", "fixture::cached_answer"]),
-                         [("by_alias", "isolated"), ("by_path", "fixture::cached_answer")])
+        self.assertEqual(names(source, ["isolated_test", "fixture::build_a_mod"]),
+                         [("by_alias", "isolated"), ("by_path", "fixture::build_a_mod")])
 
 
 if __name__ == "__main__":

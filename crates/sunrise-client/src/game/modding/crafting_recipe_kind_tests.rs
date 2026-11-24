@@ -16,9 +16,6 @@ struct Kind {
 }
 impl mod_api::CraftingRecipeKind for Kind {
     type Value = u32;
-    fn codec(&self) -> Option<mod_api::CraftingRecipeCodec<u32>> {
-        Some(mod_api::CraftingRecipeCodec::wire())
-    }
     fn decode(&self, _: &str) -> Result<u32, String> {
         Ok(3)
     }

@@ -71,8 +71,9 @@ enum Asset {
 }
 
 /// Checks the references among `content`'s files; `Err` only when a file cannot be read.
-/// A mod with code (`native`, `wasm`) also declares ids in code, so the ids it declares in files
-/// are not taken for all of them; a mod with `jar` layers may find assets and data there.
+/// A native mod or `served_by` content package also has ids declared in code, so the ids it
+/// declares in files are not taken for all of them; a mod with `jar` layers may find assets and
+/// data there.
 pub fn check_references(content: &Content, manifest: &Manifest) -> Result<Findings, String> {
     let atlas = |name: &String| {
         let mut parts = name.split('/');
@@ -81,8 +82,8 @@ pub fn check_references(content: &Content, manifest: &Manifest) -> Result<Findin
     let mut check = References {
         content,
         manifest,
-        reader: content.reader()?,
-        code: manifest.native.is_some() || manifest.wasm.is_some(),
+        reader: content.reader(),
+        code: manifest.native.is_some() || manifest.served_by.is_some(),
         jar: !manifest.jar.is_empty() || !manifest.dependencies.is_empty(),
         atlas: content.files.iter().any(atlas),
         recipe_filters: content.files.iter().any(|name| {
@@ -116,7 +117,7 @@ pub fn check_references(content: &Content, manifest: &Manifest) -> Result<Findin
         models: BTreeMap::new(),
         findings: Findings::default(),
     };
-    for name in &content.files {
+    for name in content.files.iter() {
         let mut parts = name.splitn(3, '/');
         let (top, namespace, rest) = (parts.next(), parts.next(), parts.next());
         let (Some(top), Some(namespace), Some(rest)) = (top, namespace, rest) else {

@@ -486,10 +486,25 @@ impl OrientedCollider {
     /// The boxes whose own bounds meet the world box (tested in the collider's frame, where
     /// they are axis-aligned): the grid's cells first, then each box's bounds.
     fn with_candidates<R>(&self, world: Aabb, f: impl FnOnce(&[u32]) -> R) -> R {
-        let local = self.frame.local_bounds(world);
+        self.with_local_candidates(self.frame.local_bounds(world), Aabb::intersects, f)
+    }
+
+    fn with_local_candidates<R>(
+        &self,
+        local: Aabb,
+        overlaps: impl Fn(Aabb, Aabb) -> bool,
+        f: impl FnOnce(&[u32]) -> R,
+    ) -> R {
+        let Some(bounds) = self
+            .boxes
+            .bounds()
+            .filter(|&bounds| overlaps(bounds, local))
+        else {
+            return f(&[]);
+        };
         let mut out = CANDIDATES.with(|c| std::mem::take(&mut *c.borrow_mut()));
-        self.boxes.candidates(local, &mut out);
-        out.retain(|&i| self.boxes.boxes[i as usize].intersects(local));
+        self.boxes.candidates(local.intersect(bounds), &mut out);
+        out.retain(|&i| overlaps(self.boxes.boxes[i as usize], local));
         let result = f(&out);
         CANDIDATES.with(|c| *c.borrow_mut() = out);
         result
@@ -507,7 +522,7 @@ impl OrientedCollider {
         direction = direction.with_component(axis, amount);
         let sweep = mover.expand_towards(direction);
         let mut allowed = amount;
-        let axes = self.axes();
+        let axes = self.axes(DEGENERATE_AXIS);
         self.with_candidates(sweep, |candidates| {
             for &index in candidates {
                 let obb = self.obb(self.boxes.boxes[index as usize]);
@@ -521,9 +536,120 @@ impl OrientedCollider {
         allowed
     }
 
+    /// Fraction of a straight collider's travel remaining after its first contact with `mover`.
+    /// Only boxes that survive at the same local index and bounds can sweep. `delta` is the
+    /// collider's displacement from this pose to `after`, which has the same orientation.
+    pub fn translation_push_fraction(&self, after: &Self, mover: Aabb, delta: Vec3) -> f64 {
+        // PistonMath.getMovementArea sweeps the advancing face, not the old solid volume.
+        // For a turned box moving diagonally there can be several advancing faces.
+        let relative = delta.scale(-1.0);
+        let axes = self.axes(0.0);
+        let axis_aligned = self.frame.axes.iter().all(|axis| {
+            matches!(
+                axis.components().map(f64::abs),
+                [1.0, 0.0, 0.0] | [0.0, 1.0, 0.0] | [0.0, 0.0, 1.0]
+            )
+        });
+        let components = self.frame.axes.map(|axis| delta.dot(axis));
+        let sweep = mover.expand_towards(relative);
+        // Rebasing a positive world overlap into an aligned local frame can round it to
+        // tangency. Keep that cell and candidate; only the world test decides contact.
+        let overlaps = |a: Aabb, b: Aabb| {
+            if axis_aligned {
+                Axis::ALL
+                    .into_iter()
+                    .all(|axis| a.min(axis) <= b.max(axis) && a.max(axis) >= b.min(axis))
+            } else {
+                a.intersects(b)
+            }
+        };
+        let local_sweep = self.frame.local_bounds(sweep);
+        self.with_local_candidates(local_sweep, overlaps, |candidates| {
+            let mut first = 1.0_f64;
+            for &index in candidates {
+                let index = index as usize;
+                let local = self.boxes.boxes[index];
+                if after.boxes.boxes.get(index) != Some(&local) {
+                    continue;
+                }
+                if axis_aligned {
+                    // A stationary envelope axis spans exactly the advancing face's bounds.
+                    // Compare endpoints directly; do not project them through centre/radius.
+                    let bounds = Aabb::new(
+                        self.frame.to_world(local.min),
+                        self.frame.to_world(local.max),
+                    );
+                    if Axis::ALL.into_iter().any(|axis| {
+                        delta.component(axis) == 0.0
+                            && (bounds.min(axis) >= mover.max(axis)
+                                || bounds.max(axis) <= mover.min(axis))
+                    }) {
+                        continue;
+                    }
+                }
+                let obb = self.obb(local);
+                for (i, component) in components.into_iter().enumerate() {
+                    if component == 0.0 {
+                        continue;
+                    }
+                    let mut face = Obb {
+                        centre: obb
+                            .centre
+                            .add_vector(self.frame.axes[i].scale(component.signum() * obb.half[i])),
+                        half: obb.half,
+                    };
+                    face.half[i] = 0.0;
+                    if let Some(time) = self.face_entry(&axes, mover, relative, &face, axis_aligned)
+                    {
+                        first = first.min(time);
+                        if first == 0.0 {
+                            return 1.0;
+                        }
+                    }
+                }
+            }
+            1.0 - first
+        })
+    }
+
+    /// First time the box crosses the advancing face. Strict overlap of the
+    /// projections gives an open contact interval, including a face already
+    /// inside the body at the start but not a graze that never advances into it.
+    fn face_entry(
+        &self,
+        axes: &Axes,
+        mover: Aabb,
+        relative: Vec3,
+        face: &Obb,
+        stationary_axes_checked: bool,
+    ) -> Option<f64> {
+        let (mut enter, mut exit) = (0.0_f64, 1.0_f64);
+        for axis in axes.iter() {
+            let speed = relative.dot(axis);
+            if speed == 0.0 && stationary_axes_checked {
+                continue;
+            }
+            let (distance, radii) = self.extents(mover, face, axis);
+            if speed == 0.0 {
+                if distance.abs() >= radii {
+                    return None;
+                }
+            } else {
+                let t1 = (distance - radii) / speed;
+                let t2 = (distance + radii) / speed;
+                enter = enter.max(t1.min(t2));
+                exit = exit.min(t1.max(t2));
+                if enter >= exit {
+                    return None;
+                }
+            }
+        }
+        Some(enter)
+    }
+
     /// Whether the entity box overlaps any box deeper than the collision epsilon.
     pub fn intersects(&self, mover: Aabb) -> bool {
-        let axes = self.axes();
+        let axes = self.axes(DEGENERATE_AXIS);
         self.with_candidates(mover, |candidates| {
             candidates.iter().any(|&index| {
                 let obb = self.obb(self.boxes.boxes[index as usize]);
@@ -535,7 +661,7 @@ impl OrientedCollider {
     /// Calls `f` with the index of each box the entity box overlaps deeper than the collision
     /// epsilon, until it answers true.
     pub fn overlapping(&self, mover: Aabb, mut f: impl FnMut(u32) -> bool) {
-        let axes = self.axes();
+        let axes = self.axes(DEGENERATE_AXIS);
         self.with_candidates(mover, |candidates| {
             for &index in candidates {
                 let obb = self.obb(self.boxes.boxes[index as usize]);
@@ -552,12 +678,12 @@ impl OrientedCollider {
         let Some(&local) = self.boxes.boxes.get(index as usize) else {
             return false;
         };
-        self.overlap_depth(&self.axes(), mover, &self.obb(local)) > COLLISION_EPSILON
+        self.overlap_depth(&self.axes(DEGENERATE_AXIS), mover, &self.obb(local)) > COLLISION_EPSILON
     }
 
     /// The axes of the separating-axis test: the world axes, the box's, and their cross
     /// products (those not parallel), computed once for a query.
-    fn axes(&self) -> Axes {
+    fn axes(&self, cross_threshold: f64) -> Axes {
         let world = [
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
@@ -574,7 +700,7 @@ impl OrientedCollider {
             for l in local {
                 let c = w.cross(l);
                 let n = c.length_squared();
-                if n > DEGENERATE_AXIS {
+                if n > cross_threshold {
                     list[count] = c.scale(1.0 / n.sqrt());
                     count += 1;
                 }
@@ -867,6 +993,61 @@ mod tests {
         }
         // Away from the wall nothing stops it.
         assert_eq!(collider.collide(mover, Axis::X, -5.0), -5.0);
+    }
+
+    #[test]
+    fn a_translating_collider_sweeps_only_its_advancing_face() {
+        let boxes = Arc::new(ColliderBoxes::new(vec![b([0.0; 3], [1.0; 3])]));
+        let delta = Vec3::new(1.0, 0.0, 0.0);
+        let start = OrientedCollider::new(Frame::translation(Vec3::ZERO), boxes.clone());
+        let end = OrientedCollider::new(Frame::translation(delta), boxes);
+        let push = |min, max| start.translation_push_fraction(&end, b(min, max), delta);
+        assert_eq!(push([0.875, 0.25, 0.25], [1.125, 0.75, 0.75]), 1.0);
+        assert_eq!(push([-0.125, 0.25, 0.25], [0.125, 0.75, 0.75]), 0.0);
+        assert_eq!(
+            push([1.25, 1.0_f64.next_down(), 0.25], [1.5, 1.25, 0.75]),
+            0.75
+        );
+        assert_eq!(push([1.25, 1.0, 0.25], [1.5, 1.25, 0.75]), 0.0);
+    }
+
+    #[test]
+    fn a_translating_face_keeps_world_overlap_after_rebasing() {
+        let source = b([0.0, 1.0, 0.0], [1.0, 2.0, 1.0]);
+        // With and without a second box extending the overall bounds beyond the contact.
+        // The real overlap must survive both the aggregate and per-box candidate filters.
+        for boxes in [
+            vec![source],
+            vec![source, b([0.0, 2.0, 2.0], [1.0, 3.0, 3.0])],
+        ] {
+            let boxes = Arc::new(ColliderBoxes::new(boxes));
+            let origin = Vec3::new(0.0, -1.0, 0.0);
+            let delta = Vec3::new(1.0, 0.0, 0.0);
+            let start = OrientedCollider::new(Frame::translation(origin), boxes.clone());
+            let end = OrientedCollider::new(Frame::translation(origin.add_vector(delta)), boxes);
+            let push = |y| {
+                start.translation_push_fraction(&end, b([1.25, y, 0.25], [1.5, 1.25, 0.75]), delta)
+            };
+            assert_eq!(push(1.0_f64.next_down()), 0.75);
+            assert_eq!(push(1.0), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_translating_face_keeps_one_ulp_of_forward_overlap() {
+        let boxes = Arc::new(ColliderBoxes::new(vec![b(
+            [-1.0, 0.0, 0.0],
+            [2.0_f64.powi(-55), 1.0, 1.0],
+        )]));
+        let origin = Vec3::new(-1.0, 0.0, 0.0);
+        let delta = Vec3::new(0.5, 0.0, 0.0);
+        let start = OrientedCollider::new(Frame::translation(origin), boxes.clone());
+        let end = OrientedCollider::new(Frame::translation(origin.add_vector(delta)), boxes);
+        let push = |x| {
+            start.translation_push_fraction(&end, b([x, 0.0, 0.0], [x + 0.25, 1.0, 1.0]), delta)
+        };
+        assert_eq!(push((-0.5_f64).next_down()), 2.0_f64.powi(-52));
+        assert_eq!(push(-0.5), 0.0);
     }
 
     /// A box turned 45 degrees about y shows a corner to a mover coming along x: the mover

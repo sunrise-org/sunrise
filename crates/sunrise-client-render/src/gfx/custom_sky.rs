@@ -45,7 +45,7 @@ struct Vertex {
     cell: [f32; 4],
 }
 
-pub(super) struct CustomSky {
+pub(crate) struct CustomSky {
     pipelines: Vec<wgpu::RenderPipeline>,
     /// SUNRISE_HDR_DEBUG on the float frame: the layers' light turns grey, as the sky's does.
     written_debug: bool,
@@ -571,10 +571,10 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "daily"]
     fn written_custom_sky_modes_keep_their_factors_and_light() {
         let _gpu = crate::gfx::test_gpu::lock();
-        let instance = crate::gfx::test_gpu::instance();
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
             return;
         };
         let (device, queue) =

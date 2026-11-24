@@ -65,6 +65,7 @@ impl Game<'_> {
             return;
         };
         let g = &host.hub.guests[gi];
+        let conn = g.conn;
         let player = g.uuid;
         if let Some(head) = g.bed
             && mod_api::__private::listened(mod_api::HookId::PlayerBedLeave)
@@ -72,12 +73,12 @@ impl Game<'_> {
             let name = g.name.clone();
             self.native_player_bed_leave(player, &name, head, wake_immediately, update_level);
         }
-        // A listener may have woken the guest already, or changed the list:
-        // find the guest again; `wake` does nothing to one already awake.
+        // The list may have changed, and a reconnect can share the departing guest's UUID.
+        // Find the same connection; `wake` does nothing if the listener already woke it.
         let Some(host) = self.lan.as_mut() else {
             return;
         };
-        let Some(gi) = host.hub.guests.iter().position(|g| g.uuid == player) else {
+        let Some(gi) = host.hub.guests.connection_index(conn) else {
             return;
         };
         host.hub.wake(gi, wake_immediately);
@@ -170,7 +171,7 @@ impl Game<'_> {
     /// of those have slept 100 ticks.
     pub(in crate::game) fn sleep_counts(&self) -> (i64, i64, i64) {
         let (mut active, mut sleeping, mut deep) = (0i64, 0i64, 0i64);
-        let mut count = |in_bed: bool, timer: u32| {
+        let mut count = |in_bed: bool, timer: i32| {
             active += 1;
             if in_bed {
                 sleeping += 1;
@@ -231,6 +232,29 @@ impl Game<'_> {
         let (active, sleeping, deep) = self.sleep_counts();
         let needed = self.sleepers_needed(active);
         sleeping >= needed && deep >= needed
+    }
+
+    /// `ServerLevel.tick`'s night skip: `SleepStatus.areEnoughSleeping` and
+    /// `areEnoughDeepSleeping`, unless a mod's `sleep_skip_night` cancels it for this tick.
+    pub(in crate::game) fn sleep_skips_night(&mut self) -> bool {
+        let (active, sleeping, deep) = self.sleep_counts();
+        let needed = self.sleepers_needed(active);
+        if sleeping < needed || deep < needed {
+            return false;
+        }
+        if !mod_api::__private::listened(mod_api::HookId::SleepSkipNight) {
+            return true;
+        }
+        let percentage = self
+            .ui
+            .rules
+            .int_at(sunrise_client::gamerules::vanilla::PLAYERS_SLEEPING_PERCENTAGE);
+        let mut canceled = false;
+        let dimension = self.dim.id();
+        self.native_sleep_skip_night(dimension, percentage, sleeping, active, &mut canceled);
+        // The listener's writes (`PlayerRef::set_sleep_timer`, a teleport) can leave too
+        // few sleepers; the night is then not skipped, as the counts it answered are gone.
+        !canceled && self.enough_slept()
     }
 
     /// `ServerLevel.updateSleepingPlayerList` and `announceSleepStatus`: when
@@ -305,3 +329,7 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/sleep_skip_night_tests.rs"]
+mod sleep_skip_night_tests;

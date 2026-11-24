@@ -32,7 +32,7 @@ ConditionalBlockModel.Unbaked.bake	skip:java		builds the conditional object; the
 SpecialBlockModelWrapper.Unbaked.bake	skip:data		special models come from exported model data in BlockEntityRenderer::load; no baking step
 AbstractEndPortalRenderer.submitSpecial	port	crates/sunrise-client-render/src/block_entity_render.rs::portal_cube	gap: minor: no outline pass (outlineColor) for the portal faces
 AbstractSignRenderer.submit	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	front and back text drawn in the sign branch via sign_text_calls
-AbstractSignRenderer.isOutlineVisible	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	gap: minor: only the 16-block distance is tested; spyglass scoping in first person does not turn the outline on
+AbstractSignRenderer.isOutlineVisible	port	crates/sunrise-client-render/src/block_entity_render.rs::SignOutline::visible	Game supplies first-person scoping and the camera entity’s current base position to the cached and uncached paths
 AbstractSignRenderer.extractRenderState	inline	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	gap: minor: the text filtering option is not read; filtered sign lines are not shown
 BannerRenderer.extractRenderState	inline	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	flutter phase from position, game time and partial tick; standing or wall placement
 BannerRenderer.bannerModel	inline	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	wall or standing banner model chosen in the banner branch
@@ -48,7 +48,7 @@ BeaconRenderer.addVertex	port	crates/sunrise-client-render/src/block_entity_rend
 BellRenderer.extractRenderState	inline	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	bell ticks and shake direction read in the bell branch
 BellRenderer.submit	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	the crack overlay on a bell is redrawn by BlockEntityRenderer::render_breaking
 BlockEntityRenderDispatcher.getRenderer	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::kind	renderer chosen from the block state
-BlockEntityRenderDispatcher.tryExtractRenderState	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render	gap: minor: distance cull only (256 for gateways); no frustum, type-validity or off-screen test here
+BlockEntityRenderDispatcher.tryExtractRenderState	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render	gap: minor: the frustum and off-screen tests are the frame's (Game::block_entity_reach); the distance is Reach::should_render; no type-validity test
 BlockEntityRenderDispatcher.submit	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	draws each kind; no crash report wrapper
 BlockEntityRenderDispatcher.onResourceManagerReload	missing		minor: block entity models load once in BlockEntityRenderer::load; no reload path found
 BlockEntityRenderers.createEntityRenderers	skip:data		renderer registration table; Sunrise's classify table replaces it
@@ -103,8 +103,8 @@ StandingSignRenderer.createTransformations	inline	crates/sunrise-client-render/s
 TestInstanceRenderer.extractRenderState	port	crates/sunrise-client/src/game/administration/structure_blocks.rs::Game::bounding_box_gizmos	the block's box as a game-master gizmo (TestInstanceBlockEntity.renderMode is BOX); the beacon beam is beacon.rs::test_instance_beam and the error marker text test_instances.rs::test_instance_marker_geometry
 TestInstanceRenderer.submit	port	crates/sunrise-client/src/game/administration/test_instances.rs::Game::test_instance_marker_geometry	the per-block loop drawing the error markers and their billboards; the beam sections come from Game::test_instance_beam and the box from Game::bounding_box_gizmos, both drawn per frame
 TestInstanceRenderer.submitErrorMarker	port	crates/sunrise-client/src/gizmos.rs::error_marker_shape	the red box and its text, drawn by Game::test_instance_marker_geometry
-TestInstanceRenderer.shouldRenderOffScreen	missing		minor: culling policy of a renderer Sunrise lacks
-TestInstanceRenderer.shouldRender	missing		minor: culling policy of a renderer Sunrise lacks
+TestInstanceRenderer.shouldRenderOffScreen	port	crates/sunrise-client-render/src/block_entity_reach.rs::Reach::off_screen	true, as the beacon and the structure block
+TestInstanceRenderer.shouldRender	port	crates/sunrise-client-render/src/block_entity_reach.rs::Reach::should_render	Reach::TestInstance: the beacon reach across the ground or the bounding box's 96, for the beam, outline and markers
 TheEndGatewayRenderer.submit	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	beam and visible cube faces in the end gateway branch
 TheEndPortalRenderer.submit	port	crates/sunrise-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	portal slab in the end portal branch
 TrialSpawnerRenderer.extractRenderState	port	crates/sunrise-client/src/mobs/spawner.rs::display_pose	same spin and scale rule as spawners

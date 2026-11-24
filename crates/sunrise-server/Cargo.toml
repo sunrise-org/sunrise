@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Host a Sunrise server: server.toml, the CLI and the supervisor that runs the game headless (docs/server.md)"
 
 [dependencies]
-sunrise-platform = { path = "../sunrise-platform", features = ["server-files", "world"] }
+sunrise-platform = { path = "../sunrise-platform", features = ["http-proxy", "server-files", "world"] }
 # Shared server configuration and launch command used by the native-mod launcher.
 sunrise-server-launch = { path = "../sunrise-server-launch" }
 # `sunrise-server mcp`: the Model Context Protocol, shared with sunrise-ctl and the launcher.

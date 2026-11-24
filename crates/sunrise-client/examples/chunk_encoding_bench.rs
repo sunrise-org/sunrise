@@ -18,7 +18,10 @@ use sunrise_client::{
 };
 
 fn bodies(encoder: &ChunkEncoder, columns: &[&Chunk], world: &World) -> Vec<Vec<u8>> {
-    columns.iter().map(|c| encoder.body_in(c, world)).collect()
+    columns
+        .iter()
+        .map(|c| encoder.body_in(c, world).unwrap())
+        .collect()
 }
 
 fn fixture(
@@ -68,12 +71,18 @@ fn main() -> sunrise_client::Result<()> {
     )?;
     let biome_names: Vec<String> = biomes.list.iter().map(|b| b.name.clone()).collect();
     let defaults = sunrise_world::item_defaults::read(root)?;
+    let items = sunrise_client::items::Items::catalog(
+        root,
+        &sunrise_world::loot::PackOverlay::NONE,
+        &defaults,
+    )?;
     let sync = sunrise_client::lan::data::SyncData::load(
         root,
         &sunrise_world::loot::PackOverlay::NONE,
         &defaults,
         &sunrise_client::crafting::ResolvedSources::load(
             root,
+            &items,
             &sunrise_world::loot::PackOverlay::NONE,
             &server_load(),
         )?,

@@ -1,14 +1,14 @@
 SnbtGrammar.cleanAndAppend	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::float	float text: underscores dropped before numeric conversion
-SnbtGrammar.parseUnsignedShort	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::integer	unsigned short arm validates the sixteen-bit magnitude
+SnbtGrammar.parseUnsignedShort	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::convert_integer	unsigned short arm validates the sixteen-bit magnitude
 SnbtGrammar.createFloat	port	crates/sunrise-core/src/nbt_snbt.rs::Parser::float	constructs typed float or double values from the parsed decimal representation
 SnbtGrammar.convertFloat	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::float	float arm; non-finite values rejected
 SnbtGrammar.convertDouble	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::float	double arm; non-finite values rejected
 SnbtGrammar.joinList	skip:java		joins parser parts as a string
-SnbtGrammar.ArrayPrefix.isAllowed	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::integer	typed-array kind bounds the explicit element suffix
+SnbtGrammar.ArrayPrefix.isAllowed	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::convert_integer	typed-array kind bounds the explicit element suffix
 SnbtGrammar.ArrayPrefix.buildNumber	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::list	constructs typed array elements from validated integer values
-SnbtGrammar.ArrayPrefix.computeType	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::integer	typed-array kind supplies the absent integer suffix
-SnbtGrammar.IntegerLiteral.cleanupDigits	port	crates/sunrise-core/src/nbt_snbt.rs::Parser::integer	removes numeric underscores after parsing sign and radix
-SnbtGrammar.IntegerLiteral.create	port	crates/sunrise-core/src/nbt_snbt.rs::Parser::integer	validates signed or unsigned bit widths and constructs the typed integer
+SnbtGrammar.ArrayPrefix.computeType	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::convert_integer	typed-array kind supplies the absent integer suffix
+SnbtGrammar.IntegerLiteral.cleanupDigits	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::convert_integer	iterates the numeral span without underscores and applies the sign
+SnbtGrammar.IntegerLiteral.create	port	crates/sunrise-core/src/nbt_snbt.rs::Parser::convert_integer	validates signed or unsigned bit widths and constructs the typed integer
 SnbtGrammar.IntegerLiteral.signedOrDefault	inline	crates/sunrise-core/src/nbt_snbt.rs::Parser::integer	explicit signedness wins; decimal defaults to signed
 SnbtGrammar.createParser	port	crates/sunrise-core/src/nbt_snbt.rs::Parser::new	constructs the shared recursive SNBT parser state instead of a packrat grammar graph
 SnbtPrinterTagVisitor.visitByteArray	skip:data		datagen .snbt writer only (NbtUtils.structureToSnbt); Sunrise writes no .snbt
@@ -135,15 +135,15 @@ FriendlyByteBuf.toString	skip:java		Netty buffer text
 FriendlyByteBuf.retain	skip:java		Netty reference counting
 FriendlyByteBuf.touch	skip:java		Netty leak detection
 HashedPatchMap.create	port	crates/sunrise-protocol/src/item.rs::Hashed::of	component hashes are sent for every component the client keeps (item/hash/); gap: minor: a container or bundle_contents predicate whose nested exact components hold a byte no Codec.BOOL field names is left unhashed
-HashedPatchMap.matches	port	crates/sunrise-client/src/lan/containers.rs::Hub::hashed_matches	gap: minor: compares item id and count only, not the component patch
+HashedPatchMap.matches	port	crates/sunrise-protocol/src/item/hash.rs::Hashed::matches_projected	compares the added component hashes and removed IDs as maps and sets
 HashedStack.create	port	crates/sunrise-protocol/src/item.rs::Hashed::of	component hashes are sent for every component the client keeps (item/hash/); gap: minor: a container or bundle_contents predicate whose nested exact components hold a byte no Codec.BOOL field names is left unhashed
-HashedStack.ActualItem.matches	port	crates/sunrise-client/src/lan/containers.rs::Hub::hashed_matches	gap: minor: compares item id and count only, not the component patch
+HashedStack.ActualItem.matches	port	crates/sunrise-protocol/src/item/hash.rs::Hashed::matches_with_admitted	compares item ID, count and the full patch; reuses the admitted encoded effect values
 HiddenByteBuf.pack	skip:java		Netty in-memory channel wrapper
 HiddenByteBuf.unpack	skip:java		Netty in-memory channel wrapper
 HiddenByteBuf.retain	skip:java		Netty reference counting
 HiddenByteBuf.touch	skip:java		Netty leak detection
 MonitoredLocalFrameDecoder.channelRead	port	crates/sunrise-protocol/src/connection.rs::ConnReader::recv	bytes_in counter for the bandwidth chart
-PacketBundlePacker.decode	inline	crates/sunrise-client/src/net.rs::receive_play	gap: minor: BundleDelimiter is dropped; bundled packets are dispatched one by one
+PacketBundlePacker.decode	port	crates/sunrise-client/src/net/play_bundle.rs::PlayBundle::accept	collects delimiters, passes ordinary packets and refuses terminal or oversized bundles
 PacketBundleUnpacker.encode	port	crates/sunrise-client/src/lan/entity.rs::ServerEntity::send_changes	gap: minor: delimiters only around the projectile motion and power pair
 PacketDecoder.decode	port	crates/sunrise-protocol/src/packets/mod.rs::decode	rejects leftover bytes (larger than expected)
 PacketEncoder.encode	port	crates/sunrise-protocol/src/packets/mod.rs::encode	gap: minor: no error log and no skippable-packet path

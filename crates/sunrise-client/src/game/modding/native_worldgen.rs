@@ -9,7 +9,7 @@ use sunrise_world::{registry::BlockRegistry, worldgen::placement::PlacementQuery
 pub(in crate::game) struct WorkerResources {
     pub index: Arc<Index>,
     pub metadata: &'static Blocks,
-    air: BlockState,
+    pub(super) air: BlockState,
     air_blocks: [Option<BlockKey>; 3],
 }
 impl WorkerResources {
@@ -18,6 +18,13 @@ impl WorkerResources {
             .mod_worker_resource
             .get()
             .and_then(|resource| resource.downcast_ref())
+            .ok_or(PlacementQueryError::Unavailable)
+    }
+    pub fn get_arc(registry: &BlockRegistry) -> Result<Arc<Self>, PlacementQueryError> {
+        registry
+            .mod_worker_resource
+            .get()
+            .and_then(|resource| Arc::clone(resource).downcast::<Self>().ok())
             .ok_or(PlacementQueryError::Unavailable)
     }
     pub fn state(&self, block: BlockKey) -> BlockState {

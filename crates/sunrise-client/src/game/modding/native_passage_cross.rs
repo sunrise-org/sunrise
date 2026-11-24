@@ -5,6 +5,7 @@
 //! works out where the player comes out itself and follows with a position packet that
 //! changes nothing, or puts the player back.
 use super::Game;
+use super::native_net::PlaySend;
 use mod_api::{
     Passage, PassageCrossError as Error, PassageCrossRefusal as Refusal, PassageId, PassageTurn,
     Vec3,
@@ -108,9 +109,16 @@ impl Game<'_> {
             channel: CROSS_CHANNEL.into(),
             data,
         });
-        if !self.send_play(payload) {
-            self.native_net.holds.borrow_mut().clear();
-            return Err(Error::Cancelled);
+        match self.send_play(payload) {
+            PlaySend::Admitted => {}
+            PlaySend::Cancelled => {
+                self.native_net.holds.borrow_mut().clear();
+                return Err(Error::Cancelled);
+            }
+            PlaySend::Unavailable => {
+                self.native_net.holds.borrow_mut().clear();
+                return Err(Error::Unavailable);
+            }
         }
         // The send hook's listeners only read the host: the player is still there.
         let player = self.player.as_mut().expect("checked above");

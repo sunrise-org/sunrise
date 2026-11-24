@@ -74,8 +74,8 @@ def main():
     rust = out / "rust.txt"
     rust.unlink(missing_ok=True)
     env = dict(os.environ, SUNRISE_MAP_SAVE_CASES=str(inputs), SUNRISE_MAP_SAVE_OUTPUT=str(rust))
-    run(["cargo", "test", "-p", "sunrise-client", "--lib",
-         "game::maps::save_tests::saved_map_codec_fixture", "--", "--ignored", "--exact"],
+    run([lab.parity_fixtures(),
+         "game::maps::save_tests::saved_map_codec_fixture", "--ignored", "--exact"],
         "rust", env)
     actual = rust.read_text(encoding="utf-8").splitlines()
     assert len(actual) == len(reference), (len(actual), len(reference))

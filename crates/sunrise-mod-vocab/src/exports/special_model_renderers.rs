@@ -1,5 +1,11 @@
+pub use client::special_model_renderers::ReplacedSpecialModelRenderer;
 pub use client::special_model_renderers::{
-    MAX_NESTED_STACK_PARTS, MAX_SPECIAL_MODEL_PARTS, ReplacedSpecialModelRenderer,
-    SpecialModelContext, SpecialModelPart, SpecialModelPolicy, SpecialModelRenderer,
-    SpecialModelRendererRegistry, SpecialModelRenderers, SpecialPartContent,
+    SpecialModelBakeContext, SpecialModelCollector, SpecialModelConfig, SpecialModelContext,
+    SpecialModelFactory, SpecialModelGeometry, SpecialModelQuad, SpecialModelRenderer,
+    SpecialModelRendererRegistry, SpecialModelRenderers, SpecialModelStack, SpecialModelTints,
 };
+mod __private {
+    pub use crate::client::special_model_renderers::{
+        BakedSpecialModelRenderer, SpecialModelSubmission,
+    };
+}

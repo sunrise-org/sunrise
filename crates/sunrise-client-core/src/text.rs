@@ -5,25 +5,8 @@ use crate::lang;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
-/// ChatFormatting colours by legacy code index 0..=15.
-pub const COLORS: [(char, &str, u32); 16] = [
-    ('0', "black", 0x000000),
-    ('1', "dark_blue", 0x0000AA),
-    ('2', "dark_green", 0x00AA00),
-    ('3', "dark_aqua", 0x00AAAA),
-    ('4', "dark_red", 0xAA0000),
-    ('5', "dark_purple", 0xAA00AA),
-    ('6', "gold", 0xFFAA00),
-    ('7', "gray", 0xAAAAAA),
-    ('8', "dark_gray", 0x555555),
-    ('9', "blue", 0x5555FF),
-    ('a', "green", 0x55FF55),
-    ('b', "aqua", 0x55FFFF),
-    ('c', "red", 0xFF5555),
-    ('d', "light_purple", 0xFF55FF),
-    ('e', "yellow", 0xFFFF55),
-    ('f', "white", 0xFFFFFF),
-];
+pub use sunrise_core::text::{CHAT_COLORS as COLORS, named_color};
+
 pub const BLACK: u32 = 0x000000;
 pub const GRAY: u32 = 0xAAAAAA;
 pub const DARK_GRAY: u32 = 0x555555;
@@ -35,10 +18,6 @@ pub const GOLD: u32 = 0xFFAA00;
 pub const WHITE: u32 = 0xFFFFFF;
 pub const LIGHT_PURPLE: u32 = 0xFF55FF;
 pub const DARK_PURPLE: u32 = 0xAA00AA;
-
-pub fn named_color(name: &str) -> Option<u32> {
-    COLORS.iter().find(|c| c.1 == name).map(|c| c.2)
-}
 
 /// Click actions carried by text components.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,6 +92,9 @@ pub struct Style {
     pub font: Option<String>,
     /// Content metadata for a single U+FFFC object span; never inherited.
     pub inline_object: Option<InlineObject>,
+    /// Optional index into an in-process caller's style table for lossless
+    /// round-tripping of opaque API click/hover/metadata payloads across layout.
+    pub opaque_style_id: Option<usize>,
 }
 /// A style's `font` field: an identifier (`alt` is `minecraft:alt`).
 pub fn font_id(v: &Value) -> Option<String> {
@@ -150,6 +132,7 @@ impl Style {
         if self.font.is_none() {
             self.font.clone_from(&base.font);
         }
+        self.opaque_style_id = self.opaque_style_id.or(base.opaque_style_id);
     }
     pub fn is_bold(&self) -> bool {
         self.bold == Some(true)
@@ -281,6 +264,90 @@ impl Span {
 #[derive(Clone, Debug, Default)]
 pub struct RenderedText {
     pub spans: Vec<Span>,
+}
+
+/// Reusable temporary text for laying out borrowed ranges of a styled component.
+/// Neither the borrowed source nor the canonical `Text` tree needs to be shortened at a break.
+#[derive(Default)]
+pub struct TextSpanScratch {
+    spans: Vec<Span>,
+    strings: Vec<String>,
+}
+
+impl TextSpanScratch {
+    pub const fn new() -> Self {
+        Self {
+            spans: Vec::new(),
+            strings: Vec::new(),
+        }
+    }
+
+    /// Resolve legacy codes in each borrowed range with its effective starting style. Temporarily
+    /// lend the result as flattened text, then reuse the same span and string storage.
+    pub fn with_resolved<'a, T>(
+        &mut self,
+        ranges: impl IntoIterator<Item = (&'a Span, &'a str, &'a Style)>,
+        visit: impl FnOnce(&Text) -> T,
+    ) -> T {
+        for (part, text, style) in ranges {
+            self.push_resolved(part.origin, text, style);
+        }
+        let text = Text::from_spans(std::mem::take(&mut self.spans));
+        let result = visit(&text);
+        self.spans = text.rendered.spans;
+        for mut span in self.spans.drain(..).rev() {
+            span.text.clear();
+            self.strings.push(span.text);
+        }
+        result
+    }
+
+    fn push_resolved(&mut self, origin: Origin, raw: &str, initial: &Style) {
+        let mut current = self.strings.pop().unwrap_or_default();
+        if !raw.contains('§') {
+            if !raw.is_empty() {
+                current.push_str(raw);
+                self.spans.push(Span {
+                    origin,
+                    text: current,
+                    style: initial.clone(),
+                });
+            } else if current.capacity() != 0 {
+                self.strings.push(current);
+            }
+            return;
+        }
+        let mut style = std::borrow::Cow::Borrowed(initial);
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c != '§' {
+                current.push(c);
+                continue;
+            }
+            let Some(code) = chars.next() else { break };
+            let next = legacy_format(&style, code, initial);
+            if next != *style {
+                if !current.is_empty() {
+                    self.spans.push(Span {
+                        origin,
+                        text: current,
+                        style: style.into_owned(),
+                    });
+                    current = self.strings.pop().unwrap_or_default();
+                }
+                style = std::borrow::Cow::Owned(next);
+            }
+        }
+        if !current.is_empty() {
+            self.spans.push(Span {
+                origin,
+                text: current,
+                style: style.into_owned(),
+            });
+        } else if current.capacity() != 0 {
+            self.strings.push(current);
+        }
+    }
 }
 
 /// An immutable component tree with per-node provenance and its rendered cache.
@@ -439,6 +506,28 @@ impl Text {
         };
         t.source = Some(Value::Object(c).into());
         t
+    }
+    /// Render an argument-free translation, sharing its retained component with
+    /// the previous value when the key is unchanged. The rendered spans still
+    /// use the current language.
+    pub fn translate_reusing(key: &str, previous: Option<&Self>) -> Self {
+        let Some(source) = previous
+            .and_then(|text| text.source.as_ref())
+            .filter(|source| {
+                source
+                    .as_object()
+                    .filter(|component| component.len() == 1)
+                    .and_then(|component| component.get("translate"))
+                    .and_then(Value::as_str)
+                    == Some(key)
+            })
+        else {
+            return Self::translate(key, &[]);
+        };
+        let mut text = format_translatable(key, None, &[]);
+        text.source = Some(source.clone());
+        text.origins = local_origins();
+        text
     }
     /// Component.translatableWithFallback(key, fallback, args): `translate`, with `fallback` as
     /// the template when the language has no `key`.
@@ -656,6 +745,31 @@ impl Text {
         if let Value::Object(o) = &mut c {
             for (k, v) in fields {
                 o.entry(k).or_insert(v);
+            }
+        }
+        // Raw JSON fields are decoded input, even when attached to a local root.
+        std::sync::Arc::make_mut(&mut self.origins).remove("");
+        self.replace_component(c);
+        self.refresh();
+        self
+    }
+    /// Replace raw component fields (wrapping a plain literal if needed) and
+    /// regenerate the rendered cache, as `MutableComponent.withStyle(UnaryOperator)`
+    /// does for `Entity.getDisplayName`. Nested components supplied as JSON are always remote.
+    pub fn set_component_fields(mut self, fields: Vec<(String, Value)>) -> Self {
+        let mut c = self.component();
+        if let Value::String(s) = c {
+            c = json!({ "text": s });
+        }
+        if let Value::Object(o) = &mut c {
+            for (k, v) in fields {
+                if k == "hover_event" {
+                    o.remove("hoverEvent");
+                }
+                if k == "click_event" {
+                    o.remove("clickEvent");
+                }
+                o.insert(k, v);
             }
         }
         // Raw JSON fields are decoded input, even when attached to a local root.
@@ -906,38 +1020,11 @@ impl Text {
         if !self.rendered.spans.iter().any(|s| s.text.contains('§')) {
             return self.clone();
         }
-        let mut out = Text::default();
+        let mut scratch = TextSpanScratch::default();
         for span in &self.rendered.spans {
-            let mut style = span.style.clone();
-            let mut current = String::new();
-            let mut chars = span.text.chars();
-            while let Some(c) = chars.next() {
-                if c != '§' {
-                    current.push(c);
-                    continue;
-                }
-                let Some(code) = chars.next() else { break };
-                let next = legacy_format(&style, code, &span.style);
-                if next != style {
-                    if !current.is_empty() {
-                        out.rendered.spans.push(Span {
-                            origin: span.origin,
-                            text: std::mem::take(&mut current),
-                            style: style.clone(),
-                        });
-                    }
-                    style = next;
-                }
-            }
-            if !current.is_empty() {
-                out.rendered.spans.push(Span {
-                    origin: span.origin,
-                    text: current,
-                    style,
-                });
-            }
+            scratch.push_resolved(span.origin, &span.text, &span.style);
         }
-        Self::from_spans(out.rendered.spans)
+        Self::from_spans(scratch.spans)
     }
     /// `resolve_legacy` borrowing `self` when no span holds a `§` code (the
     /// common case).
@@ -1355,61 +1442,6 @@ impl From<&Text> for serde_json::Value {
     }
 }
 
-/// Text as it crosses to a wasm mod: its JSON component, and the current language's template
-/// for each key the component translates. Where no language is loaded (a wasm mod), the text
-/// is rebuilt with those, so it reads exactly as the game built it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TextForm {
-    /// The component (`Text::component`).
-    pub component: Value,
-    /// Each translated key with its template in the current language; empty with no language.
-    pub translations: Vec<(String, String)>,
-}
-
-impl From<&Text> for TextForm {
-    fn from(text: &Text) -> Self {
-        fn keys<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
-            match v {
-                Value::Object(o) => {
-                    if let Some(Value::String(key)) = o.get("translate") {
-                        out.push(key);
-                    }
-                    o.values().for_each(|v| keys(v, out));
-                }
-                Value::Array(items) => items.iter().for_each(|v| keys(v, out)),
-                _ => {}
-            }
-        }
-        let component = text.component();
-        // Most texts translate nothing: the language is asked only for the keys found.
-        let mut found = Vec::new();
-        keys(&component, &mut found);
-        let translations = match (found.is_empty(), lang::current()) {
-            (false, Some(language)) => found
-                .into_iter()
-                .filter_map(|key| Some((key.to_owned(), language.get(key)?.to_owned())))
-                .collect(),
-            _ => Vec::new(),
-        };
-        Self {
-            component,
-            translations,
-        }
-    }
-}
-
-/// Text from its form: rebuilt from the component in the current language, or, carried where
-/// no language is loaded, in the translations the form brought.
-impl From<TextForm> for Text {
-    fn from(form: TextForm) -> Self {
-        if form.translations.is_empty() || lang::current().is_some() {
-            return Text::from(form.component);
-        }
-        let language = lang::Language::of(lang::DEFAULT, form.translations);
-        lang::scoped(language, || Text::from(form.component)).0
-    }
-}
-
 /// Text from its JSON component, its translations left as their keys.
 impl From<serde_json::Value> for Text {
     fn from(component: serde_json::Value) -> Self {
@@ -1586,8 +1618,6 @@ mod tests {
             origins(received.spans[0].style.hover.as_ref().unwrap()),
             [Origin::Remote]
         );
-        let form = Text::from(TextForm::from(&translated));
-        assert_eq!(origins(&form), [Origin::Remote; 5]);
         let object_hover = Text::styled(
             "\u{fffc}",
             Style {
@@ -1669,29 +1699,6 @@ mod tests {
                 .iter()
                 .all(|s| s.click_event().is_some())
         );
-    }
-
-    /// A translated text crossing to where no language is loaded reads as the game built it:
-    /// the same spans, so the same `plain()`.
-    #[test]
-    fn a_text_form_reads_the_same_without_a_language() {
-        let language = lang::Language::of(
-            lang::DEFAULT,
-            [("chat.type.text".to_owned(), "<%s> %s".to_owned())],
-        );
-        let ((form, built), _) = lang::scoped(language, || {
-            let text = Text::translate(
-                "chat.type.text",
-                &[Text::literal("Steve"), Text::literal("hello")],
-            );
-            (TextForm::from(&text), text)
-        });
-        assert_eq!(built.plain(), "<Steve> hello");
-        // The component alone, rebuilt with no language, reads as its key.
-        assert_eq!(Text::from(form.component.clone()).plain(), "chat.type.text");
-        let crossed = Text::from(form);
-        assert_eq!(crossed, built);
-        assert_eq!(crossed.plain(), "<Steve> hello");
     }
 
     /// Styling translated text where its language isn't loaded keeps the translation it was

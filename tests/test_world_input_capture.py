@@ -17,17 +17,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def method(source, name):
-    # A method moved out of game.rs is `pub(super)` in its own file; the fixtures paste it as a
-    # private one.
-    plain, moved = f"    fn {name}(", f"    pub(super) fn {name}("
-    start = source.index(plain if plain in source else moved)
+    # A method moved out of game.rs is `pub(super)` (or, out of its parent module,
+    # `pub(in crate::game)`) in its own file; the fixtures paste it as a private one.
+    candidates = [f"    fn {name}(", f"    pub(super) fn {name}(", f"    pub(in crate::game) fn {name}("]
+    at = next((source.index(c) for c in candidates if c in source), None)
+    if at is None:
+        raise ValueError(f"{name} not found")
+    start = at
     opening = source.index("{", start)
     depth = 1
     end = opening + 1
     while depth:
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
-    return source[start:end].replace("pub(super) fn", "fn", 1)
+    body = source[start:end]
+    for vis in ("pub(super) fn", "pub(in crate::game) fn"):
+        body = body.replace(vis, "fn", 1)
+    return body
 
 
 def function(source, name):
@@ -52,25 +58,25 @@ class WorldInputCaptureTests(unittest.TestCase):
     def test_loading_completion_wiring(self):
         game = "".join((ROOT / "crates/sunrise-client/src" / path).read_text(encoding="utf-8")
                        for path in ("game/world/player_spawn.rs", "game/runtime/window_handler.rs", "game.rs"))
-        remote_dir = next(ROOT.glob('crates/sunrise-client/src/game/*/remote'))
-        remote = (remote_dir / "mod.rs").read_text(encoding="utf-8")
+        remote_dir = ROOT / "crates/sunrise-client/src/game/network/remote"
+        tick = (remote_dir / "tick.rs").read_text(encoding="utf-8")
         level_tick = (remote_dir / "client_level_tick.rs").read_text(encoding="utf-8")
         spawn = method(game, "spawn_player")
         self.assertLess(spawn.index("self.player = Some(player)"),
                         spawn.index("self.capture_loaded_world()"))
         # ClientPacketListener.tick: the level load tracker ends the loading screen,
         # the server hears PlayerLoaded, the mouse is captured, then the player moves.
-        ready = remote[remote.index("    fn tick_client_load("):]
+        ready = method(tick, "tick_client_load")
         self.assertLess(ready.index("r.loaded_sent = true"),
                         ready.index("self.capture_loaded_world()"))
-        level_fn = level_tick[level_tick.index("    pub(in crate::game) fn tick_remote_level("):]
+        level_fn = method(level_tick, "tick_remote_level_body")
         self.assertIn("self.tick_remote_player(running, hold)", level_fn)
-        level = method(remote, "tick_remote_player")
+        level = method(tick, "tick_remote_player")
         self.assertLess(level.index("self.tick_client_load()"),
                         level.index("self.tick_remote_own_player()"))
-        self.assertIn("self.tick_local_player(", method(remote, "tick_remote_own_player"))
+        self.assertIn("self.tick_local_player(", method(tick, "tick_remote_own_player"))
         # The extracted local-player pass owns the movement input now.
-        self.assertIn("let stick = self.pad_move()", method(remote, "tick_local_player"))
+        self.assertIn("let stick = self.pad_move()", method(tick, "tick_local_player"))
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_capture_lifecycle(self):

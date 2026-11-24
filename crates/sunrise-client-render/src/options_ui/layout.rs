@@ -49,6 +49,7 @@ impl OptionsUi {
         w: f32,
         h: f32,
     ) -> std::sync::Arc<OptionsLayout> {
+        self.refresh_added_rows();
         // The scroll is an input too: a drag, the wheel or a focus move can
         // change it without a revision bump, and the rows move with it.
         let key = (w, h, self.rev, self.scroll.to_bits());
@@ -127,9 +128,9 @@ impl OptionsUi {
                 let entries = [
                     ("options.skinCustomisation", Some(Page::Skin)),
                     ("options.sounds", Some(Page::Sound)),
-                    // Video Settings... opens Sunrise's graphics screen, which holds every
-                    // video option, as Sodium's replaces vanilla's.
-                    ("options.video", Some(Page::Graphics)),
+                    // OptionsScreen's Video Settings button: VideoSettingsScreen. Sunrise's
+                    // graphics screen opens from the Extras page.
+                    ("options.video", Some(Page::Video)),
                     ("options.controls", Some(Page::Controls)),
                     ("options.language", Some(Page::Language)),
                     ("options.chat", Some(Page::Chat)),
@@ -256,22 +257,6 @@ impl OptionsUi {
                 });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
-                // VideoSettingsScreen.addTitle: a changed graphics API needs a restart.
-                if page == Page::Video && s.sunrise.api != s.startup_api {
-                    out.push(Widget {
-                        x: 0.0,
-                        y: 15.0,
-                        w,
-                        h: 9.0,
-                        kind: WKind::Text {
-                            text: tr("options.restartRequired"),
-                            color: rgba(223, 80, 80, 255),
-                            centered: true,
-                        },
-                        list: false,
-                        row: 0,
-                    });
-                }
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 let mut last_category = "";
@@ -577,6 +562,22 @@ impl OptionsUi {
                     list: false,
                     row: 0,
                 });
+                // VideoSettingsScreen.addTitle: a changed graphics API needs a restart.
+                if page == Page::Video && s.sunrise.api != s.startup_api {
+                    out.push(Widget {
+                        x: 0.0,
+                        y: 15.0,
+                        w,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: tr("options.restartRequired"),
+                            color: rgba(223, 80, 80, 255),
+                            centered: true,
+                        },
+                        list: false,
+                        row: 0,
+                    });
+                }
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 for row in self.list_rows(s) {

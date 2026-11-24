@@ -4,7 +4,9 @@ use std::{
     io::{self, Write},
     path::Path,
 };
-use sunrise_world::damage_immunity::{self, DamageRule, ImmunityTag, ImmunityWorld};
+use sunrise_world::damage_immunity::{
+    self, DamageRule, EntityImmunityWorld, ImmunityTag, ImmunityWorld,
+};
 struct Env<'a> {
     f: &'a Value,
     out: &'a mut dyn Write,
@@ -35,7 +37,7 @@ impl Env<'_> {
         Ok(self.flag(k))
     }
 }
-impl ImmunityWorld for Env<'_> {
+impl EntityImmunityWorld for Env<'_> {
     type Error = io::Error;
     fn removed(&self) -> bool {
         self.f["initial"]["removed"].as_bool().unwrap()
@@ -65,6 +67,8 @@ impl ImmunityWorld for Env<'_> {
     fn fall_immune(&mut self) -> io::Result<bool> {
         self.query("fall-immune", "fall_immune")
     }
+}
+impl ImmunityWorld for Env<'_> {
     fn enchantment_immunity(&mut self) -> io::Result<bool> {
         for s in self.slots {
             self.event(&format!("slot {}", s.as_u64().unwrap()))?;

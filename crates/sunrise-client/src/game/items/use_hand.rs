@@ -6,11 +6,11 @@ impl Game<'_> {
     /// the other guests without leaving it in the broadcast capture.
     pub(super) fn play_block_use_sound(&mut self, sound: &str, at: [f64; 3], pitch: f32) {
         if self.lan_acting.is_some() {
-            self.audio.play_unshared(sound, Some(at), 1.0, pitch);
+            self.play_audio_unshared(sound, Some(at), 1.0, pitch);
             self.guest_block_sounds
                 .push((sound.to_owned(), at, 1.0, pitch));
         } else {
-            self.audio.play(sound, Some(at), 1.0, pitch);
+            self.play_audio(sound, Some(at), 1.0, pitch);
         }
     }
 
@@ -25,7 +25,7 @@ impl Game<'_> {
         self.use_failed = false;
         // isSecondaryUseActive with something in either hand keeps blocks
         // from reacting.
-        let sneaking = self.keys.held(Mapping::Sneak);
+        let sneaking = self.held_mapping(Mapping::Sneak);
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         let mut anchor_passed = false;
         // Native mods, where ServerPlayerGameMode.useItemOn starts
@@ -35,7 +35,7 @@ impl Game<'_> {
         // mods' hook, the block's own use, then the item's.
         use mod_api::InteractionResult as Answer;
         use mod_api::TriState;
-        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
+        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock { .. }));
         let mut block_hit = block_hit;
         let (mut use_block, mut use_item) = (TriState::Default, TriState::Default);
         let block_phase = sunrise_client::spans::guard("use_block");
@@ -62,6 +62,8 @@ impl Game<'_> {
                     self.use_failed = answer == Answer::Fail;
                     return Ok(true);
                 }
+                // A canceled PASS permits Item.use but never reaches ItemStack.useOn.
+                native_hooks::BlockClickAnswer::Canceled(_) if on_block => return Ok(false),
                 native_hooks::BlockClickAnswer::Canceled(_) => {
                     (use_block, use_item) = (TriState::False, TriState::False);
                 }
@@ -75,7 +77,7 @@ impl Game<'_> {
         if use_item.or(true)
             && let Some(hit) = block_hit
             && let Some(held) = self.held().cloned()
-            && let Some(answer) = self.item_use_first(hit, self.hand, &held)
+            && let Ok(Some(answer)) = self.item_use_first(hit, self.hand, &held)
             && answer != Answer::Pass
         {
             if !self.projection_action_fresh() {
@@ -121,9 +123,13 @@ impl Game<'_> {
                 {
                     return Ok(true);
                 }
-                if self.use_on_cauldron(hit.pos)? {
-                    self.swing_arm();
-                    return Ok(true);
+                match self.use_on_cauldron(hit.pos)? {
+                    sunrise_client::cauldron::Outcome::Success => {
+                        self.swing_arm();
+                        return Ok(true);
+                    }
+                    sunrise_client::cauldron::Outcome::Consume => return Ok(true),
+                    sunrise_client::cauldron::Outcome::Pass => {}
                 }
                 if let Some(placed) = self.use_on_campfire(hit.pos)? {
                     if placed {
@@ -216,7 +222,9 @@ impl Game<'_> {
                 let sign_consumes = self.sign_consumes_click(hit.pos);
                 use sunrise_world::level::{InteractionResult, UseBranch};
                 let item_result = match block_answer {
-                    Some(answer) => native_hooks::block_use_result(answer),
+                    Some(answer) => {
+                        native_hooks::block_use_result(answer, mod_api::LogicalSide::Server)
+                    }
                     None => self.with_level(|b, level, ticks| {
                         b.block_use_item_on(level, ticks, state, block_hit, player, item.as_deref())
                     }),
@@ -262,11 +270,14 @@ impl Game<'_> {
                             })
                     });
                     let result = if let Some(answer) = answer {
-                        native_hooks::block_use_result(answer).unwrap_or(InteractionResult::Pass)
+                        native_hooks::block_use_result(answer, mod_api::LogicalSide::Server)
+                            .unwrap_or(InteractionResult::Pass)
                     } else {
                         empty_template_ran = true;
                         let player = self.use_context();
+                        let actor = self.interacting_loot_entity();
                         self.with_block_use_level(|b, level, ticks| {
+                            level.interacting = Some(actor.clone());
                             b.use_without_item(level, ticks, state, block_hit, player)
                         })
                     };
@@ -342,6 +353,14 @@ impl Game<'_> {
                     return Ok(true);
                 }
             }
+        }
+        // The block passed or was skipped, independently of what ItemStack.useOn
+        // is about to answer. Record this on the current guest turn only.
+        if let Some(GuestUse::OnBlock {
+            block_fell_through, ..
+        }) = &mut self.guest_use
+        {
+            *block_fell_through = true;
         }
         // RightClickBlock's useItem FALSE: no ItemStack.useOn, so only Item.use is left (a guest's UseItem asks for it).
         if !use_item.or(true) {
@@ -634,9 +653,11 @@ impl Game<'_> {
             face,
             hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
             inside: hit.inside,
-            yaw: self.yaw,
-            pitch: self.pitch,
-            sneaking: self.keys.held(Mapping::Sneak),
+            source: sunrise_world::level::PlacementSource::Player {
+                yaw: self.yaw,
+                pitch: self.pitch,
+                sneaking: self.held_mapping(Mapping::Sneak),
+            },
             item: stack.item.to_string(),
             can_use_game_master_blocks: self.can_use_game_master_blocks(),
         };
@@ -656,18 +677,6 @@ impl Game<'_> {
         let target = [pos.x, pos.y, pos.z];
         // BlockItem.place's SUCCESS: the client swings with its own prediction.
         self.swing_arm_predicted();
-        // BlockItem.place's sound is among the level events;
-        // SolidBucketItem.getPlaceSound replaces it with the bucket's own.
-        let solid_bucket = &*stack.item == "minecraft:powder_snow_bucket";
-        if solid_bucket {
-            for event in &mut self.level_events {
-                if let LevelEvent::Sound { pos: at, sound, .. } = event
-                    && *at == pos
-                {
-                    *sound = "minecraft:item.bucket.empty_powder_snow".into();
-                }
-            }
-        }
         self.process_level_events()?;
         self.award_stat("used", &stack.item, 1);
         self.check_golem_spawn(target)?;
@@ -693,8 +702,8 @@ impl Game<'_> {
                 effects,
                 probability,
             } => {
-                // ApplyStatusEffectsConsumeEffect draws from the user's random,
-                // even at probability 1. The level random stands in for a player's.
+                // ApplyStatusEffectsConsumeEffect draws from this consumer,
+                // even at probability 1 (also in a guest's swapped-in turn).
                 let draw = match mob {
                     Some(living) => {
                         let commands::Target::Mob(id) = self.native_living_target(living)? else {
@@ -706,7 +715,7 @@ impl Game<'_> {
                             .random
                             .next_float()
                     }
-                    None => self.world.random.next_float(),
+                    None => self.player.as_mut()?.random.next_float(),
                 };
                 if draw >= *probability {
                     return Some(false);
@@ -716,45 +725,52 @@ impl Game<'_> {
                     let Some(def) = sunrise_client::brewing::effect(&eff.id) else {
                         continue;
                     };
+                    if eff.duration < -1 {
+                        continue;
+                    }
+                    let mut instance = sunrise_client::effects::EffectInstance::from_def(
+                        def,
+                        eff.duration,
+                        eff.amplifier.clamp(0, 255),
+                    );
+                    instance.ambient = eff.ambient;
+                    instance.visible = eff.show_particles;
+                    instance.show_icon = eff.show_icon;
                     if let Some(living) = mob {
-                        let effect = mod_api::ActiveEffect::new(
-                            mod_api::__private::effect_key_by_index(def.index)
-                                .expect("effects resolved at load"),
-                            eff.duration,
-                            eff.amplifier,
-                            eff.ambient,
-                            eff.show_particles,
-                            eff.show_icon,
-                        );
-                        changed |= self.living_add_effect(living, &effect);
+                        let commands::Target::Mob(id) = self.native_living_target(living)? else {
+                            return None;
+                        };
+                        changed |= self.add_mob_effect(id, instance, None);
                     } else {
-                        let mut instance = sunrise_client::effects::EffectInstance::new(
-                            def.id,
-                            eff.duration,
-                            eff.amplifier,
-                        );
-                        instance.ambient = eff.ambient;
-                        instance.visible = eff.show_particles;
-                        instance.show_icon = eff.show_icon;
                         changed |= self.add_player_effect(instance);
                     }
                 }
                 changed
             }
             ConsumeEffect::ClearAllEffects => match mob {
-                Some(living) => self.living_remove_all_effects(living),
+                Some(living) => {
+                    let commands::Target::Mob(_) = self.native_living_target(living)? else {
+                        return None;
+                    };
+                    self.living_remove_all_effects(living)
+                }
                 None => self.remove_player_effects(None),
             },
             ConsumeEffect::RemoveEffects(effects) => {
                 let mut changed = false;
-                for effect in effects {
-                    changed |= match mob {
-                        Some(living) => sunrise_client::brewing::effect(effect)
-                            .and_then(|def| mod_api::__private::effect_key_by_index(def.index))
-                            .is_some_and(|key| self.living_remove_effect(living, key)),
-                        None => sunrise_client::brewing::effect(effect)
-                            .is_some_and(|def| self.remove_player_effects(Some(def.index))),
+                if let Some(living) = mob {
+                    let commands::Target::Mob(id) = self.native_living_target(living)? else {
+                        return None;
                     };
+                    for effect in effects {
+                        changed |= sunrise_client::brewing::effect(effect)
+                            .is_some_and(|def| self.remove_mob_effect_by_index(id, def.index));
+                    }
+                } else {
+                    for effect in effects {
+                        changed |= sunrise_client::brewing::effect(effect)
+                            .is_some_and(|def| self.remove_player_effects(Some(def.index)));
+                    }
                 }
                 changed
             }
@@ -774,31 +790,56 @@ impl Game<'_> {
                     }
                     None => self.player.as_ref()?.position,
                 };
-                let b = sunrise_core::position::BlockPos::containing(at);
-                let at = [b.x, b.y, b.z].map(|v| f64::from(v) + 0.5);
-                let level = self.level(self.dim.id())?;
                 let source = match mob {
                     Some(living) => self.entity_sound_source(living.entity())?,
                     None => mod_api::SoundSource::Players,
                 };
-                self.native_queue_sound(level, sound, at, source, 1.0, 1.0, None)?;
+                self.queue_consume_sound(sound, BlockPos::containing(at), source)?;
                 true
             }
-            ConsumeEffect::Native { kind, data } => consume_effect_dispatch::dispatch(kind, || {
-                self.native_consume_effect(kind, data, consumed, user)
-            }),
+            ConsumeEffect::Native(effect) => self.native_consume_effect(effect, consumed, user),
         })
     }
+    /// `PlaySoundConsumeEffect.apply` calls the level, not the entity, at the block's centre.
+    pub(super) fn queue_consume_sound(
+        &mut self,
+        sound: &sunrise_client::items::ConsumeSound,
+        pos: BlockPos,
+        source: mod_api::SoundSource,
+    ) -> Option<()> {
+        use sunrise_client::items::ConsumeSound;
+        let (id, inline_range) = match sound {
+            ConsumeSound::Registered(id) => (id, None),
+            ConsumeSound::Direct { id, range } => (id, Some(*range)),
+        };
+        let at = [pos.x, pos.y, pos.z].map(|v| f64::from(v) + 0.5);
+        let level = self.level(self.dim.id())?;
+        self.native_queue_sound(super::native_level_effects::NativeSoundRequest {
+            level,
+            sound: id,
+            at,
+            source,
+            volume: 1.0,
+            pitch: 1.0,
+            except: None,
+            entity: None,
+            inline_range,
+            seed: None,
+        })
+        .then_some(())
+    }
+
     /// BowItem.releaseUsing: power from charge time, arrows at power * 3, as
     /// many as the weapon's `projectile_count` says, fanned by its
     /// `projectile_spread`.
     pub(super) fn release_bow(&mut self, stack: &ItemStack, ticks: u32) {
-        let ammo = self.get_projectile(stack);
+        let Some(ammo) = self.get_projectile(stack) else {
+            return;
+        };
         let mut charge = i32::try_from(ticks).unwrap_or(i32::MAX);
         let mut canceled = false;
-        self.native_arrow_loose(stack, ammo.is_some(), &mut charge, &mut canceled);
-        let power = item_use::bow_release_power(ammo.is_some(), charge, canceled);
-        let (Some(power), Some(ammo)) = (power, ammo) else {
+        self.native_arrow_loose(stack, true, &mut charge, &mut canceled);
+        let Some(power) = item_use::bow_release_power(true, charge, canceled) else {
             return;
         };
         let arrow_slot = ammo.slot;
@@ -808,20 +849,31 @@ impl Game<'_> {
         };
         // BowItem.shootProjectile: shootFromRotation(power * 3, inaccuracy 1).
         let p = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
-        let ammo = ammo.stack;
-        let (power_bonus, infinity) = self.bow_enchantments(&ammo.item);
-        let effect = dispenser::tipped_effect(&ammo).or_else(|| {
-            (&*ammo.item == "minecraft:spectral_arrow").then_some(("minecraft:glowing", 200))
-        });
-        let kind = sunrise_client::projectiles::ProjectileKind::Arrow {
-            base_damage: 2.0 + power_bonus,
-            critical: power >= 1.0,
-            effect,
-        };
-        // ProjectileWeaponItem.draw and shoot: the weapon's enchantments decide
-        // how many arrows leave and how far apart they fan (Multishot: two more
-        // arrows, ten degrees of spread).
-        let (count, spread) = self.bow_volley(stack);
+        let shooter = self.own_entity_id() as u32;
+        let (drawn, debit) = self.draw_weapon_ammo(
+            stack,
+            &ammo.stack,
+            shooter,
+            "minecraft:player",
+            self.creative,
+        );
+        if drawn.is_empty() {
+            return;
+        }
+        if debit > 0
+            && let Some(i) = arrow_slot
+        {
+            self.consume_player_slot(i, debit);
+        }
+        let count = drawn.len();
+        let spread = self.entity_enchantment_value(
+            stack,
+            shooter,
+            "minecraft:player",
+            "minecraft:projectile_spread",
+            0.0,
+        );
+        let spread = if spread < 0.0 { 0.0 } else { spread };
         let (velocity, on_ground) = self.player.as_ref().map_or((Vec3::ZERO, true), |pl| {
             (self.known_player_movement(), pl.ground.on_ground)
         });
@@ -835,25 +887,26 @@ impl Game<'_> {
         };
         let offset = (count.saturating_sub(1) % 2) as f32 * step / 2.0;
         let mut direction = 1.0f32;
-        for index in 0..count {
+        for (index, ammo) in drawn.iter().enumerate() {
+            let effect = dispenser::tipped_effect(ammo).or_else(|| {
+                (&*ammo.item == "minecraft:spectral_arrow").then_some(("minecraft:glowing", 200))
+            });
+            let kind = sunrise_client::projectiles::ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: power >= 1.0,
+                effect,
+            };
             let angle = offset + direction * index.div_ceil(2) as f32 * step;
             direction = -direction;
             let mut arrow = sunrise_client::projectiles::Projectile::new(
-                kind.clone(),
+                kind,
                 p,
                 Some(sunrise_client::mobs::Who::Player),
             );
             // AbstractArrow's constructor asks the weapon for its piercing count.
-            let pierce = self.bow_pierce(stack, &ammo);
-            // ProjectileWeaponItem.useAmmo: creative and Infinity draw without
-            // using the ammo, so the arrow is CREATIVE_ONLY, and only the first
-            // of a volley is the player's to take; else setOwner(player) lets
-            // it be picked up.
+            let pierce = self.projectile_pierce(stack, ammo);
             if let Some(a) = arrow.arrow.as_mut() {
-                a.set_item(&sunrise_client::arrows::drawn_ammo(
-                    &ammo,
-                    self.creative || infinity || index > 0,
-                ));
+                a.set_item(ammo);
                 a.set_owner(Some(sunrise_client::mobs::Who::Player));
                 a.fired_from_weapon = weapon.clone();
                 a.pierce = pierce;
@@ -870,13 +923,7 @@ impl Game<'_> {
                 velocity,
                 on_ground,
             );
-            self.spawn_projectile(arrow, &ammo);
-            let (player, name, projectile) = (
-                sunrise_client::lan::playerdata::ints_uuid(self.acting_player_uuid()),
-                self.acting_player_name().to_owned(),
-                self.next_entity,
-            );
-            self.native_entity_shoot_bow(player, &name, projectile, power * 3.0);
+            self.spawn_projectile(arrow, ammo);
             // ProjectileWeaponItem.shoot: one point of wear per arrow, and a
             // bow that breaks mid-volley shoots no more.
             let held = self.held().is_some();
@@ -893,67 +940,8 @@ impl Game<'_> {
             .player
             .as_ref()
             .map_or(eye, |pl| [pl.position.x, pl.position.y, pl.position.z]);
-        self.audio
-            .play("minecraft:entity.arrow.shoot", Some(feet), 1.0, pitch);
+        self.play_audio("minecraft:entity.arrow.shoot", Some(feet), 1.0, pitch);
         self.award_stat("used", "minecraft:bow", 1);
-        // useAmmo takes one arrow for the first drawn projectile and none for
-        // the rest, and none at all when the weapon draws none.
-        if count > 0
-            && !self.creative
-            && !infinity
-            && let Some(i) = arrow_slot
-        {
-            let cell = self.stack_in_mut(i);
-            if let Some(s) = cell.as_mut() {
-                s.count -= 1;
-                if s.count == 0 {
-                    *cell = None;
-                }
-            }
-        }
-    }
-    /// `EnchantmentHelper.processProjectileCount` and `processProjectileSpread`
-    /// for `weapon`: the arrows a shot draws (1, plus Multishot's 2) and the
-    /// spread they fan over (0, plus Multishot's 10 degrees).
-    fn bow_volley(&mut self, weapon: &ItemStack) -> (usize, f32) {
-        let ctx = sunrise_client::enchant::EffectContext {
-            this: Some("minecraft:player"),
-            items: Some(world_items!(self)),
-            ..Default::default()
-        };
-        let enchantments = &world_stations!(self).enchantments;
-        let count = enchantments.modify_value(
-            Some(weapon),
-            "minecraft:projectile_count",
-            &ctx,
-            &mut self.world.random,
-            1.0,
-        );
-        let spread = enchantments.modify_value(
-            Some(weapon),
-            "minecraft:projectile_spread",
-            &ctx,
-            &mut self.world.random,
-            0.0,
-        );
-        (count.floor().max(0.0) as usize, spread.max(0.0))
-    }
-    /// `EnchantmentHelper.getPiercingCount` for `ammo`: the weapon's
-    /// `projectile_piercing` (Piercing, one entity per level).
-    fn bow_pierce(&mut self, weapon: &ItemStack, ammo: &ItemStack) -> u8 {
-        let ctx = sunrise_client::enchant::EffectContext {
-            tool: Some(&ammo.item),
-            items: Some(world_items!(self)),
-            ..Default::default()
-        };
-        let pierce = world_stations!(self).enchantments.modify_value(
-            Some(weapon),
-            "minecraft:projectile_piercing",
-            &ctx,
-            &mut self.world.random,
-            0.0,
-        );
-        pierce.floor().clamp(0.0, 127.0) as u8
     }
 }
 

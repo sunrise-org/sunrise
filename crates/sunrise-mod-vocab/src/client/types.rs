@@ -4,7 +4,7 @@ use crate::*;
 /// The family of a client notification entering the toast queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client toast classification.
 pub enum ToastKind {
     /// An advancement completed by the local player.
     Advancement,
@@ -16,12 +16,76 @@ pub enum ToastKind {
     System,
     /// A toast without one of the above families, including now-playing music.
     Other,
+    /// A notification submitted through `ClientHost::add_toast`.
+    Mod,
+}
+
+/// The optional 16×16 GUI icon of a [`ModToast`].
+// no wire: part of a local ClientHost::add_toast argument, not a wire field.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ToastIcon {
+    /// Draw this stack's item model, without a count or durability overlay.
+    Item(ItemStack),
+    /// Draw a sprite from the GUI atlas, identified by its resource name.
+    Sprite(Identifier),
+}
+
+/// A client mod notification submitted through `ClientHost::add_toast`.
+// no wire: local ClientHost::add_toast argument, not a wire field.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ModToast {
+    /// Title, drawn in yellow unless styled otherwise.
+    pub title: Text,
+    /// Optional text under the title.
+    pub description: Option<Text>,
+    /// Optional icon to the left of the text.
+    pub icon: Option<ToastIcon>,
+    /// An optional token for replacing a visible or queued mod toast. Use your mod's namespace.
+    /// Without a token, each accepted request is a separate toast.
+    pub kind: Option<Identifier>,
+    /// Milliseconds fully visible, before applying the user's Notification Time multiplier.
+    /// `None` uses vanilla `SystemToastId`'s default of 5000 ms.
+    pub display_ms: Option<u64>,
+}
+
+impl ModToast {
+    /// Create a notification with just a title and vanilla's default display time.
+    pub fn new(title: Text) -> Self {
+        Self {
+            title,
+            description: None,
+            icon: None,
+            kind: None,
+            display_ms: None,
+        }
+    }
+}
+
+/// Why a requested toast was not queued.
+// no wire: local refusal returned by ClientHost::add_toast.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AddToastError {
+    /// The host cannot submit notifications to a client window.
+    Unavailable,
+    /// The title or description could not be represented as game text.
+    Text(TextFormError),
+    /// The item stack could not be represented as an icon.
+    Icon(StackWriteError),
+}
+
+impl NoBackend for AddToastError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
 }
 
 /// What a key did in an `input_key` event (GLFW's `action`: release 0, press 1, repeat 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // exhaustive: a closed set the game matches without a wildcard
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client keyboard event action.
 pub enum KeyAction {
     /// The key was let go.
     Release,
@@ -36,7 +100,7 @@ pub enum KeyAction {
 /// The bits use GLFW's input-event encoding: shift 1, control 2, alt 4 and super 8.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client keyboard modifier snapshot.
 pub struct ClientModifiers {
     /// Modifier bits in GLFW's input-event encoding.
     pub bits: u32,
@@ -65,78 +129,121 @@ impl ClientModifiers {
     }
 }
 
-/// A vanilla key mapping as the client holds it (`ClientHost::mapping`).
-#[derive(Clone, Debug)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct KeyMapping {
-    /// Whether it is held (`KeyMapping.isDown`).
-    pub down: bool,
-    /// The name of the key it is bound to, as Controls shows it (`KeyMapping.getTranslatedKeyMessage`).
-    pub label: Text,
+/// A resolved vanilla key mapping for one running client.
+///
+/// Resolve it with [`vanilla_key_mapping`](crate::prelude::ClientInputClientHost::vanilla_key_mapping)
+/// in `client_setup`. Keep it across rebinding, options replacement, and screen or world changes.
+/// A different client refuses it with [`MappingError::Stale`]; resolve the saved mapping name
+/// against that client. Persist the name, not this handle.
+// no wire: process-local client mapping handle
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct VanillaKeyMappingRef {
+    pub(super) client_generation: std::num::NonZeroU64,
+    pub(super) slot: usize,
 }
 
-/// Why `ClientHost::set_mapping_down` or `ClientHost::click_mapping` refused a mapping.
+/// A resolved mod key mapping in the current client's registration roster.
+///
+/// Resolve it with [`mod_key_mapping`](crate::prelude::ClientInputClientHost::mod_key_mapping)
+/// after registration, usually in `client_setup`. Rebinding, resetting and changing screens do not
+/// invalidate it. If the client or its ordered registration roster is replaced, discard the stale
+/// handle and resolve again. Persist the owner and id, not this handle.
+// no wire: process-local registered key mapping handle
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ModKeyMappingRef {
+    pub(super) registry_generation: std::num::NonZeroU64,
+    pub(super) slot: usize,
+}
+
+/// Why resolving or using a vanilla key mapping, or reading a translated mod key label, was refused.
+// no wire: refusal of a process-local client mapping operation
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum MappingError {
-    /// No player is in a world.
-    NoWorld,
-    /// No vanilla mapping has this name.
+    /// Resolution found no vanilla mapping with the given name.
     Unknown {
         /// The name asked for.
         key: String,
     },
-    /// A vanilla mapping a player does not play with: one outside the movement, gameplay and
-    /// inventory categories (`key.screenshot`, `key.fullscreen`, `key.chat`...).
-    NotGameplay {
-        /// The name asked for.
-        key: String,
-    },
-    /// The mapping accepts a click but has no held state (`key.pickItem`).
-    ClickOnly {
-        /// The name asked for.
-        key: String,
-    },
+    /// The handle does not belong to the current client or no longer identifies a mapping.
+    Stale,
+    /// No client mapping backend is available in this host or phase.
+    Unavailable,
+    /// The translated binding label could not be represented as API text.
+    Label(TextFormError),
 }
 
-/// The metadata of a server play packet observed by `Hooks::client_packet`.
+impl NoBackend for MappingError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl From<TextFormError> for MappingError {
+    fn from(error: TextFormError) -> Self {
+        Self::Label(error)
+    }
+}
+
+impl std::fmt::Display for MappingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown { key } => write!(f, "unknown vanilla mapping {key:?}"),
+            Self::Stale => f.write_str("stale vanilla mapping handle"),
+            Self::Unavailable => f.write_str("client mappings are unavailable"),
+            Self::Label(error) => write!(f, "invalid mapping label: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for MappingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Label(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// A read-only view of a play packet in `Hooks::client_packet` or `Hooks::client_packet_send`.
 ///
-/// Fields beyond the type id are exposed only for custom payloads. This is
-/// plain mod API data, not the game's decoded protocol enum.
-#[derive(Clone, Debug, PartialEq)]
+/// The view is valid only during the hook. Only custom payloads expose more
+/// than the packet type. Copy any data you need to keep after the hook returns.
+// no wire: borrows the decoded packet for synchronous observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ClientPacket {
+pub struct ClientPacket<'a> {
     /// The protocol type, such as `minecraft:ping` or `minecraft:custom_payload`.
     /// An id outside the protocol's packet table is reported as `sunrise:unknown`.
-    pub id: Identifier,
+    pub id: &'a Identifier,
     /// The channel and bytes of a custom payload; `None` for other packet types.
-    pub custom_payload: Option<ClientPayload>,
+    pub custom_payload: Option<ClientPayload<'a>>,
 }
 
-impl ClientPacket {
-    /// Construct packet metadata with an optional custom payload.
-    pub fn new(id: Identifier, custom_payload: Option<ClientPayload>) -> Self {
+impl<'a> ClientPacket<'a> {
+    /// Construct a view from a borrowed type identifier and an optional payload view.
+    pub fn new(id: &'a Identifier, custom_payload: Option<ClientPayload<'a>>) -> Self {
         Self { id, custom_payload }
     }
 }
 
-/// The channel and uninterpreted bytes of a server custom payload.
-#[derive(Clone, Debug, PartialEq)]
+/// A borrowed channel and uninterpreted byte slice from a play custom payload.
+// no wire: borrows the decoded packet for synchronous observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ClientPayload {
-    /// The namespaced plugin channel, exactly as received.
-    pub channel: String,
+// no wire: local envelope for already-encoded server custom payload bytes.
+pub struct ClientPayload<'a> {
+    /// The namespaced plugin channel, exactly as carried by the packet.
+    pub channel: &'a str,
     /// The payload bytes, without the packet id or channel prefix.
-    pub data: Vec<u8>,
+    pub data: &'a [u8],
 }
 
-impl ClientPayload {
-    /// Construct a custom payload without interpreting its bytes.
-    pub fn new(channel: String, data: Vec<u8>) -> Self {
+impl<'a> ClientPayload<'a> {
+    /// Borrow a custom payload's channel and bytes without interpreting them.
+    pub fn new(channel: &'a str, data: &'a [u8]) -> Self {
         Self { channel, data }
     }
 }
@@ -144,7 +251,7 @@ impl ClientPayload {
 /// Camera values from the most recently extracted world frame.
 #[derive(Clone, Debug)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client frame camera snapshot.
 pub struct Camera {
     /// The camera position in blocks (x, y, z).
     pub position: [f64; 3],
@@ -156,6 +263,8 @@ pub struct Camera {
     pub yaw: f32,
     /// The vertical rotation in degrees; negative looks up.
     pub pitch: f32,
+    /// The roll rotation around the view axis in degrees (`ViewportEvent.ComputeCameraAngles`).
+    pub roll: f32,
     /// The vertical field of view in degrees.
     pub fov_degrees: f32,
     /// The near clip distance in blocks.
@@ -173,7 +282,7 @@ pub struct Camera {
 /// A snapshot of the client's input preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client input options snapshot.
 pub struct ClientInputOptions {
     /// Mouse sensitivity, normally between 0 and 1.
     pub sensitivity: f32,
@@ -196,7 +305,7 @@ pub struct ClientInputOptions {
 /// A snapshot of the client's graphics preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client graphics options snapshot.
 pub struct ClientGraphicsOptions {
     /// Field of view in degrees, 30 to 110.
     pub fov: f32,
@@ -227,7 +336,7 @@ pub struct ClientGraphicsOptions {
 /// A snapshot of the client's GUI and accessibility preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client GUI options snapshot.
 pub struct ClientGuiOptions {
     /// Requested GUI scale; 0 means automatic.
     pub gui_scale: u32,
@@ -250,12 +359,18 @@ pub struct ClientGuiOptions {
     pub text_background_opacity: f32,
     /// Menu background blur radius.
     pub menu_blur: i32,
+    /// Distortion / screen effect intensity scale (`Options.screenEffectScale`, 0 to 1).
+    pub screen_effect_scale: f32,
+    /// How far the camera tilts when the player is hurt, 0 (off) to 1 (`damageTiltStrength`,
+    /// the Damage Tilt accessibility option): the factor of vanilla's own hurt tilt, so a mod's
+    /// camera shake can scale with it as that tilt does.
+    pub damage_tilt_strength: f64,
 }
 
 /// A snapshot of the client's chat preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client chat options snapshot.
 pub struct ClientChatOptions {
     /// Which chat is shown: 0 all, 1 commands only, 2 hidden.
     pub visibility: u8,
@@ -283,7 +398,7 @@ pub struct ClientChatOptions {
 /// A snapshot of the client's audio preferences.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client audio options snapshot.
 pub struct ClientAudioOptions {
     /// Master volume, 0 to 1.
     pub master_volume: f32,
@@ -352,7 +467,7 @@ pub struct HandRender<'a> {
 /// Context for a player tuning a note block.
 #[derive(Clone, Copy, Debug)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local hook context for note block tuning.
 pub struct NoteBlockChange {
     /// The level the note block is in.
     pub dimension: LevelDimension,
@@ -497,7 +612,7 @@ impl NoteInstrument {
 /// The mixer group a sound plays on (`SoundSource`), in vanilla's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local sound mixer category.
 pub enum SoundSource {
     /// The master volume, which scales every other source.
     Master,
@@ -547,7 +662,7 @@ impl SoundSource {
 /// How a sound fades with distance (`SoundInstance.Attenuation`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client sound attenuation mode.
 pub enum SoundAttenuation {
     /// Heard at full volume everywhere.
     None,
@@ -560,28 +675,135 @@ pub enum SoundAttenuation {
 /// `isLooping`, `getDelay`, `getAttenuation` and `isRelative`).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client sound playback request and hook record.
 pub struct SoundPlay {
     /// The sound event (`minecraft:entity.pig.ambient`).
     pub identifier: String,
     /// The mixer group it plays on.
     pub source: SoundSource,
-    /// Its own volume, before the source's and the master's.
+    /// Finite base volume, before sound-file scaling and `SoundEngine.calculateVolume`.
+    /// A volume above 1 can increase attenuation distance before the final volume is clamped.
     pub volume: f32,
-    /// Its pitch, 1.0 unchanged.
+    /// Finite base pitch; 1.0 is unchanged before sound-file scaling. The engine clamps the
+    /// scaled pitch (`SoundEngine.calculatePitch`).
     pub pitch: f32,
-    /// Where it plays, in blocks; meaningless when `relative`.
+    /// Where it plays, in world blocks or as an offset from the listener when `relative`.
     pub position: [f64; 3],
     /// It restarts when it ends.
     pub looping: bool,
-    /// Ticks between a looping sound's repeats (`SoundInstance.getDelay`): 0 loops it
-    /// seamlessly, more plays it again that many ticks after it ends.
+    /// A positive value schedules a repeat that many ticks after a looping sound ends.
+    /// Zero or a negative value loops automatically (`SoundEngine.requiresManualLooping`).
     pub delay: i32,
     /// How it fades with distance.
     pub attenuation: SoundAttenuation,
-    /// It plays at the listener, wherever they move.
+    /// Its position is an offset from the listener, wherever they move.
     pub relative: bool,
+    /// How the mixer shapes it: its own gain, filters and reverb sends ([`SoundEffects`], with
+    /// every field's range). [`SoundEffects::NONE`] by default, which changes nothing.
+    ///
+    /// Set at the play (`play_local_sound`, or a `play_sound` edit with `starting` true), and
+    /// changed afterwards only on the live refresh of a ticking sound (a `play_sound` edit with
+    /// `starting` false, once a tick). A sound that doesn't tick keeps the effects it started
+    /// with until it ends: nothing changes them after it starts. A value out of range refuses
+    /// the play or the edit ([`SoundEffects::valid`]).
+    pub effects: SoundEffects,
 }
+
+/// How the mixer shapes one sound ([`SoundPlay::effects`]): a gain, a low-pass and a high-pass on
+/// the sound heard directly, and how much of it goes to each of three shared reverbs. A muffled
+/// sound behind a wall takes a low `lowpass` and some `direct` away; a sound in a cave sends to
+/// `cavern`. Every change glides over one output buffer, so moving them each tick never clicks.
+/// [`SoundEffects::NONE`] changes nothing, and a sound with it plays exactly as without effects.
+///
+/// Every field's valid range, inclusive at both ends:
+///
+/// | field | range | off / open |
+/// | --- | --- | --- |
+/// | `gain` | 0 to 1 | 1 |
+/// | `direct` | 0 to 1 | 1 |
+/// | `lowpass` | 20 to 20000 Hz | 20000 (open) |
+/// | `highpass` | 0 to 20000 Hz | 0 (off) |
+/// | `room`, `hall`, `cavern` | 0 to 1 | 0 (no send) |
+/// | `reverb_lowpass` | 20 to 20000 Hz | 20000 (open) |
+///
+/// The cutoffs are in hertz whatever the output's sample rate, so the same value is valid on
+/// every device. NaN, infinities and anything outside a range are refused, never clamped
+/// ([`SoundEffects::valid`]): the `play_sound` edit at the start, the live refresh of a ticking
+/// sound and `play_local_sound` all run that one check, and a refused value plays nothing (or
+/// stops a live sound). Inside the mixer, a direct-sound cutoff above the output's Nyquist frequency
+/// (half its sample rate; the mixer stops at 0.49 of the rate) works as that limit: on a 32 kHz
+/// output, `lowpass` 18000 filters as 15680 would. That limit depends on the device, not on the
+/// value, and is not a refusal.
+///
+/// A plain value with no sound id in it, so other audio may take the same type later.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+// no wire: local client mixer filter and reverb settings.
+pub struct SoundEffects {
+    /// The whole sound's level, direct and sent, 0 to 1, after its volume and distance. It
+    /// doesn't change how far the sound carries.
+    pub gain: f32,
+    /// The level of the sound heard directly, 0 to 1; the sends keep theirs. Lower it for a
+    /// sound heard only around a corner or through a wall.
+    pub direct: f32,
+    /// The direct sound's low-pass cutoff in hertz, 20 to 20000, independent of the output
+    /// rate: at 20000 it is open (no filter). A two-pole Butterworth (12 dB per octave).
+    pub lowpass: f32,
+    /// The direct sound's high-pass cutoff in hertz, 0 to 20000, independent of the output
+    /// rate: at 0 it is off (no filter). A two-pole Butterworth (12 dB per octave).
+    pub highpass: f32,
+    /// The send to the small room's reverb, 0 to 1: 0.6 s to fall 60 dB, damped above 7000 Hz
+    /// (a house, a corridor).
+    pub room: f32,
+    /// The send to the hall's reverb, 0 to 1: 1.8 s to fall 60 dB, damped above 4500 Hz (a
+    /// large build, a ravine).
+    pub hall: f32,
+    /// The send to the cavern's reverb, 0 to 1: 4.0 s to fall 60 dB, damped above 3000 Hz (a
+    /// deep cave).
+    pub cavern: f32,
+    /// The sends' low-pass cutoff in hertz, 20 to 20000, independent of the output rate: at
+    /// 20000 it is open. A one-pole low-pass (6 dB per octave) on what goes to the reverbs.
+    pub reverb_lowpass: f32,
+}
+
+impl SoundEffects {
+    /// No effects: full level, filters open, no reverb.
+    pub const NONE: Self = Self {
+        gain: 1.0,
+        direct: 1.0,
+        lowpass: 20_000.0,
+        highpass: 0.0,
+        room: 0.0,
+        hall: 0.0,
+        cavern: 0.0,
+        reverb_lowpass: 20_000.0,
+    };
+
+    /// Every value is a finite number in its range: `gain`, `direct`, `room`, `hall` and
+    /// `cavern` 0 to 1; `lowpass` and `reverb_lowpass` 20 to 20000 Hz; `highpass` 0 to 20000 Hz
+    /// (all inclusive). False for NaN, an infinity or anything outside; nothing is clamped. The
+    /// one check behind the `play_sound` edit, the live refresh of a ticking sound and
+    /// `play_local_sound`. The ranges don't depend on the output's sample rate.
+    pub fn valid(&self) -> bool {
+        let within = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
+        [self.gain, self.direct, self.room, self.hall, self.cavern]
+            .iter()
+            .all(|&v| within(v, 0.0, 1.0))
+            && within(self.lowpass, 20.0, 20_000.0)
+            && within(self.highpass, 0.0, 20_000.0)
+            && within(self.reverb_lowpass, 20.0, 20_000.0)
+    }
+}
+
+impl Default for SoundEffects {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+#[cfg(test)]
+#[path = "sound_effects_tests.rs"]
+mod sound_effects_tests;
 
 impl SoundPlay {
     /// Sound event `identifier` at the listener, not fading with distance, on the interface
@@ -597,6 +819,7 @@ impl SoundPlay {
             delay: 0,
             attenuation: SoundAttenuation::None,
             relative: true,
+            effects: SoundEffects::NONE,
         }
     }
     /// Sound event `identifier` at `position` on `source`, fading with distance, at volume
@@ -612,6 +835,7 @@ impl SoundPlay {
             delay: 0,
             attenuation: SoundAttenuation::Linear,
             relative: false,
+            effects: SoundEffects::NONE,
         }
     }
     /// The same sound at `volume`.
@@ -622,7 +846,11 @@ impl SoundPlay {
     pub fn with_pitch(self, pitch: f32) -> Self {
         Self { pitch, ..self }
     }
-    /// The same sound looping, `delay` ticks between its repeats.
+    /// The same sound shaped by `effects`.
+    pub fn with_effects(self, effects: SoundEffects) -> Self {
+        Self { effects, ..self }
+    }
+    /// The same sound looping, with a pause of `delay` ticks between repeats if positive.
     pub fn looping(self, delay: i32) -> Self {
         Self {
             looping: true,
@@ -632,8 +860,8 @@ impl SoundPlay {
     }
 }
 
-/// A sound a client mod started with `play_local_sound`, to follow and control: `state`, `stop`
-/// and `fade`. Each handle names one play and is never reused. Once the sound has ended, been
+/// A sound a client mod started with `play_local_sound`, to follow and control: `state`, `stop`,
+/// `fade`, `move_to` and `set_pitch`. Each handle names one play and is never reused. Once the sound has ended, been
 /// stopped or been cleared (leaving or changing levels stops every sound), the handle is stale: it
 /// reads [`SoundState::Stopped`] and its writes do nothing. It stays valid across a change of
 /// output device, which keeps the sounds playing.
@@ -641,8 +869,9 @@ impl SoundPlay {
 /// Dropping or overwriting the handle doesn't stop the sound: keep a looping sound's handle while
 /// it plays (stop it before starting another in its place), or nothing can stop it until the
 /// player leaves the level.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its field is private, so mods cannot build or destructure it
+// no wire: process-local handle to a client-played sound instance.
 pub struct SoundRef {
     pub(crate) id: u64,
 }
@@ -650,48 +879,15 @@ pub struct SoundRef {
 /// Where a mod's sound is ([`SoundRef`]'s `state`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client playback state of a SoundRef.
 pub enum SoundState {
     /// Not started yet: queued for the next audio update, waiting out `play_local_sound`'s
     /// `after` ticks, or between a looping sound's repeats (`SoundPlay::looping`'s `delay`).
     Waiting,
     /// Playing (`SoundEngine.isActive`).
     Playing,
-    /// Over: it ended, was stopped, faded to 0 or was cleared. It never plays again.
+    /// Over: it ended, was stopped, faded out or was cleared. It never plays again.
     Stopped,
-}
-
-/// A file-backed standalone model baked on every resource load.
-// exhaustive: mods build every form with a struct literal and the game matches them without a wildcard
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
-pub enum StandaloneModelForm {
-    /// Bake one dependency with the blockstate baker's negative XYZ quarter-turns.
-    Rotated {
-        /// Namespaced identifier used to resolve the resulting `ModelRef`.
-        id: String,
-        /// Source model identifier, not the result identifier.
-        model: String,
-        /// Quarter-turn counts in X, Y, Z order, modulo four.
-        turns: [u8; 3],
-        /// Keep textures aligned to the resulting face's world basis.
-        uvlock: bool,
-    },
-    /// Bake all dependencies unturned and concatenate their quads into one model.
-    Combined {
-        /// Namespaced identifier used to resolve the resulting `ModelRef`.
-        id: String,
-        /// Source model identifiers, in quad concatenation order.
-        parts: Vec<String>,
-    },
-}
-
-impl StandaloneModelForm {
-    /// The resulting model's identifier.
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Rotated { id, .. } | Self::Combined { id, .. } => id,
-        }
-    }
 }
 
 // no wire: dispatch result retains a static owning-mod identity; not an owned transport record.
@@ -710,7 +906,7 @@ pub struct Answered<T> {
 /// that was about to open does not. The first mod to answer wins.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client screen-opening hook answer.
 pub enum ScreenOpening {
     /// `Opening.setCanceled(true)`: the current screen stays open.
     Cancel,
@@ -733,7 +929,7 @@ pub enum ScreenOpening {
 /// arguments, named after the `ScreenView.id` they open with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client vanilla screen replacement target.
 pub enum ScreenTarget {
     /// In a world: the pause menu (`PauseScreen`), `paused`.
     Pause,
@@ -765,13 +961,13 @@ pub enum ScreenTarget {
     DirectConnect,
 }
 
+// no wire: toggle geometry is chosen by the client screen factory.
 /// Where a mod menu's recipe-book toggle sits: `x` GUI pixels right of the menu's left edge and
 /// `y` below the line `from` names. Vanilla screens place theirs either way:
 /// `leftPos + 5, topPos + 34` is `x: 5.0, y: 34.0, from: Menu`, and
 /// `leftPos + 5, height / 2 - 49` is `x: 5.0, y: -49.0, from: ScreenCentre`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 // exhaustive: mods build it with a literal and the game reads every field
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct RecipeBookToggle {
     /// Pixels right of the menu's left edge.
     pub x: f32,
@@ -781,10 +977,10 @@ pub struct RecipeBookToggle {
     pub from: ToggleOrigin,
 }
 
+// no wire: the toggle's coordinate origin is used only by client layout.
 /// The line a recipe-book toggle's `y` counts from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 // exhaustive: the two lines vanilla's screens measure from, matched without a wildcard
-#[derive(sunrise_mod_api_macros::Wire)]
 pub enum ToggleOrigin {
     /// The menu's top edge.
     #[default]
@@ -797,7 +993,7 @@ pub enum ToggleOrigin {
 /// The stable identifier reported by screen hooks for an observed screen.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client screen hook identifier.
 pub struct ScreenId {
     /// The same identifier as [`ScreenView::id`], such as `inventory` or `paused`.
     pub id: String,
@@ -806,12 +1002,49 @@ pub struct ScreenId {
 /// The sign the sign editor is on (`ScreensClientHost::sign_editor`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client sign-editor state snapshot.
 pub struct SignEditView {
     /// The block position of the sign being edited.
     pub pos: BlockPos,
     /// Whether the side being edited is the sign's front (`true`) or back (`false`).
     pub front: bool,
+}
+
+/// What a [`ScreenRegion`] is: one of the parts vanilla 26.3 draws outside a container screen's panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum ScreenRegionKind {
+    /// The open recipe book's panel (`RecipeBookComponent`, 147 x 166, left of the container's window).
+    RecipeBook,
+    /// The open recipe book's column of category tabs (`RecipeBookTabButton`s at `xPosTab`, 35 x 27 each, 27 apart),
+    /// left of its panel; as tall as the tabs the book shows.
+    RecipeBookTabs,
+    /// One tab of the creative inventory (`CreativeModeInventoryScreen.extractTabButton`, 26 x 32),
+    /// above or below its panel: one region per tab drawn.
+    CreativeTab,
+    /// The active effects beside the inventory (`EffectsInInventory`), as wide and tall as they draw (compact or
+    /// full rows), after `render_inventory_mob_effects` moved or resized them.
+    Effects,
+}
+
+/// A region of the open screen that the game itself draws outside its container panel ([`ScreenView::rect`]), in
+/// GUI pixels from the window's top left, as `[x, y, width, height]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct ScreenRegion {
+    /// What the game draws there.
+    pub kind: ScreenRegionKind,
+    /// Where: `[x, y, width, height]` in GUI pixels.
+    pub rect: [f32; 4],
+}
+
+impl ScreenRegion {
+    /// A region of `kind` at `rect` (`[x, y, width, height]` in GUI pixels).
+    pub const fn new(kind: ScreenRegionKind, rect: [f32; 4]) -> Self {
+        Self { kind, rect }
+    }
 }
 
 // no wire: borrowed call-scoped view; transport uses owned snapshots rather than serializing references.
@@ -834,6 +1067,15 @@ pub struct ScreenView<'a> {
     /// `multiplayer`, `add_server`, `direct_connect`…, with no menu, no title
     /// and no slots.
     pub id: &'static str,
+    /// The mod whose own screen this view represents when `id == "mod"`, or
+    /// `None` for vanilla, title, and overlay screens.
+    ///
+    /// Carries the owning mod id of the receiving screen snapshot even if a
+    /// handler closed it or opened another mod's screen before a Post or
+    /// Closing hook ran. Prefer `event.screen.mod_screen` over live
+    /// [`crate::ClientHost::mod_screen`] when identifying the screen an event
+    /// targeted.
+    pub mod_screen: Option<&'a str>,
     /// The type id of the menu the server opened for this screen
     /// (`minecraft:generic_9x3`, `minecraft:furnace`, a mod's own id; a mount's
     /// inventory is `sunrise:mount<n>`). None on a screen without one (the
@@ -861,12 +1103,19 @@ pub struct ScreenView<'a> {
     /// This frame's partial tick (`getGameTimeDeltaPartialTick(false)`, 0 to
     /// 1): what the screen draws animation against.
     pub partial_tick: f32,
+    /// What the game draws outside `rect`: the book panel and tabs, creative tabs,
+    /// and inventory effects. Render.Post sees the current draw, or an empty slice if
+    /// Pre canceled it. Input and the earlier render phases see the last published draw
+    /// for the screen. Opening, closing, init, screen room and the inventory-effects
+    /// layout hook see an empty slice. Hidden regions and areas drawn by other mods
+    /// are not included.
+    pub regions: &'a [ScreenRegion],
 }
 
 /// A camera-local visual light, with no gameplay light or shadow writes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client camera-space visual light.
 pub struct ColoredLight {
     /// The light's position in blocks.
     pub at: [f64; 3],
@@ -890,21 +1139,25 @@ impl ColoredLight {
     }
 }
 
-/// A menu type's screen, a mod's (`screen`): its size, where
-/// each of the container's slots is (`Slot.x`, `Slot.y`; none hides the
-/// slot, and so do slots past the list; for a block's menu the server's menu
-/// does not have a hidden slot either, so clicks and shift-clicks skip it), and the player inventory's first
-/// row (vanilla's is 84; the hotbar is 58 below it) and left column, from
-/// its top left.
+// no wire: screen geometry is constructed and consumed in the client window.
+/// Layout for a window's [`crate::MenuScreen`]: its size, where
+/// each of the container's slots is (`Slot.x`, `Slot.y`), and the player
+/// inventory's first row (vanilla's is 84; the hotbar is 58 below it) and
+/// left column, from its top left. The screen controls client presentation
+/// and per-slot active/visibility state (`Slot.isActive()`); server-side
+/// placement and pickup rules belong to the menu and its `MenuPart`.
 #[derive(Clone, Debug, Default, PartialEq)]
 // exhaustive: mods build it with a literal and the game reads every field
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Screen {
-    /// Vanilla's container screens are 176 wide.
+pub struct MenuScreenLayout {
+    /// Positive finite width in GUI pixels. Vanilla's container screens are 176 wide.
     pub width: f32,
-    /// The screen's height in GUI pixels; vanilla's is 166.
+    /// Positive finite height in GUI pixels; vanilla's is 166.
     pub height: f32,
-    /// Each menu slot's top-left (x, y), or `None` to hide it.
+    /// Slot geometry at its original backing index. `Some(slot)` shows the slot
+    /// initially; `None` (including omitted trailing entries) marks an initially
+    /// inactive/hidden slot (`Slot.isActive()`) that can be activated later with
+    /// [`crate::prelude::ScreensClientHost::set_screen_slot`]. Don't compact this
+    /// list; there are no entries past the backing.
     pub slots: Vec<Option<ScreenSlot>>,
     /// The y of the player inventory's first row; vanilla's is 84.
     pub inventory_y: f32,
@@ -917,15 +1170,15 @@ pub struct Screen {
     /// `None` uses `[8, height - 94]`, independently of inventory slot positions.
     /// Ignored when `own_labels` is true.
     pub inventory_label: Option<[f32; 2]>,
-    /// The mod draws the title and the "Inventory" label itself
-    /// (`screen_draw`); Sunrise leaves them out.
+    /// Sunrise leaves the title and inventory label for the screen's draw callback.
     pub own_labels: bool,
-    /// The mod draws its own background (`screen_draw`), so Sunrise
-    /// leaves out the plain panel and the slot frames.
+    /// Leave the background to the screen's draw callback, omitting the
+    /// default panel and slot frames.
     pub own_background: bool,
     /// The registered recipe book hosted beside this menu. Its declarations must
     /// target this menu; no panel is enabled until authoritative settings arrive.
-    /// Leaving this unset keeps the screen without a recipe book.
+    /// If the menu declares a book with `MenusRegistrar::menu_recipe_book`, this
+    /// field must name that book. Otherwise the book is optional and display-only.
     pub recipe_book: Option<crate::RecipeBookTypeKey>,
     /// Optional 20 × 18 recipe-book toggle position, from this menu's left and, per
     /// [`RecipeBookToggle::from`], its top or the window's centre.
@@ -939,16 +1192,18 @@ pub struct Screen {
     pub recipe_book_big_result: bool,
 }
 
+// no wire: a slot's coordinates and empty icon are local screen presentation.
 /// One visible container slot, including vanilla's `Slot.getNoItemIcon`.
+/// Its index in [`MenuScreenLayout::slots`] is the menu's backing index.
 #[derive(Clone, Debug, Default, PartialEq)]
 // exhaustive: mods declare both geometry and the optional empty-slot sprite
-#[derive(sunrise_mod_api_macros::Wire)]
 pub struct ScreenSlot {
     /// Top-left in GUI pixels relative to the screen.
     pub position: [f32; 2],
     /// GUI sprite identifier, such as `minecraft:container/slot/ingot`.
     /// Drawn at 16 × 16 only when the displayed stack is empty, including
-    /// quick-craft previews. Unknown sprites refuse the client screen at open.
+    /// quick-craft previews. Unknown sprites draw the missing texture,
+    /// matching vanilla's `Slot.getNoItemIcon`.
     pub no_item_icon: Option<String>,
 }
 
@@ -957,7 +1212,7 @@ pub struct ScreenSlot {
 /// the item's own, in vanilla's item syntax, or "".
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client item-panel display stack.
 pub struct Stack {
     /// The item identity, resolved once at load.
     pub item: ItemKey,
@@ -970,7 +1225,7 @@ pub struct Stack {
 /// How a mod's item panel (`panel_items`) looks (`panel_style`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client item-panel visual style.
 pub enum PanelStyle {
     /// The recipe book's page arrows and a plain search box (the default).
     #[default]
@@ -997,10 +1252,12 @@ pub enum PanelStyle {
 /// What the player did on a native mod's panel (`panel_event`).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client item-panel interaction event.
 pub enum PanelEvent {
     /// A click on an item of the panel, by its index in
-    /// `panel_items`' list.
+    /// `panel_items`' list: a right click as it goes down, a left click as
+    /// it comes up without having become a drag (`Dropped`), or as it goes
+    /// down while a stack is carried.
     Clicked {
         /// The item's index in the panel's list.
         index: u32,
@@ -1045,20 +1302,27 @@ pub enum PanelEvent {
     /// The player picked the tab at this index of the `panel_recipes` page's
     /// `tabs`.
     Tab(u32),
-}
-
-/// The zoom a native mod asks for (`zoom`): the factor (1 is none), eased through the
-/// field of view like the spyglass when `smooth`, and the scale of mouse turning.
-#[derive(Clone, Copy, Debug, PartialEq)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct Zoom {
-    /// The zoom as a multiple of the normal view; 1 is no zoom.
-    pub factor: f32,
-    /// Whether the camera eases into the zoom.
-    pub smooth: bool,
-    /// Scale applied to mouse turning while zoomed.
-    pub turn: f32,
+    /// The player dragged an item off the panel's `panel_items` list and let
+    /// go of it outside the panel, over the open screen (JEI's ghost
+    /// ingredient drag). A drag starts once the pointer moves 4 GUI pixels
+    /// with the left button held on an item; until then the press is a
+    /// click, which comes as `Clicked` on its release while the list still
+    /// has that item at its index. The press belongs to the menu open when it
+    /// went down: dropping it back on the panel, Escape, the window losing
+    /// focus, and that menu closing or being replaced cancel it, and a
+    /// screen hook that cancels the release drops it; none of these sends
+    /// anything. The game moves nothing and no screen hears the release:
+    /// the mod decides what the drop does (a filter slot of a menu it knows,
+    /// say) and checks it on its own server.
+    Dropped {
+        /// The dragged item, as the mod sent it.
+        stack: Stack,
+        /// Where it was let go, in GUI pixels from the window's top left
+        /// (`Screen.mouseX`, as `ScreenView::mouse` gives it).
+        x: f32,
+        /// As `x`, down from the top.
+        y: f32,
+    },
 }
 
 /// `ParticleStatus`: how many particles a client shows.
@@ -1079,7 +1343,7 @@ pub enum ParticleStatus {
 /// level's epoch, including dragon parts; a replacement level invalidates them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client crosshair hit snapshot.
 pub enum CrosshairTarget {
     /// The crosshair is on a block.
     Block {
@@ -1210,7 +1474,7 @@ impl BossBarOverlay {
 /// raid and `/bossbar` ones alike.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
+// no wire: local client boss-bar render snapshot.
 pub struct ClientBossBar {
     /// The bar's UUID, as the server's boss event packets name it.
     pub uuid: u128,

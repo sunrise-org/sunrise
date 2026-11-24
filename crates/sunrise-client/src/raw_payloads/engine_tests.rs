@@ -81,6 +81,58 @@ fn a_sunrise_peer_gets_the_channel_and_a_vanilla_peer_gets_unsupported_peer() {
     );
 }
 
+/// `send_refusal` is the one decision behind `can_send` (and `has_channel`): each answer, a
+/// yes included, is the one the send path turns into its owned error.
+#[test]
+fn the_send_refusal_is_the_decision_can_send_reports() {
+    let local = engine_only();
+    let id = attachment_sync::CHANNEL;
+    let sunrise = playing(
+        &local,
+        Side::Server,
+        &accepted(&local, Some(&local.manifest)),
+    );
+    let vanilla = playing(&local, Side::Server, &accepted(&local, None));
+    let client = playing(
+        &local,
+        Side::Client,
+        &accepted(&local, Some(&local.manifest)),
+    );
+    let cases = [
+        (&sunrise, Phase::Play, id, None),
+        (
+            &vanilla,
+            Phase::Play,
+            id,
+            Some(SendRefusal::UnsupportedPeer),
+        ),
+        // The engine sends it to clients only.
+        (&client, Phase::Play, id, Some(SendRefusal::WrongDirection)),
+        // Declared for play only, in a namespace this side owns.
+        (
+            &sunrise,
+            Phase::Configuration,
+            id,
+            Some(SendRefusal::WrongProtocol),
+        ),
+        (
+            &sunrise,
+            Phase::Play,
+            "nobody:channel",
+            Some(SendRefusal::UnknownPayload),
+        ),
+    ];
+    for (transport, phase, id, refusal) in cases {
+        let peer = &transport.epoch().unwrap().peer;
+        assert_eq!(peer.send_refusal(phase, id), refusal, "{id} {phase:?}");
+        assert_eq!(
+            peer.can_send(phase, &PayloadId(id.into())),
+            refusal.map_or(Ok(()), |refusal| Err(refusal.error(id))),
+            "{id} {phase:?}"
+        );
+    }
+}
+
 #[test]
 fn a_negotiated_engine_message_reaches_the_engine_decoder_and_nothing_else_does() {
     let local = engine_only();

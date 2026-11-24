@@ -35,6 +35,7 @@ mod tests {
         let overlay = PackOverlay {
             files: &files,
             conditions: &conditions,
+            ..PackOverlay::default()
         };
         let mut out = HashMap::new();
         overlay_map(&overlay, kind, &mut out);
@@ -105,6 +106,7 @@ mod tests {
             &PackOverlay {
                 files: &files,
                 conditions: &conditions,
+                ..PackOverlay::default()
             },
             "loot_table",
             &mut out,
@@ -130,6 +132,7 @@ mod tests {
             let overlay = PackOverlay {
                 files: &files,
                 conditions: &conditions,
+                ..PackOverlay::default()
             };
             let mut out = HashMap::new();
             overlay_map(&overlay, kind, &mut out);

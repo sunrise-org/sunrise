@@ -4,7 +4,6 @@
 //! first), and getting off follows the vehicle's own
 //! `getDismountLocationForPassenger`.
 use super::*;
-use sunrise_client::mobs::riders;
 
 /// A stone floor whose top is y 64, and the blocks listed above it.
 struct Ground {
@@ -120,6 +119,9 @@ fn scene(game: &mut Game<'_>) {
 }
 
 const GHAST: &str = "0000ca3e-0000-0000-0000-000000000007";
+const PIG: &str = "0000ca3e-0000-0000-0000-000000000008";
+/// These are daily tests: the daily run gives them prepared resources.
+const RESOURCES: &str = "set SUNRISE_TEST_RESOURCES to prepared resources";
 
 /// Summons the happy ghast of `GHAST` at 8.5 64 8.5 and returns its id.
 fn ghast(game: &mut Game<'_>) -> u32 {
@@ -138,12 +140,10 @@ fn ghast(game: &mut Game<'_>) -> u32 {
 /// `ServerPlayer.startRiding`: the teleport is `Relative.ROTATION` with no
 /// delta, so the player's view is the one it had.
 #[test]
+#[ignore = "daily"]
 fn a_ride_mount_keeps_the_players_view() {
-    // No prepared resources (CI): nothing to run in.
     let mut resources = None;
-    let Some(mut game) = super::tests::server_game(&mut resources) else {
-        return;
-    };
+    let mut game = super::tests::server_game(&mut resources).expect(RESOURCES);
     scene(&mut game);
     let id = ghast(&mut game);
     game.yaw = 90.0;
@@ -156,11 +156,10 @@ fn a_ride_mount_keeps_the_players_view() {
 /// so right-clicking a harnessed one keeps the view too (unlike a horse's
 /// `AbstractHorse.doPlayerRide`, which turns the rider first).
 #[test]
+#[ignore = "daily"]
 fn a_click_on_a_harnessed_ghast_keeps_the_players_view() {
     let mut resources = None;
-    let Some(mut game) = super::tests::server_game(&mut resources) else {
-        return;
-    };
+    let mut game = super::tests::server_game(&mut resources).expect(RESOURCES);
     scene(&mut game);
     let id = ghast(&mut game);
     let index = game
@@ -178,27 +177,101 @@ fn a_click_on_a_harnessed_ghast_keeps_the_players_view() {
 }
 
 /// `Entity.addPassenger`: the player is the first passenger, so the pig that
-/// boards after it sits in the next seat.
+/// boards after it takes the second of `EntityType.HAPPY_GHAST`'s seats,
+/// `(-1.7, 4.0, 0.0)`: on a ghast facing yaw 0, 1.7 west of its centre.
 #[test]
+#[ignore = "daily"]
 fn a_mob_that_boards_a_happy_ghast_after_its_player_takes_the_next_seat() {
     let mut resources = None;
-    let Some(mut game) = super::tests::server_game(&mut resources) else {
-        return;
-    };
+    let mut game = super::tests::server_game(&mut resources).expect(RESOURCES);
     scene(&mut game);
     let id = ghast(&mut game);
     assert!(game.run_command(&format!("ride @s mount {GHAST}")));
-    assert!(game.run_command("summon minecraft:pig 4.5 64 8.5 {NoAI:1b}"));
+    assert!(game.run_command("summon minecraft:pig 4.5 64 8.5 {NoAI:1b,UUID:[I;51774,0,0,8]}"));
+    assert!(game.run_command(&format!("ride {PIG} mount {GHAST}")));
+    game.position_riders();
     let pig = game
         .mobs
         .iter()
-        .position(|m| m.species() == Species::Pig)
+        .find(|m| m.species() == Species::Pig)
         .expect("the pig");
-    game.mobs[pig].extra.mount = Some(id);
-    game.position_riders();
-    let (at, seat) = (game.mobs[pig].position, riders::happy_ghast_attachment(1));
+    assert_eq!(pig.extra.mount, Some(id), "the pig rides the ghast");
     let ghast = game.mobs.iter().find(|m| m.id == id).unwrap().position;
-    assert_eq!(at.x, ghast.x + seat[0], "the left seat, not the player's");
-    assert_eq!(at.z, ghast.z + seat[2]);
-    assert_ne!(at.z, ghast.z + riders::happy_ghast_attachment(0)[2]);
+    assert_eq!(
+        pig.position.x,
+        ghast.x - 1.7,
+        "the left seat, not the player's"
+    );
+    assert_eq!(pig.position.z, ghast.z);
+}
+
+/// Boards the pigs of `PIG`'s UUID block (`UUID:[I;51774,0,0,n]`) one after another with `/ride`.
+fn ride_pigs(game: &mut Game<'_>, count: u32) {
+    for n in 0..count {
+        let uuid = format!("0000ca3e-0000-0000-0000-{:012x}", 0x10 + n);
+        assert!(game.run_command(&format!(
+            "summon minecraft:pig 4.5 64 8.5 {{NoAI:1b,UUID:[I;51774,0,0,{}]}}",
+            0x10 + n
+        )));
+        assert!(game.run_command(&format!("ride {uuid} mount {GHAST}")));
+    }
+}
+
+/// `HappyGhast.canAddPassenger`: `getPassengers().size() < 4`, so a click with four aboard
+/// seats no one; `/ride` forces and is not asked.
+#[test]
+#[ignore = "daily"]
+fn a_click_on_a_full_happy_ghast_seats_no_fifth_rider() {
+    let mut resources = None;
+    let mut game = super::tests::server_game(&mut resources).expect(RESOURCES);
+    scene(&mut game);
+    let id = ghast(&mut game);
+    ride_pigs(&mut game, 4);
+    let index = game
+        .mobs
+        .iter()
+        .position(|m| m.id == id)
+        .expect("the ghast");
+    game.mobs[index]
+        .extra
+        .set_body(Some("minecraft:white_harness".into()));
+    assert_eq!(game.seated_passengers(id).len(), 4, "/ride is not capped");
+    assert!(game.interact_mount(index, "minecraft:air"));
+    assert_eq!(game.riding, None, "the fifth rider is refused");
+    assert_eq!(game.seated_passengers(id).len(), 4);
+}
+
+/// `HappyGhast.BABY_DIMENSIONS` scale the attachments by `0.2375F`: a pig in the second seat of a
+/// ghastling sits `1.7 * 0.2375` west of it, not 1.7.
+#[test]
+#[ignore = "daily"]
+fn a_mob_on_a_ghastling_sits_at_the_scaled_seat() {
+    let mut resources = None;
+    let mut game = super::tests::server_game(&mut resources).expect(RESOURCES);
+    scene(&mut game);
+    assert!(game.run_command(
+        "summon minecraft:happy_ghast 8.5 64 8.5 {Tame:1b,NoAI:1b,Age:-24000,UUID:[I;51774,0,0,7]}"
+    ));
+    let id = game
+        .mobs
+        .iter_mut()
+        .find(|m| m.species() == Species::HappyGhast)
+        .map(|m| {
+            m.yaw = 0.0;
+            m.id
+        })
+        .expect("the ghastling");
+    assert!(game.mobs.iter().any(|m| m.id == id && m.is_baby()));
+    assert!(game.run_command(&format!("ride @s mount {GHAST}")));
+    assert!(game.run_command("summon minecraft:pig 4.5 64 8.5 {NoAI:1b,UUID:[I;51774,0,0,8]}"));
+    assert!(game.run_command(&format!("ride {PIG} mount {GHAST}")));
+    game.position_riders();
+    let ghast = game.mobs.iter().find(|m| m.id == id).unwrap().position;
+    let pig = game
+        .mobs
+        .iter()
+        .find(|m| m.species() == Species::Pig)
+        .expect("the pig");
+    assert_eq!(pig.position.x, ghast.x - 1.7 * f64::from(0.2375_f32));
+    assert_eq!(pig.position.z, ghast.z);
 }

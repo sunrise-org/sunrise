@@ -184,27 +184,27 @@ pub fn verify(
 /// release's, nor a release's for a nightly's.
 pub const NIGHTLY: &str = "nightly";
 
-/// The channel snapshots are signed for (release.yml kind snapshot, through nightly-build.yml): a
-/// commit of main built to test it after merge, published as `snapshot-<date>-<commit>`. No
+/// The channel Dev builds are signed for (release.yml kind dev, through nightly-build.yml): a
+/// commit of main built to test it after merge, published as `dev-<date>-<commit>`. No
 /// launcher lists or updates to one; a developer installs one by its tag.
-pub const SNAPSHOT: &str = "snapshot";
+pub const DEV: &str = "dev";
 
 /// The channels of builds that are not releases. Each is signed for its own name and for each
 /// build's own version (`<channel>-<date>-<commit>`), so no build passes for another channel's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Nightly,
-    Snapshot,
+    Dev,
 }
 
 impl Channel {
-    const ALL: [Channel; 2] = [Channel::Nightly, Channel::Snapshot];
+    const ALL: [Channel; 2] = [Channel::Nightly, Channel::Dev];
 
-    /// The channel's tag, which its channel signature is for: [`NIGHTLY`] or [`SNAPSHOT`].
+    /// The channel's tag, which its channel signature is for: [`NIGHTLY`] or [`DEV`].
     pub const fn tag(self) -> &'static str {
         match self {
             Channel::Nightly => NIGHTLY,
-            Channel::Snapshot => SNAPSHOT,
+            Channel::Dev => DEV,
         }
     }
 
@@ -212,7 +212,7 @@ impl Channel {
     const fn title(self) -> &'static str {
         match self {
             Channel::Nightly => "Nightly",
-            Channel::Snapshot => "Snapshot",
+            Channel::Dev => "Dev",
         }
     }
 
@@ -285,7 +285,7 @@ pub fn is_sdk(tag: &str) -> bool {
 
 /// The signed SHA-256 of `asset` in release `tag`, or why the download must be refused.
 /// `sums` and `signature` are the release's SHA256SUMS and SHA256SUMS.sig, None when it has none.
-/// A nightly or a snapshot is never a release: their tags are refused here, whatever their
+/// A Nightly or Dev build is never a stable release: their tags are refused here, whatever their
 /// signature ([`build_digest`] checks those). Nor is a mod SDK: its files are never game files
 /// ([`sdk_digest`] checks those).
 pub fn signed_digest(
@@ -301,9 +301,9 @@ pub fn signed_digest(
                 "{tag} is a Nightly build: only a launcher with Nightly turned on installs it."
             ));
         }
-        Some(Channel::Snapshot) => {
+        Some(Channel::Dev) => {
             return Err(format!(
-                "{tag} is a snapshot build: only `sunrise-launcher install {tag}` installs it."
+                "{tag} is a Dev build, made to test main: it is never installed as a release."
             ));
         }
         None => {}
@@ -346,8 +346,8 @@ pub fn sdk_digest(
 
 /// The version a build of `channel` names in its GitHub title, strictly: on the Nightly channel
 /// `Nightly 2026-10-28 · 0c02067` (as nightly-build.yml writes it) gives
-/// `nightly-2026-10-28-0c02067`, on the snapshot channel `Snapshot 2026-11-13 · 0c02067` gives
-/// `snapshot-2026-11-13-0c02067`. Anything else is None, the other channel's title included: the
+/// `nightly-2026-10-28-0c02067`, on the Dev channel `Dev 2026-11-13 · 0c02067` gives
+/// `dev-2026-11-13-0c02067`. Anything else is None, the other channel's title included: the
 /// caller says which channel it asked for, never the title. A build is verified against the
 /// version it installs as, so a title that doesn't name its date and commit is refused rather than
 /// dated by when GitHub says it was published.
@@ -382,8 +382,8 @@ pub fn is_build(channel: Channel, version: &str) -> bool {
 /// installs as `version` (`<channel>-<date>-<commit>`, from [`build_title_version`]): `signature`
 /// is its [`SIGNATURE_V2`], which must sign `sums` for exactly that version. A version of the other
 /// channel is refused before any signature is read; a release's list, a channel signature
-/// (`nightly`, `snapshot`) and another build's are refused by the signature, so an older Nightly
-/// can't be passed off as tonight's, nor a snapshot as a Nightly.
+/// (`nightly`, `dev`) and another build's are refused by the signature, so an older Nightly
+/// can't be passed off as tonight's, nor a Dev build as a Nightly.
 pub fn build_digest(
     channel: Channel,
     version: &str,
@@ -927,11 +927,11 @@ mod tests {
         assert!(!is_build(Channel::Nightly, "nightly-2026-10-28-0c02067-x"));
     }
 
-    /// A snapshot's signature never passes for a Nightly, nor a Nightly's for a snapshot, though one
-    /// key signs both; the release channel refuses snapshot tags as it refuses nightly ones.
+    /// A Dev build's signature never passes for a Nightly or vice versa, though one
+    /// key signs both; the release channel refuses Dev tags as it refuses nightly ones.
     #[test]
-    fn snapshot_and_nightly_signatures_never_pass_for_each_other() {
-        const SNAPSHOT_BUILD: &str = "snapshot-2026-11-13-0c02067";
+    fn dev_and_nightly_signatures_never_pass_for_each_other() {
+        const DEV_BUILD: &str = "dev-2026-11-13-0c02067";
         const NIGHTLY_BUILD: &str = "nightly-2026-11-13-0c02067";
         let asset = "sunrise-windows-x64.zip";
         let digest = |channel, version: &str, signed_for: &str| {
@@ -945,35 +945,34 @@ mod tests {
                 &[key.public()],
             )
         };
-        use Channel::{Nightly, Snapshot};
+        use Channel::{Dev, Nightly};
         assert_eq!(
-            digest(Snapshot, SNAPSHOT_BUILD, SNAPSHOT_BUILD),
+            digest(Dev, DEV_BUILD, DEV_BUILD),
             Ok(sha256_hex(b"windows"))
         );
         assert_eq!(
             digest(Nightly, NIGHTLY_BUILD, NIGHTLY_BUILD),
             Ok(sha256_hex(b"windows"))
         );
-        assert!(digest(Nightly, NIGHTLY_BUILD, SNAPSHOT_BUILD).is_err());
-        assert!(digest(Snapshot, SNAPSHOT_BUILD, NIGHTLY_BUILD).is_err());
+        assert!(digest(Nightly, NIGHTLY_BUILD, DEV_BUILD).is_err());
+        assert!(digest(Dev, DEV_BUILD, NIGHTLY_BUILD).is_err());
         // A genuine build of the other channel, asked for on this one: refused before its
         // signature is read, though that signature is valid for it.
-        let other = digest(Nightly, SNAPSHOT_BUILD, SNAPSHOT_BUILD).unwrap_err();
-        assert!(other.contains("doesn't name a Nightly build"), "{other}");
-        assert!(digest(Snapshot, NIGHTLY_BUILD, NIGHTLY_BUILD).is_err());
+        assert!(digest(Nightly, DEV_BUILD, DEV_BUILD).is_err());
+        assert!(digest(Dev, NIGHTLY_BUILD, NIGHTLY_BUILD).is_err());
         assert_eq!(
-            build_title_version(Nightly, "Snapshot 2026-11-13 · 0c02067"),
+            build_title_version(Nightly, "Dev 2026-11-13 · 0c02067"),
             None
         );
         assert_eq!(
-            build_title_version(Snapshot, "Nightly 2026-11-13 · 0c02067"),
+            build_title_version(Dev, "Nightly 2026-11-13 · 0c02067"),
             None
         );
         assert!(
-            digest(Snapshot, SNAPSHOT_BUILD, SNAPSHOT).is_err(),
+            digest(Dev, DEV_BUILD, DEV).is_err(),
             "the channel's signature"
         );
-        for tag in [SNAPSHOT, SNAPSHOT_BUILD] {
+        for tag in [DEV, DEV_BUILD] {
             let (key, sums, signature) = signed(tag);
             let err = signed_digest(
                 tag,
@@ -982,7 +981,7 @@ mod tests {
                 Some(&signature),
                 &[key.public()],
             );
-            assert!(err.unwrap_err().contains("snapshot build"), "{tag}");
+            assert!(err.is_err(), "{tag}");
         }
     }
 
@@ -990,46 +989,35 @@ mod tests {
     fn channels_are_read_from_their_prefix_only() {
         assert_eq!(Channel::of("nightly"), Some(Channel::Nightly));
         assert_eq!(Channel::of("nightly-2026-10-27"), Some(Channel::Nightly));
-        assert_eq!(Channel::of("snapshot"), Some(Channel::Snapshot));
-        assert_eq!(
-            Channel::of("snapshot-2026-11-13-0c02067"),
-            Some(Channel::Snapshot)
-        );
+        assert_eq!(Channel::of("dev"), Some(Channel::Dev));
+        assert_eq!(Channel::of("dev-2026-11-13-0c02067"), Some(Channel::Dev));
         for tag in [
             "v0.2.81",
             "nightlyx",
-            "snapshots-2026-11-13",
+            "devel-2026-11-13",
             "prebuilt-0c02067",
             "",
-            "Snapshot",
+            "Dev",
         ] {
             assert_eq!(Channel::of(tag), None, "{tag:?}");
         }
-        assert!(!is_nightly("snapshot-2026-11-13-0c02067"));
+        assert!(!is_nightly("dev-2026-11-13-0c02067"));
         assert_eq!(
-            build_title_version(Channel::Snapshot, "Snapshot 2026-11-13 · 0c02067").as_deref(),
-            Some("snapshot-2026-11-13-0c02067")
+            build_title_version(Channel::Dev, "Dev 2026-11-13 · 0c02067").as_deref(),
+            Some("dev-2026-11-13-0c02067")
         );
         for title in [
-            "Snapshot 2026-11-13",
-            "snapshot 2026-11-13 · 0c02067",
-            "Snapshot2026-11-13 · 0c02067",
+            "Dev 2026-11-13",
+            "dev 2026-11-13 · 0c02067",
+            "Dev2026-11-13 · 0c02067",
             "Release 2026-11-13 · 0c02067",
-            "Snapshot 2026-11-13 · 0C02067",
+            "Dev 2026-11-13 · 0C02067",
         ] {
-            assert_eq!(
-                build_title_version(Channel::Snapshot, title),
-                None,
-                "{title:?}"
-            );
+            assert_eq!(build_title_version(Channel::Dev, title), None, "{title:?}");
         }
-        assert!(is_build(Channel::Snapshot, "snapshot-2026-11-13-0c02067"));
-        for version in [
-            "snapshot-2026-11-13",
-            "snapshot",
-            "release-2026-11-13-0c02067",
-        ] {
-            assert!(!is_build(Channel::Snapshot, version), "{version}");
+        assert!(is_build(Channel::Dev, "dev-2026-11-13-0c02067"));
+        for version in ["dev-2026-11-13", "dev", "release-2026-11-13-0c02067"] {
+            assert!(!is_build(Channel::Dev, version), "{version}");
         }
     }
 

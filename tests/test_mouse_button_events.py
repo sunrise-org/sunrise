@@ -22,10 +22,16 @@ use std::collections::HashSet;
 #[derive(Clone, Copy, PartialEq)] enum ElementState { Pressed, Released }
 struct PointerSample;
 enum WindowEvent { MouseInput { state: ElementState, button: i32 }, Resized(()), Other }
+mod input_trace {
+    #[derive(Clone, Copy, PartialEq)]
+    pub enum InputOrigin { User, Agent }
+}
+use input_trace::InputOrigin;
 fn glfw_button(button: i32) -> i32 { button }
 fn glfw_modifiers(modifiers: u32) -> u32 { modifiers }
 struct Game { physical_buttons: HashSet<i32>, modifiers: u32, synthetic: bool, cancel: bool,
-              early: bool, calls: Vec<&'static str>, container_owned_up: bool, physical_presses: u64 }
+              early: bool, calls: Vec<&'static str>, container_owned_up: bool, physical_presses: u64,
+              press_millis: Option<u64> }
 impl Game {
     fn pad_synthetic_input(&self) -> bool { self.synthetic }
     // A container hook's press latch: retired at a real button-up, before the raw Pre.
@@ -48,15 +54,19 @@ impl Game {
         assert_eq!(self.physical_buttons.contains(&button), pressed);
         self.calls.push("mappings");
     }
-    fn settle_title_mode(&mut self) {}
+    fn millis(&self) -> u64 { 100 }
+    fn settle_title_mode(&mut self) { self.calls.push("settle"); }
     fn notify_window_resize(&mut self) {}
-    fn handle_window_event_inner(&mut self, _: (), _: WindowEvent, cursor_sample: Option<PointerSample>) {
+    fn handle_window_event_inner(&mut self, _: (), _: WindowEvent, cursor_sample: Option<PointerSample>,
+                                 press_millis: Option<u64>) -> bool {
         assert!(cursor_sample.is_none());
+        self.press_millis = press_millis;
         self.calls.push("handle");
-        if self.early { return; }
+        if self.early { return false; }
         self.calls.push("finish");
+        true
     }
-    fn dispatch(&mut self, event: WindowEvent) {
+    fn dispatch(&mut self, event: WindowEvent, origin: InputOrigin) {
         let event_loop = ();
         let cursor_sample = None;
 DISPATCH
@@ -64,26 +74,32 @@ DISPATCH
 #[test]
 fn dispatch_order_and_bookkeeping() {
     for state in [ElementState::Pressed, ElementState::Released] {
-        for (cancel, synthetic, early, expected) in [
-            (false, false, false, vec!["pre", "mappings", "handle", "finish", "post"]),
-            (true, false, false, vec!["pre"]),
-            (false, false, true, vec!["pre", "mappings", "handle", "post"]),
-            (true, true, false, vec!["handle", "finish"])] {
+        for (cancel, synthetic, early, origin, mut expected) in [
+            (false, false, false, InputOrigin::User, vec!["pre", "handle", "finish", "post"]),
+            (true, false, false, InputOrigin::User, vec!["pre"]),
+            (false, false, true, InputOrigin::User, vec!["pre", "handle", "settle", "post"]),
+            (false, false, false, InputOrigin::Agent, vec!["pre", "handle", "finish", "post"]),
+            (true, true, false, InputOrigin::User, vec!["handle", "finish"])] {
             let mut game = Game { physical_buttons: HashSet::from([2]), modifiers: 5,
-                synthetic, cancel, early, calls: vec![], container_owned_up: false, physical_presses: 0 };
-            game.dispatch(WindowEvent::MouseInput { state, button: 2 });
-            let mut expected = expected;
-            if state == ElementState::Released && !synthetic {
+                synthetic, cancel, early, calls: vec![], container_owned_up: false, physical_presses: 0,
+                press_millis: None };
+            game.dispatch(WindowEvent::MouseInput { state, button: 2 }, origin);
+            let pressed = state == ElementState::Pressed;
+            if !pressed && !synthetic {
                 expected.insert(0, "up");
+                expected.insert(2, "mappings");
             }
             assert_eq!(game.calls, expected);
-            assert_eq!(game.physical_presses, u64::from(state == ElementState::Pressed));
-            assert_eq!(game.physical_buttons.contains(&2), state == ElementState::Pressed);
+            assert_eq!(game.physical_presses, u64::from(pressed));
+            assert_eq!(game.physical_buttons.contains(&2), pressed);
+            assert_eq!(game.press_millis,
+                (pressed && !cancel && !synthetic && origin == InputOrigin::User).then_some(100));
         }
     }
     let mut game = Game { physical_buttons: HashSet::new(), modifiers: 5, synthetic: false,
-        cancel: true, early: false, calls: vec![], container_owned_up: false, physical_presses: 0 };
-    game.dispatch(WindowEvent::Other);
+        cancel: true, early: false, calls: vec![], container_owned_up: false, physical_presses: 0,
+        press_millis: None };
+    game.dispatch(WindowEvent::Other, InputOrigin::User);
     assert_eq!(game.calls, ["handle", "finish"]);
 }
 """.replace("DISPATCH", dispatch)

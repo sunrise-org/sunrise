@@ -1,26 +1,48 @@
 //! The `menu_clicked` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0034
 
 pub trait Hooks {
-    /// A click in a menu a mod opened (`native_open_menu`), heard raw: the menu's `slot`
-    /// (its own first, then the player's inventory, `native_menu_inventory_slot`; -999
-    /// outside), the `button` and the click's `mode` (`ClickType`'s id) of the player `uuid`.
-    /// A single-slot drag is heard once. Menu-button clicks, recipe placement and creative
-    /// set-slot never reach it. The hook cannot know whether the click changes anything, and
-    /// it carries no pickup answer and takes nothing: the client is sent the menu, its
-    /// inventory and its cursor as they were.
-    /// No player's state is swapped in: the menu helpers take the player's UUID.
-    /// `ItemPlace::MenuSlot` reaches the menu's own storage and its player's inventory and
-    /// hotbar slots. `PlayerSlot` and `PlayerHand` resolve the online clicking player through
-    /// the usual acting-player or guest path. For a player still connected, the mods are
-    /// told inside an action: what a listener writes through the `Host` stays when it
-    /// returns, and is undone, with the rest of the action, when a listener fails (panics or
-    /// traps). A click drained after its player left is still told, outside an action.
+    /// A click in `menu`, before its default action (`ServerGamePacketListenerImpl.handleContainerClick`,
+    /// `AbstractContainerMenu.clicked`). Only parts registered for that menu type are asked.
+    /// `slot` is in menu order (container slots, then any player inventory; -999 outside),
+    /// `button` and `mode` are the click input, and `uuid` identifies the clicking player.
+    /// Menu-button clicks, recipe placement and the creative set-slot packet do not call it.
+    /// Return [`Flow::Cancel`] after applying the click yourself to skip the default: for
+    /// example, copy an item into a filter slot without consuming the cursor.
+    /// A display-only menu has no default moves. Other menus keep their ordinary slot rules
+    /// when unhandled. The client predicts the ordinary click and the server corrects it.
+    /// No player's state is swapped in. Use their current `PlayerRef::container_menu` to reach
+    /// its slots and cursor, or [`MenuRef::set_items`] to replace a display menu's contents.
+    /// Runs directly on the receiving menu without a synthetic decided-action wrapper or
+    /// whole-inventory rollback: open a transaction explicitly with [`ServerHost::transaction`]
+    /// when a callback wants atomic multi-step edits, and prior unrelated writes stand even if
+    /// the default click is cancelled or refused. On [`Flow::Continue`], the server rechecks
+    /// receiver preconditions (live player, same menu generation and window, non-spectator,
+    /// the menu's `stillValid` answer and slot index) before running default click execution on
+    /// the live menu. Closing or replacing it prevents the default; inside a transaction, the
+    /// close or replacement takes effect only when the outermost transaction commits.
+    /// A panic aborts any transaction still open in that callback and disables only that mod's
+    /// `menu_clicked` callback for the session, with an error log and toast naming the mod.
+    /// Remaining parts continue, but the failed click's default never runs. The server resyncs
+    /// the still-live menu and keeps committed edits.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_menu_clicked",
+        dispatch = "api_carrier",
         side = "server",
-        contract = "listen",
-        neoforge = "none (vanilla AbstractContainerMenu.clicked; NeoForge adds no event or extension for it)",
-        version = 2
+        contract = "cancel",
+        scope = "menu",
+        key = "menu",
+        out = "handled",
+        cancellable = true,
+        neoforge = "none (a Java menu overrides AbstractContainerMenu.clicked; no event)",
+        version = 4
     )]
-    fn menu_clicked();
+    fn menu_clicked(
+        menu: &str,
+        uuid: u128,
+        window: i32,
+        slot: i32,
+        button: i32,
+        mode: i32,
+        handled: &mut bool,
+    );
 }

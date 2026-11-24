@@ -1,7 +1,12 @@
 //! Bind prepared registry states to model choices; bake each transformed model
 //! once and share its geometry across positions. Resource failure recovery and
 //! resource-pack reloads remain separate work.
-use crate::{Result, sprites::Sprites};
+use crate::{
+    Result,
+    mod_block_state_models::{BlockStateModelTable, installed_definitions, instantiate},
+    sprites::Sprites,
+};
+use mod_api::{__private::game::standalone_model_bake_context, StandaloneModelBakeError};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -143,6 +148,8 @@ pub struct StateModels {
     /// By state id: its definition in `choices` and the models it selects.
     states: Vec<Option<(usize, SelectedModels)>>,
     single_models: Vec<Option<u32>>,
+    /// In bake order without repeats, for bindings not covered by `single_models`.
+    alternative_models: Vec<Option<Box<[u32]>>>,
     /// Every transformed model once, with the variant it was baked from.
     baked: Vec<(Variant, BakedModel)>,
     /// Standalone models by id: their index in `baked`.
@@ -198,45 +205,52 @@ fn bake_resolved(
     })
 }
 
-/// `FaceBakery.bakeQuad`: use the same centered geometry and inverse face UV
-/// transformation as a blockstate variant, not the draw-time pose.
-fn bake_form(
+/// Assemble one slot from this generation's declared model files.
+fn bake_standalone_model(
     root: &crate::resource_source::ResourceSource,
     sprites: &mut Sprites,
     models: &crate::model_library::ParsedModels,
-    form: &mod_api::StandaloneModelForm,
-) -> Result<BakedModel> {
-    use mod_api::StandaloneModelForm;
-    match form {
-        StandaloneModelForm::Rotated {
-            model,
-            turns,
-            uvlock,
-            ..
-        } => {
-            let library = models.block_library(root, vec![model.clone()])?;
-            bake_variant(sprites, &library, model, *turns, *uvlock)
+    entry: &super::StandaloneBaker,
+) -> std::result::Result<BakedModel, String> {
+    let dependencies = &entry.registration.dependencies;
+    let library = models
+        .standalone_library(root, dependencies)
+        .map_err(|error| error.to_string())?;
+    let mut combined = BakedModel {
+        ambient_occlusion: true,
+        particle: None,
+        faces: Vec::new(),
+        cube: None,
+    };
+    let mut append = |id: &str, quarter_turns, uvlock| {
+        if !dependencies.iter().any(|dependency| dependency == id) {
+            return Err(StandaloneModelBakeError::UndeclaredDependency(
+                id.to_owned(),
+            ));
         }
-        StandaloneModelForm::Combined { parts, .. } => {
-            let library = models.block_library(root, parts.clone())?;
-            let mut combined = BakedModel {
-                ambient_occlusion: true,
-                particle: None,
-                faces: Vec::new(),
-                cube: None,
-            };
-            for part in parts {
-                let baked = bake_variant(sprites, &library, part, [0; 3], false)?;
-                if combined.particle.is_none() {
-                    combined.particle = baked.particle;
+        // Use the same centered geometry and inverse face UV transform as a blockstate variant.
+        let baked =
+            bake_variant(sprites, &library, id, quarter_turns, uvlock).map_err(|error| {
+                StandaloneModelBakeError::DependencyBake {
+                    id: id.to_owned(),
+                    reason: error.to_string(),
                 }
-                combined.ambient_occlusion &= baked.ambient_occlusion;
-                combined.faces.extend(baked.faces);
-            }
-            combined.cube = super::cube::cube_styles(&combined.faces);
-            Ok(combined)
+            })?;
+        if combined.particle.is_none() {
+            combined.particle = baked.particle;
         }
-    }
+        combined.ambient_occlusion &= baked.ambient_occlusion;
+        combined.faces.extend(baked.faces);
+        Ok(())
+    };
+    let result = entry
+        .owner
+        .call("standalone model baker", "bake_standalone_model", || {
+            (entry.registration.bake)(&mut standalone_model_bake_context(&mut append))
+        })?;
+    result.map_err(|error| error.to_string())?;
+    combined.cube = super::cube::cube_styles(&combined.faces);
+    Ok(combined)
 }
 /// The definitions a blockstate file holds, bottom first: the layers of a
 /// file the pack overlay stacked (`packs::BLOCKSTATE_LAYERS`), else the
@@ -258,6 +272,7 @@ fn bind_layer(
     block: &str,
     schema: &PropertySchema,
     possible: &[Properties],
+    definitions: Option<&BlockStateModelTable>,
 ) -> std::result::Result<(BlockStateDefinition, Vec<Option<SelectedModels>>), String> {
     match BlockStateFile::from_json(text).map_err(|e| e.to_string())? {
         BlockStateFile::Vanilla(definition) => {
@@ -267,7 +282,7 @@ fn bind_layer(
             Ok((definition, bound))
         }
         BlockStateFile::Typed { kind, config } => {
-            crate::mod_block_state_models::instantiate(&kind, block, &config, possible)
+            instantiate(definitions, &kind, block, &config, possible)
                 .map(BlockStateDefinition::from_picks)
         }
     }
@@ -307,13 +322,14 @@ impl StateModels {
         sprites: &mut Sprites,
         facts: &BTreeMap<String, Value>,
     ) -> Result<Self> {
-        Self::from_facts_with_models(
+        Self::from_facts_with_definitions(
             root,
             registry,
             blocks,
             sprites,
             facts,
             &crate::model_library::ParsedModels::default(),
+            installed_definitions(),
         )
     }
     pub(crate) fn from_facts_with_models(
@@ -323,6 +339,26 @@ impl StateModels {
         sprites: &mut Sprites,
         facts: &BTreeMap<String, Value>,
         models: &crate::model_library::ParsedModels,
+    ) -> Result<Self> {
+        Self::from_facts_with_definitions(
+            root,
+            registry,
+            blocks,
+            sprites,
+            facts,
+            models,
+            installed_definitions(),
+        )
+    }
+
+    pub(crate) fn from_facts_with_definitions(
+        root: &crate::resource_source::ResourceSource,
+        registry: &BlockRegistry,
+        blocks: &[&str],
+        sprites: &mut Sprites,
+        facts: &BTreeMap<String, Value>,
+        models: &crate::model_library::ParsedModels,
+        definitions: Option<&BlockStateModelTable>,
     ) -> Result<Self> {
         let mut choices = Vec::new();
         let mut states = vec![None; registry.len()];
@@ -395,7 +431,7 @@ impl StateModels {
             };
             let mut loaded = Vec::with_capacity(layers.len());
             for text in &layers {
-                match bind_layer(text, &name, &schema, &possible) {
+                match bind_layer(text, &name, &schema, &possible, definitions) {
                     Ok(layer) => loaded.push(layer),
                     Err(e) => log::warn!("Sunrise: blockstate definition {file} not loaded: {e}"),
                 }
@@ -451,14 +487,8 @@ impl StateModels {
                 choices.push(CompiledChoices::new(&definition)?);
             }
         }
-        let names: Vec<String> = variants.iter().map(|(name, _, _)| name.clone()).collect();
-        let library = match models.block_library(root, names.clone()) {
-            Ok(library) => library,
-            Err(e) => {
-                log::warn!("Sunrise: block models incomplete ({e}); using the missing model");
-                models.block_library_or_missing(root, names)?
-            }
-        };
+        let names = variants.iter().map(|(name, _, _)| name.clone()).collect();
+        let library = models.block_library(root, names)?;
         let resolved: Vec<_> = variants
             .iter()
             .map(|(name, ..)| library.resolve(name))
@@ -486,28 +516,53 @@ impl StateModels {
         }
         // Every variant of every definition was baked above.
         let choices: Vec<_> = choices.iter().map(|c| c.map(|v| index[&key(v)])).collect();
-        let single_models = states
-            .iter()
-            .map(|state| {
-                let (choice, selected) = state.as_ref()?;
-                choices[*choice].single_variant(selected).copied()
-            })
-            .collect();
-        Ok(Self {
+        Ok(Self::with_baked(choices, states, baked))
+    }
+
+    fn with_baked(
+        choices: Vec<CompiledChoices<u32>>,
+        states: Vec<Option<(usize, SelectedModels)>>,
+        baked: Vec<(Variant, BakedModel)>,
+    ) -> Self {
+        let mut single_models = Vec::with_capacity(states.len());
+        let mut alternative_models = Vec::with_capacity(states.len());
+        for state in &states {
+            let Some((definition, selected)) = state else {
+                single_models.push(None);
+                alternative_models.push(None);
+                continue;
+            };
+            let choice = &choices[*definition];
+            let single = choice.single_variant(selected).copied();
+            single_models.push(single);
+            if single.is_some() {
+                alternative_models.push(None);
+                continue;
+            }
+            let mut slots = Vec::new();
+            let listed = choice.each_alternative(selected, |&slot| {
+                if !slots.contains(&slot) {
+                    slots.push(slot);
+                }
+            });
+            alternative_models.push(listed.ok().map(|()| slots.into_boxed_slice()));
+        }
+        Self {
             choices,
             bounds: OnceLock::new(),
             states,
             single_models,
+            alternative_models,
             baked,
             standalone: BTreeMap::new(),
-        })
+        }
     }
     /// Bakes `names`, models no blockstate needs to name (vanilla's
     /// standalone models, NeoForge's `ModelEvent.RegisterStandalone`), as
     /// they are, unturned, for [`Self::standalone`]. One a block state
-    /// already bakes unturned is shared. A model that doesn't read (missing,
-    /// or a parent missing) is logged and left out, as a missing blockstate
-    /// is; the others still bake.
+    /// already bakes unturned is shared. Missing or rejected parents use the
+    /// missing model at that link. A missing or rejected registered file is
+    /// logged and left out; the others still bake.
     pub(crate) fn bake_standalone(
         &mut self,
         root: &crate::resource_source::ResourceSource,
@@ -528,7 +583,7 @@ impl StateModels {
                 continue;
             }
             let model = models
-                .block_library(root, vec![name.clone()])
+                .standalone_library(root, std::slice::from_ref(name))
                 .and_then(|library| bake_variant(sprites, &library, name, [0; 3], false));
             match model {
                 Ok(model) => {
@@ -546,27 +601,25 @@ impl StateModels {
         }
         Ok(())
     }
-    /// Bake dependencies atomically into one standalone slot; never publish a partial form.
-    pub(crate) fn bake_standalone_forms(
+    /// Bake each callback into a private assembly; publish only successful slots.
+    pub(super) fn bake_standalone_bakers(
         &mut self,
         root: &crate::resource_source::ResourceSource,
         sprites: &mut Sprites,
         models: &crate::model_library::ParsedModels,
-        forms: &[super::StandaloneFormRegistration],
+        bakers: &[super::StandaloneBaker],
     ) {
-        for entry in forms {
-            let id = entry.form.id();
+        for entry in bakers {
+            let id = &entry.registration.id;
             if self.standalone.contains_key(id) {
                 continue;
             }
-            let result = bake_form(root, sprites, models, &entry.form);
-            match result {
+            match bake_standalone_model(root, sprites, models, entry) {
                 Ok(model) => {
-                    self.standalone
-                        .insert(id.to_owned(), self.baked.len() as u32);
+                    self.standalone.insert(id.clone(), self.baked.len() as u32);
                     self.baked.push((
                         Variant {
-                            model: id.to_owned(),
+                            model: id.clone(),
                             rotations: [0; 3],
                             uv_lock: false,
                         },
@@ -574,8 +627,8 @@ impl StateModels {
                     ));
                 }
                 Err(error) => log::warn!(
-                    "Sunrise: mod {} standalone form {id} not loaded: {error}",
-                    entry.owner
+                    "Sunrise: mod {} standalone model {id} not loaded: {error}",
+                    entry.mod_id
                 ),
             }
         }
@@ -595,9 +648,19 @@ impl StateModels {
     pub fn standalone_slot(&self, name: &str) -> Option<u32> {
         self.standalone.get(name).copied()
     }
+    /// Whether this baked slot is the one published under its standalone model name.
+    pub(crate) fn is_standalone_slot(&self, slot: u32) -> bool {
+        self.baked
+            .get(slot as usize)
+            .is_some_and(|(variant, _)| self.standalone_slot(&variant.model) == Some(slot))
+    }
     /// Slots of registered standalone models, including models shared with block states.
     pub fn standalone_slots(&self) -> impl Iterator<Item = u32> + '_ {
         self.standalone.values().copied()
+    }
+    /// How many models the baked store holds: the first slot past them is free for a caller's own.
+    pub fn model_count(&self) -> u32 {
+        self.baked.len() as u32
     }
     /// Geometry in this catalog's existing baked store.
     pub fn model_by_slot(&self, slot: u32) -> Option<&BakedModel> {
@@ -606,17 +669,12 @@ impl StateModels {
     /// Slots of every baked model `state` can select, in bake order without repeats: each
     /// weighted alternative and each selected multipart part (`CompiledChoices::each_alternative`).
     /// `None` for a state no definition binds.
-    pub fn state_slots(&self, state: BlockStateId) -> Option<Vec<u32>> {
-        let (choice, selected) = self.state(state)?;
-        let mut slots = Vec::new();
-        self.choices[*choice]
-            .each_alternative(selected, |&slot| {
-                if !slots.contains(&slot) {
-                    slots.push(slot);
-                }
-            })
-            .ok()?;
-        Some(slots)
+    pub fn state_slots(&self, state: BlockStateId) -> Option<&[u32]> {
+        let index = state.0 as usize;
+        match self.single_models.get(index)? {
+            Some(slot) => Some(std::slice::from_ref(slot)),
+            None => self.alternative_models[index].as_deref(),
+        }
     }
     pub fn collect(
         &self,
@@ -670,10 +728,20 @@ impl StateModels {
         seed: i64,
     ) -> Result<Vec<(&Variant, &BakedModel)>> {
         let mut models = Vec::new();
-        self.each_seeded(state, seed, |(variant, model)| {
-            models.push((variant, model))
+        self.each_seeded(state, seed, |slot| {
+            let (variant, model) = &self.baked[slot as usize];
+            models.push((variant, model));
         })?;
         Ok(models)
+    }
+    /// Seeded model choices stored as slot indices so caller scratch can outlive the catalog.
+    pub fn slots_seeded(&self, state: BlockStateId, seed: i64, out: &mut Vec<u32>) -> Result<()> {
+        out.clear();
+        self.each_seeded(state, seed, |slot| out.push(slot))
+    }
+    /// The baked model at a slot returned by [`Self::slots_seeded`].
+    pub fn baked_model(&self, slot: u32) -> &BakedModel {
+        &self.baked[slot as usize].1
     }
     /// The models a block draws at `position`, into `out` (cleared first):
     /// `collect` for the mesher, which reuses one list for every block.
@@ -684,22 +752,40 @@ impl StateModels {
         out: &mut Vec<&'a BakedModel>,
     ) -> Result<()> {
         out.clear();
+        self.each_at(state, position, |slot| {
+            out.push(&self.baked[slot as usize].1)
+        })
+    }
+
+    /// The same model choices, stored as slots so mesh scratch can outlive the catalog.
+    pub(crate) fn slots_at(
+        &self,
+        state: BlockStateId,
+        position: BlockPos,
+        out: &mut Vec<u32>,
+    ) -> Result<()> {
+        out.clear();
+        self.each_at(state, position, |slot| out.push(slot))
+    }
+
+    fn each_at(
+        &self,
+        state: BlockStateId,
+        position: BlockPos,
+        mut f: impl FnMut(u32),
+    ) -> Result<()> {
         if let Some(Some(model)) = self.single_models.get(state.0 as usize) {
-            out.push(&self.baked[*model as usize].1);
+            f(*model);
             return Ok(());
         }
-        self.each_seeded(state, position_seed(position), |(_, model)| out.push(model))
+        self.each_seeded(state, position_seed(position), f)
     }
-    fn each_seeded<'a>(
-        &'a self,
-        state: BlockStateId,
-        seed: i64,
-        mut f: impl FnMut(&'a (Variant, BakedModel)),
-    ) -> Result<()> {
+
+    fn each_seeded(&self, state: BlockStateId, seed: i64, mut f: impl FnMut(u32)) -> Result<()> {
         let (choice, selected) = self.state(state).ok_or("unbound gallery block state")?;
         let mut random = LegacyRandom::new(seed);
         self.choices[*choice].for_each(selected, &mut random, |&model| {
-            f(&self.baked[model as usize]);
+            f(model);
         })?;
         Ok(())
     }
@@ -889,15 +975,28 @@ mod tests {
         );
         let connected = crate::connected::ConnectedTextures::load(
             root.source(),
-            sunrise_optifine::ctm::load(root.source()),
+            sunrise_optifine::ctm::load_engine(root.source()),
             &registry,
             &mut sprites,
             |_, _| Some(base),
+            |_| false,
         );
         assert!(!connected.is_empty());
-        crate::native_emissive::load(root.source(), &mut sprites);
+        let mod_emissive = crate::native_emissive::test_registrations([(
+            "demo",
+            vec![mod_api::EmissiveSpriteRegistration::new(
+                mod_api::Identifier::parse("demo:block/stone").unwrap(),
+                mod_api::Identifier::parse("demo:emissive/glow").unwrap(),
+            )],
+        )]);
+        let mod_pairs = crate::native_emissive::resolve_registered(&mod_emissive, &mut sprites);
         assert!(sprites.files.contains_key("demo:emissive/glow"));
-        let pairs = crate::native_emissive::load_optifine(root.source(), &mut sprites);
+        assert!(mod_pairs.contains_key(&base));
+        let pairs = crate::native_emissive::load_optifine(
+            root.source(),
+            &mut sprites,
+            &std::collections::BTreeSet::new(),
+        );
         assert!(pairs.contains(&("demo:block/stone".into(), "demo:block/stone_e".into())));
         assert!(pairs.contains(&(
             "assets/demo/optifine/ctm/tile.png".into(),
@@ -914,6 +1013,78 @@ mod tests {
             1,
             "asset reads did not touch prepared tables"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn blockstates_use_the_parsed_generation_for_rejected_models() -> Result<()> {
+        use crate::resource_source::ResourceSource;
+        use sunrise_core::nbt::Tag;
+        use sunrise_world::DATA_VERSION;
+
+        let fixture = Fixture(tempfile::tempdir()?.keep());
+        let source = ResourceSource::directory(fixture.0.clone());
+        let definition = fixture.0.join("assets/demo/blockstates/panel.json");
+        fs::create_dir_all(definition.parent().unwrap())?;
+        fs::write(
+            definition,
+            br#"{"variants":{"":[{"model":"demo:block/rejected"},{"model":"demo:block/child"}]}}"#,
+        )?;
+        fixture.write("demo:block/rejected", r#"{"loader":"demo:unregistered"}"#);
+        fixture.write(
+            "demo:block/child",
+            r##"{"parent":"demo:block/rejected","textures":{"side":"demo:block/stone"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#side"}}}]}"##,
+        );
+        let parsed = ParsedModels::load(&source);
+        // A later edit is visible only to the next resource generation, not to discovery.
+        fixture.write("demo:block/rejected", r#"{"elements": []}"#);
+        let registry = BlockRegistry::from_nbt(&Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            (
+                "states",
+                Tag::List(vec![
+                    BlockState {
+                        name: "demo:panel".into(),
+                        properties: Default::default(),
+                    }
+                    .to_nbt(),
+                ]),
+            ),
+            ("defaults", Tag::compound([("demo:panel", Tag::Int(0))])),
+        ]))?;
+        let facts = BTreeMap::from([(
+            "demo:panel".into(),
+            serde_json::json!({"schema": {}, "states": [{}]}),
+        )]);
+        let models = StateModels::from_facts_with_models(
+            &source,
+            &registry,
+            &["demo:panel"],
+            &mut Sprites::new(source.clone()),
+            &facts,
+            &parsed,
+        )?;
+        let slots = models.state_slots(BlockStateId(0)).unwrap();
+        assert_eq!(slots.len(), 2);
+        let model = |name: &str| {
+            slots
+                .iter()
+                .map(|slot| &models.baked[*slot as usize])
+                .find(|(variant, _)| variant.model == name)
+                .map(|(_, model)| model)
+                .unwrap()
+        };
+        let missing = &model("demo:block/rejected").faces;
+        assert_eq!(missing.len(), 6);
+        assert!(
+            missing
+                .iter()
+                .all(|f| f.quad.material.sprite == "minecraft:missingno")
+        );
+        let child = &model("demo:block/child").faces;
+        assert_eq!(child.len(), 1);
+        assert_eq!(child[0].quad.facing, Direction::Up);
+        assert_eq!(child[0].quad.material.sprite, "demo:block/stone");
         Ok(())
     }
 
@@ -959,11 +1130,14 @@ mod tests {
         let cog = models.standalone("lanef:block/cog").expect("baked");
         assert_eq!(cog.faces.len(), 2);
         assert_ne!(cog.faces[0].layer, shaft.faces[0].layer, "its own texture");
-        assert!(models.standalone("lanef:block/orphan").is_none());
+        assert_eq!(
+            models.standalone("lanef:block/orphan").unwrap().faces.len(),
+            6
+        );
         assert!(models.standalone("lanef:block/absent").is_none());
         assert!(models.standalone("lanef:block/unnamed").is_none());
         // Named twice, baked once.
-        assert_eq!(models.baked.len(), 2);
+        assert_eq!(models.baked.len(), 3);
         // Without a parsed library, the files are read directly.
         let mut direct = StateModels::default();
         direct.bake_standalone(

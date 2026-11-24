@@ -1,6 +1,7 @@
 //! What a frame draws behind the screens: the title panorama, the level loading background, the
 //! menu blur and transparent background, the world border wall, and the screens' render events.
 use super::*;
+use crate::game::host::draw::GameDrawContext;
 
 impl Game<'_> {
     /// The frame shows the title's panorama, not a level: the title screen, or a
@@ -38,20 +39,28 @@ impl Game<'_> {
         tracker: &sunrise_client::level_loading::LevelLoadTracker,
         progress: Option<f32>,
     ) -> bool {
-        let Some(screen) = tracker
-            .transition_screen()
-            .and_then(sunrise_client_render::dimension_transition::screen)
-        else {
+        let Some(screen) = tracker.transition_screen() else {
             return false;
         };
-        use sunrise_client::level_loading::Reason;
-        let reason = match tracker.reason {
-            Reason::NetherPortal => mod_api::DimensionTransitionReason::NetherPortal,
-            Reason::EndPortal => mod_api::DimensionTransitionReason::EndPortal,
-            Reason::Other => mod_api::DimensionTransitionReason::Other,
-        };
-        self.native_dimension_transition_screen_draw(screen, reason, progress, batch);
-        true
+        let paint = batch.paint_checkpoint();
+        let sounds = self.mod_sounds.pending_checkpoint();
+        let blur_requested = self.screen_blur_requested.get();
+        let clear_particles = self.mod_clear_particles.get();
+        let camera_type = self.requested_camera_type.get();
+        if screen.draw(
+            self,
+            tracker.reason.into(),
+            progress,
+            &mut GameDrawContext::new(self, batch),
+        ) {
+            return true;
+        }
+        paint.discard(batch);
+        self.mod_sounds.discard_pending_since(sounds);
+        self.screen_blur_requested.set(blur_requested);
+        self.mod_clear_particles.set(clear_particles);
+        self.requested_camera_type.set(camera_type);
+        false
     }
     /// `LevelLoadingScreen.extractBackground`.
     pub(super) fn draw_level_loading_background(
@@ -75,16 +84,46 @@ impl Game<'_> {
         }
     }
     /// `GameRenderer.update`'s `requestedPostEffects`: `end_of_frame` (a resource
-    /// pack's own chain), then the server's `LocalPlayer.postEffects`. Only the
-    /// world is drawn through them.
-    pub(super) fn requested_post_effects(&self) -> Vec<String> {
-        if self.title.is_some() || self.player.is_none() {
-            return Vec::new();
+    /// pack's own chain), then the server's `LocalPlayer.postEffects`, then the
+    /// active spectated entity's chain, then `extra`. Reuses unchanged `String`
+    /// slots in `out` without deduplicating repeated effect IDs.
+    pub(super) fn sync_requested_post_effects<'a>(
+        &self,
+        out: &mut Vec<String>,
+        extra: impl IntoIterator<Item = &'a str>,
+    ) {
+        fn set_slot(out: &mut Vec<String>, len: &mut usize, id: &str) {
+            if let Some(slot) = out.get_mut(*len) {
+                if slot != id {
+                    slot.clear();
+                    slot.push_str(id);
+                }
+            } else {
+                out.push(id.to_owned());
+            }
+            *len += 1;
         }
-        std::iter::once("minecraft:end_of_frame".to_owned())
-            .chain(self.post_effects.iter().cloned())
-            .chain(self.spectated_post_effect.map(str::to_owned))
-            .collect()
+        let mut len = 0;
+        if self.title.is_none() && self.player.is_some() {
+            set_slot(out, &mut len, "minecraft:end_of_frame");
+            for effect in &self.post_effects {
+                set_slot(out, &mut len, effect);
+            }
+            if self.spectated_post_effect_active
+                && let Some(effect) = self.spectated_post_effect
+            {
+                set_slot(out, &mut len, effect);
+            }
+        }
+        for effect in extra {
+            set_slot(out, &mut len, effect);
+        }
+        out.truncate(len);
+    }
+    pub(super) fn requested_post_effects(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        self.sync_requested_post_effects(&mut out, std::iter::empty());
+        out
     }
     /// `Screen.extractBlurredBackground` over the panorama or the world and
     /// HUD, when `menuBackgroundBlurriness` is at least 1.
@@ -122,6 +161,8 @@ impl Game<'_> {
                 rgba(16, 16, 16, 160),
             );
         }
+        // Screen.extractBackground draws deferred subtitles after its dimming and before widgets.
+        self.draw_deferred_subtitles(batch);
     }
     /// `LevelExtractor` / `LevelRenderer`: the world border wall this frame.
     pub(super) fn border_draw(
@@ -130,7 +171,7 @@ impl Game<'_> {
         partial: f32,
     ) -> Option<sunrise_client::gfx::BorderDraw> {
         use sunrise_client::border_render::{self, BorderRenderer};
-        let distance = f64::from(self.streaming.radius * 16);
+        let distance = f64::from(self.effective_render_distance() * 16);
         border_render::extract(
             &self.border,
             partial,
@@ -169,6 +210,10 @@ impl Game<'_> {
 impl Game<'_> {
     /// `ScreenEvent.Render.Post`, after the screen's drawing and tooltips,
     /// including when Pre cancelled. Gameplay overlays keep their exclusions.
+    /// Its view's `regions` is what this draw published
+    /// (`publish_screen_regions`): empty when Pre cancelled the drawing.
+    /// This is a notice; mounted children draw
+    /// inside the Pre-guarded contents pass (`draw_screen_phase`).
     pub(super) fn draw_screen_with_post_hook(&self, batch: &mut HudBatch) {
         if let Some(view) = self.screen_render_view(batch) {
             self.screen_render_end(batch, &view);
@@ -187,6 +232,17 @@ impl Game<'_> {
     pub(super) fn draw_title_screen_with_post_hook(&self, batch: &mut HudBatch) {
         if let Some(view) = self.title_screen_render_view(batch) {
             self.screen_render_end(batch, &view);
+        }
+    }
+    /// Draw mounted widgets belonging to the topmost active overlay screen
+    /// (`overlay_id`) inside that overlay's own draw pass, before tooltips.
+    pub(super) fn draw_overlay_mounted_widgets(
+        &self,
+        batch: &mut HudBatch,
+        overlay_id: &'static str,
+    ) {
+        if self.observed_overlay_now() == Some(overlay_id) {
+            self.draw_mounted_screen_widgets(batch);
         }
     }
     /// `draw_screen_with_pre_hook` for the title's own screens.
@@ -248,6 +304,9 @@ impl Game<'_> {
     ) {
         use sunrise_client::screen_draw::RenderPhase;
         if matches!(phase, RenderPhase::Foreground) {
+            if !self.screen_over_playing() {
+                self.draw_mounted_screen_widgets(batch);
+            }
             self.draw_container_hooks(batch);
         }
         let hook = match phase {
@@ -267,4 +326,19 @@ impl Game<'_> {
             }
         }
     }
+}
+
+/// `view` with no regions: a cancelled render drew nothing beside the panel.
+pub(super) fn without_regions<'a>(view: &mod_api::ScreenView<'a>) -> mod_api::ScreenView<'a> {
+    mod_api::ScreenView::from(mod_api::__private::built::ScreenView {
+        id: view.id,
+        mod_screen: view.mod_screen,
+        menu: view.menu,
+        title: view.title,
+        rect: view.rect,
+        slots: view.slots,
+        mouse: view.mouse,
+        partial_tick: view.partial_tick,
+        regions: &[],
+    })
 }

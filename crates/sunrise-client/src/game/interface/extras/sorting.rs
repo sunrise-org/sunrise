@@ -11,7 +11,6 @@ use sunrise_client::{
     items::ItemStack,
     keybinds,
     menu::Input,
-    stations::hover_name,
 };
 use winit::{event::MouseButton, keyboard::KeyCode};
 
@@ -49,7 +48,7 @@ impl Game<'_> {
         let container: Vec<usize> = self
             .slots()
             .into_iter()
-            .filter(|s| (300..500).contains(s))
+            .filter(|&s| crate::game::inventory_slots::container_slot_index(s).is_some())
             .collect();
         if chest_like && !container.is_empty() {
             buttons.push(((160.0, 5.0), container));
@@ -142,7 +141,7 @@ impl Game<'_> {
         let clicks = {
             let rank = |s: &ItemStack| {
                 let order = Creative::order_of(&order, s).unwrap_or(usize::MAX);
-                (order, hover_name(&self.pack.names, s))
+                (order, self.stack_hover_name(s))
             };
             let max = |s: &ItemStack| self.max_stack(s);
             inv_sort::plan(&views, &rank, &max)

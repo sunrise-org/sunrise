@@ -7,7 +7,7 @@ use super::{
     },
     lan::LanSettings,
     lan_screen::Snapshot,
-    memory::ServerSide,
+    memory::{ServerMemoryRequest, ServerSide},
     mods::ModsReload,
 };
 use serde_json::{Value, json};
@@ -117,8 +117,10 @@ pub(super) enum ControlRequest {
         words: Vec<String>,
         reply: Reply<Result<Option<Value>, String>>,
     },
-    /// The memory report: the server's own parts.
+    /// The explicit memory report: the server's own parts.
     ServerSide(Reply<ServerSide>),
+    /// A profiling sample, delivered directly to the worker while it is wanted.
+    MemorySample(ServerMemoryRequest),
     /// `lan op NAME LEVEL`: whether a guest of that name was found.
     SetOp {
         name: String,
@@ -253,6 +255,7 @@ impl Game<'_> {
             ControlRequest::ServerSide(reply) => {
                 let _ = reply.send(self.server_side());
             }
+            ControlRequest::MemorySample(request) => request.collect(|| self.server_side()),
             ControlRequest::SetOp { name, level, reply } => {
                 let _ = reply.send(self.lan_set_op(&name, level));
             }
@@ -277,7 +280,7 @@ impl Game<'_> {
                     &self.level.enabled_features,
                 )));
             self.restore_native_commands();
-            self.resend_commands_filtered();
+            self.send_native_command_report(true);
         }
     }
 }

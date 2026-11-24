@@ -1,5 +1,4 @@
 //! The `living_entity_use_item_tick` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0132
 
 pub trait Hooks {
     /// Each living tick that `entity` may still use `stack` in `hand`.
@@ -23,11 +22,19 @@ pub trait Hooks {
     /// the world only on the server, not on a server's client. Runs every tick
     /// of every use; check the item first.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_living_entity_use_item_tick",
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
         neoforge = "LivingEntityUseItemEvent.Tick",
         cancellable = true
     )]
-    fn living_entity_use_item_tick();
+    fn living_entity_use_item_tick(
+        stack: &ItemStack,
+        entity: Option<i32>,
+        hand: Hand,
+        duration: &mut i32,
+        canceled: &mut bool,
+    );
 }

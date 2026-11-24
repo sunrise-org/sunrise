@@ -1,7 +1,8 @@
-//! What `ItemModel.update` reads besides the stack (`item_model_update`): the living entity holding
-//! the item and the level it is drawn in, as plain values. Absence stays `None`: an item in a
-//! screen has no owner, and one drawn outside a world has no level.
-use crate::{GlobalPos, Identifier};
+//! What item model providers (`register_item_models`, `register_range_select_item_model_property`,
+//! `register_select_item_model_property`) read besides the stack: display context, living entity
+//! holding the item, client level, and draw seed. Absence stays `None`: an item in a screen has
+//! no owner, and one drawn outside a world has no level.
+use crate::{GlobalPos, Identifier, ItemDisplayContext};
 
 /// The living entity holding the item (`ItemOwner`), as the item model reads it.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +62,41 @@ pub struct ItemModelLevel {
     pub runs_normally: bool,
 }
 
+/// The surroundings an item model reads besides the stack (`ItemModel.update`,
+/// `RangeSelectItemModelProperty.get`, `SelectItemModelProperty.get`): display context, living
+/// holder, client level, and draw seed.
+#[derive(Clone, Debug, PartialEq)]
+// no wire: in-process draw context passed to bound item model providers.
+#[non_exhaustive]
+pub struct ItemModelContext {
+    /// Where the item is drawn (a screen, a hand, the ground, a frame, the head).
+    pub display: ItemDisplayContext,
+    /// The living entity holding the item (`None` in a screen with no holder).
+    pub owner: Option<ItemModelOwner>,
+    /// The client level the item is drawn in (`None` outside a world).
+    pub level: Option<ItemModelLevel>,
+    /// The draw's random seed.
+    pub seed: i32,
+}
+
+impl ItemModelContext {
+    // hidden: the game supplies this read-only callback input
+    #[doc(hidden)]
+    pub fn new(
+        display: ItemDisplayContext,
+        owner: Option<ItemModelOwner>,
+        level: Option<ItemModelLevel>,
+        seed: i32,
+    ) -> Self {
+        Self {
+            display,
+            owner,
+            level,
+            seed,
+        }
+    }
+}
+
 /// Whose display transform a layer of a model node draws under (`ItemTransform` of
 /// `ItemTransforms`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,8 +111,8 @@ pub enum ItemTransformMode {
     None,
 }
 
-/// A model `item_model_update` answers: one of the node's declared `models`, and whose display
-/// transform it draws under.
+/// A model a bound item model provider answers (`register_item_models`): one of the node's
+/// declared `models`, and whose display transform it draws under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]

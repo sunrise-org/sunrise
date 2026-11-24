@@ -65,6 +65,32 @@ fn network_quota_counts_heap_not_wire_bytes() {
 }
 
 #[test]
+fn modified_utf8_keys_charge_decoded_units_and_report_malformed_offsets() {
+    // Nine key units precede an accepted overlong encoding. The value has a lone surrogate.
+    let mut bytes = vec![10, 8, 0, 11];
+    bytes.extend(b"abcdefghi");
+    bytes.extend([0xc1, 0xaa, 0, 4, 0xed, 0xa0, 0x80, b'b', 0]);
+    let tag = Tag::compound([(
+        "abcdefghij",
+        Tag::String(JavaString(vec![0xd800, u16::from(b'b')])),
+    )]);
+    // 48 compound + (28 + 20) key + 36 entry + (36 + 4) string.
+    let quota = 172;
+    assert_eq!(
+        Tag::from_network_bytes(&bytes, Some(quota)).unwrap(),
+        (tag, bytes.len())
+    );
+    assert!(Tag::from_network_bytes(&bytes, Some(quota - 1)).is_err());
+    bytes[14] = b'j';
+    assert_eq!(
+        Tag::from_network_bytes(&bytes, Some(quota))
+            .unwrap_err()
+            .offset,
+        15
+    );
+}
+
+#[test]
 fn network_depth_512_and_malformed_inputs() {
     for compound in [false, true] {
         let mut tag = Tag::Int(1);
@@ -149,4 +175,41 @@ fn network_all_variants_and_java_strings_reuse_engine_codec() {
             .to_network_bytes()
             .is_err()
     );
+}
+
+/// The quota measured from the tree is the quota the reader charges for its bytes: vanilla's 325
+/// above, and the same refusal point for lists (mixed ones are written wrapped) and arrays.
+#[test]
+fn heap_measured_from_the_tree_matches_the_reader() {
+    let tag = Tag::compound([
+        ("a", Tag::Byte(1)),
+        ("b", Tag::String("x".into())),
+        ("c", Tag::IntArray(vec![1, 2])),
+    ]);
+    assert!(network_heap_within(&tag, 325).is_ok());
+    assert!(network_heap_within(&tag, 324).is_err());
+    let trees = [
+        Tag::compound([(
+            "mixed",
+            Tag::List(vec![Tag::Int(1), Tag::String("y".into()), Tag::Byte(2)]),
+        )]),
+        Tag::compound([
+            ("longs", Tag::LongArray(vec![1, 2, 3])),
+            ("bytes", Tag::ByteArray(vec![1, 2, 3])),
+            (
+                "nested",
+                Tag::List(vec![Tag::compound([("k", Tag::Double(0))]); 2]),
+            ),
+        ]),
+    ];
+    for tree in trees {
+        let bytes = tree.to_network_bytes().unwrap();
+        for quota in 0..600 {
+            assert_eq!(
+                network_heap_within(&tree, quota).is_ok(),
+                Tag::from_network_bytes(&bytes, Some(quota)).is_ok(),
+                "quota {quota}"
+            );
+        }
+    }
 }

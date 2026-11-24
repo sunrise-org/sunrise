@@ -13,6 +13,8 @@ so that player data exists. The saved world is kept in datafix/worlds/VERSION in
 import argparse
 import hashlib
 import json
+import math
+import os
 import queue
 import re
 import shutil
@@ -20,6 +22,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -63,32 +66,47 @@ VARIANTS = {
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 LOCK = json.loads((ROOT / 'research-lock.json').read_text())['java_runtimes']
 BOT = 'Upgrader'
+# Versions whose default world also gets every block state the server can save, on a grid beside the scene.
+STATE_GRID = {'1.13.2'}
 UUID_BASE = 0x6000
+
+
+def fetch(path, url, sha1, what):
+    """Download `url` to `path`, checked against `sha1`. It is written beside `path` and renamed into place, so a
+    write cut short (a full disk) never leaves a file that looks complete."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = urllib.request.urlopen(url).read()
+    if hashlib.sha1(data).hexdigest() != sha1:
+        sys.exit(f'{what}: checksum mismatch')
+    partial = tempfile.NamedTemporaryFile(dir=path.parent, suffix='.part', delete=False)
+    try:
+        with partial:
+            partial.write(data)
+        os.replace(partial.name, path)
+    finally:
+        Path(partial.name).unlink(missing_ok=True)
 
 
 def version_meta(version):
     path = LOCAL / 'servers' / version / 'version.json'
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        manifest = json.load(urllib.request.urlopen(MANIFEST))
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        # Missing, or unreadable from an older run's cut-short write: fetched again.
+        manifest_path = os.environ.get('SUNRISE_DATAFIX_MANIFEST')
+        manifest = json.loads(Path(manifest_path).read_text()) if manifest_path else json.load(urllib.request.urlopen(MANIFEST))
         entry = next(v for v in manifest['versions'] if v['id'] == version)
-        data = urllib.request.urlopen(entry['url']).read()
-        if hashlib.sha1(data).hexdigest() != entry['sha1']:
-            sys.exit(f'{version}: version metadata checksum mismatch')
-        path.write_bytes(data)
-    return json.loads(path.read_text())
+        fetch(path, entry['url'], entry['sha1'], f'{version}: version metadata')
+        return json.loads(path.read_text())
 
 
 def server_jar(version):
     """The server jar, its DataVersion (None before 1.9: no DataVersion) and protocol."""
     path = LOCAL / 'servers' / version / 'server.jar'
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        download = version_meta(version)['downloads']['server']
-        data = urllib.request.urlopen(download['url']).read()
-        if hashlib.sha1(data).hexdigest() != download['sha1']:
-            sys.exit(f'{version}: server.jar checksum mismatch')
-        path.write_bytes(data)
+    download = version_meta(version)['downloads']['server']
+    # A cached jar that fails its checksum (an empty or cut-short file from a failed run) is downloaded again.
+    if not path.exists() or hashlib.sha1(path.read_bytes()).hexdigest() != download['sha1']:
+        fetch(path, download['url'], download['sha1'], f'{version}: server.jar')
     jar = zipfile.ZipFile(path)
     if 'version.json' in jar.namelist():
         info = json.loads(jar.read('version.json'))
@@ -212,6 +230,7 @@ class Server:
             self.process.wait(120)
         except Exception:
             self.process.kill()
+            self.process.wait()   # the world folder and port are reused only once the process is gone
 
 
 def failed(lines):
@@ -349,7 +368,45 @@ def uuid_fields(data_version, i):
     return f'UUIDMost:{UUID_BASE << 32}L,UUIDLeast:{i + 1}L'
 
 
-def build_scene(server, run, Bot, port, protocol, props, era, data_version):
+def block_states(jar, java_exe):
+    """Every block state of a server jar, as setblock arguments, from the jar's own data generator report."""
+    with tempfile.TemporaryDirectory() as scratch:   # the generator writes its own logs/ into its working folder
+        subprocess.run([java_exe, '-cp', str(jar), 'net.minecraft.data.Main', '--reports', '--output', 'out'],
+                       cwd=scratch, check=True, stderr=subprocess.STDOUT)
+        report = json.loads((Path(scratch) / 'out' / 'reports' / 'blocks.json').read_text())
+    states = []
+    for block, info in report.items():
+        # moving_piston's block entity is never made by the block itself, and the server then fails to save its
+        # chunk (a null TileEntities entry), so it is the one state left out.
+        if block == 'minecraft:moving_piston':
+            continue
+        for state in info['states']:
+            props = state.get('properties')
+            states.append(block + ('[' + ','.join(f'{k}={v}' for k, v in props.items()) + ']' if props else ''))
+    return states
+
+
+def place_states(run, states):
+    """One block state at each odd x and z of a grid east of the scene, as vanilla's debug world lays them out
+    (DebugLevelSource.getBlockStateFor), on a stone floor and between barriers so fluids stay in their cell.
+    Unlike the debug world this world ticks: random ticks and fire spread are turned off, but scheduled ticks still
+    run, so a few states (flowing fluids with no source, unsupported or unpowered redstone) may settle before the
+    save; the harness upgrades whatever was saved."""
+    run('gamerule randomTickSpeed 0')
+    run('gamerule doFireTick false')
+    width = 1 + math.isqrt(len(states) - 1)   # DebugLevelSource.GRID_WIDTH: ceil(sqrt(state count))
+    x0, side = 256, 2 * width + 1
+    run(f'forceload add {x0} 0 {x0 + side} {side}')
+    for z in range(0, side + 1, 64):   # a fill changes at most 32,768 blocks
+        z1 = min(z + 63, side)
+        run(f'fill {x0} 69 {z} {x0 + side} 69 {z1} minecraft:stone')
+        run(f'fill {x0} 70 {z} {x0 + side} 70 {z1} minecraft:barrier')
+    for start in range(0, len(states), 500):
+        run('\n'.join(f'setblock {x0 + 1 + 2 * (i % width)} 70 {1 + 2 * (i // width)} {state}'
+                       for i, state in enumerate(states[start:start + 500], start)))
+
+
+def build_scene(server, run, Bot, port, protocol, props, era, data_version, states=()):
     """The scene of the generic generator; returns the bot that stays joined."""
     if not props:  # variants only differ in their world type
         run('forceload add -48 -48 79 79')
@@ -364,6 +421,8 @@ def build_scene(server, run, Bot, port, protocol, props, era, data_version):
             run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
         for i, block in enumerate(scene.blocks(data_version)):
             run(f'setblock {1 + 3 * (i % 15)} 100 {19 + 3 * (i // 15)} minecraft:{block}')
+        if states:
+            place_states(run, states)
     if not props:
         run('setworldspawn 20 101 20')
     bot = Bot(port, protocol, BOT)
@@ -391,7 +450,23 @@ def build(name, force=False):
     work = LOCAL / 'gen' / name
     shutil.rmtree(work, ignore_errors=True)
     port = lab.free_port()
+    states = block_states(jar, java(version)) if version in STATE_GRID and not props else ()
     server = Server(work, jar, port, scene.experiments(data_version), java(version), props)
+    if props and props.get('level-type') == 'debug_all_block_states':
+        # The debug world's grid (DebugLevelSource.getBlockStateFor: every block state at odd x and z from 1 to
+        # 2 * GRID_WIDTH + 1, 187 for 1.13.2's 8,599 states) holds the twelve moving_piston states. Their block has a
+        # block entity it cannot make on its own, so 1.13.2 keeps each of those positions with no data and fails to
+        # save its chunk (ChunkSerializer adds a null TileEntities entry), and a debug world refuses every block
+        # change, so the grid cannot be cleared. The world is wanted for its level.dat alone: its spawn moves far from
+        # the grid, the chunks of this first start are dropped, and the world is made again from there, so its saved
+        # chunks never hold the grid.
+        out = server.run('setworldspawn -4000 70 -4000')
+        if not any('Set the world spawn point' in line for line in out):
+            server.stop()
+            raise RuntimeError(f'{name}: setworldspawn was refused, so the grid would be saved: {out}')
+        server.stop()
+        shutil.rmtree(work / 'world' / 'region')
+        server = Server(work, jar, port, scene.experiments(data_version), java(version), props)
     problems = []
 
     def run(command):
@@ -404,7 +479,7 @@ def build(name, force=False):
     if data_version < 1631 and not props:   # 1.12 and older: tools/datafix_scene_12.py builds the scene and saves the world itself
         bot = scene12.populate(server, Bot, port, protocol, BOT, problems)
     else:
-        bot = build_scene(server, run, Bot, port, protocol, props, era, data_version)
+        bot = build_scene(server, run, Bot, port, protocol, props, era, data_version, states)
     bot.leave()
     time.sleep(2)
     server.stop()

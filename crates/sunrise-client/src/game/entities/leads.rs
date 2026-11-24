@@ -8,22 +8,13 @@ use sunrise_client::actions::Action;
 use sunrise_client::{
     items::ItemStack,
     mesher::Vertex,
-    mobs::leash::{self, Holder, Pending},
+    mobs::leash::{self, Holder},
     pose::Pose,
 };
 use sunrise_core::nbt::Tag;
-
-/// Natural fence knot: the fence is its authoritative position, not a render cache.
-/// Its JoinList carries the common residency binding and journal.
-pub(super) struct Knot {
-    /// Entity-owned registration metadata; content clones are detached.
-    pub(super) attachment_lifetime: sunrise_mod_runtime::attachments::AttachmentLifetime,
-    pub id: u32,
-    pub join: sunrise_client::join_seq::JoinSeq,
-    pub fence: [i32; 3],
-}
-sunrise_client::impl_joined!(Knot);
-sunrise_mod_runtime::impl_attachment_lifetime!(Knot);
+pub(super) use sunrise_gameplay::leash_knot::{
+    Knot, held_by_acting_player, resolve_pending_leash, write_mob_leash_tag,
+};
 
 /// The item context of a leash success (`InteractionResult.Success`): tying
 /// held mobs to this one and the holder's detach are `withoutItem`, so item
@@ -70,77 +61,6 @@ struct Rope {
     offset: [f64; 3],
     /// `getQuadLeashOffsets`, when the entity supports a quad lead.
     quad: Option<[[f64; 3]; 4]>,
-}
-/// Whether a mob's lead is held by `acting` (`getLeashHolder() == player`).
-fn held_by_acting_player(
-    leash: Option<Holder>,
-    leash_player: Option<[i32; 4]>,
-    acting: [i32; 4],
-) -> bool {
-    leash == Some(Holder::Player) && leash_player.is_none_or(|p| p == acting)
-}
-
-/// Resolve a `Pending` leash holder loaded from NBT.
-fn resolve_pending_leash(
-    pending: Pending,
-    player_uuid: [i32; 4],
-    owner_uuid: Option<[i32; 4]>,
-    is_guest: impl FnOnce([i32; 4]) -> bool,
-    mob_by_uuid: impl FnOnce([i32; 4]) -> Option<u32>,
-    boat_by_uuid: impl FnOnce([i32; 4]) -> Option<u32>,
-    knot_by_uuid: impl FnOnce([i32; 4]) -> Option<[i32; 3]>,
-) -> Option<(Holder, Option<[i32; 4]>)> {
-    match pending {
-        Pending::Knot(p) => Some((Holder::Knot(p), None)),
-        Pending::Uuid(u) if is_guest(u) || owner_uuid == Some(u) => Some((Holder::Player, Some(u))),
-        // Old integrated worlds wrote offline_uuid("Player") for every holder.
-        // Only that known sentinel can be mapped to the integrated owner; a
-        // different level player UUID may belong to somebody else. Old guest
-        // leashes lost their real UUID, so this owner recovery is best effort.
-        Pending::Uuid(u)
-            if u == player_uuid
-                && u == sunrise_client::lan::playerdata::uuid_ints(
-                    sunrise_protocol::crypto::offline_uuid("Player"),
-                )
-                && owner_uuid.is_some() =>
-        {
-            Some((Holder::Player, owner_uuid))
-        }
-        // `Leashable.restoreLeashFromSave`: `ServerLevel.getEntity(uuid)`, a
-        // leash knot included.
-        Pending::Uuid(u) => mob_by_uuid(u)
-            .map(|id| (Holder::Mob(id), None))
-            .or_else(|| boat_by_uuid(u).map(|id| (Holder::Boat(id), None)))
-            .or_else(|| knot_by_uuid(u).map(|p| (Holder::Knot(p), None))),
-    }
-}
-
-/// Write a mob's `leash` NBT entry into `tag`.
-fn write_mob_leash_tag(
-    tag: &mut Tag,
-    holder: Option<Holder>,
-    pending: Option<Pending>,
-    leash_player: Option<[i32; 4]>,
-    level_player_uuid: Option<[i32; 4]>,
-    mob_uuid: impl FnOnce(u32) -> [i32; 4],
-) {
-    let Tag::Compound(map) = tag else { return };
-    map.remove(&"leash".into());
-    let uuid = match (holder, pending) {
-        (Some(Holder::Player), _) => leash_player.or(level_player_uuid).or(Some([0, 0, 0, 1])),
-        (Some(Holder::Mob(id) | Holder::Boat(id)), _) => Some(mob_uuid(id)),
-        (_, Some(Pending::Uuid(u))) => Some(u),
-        _ => None,
-    };
-    let value = match (holder, pending) {
-        (Some(h), _) => leash::to_nbt(h, uuid),
-        (None, Some(Pending::Knot(p))) => leash::to_nbt(Holder::Knot(p), None),
-        (None, Some(Pending::Uuid(u))) => leash::to_nbt(Holder::Player, Some(u)),
-        _ => None,
-    };
-    if let Some(v) = value {
-        map.insert("leash".into(), v);
-    }
 }
 
 impl Game<'_> {
@@ -200,9 +120,9 @@ impl Game<'_> {
     /// shared `Entity.id` counter) and UUID, whether or not anyone tracks
     /// it. A fence that already has one keeps it. Call
     /// [`Self::forget_untied_knots`] before the tie.
-    pub(super) fn tie_knot(&mut self, fence: [i32; 3]) {
-        if self.knot_ids.contains_key(&fence) {
-            return;
+    pub(super) fn tie_knot(&mut self, fence: [i32; 3]) -> u32 {
+        if let Some(&id) = self.knot_ids.get(&fence) {
+            return id;
         }
         self.next_entity += 1;
         let id = self.next_entity;
@@ -214,6 +134,7 @@ impl Game<'_> {
             fence,
         });
         self.uuid_for(id);
+        id
     }
     /// The authoritative fence of an active natural knot, until a last-holder
     /// notification or the tracking cleanup retires its physical owner.
@@ -232,6 +153,49 @@ impl Game<'_> {
         let index = self.resident_entities.knots.locate(location.join)?;
         Some(self.resident_entities.knots[index].fence)
     }
+    /// `BlockAttachedEntity.kill`: retire a natural knot before notifying its holders.
+    /// Unlike vanilla's object references, this level's leash links name the fence.
+    pub(super) fn kill_natural_knot(&mut self, id: u32) -> bool {
+        let Some(fence) = self.natural_knot(id) else {
+            return false;
+        };
+        let holder = Some(Holder::Knot(fence));
+        let mobs: Vec<_> = self
+            .mobs
+            .iter()
+            .filter(|mob| !mob.removed && mob.extra.leash == holder)
+            .map(|mob| mob.id)
+            .collect();
+        let boats: Vec<_> = self
+            .boats
+            .iter()
+            .filter(|boat| boat.leash == holder)
+            .map(|boat| boat.id)
+            .collect();
+        self.knot_ids.remove(&fence);
+        self.resident_entities.knots.retain(|knot| knot.id != id);
+        for id in mobs {
+            if self
+                .mobs
+                .iter()
+                .any(|mob| mob.id == id && mob.extra.leash == holder)
+            {
+                self.detach_leash(Target::Mob(id), true);
+            }
+        }
+        for id in boats {
+            if self
+                .boats
+                .iter()
+                .any(|boat| boat.id == id && boat.leash == holder)
+            {
+                self.detach_leash(Target::Boat(id), true);
+            }
+        }
+        self.native_entity_left(id);
+        true
+    }
+
     /// Actual natural knot owners, without allocating or inferring membership from leashes.
     pub(super) fn natural_knot_id_iter(&self) -> impl Iterator<Item = u32> + '_ {
         self.resident_entities.knots.iter().map(|knot| knot.id)
@@ -278,8 +242,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn lead_sound(&mut self, sound: &str, at: [f64; 3]) {
-        self.audio
-            .play(&format!("minecraft:item.lead.{sound}"), Some(at), 1.0, 1.0);
+        self.play_audio(&format!("minecraft:item.lead.{sound}"), Some(at), 1.0, 1.0);
     }
     /// `Leashable.canHaveALeashAttachedTo` for the mob at `index` and a
     /// holder whose box centre is `center`: within the species' snapping
@@ -305,10 +268,15 @@ impl Game<'_> {
         to: Holder,
         skip: Option<usize>,
     ) -> bool {
+        let knot_id = match to {
+            Holder::Knot(fence) => self.knot_ids.get(&fence).copied(),
+            _ => None,
+        };
         let mut any = false;
         for j in self.player_leashed(center) {
             if Some(j) != skip && self.can_attach_lead(j, center) {
                 self.mobs[j].extra.leash = Some(to);
+                self.mobs[j].extra.leash_knot_id = knot_id;
                 any = true;
             }
         }
@@ -400,6 +368,10 @@ impl Game<'_> {
         holder: Holder,
         player: Option<[i32; 4]>,
     ) -> bool {
+        let knot_id = match holder {
+            Holder::Knot(fence) => self.knot_ids.get(&fence).copied(),
+            _ => None,
+        };
         match target {
             Target::Mob(id) => {
                 let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
@@ -407,6 +379,7 @@ impl Game<'_> {
                 };
                 let old = m.extra.leash;
                 m.extra.leash = Some(holder);
+                m.extra.leash_knot_id = knot_id;
                 m.extra.leash_player = player;
                 m.extra.leash_pending = None;
                 if old != Some(holder) {
@@ -421,6 +394,7 @@ impl Game<'_> {
                 let old = self.boats[i].leash;
                 self.boats.update(i, |b| {
                     b.leash = Some(holder);
+                    b.leash_knot_id = knot_id;
                     b.leash_player = player;
                     b.leash_pending = None;
                 });
@@ -519,9 +493,66 @@ impl Game<'_> {
             }
         }
     }
+    /// `LeashFenceKnotEntity.hurtServer` -> `kill` and `dropItem` for a natural or explicit knot.
+    pub(super) fn break_leash_knot(&mut self, id: u32, source: Option<Target>) -> bool {
+        if let Some(fence) = self.natural_knot(id) {
+            let at = leash::knot_state(fence).position.components();
+            self.knot_ids.remove(&fence);
+            self.resident_entities.knots.retain(|k| k.id != id);
+            if !self.broken_knots.contains(&fence) {
+                self.broken_knots.push(fence);
+            }
+            self.entity_killed_event_by(at, source);
+            self.lead_sound("untied", at);
+            return true;
+        }
+        if let Some(i) = self
+            .others
+            .iter()
+            .position(|o| o.id == id && o.kind == "minecraft:leash_knot")
+        {
+            let knot = self.others.remove(i);
+            let at = knot.position.components();
+            self.entity_killed_event_by(at, source);
+            self.lead_sound("untied", at);
+            return true;
+        }
+        false
+    }
     /// Holders read from a save become real once the entity is found; a
     /// holder that never shows up drops the lead after 100 ticks.
     pub(super) fn tick_leads(&mut self) {
+        if !self.broken_knots.is_empty() {
+            let fences = std::mem::take(&mut self.broken_knots);
+            let drop = self
+                .ui
+                .rules
+                .bool_at(sunrise_client::gamerules::vanilla::ENTITY_DROPS);
+            for fence in fences {
+                let live_id = self.knot_ids.get(&fence).copied();
+                let mobs: Vec<u32> = self
+                    .mobs
+                    .iter()
+                    .filter(|m| {
+                        !m.removed
+                            && m.extra.leash == Some(Holder::Knot(fence))
+                            && (live_id.is_none() || m.extra.leash_knot_id != live_id)
+                    })
+                    .map(|m| m.id)
+                    .collect();
+                for mob_id in mobs {
+                    self.break_leash(mob_id, drop, false);
+                }
+                let boats: Vec<usize> = self
+                    .boats_on(Holder::Knot(fence))
+                    .into_iter()
+                    .filter(|&i| live_id.is_none() || self.boats[i].leash_knot_id != live_id)
+                    .collect();
+                for boat_idx in boats {
+                    self.release_stored_boat_leash(boat_idx, drop);
+                }
+            }
+        }
         // A corpse gone without dropping its lead takes its killer along.
         // Only this level's: the others' mobs aren't in place.
         if !self.lead_killers.is_empty() {
@@ -559,19 +590,26 @@ impl Game<'_> {
             if let Some((Holder::Knot(_), _)) = holder {
                 self.forget_untied_knots();
             }
-            let m = &mut self.mobs[i];
             if let Some((h, player)) = holder {
+                let knot_id = if let Holder::Knot(fence) = h {
+                    Some(self.tie_knot(fence))
+                } else {
+                    None
+                };
+                let m = &mut self.mobs[i];
                 if h == Holder::Player {
                     m.extra.leash_player = player;
                 }
                 m.extra.leash = Some(h);
+                m.extra.leash_knot_id = knot_id;
                 m.extra.leash_pending = None;
-                if let Holder::Knot(fence) = h {
-                    self.tie_knot(fence);
-                }
-            } else if m.age > 100 {
-                m.extra.leash_pending = None;
-                let at = [m.position.x, m.position.y, m.position.z];
+            } else if self.mobs[i].age > 100 {
+                self.mobs[i].extra.leash_pending = None;
+                let at = [
+                    self.mobs[i].position.x,
+                    self.mobs[i].position.y,
+                    self.mobs[i].position.z,
+                ];
                 self.drop_lead_item(at);
             }
         }
@@ -603,7 +641,7 @@ impl Game<'_> {
         index: usize,
         item: &str,
     ) -> Option<LeashInteraction> {
-        let sneaking = self.keys.held(Action::Sneak);
+        let sneaking = self.held_mapping(Action::Sneak);
         let id = self.mobs[index].id;
         let at = self.mobs[index].center();
         if !self.mobs[index].alive() {
@@ -624,7 +662,7 @@ impl Game<'_> {
                 return Some(LeashInteraction::WithoutItem);
             }
         }
-        if item == "minecraft:shears" {
+        if self.held_shears(super::item_abilities::ability::SHEARS_HARVEST) {
             let mut dropped = false;
             if self.mobs[index].extra.leash.is_some() {
                 self.break_leash_used(id, true);
@@ -645,8 +683,7 @@ impl Game<'_> {
             self.drop_boat_leashes(&boats);
             if dropped {
                 self.lead_game_event("minecraft:shear", at);
-                self.audio
-                    .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
+                self.play_audio("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
                 self.damage_held_tool();
                 return Some(LeashInteraction::WithItem);
             }
@@ -681,14 +718,7 @@ impl Game<'_> {
                 self.lead_sound("tied", at);
                 // `Player.interactOn` restores the count of a player with
                 // infinite materials (creative); others spend the lead.
-                if !self.creative
-                    && let Some(stack) = self.held_mut().as_mut()
-                {
-                    stack.count -= 1;
-                    if stack.count == 0 {
-                        *self.held_mut() = None;
-                    }
-                }
+                self.consume_held();
                 return Some(LeashInteraction::WithItem);
             }
         }
@@ -729,16 +759,15 @@ impl Game<'_> {
             .collect();
         let existing_boats = self.boats_on(Holder::Knot(knot_pos));
         let held_item = self.held().map(|s| s.item.to_string());
-        let sneaking = self.keys.held(Action::Sneak);
+        let sneaking = self.held_mapping(Action::Sneak);
         // Shears snip every lead on the knot.
-        if knot_hit && held_item.as_deref() == Some("minecraft:shears") {
+        if knot_hit && self.held_shears(super::item_abilities::ability::SHEARS_HARVEST) {
             for i in existing {
                 let id = self.mobs[i].id;
                 self.break_leash_used(id, true);
             }
             self.drop_boat_leashes(&existing_boats);
-            self.audio
-                .play("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
+            self.play_audio("minecraft:item.shears.snip", Some(at), 1.0, 1.0);
             self.damage_held_tool();
             return true;
         }
@@ -763,14 +792,24 @@ impl Game<'_> {
         }
         self.forget_untied_knots();
         let mut attached = self.tie_player_boats(center, Holder::Knot(knot_pos));
+        let mut attached_mobs = Vec::new();
         for j in in_hand {
             if self.can_attach_lead(j, center) {
                 self.mobs[j].extra.leash = Some(Holder::Knot(knot_pos));
+                attached_mobs.push(j);
                 attached = true;
             }
         }
         if attached {
-            self.tie_knot(knot_pos);
+            let knot_id = self.tie_knot(knot_pos);
+            for j in attached_mobs {
+                self.mobs[j].extra.leash_knot_id = Some(knot_id);
+            }
+            for i in self.boats_on(Holder::Knot(knot_pos)) {
+                if self.boats[i].leash_knot_id.is_none() {
+                    self.boats.update(i, |b| b.leash_knot_id = Some(knot_id));
+                }
+            }
         }
         if !attached && !sneaking && knot_hit {
             let player = self.player_center();
@@ -830,7 +869,7 @@ impl Game<'_> {
             if let Some(holder) = m.extra.leash {
                 // A mob a mod's pre hook canceled draws no lead (it is part of the mob's own
                 // render), but the fence knot it hangs from is an entity of its own.
-                if self.render_canceled(m.id) {
+                if self.render_canceled(m.id) || self.hides_as_camera(m.id) {
                     if let Holder::Knot(p) = holder
                         && !knots.contains(&p)
                     {
@@ -850,6 +889,14 @@ impl Game<'_> {
         }
         for b in &self.boats {
             if let Some(holder) = b.leash {
+                if self.hides_as_camera(b.id) {
+                    if let Holder::Knot(p) = holder
+                        && !knots.contains(&p)
+                    {
+                        knots.push(p);
+                    }
+                    continue;
+                }
                 ropes.push(Rope {
                     holder,
                     here: lerp3(b.previous, b.position),
@@ -1001,6 +1048,13 @@ impl Game<'_> {
             return;
         };
         for p in knots {
+            if self
+                .remote_knots
+                .iter()
+                .any(|(&id, &pos)| pos == p && self.hides_as_camera(id))
+            {
+                continue;
+            }
             let state = leash::knot_state(p);
             let at =
                 glam::DVec3::new(state.position.x, state.position.y, state.position.z) - camera;
@@ -1101,7 +1155,7 @@ impl Game<'_> {
             let v = glam::DVec3::new(0.22 * hand_dir, 0.2, -0.15);
             return pos + rot_y(x_rotated(v), -y_rot);
         }
-        let crouching = self.keys.held(Action::Sneak);
+        let crouching = self.held_mapping(Action::Sneak);
         let v = glam::DVec3::new(
             0.22 * hand_dir,
             f64::from(p.dimensions.height) - 1.0,
@@ -1114,10 +1168,11 @@ impl Game<'_> {
 #[cfg(test)]
 mod rope_hold_tests {
     use super::{
-        Holder, Pending, Tag, held_by_acting_player, leash, resolve_pending_leash,
-        rope_hold_angles, write_mob_leash_tag,
+        Holder, Tag, held_by_acting_player, leash, resolve_pending_leash, rope_hold_angles,
+        write_mob_leash_tag,
     };
     use sunrise_client::lan::playerdata::uuid_ints;
+    use sunrise_client::mobs::leash::Pending;
     use sunrise_protocol::crypto::offline_uuid;
 
     #[test]

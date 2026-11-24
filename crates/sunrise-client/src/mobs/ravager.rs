@@ -109,7 +109,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         base + (max - base) * 0.1
     };
     super::finalize::set_base(m, super::finalize::Attr::MovementSpeed, speed);
-    if m.horizontal_collision && w.can_grief(m.id) {
+    if m.ground.horizontal_collision && w.can_grief(m.id) {
         let b = m
             .bounds()
             .inflate(sunrise_core::geometry::Vec3::new(0.2, 0.2, 0.2));
@@ -131,7 +131,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 }
             }
         }
-        if m.on_ground {
+        if m.ground.on_ground {
             if !destroyed {
                 m.ai.jumping = true;
             } else if w.asks_living_destroy_block {
@@ -256,7 +256,7 @@ fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && p.alive
         && p.bounds.intersects(area)
     {
-        events.push(w.route_player_event(MobEvent::AttackPlayer(6.0, from)));
+        events.push(w.route_player_event(MobEvent::AttackPlayer(6.0, from, None)));
         events.push(w.route_player_event(MobEvent::Push {
             target: Who::Player,
             velocity: fling(p.position),
@@ -371,8 +371,8 @@ mod tests {
                 Vec3::new(0.5, 64.0, 0.5),
                 0.0,
             );
-            mob.horizontal_collision = true;
-            mob.on_ground = true;
+            mob.ground.horizontal_collision = true;
+            mob.ground.on_ground = true;
             let mut events = Vec::new();
             ai_step(&mut mob, &world, &mut events);
             assert!(mob.ai.jumping);
@@ -519,8 +519,8 @@ mod tests {
                     Vec3::new(0.5, 64.0, 0.5),
                     0.0,
                 );
-                mob.horizontal_collision = true;
-                mob.on_ground = true;
+                mob.ground.horizontal_collision = true;
+                mob.ground.on_ground = true;
                 let mut events = Vec::new();
                 ai_step(&mut mob, &world, &mut events);
                 assert!(!mob.ai.jumping);
@@ -537,8 +537,8 @@ mod tests {
                     Vec3::new(0.5, 64.0, 0.5),
                     0.0,
                 );
-                mob.horizontal_collision = true;
-                mob.on_ground = true;
+                mob.ground.horizontal_collision = true;
+                mob.ground.on_ground = true;
                 let mut events = Vec::new();
                 ai_step(&mut mob, &world, &mut events);
                 assert!(

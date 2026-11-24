@@ -16,8 +16,7 @@ fn texel(x: u32, y: u32) -> [u8; 4] {
 #[ignore = "daily"]
 fn a_pack_reads_paged_maps_at_the_colours_coordinates() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let instance = crate::gfx::test_gpu::instance();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let adapter = crate::gfx::test_gpu::adapter().unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_limits: adapter.limits(),
         ..Default::default()
@@ -113,6 +112,7 @@ void main() {
             material_maps: false,
             ids: None,
             cull: false,
+            pages: false,
         }),
         block_ids: &[],
         celestial: None,
@@ -139,7 +139,13 @@ void main() {
     pass.paged = true;
     post.set_paged_maps([Some(map), None]);
     post.copied |= 1;
-    post.resize(&device, [8, 1]);
+    post.resize(
+        &device,
+        [8, 1],
+        &std::sync::atomic::AtomicBool::new(false),
+        super::super::in_flight::poll_live,
+    )
+    .unwrap();
     let read = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 256,

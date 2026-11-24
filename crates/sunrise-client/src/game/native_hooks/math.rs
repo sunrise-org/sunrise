@@ -6,6 +6,10 @@ impl Game<'_> {
     pub(in crate::game) fn math_profile(&self) -> mod_api::MathProfile {
         selected_profile()
     }
+    /// The profile jmath's operations dispatch on before a `Game` instance exists.
+    pub(in crate::game) fn startup_math_profile() -> mod_api::MathProfile {
+        selected_profile()
+    }
 }
 
 fn selected_profile() -> mod_api::MathProfile {

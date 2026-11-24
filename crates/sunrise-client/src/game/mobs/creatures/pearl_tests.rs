@@ -24,8 +24,10 @@ fn a_pearl_feels_the_water_its_box_touches() {
     let motion = sunrise_client::motion::MotionResources::load(&root, &assets).unwrap();
     let data = sunrise_client::mobs::MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        &facts,
-    );
+        facts.states.len(),
+        false,
+    )
+    .unwrap();
     let biomes = sunrise_client::biome::Biomes::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
     )
@@ -55,6 +57,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
     }
     let lid_openers = std::collections::HashMap::new();
     let w = MobWorld {
+        side: sunrise_client::motion::dry_side(),
         mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
         goal_host: None,
         live_mobs: None,
@@ -78,6 +81,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
         nearest_player: None,
         others: &[],
         dragon: None,
+        armor_stands: &[],
         leash_boats: &[],
         who_lookup: None,
         others_grid: None,
@@ -98,6 +102,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
         biomes: &biomes,
         mob_griefing: true,
         universal_anger: false,
+        pvp: false,
         mob_drops: true,
         max_entity_cramming: 24,
         difficulty: spawning::LocalDifficulty::new(2, 1000, 0, 0.0),
@@ -113,6 +118,7 @@ fn a_pearl_feels_the_water_its_box_touches() {
         asks_baby_spawn: false,
         border: None,
         section_writer: None,
+        trading_players: None,
     };
     let pw = ProjWorld {
         w: &w,

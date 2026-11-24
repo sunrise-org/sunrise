@@ -1,13 +1,21 @@
 //! A journal-fed index. Every hit is checked against its named storage owner;
 //! there is no owner reconciliation scan or reference back to the game.
 use super::{
-    Change, DimensionKey, Event, Identity, IdentityDetails, Journal, Owner, SavedUuidUpdate,
+    Change, DimensionKey, Event, Identity, IdentityDetails, Journal, Kind, Owner, SavedUuidUpdate,
 };
 
+#[path = "table/spatial.rs"]
+mod spatial;
 #[path = "table/uuid_index.rs"]
 mod uuid_index;
 use crate::join_seq::JoinSeq;
-use std::num::NonZeroU32;
+use spatial::SpatialIndex;
+pub use spatial::{SectionCandidate, SectionKey, SectionSearch};
+use std::{
+    collections::{BTreeSet, hash_map::Entry},
+    num::NonZeroU32,
+    ops::Bound::{Excluded, Unbounded},
+};
 use sunrise_core::fast_hash::FxHashMap;
 use uuid_index::UuidIndex;
 
@@ -47,7 +55,15 @@ struct ResidentRow {
     location: Location,
     details: IdentityDetails,
     admission: JoinSeq,
+    /// When it entered the section it is in: its admission (it joins the
+    /// section it is filed in), or its last crossing (`Callback.onMove` adds it
+    /// at the end of the section it entered).
+    entry: JoinSeq,
+    section: Option<SectionKey>,
 }
+
+// Lookup membership ordered by admission, not by current section entry.
+type LevelAdmissions = FxHashMap<DimensionKey, BTreeSet<(JoinSeq, NonZeroU32)>>;
 
 /// One game's index, shared by active and parked dimensions through the journal.
 /// Runtime ids are allocated by the game's one counter, not per dimension.
@@ -57,6 +73,8 @@ pub struct EntityTable {
     saved_uuid_updates: Vec<SavedUuidUpdate>,
     uuids: UuidIndex,
     rows: FxHashMap<NonZeroU32, ResidentRow>,
+    level_admissions: LevelAdmissions,
+    spatial: SpatialIndex,
     extracted: FxHashMap<NonZeroU32, Location>,
     lifted: FxHashMap<Owner, usize>,
 }
@@ -69,6 +87,8 @@ impl EntityTable {
             saved_uuid_updates: Vec::new(),
             uuids: UuidIndex::default(),
             rows: FxHashMap::default(),
+            level_admissions: FxHashMap::default(),
+            spatial: SpatialIndex::default(),
             extracted: FxHashMap::default(),
             lifted: FxHashMap::default(),
         }
@@ -122,7 +142,14 @@ impl EntityTable {
         {
             return EntityLookup::Taken;
         }
-        forget_row(&mut self.rows, &mut self.uuids, id, location);
+        forget_row(
+            &mut self.rows,
+            &mut self.uuids,
+            &mut self.level_admissions,
+            &mut self.spatial,
+            id,
+            location,
+        );
         forget(&mut self.extracted, id, location);
         EntityLookup::Missing
     }
@@ -143,15 +170,26 @@ impl EntityTable {
                 source: identity.source,
             };
             match event.change {
-                Change::Install(identity) | Change::PutBack(identity) => {
+                Change::Install(identity)
+                | Change::Spawned(identity)
+                | Change::PutBack(identity) => {
                     let location = location(identity);
+                    let old = self.rows.get(&identity.id).copied();
+                    // A new member joins the lookup now, or, given its id
+                    // after it spawned, when it joined its storage.
+                    let admission = old.map_or_else(
+                        || match event.change {
+                            Change::Spawned(_) => identity.join,
+                            _ => JoinSeq::next(),
+                        },
+                        |row| row.admission,
+                    );
                     let row = ResidentRow {
                         location,
                         details: identity.details,
-                        admission: self
-                            .rows
-                            .get(&identity.id)
-                            .map_or_else(JoinSeq::next, |row| row.admission),
+                        admission,
+                        entry: old.map_or(admission, |row| row.entry),
+                        section: old.and_then(|row| row.section),
                     };
                     if let Some(old) = self.rows.insert(identity.id, row) {
                         debug_assert_eq!(old.location, location, "duplicate loaded entity id");
@@ -161,12 +199,26 @@ impl EntityTable {
                         );
                     } else {
                         self.uuids.admit(identity.id, row);
+                        if location.owner.kind != Kind::DragonPart {
+                            self.level_admissions
+                                .entry(location.owner.dimension)
+                                .or_default()
+                                .insert((row.admission, identity.id));
+                            self.spatial.unfile(identity.id, row);
+                        }
                     }
                     self.extracted.remove(&identity.id);
                 }
                 Change::Remove(identity) => {
                     let location = location(identity);
-                    forget_row(&mut self.rows, &mut self.uuids, identity.id, location);
+                    forget_row(
+                        &mut self.rows,
+                        &mut self.uuids,
+                        &mut self.level_admissions,
+                        &mut self.spatial,
+                        identity.id,
+                        location,
+                    );
                     forget(&mut self.extracted, identity.id, location);
                 }
                 Change::Extract(identity) => {
@@ -256,29 +308,89 @@ impl EntityTable {
         self.uuids.key(id, row).map(|(_, uuid)| uuid)
     }
 
-    /// Candidates in lookup insertion order, independent of family and runtime id.
+    /// Copy the next candidate in lookup insertion order, starting at the first if `after`
+    /// is `None`. The cursor also works after the prior key has left the table.
     /// Extraction/restoration preserves order; removal and re-admission moves to the end.
     /// Dragon parts are not members of vanilla's entity lookup.
-    pub fn level_entities(&mut self, dimension: DimensionKey) -> Vec<u32> {
+    pub fn level_entity_candidate_after(
+        &mut self,
+        dimension: DimensionKey,
+        after: Option<(JoinSeq, NonZeroU32)>,
+    ) -> Option<(JoinSeq, NonZeroU32)> {
         self.drain();
-        let mut rows: Vec<_> = self
-            .rows
-            .iter()
-            .filter(|(_, row)| {
-                row.location.owner.dimension == dimension
-                    && row.location.owner.kind != super::Kind::DragonPart
-            })
-            .map(|(id, row)| (row.admission, id.get()))
-            .collect();
-        rows.sort_unstable_by_key(|(admission, _)| *admission);
-        rows.into_iter().map(|(_, id)| id).collect()
+        let admissions = self.level_admissions.get(&dimension)?;
+        match after {
+            Some(key) => admissions.range((Excluded(key), Unbounded)).next(),
+            None => admissions.first(),
+        }
+        .copied()
     }
 
-    /// Each admitted id's lookup admission: what an `EntitySection` keeps its
-    /// entities in, so a chunk saved in this order loads back in it.
+    /// Each admitted id's lookup admission, for callers that answer in lookup
+    /// order (equip answers).
     pub fn admission_order(&mut self) -> impl Fn(u32) -> Option<JoinSeq> + '_ {
         self.drain();
         |id| Some(self.rows.get(&NonZeroU32::new(id)?)?.admission)
+    }
+
+    /// `Callback.onMove`: member `id` crossed into another section, so it is
+    /// at the end of that section now; its lookup place does not change. The
+    /// section authority calls this at the movement boundary, as each move
+    /// happens, so the order of the calls is the order of the moves: a move out
+    /// and back is two entries, and a passenger moved after its vehicle enters
+    /// after it.
+    pub fn entered_section(&mut self, id: u32, at: [f64; 3]) {
+        self.drain();
+        if let Some(id) = NonZeroU32::new(id)
+            && let Some(row) = self.rows.get_mut(&id)
+        {
+            let old = (row.entry, id);
+            row.entry = JoinSeq::next();
+            if row.location.owner.kind != Kind::DragonPart {
+                self.spatial.cross(id, row, old, at);
+            }
+        }
+    }
+
+    /// Whether some row of `dimension` waits for a query to resolve its position.
+    pub fn has_unfiled_section_members(&mut self, dimension: DimensionKey) -> bool {
+        self.drain();
+        self.spatial.has_unfiled(dimension)
+    }
+
+    /// Copy an unfiled ID; source position resolution must happen outside the table borrow.
+    pub fn unfiled_section_candidate_after(
+        &mut self,
+        dimension: DimensionKey,
+        after: Option<NonZeroU32>,
+    ) -> Option<NonZeroU32> {
+        self.drain();
+        self.spatial.unfiled_after(dimension, after)
+    }
+
+    /// File a still-resident unfiled row at its resolved live position.
+    pub fn file_section_member(&mut self, id: NonZeroU32, position: [f64; 3]) {
+        if let Some(row) = self.rows.get_mut(&id) {
+            self.spatial.file(id, row, position);
+        }
+    }
+
+    /// Copy one ordinary candidate in section/entry order without lending the bucket.
+    pub fn level_section_candidate_after(
+        &self,
+        dimension: DimensionKey,
+        search: SectionSearch,
+        after: Option<SectionCandidate>,
+    ) -> Option<SectionCandidate> {
+        self.spatial.candidate_after(dimension, search, after)
+    }
+
+    /// Each admitted id's place in its section (`EntitySection` keeps its
+    /// entities in the order they entered it), so a chunk saved section by
+    /// section in this order loads back in it.
+    pub fn section_entry_order(&mut self) -> impl Fn(u32) -> Option<JoinSeq> + '_ {
+        self.drain();
+        |id| Some(self.rows.get(&NonZeroU32::new(id)?)?.entry)
     }
 
     /// Clone the current producer authority when binding storage.
@@ -292,6 +404,8 @@ impl EntityTable {
         self.saved_uuid_updates.clear();
         self.uuids = UuidIndex::default();
         self.rows.clear();
+        self.level_admissions.clear();
+        self.spatial = SpatialIndex::default();
         self.extracted.clear();
         self.lifted.clear();
     }
@@ -299,6 +413,8 @@ impl EntityTable {
 fn forget_row(
     rows: &mut FxHashMap<NonZeroU32, ResidentRow>,
     uuids: &mut UuidIndex,
+    level_admissions: &mut LevelAdmissions,
+    spatial: &mut SpatialIndex,
     id: NonZeroU32,
     location: Location,
 ) {
@@ -306,6 +422,15 @@ fn forget_row(
         && row.location == location
     {
         uuids.retire(id, row);
+        spatial.retire(id, row);
+        if location.owner.kind != Kind::DragonPart
+            && let Entry::Occupied(mut level) = level_admissions.entry(location.owner.dimension)
+        {
+            level.get_mut().remove(&(row.admission, id));
+            if level.get().is_empty() {
+                level.remove();
+            }
+        }
         rows.remove(&id);
     }
 }
@@ -316,11 +441,25 @@ fn forget(map: &mut FxHashMap<NonZeroU32, Location>, id: NonZeroU32, location: L
 }
 
 #[cfg(test)]
+fn collect_level_entities(table: &mut EntityTable, dimension: DimensionKey) -> Vec<u32> {
+    let mut after = None;
+    std::iter::from_fn(|| {
+        let key = table.level_entity_candidate_after(dimension, after)?;
+        after = Some(key);
+        Some(key.1.get())
+    })
+    .collect()
+}
+
+#[cfg(test)]
 #[path = "table/completion_tests.rs"]
 mod completion_tests;
 #[cfg(test)]
 #[path = "table/metadata_tests.rs"]
 mod metadata_tests;
+#[cfg(test)]
+#[path = "table/section_tests.rs"]
+mod section_tests;
 
 #[cfg(test)]
 mod tests {
@@ -399,17 +538,35 @@ mod tests {
             },
         );
         // Also compared to the runtime vanilla EntityLookup by the parity harness.
-        println!("lookup-order: {:?}", f.table.level_entities(HOME.dimension));
-        assert_eq!(f.table.level_entities(HOME.dimension), vec![90, 3, 40]);
+        println!(
+            "lookup-order: {:?}",
+            collect_level_entities(&mut f.table, HOME.dimension)
+        );
+        assert_eq!(
+            collect_level_entities(&mut f.table, HOME.dimension),
+            vec![90, 3, 40]
+        );
         let identity = Identity::new(90, first.join).unwrap();
         f.emit(first, Change::Extract(identity));
         f.emit(first, Change::PutBack(identity));
-        println!("lookup-order: {:?}", f.table.level_entities(HOME.dimension));
-        assert_eq!(f.table.level_entities(HOME.dimension), vec![90, 3, 40]);
+        println!(
+            "lookup-order: {:?}",
+            collect_level_entities(&mut f.table, HOME.dimension)
+        );
+        assert_eq!(
+            collect_level_entities(&mut f.table, HOME.dimension),
+            vec![90, 3, 40]
+        );
         f.emit(first, Change::Remove(identity));
         f.emit(first, Change::Install(identity));
-        println!("lookup-order: {:?}", f.table.level_entities(HOME.dimension));
-        assert_eq!(f.table.level_entities(HOME.dimension), vec![3, 40, 90]);
+        println!(
+            "lookup-order: {:?}",
+            collect_level_entities(&mut f.table, HOME.dimension)
+        );
+        assert_eq!(
+            collect_level_entities(&mut f.table, HOME.dimension),
+            vec![3, 40, 90]
+        );
         f.emit(first, Change::Remove(identity));
         let away = f.admit(
             90,
@@ -418,14 +575,20 @@ mod tests {
                 ..HOME
             },
         );
-        println!("lookup-order: {:?}", f.table.level_entities(HOME.dimension));
         println!(
             "lookup-order: {:?}",
-            f.table.level_entities(DimensionKey::NETHER)
+            collect_level_entities(&mut f.table, HOME.dimension)
+        );
+        println!(
+            "lookup-order: {:?}",
+            collect_level_entities(&mut f.table, DimensionKey::NETHER)
         );
         f.emit(away, Change::Remove(Identity::new(90, away.join).unwrap()));
         f.admit(90, HOME);
-        println!("lookup-order: {:?}", f.table.level_entities(HOME.dimension));
+        println!(
+            "lookup-order: {:?}",
+            collect_level_entities(&mut f.table, HOME.dimension)
+        );
     }
 
     #[test]

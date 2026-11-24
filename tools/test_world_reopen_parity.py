@@ -103,6 +103,9 @@ def main():
             ok = got == expected
             failures += not ok
             print(f'reopen {cycle}: {len(got)} minecarts', 'ok' if ok else f'FAIL (expected {len(expected)})')
+            if not ok:
+                print(f'  before close (kind, x, y, z): {expected}')
+                print(f'  after reopen (kind, x, y, z): {got}')
     finally:
         ctl('quit', check=False)
         if not args.keep and not failures:

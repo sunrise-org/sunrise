@@ -170,7 +170,13 @@ fn expanded_calls_continue_across_lines_and_keep_original_file_origins() {
     assert_eq!(fragment.files, ["final.fsh", "lib/dispatch.glsl"]);
 
     let vertex = preprocess(&pack, "final.vsh", &Macros::default());
-    let program = translate_composite(&vertex, &fragment, Target::Window).unwrap();
+    let program = translate_composite(
+        &vertex,
+        &fragment,
+        Target::Window,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+    )
+    .unwrap();
     for module in [&program.vertex, &program.fragment] {
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),

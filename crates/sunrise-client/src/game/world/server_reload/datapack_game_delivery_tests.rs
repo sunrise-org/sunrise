@@ -1,4 +1,5 @@
 use super::*;
+use crate::game::native_entity_refs::tests::run_fresh_cases;
 use sunrise_client::{datapack_net, lan::Out};
 use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
 
@@ -17,7 +18,10 @@ impl Hooks for Synced {
         .unwrap();
     }
 }
-fn apply_packets(rx: &std::sync::mpsc::Receiver<Out>) -> usize {
+fn apply_packets(
+    rx: &std::sync::mpsc::Receiver<Out>,
+    datapacks: &mut datapack_net::Receiver,
+) -> usize {
     rx.try_iter()
         .flat_map(|out| match out {
             Out::Packet(body) => vec![body],
@@ -29,7 +33,7 @@ fn apply_packets(rx: &std::sync::mpsc::Receiver<Out>) -> usize {
             let id = r.varint().unwrap();
             match Clientbound::decode(id, r.rest()).unwrap() {
                 Clientbound::CustomPayload(p) if p.channel == datapack_net::CHANNEL => {
-                    datapack_net::accept_chunk(&p.data).unwrap();
+                    datapacks.accept_chunk(&p.data).unwrap();
                     Some(())
                 }
                 _ => None,
@@ -41,6 +45,14 @@ fn apply_packets(rx: &std::sync::mpsc::Receiver<Out>) -> usize {
 #[test]
 #[ignore = "daily"]
 fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_refused_guests() {
+    // Both peers use process-wide snapshots; another fixture must not replace either one.
+    if run_fresh_cases(
+        "game::server_reload::tests::datapack_publication_tests::datapack_game_delivery_tests::datapack_game_reload_delivers_only_successful_generations_and_disconnects_refused_guests",
+        "SUNRISE_DATAPACK_RELOAD_DELIVERY_CHILD",
+        &["delivery"],
+    ) {
+        return;
+    }
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let pack = root.join("datapacks/base");
@@ -59,17 +71,25 @@ fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_ref
         || {
             with_game(|game| {
                 game.load_world(request(root)).unwrap();
-                let offer = datapack_net::offer().unwrap();
-                datapack_net::clear_received();
+                let offer = datapack_net::offer()
+                    .unwrap()
+                    .expect("synchronized registry offer required");
+                let mut datapacks = datapack_net::Receiver::default();
                 let datapack_net::Step::Send(bytes) = datapack_net::server_step(true, Some(&offer))
                 else {
                     panic!("initial snapshot required");
                 };
-                datapack_net::accept(&bytes).unwrap();
-                let first = datapack_net::received().unwrap();
-                let handle = first
-                    .handle("registry_test:spell", "registry_test:fire")
-                    .unwrap();
+                for chunk in datapack_net::chunks(&bytes).unwrap() {
+                    datapacks.accept_chunk(&chunk).unwrap();
+                }
+                let first = datapacks.received().unwrap();
+                assert_eq!(
+                    first
+                        .get("registry_test:spell", "registry_test:fire")
+                        .unwrap()
+                        .get("power"),
+                    Some(&DatapackValue::Int(7))
+                );
                 let rx = crate::game::lan::world_spawn_sync_tests::host_for(game);
                 game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                     g.brand = "sunrise".into();
@@ -78,30 +98,33 @@ fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_ref
                 write(&entry, r#"{"power":9}"#);
                 assert!(game.run_command("reload"));
                 assert!(
-                    apply_packets(&rx) > 0,
-                    "the coordinator must send its committed generation"
+                    apply_packets(&rx, &mut datapacks) > 0,
+                    "the coordinator must send its committed set"
                 );
-                let received = datapack_net::received().unwrap();
-                assert_eq!(received.generation(), 2);
+                let received = datapacks.received().unwrap();
                 assert_eq!(
-                    received.get(&handle),
-                    Err(mod_api::DatapackReadError::StaleGeneration)
-                );
-                let next = received
-                    .handle("registry_test:spell", "registry_test:fire")
-                    .unwrap();
-                assert_eq!(
-                    received.get(&next).unwrap().get("power"),
+                    received
+                        .get("registry_test:spell", "registry_test:fire")
+                        .unwrap()
+                        .get("power"),
                     Some(&DatapackValue::Int(9))
                 );
                 write(&entry, "{broken");
                 assert!(!game.run_command("reload"));
                 assert_eq!(
-                    apply_packets(&rx),
+                    apply_packets(&rx, &mut datapacks),
                     0,
                     "failed preparation must send no replacement"
                 );
-                assert_eq!(datapack_net::received().unwrap().generation(), 2);
+                assert_eq!(
+                    datapacks
+                        .received()
+                        .unwrap()
+                        .get("registry_test:spell", "registry_test:fire")
+                        .unwrap()
+                        .get("power"),
+                    Some(&DatapackValue::Int(9))
+                );
                 game.lan
                     .as_mut()
                     .unwrap()
@@ -111,7 +134,6 @@ fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_ref
                 write(&entry, r#"{"power":11}"#);
                 assert!(game.run_command("reload"));
                 assert!(rx.try_iter().any(|out| matches!(out, Out::Disconnect(sunrise_core::nbt::Tag::String(reason)) if String::from_utf16_lossy(&reason.0).contains("registries are unreadable"))));
-                datapack_net::clear_received();
             });
         },
     );

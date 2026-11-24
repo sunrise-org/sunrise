@@ -10,47 +10,40 @@ pub trait LevelDimensionBackend {
     /// The dimension's logical height (`ServerLevel.getLogicalHeight`), which may differ
     /// from build height. Reads active and parked server levels or the client's current level.
     /// None for a stale or unavailable level. Does not load chunks.
-    #[access(WorldOnly)]
     fn level_logical_height(&self, level: LevelRef) -> Option<i32>;
     /// Side: both.
-    /// The name of a dimension's key.
-    #[access(Metadata)]
-    fn dimension_key_id(&self, key: DimensionKey) -> Option<String>;
+    /// Borrows the canonical dimension id. `None` if the host has no backend or
+    /// the slot was never issued.
+    fn dimension_key_id(&self, key: DimensionKey) -> Option<&str>;
     /// Side: both.
     /// The lowest block `y` and the height of the level
     /// (`LevelHeightAccessor.getMinY`, `getHeight`). Reads any loaded server level
     /// or the client's current level. None for a stale handle, before client login,
     /// or for a dimension unavailable on this side. Does not load chunks. API 381.
-    #[access(WorldOnly)]
     fn level_height(&self, level: LevelRef) -> Option<(i32, i32)>;
     /// Side: both.
     /// `Level.isInWorldBounds`: `pos` within 30,000,000 blocks on x and z and inside the level's
     /// build height. None as for `native_level_height`. Does not load chunks.
-    #[access(WorldOnly)]
     fn level_in_world_bounds(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
     /// Side: both.
     /// `Level.isInSpawnableBounds`: 30,000,000 blocks on x and z, 20,000,000 on y. None as for
     /// `native_level_height`. Does not load chunks.
-    #[access(WorldOnly)]
     fn level_in_spawnable_bounds(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
     /// Side: both.
     /// Dimension shape of a loaded server level, including parked levels.
-    #[access(WorldOnly)]
     fn level_dimension_shape(&self, level: LevelRef) -> Option<LevelDimensionShape>;
     /// Side: both.
     /// The level's dimension type (`Level.dimensionType()` and its gameplay attributes): coordinate
     /// scale, ambient light, fixed time, infiniburn, monster spawn light, sky and the gameplay
     /// switches a mod's `DimensionSettings` or a data pack sets. A level whose type neither gave
     /// fields for has the Overworld's. None for a stale handle; on a client, the level it shows.
-    #[access(WorldOnly)]
-    fn level_dimension_type(&self, level: LevelRef) -> Option<LevelDimensionType>;
+    fn level_dimension_type(&self, level: LevelRef) -> Option<LevelDimensionType<'_>>;
     /// Side: server.
     /// `Level.getSeaLevel`: 63 in the Overworld, 32 in the Nether, 0 in the End; for a level of the
     /// noise generator the `sea_level` of its noise settings (a data pack's too, when it replaces
     /// them), for another level the `sea_level` its `DimensionSettings` gave, else 63. It is the sea
     /// level the game uses for the level: terrain and aquifers, mob spawning and mob behaviour, rain
     /// and snow, and maps. None for a stale handle and on a client.
-    #[access(WorldOnly)]
     fn level_sea_level(&self, level: LevelRef) -> Option<i32>;
     /// Side: server.
     /// Where an entity of box `size` (width, height), not a player, centred in the portal block
@@ -61,7 +54,6 @@ pub trait LevelDimensionBackend {
     /// sound or hook. Diverges from vanilla, which loads chunks: loaded state only, and
     /// `ChunksNotLoaded` for a level not open or a chunk of the search (16 blocks into the
     /// Nether, 128 out, plus a chunk) not loaded.
-    #[access(WorldOnly)]
     fn level_portal_destination(
         &self,
         level: LevelRef,
@@ -87,7 +79,6 @@ pub trait LevelDimensionBackendMut {
     /// with unit axes at a right angle and sides above 0 and at most 32 blocks, one with a
     /// corner past vanilla's position limits, a full level or chunk, and once every id was
     /// given.
-    #[access(WorldOnly)]
     fn level_register_passage(
         &mut self,
         level: LevelRef,
@@ -97,7 +88,6 @@ pub trait LevelDimensionBackendMut {
     /// Removes the level's passage `id`: the clients that were told of it are told it is
     /// gone at the end of the server's tick. True when it was registered in this level.
     /// False for another level's or an unknown id, a stale handle and a client.
-    #[access(WorldOnly)]
     fn level_remove_passage(&mut self, level: LevelRef, id: PassageId) -> bool;
     /// Side: server.
     /// `LevelRef::portal_destination`, then the exit portal built by `PortalForcer.createPortal`
@@ -106,7 +96,6 @@ pub trait LevelDimensionBackendMut {
     /// (`InTransaction`): a built portal cannot be rolled back. Needs the chunks around the
     /// built exit loaded (`ChunksNotLoaded`); opens no level. `NoExit` when none was found and
     /// none could be built.
-    #[access(WorldOnly)]
     fn level_find_or_create_portal_exit(
         &mut self,
         level: LevelRef,

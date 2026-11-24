@@ -3,21 +3,20 @@
 
 use super::{ArgType, Text, TryIntoEngine};
 use serde_json::{Value, json};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::{collections::HashMap, sync::Arc};
 use sunrise_client::command::{
-    CommandError, Dispatcher, MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TOOLTIP, NodeKind, Range, Reader,
-    args::Coordinates, snbt,
+    CommandError, Dispatcher, NodeKind, Range, Reader, RegistryId, args::Coordinates, snbt,
 };
 
-/// The argument kinds a native usage may name, each with a [`parser`]; `resource:<registry>`
-/// and `mod_id` come on top.
-pub(super) const KINDS: [&str; 18] = [
+/// The argument kinds a native usage may name, each with a [`parser`]; `resource:<registry>`,
+/// the bounded `integer(min,max)` and `long(min,max)` ([`bounded_parser`]) and `mod_id` come on
+/// top.
+pub(super) const KINDS: [&str; 20] = [
     "word",
+    "string",
     "text",
     "integer",
+    "long",
     "number",
     "boolean",
     "player",
@@ -62,51 +61,16 @@ pub(in super::super) fn command_arguments() -> CommandArguments {
 /// never meets one.
 pub(super) const MOD_ID: &str = "mod_id";
 
-/// The most distinct registries native usages may name. Vanilla has about a hundred, so this
-/// leaves mods room while keeping the names kept for the game's life bounded.
-const MAX_REGISTRIES: usize = 256;
-/// The longest registry name, in bytes: what the network side keeps of a received tree's names.
-const MAX_REGISTRY_NAME: usize = 256;
-
-/// The brigadier parser and properties of `resource:<registry>`: `ResourceKeyArgument` on the
+/// The Brigadier parser and properties of `resource:<registry>`: `ResourceKeyArgument` on the
 /// wire, so vanilla clients complete it, and `ResourceArgument` on the server, which refuses an id
-/// the registry lacks before the mod runs. A name that is not a resource location, or a registry
-/// past the budget, refuses the usage with the reason.
+/// the registry lacks before the mod runs.
 pub(super) fn resource_parser(name: &str) -> Result<(&'static str, Value), String> {
-    let registry = registry(name)?;
-    Ok(("minecraft:resource_key", json!({ "registry": registry })))
-}
-
-/// A registry name a usage named, kept for the game's life (`ArgType::Res` holds
-/// `&'static str`), each name once. Its own set, apart from the interner the network fills from
-/// received trees, so neither spends the other's budget.
-fn registry(name: &str) -> Result<&'static str, String> {
-    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    let mut names = NAMES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    registry_in(&mut names, name)
-}
-
-fn registry_in(names: &mut HashSet<&'static str>, name: &str) -> Result<&'static str, String> {
-    if let Some(&known) = names.get(name) {
-        return Ok(known);
-    }
-    if name.len() > MAX_REGISTRY_NAME || mod_api::Identifier::parse_namespaced(name).is_none() {
+    if mod_api::Identifier::parse_namespaced(name).is_none() {
         return Err(format!(
-            "registry `{name}` is not a `namespace:path` resource location of at most \
-             {MAX_REGISTRY_NAME} bytes"
+            "registry `{name}` is not a `namespace:path` resource location"
         ));
     }
-    if names.len() >= MAX_REGISTRIES {
-        return Err(format!(
-            "registry `{name}` is past the limit of {MAX_REGISTRIES} distinct registries"
-        ));
-    }
-    let name: &'static str = Box::leak(name.into());
-    names.insert(name);
-    Ok(name)
+    Ok(("minecraft:resource_key", json!({ "registry": name })))
 }
 
 /// What a mod receives for a custom argument: `mod_id` as the plain package id, a mod's own type
@@ -141,6 +105,8 @@ pub(super) fn command_word(word: &str, first: bool) -> bool {
 pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
     Some(match kind {
         "word" => ("brigadier:string", json!({"type": "word"}), ArgType::Word),
+        // `StringArgumentType.string()`: `StringArgumentSerializer` writes `QUOTABLE_PHRASE`.
+        "string" => ("brigadier:string", json!({"type": "phrase"}), ArgType::Str),
         "text" => (
             "brigadier:string",
             json!({"type": "greedy"}),
@@ -152,6 +118,14 @@ pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
             ArgType::Integer {
                 min: i32::MIN,
                 max: i32::MAX,
+            },
+        ),
+        "long" => (
+            "brigadier:long",
+            Value::Null,
+            ArgType::Long {
+                min: i64::MIN,
+                max: i64::MAX,
             },
         ),
         "number" => (
@@ -205,19 +179,125 @@ pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
     })
 }
 
+/// The parser and properties of a bounded number kind, `integer(min,max)` or `long(min,max)`,
+/// where either bound may be left empty (`integer(0,)`): Brigadier's
+/// `IntegerArgumentType.integer(min, max)` and `LongArgumentType.longArg(min, max)`. `None` for
+/// any other kind; the reason for one that names `integer(` or `long(` but does not parse.
+pub(super) fn bounded_parser(kind: &str) -> Option<Result<(&'static str, Value), String>> {
+    let (name, bounds) = kind.strip_suffix(')')?.split_once('(')?;
+    let integer = match name {
+        "integer" => true,
+        "long" => false,
+        _ => return None,
+    };
+    Some(declared_bounds(kind, integer, bounds))
+}
+
+/// The `min,max` of a bounded number kind, each an `i32` for `integer` and an `i64` for `long`.
+fn declared_bounds(
+    kind: &str,
+    integer: bool,
+    bounds: &str,
+) -> Result<(&'static str, Value), String> {
+    let bound = |text: &str| -> Result<Option<i64>, String> {
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let value = match integer {
+            true => text.parse::<i32>().map(i64::from),
+            false => text.parse::<i64>(),
+        };
+        value
+            .map(Some)
+            .map_err(|_| format!("`{kind}`: `{text}` is not a bound of that kind"))
+    };
+    let (min, max) = bounds
+        .split_once(',')
+        .ok_or_else(|| format!("`{kind}` is not `(min,max)` bounds"))?;
+    let (min, max) = (bound(min)?, bound(max)?);
+    if let (Some(min), Some(max)) = (min, max)
+        && max < min
+    {
+        return Err(format!("`{kind}`: the maximum is below the minimum"));
+    }
+    let parser = match integer {
+        true => "brigadier:integer",
+        false => "brigadier:long",
+    };
+    Ok((parser, number_properties(integer, min, max)))
+}
+
+/// `IntegerArgumentInfo` / `LongArgumentInfo`'s properties: a bound is written only when it is not
+/// the type's own extreme (`min != Integer.MIN_VALUE`, `max != Integer.MAX_VALUE`), so `integer(,)`
+/// is the bare `integer`.
+fn number_properties(integer: bool, min: Option<i64>, max: Option<i64>) -> Value {
+    let (low, high) = match integer {
+        true => (i64::from(i32::MIN), i64::from(i32::MAX)),
+        false => (i64::MIN, i64::MAX),
+    };
+    let mut properties = serde_json::Map::new();
+    if let Some(min) = min.filter(|&min| min != low) {
+        properties.insert("min".into(), min.into());
+    }
+    if let Some(max) = max.filter(|&max| max != high) {
+        properties.insert("max".into(), max.into());
+    }
+    match properties.is_empty() {
+        true => Value::Null,
+        false => Value::Object(properties),
+    }
+}
+
+/// The parser and properties a mod's argument type goes to clients as, from its declared kind.
+/// `None` for a kind this build cannot read.
+pub(super) fn custom_parser(kind: mod_api::CommandArgumentKind) -> Option<(&'static str, Value)> {
+    use mod_api::CommandArgumentKind as Kind;
+    Some(match kind {
+        Kind::Word => ("brigadier:string", json!({"type": "word"})),
+        Kind::Greedy => ("brigadier:string", json!({"type": "greedy"})),
+        Kind::Quotable => ("brigadier:string", json!({"type": "phrase"})),
+        Kind::Integer { min, max } => (
+            "brigadier:integer",
+            number_properties(true, min.map(i64::from), max.map(i64::from)),
+        ),
+        Kind::Long { min, max } => ("brigadier:long", number_properties(false, min, max)),
+        _ => return None,
+    })
+}
+
+/// A validated `brigadier:integer` node's bounds, `int`'s extremes where its properties leave
+/// one out.
+fn integer_bounds(node: &Value) -> (i32, i32) {
+    let (min, max) = long_bounds(node);
+    (
+        i32::try_from(min).unwrap_or(i32::MIN),
+        i32::try_from(max).unwrap_or(i32::MAX),
+    )
+}
+
+/// A validated `brigadier:long` node's bounds, `long`'s extremes where its properties leave one
+/// out.
+fn long_bounds(node: &Value) -> (i64, i64) {
+    let properties = &node["properties"];
+    (
+        properties["min"].as_i64().unwrap_or(i64::MIN),
+        properties["max"].as_i64().unwrap_or(i64::MAX),
+    )
+}
+
 /// The type of the argument node that parsed `range`: the parsed node, not the value, says which
 /// kind a position, id or string is.
-pub(super) fn parsed_type(
-    dispatcher: &Dispatcher,
+pub(super) fn parsed_type<'a>(
+    dispatcher: &'a Dispatcher,
     parsed_nodes: &[(usize, Range)],
     range: Range,
-) -> Option<ArgType> {
+) -> Option<&'a ArgType> {
     parsed_nodes.iter().find_map(|(node, parsed)| {
         if *parsed != range {
             return None;
         }
         match &dispatcher.nodes[*node].kind {
-            NodeKind::Argument { ty, .. } => Some(ty.clone()),
+            NodeKind::Argument { ty, .. } => Some(ty),
             _ => None,
         }
     })
@@ -270,92 +350,13 @@ fn refused_argument_text(error: mod_api::CommandArgumentError) -> Text {
     }
 }
 
-/// Why a mod's suggestion cannot replace part of the text `prefix` being typed: it names the
-/// argument type and the suggestion, and the reason. A replacement that starts past the typed
-/// text, or inside a character, has no range the chat could apply, so the suggestion is refused
-/// (reported, and left out) rather than panicking on the player's input.
-fn suggestion_refusal(
-    id: &str,
-    prefix: &str,
-    suggestion: &mod_api::CommandSuggestion,
-) -> Option<String> {
-    let offset = suggestion.replace_start?;
-    (offset > prefix.len() || !prefix.is_char_boundary(offset)).then(|| {
-        format!(
-            "mod command argument `{id}` refused the suggestion `{}`: it replaces from byte \
-             {offset} of the {} typed",
-            suggestion.text,
-            prefix.len()
-        )
-    })
-}
-
-/// Ask a mod's declared provider for one argument: the request the engine builds from what its
-/// dispatcher parsed, and the answer as the engine's suggestions. A panic answers no suggestions
-/// and is logged against the argument type; nothing is kept between two requests.
-fn provider_suggestions(
-    provider: &Arc<dyn mod_api::SuggestionProvider>,
-    id: &str,
-    reg: &sunrise_client::command::Registries,
-    prefix: &str,
-    arguments: &[sunrise_client::command::ParsedArgument],
-) -> Vec<sunrise_client::command::CustomSuggestion> {
-    let request = mod_api::SuggestionRequest::new(
-        prefix,
-        arguments
-            .iter()
-            .map(|argument| {
-                mod_api::TypedArgument::new(argument.name.clone(), argument.text.clone())
-            })
-            .collect(),
-        reg.sender.as_ref().map(|sender| {
-            mod_api::__private::game::command_sender(
-                sender.uuid,
-                sender.name.clone(),
-                mod_api::PermissionLevel::from_level(reg.permission.into()),
-            )
-        }),
-    );
-    let answered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mod_api::__private::contain_refusal(
-            mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
-            || provider.suggest(&request),
-        )
-    }));
-    match answered {
-        Ok(Err(refusal)) => {
-            refusal.report();
-            eprintln!(
-                "mod command argument type {id} suggestion provider refused: {refusal}; no suggestions"
-            );
-            Vec::new()
-        }
-        Ok(Ok(reply)) => reply
-            .suggestions
-            .into_iter()
-            .map(|suggestion| sunrise_client::command::CustomSuggestion {
-                text: suggestion.text,
-                tooltip: suggestion.tooltip,
-                // The provider answers whole-prefix completions: no replacement offset.
-                replace_start: None,
-            })
-            .collect(),
-        Err(_) => {
-            eprintln!(
-                "mod command argument type {id} suggestion provider panicked; no suggestions"
-            );
-            Vec::new()
-        }
-    }
-}
-
 /// The dispatcher type of one validated tree node: a vanilla kind, or the mod's registered
 /// argument type with its parser and suggestions.
 pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgType {
     if node["parser"] == "minecraft:resource_key" {
         let registry = node["properties"]["registry"].as_str().unwrap_or_default();
         return ArgType::Res(
-            self::registry(registry).expect("native command tree names validated registries"),
+            RegistryId::parse(registry).expect("native command tree names validated registries"),
         );
     }
     if let Some(id) = node["custom_argument"].as_str() {
@@ -365,130 +366,84 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
         let parse = argument.clone();
         let suggest = argument.clone();
         let kind_id = id.to_owned();
-        // Read once per tree, like `kind()`: the tree keeps the declaration, not the mod code.
-        let provider = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            mod_api::__private::contain_refusal(
-                mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
-                || argument.suggestion_provider(),
-            )
-        })) {
-            Ok(Ok(provider)) => provider,
-            Ok(Err(refusal)) => {
-                refusal.report();
-                eprintln!(
-                    "mod command argument type {id} was refused declaring its suggestion provider: {refusal}; \
-                     its arguments complete by `suggest`"
-                );
-                None
+        // Use the validated tree properties rather than calling mod code again.
+        use sunrise_client::command::CustomArgumentKind as Kind;
+        let kind = match node["parser"].as_str() {
+            Some("brigadier:integer") => {
+                let (min, max) = integer_bounds(node);
+                Kind::Integer { min, max }
             }
-            Err(_) => {
-                eprintln!(
-                    "mod command argument type {id} panicked declaring its suggestion provider; \
-                     its arguments complete by `suggest`"
-                );
-                None
+            Some("brigadier:long") => {
+                let (min, max) = long_bounds(node);
+                Kind::Long { min, max }
             }
-        };
-        // Use the validated tree property rather than calling mod code again.
-        let kind = if node["properties"]["type"] == "greedy" {
-            sunrise_client::command::CustomArgumentKind::Greedy
-        } else {
-            sunrise_client::command::CustomArgumentKind::Word
+            _ if node["properties"]["type"] == "greedy" => Kind::Greedy,
+            _ if node["properties"]["type"] == "phrase" => Kind::Quotable,
+            _ => Kind::Word,
         };
         let custom = sunrise_client::command::CustomArgument::new(
             id,
             kind,
             move |input| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    mod_api::__private::contain_refusal(
-                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
-                        || parse.parse(input),
-                    )
-                }))
-                .map_err(|_| Text::tr("commands.generic.failed", &[]))?
-                .map_err(|refusal| {
-                    refusal.report();
-                    Text::tr("commands.generic.failed", &[])
-                })?
-                .map_err(refused_argument_text)
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse.parse(input)))
+                    .map_err(|_| Text::tr("commands.generic.failed", &[]))?
+                    .map_err(refused_argument_text)
             },
-            move |reg: &sunrise_client::command::Registries, prefix: &str| {
-                // The mod's provider decides what this sender may complete; the game keeps
-                // its answer as it comes (`CommandSender::suggest`).
-                let sender = reg.sender.as_ref().map(|sender| {
-                    mod_api::__private::game::command_sender(
-                        sender.uuid,
-                        sender.name.clone(),
-                        mod_api::PermissionLevel::from_level(i32::from(reg.permission)),
-                    )
-                });
-                let Ok(results) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    mod_api::__private::contain_refusal(
-                        mod_api::content::crash::current_native_mod().unwrap_or("unknown"),
-                        || suggest.suggest(sender.as_ref(), prefix),
-                    )
-                })) else {
-                    eprintln!("mod command argument completer panicked");
-                    return Vec::new();
-                };
-                let results = match results {
-                    Ok(results) => results,
-                    Err(refusal) => {
-                        refusal.report();
-                        eprintln!("mod command argument completer refused: {refusal}");
-                        return Vec::new();
-                    }
-                };
-                // Suggestions use STRING_UTF8 (Java UTF-16 length). Tooltips are
-                // literal NBT strings, whose modified UTF-8 byte length is unsigned u16.
-                if results.iter().any(|s| {
-                    s.text.encode_utf16().count() > MAX_SUGGESTION_TEXT
-                        || s.tooltip.as_ref().is_some_and(|tip| {
-                            tip.encode_utf16()
-                                .map(|unit| match unit {
-                                    1..=0x7f => 1,
-                                    0..=0x7ff => 2,
-                                    _ => 3,
-                                })
-                                .sum::<usize>()
-                                > MAX_SUGGESTION_TOOLTIP
+            move |reg: &sunrise_client::command::Registries,
+                  prefix: &str,
+                  arguments: &[sunrise_client::command::ParsedArgument]| {
+                // The mod decides what this sender may complete; the game keeps its answer as it
+                // comes (`CommandSender::suggest`).
+                let request = mod_api::SuggestionRequest::new(
+                    prefix,
+                    arguments
+                        .iter()
+                        .map(|argument| {
+                            mod_api::TypedArgument::new(
+                                argument.name.clone(),
+                                argument.text.clone(),
+                            )
                         })
-                }) {
-                    eprintln!("mod command argument completion exceeds the protocol string limit");
+                        .collect(),
+                    reg.sender.as_ref().map(|sender| {
+                        mod_api::__private::game::command_sender(
+                            sender.uuid,
+                            sender.name.clone(),
+                            mod_api::PermissionLevel::from_level(i32::from(reg.permission)),
+                        )
+                    }),
+                );
+                let Ok(results) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    suggest.suggest(&request)
+                })) else {
+                    eprintln!(
+                        "mod command argument type {kind_id} completer panicked; no suggestions"
+                    );
                     return Vec::new();
-                }
+                };
                 results
                     .into_iter()
-                    .filter_map(|suggestion| {
-                        // A completion for one token of the text replaces from its offset; one the
-                        // player's text cannot hold is refused by name instead of panicking where
-                        // the chat applies the range.
-                        if let Some(refusal) = suggestion_refusal(&kind_id, prefix, &suggestion) {
-                            eprintln!("{refusal}");
-                            return None;
-                        }
-                        Some(sunrise_client::command::CustomSuggestion {
-                            text: suggestion.text,
-                            tooltip: suggestion.tooltip,
-                            replace_start: suggestion.replace_start,
-                        })
+                    .map(|s| sunrise_client::command::Suggestion {
+                        range: s.range,
+                        text: s.text,
+                        tooltip: s.tooltip,
+                        int_value: s.int_value,
                     })
                     .collect()
             },
         );
-        return match provider {
-            Some(provider) => {
-                let id: Arc<str> = id.into();
-                let named = id.clone();
-                ArgType::Custom(custom.with_provider(move |reg, prefix, arguments| {
-                    provider_suggestions(&provider, &named, reg, prefix, arguments)
-                }))
-            }
-            None => ArgType::Custom(custom),
-        };
+        return ArgType::Custom(custom);
     }
     if node["parser"] == "minecraft:vec3" && node[UNCENTERED] == true {
         return ArgType::Vec3 { center: false };
+    }
+    if node["parser"] == "brigadier:integer" {
+        let (min, max) = integer_bounds(node);
+        return ArgType::Integer { min, max };
+    }
+    if node["parser"] == "brigadier:long" {
+        let (min, max) = long_bounds(node);
+        return ArgType::Long { min, max };
     }
     KINDS
         .into_iter()
@@ -504,27 +459,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_suggestion_may_replace_from_an_offset_inside_the_typed_text() {
-        let whole = mod_api::CommandSuggestion::new("stone");
-        assert_eq!(suggestion_refusal("test:pattern", "st", &whole), None);
-        let token = mod_api::CommandSuggestion::new("stone").replacing_from(6);
-        assert_eq!(suggestion_refusal("test:pattern", "stone st", &token), None);
-        // Past the typed text: there is no range to replace.
-        let refusal = suggestion_refusal("test:pattern", "st", &token).unwrap();
-        assert!(
-            refusal.contains("test:pattern"),
-            "names the type: {refusal}"
-        );
-        assert!(
-            refusal.contains("`stone`"),
-            "names the suggestion: {refusal}"
-        );
-        // Inside a two-byte character: no boundary to split the replacement on.
-        let inside = mod_api::CommandSuggestion::new("é").replacing_from(1);
-        assert!(suggestion_refusal("test:pattern", "é ", &inside).is_some());
-    }
-
-    #[test]
     fn the_id_kind_is_vanillas_free_identifier_parser() {
         let (parser, properties, ty) = super::parser("id").expect("the id kind has a parser");
         assert_eq!(parser, "minecraft:resource_location");
@@ -534,30 +468,34 @@ mod tests {
     }
 
     #[test]
-    fn registry_names_are_resource_locations_within_their_own_budget() {
-        let mut names = HashSet::new();
+    fn native_resource_arguments_own_registry_names_without_a_registration_budget() {
         for bad in [
             "a:b:c",
             "a/b:c",
-            "noNamespace",
+            "item",
             "minecraft:",
             ":x",
             "Minecraft:x",
+            "..:x",
         ] {
-            assert!(registry_in(&mut names, bad).is_err(), "{bad}");
+            let refusal = resource_parser(bad).unwrap_err();
+            assert!(
+                refusal.contains(bad) && refusal.contains("namespace:path"),
+                "{refusal}"
+            );
         }
-        let long = format!("a:{}", "b".repeat(MAX_REGISTRY_NAME));
-        assert!(registry_in(&mut names, &long).is_err());
-        let first = registry_in(&mut names, "minecraft:entity_type").unwrap();
-        assert!(std::ptr::eq(
-            first,
-            registry_in(&mut names, "minecraft:entity_type").unwrap()
-        ));
-        for n in 1..MAX_REGISTRIES {
-            registry_in(&mut names, &format!("mymod:r{n}")).unwrap();
+        let arguments = CommandArguments::new();
+        let names = (0..257).map(|n| format!("mymod:r{n}"));
+        let long = format!("mymod:registry/{}", "b".repeat(300));
+        for name in names.chain([long]) {
+            let (parser, properties) = resource_parser(&name).unwrap();
+            assert_eq!(parser, "minecraft:resource_key");
+            let node = json!({ "parser": parser, "properties": properties });
+            let ArgType::Res(registry) = argument_type(&node, &arguments) else {
+                panic!("the server must check the registry for resource arguments");
+            };
+            drop(node);
+            assert_eq!(registry.as_str(), name);
         }
-        let refusal = registry_in(&mut names, "mymod:one_more").unwrap_err();
-        assert!(refusal.contains("past the limit"), "{refusal}");
-        assert!(registry_in(&mut names, "minecraft:entity_type").is_ok());
     }
 }

@@ -15,7 +15,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
     default: || 0,
     codec: None,
     copy_on_death: false,
-    sync: false,
+    sync_codec: None,
 };
 
 // All cases use one resource graph. Keep both the external map and the old

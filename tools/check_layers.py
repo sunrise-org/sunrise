@@ -15,6 +15,7 @@ optional (behind a feature), for the layer and the portable check alike. The che
 - a portable crate depending on a crate of the repository that isn't portable, or on a `forbidden` library;
 - a `portable.pending` crate doing the same beyond the crates its entry lists, listed as portable too, or (with
   --base) gaining an entry its base list lacks.
+- a `sides` crate reaching another one, or a crate below them (or sunrise-client-lib) reaching one (#2210).
 An `allowed` or `optional` entry with no dependency left is reported, not failed. Dev-dependencies are exempt: tests may reach the platform, but shipped code may not.
 
     python3 tools/check_layers.py                     # the check
@@ -109,6 +110,33 @@ def crossings(config, graph):
     return out
 
 
+def reachable(graph, start):
+    """Every crate `start` depends on, directly or through others."""
+    seen, todo = set(), [start]
+    while todo:
+        for dep in graph.get(todo.pop(), ()):
+            if dep not in seen:
+                seen.add(dep)
+                todo.append(dep)
+    return seen
+
+
+def side_problems(config, graph):
+    """Gameplay's side crates (#2210) reaching each other, or a crate below them reaching a side crate."""
+    sides = config.get("sides", {}).get("crates", [])
+    problems = []
+    for crate in sides:
+        reach = reachable(graph, crate)
+        problems += [f"{crate} -> {other}: gameplay's sides may not depend on each other ({CONFIG_PATH} sides)"
+                     for other in sides if other != crate and other in reach]
+    if sides:
+        below = {"sunrise-client-lib"}.union(*(reachable(graph, crate) for crate in sides)) - set(sides)
+        for crate in sorted(below):
+            problems += [f"{crate} -> {side}: a crate below gameplay's sides may not depend on them "
+                         f"({CONFIG_PATH} sides)" for side in sides if side in reachable(graph, crate)]
+    return problems
+
+
 def check(config, graph, base=None, optional=frozenset(), upstream=None):
     """(problems, notes): problems fail the check, notes are only printed. `optional` is optional_edges()."""
     may = config["may_depend"]
@@ -143,6 +171,7 @@ def check(config, graph, base=None, optional=frozenset(), upstream=None):
         problems.append(f"{edge}: {layers[crate]} may not depend on {layers[dep]}. "
                         f"See {DOC}{SECTION[layers[crate]]}: move the code to the right layer, or offer an "
                         f"extension point the other side plugs into")
+    problems += side_problems(config, graph)
     if base is not None:
         base_layers = base.get("crates", {})
         if upstream is not None:

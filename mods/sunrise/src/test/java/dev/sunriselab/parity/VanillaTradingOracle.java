@@ -434,6 +434,36 @@ public final class VanillaTradingOracle {
                         .forEach(id -> sb.append(' ').append(this.getRandomSequence(Identifier.parse(id)).nextInt()));
                     out.println(sb);
                 }
+                case "offer_int" -> {
+                    var v = (Villager) merchant(level, "farmer:plains:5", at, null);
+                    var buy = new CompoundTag();
+                    buy.putString("id", "minecraft:emerald");
+                    buy.putInt("count", Integer.parseInt(kv.get("base")));
+                    var sell = new CompoundTag();
+                    sell.putString("id", "minecraft:bread");
+                    var tag = new CompoundTag();
+                    tag.put("buy", buy);
+                    tag.put("sell", sell);
+                    tag.putInt("uses", Integer.parseInt(kv.get("uses")));
+                    tag.putInt("maxUses", Integer.parseInt(kv.get("max")));
+                    tag.putBoolean("rewardExp", false);
+                    tag.putInt("specialPrice", Integer.parseInt(kv.get("special")));
+                    tag.putInt("demand", Integer.parseInt(kv.get("demand")));
+                    tag.putFloat("priceMultiplier", Float.parseFloat(kv.get("multiplier")));
+                    tag.putInt("xp", Integer.parseInt(kv.get("xp")));
+                    var ops = level.registryAccess().createSerializationContext(NbtOps.INSTANCE);
+                    var o = MerchantOffer.CODEC.parse(ops, tag).getOrThrow();
+                    int price = o.getCostA().getCount();
+                    o.updateDemand();
+                    o.addToSpecialPriceDiff(Integer.parseInt(kv.get("delta")));
+                    o.increaseUses();
+                    int used = o.getUses();
+                    o.resetUses();
+                    v.setVillagerXp(Integer.parseInt(kv.get("start")));
+                    method(Villager.class, "rewardTradeXp", MerchantOffer.class).invoke(v, o);
+                    out.printf("%s %d %d %d %d %d %d %d %d%n", name, price, o.getDemand(),
+                        o.getSpecialPriceDiff(), o.getCostA().getCount(), used, o.getUses(), o.getXp(), v.getVillagerXp());
+                }
                 case "price" -> {
                     Villager v = (Villager) merchant(level, kv.get("v"), at, null);
                     prepare(v, kv);
@@ -564,6 +594,15 @@ public final class VanillaTradingOracle {
                         }
                     }
                     case "close" -> p.closeContainer();
+                    case "restock" -> {
+                        // WorkAtPoi.start's restock at game time f[1], day f[2], screen open or not.
+                        if (v instanceof Villager villager) {
+                            var clock = level.registryAccess().lookupOrThrow(Registries.WORLD_CLOCK).getOrThrow(WorldClocks.OVERWORLD);
+                            this.getWorldData().overworldData().setGameTime(Long.parseLong(f[1]));
+                            this.clockManager().setTotalTicks(clock, Long.parseLong(f[2]) * 24000L + 1000L);
+                            if (villager.shouldRestock(level)) villager.restock();
+                        }
+                    }
                     default -> throw new IllegalArgumentException(s);
                 }
                 StringBuilder sb = new StringBuilder(name + " " + (k++) + " " + s);
@@ -587,7 +626,7 @@ public final class VanillaTradingOracle {
                 }
                 sb.append(" offers");
                 for (MerchantOffer o : v.getOffers()) {
-                    sb.append(' ').append(o.getUses()).append('/').append(o.getSpecialPriceDiff()).append('/').append(o.getCostA().getCount());
+                    sb.append(' ').append(o.getUses()).append('/').append(o.getSpecialPriceDiff()).append('/').append(o.getCostA().getCount()).append('/').append(o.getDemand());
                 }
                 sb.append(" orbs");
                 for (ExperienceOrb orb : level.getEntitiesOfClass(ExperienceOrb.class, new AABB(at[0] - 8, at[1] - 8, at[2] - 8, at[0] + 8, at[1] + 8, at[2] + 8))) {

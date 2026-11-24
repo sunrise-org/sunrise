@@ -137,7 +137,7 @@ impl<'a, 'w> Resolver<'a, 'w> {
     pub(super) fn search_text(&self, stacks: &[ItemStack]) -> String {
         stacks
             .iter()
-            .map(|stack| sunrise_client::stations::hover_name(&self.game.pack.names, stack))
+            .map(|stack| self.game.stack_hover_name_text(stack).plain())
             .collect::<Vec<_>>()
             .join(" ")
             .to_lowercase()

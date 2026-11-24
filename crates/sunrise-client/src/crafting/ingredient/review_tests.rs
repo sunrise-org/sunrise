@@ -106,7 +106,7 @@ fn component_display_is_patched_and_candidate_matching_allocates_nothing() {
 fn only_with_component_display_filters_borrowed_presence() {
     let items = Items::empty();
     let ingredient=Ingredient::parse(&serde_json::json!({"type":"neoforge:custom_display","base":"minecraft:apple","display":{"type":"minecraft:only_with_component","component":"minecraft:damage","contents":{"type":"minecraft:composite","contents":[{"type":"minecraft:item","item":"minecraft:apple"},{"type":"minecraft:item_stack","item":{"id":"minecraft:diamond_sword","components":{"minecraft:damage":5}}}]}}}),&items).unwrap();
-    let shown = ingredient.shown.unwrap();
+    let shown = ingredient.shown.as_ref().unwrap();
     assert_eq!(shown.len(), 1);
     assert_eq!(&*shown[0].item, "minecraft:diamond_sword");
     assert_eq!(shown[0].damage, 5);

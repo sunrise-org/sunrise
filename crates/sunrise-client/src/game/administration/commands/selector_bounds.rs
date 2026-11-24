@@ -24,8 +24,7 @@ impl Game<'_> {
     /// retains its existing point fallback for those kinds.
     pub(in crate::game) fn selector_target_bounds(&self, target: Target) -> Option<Aabb> {
         match target {
-            // Stage 3's insertion joins live rows; the point fallback stands.
-            Target::General(_) => None,
+            Target::General(id) => self.resident_entities.general.row(id).map(Entity::bounds),
             Target::Player => self.player.as_ref().map(|p| p.bounds()),
             Target::Guest(conn) => self.command_guest(conn).map(|p| p.bounds()),
             Target::Hook(id) => self.fishing_hook_by_id(id).map(|(h, _)| h.bounds()),
@@ -76,6 +75,10 @@ impl Game<'_> {
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.bounds()),
+            Target::Bolt(id) => self.bolts.iter().find(|b| b.id == id).map(|b| {
+                let p = Vec3::new(b.at[0], b.at[1], b.at[2]);
+                Aabb::new(p, p)
+            }),
             Target::Other(_)
             | Target::Fangs(_)
             | Target::Dragon(_)

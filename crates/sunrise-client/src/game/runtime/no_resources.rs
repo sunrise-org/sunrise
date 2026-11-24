@@ -97,7 +97,7 @@ impl Missing {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        match renderer.render(&loading_frame(&batch)) {
+        match renderer.render(&loading_frame(&batch), None) {
             Ok(true) => return,
             Ok(false) => {}
             Err(e) => log::warn!("Sunrise: frame failed: {e}"),
@@ -127,9 +127,10 @@ impl ApplicationHandler for Missing {
         if self.window.is_some() {
             return;
         }
-        let attributes =
-            sunrise_client::window::with_icon(Window::default_attributes().with_title("Sunrise"))
-                .with_inner_size(winit::dpi::LogicalSize::new(1040.0, 700.0));
+        let attributes = sunrise_client::window::with_icon(
+            Window::default_attributes().with_title(super::window_title::base()),
+        )
+        .with_inner_size(winit::dpi::LogicalSize::new(1040.0, 700.0));
         let made = event_loop
             .create_window(attributes)
             .map_err(Into::into)

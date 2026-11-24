@@ -3,11 +3,11 @@
 //! have weather, the rain and thunder layers, sampled into the sky state the renderer draws.
 use crate::Result;
 use serde_json::Value as Json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use sunrise_assets::resource_source::ResourceSource;
 use sunrise_world::environment_attributes::{
-    Attribute, AttributeMap, Entry, Kind, Value, attribute,
+    AMBIENT_PARTICLES, Attribute, AttributeMap, Entry, Kind, Value, attribute,
 };
 use sunrise_world::environment_system::{BiomeBlend, Builder, Conditions, System};
 use sunrise_world::environment_timeline::Timeline;
@@ -54,6 +54,9 @@ pub struct Sky {
     /// Environmental fog (`visual/fog_start_distance` / `fog_end_distance`).
     pub fog_start: f32,
     pub fog_end: f32,
+    /// `visual/sky_fog_end_distance`.
+    #[serde(default)]
+    pub sky_fog_end: f32,
     /// `visual/cloud_fog_end_distance`.
     pub cloud_fog_end: f32,
     /// `visual/cloud_height`.
@@ -147,8 +150,11 @@ impl PackModifiers {
 }
 
 /// What a pack's expression can ask about the frame (wiki "Scripting Expressions": the global,
-/// player, camera and positional contexts), set before the frame samples the sky.
-#[derive(Clone, Debug, Default)]
+/// player, camera and positional contexts), set before the frame samples the sky. `clone_from`
+/// keeps the destination's strings, so a context copied into every frame allocates nothing once
+/// its strings have room for the names.
+#[derive(Debug, Default)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct Frame {
     pub rain: f32,
     pub thunder: f32,
@@ -172,6 +178,47 @@ pub struct Frame {
     pub biome: String,
     pub temperature: f32,
     pub downfall: f32,
+}
+
+impl Clone for Frame {
+    fn clone(&self) -> Self {
+        let mut frame = Self::default();
+        frame.clone_from(self);
+        frame
+    }
+
+    /// Every field copied, the strings into the destination's own buffers.
+    fn clone_from(&mut self, source: &Self) {
+        let Self {
+            rain,
+            thunder,
+            game_time,
+            day_time,
+            render_distance,
+            sky_type,
+            dimension,
+            player,
+            player_velocity,
+            player_on_ground,
+            in_water,
+            camera,
+            sky_light,
+            block_light,
+            biome,
+            temperature,
+            downfall,
+        } = source;
+        self.dimension.clone_from(dimension);
+        self.biome.clone_from(biome);
+        (self.rain, self.thunder, self.game_time, self.day_time) =
+            (*rain, *thunder, *game_time, *day_time);
+        (self.render_distance, self.sky_type) = (*render_distance, *sky_type);
+        (self.player, self.player_velocity, self.player_on_ground) =
+            (*player, *player_velocity, *player_on_ground);
+        (self.in_water, self.camera, self.sky_light, self.block_light) =
+            (*in_water, *camera, *sky_light, *block_light);
+        (self.temperature, self.downfall) = (*temperature, *downfall);
+    }
 }
 
 impl Frame {
@@ -291,7 +338,7 @@ fn as_number(value: &Value) -> f64 {
         Value::Argb([r, g, b, a]) => {
             f64::from((byte(*a) << 24 | byte(*r) << 16 | byte(*g) << 8 | byte(*b)) as i32)
         }
-        Value::Other(_) => 0.0,
+        Value::AmbientParticles(_) | Value::Other(_) => 0.0,
     }
 }
 
@@ -795,101 +842,45 @@ impl Resolver {
     }
 }
 
-/// The biome ids a `#tag` (`data/<namespace>/tags/worldgen/biome/<path>.json`) holds, nested
-/// tags included.
-fn biome_tag(
-    root: &ResourceSource,
-    tag: &str,
-    cache: &mut HashMap<String, HashSet<String>>,
-) -> HashSet<String> {
-    if let Some(hit) = cache.get(tag) {
-        return hit.clone();
-    }
-    cache.insert(tag.to_owned(), HashSet::new());
-    let (namespace, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
-    let file = format!("data/{namespace}/tags/worldgen/biome/{path}.json");
-    let mut out = HashSet::new();
-    if let Ok(json) = root
-        .read(&file)
-        .map_err(|e| e.to_string())
-        .and_then(|bytes| serde_json::from_slice::<Json>(&bytes).map_err(|e| e.to_string()))
-    {
-        out.extend(
-            sunrise_world::tag_layers::TagLayers::from_file(&json)
-                .build(|inner| biome_tag(root, inner, cache).into_iter().collect())
-                .into_iter()
-                .map(|id| {
-                    if id.contains(':') {
-                        id
-                    } else {
-                        format!("minecraft:{id}")
-                    }
-                }),
-        );
-    }
-    cache.insert(tag.to_owned(), out.clone());
-    out
-}
-
-/// The timeline ids a dimension type's `timelines` names: an id, a `#tag` or a list,
-/// tags resolved through `tags/timeline/` (their entries may be `{"id", "required"}`).
-fn timeline_ids(root: &ResourceSource, json: &Json, out: &mut Vec<String>, depth: u32) {
-    // An entry's id and whether it removes (`TagLoader.EntryWithSource.remove`).
-    let entry = |e: &Json| {
-        e.as_str()
-            .or_else(|| e.get("id").and_then(Json::as_str))
-            .map(|id| {
-                (
-                    id.to_owned(),
-                    e.get("remove").and_then(Json::as_bool) == Some(true),
-                )
-            })
+/// The dimension's timeline selection, applying ordered tag members in place.
+fn timeline_ids(root: &ResourceSource, json: &Json) -> Vec<String> {
+    let timeline_path = |id: &str| {
+        let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+        format!("data/{namespace}/timeline/{path}.json")
     };
-    let items: Vec<(String, bool)> = match json {
-        Json::Array(list) => list.iter().filter_map(entry).collect(),
-        other => entry(other).into_iter().collect(),
+    let tags = crate::pack_tags::bind(root, "timeline", |id| root.contains(&timeline_path(id)));
+    let entries = match json {
+        Json::Array(items) => items.as_slice(),
+        entry => std::slice::from_ref(entry),
     };
-    for (item, removes) in items {
-        if let Some(tag) = item.strip_prefix('#') {
-            let (namespace, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
-            let file = format!("data/{namespace}/tags/timeline/{path}.json");
-            if depth < 8
-                && let Ok(tag) = root
-                    .read(&file)
-                    .map_err(|e| e.to_string())
-                    .and_then(|bytes| {
-                        serde_json::from_slice::<Json>(&bytes).map_err(|e| e.to_string())
-                    })
-            {
-                let mut members = Vec::new();
-                members.extend(sunrise_world::tag_layers::TagLayers::from_file(&tag).build(
-                    |inner| {
-                        let mut child = Vec::new();
-                        timeline_ids(
-                            root,
-                            &Json::String(format!("#{inner}")),
-                            &mut child,
-                            depth + 1,
-                        );
-                        child
-                    },
-                ));
-                if removes {
-                    out.retain(|kept| !members.contains(kept));
-                } else {
-                    for id in members {
-                        if !out.contains(&id) {
-                            out.push(id);
-                        }
-                    }
-                }
+    let mut out = Vec::new();
+    for entry in entries {
+        let Some(id) = sunrise_world::tag_layers::entry_id(entry) else {
+            continue;
+        };
+        let removes = entry["remove"].as_bool() == Some(true);
+        let direct;
+        let members = if let Some(tag) = id.strip_prefix('#') {
+            let Ok(tag) = sunrise_core::identifier::Identifier::parse(tag) else {
+                continue;
+            };
+            let Some(members) = tags.get(tag.to_string().as_str()) else {
+                continue;
+            };
+            members.as_slice()
+        } else {
+            direct = id.to_owned();
+            std::slice::from_ref(&direct)
+        };
+        for member in members {
+            if removes {
+                out.retain(|kept| kept != member);
+            } else if !out.contains(member) {
+                out.push(member.clone());
             }
-        } else if removes {
-            out.retain(|kept| kept != &item);
-        } else if !out.contains(&item) {
-            out.push(item);
         }
     }
+    out
 }
 
 impl Environment {
@@ -969,7 +960,6 @@ impl Environment {
         // Without biome data (a bare dimension type), there is no biome layer.
         let mut biomes = HashMap::new();
         let mut post = HashMap::new();
-        let tags = std::cell::RefCell::new(HashMap::new());
         for file in root.list_under("data", &["worldgen/biome"]) {
             let Some((namespace, name)) = file
                 .strip_prefix("data/")
@@ -1000,8 +990,7 @@ impl Environment {
             };
             let mut post_map = AttributeMap::default();
             for m in &packs.biomes {
-                let in_tag =
-                    |tag: &str| biome_tag(root, tag, &mut tags.borrow_mut()).contains(&name);
+                let in_tag = |tag: &str| tags.contains("worldgen/biome", tag, &name);
                 if m.targets.matches(&name, in_tag) {
                     resolver.apply(&mut map, &m.base);
                     resolver.apply(&mut post_map, &m.post_process);
@@ -1013,9 +1002,10 @@ impl Environment {
             biomes.insert(name, map);
         }
         builder.biome_layer(biomes.values());
-        let mut ids = Vec::new();
-        timeline_ids(root, &json["timelines"], &mut ids, 0);
-        for id in ids {
+        // Ambient emission uses the active level's registry, including synchronized biomes.
+        builder
+            .biome_attribute(attribute(AMBIENT_PARTICLES).expect("registered ambient particles"));
+        for id in timeline_ids(root, &json["timelines"]) {
             let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", &id));
             let file = format!("data/{namespace}/timeline/{path}.json");
             match root
@@ -1051,9 +1041,9 @@ impl Environment {
     }
 
     /// Sets what the packs' expressions read for the next samples.
-    pub fn set_frame(&self, frame: Frame) {
+    pub fn set_frame(&self, frame: &Frame) {
         if let Ok(mut f) = self.frame.write() {
-            *f = frame;
+            f.clone_from(frame);
         }
     }
 
@@ -1118,16 +1108,24 @@ impl Environment {
     /// `EnvironmentAttributeSystem.getValue` of one attribute, or its dimension value without
     /// a biome.
     pub fn value(&self, id: &str, at: &Sample) -> Option<Value> {
-        let attribute = attribute(id)?;
+        self.value_at(attribute(id)?, at, &|_| at.day_time)
+    }
+
+    /// Sample a known attribute with the level's clock values.
+    pub fn value_at(
+        &self,
+        attribute: &Attribute,
+        at: &Sample,
+        clock: &dyn Fn(&str) -> i64,
+    ) -> Option<Value> {
         let biome = |_full_resolution: bool| at.biome;
-        let clock = |_clock: &str| at.day_time;
         let post_biome = |_full_resolution: bool| at.post_biome;
         let conditions = Conditions {
             rain: at.rain,
             thunder: at.thunder,
             blend: at.blend,
             biome: &biome,
-            clock: &clock,
+            clock,
             post_blend: at.post_blend,
             post_biome: Some(&post_biome),
         };
@@ -1167,6 +1165,7 @@ impl Environment {
             sky_light_level: float("gameplay/sky_light_level"),
             fog_start: float("visual/fog_start_distance"),
             fog_end: float("visual/fog_end_distance"),
+            sky_fog_end: float("visual/sky_fog_end_distance"),
             cloud_fog_end: float("visual/cloud_fog_end_distance"),
             cloud_height: float("visual/cloud_height"),
         }
@@ -1194,6 +1193,62 @@ pub fn sky_darken(environment: &Environment, day_time: i64, rain: f32, thunder: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Frame::clone_from` copies every field and writes the strings into the destination's own
+    /// buffers (their address and capacity kept), so a context copied each frame allocates
+    /// nothing; `clone` gives an equal frame. The environment's held frame, which its attribute
+    /// expressions read, is written the same way by `set_frame`, every time it is set.
+    #[test]
+    fn a_frame_copies_into_its_own_strings() {
+        let source = Frame {
+            rain: 0.25,
+            thunder: 0.5,
+            game_time: 7,
+            day_time: 8,
+            render_distance: 9,
+            sky_type: 2,
+            dimension: "minecraft:the_end".to_owned(),
+            player: [1.0, 2.0, 3.0],
+            player_velocity: [4.0, 5.0, 6.0],
+            player_on_ground: true,
+            in_water: false,
+            camera: [7.0, 8.0, 9.0],
+            sky_light: 10,
+            block_light: 11,
+            biome: "minecraft:the_void".to_owned(),
+            temperature: 0.75,
+            downfall: 0.125,
+        };
+        // Room for the names, and the booleans the other way round from the source's.
+        let roomy = || Frame {
+            dimension: String::with_capacity(64),
+            biome: String::with_capacity(64),
+            player_on_ground: false,
+            in_water: true,
+            ..Default::default()
+        };
+        let mut frame = roomy();
+        let buffers = |f: &Frame| [&f.dimension, &f.biome].map(|s| (s.as_ptr(), s.capacity()));
+        let before = buffers(&frame);
+        frame.clone_from(&source);
+        assert_eq!(buffers(&frame), before);
+        assert_eq!(frame, source);
+        assert_eq!(source.clone(), source);
+        // The environment's own copy, set twice: the second time over the first's names.
+        let environment = with_packs(&[]);
+        *environment.frame.write().unwrap() = roomy();
+        let before = buffers(&environment.frame.read().unwrap());
+        let overworld = Frame {
+            dimension: "minecraft:overworld".to_owned(),
+            biome: "minecraft:plains".to_owned(),
+            ..Default::default()
+        };
+        environment.set_frame(&overworld);
+        environment.set_frame(&source);
+        let held = environment.frame.read().unwrap();
+        assert_eq!(buffers(&held), before);
+        assert_eq!(*held, source);
+    }
 
     /// The level table is global, so the tests that set it take turns.
     static LEVEL_TABLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1444,7 +1499,7 @@ mod tests {
             r#"{"attributes_modifiers": {"visual/fog_end_distance": "64 - (p.y < 0) * 80"}}"#,
         )]);
         let end_at = |y: f64| {
-            env.set_frame(Frame {
+            env.set_frame(&Frame {
                 player: [0.5, y, 0.5],
                 ..Frame::default()
             });
@@ -1470,7 +1525,7 @@ mod tests {
             ),
         ]);
         let at = |rain: f32, thunder: f32, chunks: i32| {
-            env.set_frame(Frame {
+            env.set_frame(&Frame {
                 rain,
                 thunder,
                 render_distance: chunks,
@@ -1523,7 +1578,7 @@ mod tests {
             ("assets/mypack/polytone/colormaps/sky.png", &png),
         ]);
         let sky = |rain: f32, thunder: f32| {
-            env.set_frame(Frame {
+            env.set_frame(&Frame {
                 rain,
                 thunder,
                 ..Frame::default()
@@ -1644,7 +1699,7 @@ mod tests {
             ),
         ]);
         let sky = |biome: &str| {
-            env.set_frame(Frame {
+            env.set_frame(&Frame {
                 biome: biome.to_owned(),
                 ..Frame::default()
             });

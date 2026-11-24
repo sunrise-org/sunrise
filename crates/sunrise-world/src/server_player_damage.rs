@@ -8,7 +8,7 @@ use crate::{
     compression::invalid,
     damage_reduction::{self, Bypass, DamageReductionWorld},
     food::FoodData,
-    living_damage::{self, DamageContainer, DamageStat, DamageWorld, MagicAbsorb},
+    living_damage::{self, DamageContainer, DamageStat, DamageWorld},
     player_health::{PlayerAttributeHealth, PlayerFloatIds, PlayerHealthError},
     synced_floats::{DataError, Observer, SyncedFloats},
 };
@@ -35,6 +35,13 @@ fn health_error<E, A>(e: PlayerHealthError<E, A>) -> ServerDamageError<E, A> {
         PlayerHealthError::Attribute(e) => ServerDamageError::Attribute(e),
         PlayerHealthError::Data(e) => ServerDamageError::Data(e),
     }
+}
+/// The player's body as a combat binding holds it, lent for reading to its environment at a
+/// hook: the attribute map and the synced health and absorption floats.
+pub struct PlayerBodyRead<'a, A> {
+    pub attributes: &'a A,
+    pub data: &'a SyncedFloats,
+    pub ids: PlayerFloatIds,
 }
 pub trait ServerDamageEnvironment<A: HealthAttributes = EntityAttributes>:
     ArmorWorld + Observer<Error = <Self as ArmorWorld>::Error>
@@ -66,6 +73,14 @@ pub trait ServerDamageEnvironment<A: HealthAttributes = EntityAttributes>:
     /// `DamageWorld::damage_pre`. The default does nothing.
     fn damage_pre(&mut self, _container: &mut DamageContainer) -> Result<(), EnvError<Self>> {
         Ok(())
+    }
+    /// [`Self::damage_pre`] with the player's body lent for reading. The default ignores it.
+    fn damage_pre_with(
+        &mut self,
+        container: &mut DamageContainer,
+        _body: PlayerBodyRead<'_, A>,
+    ) -> Result<(), EnvError<Self>> {
+        self.damage_pre(container)
     }
 }
 pub struct ServerPlayerDamage<'a, E, A: HealthAttributes = EntityAttributes> {
@@ -146,7 +161,6 @@ impl<'a, A: HealthAttributes, E: ServerDamageEnvironment<A>> ServerPlayerDamage<
             before,
             before - damage,
             damage,
-            !bypass_armor,
         );
         living_damage::actually_hurt_after_armor(self, container, damage, true)
     }
@@ -250,11 +264,8 @@ impl<A: HealthAttributes, E: ServerDamageEnvironment<A>> DamageWorld
     fn after_armor(&mut self, v: f32) -> Result<f32, Self::Error> {
         damage_reduction::after_armor(self, v)
     }
-    fn bypasses_armor(&mut self) -> Result<bool, Self::Error> {
-        self.bypasses(Bypass::Armor)
-    }
-    fn after_magic(&mut self, v: f32) -> Result<MagicAbsorb, Self::Error> {
-        damage_reduction::after_magic(self, v)
+    fn after_magic(&mut self, container: &mut DamageContainer, v: f32) -> Result<f32, Self::Error> {
+        damage_reduction::after_magic(self, container, v)
     }
     fn absorption(&mut self) -> Result<f32, Self::Error> {
         self.health_binding().absorption().map_err(health_error)
@@ -319,8 +330,13 @@ impl<A: HealthAttributes, E: ServerDamageEnvironment<A>> DamageWorld
             .map_err(ServerDamageError::Environment)
     }
     fn damage_pre(&mut self, container: &mut DamageContainer) -> Result<(), Self::Error> {
+        let body = PlayerBodyRead {
+            attributes: &*self.attributes,
+            data: &*self.data,
+            ids: self.ids,
+        };
         self.environment
-            .damage_pre(container)
+            .damage_pre_with(container, body)
             .map_err(ServerDamageError::Environment)
     }
 }

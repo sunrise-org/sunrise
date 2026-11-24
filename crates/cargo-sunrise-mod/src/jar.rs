@@ -56,33 +56,41 @@ fn stage_dir(project: &Path, relative: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Stage independent snapshots of the project's exact originals. Return the home for the game.
-pub(crate) fn stage_for_run(
-    manifest: &Manifest,
+pub(crate) fn launch_arguments(project: &Path, args: &[String]) -> Result<LaunchArguments, String> {
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let home = project.join(crate::RUN_DIR).join("home");
+    LaunchArguments::parse(args.iter().cloned(), &cwd, &home, None).map_err(|e| e.to_string())
+}
+
+/// Stage independent snapshots of every selected package's exact originals.
+pub(crate) fn stage_for_run<'a>(
+    manifests: impl IntoIterator<Item = &'a Manifest>,
     project: &Path,
     source: Option<&Path>,
-    game_args: &[String],
+    launch: &LaunchArguments,
 ) -> Result<Option<PathBuf>, String> {
-    if manifest.jar.is_empty() {
+    let requirements = collect_jar_requirements(
+        manifests
+            .into_iter()
+            .map(|manifest| (manifest.id.as_str(), manifest.jar.as_slice())),
+    )
+    .map_err(|e| e.to_string())?;
+    if requirements.is_empty() {
         return Ok(None);
     }
     let relative_home = Path::new(crate::RUN_DIR).join("home");
     let home = project.join(&relative_home);
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let launch = LaunchArguments::parse(game_args.iter().cloned(), &cwd, &home, None)
-        .map_err(|e| e.to_string())?;
     if launch.context.home != cwd.join(&home) {
         return Err(format!(
             "{} needs jars in its development home ({}); omit the game's --home and use `cargo sunrise-mod run --jars <dir>` to choose where to read originals",
-            manifest.id,
+            requirements[0].owners.join(", "),
             home.display()
         ));
     }
     let source = source.map_or_else(default_store, Path::to_path_buf);
     let dest = stage_dir(project, &relative_home.join("jars"))?;
     let source_in_stage = dunce::canonicalize(&source).is_ok_and(|dir| dir.starts_with(&dest));
-    let requirements = collect_jar_requirements([(manifest.id.as_str(), manifest.jar.as_slice())])
-        .map_err(|e| e.to_string())?;
     let wanted: HashSet<_> = requirements
         .iter()
         .map(|r| r.jar.cache_path(&dest))
@@ -121,7 +129,7 @@ pub(crate) fn stage_for_run(
             format!(
                 "{} needs Java jar {} {} (SHA-512 {}): {}: {why}\n\
                  Add the exact original with `cargo sunrise-mod use-jar <path>` and run without --jars, or use `cargo sunrise-mod run --jars <dir>` with `<sha512>.jar` files",
-                manifest.id,
+                requirement.owners.join(", "),
                 jar.id(),
                 jar.version(),
                 jar.sha512(),
@@ -274,6 +282,36 @@ mod tests {
         (manifest, source, original)
     }
 
+    fn stage(manifest: &Manifest, root: &Path, source: &Path) -> Result<Option<PathBuf>, String> {
+        stage_for_run(
+            [manifest],
+            root,
+            Some(source),
+            &launch_arguments(root, &[]).unwrap(),
+        )
+    }
+
+    #[test]
+    fn run_stages_originals_needed_only_by_a_library() {
+        let root = tempfile::tempdir().unwrap();
+        let (library, source, _) = fixture(root.path());
+        let mut project = library.clone();
+        project.id = "addon".into();
+        project.jar.clear();
+        let home = stage_for_run(
+            [&project, &library],
+            root.path(),
+            Some(&source),
+            &launch_arguments(root.path(), &[]).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            fs::read(library.jar[0].cache_path(&home.join("jars"))).unwrap(),
+            b"abc"
+        );
+    }
+
     #[test]
     fn run_stages_only_declared_originals_and_keeps_the_previous_stage_on_refusal() {
         let root = tempfile::tempdir().unwrap();
@@ -287,10 +325,7 @@ mod tests {
         let sentinel = jars.join("notes.jar");
         fs::write(&sentinel, b"keep me").unwrap();
 
-        assert_eq!(
-            stage_for_run(&manifest, root.path(), Some(&source), &[]).unwrap(),
-            Some(home)
-        );
+        assert_eq!(stage(&manifest, root.path(), &source).unwrap(), Some(home));
         let staged = manifest.jar[0].cache_path(&jars);
         assert_eq!(fs::read(&staged).unwrap(), b"abc");
         assert!(!stale.exists());
@@ -300,7 +335,7 @@ mod tests {
         assert_eq!(fs::read_dir(&source).unwrap().count(), 2);
 
         fs::remove_file(&original).unwrap();
-        let error = stage_for_run(&manifest, root.path(), Some(&source), &[]).unwrap_err();
+        let error = stage(&manifest, root.path(), &source).unwrap_err();
         for expected in [
             "garden",
             "original",
@@ -318,7 +353,7 @@ mod tests {
     fn run_reuses_verified_copies_and_an_original_cannot_change_them() {
         let root = tempfile::tempdir().unwrap();
         let (manifest, source, original) = fixture(root.path());
-        let stage = || stage_for_run(&manifest, root.path(), Some(&source), &[]);
+        let stage = || stage(&manifest, root.path(), &source);
         fs::write(&original, b"wrong").unwrap();
         assert!(stage().is_err());
         let jars = root.path().join(crate::RUN_DIR).join("home/jars");
@@ -368,7 +403,7 @@ mod tests {
             fs::create_dir_all(redirected.parent().unwrap()).unwrap();
             std::os::unix::fs::symlink(outside.path(), &redirected).unwrap();
 
-            assert!(stage_for_run(&manifest, project.path(), Some(&source), &[]).is_err());
+            assert!(stage(&manifest, project.path(), &source).is_err());
             assert_eq!(fs::read_link(&redirected).unwrap(), outside.path());
             assert_eq!(fs::read(&sentinel).unwrap(), b"player jar");
             assert_eq!(fs::read_dir(outside_jars).unwrap().count(), 1);

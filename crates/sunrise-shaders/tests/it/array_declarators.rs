@@ -23,6 +23,7 @@ fn program(source: &str) -> Result<sunrise_shaders::Program, Vec<sunrise_shaders
         &stage("void main() { gl_Position = gl_Vertex; }"),
         &stage(source),
         Target::Window,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
 }
 

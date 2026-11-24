@@ -106,11 +106,11 @@ fn villager_food_codec_compiles_recipes_and_matches_borrowed_nutrition() {
         serde_json::json!({"nutrition":"3"}),
     ] {
         let value = ingredient(payload, false);
-        let walked = WalkedIngredient::walk(
+        let walked = WalkedIngredient::<()>::walk(
             &value,
             &items.item_tag_order,
             &|_| None,
-            &resolved_items,
+            &|_, _| None,
             &|data| crate::json_nbt::json_to_compound(data).ok(),
         )
         .unwrap();

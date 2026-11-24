@@ -1,9 +1,12 @@
 //! Frozen raw-payload declarations and per-connection dispatch tables.
 //! Application packets retain their declared vanilla custom-payload channel.
 pub mod connection;
+pub mod droppable;
 mod encode;
 mod engine;
 pub use engine::{is_engine, negotiated};
+#[cfg(test)]
+mod droppable_wire_tests;
 #[cfg(test)]
 mod engine_tests;
 pub use encode::{encode, encoded_len};
@@ -11,8 +14,6 @@ mod incoming;
 pub use incoming::{Body, Classified, Failure, Incoming};
 mod endpoint;
 pub use endpoint::{Endpoint, Prepared};
-#[cfg(test)]
-mod busy_wasm_tests;
 mod executor;
 #[cfg(test)]
 mod executor_tests;
@@ -22,9 +23,7 @@ mod raw_channel_tests;
 pub mod staging_probe;
 #[cfg(test)]
 mod typed_schema_tests;
-#[cfg(test)]
-mod wasm_tests;
-pub use executor::{dispatch, dispatch_pending, mod_of};
+pub use executor::{dispatch, dispatch_bundle, dispatch_pending, mod_of};
 mod main_queue;
 pub use main_queue::MainQueue;
 #[cfg(test)]
@@ -49,6 +48,7 @@ use sunrise_protocol::{
     packets::custom_payload::{PayloadCodecs, PayloadFlow, PayloadProtocol as CodecProtocol},
     payload_negotiation::{self as negotiation, Flow, Manifest, Phase, RegistrationPhase},
 };
+pub(crate) use transport::PlayTransition;
 pub use transport::Transport;
 
 /// Logical receiving side, never inferred from application bytes.
@@ -83,6 +83,11 @@ pub struct Local {
     raw: HashMap<String, Vec<PayloadReceiver>>,
     // Shared by a server installation's connections: abandoned epochs must not
     // accumulate uncharged tables while the main executor is stalled.
+    /// The `Droppable` channels, with their drop counters; empty when no mod declared one.
+    droppable: HashMap<String, Arc<mod_api::__private::game::DropCounters>>,
+    budgets: droppable::Budgets,
+    /// Server side: each bound player's connection, for a group send from a network thread.
+    roster: std::sync::RwLock<HashMap<mod_api::PlayerRef, std::sync::Weak<connection::Connection>>>,
     snapshot_budget: Option<(
         sunrise_mod_runtime::byte_channel::Sender<()>,
         sunrise_mod_runtime::byte_channel::Receiver<()>,
@@ -141,6 +146,17 @@ impl Local {
         };
         let mut local = Self::new(manifest, registry);
         local.raw = raw;
+        local.droppable = local
+            .registry
+            .iter()
+            .flat_map(|registry| registry.declarations())
+            .filter(|d| d.delivery == mod_api::PayloadDelivery::Droppable)
+            .filter_map(|d| {
+                let counters = local.registry.as_ref()?.drop_counters(&d.id.0)?;
+                Some((d.id.0.clone(), counters.clone()))
+            })
+            .collect();
+        local.budgets = droppable::Budgets::from_env();
         Ok(Arc::new(local))
     }
     pub(crate) fn empty() -> Arc<Self> {
@@ -193,6 +209,12 @@ impl Local {
             registry,
             declarations,
             raw: HashMap::new(),
+            droppable: HashMap::new(),
+            budgets: droppable::Budgets {
+                clientbound: droppable::CLIENTBOUND_BUDGET,
+                serverbound: droppable::SERVERBOUND_BUDGET,
+            },
+            roster: Default::default(),
         }
     }
     /// Whether a connection needs per-connection state: a negotiated declaration,
@@ -208,6 +230,72 @@ impl Local {
             .entries()
             .iter()
             .any(|entry| !engine::is_engine(entry.phase(), entry.id()))
+    }
+    /// The drop counters of `id` when it is a `Droppable` channel.
+    pub fn droppable(&self, id: &str) -> Option<&Arc<mod_api::__private::game::DropCounters>> {
+        self.droppable.get(id)
+    }
+    /// Whether any `Droppable` channel is declared: only then do connections own a queue.
+    pub fn has_droppable(&self) -> bool {
+        !self.droppable.is_empty()
+    }
+    /// Group send of a `Droppable` channel from any thread, to the players a mod snapshot names:
+    /// each queued on its connection's own queue, so a network handler fans a frame out without
+    /// waiting for the main tick. A player who left, is not in play or whose peer lacks the
+    /// channel is skipped. Server side only; the caller checked the side.
+    pub fn send_to(
+        &self,
+        players: &[mod_api::PlayerRef],
+        id: &PayloadId,
+        bytes: mod_api::PayloadBytes,
+    ) -> Result<u32, PayloadSendError> {
+        let Some(counters) = self.droppable.get(&id.0) else {
+            return Err(if self.owns(&id.0) {
+                PayloadSendError::NotDroppable(id.clone())
+            } else {
+                PayloadSendError::UnknownPayload(id.clone())
+            });
+        };
+        if self.declarations[1]
+            .get(&id.0)
+            .is_some_and(|flow| *flow == Flow::ToServer)
+        {
+            return Err(PayloadSendError::WrongDirection(id.clone()));
+        }
+        let len = encoded_len(Phase::Play, Side::Server, id, bytes.0.len());
+        let limit =
+            sunrise_protocol::frame::MAX_FRAME.min(sunrise_protocol::frame::MAX_UNCOMPRESSED);
+        if len > limit {
+            return Err(PayloadSendError::FrameTooLarge {
+                id: id.clone(),
+                stage: mod_api::PayloadFrameStage::Encoded,
+                size: len as u64,
+                limit: limit as u64,
+            });
+        }
+        let body = encode(Phase::Play, Side::Server, id, bytes);
+        let now = std::time::Instant::now();
+        let roster = self.roster.read().unwrap_or_else(|e| e.into_inner());
+        let mut queued = 0;
+        for player in players {
+            let Some(connection) = roster.get(player).and_then(std::sync::Weak::upgrade) else {
+                continue;
+            };
+            let (Some(epoch), Some(queue)) = (connection.epoch(), connection.droppable()) else {
+                continue;
+            };
+            if epoch.phase != Phase::Play || epoch.peer.can_send(Phase::Play, id).is_err() {
+                continue;
+            }
+            // Published under the epoch gate, so a send never outlives its phase.
+            if epoch
+                .with_active(|| queue.push(now, counters, body.clone()))
+                .is_some()
+            {
+                queued += 1;
+            }
+        }
+        Ok(queued)
     }
     /// Whether `id` is a raw play channel a mod declared on this server.
     pub fn is_raw(&self, id: &str) -> bool {
@@ -300,7 +388,7 @@ impl Peer {
     /// never a silent skip. Callers separately distinguish unrelated engine/plugin channels.
     pub fn receiver(&self, phase: Phase, id: &str) -> Result<&PayloadReceiver, PayloadSendError> {
         match self.phases[index(phase)].get(id) {
-            Some(Some(receiver)) if receiver.enabled() => Ok(receiver),
+            Some(Some(receiver)) if receiver.owner_enabled() => Ok(receiver),
             Some(Some(_)) => Err(PayloadSendError::Disconnected),
             Some(None) => Err(PayloadSendError::WrongDirection(PayloadId(id.to_owned()))),
             None => Err(self.missing(phase, id)),
@@ -326,33 +414,63 @@ impl Peer {
     }
     /// Resolve local authority, phase, direction and peer support before preparing bytes.
     pub fn can_send(&self, phase: Phase, id: &PayloadId) -> Result<(), PayloadSendError> {
+        match self.send_refusal(phase, &id.0) {
+            None => Ok(()),
+            Some(refusal) => Err(refusal.error(&id.0)),
+        }
+    }
+    /// The decision behind [`Self::can_send`], without building the owned error: `None` when
+    /// `id` may be sent in `phase`. It allocates nothing, so a refusal is cheap to ask for.
+    pub fn send_refusal(&self, phase: Phase, id: &str) -> Option<SendRefusal> {
         // A raw channel needs no peer declaration: it goes to any client in play.
-        if self.local.is_raw(&id.0) {
+        if self.local.is_raw(id) {
             return match (phase, self.side) {
-                (Phase::Play, Side::Server) => Ok(()),
-                (Phase::Configuration, _) => Err(PayloadSendError::WrongProtocol(id.clone())),
-                (_, Side::Client) => Err(PayloadSendError::WrongDirection(id.clone())),
+                (Phase::Play, Side::Server) => None,
+                (Phase::Configuration, _) => Some(SendRefusal::WrongProtocol),
+                (_, Side::Client) => Some(SendRefusal::WrongDirection),
             };
         }
-        let flow = self.local.declarations[index(phase)]
-            .get(&id.0)
-            .ok_or_else(|| self.missing(phase, &id.0))?;
+        let Some(flow) = self.local.declarations[index(phase)].get(id) else {
+            return Some(self.missing_refusal(phase, id));
+        };
         if *flow != Flow::Bidirectional && *flow != self.side.outgoing() {
-            return Err(PayloadSendError::WrongDirection(id.clone()));
+            return Some(SendRefusal::WrongDirection);
         }
-        if !self.phases[index(phase)].contains_key(&id.0) {
-            return Err(PayloadSendError::UnsupportedPeer(id.clone()));
+        if !self.phases[index(phase)].contains_key(id) {
+            return Some(SendRefusal::UnsupportedPeer);
         }
-        Ok(())
+        None
     }
     fn missing(&self, phase: Phase, id: &str) -> PayloadSendError {
-        let id = PayloadId(id.to_owned());
-        if self.local.declarations[index(phase)].contains_key(&id.0) {
-            PayloadSendError::UnsupportedPeer(id)
-        } else if self.local.owns(&id.0) {
-            PayloadSendError::WrongProtocol(id)
+        self.missing_refusal(phase, id).error(id)
+    }
+    fn missing_refusal(&self, phase: Phase, id: &str) -> SendRefusal {
+        if self.local.declarations[index(phase)].contains_key(id) {
+            SendRefusal::UnsupportedPeer
+        } else if self.local.owns(id) {
+            SendRefusal::WrongProtocol
         } else {
-            PayloadSendError::UnknownPayload(id)
+            SendRefusal::UnknownPayload
+        }
+    }
+}
+/// Why a channel cannot be sent on, before the owned [`PayloadSendError`] names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendRefusal {
+    UnknownPayload,
+    WrongProtocol,
+    WrongDirection,
+    UnsupportedPeer,
+}
+impl SendRefusal {
+    /// The send path's error for channel `id`.
+    pub fn error(self, id: &str) -> PayloadSendError {
+        let id = PayloadId(id.to_owned());
+        match self {
+            Self::UnknownPayload => PayloadSendError::UnknownPayload(id),
+            Self::WrongProtocol => PayloadSendError::WrongProtocol(id),
+            Self::WrongDirection => PayloadSendError::WrongDirection(id),
+            Self::UnsupportedPeer => PayloadSendError::UnsupportedPeer(id),
         }
     }
 }

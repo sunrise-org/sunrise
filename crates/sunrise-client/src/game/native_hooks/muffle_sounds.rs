@@ -12,7 +12,7 @@ impl Game<'_> {
     /// the muffle in place; `ticks` 0 ends it at once. Nothing changes while no
     /// mod calls it. False, with nothing changed, on a server, for an amount or
     /// strength outside 0 to 1, or for an exempt event that isn't
-    /// `namespace:path` or more than 64 of them. API @API:muffle_sounds@.
+    /// `namespace:path`. API @API:muffle_sounds@.
     pub(in crate::game) fn muffle_sounds(
         &mut self,
         amount: f32,
@@ -20,7 +20,7 @@ impl Game<'_> {
         ticks: u32,
         exempt: &[&str],
     ) -> bool {
-        if !self.native_window() || exempt.len() > 64 || !exempt.iter().all(|e| sound_id(e)) {
+        if !self.native_window() || !exempt.iter().all(|e| sound_id(e)) {
             return false;
         }
         self.audio.muffle(amount, lowpass, ticks, exempt)

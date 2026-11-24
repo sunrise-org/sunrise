@@ -1,5 +1,4 @@
 //! The `food_level_changed` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0243
 
 pub trait Hooks {
     /// The food level of the server player `player` (`name`) is about to change
@@ -13,10 +12,12 @@ pub trait Hooks {
     /// world. The player's state is swapped in, so `host.players().acting_player()`,
     /// `PlayerRef::tell` and the item helpers reach them. On a server.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_food_level_changed",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         neoforge = "none (vanilla: FoodData; Bukkit's FoodLevelChangeEvent)"
     )]
-    fn food_level_changed();
+    fn food_level_changed(player: u128, name: &str, from: i32, to: &mut i32, cancel: &mut bool);
 }

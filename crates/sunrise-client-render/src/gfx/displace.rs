@@ -757,17 +757,15 @@ mod tests {
     /// margin), and by the view not at all wholly past one side. FXC dropped
     /// the view's side test and drew nothing (#16168).
     #[test]
+    #[ignore = "daily"]
     fn the_pick_takes_the_quads_in_view_on_every_backend() {
-        let mut tested = false;
+        let _gpu = crate::gfx::test_gpu::lock();
         for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
-            let (device, queue) =
-                match pollster::block_on(adapter.request_device(&Default::default())) {
-                    Ok(device) => device,
-                    Err(e) => {
-                        eprintln!("no device on {name}: {e}");
-                        continue;
-                    }
-                };
+            let Some((device, queue)) =
+                crate::gfx::test_gpu::optional_device_with(&adapter, &Default::default())
+            else {
+                continue;
+            };
             eprintln!("displacement pick on {} ({name})", adapter.get_info().name);
             let normals = normals(&device, &queue);
             let mut displacement =
@@ -803,10 +801,6 @@ mod tests {
                     "shadow at {at:?} on {name}"
                 );
             }
-            tested = true;
-        }
-        if !tested {
-            eprintln!("no GPU: skipped");
         }
     }
 
@@ -814,7 +808,9 @@ mod tests {
     /// and a quad spilled to its own vertices, on two pages) are written out as the very words
     /// of their vertices, as a wide section's are copied (#16127).
     #[test]
+    #[ignore = "daily"]
     fn compact_sections_give_the_grid_the_words_of_their_vertices_on_every_backend() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use crate::mesher::{TerrainVertex, packed};
         // Whole faces of blocks on the grid, each its own layer, grey level and light: records.
         let face = |i: u32| {
@@ -863,16 +859,12 @@ mod tests {
         );
         let base = |slot: u32| packed::PACKED_BASE + 4 * slot;
         let expected: Vec<TerrainVertex> = [&a, &b, &c].into_iter().flatten().copied().collect();
-        let mut tested = false;
         for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
-            let (device, queue) =
-                match pollster::block_on(adapter.request_device(&Default::default())) {
-                    Ok(device) => device,
-                    Err(e) => {
-                        eprintln!("no device on {name}: {e}");
-                        continue;
-                    }
-                };
+            let Some((device, queue)) =
+                crate::gfx::test_gpu::optional_device_with(&adapter, &Default::default())
+            else {
+                continue;
+            };
             eprintln!("displacement quads on {} ({name})", adapter.get_info().name);
             let page = |words: &[[u32; 6]]| {
                 use wgpu::util::DeviceExt;
@@ -911,10 +903,6 @@ mod tests {
                     "vertex {i} on {name}"
                 );
             }
-            tested = true;
-        }
-        if !tested {
-            eprintln!("no GPU: skipped");
         }
     }
 

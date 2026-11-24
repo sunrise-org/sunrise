@@ -71,12 +71,16 @@ pub mod tests {
             ("key_test:later", 0),
             ("minecraft:poison", 1),
         ];
-        mod_vocab::__private::resolve_effects(effects.iter().map(|(id, _)| *id), |id| {
-            effects
-                .iter()
-                .find(|(name, _)| *name == id)
-                .map(|(_, index)| *index)
-        })
+        mod_vocab::__private::resolve_effects(
+            effects.iter().map(|(id, _)| *id),
+            |id| {
+                effects
+                    .iter()
+                    .find(|(name, _)| *name == id)
+                    .map(|(_, index)| *index)
+            },
+            |_| true,
+        )
         .unwrap();
         let keys = requested.lock().unwrap();
         assert_eq!(keys[0], keys[2]);
@@ -103,10 +107,8 @@ pub mod tests {
         assert!(mod_vocab::__private::parts_installation::validate_effect_key(u32::MAX).is_err());
         struct Table;
         impl mod_api::prelude::KeysBackend for Table {
-            fn effect_key_id(&self, key: EffectKey) -> String {
+            fn effect_key_id(&self, key: EffectKey) -> Option<&str> {
                 mod_vocab::__private::parts_installation::effect_id(key)
-                    .expect("invalid effect key slot")
-                    .to_owned()
             }
         }
         impl Backend for Table {}
@@ -117,12 +119,14 @@ pub mod tests {
             }
         }
         mod_api::impl_host_areas!(Table);
-        assert_eq!(keys[0].id(&Table), "minecraft:speed");
-        assert_eq!(keys[1].id(&Table), "key_test:later");
+        assert_eq!(keys[0].id(&Table), Some("minecraft:speed"));
+        assert_eq!(keys[1].id(&Table), Some("key_test:later"));
+        let unissued = mod_vocab::__private::parts_installation::effect_key(u32::MAX);
+        assert_eq!(unissued.id(&Table), None);
         struct NoGame;
         impl Host for NoGame {}
         mod_api::impl_host_areas!(NoGame);
-        assert!(std::panic::catch_unwind(|| keys[0].id(&NoGame)).is_err());
+        assert_eq!(keys[0].id(&NoGame), None);
         assert_eq!(keys[0].category(&NoGame), None);
     }
 }
@@ -148,7 +152,7 @@ impl EffectsRegistrar for PartRegistrar {
             ));
             return Err(MobEffectPartError::InvalidKey { effect: *effect });
         };
-        if id.starts_with("minecraft:") {
+        if self.has_builtin_entry("minecraft:mob_effect", &id) {
             return Err(MobEffectPartError::VanillaEffect { effect: *effect });
         }
         if self.attach_known(|parts| &mut parts.effects, kind, &id, part) {
@@ -182,27 +186,30 @@ impl PartRegistrar {
     /// Actual declaration ownership is checked after content has loaded.
     pub(crate) fn skip_absent_effect_parts(&mut self) {
         let packages = crate::load_state::current_packages();
+        let dependencies = crate::load_state::effective_dependencies();
         let mut ids: Vec<_> = self.parts.effects.keys().cloned().collect();
         ids.sort_unstable();
         for id in ids {
             let namespace = id.split_once(':').map_or("", |(namespace, _)| namespace);
-            let owner = packages
+            if packages
                 .iter()
-                .find(|package| package.namespaces().any(|owned| owned == namespace));
-            let owner_id = owner.map_or(namespace, |package| package.id());
-            let parts = self.parts.effects.get_mut(&id).unwrap();
-            parts.retain(|part| {
-                if part.mod_id == owner_id { return true; }
-                let dependency = packages.iter().find(|package| package.id() == part.mod_id)
-                    .and_then(|package| package.dependencies().iter().find(|dependency| dependency.id() == owner_id));
-                if owner.is_none() && dependency.is_some_and(|dependency| dependency.kind() == crate::DependencyKind::Optional) {
-                    self.registry_keys.borrow_mut().effects.withdraw(part.mod_id, &id);
-                    log::debug!("mod {} skipped {} on effect {id}: optional dependency {owner_id} is absent", part.mod_id, part.type_name);
+                .any(|package| package.namespaces().any(|owned| owned == namespace))
+            {
+                continue;
+            }
+            self.parts.effects.get_mut(&id).unwrap().retain(|part| {
+                if part.mod_id != namespace
+                    && dependencies.kind(part.mod_id, namespace)
+                        == Some(crate::DependencyKind::Optional)
+                {
+                    self.registry_keys
+                        .borrow_mut()
+                        .effects
+                        .withdraw(part.mod_id, &id);
                     return false;
                 }
                 true
             });
-            parts.sort_by_key(|part| (part.mod_index, part.order));
         }
     }
 }

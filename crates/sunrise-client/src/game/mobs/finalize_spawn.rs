@@ -10,7 +10,6 @@
 //! is that divergence removed.
 
 use super::Game;
-use sunrise_client::collisions::{SceneCollisions, no_collision_empty};
 use sunrise_client::mobs::{Mob, Species, finalize, spawn_rules::Reason, spawning};
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_world::food::Difficulty;
@@ -29,13 +28,12 @@ pub(super) fn biome_or_plains(name: Option<String>) -> String {
 impl FinalizeGame<'_, '_> {
     /// The biome id at a block, when its chunk is loaded.
     fn biome_name(&self, pos: [i32; 3]) -> Option<String> {
-        let chunk = self.game.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4))?;
-        Some(
-            world_biomes!(self.game)
-                .get(chunk.biome(pos[0], pos[1], pos[2]))
-                .name
-                .clone(),
-        )
+        // `LevelReader.getBiome`: the noise cell the biome zoom picks, perhaps in a neighbouring chunk.
+        let game = &self.game;
+        let biome = game
+            .world
+            .biome_at(game.streaming.biome_zoom, pos[0], pos[1], pos[2])?;
+        Some(world_biomes!(game).get(biome).name.clone())
     }
 }
 
@@ -60,19 +58,9 @@ impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
     fn spawning_monsters(&self) -> bool {
         self.game.spawning_monsters()
     }
-    /// `Level.noCollision(null, box)`: block collisions, and living shulkers
-    /// are solid (`getEntityCollisions`).
     fn no_collision(&self, bounds: Aabb) -> bool {
-        let mut scene = SceneCollisions {
-            world: &self.game.world,
-            binding: self.game.res.collision(),
-            subject: None,
-        };
-        let grown = bounds.inflate(Vec3::new(1e-7, 1e-7, 1e-7));
-        no_collision_empty(&mut scene, bounds)
-            && !self.game.mobs.iter().any(|m| {
-                m.species() == Species::Shulker && m.alive() && m.bounds().intersects(grown)
-            })
+        self.game
+            .no_spawn_collision(bounds, |query| self.game.live_spawn_mob_collision(query))
     }
     fn free_chicken(&self, bounds: Aabb) -> Option<u32> {
         self.game.finalize_free_chicken(bounds)
@@ -95,12 +83,13 @@ impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
         self.game.finalize_spawn_event_result(mob, reason)
     }
     fn create(&mut self, kind: &str, _: Reason) -> Option<Mob> {
+        let t = self.game.res.mob_types().get(kind)?;
         if self.game.world.health_rules.difficulty == Difficulty::Peaceful
-            && !finalize::allowed_in_peaceful(kind)
+            && !t.allowed_in_peaceful()
         {
             return None;
         }
-        let t = self.game.res.mob_types().get(kind)?.clone();
+        let t = t.clone();
         self.game.next_entity += 1;
         Some(Mob::new(self.game.next_entity, t, Vec3::ZERO, 0.0))
     }
@@ -162,12 +151,7 @@ impl Game<'_> {
     ) -> finalize::SpawnEvent {
         // A mob finalization makes starts without group data, and the
         // finalization that follows reads none.
-        let (outcome, _) = self.finalize_spawn_event(mob, reason, None, &mut None);
-        match outcome {
-            super::creatures::Finalized::Cancelled => finalize::SpawnEvent::Cancelled,
-            super::creatures::Finalized::Skipped => finalize::SpawnEvent::Skip,
-            super::creatures::Finalized::Done => finalize::SpawnEvent::Finalize,
-        }
+        self.finalize_spawn_event(mob, reason, None, &mut None).0
     }
     /// The game's own finalization of a mob, with no event: the same
     /// `finalize::Ctx` world generation runs, over the live level, with the
@@ -206,7 +190,7 @@ impl Game<'_> {
         game.world.random = random;
         for m in created {
             game.mobs.push(m);
-            game.native_mobs_joined(game.mobs.len() - 1, false);
+            game.admit_new_mobs(game.mobs.len() - 1);
         }
     }
 }
@@ -311,7 +295,7 @@ mod tests {
             game.world.random =
                 sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(42_i64));
             let outcome = game.finalize_with(&mut with, Reason::Natural, None);
-            assert_eq!(outcome, super::super::creatures::Finalized::Done);
+            assert!(outcome);
             // The same stream for the plain path: same seed, same draws.
             game.world.random =
                 sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(42_i64));

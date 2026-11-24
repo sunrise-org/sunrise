@@ -2,12 +2,12 @@ name: modding-book
 on:
   push:
     branches: [main]
-    paths: ["docs/modding/**", "crates/sunrise-mod-api/**", "crates/sunrise-mod-api-gen/**", "xtask/**", "tools/*modding*", "tests/test_modding_*.py", "tools/ci/nightly.py", "crates/sunrise-mod-package/src/sdk/**", "crates/sunrise-mod-surface/**", "crates/sunrise-mod-call/**"]
+    paths: ["docs/modding/**", "crates/sunrise-mod-vocab/**", "crates/sunrise-mod-api/**", "crates/sunrise-mod-api-gen/**", "crates/sunrise-stage/**", "xtask/**", "tools/*modding*", "tests/test_modding_*.py", "tools/ci/nightly.py", "crates/sunrise-mod-package/src/sdk/**", "crates/sunrise-mod-surface/**", "crates/sunrise-mod-call/**", "crates/sunrise-client/src/mobs/villager_secondary.extension-tags.json", ".github/workflows/modding-book.yml"]
   # A PR gets the book itself (concept-pages preprocessor and mdBook build), not the API doc and example builds.
   pull_request:
-    # The generator and xtask render the hook-notes and coverage chapters at build time, from the
+    # The generator and xtask render the hook-notes and NeoForge counterparts chapters at build time, from the
     # mod API's surface and catalog.
-    paths: ["docs/modding/**", "crates/sunrise-mod-api/**", "crates/sunrise-mod-api-gen/**", "xtask/**", "tools/*modding*", "tests/test_modding_*.py", "tools/ci/nightly.py", "crates/sunrise-mod-package/src/sdk/**", "crates/sunrise-mod-surface/**", "crates/sunrise-mod-call/**", ".github/workflows/modding-book.yml"]
+    paths: ["docs/modding/**", "crates/sunrise-mod-vocab/**", "crates/sunrise-mod-api/**", "crates/sunrise-mod-api-gen/**", "crates/sunrise-stage/**", "xtask/**", "tools/*modding*", "tests/test_modding_*.py", "tools/ci/nightly.py", "crates/sunrise-mod-package/src/sdk/**", "crates/sunrise-mod-surface/**", "crates/sunrise-mod-call/**", "crates/sunrise-client/src/mobs/villager_secondary.extension-tags.json", ".github/workflows/modding-book.yml"]
   workflow_dispatch:
 # A newer push to a pull request or to main replaces the older run: only the newest head's book matters.
 concurrency:
@@ -79,9 +79,35 @@ jobs:
           tar -xzf "$folder/mdbook.tar.gz" -C "$folder" mdbook
           echo "$folder" >> "$GITHUB_PATH"
       - if: steps.book.outputs.present == 'true'
-        run: python3 -m unittest tests.test_modding_concept_pages tests.test_modding_hook_notes tests.test_neoforge_counterparts tests.test_modding_book_guard tests.test_modding_book_links tests.test_modding_sdk_tables
-      - if: steps.book.outputs.present == 'true'
-        run: mdbook build docs/modding
+        run: python3 -m unittest tests.test_modding_concept_pages tests.test_modding_hook_notes tests.test_neoforge_counterparts tests.test_modding_book_guard tests.test_modding_book_links tests.test_modding_sdk_tables tests.test_modding_book_redirects
+      # A page the change removes or renames keeps its address through docs/modding/redirects.json (a dispatch has no base).
+      - name: Every address the book loses has a redirect
+        if: steps.book.outputs.present == 'true'
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            echo "::notice::no base commit for this event; only the redirects file itself is checked"
+            python3 tools/modding_book_redirects.py
+          else
+            git fetch --no-tags --depth=1 origin "$BASE"
+            python3 tools/modding_book_redirects.py --base "$BASE"
+          fi
+      # mdBook logs a link or include it can't resolve as an [ERROR] and still succeeds, leaving the page without it.
+      # `shell: bash` runs with pipefail, so mdBook's own failure still fails the step through tee.
+      - name: Build the book
+        if: steps.book.outputs.present == 'true'
+        shell: bash
+        run: |
+          mdbook build docs/modding 2>&1 | tee "$RUNNER_TEMP/mdbook.log"
+          status=0
+          grep -E '^[0-9-]+ [0-9:]+ \[ERROR\]' "$RUNNER_TEMP/mdbook.log" || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo '::error::mdBook reported the errors above: a page is missing an include or link.'
+            exit 1
+          fi
+          # grep's 1 is "no [ERROR] line"; anything else is a failure to read the log.
+          [ "$status" -eq 1 ]
       - name: Compiler cache statistics
         if: always() && steps.book.outputs.present == 'true' && runner.environment != 'github-hosted'
         run: sccache --show-stats || echo 'compiler-cache statistics unavailable'

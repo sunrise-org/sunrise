@@ -35,9 +35,9 @@ impl CheckedSlotLayout {
         self
     }
     /// Validate mod-controlled indices once before mapping any display.
-    /// The menu limit is the existing 256 container slots, not a display cap.
+    /// The slot count is bounded by vanilla's 16-bit signed slot index (`i16::MAX`).
     pub fn new(layout: SlotLayout, slot_count: u16) -> Result<Self, LayoutError> {
-        if slot_count == 0 || slot_count > 256 {
+        if slot_count == 0 || slot_count > i16::MAX as u16 {
             return Err(LayoutError::InvalidSlotCount);
         }
         if let SlotLayout::Crafting {
@@ -57,15 +57,14 @@ impl CheckedSlotLayout {
             }
         }
         let checked = Self(layout, None);
-        let mut seen = [false; 256];
+        let mut seen = std::collections::BTreeSet::new();
         for slot in checked.slots() {
             if slot >= slot_count {
                 return Err(LayoutError::OutOfRange(slot));
             }
-            if seen[usize::from(slot)] {
+            if !seen.insert(slot) {
                 return Err(LayoutError::DuplicateSlot(slot));
             }
-            seen[usize::from(slot)] = true;
         }
         Ok(checked)
     }

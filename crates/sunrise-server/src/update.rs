@@ -1,8 +1,9 @@
 //! Updates and rollbacks (docs/server.md, section 7) for a `sunrise-server` installed by install.sh or
 //! install.ps1: each release in `<dir>/releases/<tag>`, `<dir>/current` pointing at the one in use, and
-//! `<dir>/previous` naming the one before it. An update downloads the current Nightly from GitHub (the only build
-//! Sunrise ships since 2026-10-28; GitHub's latest release while there is none), checks it against the SHA-256 in
-//! its signed SHA256SUMS (docs/security.md), unpacks it beside the others as `nightly-<date>-<commit>` and switches
+//! `<dir>/previous` naming the one before it. An update downloads the newest build of the server's channel from
+//! GitHub ([`newest`]: on a stable release the newest stable release of its line, otherwise the current Nightly),
+//! checks it against the SHA-256 in its signed SHA256SUMS (docs/security.md), unpacks it beside the others under its
+//! tag (a Nightly as `nightly-<date>-<commit>`) and switches
 //! `current`; the supervisor then restarts the game on it and switches back by itself if the new game doesn't come
 //! up.
 
@@ -13,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+use sunrise_platform::proxy;
 use sunrise_server_launch::{
     self as launch, Install,
     config::{self, Config},
@@ -22,8 +24,8 @@ const REPO: &str = sunrise_release_sign::REPOSITORY;
 /// The release archives for this computer, most specific first: on Linux the server build (no ALSA or
 /// udev), else the full game (releases before the server build).
 fn assets_for(os: &str, arch: &str, musl: bool) -> &'static [&'static str] {
-    // The musl archive is manually installed; glibc updates would replace this supervisor
-    // with a binary that cannot even start to roll back on a musl system.
+    // No musl archive is published: a musl build is built from source, and a glibc update would replace this
+    // supervisor with a binary that cannot even start to roll back on a musl system.
     if musl {
         return &[];
     }
@@ -33,9 +35,6 @@ fn assets_for(os: &str, arch: &str, musl: bool) -> &'static [&'static str] {
             "sunrise-linux-x86_64.tar.gz",
         ],
         ("macos", "aarch64") => &["sunrise-macos-arm64.zip"],
-        ("macos", "x86_64") => &["sunrise-macos-x64.zip"],
-        // A release without an ARM64 build: the x64 one, which Windows runs under emulation.
-        ("windows", "aarch64") => &["sunrise-windows-arm64.zip", "sunrise-windows-x64.zip"],
         ("windows", "x86_64") => &["sunrise-windows-x64.zip"],
         _ => &[],
     }
@@ -249,26 +248,93 @@ pub struct Release {
 /// GitHub's API, or a release asset: the body of `url`.
 fn fetch(url: &str) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
-    ureq::get(url)
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", "sunrise-server")
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(404, _) => "404".to_string(),
-            e => format!("GitHub didn't answer: {e}"),
-        })?
-        .into_reader()
-        .take(64 << 20)
-        .read_to_end(&mut body)
-        .map_err(|e| format!("GitHub's answer: {e}"))?;
+    proxy::get(
+        url,
+        &[
+            ("Accept", "application/vnd.github+json"),
+            ("User-Agent", "sunrise-server"),
+        ],
+        None,
+    )
+    .map_err(|e| match e {
+        e if e.status() == Some(404) => "404".to_string(),
+        e => format!("GitHub didn't answer: {e}"),
+    })?
+    .into_reader()
+    .take(64 << 20)
+    .read_to_end(&mut body)
+    .map_err(|e| format!("GitHub's answer: {e}"))?;
     Ok(body)
+}
+
+/// A release's address in GitHub's API.
+fn api(tag: &str) -> String {
+    format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}")
+}
+
+/// The release a server running `current` updates to, with the SHA-256 its signed checksums give
+/// for this computer's archive. A server on a stable release follows its line: the newest published
+/// stable release of the same Minecraft version and Sunrise major (`26.3-0.x`), never a Nightly,
+/// whose mod API may differ (docs/release-flow.md "Release branches"). Any other server follows
+/// the Nightly ([`release`]).
+pub fn newest(current: &str) -> Result<Release, String> {
+    if stable(current).is_none() {
+        return release(None);
+    }
+    newest_on_line(
+        current,
+        fetch,
+        &sunrise_release_sign::trusted_keys_for(REPO),
+    )
+}
+
+/// [`newest`] for a server on the stable release `current`: the stable tags of its line, newest
+/// first, and the first of them with a published (not pre-release) release. A tag with no release
+/// yet (one a release reserved before publishing) is passed over.
+fn newest_on_line(
+    current: &str,
+    fetch: impl Fn(&str) -> Result<Vec<u8>, String>,
+    keys: &[sunrise_release_sign::PublicKey],
+) -> Result<Release, String> {
+    let (game, [major, ..]) = stable(current).ok_or("not a stable release")?;
+    let target = current
+        .split_once('-')
+        .map_or(current, |(target, _)| target);
+    let line = format!("{target}-{major}.");
+    let refs: Vec<Value> = serde_json::from_slice(&fetch(&format!(
+        "https://api.github.com/repos/{REPO}/git/matching-refs/tags/{line}"
+    ))?)
+    .map_err(|e| format!("GitHub's tags: {e}"))?;
+    let mut tags: Vec<&str> = refs
+        .iter()
+        .filter_map(|entry| entry["ref"].as_str()?.strip_prefix("refs/tags/"))
+        .filter(|tag| stable(tag).is_some_and(|(g, [m, ..])| g == game && m == major))
+        .collect();
+    tags.sort_by_key(|tag| std::cmp::Reverse(tag_order(tag)));
+    for tag in tags {
+        let release: Value = match fetch(&api(tag)) {
+            Err(e) if e == "404" => continue,
+            found => {
+                serde_json::from_slice(&found?).map_err(|e| format!("GitHub's answer: {e}"))?
+            }
+        };
+        // Verified below for the tag it names: it must be the tag selected, or another signed release could
+        // stand in for it and move the server off its line.
+        if release["tag_name"] != tag {
+            return Err(format!("GitHub's release {tag} names another tag"));
+        }
+        if release["prerelease"] != false || release["draft"] != false {
+            continue;
+        }
+        return pick(&release, &fetch, keys);
+    }
+    Err(format!("no published release of {line}x on GitHub"))
 }
 
 /// The current Nightly (or `tag`: a release, `nightly` or a dated `nightly-<date>`), from GitHub's
 /// API, with the SHA-256 its signed checksums give for this computer's archive. With no Nightly
 /// published, GitHub's latest release.
 pub fn release(tag: Option<&str>) -> Result<Release, String> {
-    let api = |tag: &str| format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}");
     let text = match tag {
         Some(tag) => fetch(&api(tag)),
         None => match fetch(&api(sunrise_release_sign::NIGHTLY)) {
@@ -384,12 +450,39 @@ fn pick_for_assets(
 /// tagged `vYYYY.MM.DD[.N]` (any `v` and numbers: `Dated`), compared number by number; from 0.2 they are
 /// `vMAJOR.MINOR.PATCH[-PRE]` (`Semver`), and every one of those is newer than every dated one, so
 /// v0.2.0 follows v2026.10.19.15. A pre-release (`v0.3.0-rc.1`) comes before its release, as in semver.
-/// Nightlies (`nightly-<date>-<commit>`, the only builds since 2026-10-28) follow every release, by date.
+/// Stable releases (`26.3-0.1.0`) follow those, by Minecraft version and then semver. Nightlies
+/// (`nightly-<date>-<commit>`) follow every release, by date: a server never compares a Nightly with
+/// a stable release to update, since each follows its own channel ([`newest`]).
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum TagOrder {
     Dated(Vec<u64>),
     Semver([u64; 3], Prerelease),
+    Stable(Vec<u64>, [u64; 3]),
     Nightly(String),
+}
+
+/// A stable release's tag, `<Minecraft version>-<semver>` (`26.3-0.1.0`), as
+/// `release_train.stable_version` reads it: the Minecraft version's two or three numbers, and the
+/// release's major, minor and patch without leading zeros, pre-release or build suffix.
+fn stable(tag: &str) -> Option<(Vec<u64>, [u64; 3])> {
+    let digits = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    let (target, version) = tag.split_once('-')?;
+    let game = target
+        .split('.')
+        .map(|n| digits(n).then(|| n.parse().ok()).flatten())
+        .collect::<Option<Vec<u64>>>()?;
+    let version = version
+        .split('.')
+        .map(|n| {
+            (digits(n) && (n == "0" || !n.starts_with('0')))
+                .then(|| n.parse().ok())
+                .flatten()
+        })
+        .collect::<Option<Vec<u64>>>()?;
+    match (game.len(), version.as_slice()) {
+        (2 | 3, &[major, minor, patch]) => Some((game, [major, minor, patch])),
+        _ => None,
+    }
 }
 
 /// A pre-release's place: (is a release, its identifiers). A release has none and follows every
@@ -409,6 +502,9 @@ const FIRST_YEAR: u64 = 1000;
 fn tag_order(tag: &str) -> Option<TagOrder> {
     if let Some(date) = sunrise_release_sign::nightly_date(tag) {
         return Some(TagOrder::Nightly(date.to_owned()));
+    }
+    if let Some((game, version)) = stable(tag) {
+        return Some(TagOrder::Stable(game, version));
     }
     let rest = tag.strip_prefix('v')?;
     let (core, pre) = match rest.split_once('-') {
@@ -471,9 +567,7 @@ pub fn download(install: &Install, release: &Release) -> Result<PathBuf, String>
     let path = folder.join(&release.asset);
     let part = folder.join(format!("{}.part", release.asset));
     let result = (|| {
-        let mut reader = ureq::get(&release.url)
-            .set("User-Agent", "sunrise-server")
-            .call()
+        let mut reader = proxy::get(&release.url, &[("User-Agent", "sunrise-server")], None)
             .map_err(|e| format!("downloading {}: {e}", release.asset))?
             .into_reader();
         let mut file =
@@ -656,7 +750,10 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
             (tag, archive, false)
         }
         None => {
-            let release = release(version.as_deref())?;
+            let release = match &version {
+                Some(tag) => release(Some(tag))?,
+                None => newest(&current)?,
+            };
             if check && as_json {
                 println!(
                     "{}",
@@ -670,17 +767,7 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
                 return Ok(());
             }
             if check {
-                if update_available(&release.tag, &current) {
-                    println!(
-                        "Sunrise {} is out; this server runs {current}. `sunrise-server update` installs it.",
-                        release.tag
-                    );
-                } else {
-                    println!(
-                        "Up to date: {current} (the newest release is {}).",
-                        release.tag
-                    );
-                }
+                println!("{}", check_line(version.as_deref(), &release.tag, &current));
                 return Ok(());
             }
             if version.is_none() && !update_available(&release.tag, &current) {
@@ -709,6 +796,22 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
     }
     unpacked?;
     switch_to(dir, &install, &tag, timeout)
+}
+
+/// What `update --check` says about `newest` for a server running `current`. With `--version`
+/// (`asked`), the command it suggests names the tag asked for, not the version that tag installs
+/// as: `nightly` resolves to `nightly-<date>-<commit>`, which is no tag on GitHub.
+fn check_line(asked: Option<&str>, newest: &str, current: &str) -> String {
+    match asked {
+        Some(asked) if newest != current => format!(
+            "Sunrise {newest} is on GitHub; this server runs {current}. `sunrise-server update --version {asked}` \
+             installs it."
+        ),
+        _ if update_available(newest, current) => format!(
+            "Sunrise {newest} is out; this server runs {current}. `sunrise-server update` installs it."
+        ),
+        _ => format!("Up to date: {current} (the newest release is {newest})."),
+    }
 }
 
 /// `rollback [--timeout SECONDS]`: back to the release used before the current one.
@@ -870,8 +973,7 @@ mod tests {
     fn musl_update_refuses_glibc_before_downloading() {
         let release = json!({"tag_name": "nightly", "assets": [
             {"name": "sunrise-server-linux-x86_64.tar.gz", "browser_download_url": "server"},
-            {"name": "sunrise-linux-x86_64.tar.gz", "browser_download_url": "client"},
-            {"name": "sunrise-linux-musl-x86_64.tar.gz", "browser_download_url": "manual"}
+            {"name": "sunrise-linux-x86_64.tar.gz", "browser_download_url": "client"}
         ]});
         let error = pick_for_assets(
             &release,
@@ -884,15 +986,17 @@ mod tests {
     }
 
     #[test]
-    fn windows_updates_choose_the_machine_architecture() {
+    fn updates_choose_only_the_three_published_platforms() {
         assert_eq!(
             assets_for("windows", "x86_64", false),
             &["sunrise-windows-x64.zip"]
         );
         assert_eq!(
-            assets_for("windows", "aarch64", false),
-            &["sunrise-windows-arm64.zip", "sunrise-windows-x64.zip"]
+            assets_for("macos", "aarch64", false),
+            &["sunrise-macos-arm64.zip"]
         );
+        assert!(assets_for("windows", "aarch64", false).is_empty());
+        assert!(assets_for("macos", "x86_64", false).is_empty());
     }
 
     #[cfg(unix)]
@@ -1082,14 +1186,119 @@ mod tests {
         let mut release = nightly.clone();
         release["tag_name"] = json!("v0.2.95");
         assert!(pick(&release, serving(TONIGHT, TONIGHT), &[key.public()]).is_err());
-        // A genuine snapshot (its title, its own valid signatures) served as the Nightly, or under
-        // its own tag: refused, so no server updates to a snapshot.
-        const SNAPSHOT: &str = "snapshot-2026-10-28-0c02067";
-        let mut snapshot = nightly.clone();
-        snapshot["name"] = json!("Snapshot 2026-10-28 · 0c02067");
-        assert!(pick(&snapshot, serving("snapshot", SNAPSHOT), &[key.public()]).is_err());
-        snapshot["tag_name"] = json!(SNAPSHOT);
-        assert!(pick(&snapshot, serving("snapshot", SNAPSHOT), &[key.public()]).is_err());
+        // A genuine Dev build (its title, its own valid signatures) served as the Nightly, or under
+        // its own tag: refused, so no server updates to a Dev build.
+        const DEV: &str = "dev-2026-10-28-0c02067";
+        let mut dev = nightly.clone();
+        dev["name"] = json!("Dev 2026-10-28 · 0c02067");
+        assert!(pick(&dev, serving("dev", DEV), &[key.public()]).is_err());
+        dev["tag_name"] = json!(DEV);
+        assert!(pick(&dev, serving("dev", DEV), &[key.public()]).is_err());
+    }
+
+    #[test]
+    fn stable_tags_compare_within_their_line() {
+        assert!(newer("26.3-0.1.1", "26.3-0.1.0"));
+        assert!(newer("26.3-0.10.0", "26.3-0.9.3"));
+        assert!(newer("26.3-1.0.0", "26.3-0.99.0"));
+        assert!(newer("26.3.1-0.1.0", "26.3-2.0.0"));
+        assert!(update_available("26.3-0.2.0", "26.3-0.1.0"));
+        assert!(!update_available("26.3-0.1.0", "26.3-0.2.0"));
+        assert!(!update_available("26.3-0.1.0", "26.3-0.1.0"));
+        // Not stable tags: no release to compare.
+        for tag in [
+            "26.3-0.1",
+            "26.3-01.1.0",
+            "26-0.1.0",
+            "26.3-0.1.0-rc.1",
+            "26.3.1.2-0.1.0",
+            "a.3-0.1.0",
+        ] {
+            assert!(stable(tag).is_none(), "{tag}");
+        }
+    }
+
+    /// A server on 26.3-0.1.0 updates to the newest published release of 26.3-0.x: never a tag
+    /// with no release yet, never another major, never the Nightly.
+    #[test]
+    fn a_stable_server_follows_its_line() {
+        use sunrise_release_sign::{SigningKey, sha256_hex, sums_file};
+        let Some(first) = ASSETS.first() else { return };
+        let (key, _) = SigningKey::generate().unwrap();
+        let sums = sums_file(&[(first.to_string(), sha256_hex(b"server"))]);
+        let signed = key.sign("26.3-0.2.0", sums.as_bytes());
+        let asset = |name: &str| json!({ "name": name, "browser_download_url": format!("https://example.invalid/{name}") });
+        let refs = json!([
+            {"ref": "refs/tags/26.3-0.1.0"}, {"ref": "refs/tags/26.3-0.2.0"},
+            {"ref": "refs/tags/26.3-0.3.0"}, {"ref": "refs/tags/26.3-0.2.0-rc.1"},
+            {"ref": "refs/tags/26.3-0.5.0"}, {"ref": "refs/tags/26.3-0.4.0"},
+        ]);
+        // A newer stable-looking tag whose release is a draft or a pre-release: passed over.
+        let unpublished = |tag: &str, flag: &str| {
+            let mut release = json!({ "tag_name": tag, "prerelease": false, "draft": false, "assets": [asset(first)] });
+            release[flag] = json!(true);
+            release.to_string().into_bytes()
+        };
+        let fetch = |url: &str| -> Result<Vec<u8>, String> {
+            if url.ends_with("/git/matching-refs/tags/26.3-0.") {
+                return Ok(refs.to_string().into_bytes());
+            }
+            match url {
+                u if u == api("26.3-0.5.0") => Ok(unpublished("26.3-0.5.0", "draft")),
+                u if u == api("26.3-0.4.0") => Ok(unpublished("26.3-0.4.0", "prerelease")),
+                // Reserved by a release that never published.
+                u if u == api("26.3-0.3.0") => Err("404".into()),
+                u if u == api("26.3-0.2.0") => Ok(json!({
+                    "tag_name": "26.3-0.2.0", "prerelease": false, "draft": false,
+                    "assets": [asset(first), asset("SHA256SUMS"), asset("SHA256SUMS.sig")],
+                })
+                .to_string()
+                .into_bytes()),
+                "https://example.invalid/SHA256SUMS" => Ok(sums.clone().into_bytes()),
+                "https://example.invalid/SHA256SUMS.sig" => Ok(signed.clone().into_bytes()),
+                other => panic!("asked for {other}"),
+            }
+        };
+        let picked = newest_on_line("26.3-0.1.0", fetch, &[key.public()]).unwrap();
+        assert_eq!(picked.tag, "26.3-0.2.0");
+        assert_eq!(picked.sha256, sha256_hex(b"server"));
+        assert!(update_available(&picked.tag, "26.3-0.1.0"));
+        // On the newest release already: it is what GitHub has, so no update.
+        assert!(!update_available(&picked.tag, "26.3-0.2.0"));
+        // The release served for 26.3-0.2.0 names another tag, with sums validly signed for that
+        // tag: refused for its tag, never installed.
+        let other = key.sign("26.4-1.0.0", sums.as_bytes());
+        let swapped = |url: &str| -> Result<Vec<u8>, String> {
+            if url == "https://example.invalid/SHA256SUMS.sig" {
+                return Ok(other.clone().into_bytes());
+            }
+            let body = fetch(url)?;
+            Ok(if url == api("26.3-0.2.0") {
+                String::from_utf8(body)
+                    .unwrap()
+                    .replace("26.3-0.2.0", "26.4-1.0.0")
+                    .into_bytes()
+            } else {
+                body
+            })
+        };
+        let err = newest_on_line("26.3-0.1.0", swapped, &[key.public()]).unwrap_err();
+        assert!(err.contains("names another tag"), "{err}");
+    }
+
+    #[test]
+    fn an_explicit_check_suggests_the_tag_asked_for() {
+        let line = check_line(Some("nightly"), "nightly-2026-11-21-0c02067", "26.3-0.1.0");
+        assert!(
+            line.contains("`sunrise-server update --version nightly`"),
+            "{line}"
+        );
+        assert!(line.contains("nightly-2026-11-21-0c02067"), "{line}");
+        // Without --version, the update the server's own channel offers, and none once it runs it.
+        let line = check_line(None, "26.3-0.2.0", "26.3-0.1.0");
+        assert!(line.contains("`sunrise-server update`"), "{line}");
+        assert!(line.contains("26.3-0.2.0"), "{line}");
+        assert!(!check_line(None, "26.3-0.1.0", "26.3-0.1.0").contains("`sunrise-server update"));
     }
 
     #[test]

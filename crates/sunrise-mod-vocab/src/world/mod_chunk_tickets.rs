@@ -1,6 +1,5 @@
 //! Moved here from the game so mods can name it.
-#[allow(unused_imports)]
-use crate::*;
+use std::collections::{BTreeMap, BTreeSet};
 // no wire: encoded by the existing manual Wire implementation on TicketOwner.
 /// What a ticket belongs to: a block (a machine) or an entity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -16,8 +15,7 @@ pub enum TicketOwner {
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct ModTicket {
-    /// The controller that holds it: its slot in the installed controller table
-    /// (`mod_api::TicketController::slot`).
+    /// The controller that holds it: its slot in the installed controller table.
     pub controller: u32,
     pub owner: TicketOwner,
     pub chunk: (i32, i32),
@@ -46,20 +44,26 @@ impl TicketSet {
         }
     }
 }
-/// The tickets one controller loaded, as `validate_tickets` hands them out
-/// (NeoForge's `TicketHelper`, one for each controller). Every call acts as
-/// the mod marked as running, and only the controller's owning mod sees or
-/// removes anything, block owners and entity owners apart. The game releases
-/// what was removed once the hook returns.
+/// The saved tickets lent to one controller's [`LoadingValidationCallback`](crate::LoadingValidationCallback)
+/// (NeoForge's `TicketHelper`). The view contains only that controller's
+/// staged rows, with block and entity owners apart. [`block_tickets`](Self::block_tickets)
+/// and [`entity_tickets`](Self::entity_tickets) lend read-only maps of the
+/// original saved tickets for the whole invocation and stay unchanged after
+/// removals during the callback. Each successful removal excludes that row
+/// from subsequent removals. Selections publish only when the callback
+/// completes successfully; a published removal never forces its chunk.
 pub trait TicketValidation {
-    /// The controller's block tickets: each block position with the chunks it
-    /// holds without and with natural spawning (`TicketHelper.getBlockTickets`'
-    /// `TicketSet`: `nonNaturalSpawning`, `naturalSpawning`), in position order.
-    fn block_tickets(&self) -> Vec<([i32; 3], TicketSet)>;
-    /// The controller's entity tickets: each entity UUID with the chunks it
-    /// holds without and with natural spawning (`TicketHelper.getEntityTickets`),
-    /// in UUID order.
-    fn entity_tickets(&self) -> Vec<(u128, TicketSet)>;
+    /// The controller's original saved block tickets: each block position with
+    /// the chunks it held without and with natural spawning
+    /// (`TicketHelper.getBlockTickets`' `TicketSet`: `nonNaturalSpawning`,
+    /// `naturalSpawning`), in position order. Read-only and unchanged by
+    /// removals during this validation call.
+    fn block_tickets(&self) -> &BTreeMap<[i32; 3], TicketSet>;
+    /// The controller's original saved entity tickets: each entity UUID with
+    /// the chunks it held without and with natural spawning
+    /// (`TicketHelper.getEntityTickets`), in UUID order. Read-only and
+    /// unchanged by removals during this validation call.
+    fn entity_tickets(&self) -> &BTreeMap<u128, TicketSet>;
     /// Remove every ticket the block holds, of both kinds
     /// (`removeAllTickets(BlockPos)`): how many went.
     fn remove_block_tickets(&mut self, pos: [i32; 3]) -> usize;
@@ -81,60 +85,73 @@ pub trait TicketValidation {
     -> bool;
 }
 
-// no wire: controller-owned mutable ticket bookkeeping retains static mod ownership; individual ModTicket values cross instead.
-/// The game's [`TicketValidation`]: one controller's loaded tickets, and those removed.
+// no wire: borrows one controller's staged rows during native validation.
+/// The game's [`TicketValidation`]: one controller's staged tickets.
+// hidden: a game-side helper; mods receive the TicketValidation trait.
+#[doc(hidden)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
-pub struct ControllerTickets {
-    /// The `[mod] id` that owns the controller.
-    owner: &'static str,
-    loaded: Vec<ModTicket>,
-    removed: Vec<ModTicket>,
+pub struct ControllerTickets<'a> {
+    loaded: &'a mut Vec<ModTicket>,
+    block_tickets: BTreeMap<[i32; 3], TicketSet>,
+    entity_tickets: BTreeMap<u128, TicketSet>,
+    selected: BTreeSet<usize>,
 }
-/// Shows only how many tickets the calling mod's controller holds, never another mod's.
-impl std::fmt::Debug for ControllerTickets {
+impl std::fmt::Debug for ControllerTickets<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControllerTickets")
-            .field("own", &self.own().count())
+            .field("loaded", &self.loaded.len())
             .finish()
     }
 }
-impl ControllerTickets {
-    /// A validation of the `loaded` tickets of one controller, owned by mod
-    /// `owner`. For the game.
+impl<'a> ControllerTickets<'a> {
+    /// Borrow the staged tickets of one controller. For the game.
     // hidden: a game-side helper, not part of the mod surface
     #[doc(hidden)]
-    pub fn new(owner: &'static str, loaded: Vec<ModTicket>) -> Self {
+    pub fn new(loaded: &'a mut Vec<ModTicket>) -> Self {
+        let mut block_tickets = BTreeMap::<[i32; 3], TicketSet>::new();
+        let mut entity_tickets = BTreeMap::<u128, TicketSet>::new();
+        for row in loaded.iter() {
+            let chunk = [row.chunk.0, row.chunk.1];
+            match row.owner {
+                TicketOwner::Block(pos) => block_tickets
+                    .entry(pos)
+                    .or_default()
+                    .push(chunk, row.natural_spawning),
+                TicketOwner::Entity(uuid) => entity_tickets
+                    .entry(uuid)
+                    .or_default()
+                    .push(chunk, row.natural_spawning),
+            }
+        }
         Self {
-            owner,
             loaded,
-            removed: Vec::new(),
+            block_tickets,
+            entity_tickets,
+            selected: BTreeSet::new(),
         }
     }
-    /// The tickets removed. For the game.
-    // hidden: a game-side helper, not part of the mod surface
+
+    /// Publish the staged removals after a successful callback. For the game.
+    // hidden: engine-side commit step after a ticket validation callback succeeds.
     #[doc(hidden)]
-    pub fn into_removed(self) -> Vec<ModTicket> {
-        self.removed
+    pub fn publish_removals(self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        let mut index = 0;
+        self.loaded.retain(|_| {
+            let keep = !self.selected.contains(&index);
+            index += 1;
+            keep
+        });
     }
 }
-impl TicketValidation for ControllerTickets {
-    fn block_tickets(&self) -> Vec<([i32; 3], TicketSet)> {
-        let mut grouped = std::collections::BTreeMap::<[i32; 3], TicketSet>::new();
-        for (owner, chunk, spawning) in self.own() {
-            if let TicketOwner::Block(pos) = owner {
-                grouped.entry(pos).or_default().push(chunk, spawning);
-            }
-        }
-        grouped.into_iter().collect()
+impl TicketValidation for ControllerTickets<'_> {
+    fn block_tickets(&self) -> &BTreeMap<[i32; 3], TicketSet> {
+        &self.block_tickets
     }
-    fn entity_tickets(&self) -> Vec<(u128, TicketSet)> {
-        let mut grouped = std::collections::BTreeMap::<u128, TicketSet>::new();
-        for (owner, chunk, spawning) in self.own() {
-            if let TicketOwner::Entity(uuid) = owner {
-                grouped.entry(uuid).or_default().push(chunk, spawning);
-            }
-        }
-        grouped.into_iter().collect()
+    fn entity_tickets(&self) -> &BTreeMap<u128, TicketSet> {
+        &self.entity_tickets
     }
     fn remove_block_tickets(&mut self, pos: [i32; 3]) -> usize {
         self.remove(TicketOwner::Block(pos), None)
@@ -159,28 +176,18 @@ impl TicketValidation for ControllerTickets {
         self.remove(TicketOwner::Entity(uuid), Some((chunk, natural_spawning))) > 0
     }
 }
-impl ControllerTickets {
-    fn own(&self) -> impl Iterator<Item = (TicketOwner, [i32; 2], bool)> + '_ {
-        let owned = crate::content::crash::current_native_mod() == Some(self.owner);
-        self.loaded
-            .iter()
-            .filter(move |_| owned)
-            .map(|t| (t.owner, [t.chunk.0, t.chunk.1], t.natural_spawning))
-    }
+impl ControllerTickets<'_> {
     fn remove(&mut self, owner: TicketOwner, kind: Option<([i32; 2], bool)>) -> usize {
-        if crate::content::crash::current_native_mod() != Some(self.owner) {
-            return 0;
+        let before = self.selected.len();
+        for (index, row) in self.loaded.iter().enumerate() {
+            if row.owner == owner
+                && kind.is_none_or(|([x, z], spawning)| {
+                    row.chunk == (x, z) && row.natural_spawning == spawning
+                })
+            {
+                self.selected.insert(index);
+            }
         }
-        let (gone, kept): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut self.loaded).into_iter().partition(|t| {
-                t.owner == owner
-                    && kind.is_none_or(|([x, z], spawning)| {
-                        t.chunk == (x, z) && t.natural_spawning == spawning
-                    })
-            });
-        self.loaded = kept;
-        let count = gone.len();
-        self.removed.extend(gone);
-        count
+        self.selected.len() - before
     }
 }

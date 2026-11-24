@@ -16,19 +16,11 @@ impl Renderer {
             self.pack_atlas = None;
             self.pack_material_atlases = None;
         }
-        let instance = wgpu::vertex_attr_array![5=>Float32x4];
-        let vertex = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<TerrainVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &TERRAIN_ATTRIBUTES,
-        };
-        let instances = wgpu::VertexBufferLayout {
-            array_stride: 16,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &instance,
-        };
-        let buffers = [Some(vertex), Some(instances)];
+        let draws = self.pack_terrain_draws();
+        let buffers = pack_terrain_buffers();
+        let buffers = &buffers[..terrain_buffer_count(draws)];
         let flat = self.pack_terrain_flat;
+        let pages = draws.reads_pages();
         let sprite_rects = self
             .pack_atlas
             .as_ref()
@@ -49,13 +41,14 @@ impl Renderer {
                     .map_or([1, 1], |t| [t.width(), t.height()]),
                 terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
                     // Flat terrain programs pull their vertices (`pack_atlas::PULL_FLAT`).
-                    buffers: if flat { &[] } else { &buffers },
+                    buffers: if flat { &[] } else { buffers },
                     table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
                     depth_write: true,
                     atlas: None,
                     material_maps: true,
                     ids: None,
                     cull: true,
+                    pages,
                 }),
                 block_ids,
                 celestial: self
@@ -67,13 +60,14 @@ impl Renderer {
                 weather: true,
                 hand: true,
             };
-            pack_post::PackPost::new(
-                &self.device,
-                &self.queue,
-                &self.adapter,
+            let mod_runtime = crate::mod_pipelines::pack_runtime_specs();
+            let mod_vertex_buffers = [Some(mod_pipelines::PipelineVertex::buffer_layout())];
+            pack_post::PackPost::new_with_mods(
+                (&self.device, &self.queue, &self.adapter),
                 post,
                 self.output.frame.format,
                 world,
+                mod_runtime.as_runtime(&mod_vertex_buffers),
                 &std::sync::atomic::AtomicBool::new(false),
             )
         });
@@ -149,17 +143,17 @@ impl Renderer {
     /// reads: that frame's, or an error, never an older one. The last frame's PNG has already
     /// waited for it, without a limit, as `screenshot` does.
     pub fn finish_sequence_frame(&mut self) -> Result<()> {
-        self.device
-            .poll(wgpu::PollType::Wait {
+        super::in_flight::poll_live(
+            &self.device,
+            &self.device_lost,
+            wgpu::PollType::Wait {
                 submission_index: None,
                 timeout: Some(std::time::Duration::from_secs(30)),
-            })
-            .map_err(|e| format!("the frame didn't finish on the GPU: {e}"))?;
-        if self.device_lost() {
-            return Err("the graphics device was lost".into());
-        }
+            },
+        )
+        .map_err(|e| format!("the frame didn't finish on the GPU: {e}"))?;
         if let Some((_, Some(post))) = &mut self.pack_post {
-            post.take_center_depth(&self.device)?;
+            post.take_center_depth()?;
         }
         Ok(())
     }
@@ -199,26 +193,21 @@ impl Renderer {
             .as_ref()
             .map(|t| t.create_view(&Default::default()));
         let flat = self.pack_terrain_flat;
+        let draws = self.pack_terrain_draws();
+        let pages = draws.reads_pages();
         let table = (self.flat.as_ref())
             .filter(|_| flat)
             .map(|f| f.draw_layout.clone());
         let terrain = self.pack_atlas.is_some();
+        let draws_sections = PackLoading::draws_of(&pack, terrain);
         let clouds = self.cloud_bindings.clone();
+        let mod_runtime = crate::mod_pipelines::pack_runtime_specs();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancelled = cancel.clone();
         let build = move || {
-            let instance = wgpu::vertex_attr_array![5=>Float32x4];
-            let vertex = wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<TerrainVertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &TERRAIN_ATTRIBUTES,
-            };
-            let instances = wgpu::VertexBufferLayout {
-                array_stride: 16,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &instance,
-            };
-            let buffers = [Some(vertex), Some(instances)];
+            let buffers = pack_terrain_buffers();
+            let buffers = &buffers[..terrain_buffer_count(draws)];
+            let mod_vertex_buffers = [Some(mod_pipelines::PipelineVertex::buffer_layout())];
             let world = pack_post::World {
                 atlas,
                 sprite_rects: &sprite_rects,
@@ -227,13 +216,14 @@ impl Renderer {
                 gui_size,
                 terrain: terrain.then(|| pack_post::Geometry {
                     // Flat terrain programs pull their vertices (`pack_atlas::PULL_FLAT`).
-                    buffers: if flat { &[] } else { &buffers },
+                    buffers: if flat { &[] } else { buffers },
                     table: table.as_ref(),
                     depth_write: true,
                     atlas: None,
                     material_maps: true,
                     ids: None,
                     cull: true,
+                    pages,
                 }),
                 block_ids: &block_ids,
                 celestial,
@@ -241,7 +231,14 @@ impl Renderer {
                 weather: true,
                 hand: true,
             };
-            pack_post::PackPost::new(&device, &queue, &adapter, pack, format, world, &cancelled)
+            pack_post::PackPost::new_with_mods(
+                (&device, &queue, &adapter),
+                pack,
+                format,
+                world,
+                mod_runtime.as_runtime(&mod_vertex_buffers),
+                &cancelled,
+            )
         };
         // A pack is not the game's code: a panic building it turns the pack off (#3525).
         let thread = std::thread::Builder::new()
@@ -257,6 +254,7 @@ impl Renderer {
                     label,
                     started,
                     _cancel: CancelOnDrop(cancel),
+                    draws: draws_sections,
                 });
             }
             Err(e) => {
@@ -379,32 +377,10 @@ impl Renderer {
     /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
     pub fn pack_inputs(&mut self) -> sunrise_shaders::GameInputs {
         let terrain = self.pack_terrain_inputs();
-        // A geometry stage reads flat draws' vertices itself, through their index buffer.
-        let terrain_geometry = terrain
-            .clone()
-            .filter(|_| self.pack_terrain_flat)
-            .map(|mut inputs| {
-                inputs.declarations.push_str(
-                    "layout(set = 5, binding = 0) readonly buffer HzIndices { uint hz_indices[]; };\n",
-                );
-                sunrise_shaders::GeometryInputs {
-                    inputs,
-                    // Flat terrain inputs pull their own vertex (`PULL_FLAT`, `gl_VertexIndex` → `hz_vertex_index`).
-                    pull: String::new(),
-                    index: "hz_indices[@]".to_owned(),
-                }
-            });
         sunrise_shaders::GameInputs {
-            terrain_geometry,
-            entity_geometry: Some(pack_entities::geometry_inputs()),
-            sky: Some(pack_sky::inputs()),
-            celestial: Some(pack_sky::celestial_inputs()),
-            entities: Some(pack_entities::inputs()),
-            clouds: Some(pack_entities::cloud_inputs()),
-            weather: Some(pack_weather::inputs()),
-            lines: Some(pack_lines::inputs()),
-            hand: Some(pack_hand::inputs()),
-            ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers)
+            interface_limits: crate::core_shader::interface_limits(&self.device.limits()),
+            mod_programs: crate::mod_pipelines::pack_program_requests(),
+            ..pack_atlas::game_inputs(terrain, self.pack_terrain_flat, &self.pack_lava_layers)
         }
     }
 
@@ -474,11 +450,46 @@ impl Renderer {
             self.queue.submit([encoder.finish()]);
         }
         self.pack_terrain_flat = flat;
-        Some(
-            self.pack_atlas
-                .as_ref()?
-                .terrain_inputs(self.pack_terrain_flat),
-        )
+        // Per-section draws read the pages where the pack's terrain programs still fit the
+        // vertex stage with them, and the normal stream where they don't but fit with it.
+        let gpu = pack_post::Gpu::of(&self.adapter, self.device.features());
+        let limits = self.device.limits();
+        let fit = (self.pack_terrain_bindings).pages_fit(&limits, gpu);
+        self.pack_terrain_pages = !flat && self.terrain_pages && fit;
+        let stream = (self.pack_terrain_bindings).normals_fit(&limits, gpu);
+        self.pack_terrain_normals = !flat && !self.pack_terrain_pages && stream;
+        if !flat && !self.pack_terrain_pages && !stream {
+            log::warn!(
+                "shader pack terrain: {:?} fit the vertex stage's buffers with neither set 3 \
+                 nor the normal stream; per-section draws give the constant normal and tangent",
+                self.pack_terrain_bindings
+            );
+        }
+        let draws = self.pack_terrain_draws();
+        Some(self.pack_atlas.as_ref()?.terrain_inputs_for(draws))
+    }
+    /// How the game's terrain draws give the pack's terrain programs their vertices, as
+    /// `pack_terrain_inputs` last took them: flat, or per section, reading their quad's corners
+    /// from the section arena's pages where vertex shaders read storage and the pack's programs
+    /// fit with them (`pack_terrain_pages`), else their quad's normal and tangent from the
+    /// normal stream where they fit with it (`pack_terrain_normals`), else as attributes alone.
+    pub(crate) fn pack_terrain_draws(&self) -> pack_atlas::TerrainDraws {
+        match (
+            self.pack_terrain_flat,
+            self.pack_terrain_pages,
+            self.pack_terrain_normals,
+        ) {
+            (true, ..) => pack_atlas::TerrainDraws::Flat,
+            (false, true, _) => pack_atlas::TerrainDraws::Pages,
+            (false, false, true) => pack_atlas::TerrainDraws::Normals,
+            (false, false, false) => pack_atlas::TerrainDraws::Attributes,
+        }
+    }
+    /// What the pack about to be loaded binds in its terrain programs' vertex stage
+    /// (`pack_atlas::TerrainBindings::of`), before `pack_inputs`: per-section draws read the
+    /// arena's pages, or else the normal stream, only where those programs still fit with them.
+    pub fn set_pack_terrain_bindings(&mut self, bindings: pack_atlas::TerrainBindings) {
+        self.pack_terrain_bindings = bindings;
     }
     /// The macros this renderer gives shader packs: the GL extensions this device has
     /// (subgroups, when it has them), and the vendor, renderer and mipmap levels
@@ -497,11 +508,64 @@ impl Renderer {
                 macros.define(format!("MC_GL_KHR_shader_subgroup_{ext}"), "");
             }
         }
+        for (name, value) in crate::mod_pipelines::pack_defines() {
+            macros.define(name, value);
+        }
+    }
+
+    /// How the active translated shader pack binds mod pipeline `slot`.
+    pub fn pack_override_state(&self, slot: usize) -> mod_api::PackOverrideState {
+        match &self.pack_post {
+            Some((_, Some(post))) => {
+                if post.is_mod_pipeline_bound(slot) {
+                    mod_api::PackOverrideState::Bound
+                } else {
+                    mod_api::PackOverrideState::UnboundPack
+                }
+            }
+            _ => mod_api::PackOverrideState::NoPack,
+        }
     }
 
     /// The dimension the shader pack was last set for.
     pub fn shader_pack_dimension(&self) -> Option<i32> {
         let loading = self.pack_loading.as_ref().map(|l| l.dimension);
         loading.or_else(|| self.pack_post.as_ref().map(|p| p.0))
+    }
+}
+
+/// The section origins' vertex attribute (`section_instance`).
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![5=>Float32x4];
+
+/// The vertex buffers a pack's per-section terrain programs read: the arena's vertices, the
+/// sections' origins and the normal stream (`pack_atlas::NORMAL_ATTRIBUTES`), of which a
+/// pipeline takes `terrain_buffer_count`.
+fn pack_terrain_buffers() -> [Option<wgpu::VertexBufferLayout<'static>>; 3] {
+    [
+        Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &TERRAIN_ATTRIBUTES,
+        }),
+        Some(wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &INSTANCE_ATTRIBUTES,
+        }),
+        Some(wgpu::VertexBufferLayout {
+            array_stride: pack_atlas::NORMAL_BYTES,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &pack_atlas::NORMAL_ATTRIBUTES,
+        }),
+    ]
+}
+
+/// How many of `pack_terrain_buffers` a terrain program drawn as `draws` reads: the normal
+/// stream only with `TerrainDraws::Normals`.
+fn terrain_buffer_count(draws: pack_atlas::TerrainDraws) -> usize {
+    if draws == pack_atlas::TerrainDraws::Normals {
+        3
+    } else {
+        2
     }
 }

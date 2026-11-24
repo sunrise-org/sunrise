@@ -1,6 +1,8 @@
 #[test]
 fn the_chunk_storage_takes_any_radius_and_centre_a_server_sends() {
-    use crate::game::remote::in_storage_range;
+    use sunrise_client::chunk_map::ClientChunkRange;
+    let in_storage_range =
+        |distance, center, x, z| ClientChunkRange::new(center, distance).contains((x, z));
     // Vanilla's storage: radius at least 2, plus 3, each way from the centre.
     assert!(in_storage_range(10, (0, 0), 13, -13));
     assert!(!in_storage_range(10, (0, 0), 14, 0));
@@ -15,4 +17,24 @@ fn the_chunk_storage_takes_any_radius_and_centre_a_server_sends() {
         i32::MIN + 13,
         i32::MAX - 13
     ));
+}
+
+#[test]
+fn the_cache_indexes_negative_slots_on_both_axes() {
+    use std::sync::Arc;
+    use sunrise_client::{
+        chunk::Chunk,
+        chunk_map::{ChunkMap, ClientChunkRange},
+    };
+
+    let mut chunks = ChunkMap::default();
+    let old = Arc::new(Chunk::empty(2, 3));
+    chunks.insert((2, 3), old.clone());
+    let (hidden, shown) = chunks.set_client_chunk_range(ClientChunkRange::new((-9, -8), 2));
+    assert_eq!(hidden, [(2, 3)]);
+    assert!(shown.is_empty());
+    assert_eq!(chunks.client_chunk_alias((-9, -8)), Some((2, 3)));
+    assert_eq!(chunks.client_chunk_alias((-9, -7)), None);
+    assert!(chunks.remove(&(-9, -8)).is_none());
+    assert!(Arc::ptr_eq(chunks.resident_get(&(2, 3)).unwrap(), &old));
 }

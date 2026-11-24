@@ -2,7 +2,10 @@
 #![allow(clippy::all)]
 use super::mod_api_host::FireOddsLevel;
 use super::*;
-use crate::game::native_level_signals::ReadLevel;
-use mod_api::BlockFace;
+use crate::game::{native_level_signals::ReadLevel, native_surface::FrictionView};
+use mod_api::{
+    BlockEntityDataView, BlockFace, BlockRemovalEffects, BlockSoundCause, BlockSoundType,
+    EmissiveSpriteRegistration, GuiCanvas, RandomSource, SettingValue, SoundPlay,
+};
 
 include!(concat!(env!("OUT_DIR"), "/mod_api_fire_generated.rs"));

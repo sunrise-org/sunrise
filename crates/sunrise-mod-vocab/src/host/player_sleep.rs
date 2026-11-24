@@ -9,21 +9,18 @@ pub trait PlayerSleepBackend {
     /// Side: server.
     /// Whether `player_set_sleep_ignored` left the player out of the night's sleep count. False
     /// for a player never ignored. None for a stale handle or a player who isn't online.
-    #[access(WorldOnly)]
     fn player_sleep_ignored(&self, player: PlayerRef) -> Option<bool>;
     /// Side: server.
     /// Whether the player counts in the night's sleep count (`SleepStatus.update`): not a
     /// spectator, not a fake player, and not left out through `player_set_sleep_ignored` while
     /// out of bed. None for a stale or unavailable player.
-    #[access(WorldOnly)]
     fn player_counts_for_sleep(&self, player: PlayerRef) -> Option<bool>;
     /// Side: server.
     /// `Player.getSleepTimer` (`sleepCounter`): the ticks the player has been in bed, 100 once
     /// asleep long enough (`isSleepingLongEnough`, what the night skip waits for), then
     /// counting up 101 to 109 and back to 0 once they are up. None for a stale or unavailable
     /// player.
-    #[access(WorldOnly)]
-    fn player_sleep_timer(&self, player: PlayerRef) -> Option<u32>;
+    fn player_sleep_timer(&self, player: PlayerRef) -> Option<i32>;
 }
 /// The handles' writes of the `player_sleep` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -37,13 +34,9 @@ pub trait PlayerSleepBackendMut {
     /// until a mod sets it back or the server stops, also if they leave and
     /// come back. False when the server list is unavailable, the handle is
     /// stale or the player isn't online.
-    #[access(WorldOnly)]
     fn player_set_sleep_ignored(&mut self, player: PlayerRef, ignored: bool) -> bool;
     /// Side: server.
-    /// Sets the player's `sleepCounter`: 0 to 109, the values the game reaches (see
-    /// `player_sleep_timer`). A player in bed at 100 counts as slept long enough for the night
-    /// skip. False for a value past 109, a stale or unavailable player, a fake player and a
-    /// player in another level than the one in place.
-    #[access(WorldOnly)]
-    fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: u32) -> bool;
+    /// Writes the signed `Player.sleepCounter` without lying down or waking up. The next
+    /// `Player.tick` handles the counter as usual. False for a stale or unavailable player.
+    fn player_set_sleep_timer(&mut self, player: PlayerRef, ticks: i32) -> bool;
 }

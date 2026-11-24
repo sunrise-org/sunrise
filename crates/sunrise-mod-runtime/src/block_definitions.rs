@@ -110,34 +110,54 @@ impl BlockDefinition {
         self.apply(state, &[(name, value)])
     }
 
+    /// Check explicit property requirements without filling in omitted values or building a state.
+    pub fn validate_properties(&self, properties: &[(&str, &str)]) -> Result<(), StateError> {
+        self.resolve_properties(properties)
+            .try_for_each(|resolved| resolved.map(|_| ()))
+    }
+
     fn apply(&self, state: u16, properties: &[(&str, &str)]) -> Result<u16, StateError> {
         let mut values = self
             .states
             .get(usize::from(state))
             .ok_or(StateError::UnknownState)?
             .to_vec();
-        for (input, &(name, value)) in properties.iter().enumerate() {
-            if properties[..input]
-                .iter()
-                .any(|(previous, _)| *previous == name)
-            {
-                return Err(StateError::DuplicateProperty(input));
-            }
-            let (index, (_, legal)) = self
-                .properties
-                .iter()
-                .enumerate()
-                .find(|(_, (key, _))| key == name)
-                .ok_or(StateError::UnknownProperty(input))?;
-            values[index] = legal
-                .iter()
-                .position(|v| v == value)
-                .ok_or(StateError::InvalidValue(input))? as u16;
+        for resolved in self.resolve_properties(properties) {
+            let (index, value) = resolved?;
+            values[index] = value;
         }
         self.ordinals
             .get(values.as_slice())
             .copied()
             .ok_or(StateError::InvalidCombination)
+    }
+
+    fn resolve_properties<'a>(
+        &'a self,
+        properties: &'a [(&'a str, &'a str)],
+    ) -> impl Iterator<Item = Result<(usize, u16), StateError>> + 'a {
+        properties
+            .iter()
+            .enumerate()
+            .map(move |(input, &(name, value))| {
+                if properties[..input]
+                    .iter()
+                    .any(|(previous, _)| *previous == name)
+                {
+                    return Err(StateError::DuplicateProperty(input));
+                }
+                let (index, (_, legal)) = self
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (key, _))| key == name)
+                    .ok_or(StateError::UnknownProperty(input))?;
+                let value = legal
+                    .iter()
+                    .position(|v| v == value)
+                    .ok_or(StateError::InvalidValue(input))? as u16;
+                Ok((index, value))
+            })
     }
 }
 

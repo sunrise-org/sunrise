@@ -1,41 +1,23 @@
 //! Brushing suspicious sand and gravel: `BrushItem.onUseTick` and
 //! `BrushableBlockEntity`. The block's loot table stays in its saved block
 //! entity (like a decorated pot's) until the first counted stroke rolls it.
-use super::{Game, Hit, decorated_pot, view_vector};
-use std::collections::HashMap;
+use super::{
+    Game, Hit, decorated_pot,
+    item_draw::{BlockItemDraw, block_entity_pose},
+    view_vector,
+};
 use sunrise_client::{
     block_entity_render::vertex_light,
+    camera::rotate_degrees,
     containers::BlockEntity,
     mesher::Vertex,
     particles::{ParticleOptions, ParticleType},
     save,
 };
+use sunrise_client_render::block_entity_reach::Reach;
 use sunrise_core::random::RandomSource;
 
-/// `BrushItem.USE_DURATION`.
-const USE_DURATION: u32 = 200;
-
-/// A brushable block's counters. Vanilla never saves them: the block's
-/// `dusted` state is all that is left after a reload.
-#[derive(Default)]
-pub(super) struct BrushState {
-    count: i32,
-    resets_at: i64,
-    cooldown_ends_at: i64,
-    hit_face: Option<[i32; 3]>,
-}
-
-/// `BrushableBlockEntity.getCompletionState`: the `dusted` property.
-fn completion_state(count: i32) -> i32 {
-    match count {
-        0 => 0,
-        1..=2 => 1,
-        3..=5 => 2,
-        _ => 3,
-    }
-}
-
-pub(super) type Brushing = HashMap<[i32; 3], BrushState>;
+pub(super) use sunrise_gameplay::brushing::{Brushing, USE_DURATION, completion_state};
 
 impl Game<'_> {
     /// `BrushItem.onUseTick` for a brush used `ticks` ticks so far, the
@@ -98,7 +80,7 @@ impl Game<'_> {
             self.brush_dust(hit, slot == super::shield::OFFHAND_SLOT);
         }
         let at = hit.pos.map(|v| f64::from(v) + 0.5);
-        self.audio.play(sound, Some(at), 1.0, 1.0);
+        self.play_audio(sound, Some(at), 1.0, 1.0);
         if brushable && self.brush_block(hit.pos, hit.face, slot) {
             self.damage_held(1);
         }
@@ -323,16 +305,27 @@ impl Game<'_> {
 
     /// `BrushableBlockRenderer`: reveal the item from the first brushed face.
     pub(super) fn brushable_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
+        self.brushable_items(camera, |d| {
+            self.submit_item_world(d.state, d.pose, d.light, out);
+        });
+    }
+
+    /// The items [`Self::brushable_geometry`] draws.
+    pub(super) fn brushable_items(&self, camera: glam::DVec3, mut draw: impl FnMut(BlockItemDraw)) {
         use sunrise_assets::item_model::DisplayContext;
+        let _items = sunrise_client::spans::raw_flight_guard("block_entity_items");
+        let reach = Reach::Default;
+        sunrise_client::spans::note_block_entity_item_visits(|| {
+            self.world.block_entities.len() as u64
+        });
         for (key, entity) in &self.world.block_entities {
             let BlockEntity::Brushable(b) = entity else {
                 continue;
             };
-            let (Some(item), Some(face)) = (&b.item, b.hit_direction) else {
+            let (Some(stack), Some(face)) = (&b.item, b.hit_direction) else {
                 continue;
             };
-            let at = glam::DVec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
-            if at.distance_squared(camera) >= 64.0 * 64.0 {
+            if !reach.should_render([key.0, key.1, key.2], camera, 0) {
                 continue;
             }
             let state = self.world.block(key.0, key.1, key.2);
@@ -347,31 +340,43 @@ impl Game<'_> {
             if progress == 0 {
                 continue;
             }
-            let offset = f32::from(progress) * 0.075;
+            // `BrushableBlockRenderer.translations`.
+            let offset = f32::from(progress) / 10.0 * 0.75;
             let (translation, adjacent, east_west) = match face {
-                0 => (glam::Vec3::new(0.5, -0.23 - offset, 0.5), [0, -1, 0], false),
-                1 => (glam::Vec3::new(0.5, 0.25 + offset, 0.5), [0, 1, 0], false),
-                2 => (glam::Vec3::new(0.5, 0.0, 0.25 - offset), [0, 0, -1], false),
-                3 => (glam::Vec3::new(0.5, 0.0, 0.73 + offset), [0, 0, 1], false),
-                4 => (glam::Vec3::new(0.25 - offset, 0.0, 0.5), [-1, 0, 0], true),
-                5 => (glam::Vec3::new(0.73 + offset, 0.0, 0.5), [1, 0, 0], true),
+                0 => ([0.5, -0.23 - offset, 0.5], [0, -1, 0], false),
+                1 => ([0.5, 0.25 + offset, 0.5], [0, 1, 0], false),
+                2 => ([0.5, 0.0, 0.25 - offset], [0, 0, -1], false),
+                3 => ([0.5, 0.0, 0.73 + offset], [0, 0, 1], false),
+                4 => ([0.25 - offset, 0.0, 0.5], [-1, 0, 0], true),
+                5 => ([0.73 + offset, 0.0, 0.5], [1, 0, 0], true),
                 _ => continue,
             };
-            let item = self.resolve_item(item, DisplayContext::Fixed, None, 0);
+            let item = self.resolve_item(stack, DisplayContext::Fixed, None, 0);
             if item.is_empty() {
                 continue;
             }
-            let pose = glam::Mat4::from_translation(
-                (at - camera).as_vec3() + glam::Vec3::new(0.0, 0.5, 0.0) + translation,
-            ) * glam::Mat4::from_rotation_y(
-                (86.0_f32 + if east_west { 90.0 } else { 0.0 }).to_radians(),
-            ) * glam::Mat4::from_scale(glam::Vec3::splat(0.5));
+            let mut pose = block_entity_pose(*key, camera);
+            pose.translate(0.0, 0.5, 0.0);
+            pose.translate(translation[0], translation[1], translation[2]);
+            rotate_degrees(&mut pose, 1, 75.0);
+            rotate_degrees(&mut pose, 1, if east_west { 101.0 } else { 11.0 });
+            pose.scale(0.5, 0.5, 0.5);
             let light = self.world.light(
                 key.0 + adjacent[0],
                 key.1 + adjacent[1],
                 key.2 + adjacent[2],
             );
-            self.submit_item_world(&item, pose, vertex_light(light), out);
+            draw(BlockItemDraw {
+                #[cfg(test)]
+                stack,
+                #[cfg(test)]
+                display: DisplayContext::Fixed,
+                #[cfg(test)]
+                seed: 0,
+                state: &item,
+                pose: pose.to_glam(),
+                light: vertex_light(light),
+            });
         }
     }
 
@@ -387,7 +392,7 @@ impl Game<'_> {
         if !sound.is_empty() {
             let at = pos.map(|v| f64::from(v) + 0.5);
             // Each client plays it from the event itself.
-            self.audio.play_unshared(sound, Some(at), 1.0, 1.0);
+            self.play_audio_unshared(sound, Some(at), 1.0, 1.0);
         }
         self.destroy_particles(pos, state);
     }

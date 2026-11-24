@@ -1,4 +1,4 @@
-//! Refusals when a client mod moves or hides a slot of its open screen.
+//! Refusals when a client mod moves, activates, or hides a slot of an open mod screen.
 
 /// Why [`set_screen_slot`](crate::prelude::ScreensClientHost::set_screen_slot) changed
 /// nothing. Every refusal leaves the screen's slots as they were.
@@ -6,13 +6,10 @@
 #[non_exhaustive]
 #[derive(sunrise_mod_api_macros::Wire)]
 pub enum ScreenSlotRefusal {
-    /// No mod screen is open, or the open one is another menu type's or another mod's.
+    /// No mod screen is open, or the open one is for another menu type.
     NoScreen,
-    /// The slot is past the slots the screen declared when it opened.
+    /// The slot is outside the menu's container backing.
     NoSuchSlot,
-    /// The slot was hidden when the screen opened, so the server's menu has no such slot:
-    /// showing it would offer a slot the server does not have.
-    HiddenAtOpen,
     /// A position that is not finite.
     BadPosition,
     /// Asked with no game backend: screens are the client's.
@@ -22,9 +19,8 @@ pub enum ScreenSlotRefusal {
 impl std::fmt::Display for ScreenSlotRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::NoScreen => "no screen owned by the calling mod is open for that menu type",
+            Self::NoScreen => "no mod screen is open for that menu type",
             Self::NoSuchSlot => "the screen declared no such slot",
-            Self::HiddenAtOpen => "the slot was hidden when the screen opened",
             Self::BadPosition => "the position is not finite",
             Self::Unavailable => "screens are on the client",
         })

@@ -70,6 +70,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
                     name: "kill".into(),
                     trigger: "minecraft:kill_mob_near_sculk_catalyst".into(),
                     conditions: serde_json::json!({}).into(),
+                    player: None,
                 }],
                 requirements: vec![vec!["kill".into()]],
                 rewards: Rewards::default(),
@@ -126,7 +127,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             }
             assert_eq!(game.resolve_player_credit(credit), Some(Some(12)));
             let victim = game.mobs[1].clone();
-            game.mob_died(&victim);
+            game.mob_die(&victim);
             let stats = &game.lan.as_ref().unwrap().play.get(&12).unwrap().stats;
             assert_eq!(stats.get("custom", "minecraft:mob_kills"), 1);
             game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
@@ -137,7 +138,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             second.id = 102;
             game.last_hurt_by_player
                 .insert(102, super::super::combat::PlayerCredit(12));
-            game.as_guest(12, |game| game.mob_died(&second)).unwrap();
+            game.as_guest(12, |game| game.mob_die(&second)).unwrap();
             let host = game.lan.as_ref().unwrap();
             assert_eq!(host.play[&12].stats.get("custom", "minecraft:mob_kills"), 2);
             assert!(host.hub.guests[0].advancements.has("test:catalyst", "kill"));
@@ -155,7 +156,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             game.resolve_player_responsible(101, Damage::mob(100, [0.0; 3]));
             let credit = game.last_hurt_by_player.remove(&101).unwrap();
             game.last_hurt_by_player.insert(103, credit);
-            game.mob_died(&third);
+            game.mob_die(&third);
             let host = game.lan.as_ref().unwrap();
             assert_eq!(host.play[&12].stats.get("custom", "minecraft:mob_kills"), 3);
             game.mobs[0].extra.owner = None;
@@ -231,7 +232,9 @@ fn ender_pearl_clears_impulse_before_next_fall() {
     let player = game.player.as_mut().unwrap();
     assert_eq!(player.position, destination);
     assert_eq!(player.fall_distance, 0.0);
+    let side = game_side!(game);
     let damaged = MotionWorld {
+        side: &side,
         entities: &[],
         player,
         scene: &mut game.world,
@@ -335,64 +338,4 @@ fn thrown_item_billboard_faces_the_front_camera() {
     assert!(up.abs_diff_eq(glam::Vec3::Y, 1e-5), "{up}");
     let (right, _) = thrown_item_axes(CameraType::ThirdPersonBack, 0.0, 0.0);
     assert!(right.abs_diff_eq(glam::Vec3::NEG_X, 1e-5), "{right}");
-}
-
-/// A cow part that reads the world through the Host before answering a spawn group's limit.
-struct GatedCluster;
-#[mod_api::sunrise_part]
-impl mod_api::EntityPart for GatedCluster {
-    fn spawn_cluster_size(
-        &self,
-        host: &dyn mod_api::Host,
-        _: mod_api::UnspawnedMobRef,
-        _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
-        _: u32,
-    ) -> Option<u32> {
-        let _ = host.level("minecraft:overworld");
-        Some(1)
-    }
-}
-struct GatedClusterMod;
-#[mod_api::__subscriptions]
-impl mod_api::Hooks for GatedClusterMod {
-    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
-        r.entity_part("minecraft:cow", GatedCluster);
-    }
-}
-
-/// A spawn group's limit is asked at spawns, after the thread reached World. Asked under Setup and
-/// Reloading anyway, a part's world read is a contained refusal (no answer, vanilla's limit
-/// stands), never the no-scope panic; in World the same part answers.
-#[test]
-#[ignore = "daily"]
-fn a_spawn_cluster_size_outside_the_world_is_refused_not_a_panic() {
-    use mod_api::__private::{ModPhase, PhaseOwner};
-    use sunrise_client::mobs::{Mob, spawn_rules::Reason};
-    use sunrise_core::geometry::Vec3;
-
-    let entries = vec![mod_api::ModEntry::new("gated", Box::new(GatedClusterMod))];
-    mod_platform::__private::install(entries.into());
-    crate::game::api_values::install_parts(&[mod_api::ModEntry::new(
-        "gated",
-        Box::new(GatedClusterMod),
-    )])
-    .unwrap();
-    super::super::native_entity_refs::tests::with_game(|game| {
-        game.resolve_parts().unwrap();
-        let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        let mut cow = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-        for reloading in [false, true] {
-            let setup = PhaseOwner::scope(ModPhase::Setup);
-            let _reload = reloading.then(|| setup.reloading().unwrap());
-            assert_eq!(
-                game.spawn_cluster_size(&mut cow, Reason::Command, None, 4),
-                None
-            );
-        }
-        assert_eq!(
-            game.spawn_cluster_size(&mut cow, Reason::Command, None, 4),
-            Some(1)
-        );
-    });
 }

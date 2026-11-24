@@ -2,6 +2,7 @@
 use super::*;
 use crate::{gfx::Frame, hud::HudBatch};
 use std::io::{Cursor, Write};
+use sunrise_shaders::Post;
 use wgpu::TextureFormat as T;
 
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
@@ -159,12 +160,21 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Option<Self> {
-        let instance = crate::gfx::test_gpu::instance();
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        Self::with_features(wgpu::Features::empty())
+    }
+
+    /// [`Self::new`] with `features` turned on; `None` when the adapter lacks one.
+    pub(super) fn with_features(features: wgpu::Features) -> Option<Self> {
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
             eprintln!("Post destination test skipped: no GPU adapter");
             return None;
         };
+        if !adapter.features().contains(features) {
+            eprintln!("Post destination test skipped: the adapter lacks {features:?}");
+            return None;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: features,
             required_limits: adapter.limits(),
             ..Default::default()
         }))
@@ -252,12 +262,27 @@ impl Fixture {
         self.render_with_terrain(post, size, &mut |_, _, _, _| {})
     }
 
+    /// `render` with the Shadow Cache on.
+    pub(super) fn render_cached(&self, post: &mut PackPost, size: [u32; 2]) -> Vec<[u8; 4]> {
+        self.render_frame(post, size, &mut |_, _, _, _| {}, true)
+    }
+
     /// `render`, with `terrain` drawing the game's terrain lists.
     pub(super) fn render_with_terrain(
         &self,
         post: &mut PackPost,
         size: [u32; 2],
         terrain: &mut TerrainDraw<'_>,
+    ) -> Vec<[u8; 4]> {
+        self.render_frame(post, size, terrain, false)
+    }
+
+    fn render_frame(
+        &self,
+        post: &mut PackPost,
+        size: [u32; 2],
+        terrain: &mut TerrainDraw<'_>,
+        shadow_cache: bool,
     ) -> Vec<[u8; 4]> {
         let world = self.texture(size, T::Rgba8Unorm);
         let depth = self.texture(size, T::Depth32Float);
@@ -278,13 +303,21 @@ impl Fixture {
             &world,
             &depth,
             &screen,
-            &fixture_frame(&hud),
+            &Frame {
+                shadow_cache,
+                ..fixture_frame(&hud)
+            },
             &Default::default(),
             size,
             size,
             &[],
             terrain,
-        );
+            Default::default(),
+            |_, _| false,
+            &std::sync::atomic::AtomicBool::new(false),
+            super::super::in_flight::poll_live,
+        )
+        .unwrap();
         encoder.copy_texture_to_buffer(
             screen.texture().as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -317,6 +350,7 @@ impl Fixture {
 }
 
 #[test]
+#[ignore = "daily"]
 fn partial_writes_retain_the_alternate_with_flip_scale_and_mrt_controls() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
@@ -375,6 +409,7 @@ fn partial_writes_retain_the_alternate_with_flip_scale_and_mrt_controls() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn frame_clear_and_retained_history_apply_before_partial_post_writes() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
@@ -420,16 +455,21 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         camera: glam::DVec3::new(0.5, 100.0, 0.5),
         yaw: 0.0,
         pitch: 0.0,
+        roll: 0.0,
         fov_degrees: 90.0,
+        cull_fov_degrees: 90.0,
         bob: glam::Mat4::IDENTITY,
+        view_transform: glam::Mat4::IDENTITY,
         spin: glam::Mat4::IDENTITY,
         sky: crate::environment::Sky::default(),
         distance: 12.0,
         detail_distance: 12.0,
+        shadow_distance: None,
         depth_far: 1000.0,
         underwater: false,
         cave_culling: false,
         title: true,
+        sky_pass: false,
         sky_blocked: false,
         skybox: false,
         end_sky: false,
@@ -451,6 +491,7 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         glint_ticks: 0.0,
         nether_lighting: false,
         entities: &[],
+        explicit_particles: None,
         static_block_entities: &[],
         visible_static_block_entity_sections: &[],
         static_block_entity_stats: crate::block_entity_render::StaticCacheFrameStats::default(),
@@ -469,6 +510,7 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         see_through: &[],
         world_primitives: Default::default(),
         celestial: &[],
+        celestial_bodies: &[],
         stars: None,
         hand: &[],
         hand_items: &[],
@@ -491,14 +533,12 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
     }
 }
 
-#[path = "clear_budget_tests.rs"]
-mod clear_budget_tests;
-
 /// A cleared buffer written three times a frame flips an odd number of times, so its first write
 /// goes to the texture that was "main" the frame before, which a later program wrote after that
 /// frame's clear. Where that first write discards, Iris 1.11.7 reads the clear value (a probe
 /// pack of our own with these three programs reads 0 there, not the previous frame's 0.25).
 #[test]
+#[ignore = "daily"]
 fn a_cleared_buffer_starts_every_frame_cleared_on_both_textures() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
@@ -561,6 +601,3 @@ fn a_cleared_buffer_starts_every_frame_cleared_on_both_textures() {
         assert!(wrong.is_empty(), "frame {frame}: {wrong:?}");
     }
 }
-
-#[path = "clear_false_tests.rs"]
-mod clear_false_tests;

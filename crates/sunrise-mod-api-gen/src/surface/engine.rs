@@ -2,25 +2,9 @@
 use mod_surface::{EngineContract, EngineItem};
 use std::path::Path;
 
-pub(super) fn collect(
-    root: &Path,
-    wire: &crate::points::WireTypes,
-    with_internals: bool,
-) -> Result<Vec<EngineItem>, String> {
+/// Reads the published loops and, for a full audit, the advisory internals of a source tree.
+pub fn collect(root: &Path, with_internals: bool) -> Result<Vec<EngineItem>, String> {
     let mut items = Vec::new();
-    for point in crate::points::points_with(root, wire)? {
-        // points.json also carries refusals for diagnostics, but none of these rows admits
-        // an injection. Losing a point's last listener place is a removal from this surface.
-        if point.api_refusal.is_none() {
-            items.push(EngineItem::new(
-                format!("point:{}", point.target),
-                EngineContract::Point {
-                    name: point.name,
-                    signature_hash: point.signature_hash,
-                },
-            ));
-        }
-    }
     for published in crate::loops::collect(root)? {
         items.push(EngineItem::new(
             format!("loop:{}", published.name),
@@ -59,7 +43,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn exports_points_and_loops_from_source_with_opt_in_internals() {
+    fn exports_loops_from_source_with_opt_in_internals() {
         let tree = tempfile::tempdir().unwrap();
         let root = tree.path();
         let write = |file: &str, text: &str| {
@@ -67,7 +51,6 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, text).unwrap();
         };
-        write("crates/sunrise-engine-slots/Cargo.toml", "[dependencies]\n");
         let game = "crates/sunrise-client/src/game.rs";
         let source = r#"
 fn tick() {}
@@ -80,12 +63,7 @@ impl Game {
 }
 "#;
         write(game, source);
-        let wire = Default::default();
-        let default = collect(root, &wire, false).unwrap();
-        assert!(default.iter().any(|item| {
-            item.id == "point:sunrise_client::game::tick"
-                && matches!(&item.contract, EngineContract::Point { .. })
-        }));
+        let default = collect(root, false).unwrap();
         assert_eq!(
             default
                 .iter()
@@ -103,7 +81,7 @@ impl Game {
         write("crates/sunrise-client/src/entry.rs", "");
         write("crates/sunrise-mod-api-gen/internals.txt", "");
         write(crate::crossing::CROSSING_FOREIGN_FILE, "[]");
-        let audit = collect(root, &wire, true).unwrap();
+        let audit = collect(root, true).unwrap();
         assert_eq!(&audit[..default.len()], default.as_slice());
         assert!(
             audit
@@ -125,7 +103,7 @@ impl Game {
             )
             .with_engine_items(items)
         };
-        let renamed = surface(collect(root, &wire, false).unwrap());
+        let renamed = surface(collect(root, false).unwrap());
         let diff = mod_surface::diff(&surface(default), &renamed);
         assert_eq!(
             diff.undeclared()

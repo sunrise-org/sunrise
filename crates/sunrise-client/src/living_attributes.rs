@@ -6,7 +6,7 @@
 //! A player owns its map from the start. The others build theirs on first use
 //! (an item with attribute modifiers, a read through a `LivingRef`, the save),
 //! because most mobs never need one and a map costs a few KiB.
-use crate::Result;
+use crate::{Result, mobs::finalize::EquipmentRead};
 use std::{cell::OnceCell, collections::BTreeMap, convert::Infallible, fmt, io, sync::Arc};
 use sunrise_client_core::nbt_value::{float, string, text};
 use sunrise_items::{
@@ -14,7 +14,7 @@ use sunrise_items::{
     items::{ItemStack, Items},
 };
 use {
-    sunrise_core::nbt::Tag,
+    sunrise_core::{equipment_slot::EquipmentSlot, nbt::Tag},
     sunrise_world::{
         attribute_map::ValueKind,
         attributes::{
@@ -141,6 +141,24 @@ pub fn apply_saved(attributes: &mut Live, saved: Option<&Tag>) -> Result<()> {
     let Some(Tag::List(list)) = saved else {
         return Ok(());
     };
+    apply_list(attributes, list, |_| true)
+}
+
+/// Whether `entity`'s own code sets `attribute`'s base past the attribute's range, so a load
+/// keeps the saved base as vanilla does: `AbstractCubeMob.setCubeMobHealth` (size², up to
+/// 16129) and `MagmaCube.setSize`'s armor (size * 3). Any other base takes the #3728 clamp.
+pub fn own_unbounded_base(entity: &str, attribute: &str) -> bool {
+    matches!(
+        (entity, attribute),
+        (
+            "minecraft:slime" | "minecraft:magma_cube",
+            "minecraft:max_health"
+        ) | ("minecraft:magma_cube", "minecraft:armor")
+    )
+}
+
+/// [`apply_saved`] over a list, clamping a base (`loaded_base`) only where `clamp` says.
+fn apply_list(attributes: &mut Live, list: &[Tag], clamp: impl Fn(&str) -> bool) -> Result<()> {
     for entry in list {
         let Some(key) = text(entry.get("id")).and_then(|id| attributes.key(&id)) else {
             continue;
@@ -161,12 +179,13 @@ pub fn apply_saved(attributes: &mut Live, saved: Option<&Tag>) -> Result<()> {
             _ => Vec::new(),
         };
         let definition = attributes.catalog().attribute(key.attribute()).definition;
+        let base = float(entry.get("base")).unwrap_or(0.0);
         let packed = Packed {
-            base: loaded_base(
-                key.name(),
-                definition,
-                float(entry.get("base")).unwrap_or(0.0),
-            ),
+            base: if clamp(key.name()) {
+                loaded_base(key.name(), definition, base)
+            } else {
+                base
+            },
             modifiers,
         };
         let Some(handle) = attributes
@@ -248,9 +267,7 @@ impl Default for ClampLog {
 #[derive(Clone, Default)]
 pub struct LivingAttributes {
     map: OnceCell<Box<Live>>,
-    /// The items whose modifiers the map holds, by `EquipmentSlot` ordinal
-    /// (`LivingEntity.lastEquipmentItems`).
-    worn: Option<Box<Equipment>>,
+    worn: Option<Box<WornEquipment>>,
     /// The loaded `attributes` entries, applied when the map is built.
     saved: Option<Box<[Tag]>>,
     /// The transient modifiers mods added, by attribute: not saved, and put
@@ -266,10 +283,59 @@ impl fmt::Debug for LivingAttributes {
             .finish()
     }
 }
+/// One slot delta. Its previous value is still in the history until application.
+pub type EquipmentDelta = (EquipmentSlot, Option<ItemStack>);
+
+/// The deltas one body tick found, held by slot: the slot set is fixed, so collecting them
+/// allocates nothing, and reading them back is in `EquipmentSlot` order.
+#[derive(Default)]
+pub struct EquipmentDeltas([Option<Option<ItemStack>>; EquipmentSlot::ALL.len()]);
+
+impl EquipmentDeltas {
+    pub fn set(&mut self, slot: EquipmentSlot, now: Option<ItemStack>) {
+        self.0[slot as usize] = Some(now);
+    }
+    fn take(&mut self, slot: EquipmentSlot) -> Option<Option<ItemStack>> {
+        self.0[slot as usize].take()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(Option::is_none)
+    }
+    fn slots(&self) -> impl Iterator<Item = EquipmentSlot> + '_ {
+        EquipmentSlot::ALL
+            .into_iter()
+            .filter(|slot| self.0[*slot as usize].is_some())
+    }
+    fn into_deltas(self) -> impl Iterator<Item = EquipmentDelta> {
+        EquipmentSlot::ALL
+            .into_iter()
+            .zip(self.0)
+            .filter_map(|(slot, now)| Some((slot, now?)))
+    }
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct WornEquipment {
+    /// The items whose modifiers the map holds. Normally also `lastEquipmentItems`.
+    applied: Equipment,
+    /// A synchronous write or map invalidation can advance the live modifiers
+    /// before the next body tick. Keep only the displaced slots, so detection
+    /// still compares against what the last body tick observed.
+    before_tick: Vec<EquipmentDelta>,
+}
+
+impl WornEquipment {
+    fn remember(&mut self, slot: EquipmentSlot, previous: Option<ItemStack>) {
+        if !self.before_tick.iter().any(|(saved, _)| *saved == slot) {
+            self.before_tick.push((slot, previous));
+        }
+    }
+}
+
 /// A snapshot of the modifier rows and equipment detection cache, independent
 /// of base values. An invalidated map still has its current seed values.
 pub struct ModifierSnapshot {
-    worn: Option<Box<Equipment>>,
+    worn: Option<Box<WornEquipment>>,
     rows: BTreeMap<(String, String), ModifierState>,
 }
 
@@ -290,7 +356,7 @@ impl PartialEq for ModifierState {
 /// The live modifier edits that a transaction owns, in refresh order.
 #[derive(Default)]
 pub struct ModifierChanges {
-    worn_before: Option<Option<Box<Equipment>>>,
+    worn_before: Option<Option<Box<WornEquipment>>>,
     modifiers: Vec<ModifierChange>,
 }
 
@@ -318,6 +384,25 @@ impl ModifierChanges {
 }
 
 impl ModifierSnapshot {
+    fn from_map(map: &Live, worn: Option<Box<WornEquipment>>) -> Self {
+        let rows = map
+            .instances()
+            .flat_map(|(_, key, value)| {
+                value.modifiers().iter().map(move |modifier| {
+                    let id = modifier.id();
+                    (
+                        (key.name().to_owned(), id.to_owned()),
+                        ModifierState {
+                            modifier: modifier.clone(),
+                            permanent: value.permanent_modifiers().iter().any(|m| m.id() == id),
+                        },
+                    )
+                })
+            })
+            .collect();
+        Self { worn, rows }
+    }
+
     /// Keep only the rows and detection cache a single step actually changed.
     pub fn diff(&self, after: &Self) -> Option<ModifierChanges> {
         let mut changes = ModifierChanges {
@@ -348,6 +433,45 @@ impl ModifierSnapshot {
             }
         }
         (changes.worn_before.is_some() || !changes.modifiers.is_empty()).then_some(changes)
+    }
+}
+
+/// Rewind only the rows a write owned. Walking the whole before-order anchors
+/// restored rows to surviving neighbours, even if a later explicit write moved
+/// or removed a row. Among those later writes the current order wins.
+pub(crate) fn restore_modifier_order<Row: Clone>(
+    current: &mut Vec<Row>,
+    before: Vec<Row>,
+    owned: impl Fn(&Row) -> bool,
+    same_key: impl Fn(&Row, &Row) -> bool,
+    same_row: impl Fn(&Row, &Row) -> bool,
+) -> bool {
+    let mut restored: Vec<_> = current.iter().filter(|row| !owned(row)).cloned().collect();
+    let mut at = 0;
+    for old in before {
+        if owned(&old) {
+            restored.insert(at, old);
+            at += 1;
+        } else if let Some(index) = restored.iter().position(|row| same_key(row, &old)) {
+            at = at.max(index + 1);
+        }
+    }
+    if current.len() == restored.len() && current.iter().zip(&restored).all(|(a, b)| same_row(a, b))
+    {
+        return false;
+    }
+    *current = restored;
+    true
+}
+
+/// The transient seed in its insertion order, independent of the built equipment map.
+#[derive(Default)]
+pub(crate) struct TransientModifiers(Vec<(Arc<str>, Modifier)>);
+
+impl TransientModifiers {
+    pub(crate) fn forget(&mut self, attribute: &str, id: &str) {
+        self.0
+            .retain(|(name, m)| &**name != attribute || m.id() != id);
     }
 }
 
@@ -385,17 +509,27 @@ impl LivingAttributes {
         self.saved = (!kept.is_empty()).then(|| kept.into_boxed_slice());
     }
 
-    /// Whether the map holds an item's modifiers, which a slot emptied since
-    /// has to take away.
+    /// Whether a previously equipped slot still needs comparison.
     pub fn has_worn(&self) -> bool {
-        self.worn.as_ref().is_some_and(|w| !w.is_empty())
+        self.worn.is_some()
     }
 
-    /// Drops the map, because what it was built from changed: the next use
-    /// builds it again and the next equipment pass puts the item modifiers back.
+    /// Drops the map because its seed changed, retaining the body tick's
+    /// comparison baseline. The next refresh puts the item modifiers back.
     pub fn invalidate(&mut self) {
         self.map.take();
-        self.worn = None;
+        if let Some(worn) = self.worn.as_mut() {
+            for slot in EquipmentSlot::ALL {
+                if let Some(previous) = worn.applied[slot as usize].take() {
+                    worn.remember(slot, Some(previous));
+                }
+            }
+        }
+    }
+
+    /// Neither the modifier map nor any applied item modifiers are cached.
+    pub fn is_invalidated(&self) -> bool {
+        self.map.get().is_none() && self.worn.as_ref().is_none_or(|w| w.applied.is_empty())
     }
 
     /// The map, if it is built.
@@ -405,9 +539,10 @@ impl LivingAttributes {
 
     fn build(&self, catalog: &Arc<Catalog>, entity: &str, seed: Vec<Tag>) -> Result<Live> {
         let mut live = new_live(catalog, entity)?;
-        apply_saved(&mut live, Some(&Tag::List(seed)))?;
+        // The seed is the entity's own record, which no load clamp touches.
+        apply_list(&mut live, &seed, |_| false)?;
         if let Some(saved) = &self.saved {
-            apply_saved(&mut live, Some(&Tag::List(saved.to_vec())))?;
+            apply_list(&mut live, saved, |name| !own_unbounded_base(entity, name))?;
         }
         for (name, modifier) in self.transient.iter().flat_map(|t| t.iter()) {
             let Some(key) = live.key(name) else {
@@ -480,6 +615,27 @@ impl LivingAttributes {
         }
     }
 
+    pub(crate) fn transient_modifiers(&self) -> TransientModifiers {
+        TransientModifiers(self.transient.as_deref().cloned().unwrap_or_default())
+    }
+
+    pub(crate) fn restore_transient_modifiers(
+        &mut self,
+        before: TransientModifiers,
+        owned: impl Fn(&str, &str) -> bool,
+    ) -> bool {
+        let mut current = self.transient.take().unwrap_or_default();
+        let changed = restore_modifier_order(
+            &mut current,
+            before.0,
+            |(name, m)| owned(name, m.id()),
+            |(name, m), (other, n)| name == other && m.id() == n.id(),
+            |(name, m), (other, n)| name == other && m.same_identity(n),
+        );
+        self.transient = (!current.is_empty()).then_some(current);
+        changed
+    }
+
     /// `AttributeMap.getValue` or `getBaseValue` of `name`: None for an
     /// attribute the entity type does not have. `seed` is what the entity keeps
     /// of its attributes elsewhere, in the `attributes` list's form; it is only
@@ -508,16 +664,8 @@ impl LivingAttributes {
         entity: &str,
         name: &str,
         seed: impl FnOnce() -> Vec<Tag>,
-    ) -> Option<Vec<Modifier>> {
-        let map = self.built_or_build(catalog, entity, seed)?;
-        let key = map.key(name)?;
-        map.value(Some(key.clone()), ValueKind::Base).ok()?;
-        Some(
-            map.lookup(Some(&key))
-                .and_then(|handle| map.instance(&handle).ok())
-                .map(|instance| instance.modifiers().to_vec())
-                .unwrap_or_default(),
-        )
+    ) -> Option<&[Modifier]> {
+        self.built_or_build(catalog, entity, seed)?.modifiers(name)
     }
 
     /// The map, built from `seed` if this is its first use.
@@ -536,11 +684,24 @@ impl LivingAttributes {
         }
     }
 
-    /// `LivingEntity.collectEquipmentChanges` for the item modifiers: every
-    /// slot, in `EquipmentSlot` order, whose item is not the one the map
-    /// holds loses the old item's modifiers; then the changed slots, in the
-    /// same order, take the new item's. Nothing is allocated when no slot
-    /// changed.
+    /// Whether early refreshes or invalidation left slots to settle on the tick.
+    pub fn has_pending_equipment(&self) -> bool {
+        self.worn
+            .as_ref()
+            .is_some_and(|w| !w.before_tick.is_empty())
+    }
+
+    /// `LivingEntity.lastEquipmentItems`, independent of early modifier refreshes.
+    pub fn last_equipment(&self, slot: EquipmentSlot) -> Option<&ItemStack> {
+        let worn = self.worn.as_ref()?;
+        match worn.before_tick.iter().find(|(saved, _)| *saved == slot) {
+            Some((_, previous)) => previous.as_ref(),
+            None => worn.applied.get(slot as usize),
+        }
+    }
+
+    /// `LivingEntity.collectEquipmentChanges` for living entities whose slot
+    /// reads need no gear projection or call to a listener here.
     pub fn collect_equipment_changes(
         &mut self,
         catalog: &Arc<Catalog>,
@@ -549,56 +710,108 @@ impl LivingAttributes {
         items: &Items,
         seed: impl FnOnce() -> Vec<Tag>,
     ) -> Result<()> {
-        let item = |slot: usize| equipment.get(slot);
-        let mut changed = 0u8;
-        for slot in 0..8 {
-            let was = self.worn.as_ref().and_then(|w| w[slot].as_ref());
-            // `LivingEntity.equipmentHasChanged`: `!ItemStack.matches`.
-            let same = match (item(slot), was) {
-                (Some(now), Some(was)) => now.matches(was),
-                (now, was) => now.is_none() && was.is_none(),
-            };
-            if !same {
-                changed |= 1 << slot;
+        let read = |slot: EquipmentSlot| equipment.get(slot as usize).map(EquipmentRead::resident);
+        let changes = equipment_deltas(read, |slot| self.last_equipment(slot));
+        self.finish_equipment_tick(catalog, entity, items, changes, read, seed)
+    }
+
+    /// An immediate refresh compares against what the map already holds but
+    /// does not consume the next body tick's observation.
+    pub fn refresh_equipment<'a>(
+        &mut self,
+        catalog: &Arc<Catalog>,
+        entity: &str,
+        items: &Items,
+        read: impl Fn(EquipmentSlot) -> Option<EquipmentRead<'a>>,
+        seed: impl FnOnce() -> Vec<Tag>,
+    ) -> Result<()> {
+        let changes = equipment_deltas(read, |slot| self.worn.as_ref()?.applied.get(slot as usize));
+        self.apply_equipment_deltas(catalog, entity, items, changes, true, seed)
+    }
+
+    /// On a body tick the detected deltas normally go straight to the map.
+    /// Only slots already touched by an early refresh need reconciliation. A
+    /// listener may have edited such a slot after it was observed; keep the
+    /// observed value for the next tick without overwriting live modifiers.
+    pub fn finish_equipment_tick<'a>(
+        &mut self,
+        catalog: &Arc<Catalog>,
+        entity: &str,
+        items: &Items,
+        mut changes: EquipmentDeltas,
+        read: impl Fn(EquipmentSlot) -> Option<EquipmentRead<'a>>,
+        seed: impl FnOnce() -> Vec<Tag>,
+    ) -> Result<()> {
+        if let Some(worn) = self.worn.as_mut()
+            && !worn.before_tick.is_empty()
+        {
+            for (slot, previous) in std::mem::take(&mut worn.before_tick) {
+                let mut observed = changes.take(slot).unwrap_or(previous);
+                let now = read(slot);
+                let matches_observed =
+                    EquipmentRead::matches_previous(now.as_ref(), observed.as_ref());
+                if !EquipmentRead::matches_previous(now.as_ref(), worn.applied.get(slot as usize)) {
+                    let current = if matches_observed {
+                        observed.take()
+                    } else {
+                        now.map(|read| read.project().into_owned())
+                    };
+                    changes.set(slot, current);
+                }
+                if !matches_observed {
+                    worn.before_tick.push((slot, observed));
+                }
             }
         }
-        if changed == 0 {
-            return Ok(());
-        }
+        self.apply_equipment_deltas(catalog, entity, items, changes, false, seed)
+    }
+
+    /// `LivingEntity.collectEquipmentChanges`: remove every changed slot's old
+    /// modifiers before applying new ones, in `EquipmentSlot` order. An early
+    /// refresh changes the live map now but never consumes a tick observation.
+    fn apply_equipment_deltas(
+        &mut self,
+        catalog: &Arc<Catalog>,
+        entity: &str,
+        items: &Items,
+        changes: EquipmentDeltas,
+        early: bool,
+        seed: impl FnOnce() -> Vec<Tag>,
+    ) -> Result<()> {
         let mut seed = Some(seed);
-        let mut worn = self.worn.take().unwrap_or_default();
-        // `stopLocationBasedEffects`: the old items' modifiers go first.
-        for slot in 0..8 {
-            if changed & (1 << slot) == 0 {
-                continue;
-            }
-            let (Some(map), Some(old)) = (self.map.get_mut(), worn[slot].take()) else {
-                worn[slot] = None;
-                continue;
-            };
-            apply_item(map, &old, slot, items, false)?;
-        }
-        for slot in 0..8 {
-            if changed & (1 << slot) == 0 {
-                continue;
-            }
-            worn[slot] = item(slot).cloned();
-            let Some(new) = &worn[slot] else {
-                continue;
-            };
-            if crate::item_attributes::attribute_modifiers(new, items).is_empty() {
-                continue;
-            }
-            if self.map.get().is_none() {
-                let seed = seed.take().map_or_else(Vec::new, |f| f());
-                let built = self.build(catalog, entity, seed)?;
-                self.map.get_or_init(|| Box::new(built));
-            }
-            if let Some(map) = self.map.get_mut() {
-                apply_item(map, new, slot, items, true)?;
+        if let (Some(worn), Some(map)) = (&self.worn, self.map.get_mut()) {
+            for slot in changes.slots() {
+                if let Some(old) = worn.applied.get(slot as usize) {
+                    apply_item(map, old, slot as usize, items, false)?;
+                }
             }
         }
-        self.worn = Some(worn);
+        for (slot, new) in changes.into_deltas() {
+            if let Some(stack) = new.as_ref()
+                && !crate::item_attributes::attribute_modifiers(stack, items).is_empty()
+            {
+                if self.map.get().is_none() {
+                    let seed = seed.take().map_or_else(Vec::new, |f| f());
+                    let built = self.build(catalog, entity, seed)?;
+                    self.map.get_or_init(|| Box::new(built));
+                }
+                if let Some(map) = self.map.get_mut() {
+                    apply_item(map, stack, slot as usize, items, true)?;
+                }
+            }
+            let worn = self.worn.get_or_insert_with(Box::default);
+            let old = std::mem::replace(&mut worn.applied[slot as usize], new);
+            if early {
+                worn.remember(slot, old);
+            }
+        }
+        if self
+            .worn
+            .as_ref()
+            .is_some_and(|w| w.applied.is_empty() && w.before_tick.is_empty())
+        {
+            self.worn = None;
+        }
         Ok(())
     }
 
@@ -617,25 +830,27 @@ impl LivingAttributes {
             seeded = self.build(catalog, entity, seed())?;
             &seeded
         };
-        let rows = map
-            .instances()
-            .flat_map(|(_, key, value)| {
-                value.modifiers().iter().map(move |modifier| {
-                    let id = modifier.id();
-                    (
-                        (key.name().to_owned(), id.to_owned()),
-                        ModifierState {
-                            modifier: modifier.clone(),
-                            permanent: value.permanent_modifiers().iter().any(|m| m.id() == id),
-                        },
-                    )
-                })
-            })
-            .collect();
-        Ok(ModifierSnapshot {
-            worn: self.worn.clone(),
-            rows,
-        })
+        Ok(ModifierSnapshot::from_map(map, self.worn.clone()))
+    }
+
+    /// What invalidation alone will discard: the live overlay over the current
+    /// seed and the equipment detection state, never changes to the seed itself.
+    pub fn modifier_invalidation_undo(
+        &self,
+        catalog: &Arc<Catalog>,
+        entity: &str,
+        seed: impl FnOnce() -> Vec<Tag>,
+    ) -> Result<Option<ModifierChanges>> {
+        let mut changes = if let Some(map) = self.built() {
+            let seeded = self.build(catalog, entity, seed())?;
+            ModifierSnapshot::from_map(map, None).diff(&ModifierSnapshot::from_map(&seeded, None))
+        } else {
+            None
+        };
+        if let Some(worn) = self.worn.as_ref().filter(|w| !w.applied.is_empty()) {
+            changes.get_or_insert_with(Default::default).worn_before = Some(Some(worn.clone()));
+        }
+        Ok(changes)
     }
 
     /// Restores the recorded live rows, not the current answers to item queries.
@@ -724,6 +939,20 @@ impl LivingAttributes {
             }
         }
     }
+}
+
+fn equipment_deltas<'a, 'b>(
+    read: impl Fn(EquipmentSlot) -> Option<EquipmentRead<'a>>,
+    previous: impl Fn(EquipmentSlot) -> Option<&'b ItemStack>,
+) -> EquipmentDeltas {
+    let mut deltas = EquipmentDeltas::default();
+    for slot in EquipmentSlot::ALL {
+        let now = read(slot);
+        if !EquipmentRead::matches_previous(now.as_ref(), previous(slot)) {
+            deltas.set(slot, now.map(|read| read.project().into_owned()));
+        }
+    }
+    deltas
 }
 
 fn apply_item(

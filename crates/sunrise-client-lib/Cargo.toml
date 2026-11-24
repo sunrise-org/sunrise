@@ -9,16 +9,11 @@ license.workspace = true
 rust-version.workspace = true
 description = "Reusable client systems, control tool and parity probes"
 
-[build-dependencies]
-sunrise-game-discovery = { path = "../sunrise-game-discovery" }
-
 [lib]
 path = "../sunrise-client/src/client_lib.rs"
 
 [dependencies]
-sunrise-guest-stack = { path = "../sunrise-guest-stack" }
 sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
-sunrise-engine-slots = { path = "../sunrise-engine-slots" }
 sunrise-hooks = { path = "../sunrise-hooks" }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime" }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
@@ -53,7 +48,7 @@ sunrise-shaders = { path = "../sunrise-shaders" }
 sunrise-shader-api = { path = "../sunrise-shader-api" }
 # The narrator (GameNarrator): text-to-speech of chat, system messages and screens.
 sunrise-narrator = { path = "../sunrise-narrator" }
-# Sunrise mods: sandboxed WebAssembly components, off unless installed and turned on (docs/modding/src/how-to/content-mods.md).
+# Sunrise mods: native code and content packages (docs/modding/src/how-to/content-mods.md).
 # Their runtime is the `mods` feature.
 sunrise-mod-package = { path = "../sunrise-mod-package", default-features = false, features = ["index"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
@@ -90,6 +85,8 @@ sunrise-dualsense = { path = "../sunrise-dualsense", optional = true }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 # `LevelStorageAccess.estimateDiskSpace`: usable disk space, without unsafe code on Windows.
 fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
+# Contain recursive native item renderers before a stack overflow can abort the process.
+stacker = "0.1.25"
 
 [target.'cfg(unix)'.dependencies]
 # The server thread's CPU time per tick (`SUNRISE_SPIKES`, spans.rs).
@@ -111,12 +108,20 @@ wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
+# Thread-local menu callbacks for resource-backed game fixtures only.
+test-menu-validity = []
 # Scoped observations for compiled-guest executor tests only.
 test-payload-probe = []
 # Isolated server-publication slots for resource-backed game fixtures only.
 test-publication-scope = []
+# Thread-local tooltip component factories for isolated game unit tests only.
+test-tooltip-factories = []
 # Non-consuming residency journal observation for game fixtures only.
 test-residency-observer = []
+# Local server-pack feedback observation for game fixtures only.
+test-pack-feedback = []
+# A level side with no weather, tags or block entities, for tests and probes that never read them.
+test-dry-side = []
 default = ["audio", "controllers"]
 # Dev-only: the ignored tracker-send benchmark uses the executable's allocator.
 tracker-send-bench = []
@@ -125,6 +130,8 @@ tracker-send-bench = []
 audio = ["sunrise-client-render/audio"]
 # Controllers: gilrs, and the DualSense's own output. Without it only `sunrise-ctl pad`'s virtual pad.
 controllers = ["dep:gilrs", "sunrise-client-input/controllers"]
+# The sensor_scan_tests mob-kind fixture for the gameplay crates' tests.
+test-mob-kind = []
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["sunrise-core/rng-trace"]
 # Opt-in Windows heap experiment; see docs/windows-allocators.md.
@@ -134,8 +141,8 @@ windows-segment-heap = []
 workspace = true
 
 [dev-dependencies]
+sunrise-client-lib = { path = ".", default-features = false, features = ["test-dry-side"] }
 sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-probe", "test-game-dir"] }
-sunrise-mod-wasm = { path = "../sunrise-mod-wasm", features = ["listener-fixture", "test-copy-probe"] }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", features = ["testing"] }
@@ -143,6 +150,7 @@ mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", featur
 sunrise-theme = { path = "../sunrise-theme" }
 sunrise-client-render = { path = "../sunrise-client-render", features = ["test-support"] }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }
+sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
 # Reads back the captures the server_perf tests write.
 sunrise-perf = { path = "../sunrise-perf" }
 # Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).
@@ -229,6 +237,10 @@ name = "custom_component_wire"
 path = "../sunrise-client/tests/custom_component_wire.rs"
 
 [[test]]
+name = "custom_bundle_wire"
+path = "../sunrise-client/tests/custom_bundle_wire.rs"
+
+[[test]]
 name = "datapack_join"
 path = "../sunrise-client/tests/datapack_join.rs"
 
@@ -255,6 +267,10 @@ path = "../sunrise-client/tests/tall_column.rs"
 [[test]]
 name = "wide_states"
 path = "../sunrise-client/tests/wide_states.rs"
+
+[[test]]
+name = "transient_component_data"
+path = "../sunrise-client/tests/transient_component_data.rs"
 
 [[example]]
 name = "chunk_encoding_bench"

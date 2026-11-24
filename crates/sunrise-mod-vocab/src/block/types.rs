@@ -2,150 +2,25 @@
 use crate::*;
 
 /// A block requested once through [`Registrar::block_key`](BlocksRegistrar::block_key). Its load-owned slot survives reload.
-// no wire: decoding validates the u32 slot with BlockKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with BlockKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its field is private, so only registration creates a key
 pub struct BlockKey(pub(crate) u32);
 
-/// A block state as the game's state table numbers it (`Block.BLOCK_STATE_REGISTRY`'s id): what
-/// worldgen providers and fluid queries answer. Valid for the running game only; never save it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// exhaustive: a state id is its number
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct BlockStateId(pub u32);
+impl BlockKey {
+    /// Whether this block is in `tag` (`BlockState.is(TagKey)`), over `tags`'s current
+    /// authoritative snapshot. An unknown tag is `Some(false)`; unavailable tags or mappings
+    /// return `None`.
+    pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
+        tags.block_in_tag(self, tag)
+    }
+}
 
 /// A block entity type requested at registration. Its slot remains stable for the process.
-// no wire: decoding validates the u32 slot with BlockEntityTypeKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+// no wire: decoding validates the u32 slot with BlockEntityTypeKey::from_slot on the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the load-owned table creates keys
 pub struct BlockEntityTypeKey(pub(crate) u32);
-
-/// The existing block entity tick's write-back choice on native and wasm.
-// exhaustive: the wire protocol has exactly two snapshot write-back choices.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
-pub enum BlockEntityTickReply {
-    /// Validate and apply the full payload, as ticks do by default.
-    #[default]
-    Changed,
-    /// Discard this Part's payload edits without encoding, decoding or applying
-    /// its reply snapshot. Earlier Parts' accepted `Changed` edits survive.
-    /// When every Part answers `Unchanged`, the original entity and revision
-    /// survive only while its original placeholder remains, with no tick-only
-    /// dirty, container or comparator effects. Independent Host writes retain
-    /// their own effects.
-    Unchanged,
-}
-
-// no wire: borrowed host or registrar backend; access stays scoped to the owning call.
-/// A hook's mutable block entity payload, with a read-only type identity.
-/// The private handle cannot be constructed or taken out by a mod.
-///
-/// ```compile_fail
-/// use mod_api::{BlockEntityTickEvent, ModBlockEntity};
-/// fn replace(event: &mut BlockEntityTickEvent<'_>) {
-///     *event.entity = ModBlockEntity::default();
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use mod_api::BlockEntityTickEvent;
-/// fn take(event: &mut BlockEntityTickEvent<'_>) {
-///     let _ = std::mem::take(&mut event.entity);
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use mod_api::{BlockEntityTickEvent, ModBlockEntity};
-/// fn access(event: &mut BlockEntityTickEvent<'_>) {
-///     let _: &mut ModBlockEntity = event.entity.entity;
-/// }
-/// ```
-// exhaustive: its fields are private, so mods cannot build or destructure it
-pub struct ModBlockEntityView<'a> {
-    pub(crate) entity: &'a mut ModBlockEntity,
-    tick_listener: bool,
-    tick_original: Option<(
-        crate::item::containers::ModBlockEntityFields,
-        crate::item::containers::ModRevision,
-        Option<Compound>,
-    )>,
-}
-
-impl<'a> ModBlockEntityView<'a> {
-    // hidden: a game-side helper lending the checked view to a hook
-    #[doc(hidden)]
-    pub fn new(entity: &'a mut ModBlockEntity) -> Self {
-        Self {
-            entity,
-            tick_listener: false,
-            tick_original: None,
-        }
-    }
-    /// Id.
-    pub fn id(&self) -> &str {
-        self.entity.id()
-    }
-
-    /// Begin one tick listener's lazy payload checkpoint.
-    // hidden: the generated listener dispatch brackets each tick listener with this; mods never call it
-    #[doc(hidden)]
-    pub fn __begin_tick_listener(&mut self) {
-        self.tick_listener = true;
-    }
-
-    /// Accept this listener's edits, or restore the preceding accepted payload.
-    // hidden: the generated listener dispatch brackets each tick listener with this; mods never call it
-    #[doc(hidden)]
-    pub fn __finish_tick_listener(&mut self, reply: BlockEntityTickReply) {
-        self.tick_listener = false;
-        if let Some((fields, revision, client_update_fields)) = self.tick_original.take()
-            && reply == BlockEntityTickReply::Unchanged
-        {
-            self.entity.fields = fields;
-            self.entity.revision = revision;
-            self.entity.client_update_fields = client_update_fields;
-        }
-    }
-
-    fn checkpoint_tick_listener(&mut self) {
-        if self.tick_listener && self.tick_original.is_none() {
-            self.tick_original = Some((
-                self.entity.fields.clone(),
-                self.entity.revision,
-                self.entity.client_update_fields.clone(),
-            ));
-        }
-    }
-    /// Replace the one-shot fields the block's next change sends clients; an empty compound
-    /// clears them. They go over what `block_entity_update_tag` gives (or alone, without
-    /// one) in the single packet every current viewer gets, and are gone. Call
-    /// `block_entity_sync` to send them: until a change reaches a viewer they wait, however
-    /// many chunks are sent, and they end with the block entity. They are for a one-shot
-    /// effect, not state: nothing saves, clones or compares them, and the revision stays.
-    /// A client merges them into its copy's `nbt` as any update field, where they stay until
-    /// sent again: a changing value, such as a counter, tells one effect from the next.
-    /// Fields that would take the packet past what a client reads (2 MiB of network NBT) are
-    /// dropped with a warning, and the change goes without them. A transaction that rolls the
-    /// block entity back also drops a batch queued before it.
-    pub fn set_client_update_fields(&mut self, fields: Compound) {
-        self.checkpoint_tick_listener();
-        self.entity.client_update_fields = Some(fields);
-    }
-}
-
-impl std::ops::Deref for ModBlockEntityView<'_> {
-    type Target = crate::item::containers::ModBlockEntityFields;
-    fn deref(&self) -> &Self::Target {
-        self.entity
-    }
-}
-
-impl std::ops::DerefMut for ModBlockEntityView<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.checkpoint_tick_listener();
-        self.entity
-    }
-}
 
 /// What an explosion does to blocks (`Explosion.BlockInteraction`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -465,6 +340,61 @@ pub struct BlockClick<'a> {
     pub player_entity_id: i32,
 }
 
+/// The server's staged writes during a step-on Part call.
+// hidden: the generated dispatch passes this buffer from the engine, never the Part.
+#[doc(hidden)]
+// no wire: the engine owns this call-local staging buffer; Parts only borrow it.
+#[non_exhaustive]
+#[derive(Clone, Default)]
+pub struct StepOnWrites {
+    server: bool,
+    block: Vec<LandingWrite>,
+    entity: Vec<EntityWrite>,
+}
+
+impl StepOnWrites {
+    // hidden: only the engine chooses to lend server write access.
+    #[doc(hidden)]
+    pub fn server() -> Self {
+        Self {
+            server: true,
+            ..Self::default()
+        }
+    }
+}
+
+impl StepOnEvent<'_> {
+    // hidden: the game validates and drains one Part's outputs before invoking the next.
+    #[doc(hidden)]
+    pub fn __take_writes(&mut self) -> (Vec<LandingWrite>, Vec<EntityWrite>) {
+        (
+            std::mem::take(&mut self.writes.block),
+            std::mem::take(&mut self.writes.entity),
+        )
+    }
+
+    /// Queue a write to the contacted block. Returns false on the client.
+    pub fn request(&mut self, write: LandingWrite) -> bool {
+        if !self.writes.server {
+            return false;
+        }
+        self.writes.block.push(write);
+        true
+    }
+
+    /// Queue a write to the stepping entity, before inside-block effects.
+    /// Returns false on the client. As with `entity_inside`, the body applies
+    /// the writes it supports, in request order. Boats and minecarts (#4177),
+    /// armor stands and projectiles ignore contact hurt.
+    pub fn write_entity(&mut self, write: EntityWrite) -> bool {
+        if !self.writes.server {
+            return false;
+        }
+        self.writes.entity.push(write);
+        true
+    }
+}
+
 impl FallOnEvent<'_> {
     /// Ask for a write at the block the entity landed on. It is applied once the entity's
     /// batch has ticked, in the order asked, if the block is still the state it landed on.
@@ -490,19 +420,24 @@ impl EntityInsideEvent<'_> {
     pub fn apply(&mut self, effect: InsideEffect) {
         self.effects.apply(effect);
     }
-    /// Queue a typed write to the swept entity that applies just before `effect` in the
-    /// flush order (`InsideBlockEffectApplier.runBefore`).
-    pub fn run_before(&mut self, effect: InsideEffect, write: EntityWrite) {
-        self.effects.run_before(effect, write);
+    /// Queue a callback that runs just before `effect` in the flush order
+    /// (`InsideBlockEffectApplier.runBefore`), lent an [`InsideEntityView`] over the
+    /// swept entity and its live level.
+    pub fn run_before(
+        &mut self,
+        effect: InsideEffect,
+        callback: impl FnMut(&mut InsideEntityView<'_>) + 'static,
+    ) {
+        self.effects.run_before(effect, callback);
     }
-    /// Queue a typed write to the swept entity that applies just after `effect` in the
-    /// flush order (`InsideBlockEffectApplier.runAfter`).
-    pub fn run_after(&mut self, effect: InsideEffect, write: EntityWrite) {
-        self.effects.run_after(effect, write);
-    }
-    /// Ask for a write at the touched block. It is applied once the entity's batch has
-    /// ticked, in the order asked, if the block is still the state the entity touched.
-    pub fn request(&mut self, write: InsideWrite) {
-        self.writes.push(write);
+    /// Queue a callback that runs just after `effect` in the flush order
+    /// (`InsideBlockEffectApplier.runAfter`), lent an [`InsideEntityView`] over the
+    /// swept entity and its live level.
+    pub fn run_after(
+        &mut self,
+        effect: InsideEffect,
+        callback: impl FnMut(&mut InsideEntityView<'_>) + 'static,
+    ) {
+        self.effects.run_after(effect, callback);
     }
 }

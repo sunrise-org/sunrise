@@ -22,20 +22,21 @@
 use super::{
     Mob, MobWorld, Species, farm::Climate, gear, spawn_rules::Reason, spawning::LocalDifficulty,
 };
-use crate::{enchant::Enchantments, items::Items};
+use crate::{
+    enchant::Enchantments,
+    items::{ItemStack, Items},
+    living_attributes::EquipmentDeltas,
+};
 use serde_json::Value;
-use std::{fs, path::Path, sync::Arc};
-use sunrise_core::{geometry::Aabb, random::RandomSource};
+use std::{borrow::Cow, fs, path::Path, sync::Arc};
+use sunrise_core::{equipment_slot::EquipmentSlot, geometry::Aabb, random::RandomSource};
+use sunrise_world::attributes::entity::Catalog;
 
-/// What a level's finalizeSpawn event decided for a mob another mob's
-/// finalizeSpawn created: the rider is dropped, added without its own rolls,
-/// or finalized. Vanilla fires the event for every `finalizeSpawn` call,
-/// riders included.
-#[derive(Debug, PartialEq)]
-pub enum SpawnEvent {
-    Cancelled,
-    Skip,
-    Finalize,
+/// The two independent decisions of NeoForge's `FinalizeSpawnEvent`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SpawnEvent {
+    pub skip_initialization: bool,
+    pub veto_admission: bool,
 }
 
 /// The level as finalizeSpawn reads it.
@@ -74,7 +75,7 @@ pub trait FinalizeLevel {
     /// finalizeSpawn creates (`ZombieHorse`'s zombie, a chicken jockey).
     /// The default finalizes: a level without the event keeps vanilla's flow.
     fn spawn_event(&mut self, _: &mut Mob, _: Reason) -> SpawnEvent {
-        SpawnEvent::Finalize
+        SpawnEvent::default()
     }
     /// What finalizeSpawn needs besides the level: the variant registries,
     /// enchantments and items the level owns.
@@ -468,6 +469,15 @@ pub enum Op {
     AddMultipliedBase,
     AddMultipliedTotal,
 }
+impl From<Op> for sunrise_world::attributes::Operation {
+    fn from(op: Op) -> Self {
+        match op {
+            Op::AddValue => Self::AddValue,
+            Op::AddMultipliedBase => Self::AddMultipliedBase,
+            Op::AddMultipliedTotal => Self::AddMultipliedTotal,
+        }
+    }
+}
 /// A permanent attribute modifier (`AttributeModifier`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Modifier {
@@ -491,6 +501,8 @@ pub struct Attributes {
     pub name_tag_distance: Option<f64>,
     /// `BELOW_NAME_DISTANCE` from a server attribute update.
     pub below_name_distance: Option<f64>,
+    /// `CAMERA_DISTANCE` from a server attribute update; never saved.
+    pub camera_distance: Option<f64>,
     /// The transient minecraft:baby speed modifier was taken away
     /// (`/attribute ... modifier remove`) until the next setBaby. Not
     /// saved: a load runs setBaby again.
@@ -627,7 +639,110 @@ fn effect_modifier_id(name: &str) -> String {
         _ => format!("minecraft:effect.{name}"),
     }
 }
+/// One effect mutation's before-order in the legacy and live modifier seed stores.
+/// A clear is one batch: restore all of its rows together, not at stale indices.
+pub struct EffectModifierUndo {
+    keys: Vec<(Attr, String)>,
+    permanent: Vec<Modifier>,
+    transient: Vec<Modifier>,
+    live: crate::living_attributes::TransientModifiers,
+}
+
+impl EffectModifierUndo {
+    pub fn keep_explicit_write(&mut self, attribute: &str, id: &str) {
+        self.keys
+            .retain(|(attr, key)| attr.id() != attribute || key != id);
+        let unaffected = |row: &Modifier| row.attr.id() != attribute || row.id != id;
+        self.permanent.retain(unaffected);
+        self.transient.retain(unaffected);
+        self.live.forget(attribute, id);
+    }
+
+    pub fn restore(self, mob: &mut Mob) {
+        if self.keys.is_empty() {
+            return;
+        }
+        let Self {
+            keys,
+            permanent,
+            transient,
+            live,
+        } = self;
+        let owns = |row: &Modifier| {
+            keys.iter()
+                .any(|(attr, id)| *attr == row.attr && *id == row.id)
+        };
+        let same_key = |a: &Modifier, b: &Modifier| a.attr == b.attr && a.id == b.id;
+        let mut changed = false;
+        if let Some(attrs) = mob.extra.attributes.as_mut() {
+            use crate::living_attributes::restore_modifier_order;
+            changed |= restore_modifier_order(
+                &mut attrs.modifiers,
+                permanent,
+                owns,
+                same_key,
+                Modifier::eq,
+            );
+            changed |= restore_modifier_order(
+                &mut attrs.transient,
+                transient,
+                owns,
+                same_key,
+                Modifier::eq,
+            );
+        }
+        changed |= mob
+            .extra
+            .live
+            .restore_transient_modifiers(live, |attribute, id| {
+                keys.iter()
+                    .any(|(attr, key)| attr.id() == attribute && key == id)
+            });
+        if changed {
+            mob.extra.live.invalidate();
+            for attr in Attr::ALL {
+                if keys.iter().any(|(key, _)| *key == attr) {
+                    refresh(mob, attr);
+                }
+            }
+        }
+    }
+}
+
 impl Mob {
+    /// The modifier rows one effect write (or one bulk clear of the given effects) can replace.
+    pub fn effect_modifier_undo(
+        &self,
+        effects: impl Iterator<Item = &'static str>,
+    ) -> Option<EffectModifierUndo> {
+        let keys: Vec<_> = effects
+            .flat_map(|effect| {
+                let name = effect.trim_start_matches("minecraft:");
+                Attr::ALL
+                    .into_iter()
+                    .filter(move |&attr| {
+                        effect_modifier(name, 0, attr).is_some()
+                            && default_value(self, attr).is_some()
+                    })
+                    .map(move |attr| (attr, effect_modifier_id(name)))
+            })
+            .collect();
+        if keys.is_empty() {
+            return None;
+        }
+        let attrs = self.extra.attributes.as_deref();
+        Some(EffectModifierUndo {
+            keys,
+            permanent: attrs
+                .map(|attrs| attrs.modifiers.clone())
+                .unwrap_or_default(),
+            transient: attrs
+                .map(|attrs| attrs.transient.clone())
+                .unwrap_or_default(),
+            live: self.extra.live.transient_modifiers(),
+        })
+    }
+
     /// The one place a mob's effect attribute modifiers change (#478). They
     /// are permanent modifiers in the attribute store, so they are saved and
     /// synced as any other, and a read derives nothing from the effect list.
@@ -838,12 +953,7 @@ pub fn add_transient_modifier(m: &mut Mob, a: Attr, id: &str, amount: f64, op: O
     });
     // The live map is built from the saved record, so it keeps the modifier
     // itself for the next build.
-    let operation = match op {
-        Op::AddValue => sunrise_world::attributes::Operation::AddValue,
-        Op::AddMultipliedBase => sunrise_world::attributes::Operation::AddMultipliedBase,
-        Op::AddMultipliedTotal => sunrise_world::attributes::Operation::AddMultipliedTotal,
-    };
-    let modifier = sunrise_world::attributes::Modifier::new(id, amount, operation).ok();
+    let modifier = sunrise_world::attributes::Modifier::new(id, amount, op.into()).ok();
     m.extra.live.keep_transient(a.id(), id, modifier);
     m.extra.live.invalidate();
     refresh(m, a);
@@ -1027,50 +1137,6 @@ fn skeleton(s: Species) -> bool {
 fn raider(s: Species) -> bool {
     super::raider::is_raider(s)
 }
-/// `EntityType.isAllowedInPeaceful`: the types built with `notInPeaceful`.
-pub fn allowed_in_peaceful(kind: &str) -> bool {
-    !matches!(
-        kind.strip_prefix("minecraft:").unwrap_or(kind),
-        "blaze"
-            | "bogged"
-            | "breeze"
-            | "cave_spider"
-            | "creaking"
-            | "creeper"
-            | "drowned"
-            | "elder_guardian"
-            | "enderman"
-            | "endermite"
-            | "evoker"
-            | "ghast"
-            | "giant"
-            | "guardian"
-            | "hoglin"
-            | "husk"
-            | "illusioner"
-            | "magma_cube"
-            | "parched"
-            | "phantom"
-            | "piglin_brute"
-            | "pillager"
-            | "ravager"
-            | "silverfish"
-            | "skeleton"
-            | "slime"
-            | "spider"
-            | "stray"
-            | "vex"
-            | "vindicator"
-            | "warden"
-            | "witch"
-            | "wither"
-            | "wither_skeleton"
-            | "zoglin"
-            | "zombie"
-            | "zombie_villager"
-            | "zombified_piglin"
-    )
-}
 /// `AgeableMob.getBabyStartAge` (a sniffer's is -48000).
 pub fn baby_start_age(s: Species) -> i32 {
     if s == Species::Sniffer {
@@ -1124,11 +1190,6 @@ pub fn goat_spawn(m: &mut Mob, r: &mut impl RandomSource) {
         let left = r.next_boolean();
         m.extra.lost_horns[usize::from(!left)] = true;
     }
-}
-/// `SpawnEggItem.spawnsEntity`: the spawn egg is for the mob's own kind, so
-/// it is used on it (`Mob.checkAndHandleImportantInteractions`).
-pub fn spawn_egg_is_for(egg: &str, kind: &str) -> bool {
-    egg.strip_suffix("_spawn_egg") == Some(kind)
 }
 
 /// `SpawnEggItem.spawnOffspringFromSpawnEgg`: the offspring of a spawn egg
@@ -1203,38 +1264,243 @@ pub fn item(m: &Mob, slot: usize) -> Option<Arc<str>> {
         _ => None,
     }
 }
-/// The whole stack a mob keeps in `slot` (damage, name, components, count,
-/// enchantments and trim), when it kept more than the item id.
-pub fn stored_stack(m: &Mob, slot: usize) -> Option<crate::items::ItemStack> {
-    if slot > HEAD {
-        return None;
+/// A single equipment stack, with any separate gear data needed to project it.
+pub struct EquipmentRead<'a> {
+    base: &'a ItemStack,
+    overlays: Option<(&'a gear::Gear, usize)>,
+}
+
+impl<'a> EquipmentRead<'a> {
+    /// Borrow a resident stack whose components are all on the stack itself.
+    pub fn resident(base: &'a ItemStack) -> Self {
+        Self {
+            base,
+            overlays: None,
+        }
     }
-    let mut stack = m.extra.slot_stack(slot)?.clone();
-    if stack.damage == 0 && stack.count <= 1 && stack.extra.is_none() {
-        return None;
+
+    /// The stored stack. Gear overlays affect components, not item, count or damage.
+    pub fn base(&self) -> &'a ItemStack {
+        self.base
+    }
+
+    /// The active trim, if any, without projecting the stack's component patch.
+    pub fn trim(&self) -> Option<&'a gear::Trim> {
+        self.overlays
+            .and_then(|(gear, index)| gear.trims[index].as_ref())
+            .or_else(|| self.base.data()?.trim.as_ref())
+    }
+
+    /// Vanilla's foil test uses the same enchantments the caller can read from this stack.
+    pub fn has_foil(&self, item_glint: Option<bool>) -> bool {
+        let enchanted = !self.base.enchantments().is_empty()
+            || self
+                .overlays
+                .is_some_and(|(gear, index)| !gear.slots[index].is_empty());
+        self.base.has_foil_with_enchantments(item_glint, enchanted)
+    }
+
+    /// The complete stack: still borrowed unless its gear data needs overlaying.
+    pub fn project(&self) -> Cow<'a, ItemStack> {
+        if self.overlays.is_none() {
+            return Cow::Borrowed(self.base);
+        }
+        let mut stack = self.base.clone();
+        self.overlay_gear(&mut stack, |_| true);
+        Cow::Owned(stack)
+    }
+
+    /// Whether this stack matches `other` (`ItemStack.matches`), including any
+    /// separate gear overlay, without cloning the stack or its components.
+    pub fn matches_stack(&self, other: &ItemStack) -> bool {
+        match self.overlays {
+            None => self.base.matches(other),
+            Some((gear, index)) => self.base.matches_with_overlay(
+                other,
+                &gear.slots[index],
+                gear.trims[index].as_ref(),
+            ),
+        }
+    }
+
+    /// `LivingEntity.equipmentHasChanged` negated, for a possibly empty slot.
+    pub fn matches_previous(now: Option<&Self>, previous: Option<&ItemStack>) -> bool {
+        match (now, previous) {
+            (Some(now), Some(previous)) => now.matches_stack(previous),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    /// Encode selected extra components with the same gear overlay as a full projection.
+    /// Encode only the selected gear values over the resident patch, without cloning the slot.
+    pub fn extra_components_matching(
+        &self,
+        select: impl Fn(&str) -> bool,
+    ) -> Option<sunrise_core::nbt::Tag> {
+        use sunrise_core::nbt::Tag;
+        use sunrise_items::item_data::encode_extra_components_matching;
+
+        let base = encode_extra_components_matching(self.base, &select);
+        if self.overlays.is_none()
+            || !(select("minecraft:enchantments") || select("minecraft:trim"))
+        {
+            return base;
+        }
+
+        let mut shell = ItemStack {
+            item: self.base.item.clone(),
+            count: self.base.count,
+            damage: 0,
+            extra: None,
+        };
+        self.overlay_gear(&mut shell, &select);
+        let Some(Tag::Compound(gear)) = encode_extra_components_matching(&shell, select) else {
+            return base;
+        };
+        let Some(Tag::Compound(mut patch)) = base else {
+            return Some(Tag::Compound(gear));
+        };
+        patch.extend(gear);
+        Some(Tag::Compound(patch))
+    }
+
+    fn overlay_gear(&self, stack: &mut ItemStack, select: impl Fn(&str) -> bool) {
+        let Some((gear, index)) = self.overlays else {
+            return;
+        };
+        if select("minecraft:enchantments") && !gear.slots[index].is_empty() {
+            stack.data_mut().enchantments = gear.slots[index].clone();
+        }
+        if select("minecraft:trim")
+            && let Some(trim) = &gear.trims[index]
+        {
+            stack.data_mut().trim = Some(trim.clone());
+        }
+    }
+}
+
+/// Borrow one slot as `Mob::equipment_stacks` reads it, without reading the other slots.
+pub fn equipment_slot(m: &Mob, slot: EquipmentSlot) -> Option<EquipmentRead<'_>> {
+    let slot = slot as usize;
+    let base = m.extra.slot_stack(slot)?;
+    if slot > HEAD {
+        return Some(EquipmentRead::resident(base));
     }
     let index = gear_slot(slot);
-    if let Some(g) = gear::gear(m) {
-        if !g.slots[index].is_empty() {
-            stack.data_mut().enchantments = g.slots[index].clone();
+    let overlays = gear::gear(m)
+        .filter(|gear| !gear.slots[index].is_empty() || gear.trims[index].is_some())
+        .map(|gear| (gear, index));
+    Some(EquipmentRead { base, overlays })
+}
+
+/// A changed slot at `LivingEntity.collectEquipmentChanges`, still borrowed.
+pub struct EquipmentChange<'a> {
+    pub current: Option<EquipmentRead<'a>>,
+    pub previous: Option<&'a ItemStack>,
+}
+
+pub fn changed_equipment_slot(m: &Mob, slot: EquipmentSlot) -> Option<EquipmentChange<'_>> {
+    let previous = m.extra.live.last_equipment(slot);
+    let current = equipment_slot(m, slot);
+    (!EquipmentRead::matches_previous(current.as_ref(), previous))
+        .then_some(EquipmentChange { current, previous })
+}
+
+/// Detect at the body tick. Return the first changed slot if its callback
+/// needs the owning game; otherwise apply vanilla's changes without yielding.
+pub fn detect_equipment_updates(
+    m: &mut Mob,
+    catalog: &Arc<Catalog>,
+    items: &Items,
+    notify: impl FnOnce() -> bool,
+) -> Option<EquipmentSlot> {
+    if m.extra.equipment.is_empty() && !m.extra.live.has_worn() {
+        return None;
+    }
+    let mut deltas = EquipmentDeltas::default();
+    let mut notify = Some(notify);
+    let mut first = None;
+    for slot in EquipmentSlot::ALL {
+        let Some(change) = changed_equipment_slot(m, slot) else {
+            continue;
+        };
+        if first.is_none() {
+            first = Some(slot);
+            if notify.take().is_some_and(|notify| notify()) {
+                return first;
+            }
         }
-        if g.trims[index].is_some() {
-            stack.data_mut().trim = g.trims[index].clone();
-        }
+        deltas.set(slot, change.current.map(|read| read.project().into_owned()));
+    }
+    finish_equipment_tick(m, catalog, items, deltas);
+    None
+}
+
+pub fn equipment_attribute_seed(m: &Mob) -> Vec<sunrise_core::nbt::Tag> {
+    crate::entity_nbt::attribute_entries(m)
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .collect()
+}
+
+/// Settle only the observed deltas, plus slots whose live modifiers changed
+/// early (such as through a listener's equipment write).
+pub fn finish_equipment_tick(
+    m: &mut Mob,
+    catalog: &Arc<Catalog>,
+    items: &Items,
+    deltas: EquipmentDeltas,
+) {
+    super::armor::prepare(m, catalog);
+    if deltas.is_empty() && !m.extra.live.has_pending_equipment() {
+        return;
+    }
+    let mut live = std::mem::take(&mut m.extra.live);
+    if let Err(error) = live.finish_equipment_tick(
+        catalog,
+        &m.kind.id,
+        items,
+        deltas,
+        |slot| equipment_slot(m, slot),
+        || equipment_attribute_seed(m),
+    ) {
+        log::warn!("equipment attributes of {} {}: {error}", m.kind.id, m.id);
+    }
+    m.extra.live = live;
+}
+
+/// The whole stack a mob keeps in `slot` (damage, name, components, count,
+/// enchantments and trim), when it kept more than the item id.
+pub fn stored_stack(m: &Mob, slot: usize) -> Option<ItemStack> {
+    let read = equipment_slot(m, *EquipmentSlot::ALL.get(slot)?)?;
+    let base = read.base();
+    if slot > HEAD || (base.damage == 0 && base.count <= 1 && base.extra.is_none()) {
+        return None;
+    }
+    Some(read.project().into_owned())
+}
+/// What a mob has in `slot` as a stack, including its count, enchantments and trim.
+pub fn item_stack(m: &Mob, slot: usize) -> Option<crate::items::ItemStack> {
+    if !matches!(slot, MAINHAND..=HEAD | SADDLE) {
+        return None;
+    }
+    let read = equipment_slot(m, *EquipmentSlot::ALL.get(slot)?)?;
+    let base = read.base();
+    if slot <= HEAD && (base.damage != 0 || base.count > 1 || base.extra.is_some()) {
+        return Some(read.project().into_owned());
+    }
+    let mut stack = ItemStack {
+        item: base.item.clone(),
+        count: base.count,
+        damage: 0,
+        extra: None,
+    };
+    stack.set_crafting_enchantments(slot_enchantments(m, slot));
+    if let Some(trim) = gear::gear(m).and_then(|g| g.trims[gear_slot(slot)].clone()) {
+        stack.data_mut().trim = Some(trim);
     }
     Some(stack)
-}
-/// What a mob has in `slot` as a stack: the one it kept, else one item with
-/// its enchantments.
-pub fn item_stack(m: &Mob, slot: usize) -> Option<crate::items::ItemStack> {
-    stored_stack(m, slot).or_else(|| {
-        let mut stack = crate::items::ItemStack::new(&item(m, slot)?, 1);
-        stack.set_crafting_enchantments(slot_enchantments(m, slot));
-        if let Some(trim) = gear::gear(m).and_then(|g| g.trims[gear_slot(slot)].clone()) {
-            stack.data_mut().trim = Some(trim);
-        }
-        Some(stack)
-    })
 }
 /// `LivingEntity.getItemBySlot` from the stacks a mob keeps: the hands and
 /// armour from `item_stack` (`EquipmentSlot` ordinals match these slots), the
@@ -1406,7 +1672,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 set_age(m, start, None);
             }
             if let Some(a) = g.ageable() {
-                a.size += 1;
+                // AgeableMobGroupData.increaseGroupSizeByOne increments a Java int.
+                a.size = a.size.wrapping_add(1);
             }
         }
         self.mob(m, Some(g))
@@ -1610,14 +1877,11 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     /// `false` drops it, otherwise it is finalized unless the level said the
     /// listener already did (`Mob.finalizeSpawn` fires for riders too).
     fn rider_kept(&mut self, j: &mut Mob, reason: Reason, group: Option<Group>) -> bool {
-        match self.level.spawn_event(j, reason) {
-            SpawnEvent::Cancelled => false,
-            SpawnEvent::Skip => true,
-            SpawnEvent::Finalize => {
-                self.finalize(j, reason, group);
-                true
-            }
+        let event = self.level.spawn_event(j, reason);
+        if !event.skip_initialization {
+            self.finalize(j, reason, group);
         }
+        !event.veto_admission
     }
     /// `startRiding`: the rider leaves the vehicle it was on.
     fn ride(&mut self, rider: &mut Mob, vehicle: &mut Mob) {
@@ -2759,13 +3023,6 @@ mod tests {
         assert!(child.is_baby());
         // It keeps the parent's variant.
         assert_eq!(child.extra.variant, 3);
-        // The egg is for the mob's own kind.
-        assert!(spawn_egg_is_for("minecraft:cow_spawn_egg", "minecraft:cow"));
-        assert!(!spawn_egg_is_for(
-            "minecraft:pig_spawn_egg",
-            "minecraft:cow"
-        ));
-        assert!(!spawn_egg_is_for("minecraft:stick", "minecraft:cow"));
     }
     /// #7877: `/attribute <mob> <attr> modifier add` hands `add_modifier` an
     /// id typed at run time; it lands in the value, reads back, and goes.
@@ -2961,6 +3218,29 @@ mod tests {
         assert!(!halloween_date(10, 30));
         assert!(!halloween_date(11, 1));
         assert!(!halloween_date(1, 1));
+    }
+
+    #[test]
+    fn equipment_read_matches_stack_with_and_without_gear_overlays() {
+        let kind = crate::mobs::sensor_scan_tests::kind();
+        let mut m = crate::mobs::Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0);
+        set_item(&mut m, CHEST, "minecraft:iron_chestplate");
+        set_slot_enchantments(&mut m, CHEST, vec![(Arc::from("minecraft:thorns"), 3)]);
+        let trim: gear::Trim = ("minecraft:gold".into(), "minecraft:coast".into());
+        gear::set_trim(&mut m, gear::CHEST, Some(trim));
+        set_slot_damage(&mut m, CHEST, 2);
+
+        let read = equipment_slot(&m, EquipmentSlot::Chest).unwrap();
+        let projected = read.project().into_owned();
+        assert!(read.matches_stack(&projected));
+
+        let mut altered = projected.clone();
+        altered.damage = 3;
+        assert!(!read.matches_stack(&altered));
+
+        let mut unenchanted = ItemStack::new("minecraft:iron_chestplate", 1);
+        unenchanted.damage = 2;
+        assert!(!read.matches_stack(&unenchanted));
     }
 }
 

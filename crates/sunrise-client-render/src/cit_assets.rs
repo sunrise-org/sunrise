@@ -158,7 +158,7 @@ fn load_model(
     let model = root
         .read_to_string(resource)
         .map_err(|e| e.to_string())
-        .and_then(|text| CuboidModel::from_json(&text).map_err(|e| e.to_string()));
+        .and_then(|text| crate::mod_model_loaders::decode_model(&text).map_err(|e| e.to_string()));
     let mut model = match model {
         Ok(model) => model,
         Err(e) => {

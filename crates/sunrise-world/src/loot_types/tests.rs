@@ -193,3 +193,42 @@ fn selecting_a_pack_never_falls_back_from_malformed_winning_loot_data() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn condition_field_validation_binds_predicate_holders_including_nested_terms() {
+    let types = Types::default();
+    let predicates = HashMap::from([(
+        "test:rain".into(),
+        json!({"type": "minecraft:weather_check", "raining": true}),
+    )]);
+    types
+        .validate_condition_field(&json!("test:rain"), &predicates, "conditions.player")
+        .unwrap();
+    types
+        .validate_condition_field(
+            &json!({"type": "minecraft:all_of", "terms": ["test:rain"]}),
+            &predicates,
+            "conditions.player",
+        )
+        .unwrap();
+    let missing_top = types
+        .validate_condition_field(&json!("test:missing"), &predicates, "conditions.player")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        missing_top.contains("test:missing") && missing_top.contains("unknown reference"),
+        "{missing_top}"
+    );
+    let missing_nested = types
+        .validate_condition_field(
+            &json!({"type": "minecraft:all_of", "terms": ["test:rain", "test:absent"]}),
+            &predicates,
+            "conditions.player",
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        missing_nested.contains("test:absent") && missing_nested.contains("unknown reference"),
+        "{missing_nested}"
+    );
+}

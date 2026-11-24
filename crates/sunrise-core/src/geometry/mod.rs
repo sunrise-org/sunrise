@@ -17,8 +17,8 @@ pub use movement::{
     resolve_step_movement, try_resolve_step_movement, try_resolve_step_movement_oriented,
 };
 pub use shape::{ShapeError, ShapeOp, VoxelShape};
-pub use sweep::sweep_intersected_blocks;
-pub use traversal::{TraversalError, traverse_blocks};
+pub use sweep::{SweepCursor, sweep_intersected_blocks};
+pub use traversal::{TraversalError, traverse_blocks, traverse_blocks_window};
 
 pub const COLLISION_EPSILON: f64 = 1.0e-7;
 
@@ -660,19 +660,7 @@ pub(crate) fn clamp(value: f64, min: f64, max: f64) -> f64 {
         java_min(value, max)
     }
 }
-/// `Mth.floor`, which is `(int) Math.floor(v)`: truncate, then step down for
-/// negative fractions. A truncating conversion and a compare, where
-/// `f64::floor` is a libm call on baseline x86-64. Both casts saturate (NaN is
-/// 0), so the step down saturates too: below `i32::MIN` stays `i32::MIN`.
-#[inline]
-pub(crate) fn floor_i32(value: f64) -> i32 {
-    let truncated = value as i32;
-    if value < f64::from(truncated) {
-        truncated.saturating_sub(1)
-    } else {
-        truncated
-    }
-}
+pub(crate) use crate::mth::floor as floor_i32;
 fn lerp(amount: f64, start: f64, end: f64) -> f64 {
     start + amount * (end - start)
 }

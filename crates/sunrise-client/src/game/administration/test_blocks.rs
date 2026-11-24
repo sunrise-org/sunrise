@@ -7,19 +7,10 @@ use sunrise_client::{
 };
 use sunrise_core::position::BlockPos;
 use sunrise_protocol::packets::play;
-use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
 type Pos = (i32, i32, i32);
 
-/// `TestBlock.ownSignal`: the block state's mode is the gate, and only then
-/// does the block entity's powered flag count.
-pub(super) fn own_signal(registry: &BlockRegistry, state: BlockStateId, powered: bool) -> i32 {
-    let start = registry
-        .state(state)
-        .and_then(|s| s.properties.get("mode"))
-        .is_some_and(|mode| mode == "start");
-    if start && powered { 15 } else { 0 }
-}
+pub(super) use sunrise_gameplay::test_blocks::own_signal;
 
 impl Game<'_> {
     fn test_block_mut(&mut self, pos: Pos) -> Option<&mut TestBlock> {

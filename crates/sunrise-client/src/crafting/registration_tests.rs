@@ -130,7 +130,7 @@ fn unknown_serializer_refuses_before_unclaimed_ingredient_is_dropped() {
         .unwrap();
         let sources = vec![("minecraft:future".into(), file)];
         let context = crate::test_resources::server_load();
-        let error = ResolvedSources::resolve(sources.clone(), &context)
+        let error = ResolvedSources::resolve(sources.clone(), &Items::empty(), &context)
             .err()
             .unwrap()
             .to_string();
@@ -271,10 +271,14 @@ fn a_failed_load_names_every_bad_recipe() {
                 serde_json::json!({"type":"minecraft:crafting_special_repairitem"}),
             ),
         ];
-        let error = ResolvedSources::resolve(sources, &crate::test_resources::server_load())
-            .err()
-            .unwrap()
-            .to_string();
+        let error = ResolvedSources::resolve(
+            sources,
+            &Items::empty(),
+            &crate::test_resources::server_load(),
+        )
+        .err()
+        .unwrap()
+        .to_string();
         assert_eq!(
             error,
             "2 recipes failed to load:\n  recipe data/minecraft/recipe/a.json, unregistered recipe serializer absent:one\n  recipe data/minecraft/recipe/b.json, unregistered recipe serializer absent:two"
@@ -339,23 +343,20 @@ fn collected_sources_and_table_build_report_every_stage_together() {
         )
         .unwrap();
         let context = crate::test_resources::server_load();
+        let items = Items::for_tests(Default::default());
         let sources =
-            ResolvedSources::load_collecting(root.path(), &PackOverlay::NONE, &context).unwrap();
+            ResolvedSources::load_collecting(root.path(), &items, &PackOverlay::NONE, &context)
+                .unwrap();
         assert!(!sources.is_complete());
-        let error = Recipes::from_resolved(
-            root.path(),
-            &Items::for_tests(Default::default()),
-            &PackOverlay::NONE,
-            &sources,
-        )
-        .err()
-        .unwrap()
-        .to_string();
+        let error = Recipes::from_resolved(root.path(), &items, &PackOverlay::NONE, &sources)
+            .err()
+            .unwrap()
+            .to_string();
         assert!(error.starts_with("2 recipes failed to load:"), "{error}");
         assert!(
             error.find("a.json").unwrap() < error.find("b.json").unwrap(),
             "{error}"
         );
-        assert!(ResolvedSources::load(root.path(), &PackOverlay::NONE, &context).is_err());
+        assert!(ResolvedSources::load(root.path(), &items, &PackOverlay::NONE, &context).is_err());
     });
 }

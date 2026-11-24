@@ -37,7 +37,7 @@ fn bundle_completes_on_tick_200() {
                 ItemStack::new("minecraft:stick", 1),
             ];
             game.screen = Screen::Playing;
-            game.right = true;
+            game.set_mapping_held("key.use", true);
             game.lan_acting = Some(1);
             EVENTS.with(|events| events.borrow_mut().clear());
             assert!(game.start_using_item());

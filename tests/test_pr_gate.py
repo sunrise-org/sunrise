@@ -6,16 +6,19 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
 spec = importlib.util.spec_from_file_location("pr_gate", ROOT / "tools/ci/pr_gate.py")
 pr_gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pr_gate)
 
 SHA = "a" * 40
+MERGE = "b" * 40
 SAME_REPO = "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
 
 
@@ -44,22 +47,32 @@ class GateTests(unittest.TestCase):
             with self.subTest(same=same, labels=labels, branch=branch):
                 result = pr_gate.outputs("pull_request", same, "", never_read,
                                          labels=labels, head_ref=branch)
-                self.assertEqual(result, {"heavy": expected, "pr_sha": "", "trusted": ""})
+                self.assertEqual(result, {"heavy": expected, "pr_sha": "", "pr_merge": "", "trusted": ""})
                 # An empty trusted output preserves the workflow's repository-based trust fallback.
         for event in ("push", "schedule", "workflow_dispatch"):
             self.assertEqual(pr_gate.outputs(event, False, "", never_read)["heavy"], "true")
 
-    def test_a_dispatch_with_pr_runs_that_head_and_keeps_a_fork_off_our_runners(self):
+    def test_a_dispatch_with_pr_runs_its_test_merge_reports_its_head_and_keeps_a_fork_off_our_runners(self):
         fork = pr_gate.outputs("workflow_dispatch", True, "3665", lambda n: {
-            "sha": SHA, "ref": "sync-upstream", "labels": ["rollup"], "same_repository": False})
-        self.assertEqual(fork, {"heavy": "true", "pr_sha": SHA, "trusted": "false"})
+            "sha": SHA, "merge": MERGE, "mergeable": True, "ref": "sync-upstream", "labels": ["rollup"],
+            "same_repository": False})
+        self.assertEqual(fork, {"heavy": "true", "pr_sha": SHA, "pr_merge": MERGE, "trusted": "false"})
         ours = pr_gate.outputs("workflow_dispatch", True, "3672", lambda n: {
-            "sha": SHA, "ref": "split/c3-bridge-docs", "labels": [], "same_repository": True})
-        self.assertEqual(ours, {"heavy": "true", "pr_sha": SHA, "trusted": "true"})
+            "sha": SHA, "merge": MERGE, "mergeable": True, "ref": "split/c3-bridge-docs", "labels": [],
+            "same_repository": True})
+        self.assertEqual(ours, {"heavy": "true", "pr_sha": SHA, "pr_merge": MERGE, "trusted": "true"})
+
+    def test_a_dispatch_without_a_test_merge_is_refused(self):
+        for mergeable in (False, None):
+            head = {"sha": SHA, "merge": "", "mergeable": mergeable, "ref": "work", "labels": [],
+                    "same_repository": True}
+            with self.subTest(mergeable=mergeable), self.assertRaises(SystemExit):
+                pr_gate.outputs("workflow_dispatch", True, "3241", lambda n, head=head: head)
 
     def test_a_dispatch_on_our_rollup_or_sync_is_refused_since_its_pushes_run_the_gate(self):
         for ref, labels in (("sunrise-review-rollup-43", []), ("sync-upstream-7", []), ("sync/upstream-acbd", []), ("integration", ["rollup"])):
-            head = {"sha": SHA, "ref": ref, "labels": labels, "same_repository": True}
+            head = {"sha": SHA, "merge": MERGE, "mergeable": True, "ref": ref, "labels": labels,
+                    "same_repository": True}
             with self.subTest(ref=ref, labels=labels), self.assertRaisesRegex(SystemExit, "rollup or sync"):
                 pr_gate.outputs("workflow_dispatch", True, "2833", lambda n, head=head: head)
 
@@ -89,13 +102,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("needs.changes.outputs.heavy == 'false'", self.job("format"))
         self.assertNotRegex(self.job("format"), r"cargo (clippy|build|test|check)")
 
-    def test_a_dispatched_head_is_checked_out_with_a_read_only_token_and_reported_apart(self):
+    def test_a_dispatched_test_merge_is_checked_out_with_a_read_only_token_and_reported_on_the_head(self):
         for name in ("lint", "verify", "verify-static"):
             with self.subTest(job=name):
-                self.assertIn("ref: ${{ needs.changes.outputs.pr_sha }}", self.job(name))
+                self.assertIn("ref: ${{ needs.changes.outputs.pr_merge }}", self.job(name))
+                self.assertNotIn("outputs.pr_sha", self.job(name))
                 self.assertNotIn("statuses: write", self.job(name))
         status = self.job("pr-status")
         self.assertIn("statuses: write", status)
+        self.assertIn("SHA: ${{ needs.changes.outputs.pr_sha }}", status)
         self.assertNotIn("actions/checkout", status)
         self.assertIn("permissions:\n  contents: read\n", self.workflow)
 
@@ -179,9 +194,6 @@ class WorkflowTests(unittest.TestCase):
         jobs = workflow["jobs"]
         for name in ("runtime-leases",):
             self.assertEqual(jobs[name]["if"], "inputs.commit != '' || github.event_name == 'workflow_dispatch'")
-        # The wasm std member's Linux/Windows comparison is a platform leg too: the daily run and dispatches only.
-        names = yaml.safe_load((ROOT / ".github/workflows/wasm-std-names.yml").read_text())
-        self.assertEqual(set(names[True]), {"workflow_call", "workflow_dispatch"})
 
     def test_other_pull_request_workflows_skip_what_compiles_for_forks(self):
         for workflow, jobs in (("cargo-sunrise-mod-build.yml", ("build",)), ("modding-book.yml", ("book",))):

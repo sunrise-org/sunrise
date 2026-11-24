@@ -62,7 +62,7 @@ fn block_tables_resolve_predicate_ids_from_the_packs() {
         &root,
         &PackOverlay {
             files: &pack,
-            ..PackOverlay::NONE
+            ..PackOverlay::default()
         },
         &defaults,
     )

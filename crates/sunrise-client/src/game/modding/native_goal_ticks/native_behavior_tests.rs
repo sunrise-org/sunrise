@@ -8,7 +8,8 @@ use super::super::native_entity_refs::tests::with_game;
 use super::tests::zombie;
 use mod_api::{
     Activity, Behavior, BehaviorCx, BehaviorRegistrar, BrainMemory, EntityPart, Hooks,
-    MemoryStatus, ModEntry, RegisteredBehavior, Registrar, RegistrationContext,
+    MemoryStatus, ModEntry, RegisterBehaviorsEvent, RegisteredBehavior, Registrar,
+    RegistrationContext,
 };
 use std::sync::Mutex;
 use sunrise_client::health::DamageLevel;
@@ -137,8 +138,15 @@ fn random_of(level: &mut DamageLevel<'_>) -> (u64, Option<f64>) {
 struct ZombieBehaviors;
 #[mod_api::sunrise_part]
 impl EntityPart for ZombieBehaviors {
-    fn register_behaviors(&self, behaviors: &mut BehaviorRegistrar<'_>) {
-        if let Err(e) = behaviors.add(Activity::Idle, 5, 40, 80, &[], Probe::still_for(1)) {
+    fn register_behaviors(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        event: &mut RegisterBehaviorsEvent<'_, '_>,
+    ) {
+        if let Err(e) = event
+            .behaviors
+            .add(Activity::Idle, 5, 40, 80, &[], Probe::still_for(1))
+        {
             REFUSALS.lock().unwrap().push(e);
         }
     }
@@ -157,10 +165,14 @@ macro_rules! plan_part {
         struct $name;
         #[mod_api::sunrise_part]
         impl EntityPart for $name {
-            fn register_behaviors(&self, behaviors: &mut BehaviorRegistrar<'_>) {
+            fn register_behaviors(
+                &self,
+                _host: &mut dyn mod_api::ServerHost,
+                event: &mut RegisterBehaviorsEvent<'_, '_>,
+            ) {
                 for (id, add) in ADDS.lock().unwrap().iter() {
                     if *id == $id {
-                        add(behaviors);
+                        add(event.behaviors);
                     }
                 }
             }
@@ -366,7 +378,7 @@ fn with_game_states(
     states.unwrap()
 }
 
-/// A villager in the game's list, as `Mob::new` builds it.
+/// A villager in the game's list, as `Mob::new` builds it, with staged mod parts flushed.
 fn villager(game: &mut super::super::Game<'_>, id: u32, at: [f64; 3]) {
     use sunrise_core::geometry::Vec3;
     let kind = game
@@ -376,8 +388,10 @@ fn villager(game: &mut super::super::Game<'_>, id: u32, at: [f64; 3]) {
         .unwrap()
         .clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
-    m.on_ground = true;
+    m.ground.on_ground = true;
     game.mobs.push(m);
+    let join = game.mobs.last().unwrap().join;
+    game.flush_resident_mob_parts(id, join);
 }
 
 /// One pass over the villager's own brain tick as `server_ai_step` reaches
@@ -405,7 +419,9 @@ fn with_villager_tick(
     let mut events = Vec::new();
     let index = mobs.iter().position(|m| m.id == id).unwrap();
     f(&mut mobs[index], &w, level, &mut events);
+    let join = mobs[index].join;
     game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+    game.flush_resident_mob_parts(id, join);
 }
 
 /// `villager_brain::tick` once at this time, on the caller's level random.
@@ -416,6 +432,11 @@ fn villager_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
+    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+        mobs::villager_brain::ensure_brain(m, game_time, day_time);
+        let join = m.join;
+        game.flush_resident_mob_parts(id, join);
+    }
     with_villager_tick(
         game,
         id,
@@ -704,13 +725,15 @@ fn a_villager_without_mod_behaviors_draws_what_a_parts_free_one_does() {
 
 // ---- The animal brain (the second wiring) --------------------------------
 
-/// A mob of `kind` in the game's list, as `Mob::new` builds it.
+/// A mob of `kind` in the game's list, as `Mob::new` builds it, with staged mod parts flushed.
 fn mob_of(game: &mut super::super::Game<'_>, kind: &str, id: u32, at: [f64; 3]) {
     use sunrise_core::geometry::Vec3;
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
-    m.on_ground = true;
+    m.ground.on_ground = true;
     game.mobs.push(m);
+    let join = game.mobs.last().unwrap().join;
+    game.flush_resident_mob_parts(id, join);
 }
 
 /// `animal_brain::tick` once at this time, on the caller's level random.
@@ -721,6 +744,11 @@ fn animal_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
+    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+        mobs::animal_brain::ensure_brain(m);
+        let join = m.join;
+        game.flush_resident_mob_parts(id, join);
+    }
     with_villager_tick(
         game,
         id,
@@ -895,6 +923,11 @@ fn monster_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
+    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+        mobs::monster_brain::ensure_brain(m);
+        let join = m.join;
+        game.flush_resident_mob_parts(id, join);
+    }
     with_villager_tick(
         game,
         id,
@@ -915,6 +948,10 @@ fn warden_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
+    if let Some(m) = game.mobs.iter().find(|m| m.id == id) {
+        let join = m.join;
+        game.flush_resident_mob_parts(id, join);
+    }
     with_villager_tick(
         game,
         id,
@@ -1075,118 +1112,5 @@ fn a_panicking_behavior_leaves_the_rest_of_the_tick_working() {
             selector.tick(m, &mut cx);
             m.ai.goals = selector;
         });
-    });
-}
-
-/// A behavior whose methods read the world through the Host after journalling the call.
-/// `read_in_check` picks whether `check_extra_start_conditions` reads too.
-struct Gated {
-    read_in_check: bool,
-}
-impl Gated {
-    fn call(&self, cx: &mut BehaviorCx<'_>, call: &str) {
-        record(&format!("gated/{call}"));
-        let _ = cx.host().level("minecraft:overworld");
-        record("gated/read");
-    }
-}
-impl Behavior for Gated {
-    fn name(&self) -> &'static str {
-        "Gated"
-    }
-    fn check_extra_start_conditions(&mut self, cx: &mut BehaviorCx<'_>) -> bool {
-        if self.read_in_check {
-            self.call(cx, "check");
-        }
-        true
-    }
-    fn start(&mut self, cx: &mut BehaviorCx<'_>) {
-        self.call(cx, "start");
-    }
-    fn can_still_use(&mut self, cx: &mut BehaviorCx<'_>) -> bool {
-        self.call(cx, "can_still_use");
-        true
-    }
-    fn tick(&mut self, cx: &mut BehaviorCx<'_>) {
-        self.call(cx, "tick");
-    }
-    fn stop(&mut self, cx: &mut BehaviorCx<'_>) {
-        self.call(cx, "stop");
-    }
-}
-
-/// Behaviors run in brain ticks, after the thread reached World. Run under Setup and Reloading
-/// anyway, a behavior's world read in any of its methods is a contained refusal (the behavior did
-/// not answer), never the no-scope panic; in World the same behaviors read.
-#[test]
-#[ignore = "daily"]
-fn a_behavior_run_outside_the_world_is_refused_not_a_panic() {
-    use mod_api::__private::{ModPhase, PhaseOwner};
-    let _test = TEST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    with_game(|game| {
-        zombie(game, 8, [3.5, 65.0, 3.5]);
-        for reloading in [false, true] {
-            CALLS.lock().unwrap().clear();
-            let setup = PhaseOwner::scope(ModPhase::Setup);
-            let _reload = reloading.then(|| setup.reloading().unwrap());
-            let mut reads_in_check = wrapped(
-                3,
-                3,
-                Box::new(Gated {
-                    read_in_check: true,
-                }),
-            );
-            let mut reads_after = wrapped(
-                3,
-                3,
-                Box::new(Gated {
-                    read_in_check: false,
-                }),
-            );
-            with_mob_world(game, |mob, w, level| {
-                assert!(
-                    !reads_in_check.try_start(mob, w, level.random(), 0),
-                    "a refused check is no answer"
-                );
-                assert!(reads_after.try_start(mob, w, level.random(), 0));
-                reads_after.tick_or_stop(mob, w, 1);
-            });
-            let calls = CALLS.lock().unwrap().clone();
-            for reached in [
-                "gated/check",
-                "gated/start",
-                "gated/can_still_use",
-                "gated/stop",
-            ] {
-                assert!(
-                    calls.iter().any(|call| call == reached),
-                    "{reached} was called: {calls:?}"
-                );
-            }
-            assert!(
-                !calls.iter().any(|call| call == "gated/read"),
-                "no world read answered: {calls:?}"
-            );
-            assert!(!reads_after.running(), "a refused can_still_use stops it");
-        }
-        CALLS.lock().unwrap().clear();
-        let mut reads = wrapped(
-            3,
-            3,
-            Box::new(Gated {
-                read_in_check: true,
-            }),
-        );
-        with_mob_world(game, |mob, w, level| {
-            assert!(reads.try_start(mob, w, level.random(), 0));
-        });
-        assert!(
-            CALLS
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|call| call == "gated/read"),
-            "in World the same behavior reads"
-        );
     });
 }

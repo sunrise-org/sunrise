@@ -112,6 +112,12 @@ impl<'a> CollisionContext<'a> {
         self
     }
 
+    /// Reuse the entity facts captured for collision at its post-move height.
+    pub const fn at_entity_height(mut self, y: f64) -> Self {
+        self.height = Height::Bottom(y);
+        self
+    }
+
     /// Ordinary EntityCollisionContext. The native factory overload taking an
     /// explicit fluid flag also uses this path for experimental minecarts.
     pub fn for_entity(entity: CollisionEntity<'a>, always_fluid: bool) -> Self {

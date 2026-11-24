@@ -5,8 +5,10 @@
 //! source and a parse of every crate below it), so a mixin build reads only the files of the
 //! modules its targets are in. Before a function is copied, its text is checked against the
 //! index's hash: a source that is not the build's is refused by name, never walked.
-use crate::patch::{Found, Source, TargetPath, plain, replaceable, target_path};
-use quote::ToTokens;
+use crate::patch::{Found, Source, TargetPath, replaceable, target_path};
+use crate::source::plain_path;
+use mod_surface::build_data::FunctionDigests;
+use quote::{ToTokens, quote};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,7 +17,7 @@ use syn::spanned::Spanned;
 use syn::{ImplItem, Item};
 
 /// The index's file name in the build data.
-pub const FILE: &str = point_shape::build_data::FUNCTIONS;
+pub const FILE: &str = mod_surface::build_data::FUNCTIONS;
 
 /// The function index of one game build.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,8 +46,17 @@ pub struct CrateModules {
 pub struct ModuleFile {
     /// Relative to the source root, `/`-separated.
     pub path: String,
+    /// Conditions on this contribution to the module. A pinned lower build selects its files
+    /// before their declarations are re-exported into the patch crate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cfg: Vec<String>,
     /// The SHA-256 of the file's bytes, hex.
     pub sha256: String,
+    /// The enclosing gates on a literal include, outermost first: the same conditions as `cfg`.
+    /// An empty list means an unconditional include; a missing field is a regular module file
+    /// (or an older index).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_cfg: Option<Vec<String>>,
 }
 
 /// A function that can take a replacement.
@@ -62,6 +73,9 @@ pub struct Function {
     pub signature_hash: String,
     /// The SHA-256 of the span's bytes, hex.
     pub sha256: String,
+    /// The declaration and body fingerprints. Earlier build indexes have only the span hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digests: Option<FunctionDigests>,
 }
 
 /// Why a function can't take a replacement.
@@ -93,13 +107,13 @@ impl Code {
 /// its last segment (`m::<GameLevel as LevelAccess>::block_state`), as the copy finds it.
 pub fn key(target: &str) -> String {
     match target_path(target) {
-        None => plain(target),
+        None => plain_path(target),
         Some(TargetPath {
             qualified: Some((module, ty, tr)),
             name,
             ..
-        }) => format!("{}::<{ty} as {tr}>::{name}", plain(module)),
-        Some(TargetPath { front, name, .. }) => format!("{}::{name}", plain(front)),
+        }) => format!("{}::<{ty} as {tr}>::{name}", plain_path(module)),
+        Some(TargetPath { front, name, .. }) => format!("{}::{name}", plain_path(front)),
     }
 }
 
@@ -300,14 +314,14 @@ pub(crate) fn index_of(
         .filter(|krate| *krate != "sunrise_client")
         .collect();
     for krate in lower {
-        if !source.load(krate) {
+        if !source.load(krate)? {
             return Err(format!(
                 "{krate}: it has #[sunrise_mod_api_macros::replaceable] functions, but its sources can't be read"
             ));
         }
     }
     let mut index = FunctionIndex::default();
-    for (module, paths) in &source.files {
+    for (module, files) in &source.files {
         let krate = module.split("::").next().unwrap_or_default();
         let facts = index
             .crates
@@ -321,8 +335,9 @@ pub(crate) fn index_of(
                 modules: BTreeMap::new(),
             });
         let mut listed = Vec::new();
-        for path in paths {
-            // A `#[path]` leads through `..`: the index names the file as the archive holds it.
+        for file in files {
+            let path = &file.path;
+            // A `#[path]` or include can lead through `..`: use the archive's file spelling.
             let inside = path.strip_prefix(root).ok().and_then(|inside| {
                 let mut parts: Vec<String> = Vec::new();
                 for component in inside.components() {
@@ -344,7 +359,9 @@ pub(crate) fn index_of(
             let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
             listed.push(ModuleFile {
                 path: relative,
+                cfg: file.cfg.clone(),
                 sha256: sha256(&bytes),
+                include_cfg: file.included.then(|| file.cfg.clone()),
             });
         }
         facts.modules.insert(module.clone(), listed);
@@ -461,16 +478,30 @@ struct File<'a> {
 }
 
 impl File<'_> {
-    fn function(&self, span: proc_macro2::Span, sig: &syn::Signature) -> Function {
+    fn candidate(&self, span: proc_macro2::Span, found: Found) -> Candidate {
         let start = crate::source::offset(self.text, self.lines, span.start());
         let end = crate::source::offset(self.text, self.lines, span.end());
-        Function {
+        let syn::ImplItemFn {
+            attrs,
+            vis,
+            defaultness,
+            sig,
+            block,
+        } = &found.function;
+        let owner = &found.owner;
+        let declaration = quote!(#owner #(#attrs)* #vis #defaultness #sig);
+        let function = Function {
             module: self.module.to_owned(),
             file: self.relative.to_owned(),
             span: [start, end],
             signature_hash: crate::internals::signature_hash(&sig.to_token_stream().to_string()),
             sha256: sha256(&self.text.as_bytes()[start..end]),
-        }
+            digests: Some(FunctionDigests {
+                declaration: sha256(declaration.to_string().as_bytes()),
+                body: sha256(block.to_token_stream().to_string().as_bytes()),
+            }),
+        };
+        Candidate { found, function }
     }
 }
 
@@ -487,8 +518,9 @@ fn collect(
             Item::Fn(function) => {
                 out.entry(format!("{module}::{}", function.sig.ident))
                     .or_default()
-                    .push(Candidate {
-                        found: Found {
+                    .push(file.candidate(
+                        function.span(),
+                        Found {
                             module: module.to_owned(),
                             owner: None,
                             function: syn::ImplItemFn {
@@ -499,8 +531,7 @@ fn collect(
                                 block: (*function.block).clone(),
                             },
                         },
-                        function: file.function(function.span(), &function.sig),
-                    });
+                    ));
             }
             Item::Impl(block) => {
                 // The header and its associated types and constants: the verdict reads the
@@ -522,7 +553,7 @@ fn collect(
                         .cloned()
                         .collect(),
                 };
-                let owner = plain(&block.self_ty.to_token_stream().to_string());
+                let owner = plain_path(&block.self_ty.to_token_stream().to_string());
                 let scope = match &block.trait_ {
                     Some((_, path, _)) => {
                         let last = path
@@ -538,14 +569,14 @@ fn collect(
                     if let ImplItem::Fn(method) = member {
                         out.entry(format!("{scope}::{}", method.sig.ident))
                             .or_default()
-                            .push(Candidate {
-                                found: Found {
+                            .push(file.candidate(
+                                method.span(),
+                                Found {
                                     module: module.to_owned(),
                                     owner: Some(header.clone()),
                                     function: method.clone(),
                                 },
-                                function: file.function(method.span(), &method.sig),
-                            });
+                            ));
                     }
                 }
             }

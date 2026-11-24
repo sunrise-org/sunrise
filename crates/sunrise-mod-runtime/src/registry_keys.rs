@@ -10,14 +10,21 @@ pub struct Requests {
     pub declared_fluids: HashMap<String, &'static str>,
     pub items: Names,
     pub effects: Names,
+    pub damage_types: Names,
     pub particles: Names,
     pub block_entity_types: Names,
     pub entity_types: Names,
     pub game_events: Names,
 }
 
+/// The slots and identities of one registry's keys. Cloning shares the tables until one side
+/// changes them, so a test process can hold equal tables of its many installations once.
 #[derive(Clone, Default, PartialEq)]
-pub struct Names {
+pub struct Names(pub std::sync::Arc<Table>);
+
+/// The shared payload of [`Names`]: a registry's requested keys and their resolved slots.
+#[derive(Clone, Default, PartialEq)]
+pub struct Table {
     pub entries: Vec<Request>,
     pub slots: HashMap<String, u32>,
     /// Typed identifier lookup without formatting a string on metadata reads.
@@ -27,6 +34,19 @@ pub struct Names {
     /// Slots in the completed registry's registration order, when a completion
     /// recorded one. Empty while the table holds only mod requests.
     pub order: Vec<u32>,
+}
+
+impl std::ops::Deref for Names {
+    type Target = Table;
+    fn deref(&self) -> &Table {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Names {
+    fn deref_mut(&mut self) -> &mut Table {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -87,8 +107,16 @@ impl Names {
     /// its number and an id another mod requested stays requested; with no requester left,
     /// resolution has nothing to refuse (and returns no value at that position).
     pub fn withdraw(&mut self, mod_id: &'static str, id: &str) {
-        if let Some(slot) = self.slots.get(id) {
-            self.entries[*slot as usize].mods.retain(|m| *m != mod_id);
+        if let Some(&slot) = self.slots.get(id) {
+            self.entries[slot as usize].mods.retain(|m| *m != mod_id);
+        }
+    }
+
+    /// Take back every request `drop` names, as [`Self::withdraw`] does for one.
+    pub fn withdraw_where(&mut self, mut drop: impl FnMut(&'static str, &str) -> bool) {
+        for entry in &mut self.entries {
+            let id = entry.id.as_str();
+            entry.mods.retain(|&mod_id| !drop(mod_id, id));
         }
     }
 
@@ -148,6 +176,34 @@ impl Names {
         } else {
             Err(errors)
         }
+    }
+}
+
+/// A resolved entity registry with classification indexed by the same load-owned slots.
+pub struct EntityTypes {
+    names: Names,
+    living: Box<[Option<bool>]>,
+}
+
+impl EntityTypes {
+    /// Attach the living classification to the slots of the completed name table.
+    pub fn new(names: Names, mut is_living: impl FnMut(&str) -> Option<bool>) -> Self {
+        let living = names
+            .entries
+            .iter()
+            .map(|entry| is_living(&entry.id))
+            .collect();
+        Self { names, living }
+    }
+
+    /// The completed entity type names and registration order.
+    pub fn names(&self) -> &Names {
+        &self.names
+    }
+
+    /// Living classification of an exact registered type id, or None if unknown.
+    pub fn is_living(&self, id: &str) -> Option<bool> {
+        self.living[*self.names.slots.get(id)? as usize]
     }
 }
 

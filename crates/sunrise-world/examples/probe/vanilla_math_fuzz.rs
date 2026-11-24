@@ -95,6 +95,27 @@ fn old_rotated([x, y, z]: [f64; 3], yaw: f32) -> [f64; 3] {
     [x * cos + z * sin, y, z * cos - x * sin]
 }
 
+/// `Mth.floor` and `Mth.ceil` as Sunrise's own copies had them before `sunrise_core::mth`: truncate, then step
+/// with a wrapping `int` (`i32::MIN - 1` becomes `i32::MAX`, as a release build's `i - 1` does). Kept here only
+/// to measure against.
+fn old_rounding(a: &[f64]) -> Vec<f64> {
+    // The step down (floor) or up (ceil) from the truncation `t` when the value lies past it.
+    let step = |t: i32, below: bool, above: bool| {
+        f64::from(
+            t.wrapping_sub(i32::from(below))
+                .wrapping_add(i32::from(above)),
+        )
+    };
+    let (x, d) = (a[0] as f32, a[1]);
+    let (tx, td) = (x as i32, d as i32);
+    vec![
+        step(tx, x < tx as f32, false),
+        step(tx, false, x > tx as f32),
+        step(td, d < f64::from(td), false),
+        step(td, false, d > f64::from(td)),
+    ]
+}
+
 type Variant = (&'static str, fn(&[f64]) -> Vec<f64>);
 
 /// Each function's inputs drawn from the stream (in VanillaMathFuzz.apply's order) and its variants.
@@ -218,6 +239,22 @@ fn function(name: &str) -> (fn(&mut Stream, u64) -> Vec<f64>, Vec<Variant>) {
                     };
                     vec![(to[0] * view[0] + to[1] * view[1]).acos()]
                 }),
+            ],
+        ),
+        "mth_rounding" => (
+            |s, i| {
+                let x = s.angle(i, -3e9, 3e9);
+                vec![f64::from(x), s.coord(i, -3e9, 3e9)]
+            },
+            vec![
+                ("sunrise", |a| {
+                    use sunrise_core::mth::{ceil, ceil_f32, floor, floor_f32};
+                    let x = a[0] as f32;
+                    [floor_f32(x), ceil_f32(x), floor(a[1]), ceil(a[1])]
+                        .map(f64::from)
+                        .to_vec()
+                }),
+                ("old", old_rounding),
             ],
         ),
         other => {

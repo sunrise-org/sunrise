@@ -321,6 +321,7 @@ pub fn main() -> Result<()> {
             .unwrap_or_default();
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
+                side: sunrise_client::motion::dry_side(),
                 entities: &entities,
                 player: &mut player,
                 scene: &mut scene,
@@ -520,7 +521,13 @@ pub fn main() -> Result<()> {
                         other => return Err(format!("unknown fixture effect {other}").into()),
                     }
                 }
-                "travel" => world.travel_in_air(&mut MoveGate::new(), vector(&op["value"]))?,
+                "travel" => {
+                    sunrise_world::living_air::travel_in_air(
+                        &mut world,
+                        &mut MoveGate::new(),
+                        vector(&op["value"]).into(),
+                    )?;
+                }
                 "tick" => {
                     let v = vector(&op["value"]);
                     world.movement_tick([v.x as f32, v.y as f32, v.z as f32])?;

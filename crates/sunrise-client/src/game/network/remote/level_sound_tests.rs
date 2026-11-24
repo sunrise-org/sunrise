@@ -42,7 +42,7 @@ impl mod_api::Hooks for Tuner {
         (e.volume, e.pitch) = (0.5, 2.0);
         Flow::Continue
     }
-    fn play_sound(&self, _: &dyn mod_api::LoopContext, e: &mut mod_api::PlaySoundEvent<'_>) {
+    fn play_sound(&self, _: &mut dyn mod_api::ClientHost, e: &mut mod_api::PlaySoundEvent<'_>) {
         // Active sounds also refresh their playback parameters on ticks.
         if e.starting {
             self.0.lock().unwrap().played.push(e.original.clone());
@@ -219,8 +219,8 @@ fn game_events_ask_client_level_before_playback() {
             let mut player = PlayerMotion::new(game.motion, Vec3::new(1.0, 64.0, 1.0)).unwrap();
             player.dimensions.eye_height = 1.25;
             game.player = Some(player);
-            for event in [6, 9, 10] {
-                game.handle_packet(C::GameEvent(play::GameEvent { event, param: 1.0 }))
+            for (event, param) in [(6, 1.0), (9, 1.0), (10, 1.4)] {
+                game.handle_packet(C::GameEvent(play::GameEvent { event, param }))
                     .unwrap();
             }
             assert_eq!(
@@ -252,7 +252,7 @@ fn game_events_ask_client_level_before_playback() {
             );
             game.handle_packet(C::GameEvent(play::GameEvent {
                 event: 10,
-                param: 0.0,
+                param: 1.5,
             }))
             .unwrap();
             assert_eq!(
@@ -328,6 +328,7 @@ fn packets_ask_client_level_before_playback_not_ui() {
                 })
             };
             deliver(game, position("minecraft:block.chest.locked"));
+            // `play_sound` already fired inside the packet's own play.
             {
                 let log = log.lock().unwrap();
                 assert_eq!(log.requests, ["position"]);
@@ -382,7 +383,7 @@ fn packets_ask_client_level_before_playback_not_ui() {
                 );
                 assert_eq!(log.played.len(), 2, "absent emitter starts no playback");
             }
-            game.audio.play_button_click();
+            game.play_audio_button_click();
             let log = log.lock().unwrap();
             assert_eq!(log.requests.len(), 3, "UI playback adds no level request");
             assert_eq!(

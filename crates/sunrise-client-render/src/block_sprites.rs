@@ -102,28 +102,41 @@ impl<'a> Lookup<'a> {
     }
     /// The sprite at `layer` of all the layers.
     pub fn sprite(&self, layer: u32) -> SpriteRef {
-        let render = &self.context.render;
-        SpriteRef {
-            array: layer / self.split,
-            layer: layer % self.split,
-            animated: render.animations.iter().any(|a| a.layer == layer),
-            cutout: render
-                .sprite_mips
-                .get(layer as usize)
-                .is_some_and(|m| m.has_transparent),
-        }
+        sprite_at(&self.context.render, self.split, layer)
     }
 
-    /// A texture by name (`minecraft:block/stone`, `block/stone`); none for one no model uses (the arrays hold only
-    /// the textures models and the game's own drawing name).
+    /// A texture by name in this lookup.
     pub fn texture(&self, name: &str) -> Option<SpriteRef> {
-        let layers = &self.context.render.sprite_layers;
-        let layer = layers
-            .get(name)
-            .or_else(|| layers.get(&format!("minecraft:{name}")))?;
-        Some(self.sprite(*layer))
+        texture_at(&self.context.render, self.split, name)
     }
+}
 
+fn sprite_at(render: &crate::assets::RenderAssets, split: u32, layer: u32) -> SpriteRef {
+    SpriteRef {
+        array: layer / split,
+        layer: layer % split,
+        animated: render.animations.iter().any(|a| a.layer == layer),
+        cutout: render
+            .sprite_mips
+            .get(layer as usize)
+            .is_some_and(|m| m.has_transparent),
+    }
+}
+
+/// A texture by name in the uploaded block atlas, independently of model publication.
+pub fn texture_at(
+    render: &crate::assets::RenderAssets,
+    split: u32,
+    name: &str,
+) -> Option<SpriteRef> {
+    let layers = &render.sprite_layers;
+    let layer = layers
+        .get(name)
+        .or_else(|| layers.get(&format!("minecraft:{name}")))?;
+    Some(sprite_at(render, split.max(1), *layer))
+}
+
+impl Lookup<'_> {
     /// What block `name` (`minecraft:oak_log[axis=x]`; properties left out take the default) draws on each side;
     /// none for a block the game does not know.
     pub fn block(&self, name: &str) -> Option<BlockSprites> {

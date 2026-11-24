@@ -14,6 +14,7 @@ use dispatch::{args, args_os};
 
 mod allay_interaction_fixture;
 mod ambient_fixture;
+mod anvil_name_fixture;
 mod arrow_probe;
 mod audio_attributes_fixture;
 /// Sound-engine fakes the audio probes share.
@@ -59,6 +60,7 @@ mod firework_tooltip_fixture;
 mod first_person_probe;
 mod frame_limiter_probe;
 mod furnace_fixture;
+mod game_event_param_fixture;
 mod game_loop_probe;
 mod ghost_recipe_fixture;
 mod held_drop_fixture;
@@ -127,6 +129,7 @@ mod trading_fixture;
 mod translucency_fixture;
 mod trident_probe;
 mod vehicle_container_fixture;
+mod visibility_fixture;
 mod weather_fixture;
 mod world_border_render_fixture;
 mod world_options_fixture;
@@ -134,6 +137,7 @@ mod zombie_cure_sound_probe;
 
 probes! {
     ambient_fixture,
+    anvil_name_fixture,
     arrow_probe,
     audio_attributes_fixture,
     auto_jump_probe,
@@ -180,6 +184,7 @@ probes! {
     firework_tooltip_fixture,
     first_person_probe,
     frame_limiter_probe,
+    game_event_param_fixture,
     game_loop_probe,
     ghost_recipe_fixture,
     held_drop_fixture,
@@ -247,6 +252,7 @@ probes! {
     translucency_fixture,
     stack_foil_fixture,
     vehicle_container_fixture,
+    visibility_fixture,
     weather_fixture,
     world_border_render_fixture,
     world_options_fixture,

@@ -61,7 +61,7 @@ impl Game<'_> {
         argb: u32,
     ) -> bool {
         let atlas = &self.gui.atlas;
-        if !atlas.sprites.contains_key(sprite) {
+        if atlas.gui_rect(sprite).is_none() {
             return false;
         }
         let [x, y, w, h] = rect;

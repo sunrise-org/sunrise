@@ -35,12 +35,15 @@ mod splash;
 #[cfg(test)]
 mod tests;
 mod world_folder;
+pub(crate) use world_folder::sanitize_name as sanitize_world_name;
 pub mod world_management;
 mod world_toast;
 pub use buffet::State as BuffetEditor;
 pub use create_world::{DIFFICULTIES, WorldOptions};
 pub use flat::{FlatLayer, FlatSettings, State as FlatEditor};
 pub use onboarding::Onboarding;
+use preset_buttons::ADDED_IDS;
+use preset_editors::PresetEditorFactories;
 use world_toast::WorldToast;
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
@@ -363,8 +366,7 @@ pub enum Mode {
     /// A registered preset editor over an unchanged copy of Create World.
     CreatePreset {
         parent: Box<Mode>,
-        editor: mod_api::PresetEditor,
-        dimensions: RefCell<sunrise_core::nbt::Tag>,
+        session: preset_editors::PresetEditorSession,
     },
     /// AccessibilityOnboardingScreen: the first screen of a first launch.
     Onboarding(Onboarding),
@@ -378,7 +380,8 @@ pub enum Action {
     Options,
     Accessibility,
     Language,
-    /// The Mods icon of the main menu: the NeoForge-style mod list.
+    /// The Mods screen, the NeoForge-style mod list: what a title screen button opens
+    /// (`sunrise_hooks::title::Opens::Mods`).
     Mods,
     /// AccessibilityOnboardingScreen's Music & Sounds button.
     Sounds,
@@ -400,6 +403,8 @@ pub enum Action {
     },
     Connect {
         address: String,
+        /// The saved server list row's name, when the join came from that row.
+        name: Option<String>,
         lan: bool,
         realm: bool,
     },
@@ -411,8 +416,9 @@ pub enum Action {
 }
 pub struct Title {
     rule_registry: std::sync::Arc<crate::gamerules::RuleRegistry>,
-    /// The screen shown. Code here changes it through `set_mode`.
+    /// The screen shown. Code here changes it through `set_mode` or `activate_mode`.
     pub mode: Mode,
+    mode_activation: u64,
     /// Set by the game while a mod listens to the screen hooks: `set_mode` then leaves
     /// a new screen in `requested` for the game to announce
     /// (`screen_opening`) and apply, so a mod's answer can keep it shut.
@@ -428,6 +434,7 @@ pub struct Title {
     additional_data_packs: std::sync::Arc<[std::sync::Arc<crate::datapack::DataPack>]>,
     /// Game supplies this when screen hooks are available, even with no mod data.
     preset_data: Option<std::sync::Arc<crate::datapack::DataPack>>,
+    preset_editors: std::sync::Arc<PresetEditorFactories>,
     pub started: std::time::Instant,
     search: String,
     search_focused: bool,
@@ -445,6 +452,9 @@ pub struct Title {
     credits_button: Cell<[f32; 4]>,
     /// `Minecraft.allowsMultiplayer()` once the account's attributes are known.
     pub allows_multiplayer: bool,
+    /// The packages in the mods folder (the Mods screen's rows): the main menu's added buttons
+    /// (`sunrise_hooks::title`) show by it.
+    pub mods: usize,
     /// The ban screens `Gui.addInitialScreens` queued, shown once the title is up.
     ban_queue: std::collections::VecDeque<crate::ban_notice::Notice>,
     /// A ban notice's three buttons as last drawn (`ConfirmLinkScreen`'s row).
@@ -471,7 +481,6 @@ pub struct Title {
     /// A Realm's checked address, once the Realms screen's join came back.
     connect_request: Option<String>,
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
-    toast: Option<crate::toasts::SystemToast>,
     pending_toast: Option<WorldToast>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
@@ -530,29 +539,36 @@ impl Button {
     /// at the button's x plus 2, `right` at its x plus width minus the
     /// sprite's width minus 4, and `centerX` at its x plus half its width: the
     /// label slides inside that box when wider, and one that fits is moved
-    /// left until it ends where the icon's room begins. A button without an
-    /// icon has `right` 2 short of its edge, where `centerX` is the middle of
-    /// the box and nothing moves.
+    /// left until it ends where the icon's room begins. A plain button takes
+    /// its centre from the midpoint of the unreserved content bounds.
+    /// Controller glyph room narrows the fit and clip bounds, not the centre.
     fn draw_label_at(&self, batch: &mut HudBatch, atlas: &HudAtlas, color: u32, now_ms: i64) {
-        let right = match self.trailing {
-            Some((_, size)) => self.x + self.w - size - 4.0,
-            None => self.x + self.w - 2.0,
-        };
         let room = if self.action.is_some() && self.enabled {
             crate::widgets::action_glyph_room()
         } else {
             0.0
         };
+        let left = self.x + 2.0;
+        let (center_x, right) = match self.trailing {
+            Some((_, size)) => (
+                self.x + (self.w / 2.0).floor(),
+                self.x + self.w - size - 4.0,
+            ),
+            None => {
+                let right = self.x + self.w - 2.0;
+                // `acceptScrollingWithDefaultCenter`: truncate the midpoint toward zero.
+                (((left + right) / 2.0).trunc(), right)
+            }
+        };
         crate::ui::scrolling_text_around_at(
             batch,
             atlas,
             &Text::literal(&self.label),
-            self.x + (self.w / 2.0).floor(),
-            self.x + 2.0 + room,
+            center_x,
+            left + room,
             right,
             self.y,
             self.y + 20.0,
-            self.y + 6.0,
             now_ms,
             color,
         );
@@ -796,8 +812,8 @@ impl Mode {
 
 impl Title {
     /// Opens `mode` (`Minecraft.setScreen`). While `gated`, a screen with a
-    /// different id waits in `requested` for the game; the same screen again
-    /// (its id unchanged) is applied at once.
+    /// different id waits in `requested` for the game; a screen of the same
+    /// kind (its id unchanged) is applied at once.
     pub fn set_mode(&mut self, mut mode: Mode) {
         if let Mode::Create { options, .. } = &mut mode {
             options.set_additional_data_packs(self.additional_data_packs.clone());
@@ -807,8 +823,17 @@ impl Title {
             self.requested = Some(mode);
         } else {
             self.requested = None;
-            self.mode = mode;
+            self.activate_mode(mode);
         }
+    }
+    /// Apply a mode already accepted by the game (or one that bypasses the gate).
+    pub fn activate_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.mode_activation = self.mode_activation.wrapping_add(1);
+    }
+    /// Which activation is shown, independent of the screen's layout or id.
+    pub fn mode_activation(&self) -> u64 {
+        self.mode_activation
     }
     /// The screen `set_mode` left for the game to announce and apply.
     pub fn take_requested(&mut self) -> Option<Mode> {
@@ -887,6 +912,7 @@ impl Title {
         Self {
             rule_registry: crate::gamerules::rule_registry(),
             mode,
+            mode_activation: 0,
             gated: false,
             requested: None,
             last_server: String::new(),
@@ -895,6 +921,7 @@ impl Title {
             resources: resources.to_owned(),
             additional_data_packs: std::sync::Arc::from([]),
             preset_data: None,
+            preset_editors: PresetEditorFactories::installed(),
             started: now,
             search: String::new(),
             search_focused: false,
@@ -906,6 +933,7 @@ impl Title {
             warning_check: Cell::new([0.0; 4]),
             credits_button: Cell::new([0.0; 4]),
             allows_multiplayer: true,
+            mods: 0,
             ban_queue: Default::default(),
             ban_buttons: Cell::new([(0.0, 0.0); 3]),
             backup: None,
@@ -918,7 +946,6 @@ impl Title {
             erase_check: Cell::new([0.0; 4]),
             open_request: None,
             connect_request: None,
-            toast: None,
             pending_toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
             splash: choose_splash(splashes, splash_index, (today.month(), today.day())),
@@ -1022,7 +1049,7 @@ impl Title {
             // opened from (the configuration screen, or the list for a new Realm).
             let mut screen = crate::realms::Screen::with_saves(Some(self.saves.clone()));
             screen.cancel_create_world(request);
-            self.mode = Mode::Realms(screen);
+            self.activate_mode(Mode::Realms(screen));
             return;
         }
         if self.create_return_to_main {
@@ -1032,7 +1059,7 @@ impl Title {
         }
     }
     /// A press on the superflat screens: their list, share box or buttons.
-    fn flat_click(&mut self, x: f32, y: f32, size: (f32, f32), hit: Option<u8>) {
+    fn flat_click(&mut self, x: f32, y: f32, size: (f32, f32), hit: Option<u8>) -> bool {
         match hit {
             Some(70) => {
                 if let Mode::CreateFlat { flat, .. } = &mut self.mode {
@@ -1058,24 +1085,26 @@ impl Title {
             }
             None => {
                 if let Mode::CreateFlat { flat, .. } = &mut self.mode {
-                    flat::click(flat, (x, y), size);
+                    return flat::click(flat, (x, y), size);
                 }
             }
-            _ => {}
+            _ => return false,
         }
+        hit.is_some()
     }
     /// A press on the single-biome screen: its search box, list or buttons.
-    fn buffet_click(&mut self, x: f32, y: f32, size: (f32, f32), hit: Option<u8>) {
+    fn buffet_click(&mut self, x: f32, y: f32, size: (f32, f32), hit: Option<u8>) -> bool {
         match hit {
             Some(80) => self.close_buffet(true),
             Some(81) => self.close_buffet(false),
             None => {
                 if let Mode::CreateBuffet { buffet, .. } = &mut self.mode {
-                    buffet::click(buffet, (x, y), size);
+                    return buffet::click(buffet, (x, y), size);
                 }
             }
-            _ => {}
+            _ => return false,
         }
+        hit.is_some()
     }
     /// Return to Create New World, keeping (`apply`) the chosen biome
     /// (`CreateBuffetWorldScreen`'s Done and Cancel).
@@ -1279,7 +1308,7 @@ impl Title {
         Some((row as usize, (x - left - 2.0, y - content_y)))
     }
     /// The pointer moved with the button held (`mouseDragged`).
-    pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
+    pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) -> bool {
         if let Some(rules) = self.rules.get_mut() {
             return rules.drag(cursor.1, size.1.ceil());
         }
@@ -1290,66 +1319,65 @@ impl Title {
             return screen.drag(cursor.1, size);
         }
         if let Mode::CreateFlat { flat, .. } = &mut self.mode {
-            flat::drag(flat, cursor, size);
-            return;
+            return flat::drag(flat, cursor, size);
         }
         if let Mode::CreateBuffet { buffet, .. } = &mut self.mode {
-            buffet::drag(buffet, cursor, size);
-            return;
+            return buffet::drag(buffet, cursor, size);
         }
-        if self.drag_missing_mods(cursor, size) {
-            return;
+        if matches!(self.mode, Mode::MissingMods { .. }) {
+            return self.drag_missing_mods(cursor, size);
         }
         if let Mode::Select { worlds, .. } = &self.mode {
             let (top, bottom, _, content) = self.world_list(worlds, size);
             let mut scroll = self.scroll.get();
-            scroll.drag(cursor.1, top, bottom, content);
+            let handled = scroll.drag(cursor.1, top, bottom, content);
             self.scroll.set(scroll);
+            return handled;
         }
+        false
     }
     /// The button was released (`onRelease`).
-    pub fn release(&mut self) {
+    pub fn release(&mut self) -> bool {
+        let mut handled = false;
         if let Some(rules) = self.rules.get_mut() {
-            rules.release();
+            handled |= rules.release();
         }
         if let Mode::Realms(screen) = &mut self.mode {
-            screen.release();
+            handled |= screen.release();
         }
         if let Mode::Multiplayer(screen) = &mut self.mode {
-            screen.release(&self.saves);
+            handled |= screen.release(&self.saves);
         }
         if let Mode::CreateFlat { flat, .. } = &mut self.mode {
-            flat::release(flat);
+            handled |= flat::release(flat);
         }
         if let Mode::CreateBuffet { buffet, .. } = &mut self.mode {
-            buffet::release(buffet);
+            handled |= buffet::release(buffet);
         }
-        self.scroll.get_mut().release();
+        let scroll = self.scroll.get_mut();
+        handled |= scroll.held();
+        scroll.release();
+        handled
     }
-    /// Mouse wheel over the classic world and server lists, or cycle buttons. Returns true if a button was cycled.
+    /// Mouse wheel over the classic world and server lists, or cycle buttons. Returns true if a child accepted it.
     pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) -> bool {
         if let Some(rules) = self.rules.get_mut() {
-            rules.wheel(delta, size.1.ceil());
-            return false;
+            return rules.wheel_at(delta, cursor.1, size.1.ceil());
         }
         if let Mode::Multiplayer(screen) = &mut self.mode {
-            screen.wheel(delta, cursor, size);
-            return false;
+            return screen.wheel(delta, cursor, size);
         }
         if let Mode::Realms(screen) = &mut self.mode {
-            screen.wheel(delta, cursor, size);
-            return false;
+            return screen.wheel(delta, cursor, size);
         }
         if let Mode::CreateFlat { flat, .. } = &mut self.mode {
-            flat::wheel(flat, delta, cursor, size);
-            return false;
+            return flat::wheel(flat, delta, cursor, size);
         }
         if let Mode::CreateBuffet { buffet, .. } = &mut self.mode {
-            buffet::wheel(buffet, delta, cursor, size);
-            return false;
+            return buffet::wheel(buffet, delta, cursor, size);
         }
-        if self.wheel_missing_mods(delta, size) {
-            return false;
+        if matches!(self.mode, Mode::MissingMods { .. }) {
+            return self.wheel_missing_mods(delta, cursor.1, size);
         }
         // CycleButton.mouseScrolled reads only the vertical wheel.
         if let Mode::Create {
@@ -1358,8 +1386,15 @@ impl Title {
             && delta != 0.0
         {
             let (w, h) = size;
-            let buttons =
-                create_world::buttons(w, h, *creative, options, self.preset_data.is_some());
+            let buttons = create_world::buttons(
+                w,
+                h,
+                *creative,
+                options,
+                self.preset_data
+                    .is_some()
+                    .then_some(self.preset_editors.as_ref()),
+            );
             if let Some(b) = buttons.iter().find(|b| {
                 b.enabled
                     && cursor.0 >= b.x
@@ -1382,7 +1417,7 @@ impl Title {
         let mut scroll = self.scroll.get();
         scroll.wheel(delta, ROW_HEIGHT / 2.0, top, bottom, content);
         self.scroll.set(scroll);
-        false
+        true
     }
     pub fn failed(&mut self, error: impl std::fmt::Display) {
         let return_to = Box::new(self.mode.clone());
@@ -1398,26 +1433,7 @@ impl Title {
         let (title, message) = self.pending_toast.take()?.text();
         Some(crate::toasts::SystemToast::new(title, Some(message)))
     }
-    /// Apply a toast accepted by the game's toast admission hook.
-    pub fn apply_toast(&mut self, toast: crate::toasts::SystemToast) {
-        self.toast = Some(toast);
-    }
-    /// `ToastManager.update` for the system toast: slides it in, keeps it
-    /// for 5 s times the notification display time, slides it out. The
-    /// sound of a new visibility (`Toast.Visibility`), if any.
-    pub fn update_toast(&mut self, multiplier: f32) -> Option<&'static str> {
-        let (sound, finished) = self.toast.as_mut()?.update(f64::from(multiplier));
-        if finished {
-            self.toast = None;
-        }
-        sound.map(|show| {
-            if show {
-                "minecraft:ui.toast.in"
-            } else {
-                "minecraft:ui.toast.out"
-            }
-        })
-    }
+
     /// The server list's narration of LAN worlds found since the last call
     /// (`JoinMultiplayerScreen.tick`'s `updateNetworkServers`).
     pub fn lan_found_narrations(&self, size: (f32, f32)) -> Vec<Text> {
@@ -1425,10 +1441,6 @@ impl Title {
             Mode::Multiplayer(screen) => screen.lan_found_narrations(size),
             _ => Vec::new(),
         }
-    }
-    /// Whether the system toast holds the `ToastManager`'s first slot.
-    pub fn has_toast(&self) -> bool {
-        self.toast.is_some()
     }
     /// The world a finished backup made before its upgrade opens next.
     /// The Realms screen's workers: a join that came back connects (`GetServerDetailsTask`
@@ -1445,6 +1457,7 @@ impl Title {
         let address = self.connect_request.take()?;
         Some(Action::Connect {
             address,
+            name: None,
             lan: false,
             realm: true,
         })
@@ -1895,7 +1908,7 @@ impl Title {
         };
         let mut screen = crate::realms::Screen::with_saves(Some(self.saves.clone()));
         screen.start_create_world_upload(request, world);
-        self.mode = Mode::Realms(screen);
+        self.activate_mode(Mode::Realms(screen));
         Action::None
     }
     /// The folder a new world named `name` gets (`findResultFolder`).
@@ -2138,7 +2151,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
         };
         let narratable = match b.id {
-            9 => icon("sunrise.mods.screen.narration"),
             5 => icon("gui.friends.open.narration"),
             6 => icon("options.language.narration"),
             7 => icon("accessibility.onboarding.accessibility.button.narration"),
@@ -2147,7 +2159,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         // TitleScreen.init adds the icon row after Minecraft Realms and before
         // Options... and Quit Game, which Sunrise draws first.
         narratable.order(match b.id {
-            5..=7 | 9 => 1,
+            5..=7 => 1,
             2 | 3 => 2,
             _ => 0,
         })
@@ -2159,7 +2171,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// (always, for Sunrise's Join a Friend).
     fn button_tooltip(&self, id: u8) -> Option<&'static str> {
         match (&self.mode, id) {
-            (Mode::Main, 9) => Some("sunrise.pages.mods.tooltip"),
             (Mode::Main, 5) => Some("gui.friends.open.tooltip"),
             (Mode::Main, 6) | (Mode::Onboarding(_), onboarding::LANGUAGE) => {
                 Some("options.language.tooltip")
@@ -2298,6 +2309,12 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
     /// Navigation buttons can return `Action::None` while still sounding.
     pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool) {
+        let (action, sound, _) = self.click_with_outcome(x, y, size);
+        (action, sound)
+    }
+
+    /// A left press: the action, button sound, and whether a screen widget took it.
+    pub fn click_with_outcome(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool, bool) {
         self.remember_direct_address();
         // The game rules take the press in `press_rules`, which has the atlas.
         if self.rules.get_mut().is_some()
@@ -2305,34 +2322,35 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             || self.confirm_experiments.get_mut().is_some()
             || self.preparing
         {
-            return (Action::None, false);
+            return (Action::None, false, false);
         }
         let (w, h) = (size.0.ceil(), size.1.ceil());
         // MenuTabBar: a new tab clears the focus and clicks.
         if let Some(tab) = create_world::tab_at(w, (x, y))
             && matches!(self.mode, Mode::Create { .. })
         {
-            return (Action::None, self.select_create_tab(tab));
+            let selected = self.select_create_tab(tab);
+            return (Action::None, selected, selected);
         }
         // The SafetyScreen's box toggles where it was last drawn.
         if let Mode::MultiplayerWarning { check } = &mut self.mode {
             let [bx, by, bw, bh] = self.warning_check.get();
             if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
                 *check = !*check;
-                return (Action::None, true);
+                return (Action::None, true, true);
             }
         }
         if let Mode::OptimizeConfirm { erase_cache, .. } = &mut self.mode {
             let [bx, by, bw, bh] = self.erase_check.get();
             if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
                 *erase_cache = !*erase_cache;
-                return (Action::None, true);
+                return (Action::None, true, true);
             }
         }
         if matches!(self.mode, Mode::Main) {
             let [bx, by, bw, bh] = self.credits_button.get();
             if (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) {
-                return (Action::Credits, true);
+                return (Action::Credits, true, true);
             }
         }
         let hit = self
@@ -2347,20 +2365,22 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             self.focused_button = None;
         }
         if matches!(self.mode, Mode::CreateBuffet { .. }) {
-            self.buffet_click(x, y, (w, h), hit);
+            let handled = self.buffet_click(x, y, (w, h), hit);
             self.drop_button_focus_for_field(hit);
-            return (Action::None, hit.is_some());
+            return (Action::None, hit.is_some(), handled);
         }
         if matches!(self.mode, Mode::CreateFlat { .. }) {
-            self.flat_click(x, y, (w, h), hit);
+            let handled = self.flat_click(x, y, (w, h), hit);
             self.drop_button_focus_for_field(hit);
-            return (Action::None, hit.is_some());
+            return (Action::None, hit.is_some(), handled);
         }
-        let action = self.click_action(x, y, (w, h), hit);
+        let mut handled = hit.is_some();
+        let action = self.click_action(x, y, (w, h), hit, &mut handled);
         self.drop_button_focus_for_field(hit);
         // World list selection is silent; launching its selected entry sounds.
         let sound = hit.is_some() || matches!(action, Action::Play { .. });
-        (action, sound)
+        let handled = handled || !matches!(action, Action::None);
+        (action, sound, handled)
     }
     /// A click that misses every button and leaves an edit box focused moves the focus
     /// to that box (`Screen.setFocused`): a focused button must not keep reacting to
@@ -2370,7 +2390,14 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             self.focused_button = None;
         }
     }
-    fn click_action(&mut self, x: f32, y: f32, (w, h): (f32, f32), hit: Option<u8>) -> Action {
+    fn click_action(
+        &mut self,
+        x: f32,
+        y: f32,
+        (w, h): (f32, f32),
+        hit: Option<u8>,
+        handled: &mut bool,
+    ) -> Action {
         if matches!(self.mode, Mode::CreatePreset { .. }) {
             if let Some(94 | 95) = hit {
                 self.close_preset_editor(hit == Some(94));
@@ -2379,15 +2406,19 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         if hit == Some(26)
             && self.preset_data.is_some()
-            && let Mode::Create { options, .. } = &self.mode
-            && let Some(editor) = preset_editors::editor(options.preset_id())
-            && let Some(dimensions) = options.editor_dimensions()
+            && let Mode::Create { seed, options, .. } = &self.mode
+            && self.preset_editors.has_editor(options.preset_id())
         {
-            self.set_mode(Mode::CreatePreset {
-                parent: Box::new(self.mode.clone()),
-                editor,
-                dimensions: RefCell::new(dimensions),
-            });
+            if let Some(sunrise_core::nbt::Tag::Compound(dimensions)) = options.editor_dimensions()
+                && let Ok(Some(session)) =
+                    self.preset_editors
+                        .open_session(options.preset_id(), dimensions, seed)
+            {
+                self.set_mode(Mode::CreatePreset {
+                    parent: Box::new(self.mode.clone()),
+                    session,
+                });
+            }
             return Action::None;
         }
         match (&mut self.mode, hit) {
@@ -2431,8 +2462,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             (Mode::Main, Some(8)) => {
                 // The upload screen lists the game's own worlds (`saves`).
-                self.mode =
-                    Mode::Realms(crate::realms::Screen::from_title(Some(self.saves.clone())));
+                self.activate_mode(Mode::Realms(crate::realms::Screen::from_title(Some(
+                    self.saves.clone(),
+                ))));
                 Action::None
             }
             (Mode::Realms(screen), hit) => {
@@ -2441,14 +2473,17 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 // from the buttons.
                 if screen.take_list_click() {
                     self.focused_button = None;
+                    *handled = true;
                 }
+                *handled |= !matches!(&outcome, crate::realms::Outcome::None);
                 match outcome {
                     crate::realms::Outcome::Back => {
-                        self.mode = Mode::Main;
+                        self.activate_mode(Mode::Main);
                         Action::None
                     }
                     crate::realms::Outcome::Connect(address) => Action::Connect {
                         address,
+                        name: None,
                         lan: false,
                         realm: true,
                     },
@@ -2459,7 +2494,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                         // upload into the Realm's slot instead of a local world.
                         self.realms_create = Some(request);
                         self.create_return_to_main = false;
-                        self.mode = self.new_world();
+                        self.activate_mode(self.new_world());
                         Action::None
                     }
                     crate::realms::Outcome::None => Action::None,
@@ -2474,8 +2509,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     self.set_mode(Mode::Main);
                     Action::None
                 }
-                crate::multiplayer::Outcome::Connect { address, lan } => Action::Connect {
+                crate::multiplayer::Outcome::Connect { address, name, lan } => Action::Connect {
                     address,
+                    name,
                     lan,
                     realm: false,
                 },
@@ -2498,7 +2534,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             (Mode::Main, Some(3)) => Action::Options,
             (Mode::Main, Some(7)) => Action::Accessibility,
-            (Mode::Main, Some(9)) => Action::Mods,
+            (Mode::Main, Some(id)) if id >= ADDED_IDS => preset_buttons::added_action(id),
             (Mode::Main, Some(6)) => Action::Language,
             (Mode::Select { worlds, selected }, Some(10)) => {
                 match selected.and_then(|i| worlds.get(i)).cloned() {
@@ -2634,7 +2670,10 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 self.set_mode(Mode::Main);
                 Action::None
             }
-            (Mode::MissingMods { .. }, None) => self.press_missing_mods((x, y), (w, h)),
+            (Mode::MissingMods { .. }, None) => {
+                *handled = self.press_missing_mods((x, y), (w, h));
+                Action::None
+            }
             (Mode::Select { .. }, None) => {
                 self.search_focused =
                     (21.0..41.0).contains(&y) && (x - (w / 2.0).floor()).abs() < 100.0;
@@ -2647,6 +2686,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     .get_mut()
                     .press((x, y), left + ROW_WIDTH + 8.0, top, bottom, content)
                 {
+                    *handled = true;
                     return Action::None;
                 }
                 let Mode::Select { worlds, selected } = &self.mode else {
@@ -2659,6 +2699,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                         Some((index, world.clone(), rel))
                     });
                 if let Some((index, world, (rx, ry))) = chosen {
+                    *handled = true;
                     // WorldListEntry.mouseClicked: the icon joins at once.
                     let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
                     // WorldListEntry.canInteract: only a world that can be played joins.
@@ -2761,7 +2802,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     options,
                 },
                 Some(26),
-            ) if options.world_type == crate::save::WorldPreset::SingleBiomeSurface => {
+            ) if options.custom_preset.is_none()
+                && options.world_type == crate::save::WorldPreset::SingleBiomeSurface =>
+            {
                 let buffet = buffet::State::new(&self.resources, &options.single_biome);
                 let mode = Mode::CreateBuffet {
                     name: name.clone(),
@@ -2784,7 +2827,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     options,
                 },
                 Some(26),
-            ) => {
+            ) if options.custom_preset.is_none()
+                && options.world_type == crate::save::WorldPreset::Flat =>
+            {
                 let flat = flat::State::new(&self.resources, options.flat_settings.clone());
                 let mode = Mode::CreateFlat {
                     name: name.clone(),
@@ -2934,40 +2979,44 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
     }
     /// A left press after `click` focused a field: the cursor goes under the
-    /// pointer (`EditBox.onClick`).
+    /// pointer (`EditBox.onClick`). Returns `true` when the click hit the
+    /// focused field.
     pub fn press_field(
         &mut self,
         atlas: &HudAtlas,
         (x, y): (f32, f32),
         size: (f32, f32),
         shift: bool,
-    ) {
+    ) -> bool {
         let (w, h) = (size.0.ceil(), size.1.ceil());
         if self.rules.get_mut().is_some() {
-            return;
+            return false;
         }
         let Some(rect @ [fx, fy, fw, fh]) = self.focused_rect((w, h)) else {
-            return;
+            return false;
         };
         if !crate::ui::hovered((x, y), fx, fy, fw, fh) {
-            return;
+            return false;
         }
         if let Some(field) = caret_field(&mut self.mode, self.search_focused, &mut self.search) {
             self.caret.get_mut().press(atlas, field, rect, x, shift);
+            return true;
         }
+        false
     }
     /// The pointer moved with the button held (`EditBox.onDrag`).
-    pub fn drag_field(&mut self, atlas: &HudAtlas, x: f32) {
+    pub fn drag_field(&mut self, atlas: &HudAtlas, x: f32) -> bool {
         if self.rules.get_mut().is_some() {
-            return;
+            return false;
         }
         if let Some(field) = caret_field(&mut self.mode, self.search_focused, &mut self.search) {
-            self.caret.get_mut().drag(atlas, field, x);
+            return self.caret.get_mut().drag(atlas, field, x);
         }
+        false
     }
     /// The button was released: drags stop selecting.
-    pub fn release_field(&mut self) {
-        self.caret.get_mut().release();
+    pub fn release_field(&mut self) -> bool {
+        self.caret.get_mut().release()
     }
     /// Clipboard replacements also invalidate a selection in the filtered list.
     pub fn search_changed(&mut self) {
@@ -3017,6 +3066,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 crate::realms::Outcome::Connect(address) => (
                     Action::Connect {
                         address,
+                        name: None,
                         lan: false,
                         realm: true,
                     },
@@ -3031,7 +3081,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             let (w, h) = size;
             let buttons = self.buttons(w, h);
             if let Some(b) = buttons.into_iter().find(|b| b.id == id && b.enabled) {
-                let action = self.click_action(b.x, b.y, (w, h), Some(id));
+                let action = self.click_action(b.x, b.y, (w, h), Some(id), &mut true);
                 return (action, true);
             }
             return (Action::None, false);
@@ -3045,13 +3095,14 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         match &self.mode {
             Mode::Multiplayer(screen) => match screen.confirm() {
-                crate::multiplayer::Outcome::Connect { address, lan } => {
+                crate::multiplayer::Outcome::Connect { address, name, lan } => {
                     if matches!(screen, crate::multiplayer::Screen::Direct { .. }) {
                         crate::multiplayer::remember_direct_join(&self.saves, &address);
                     }
                     (
                         Action::Connect {
                             address,
+                            name,
                             lan,
                             realm: false,
                         },
@@ -3456,6 +3507,16 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// A left press on the game rules (they need the atlas for text): whether
     /// it lands on a button, for its sound.
     pub fn press_rules(&mut self, atlas: &HudAtlas, cursor: (f32, f32), size: (f32, f32)) -> bool {
+        self.press_rules_with_outcome(atlas, cursor, size).0
+    }
+
+    /// The rules screen's sound and handled result; text inputs may take a silent press.
+    pub fn press_rules_with_outcome(
+        &mut self,
+        atlas: &HudAtlas,
+        cursor: (f32, f32),
+        size: (f32, f32),
+    ) -> (bool, bool) {
         let size = (size.0.ceil(), size.1.ceil());
         if self.confirm_experiments.borrow().is_some() {
             let click = self
@@ -3470,7 +3531,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                         .as_mut()
                         .unwrap()
                         .details = true;
-                    return true;
+                    return (true, true);
                 }
                 Some(confirm_experiments::Click::Proceed) => {
                     let pending = self
@@ -3485,7 +3546,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                         self.set_data_packs(pending);
                         self.preparing = true;
                     }
-                    return true;
+                    return (true, true);
                 }
                 Some(confirm_experiments::Click::Back) => {
                     let screen = self.confirm_experiments.borrow();
@@ -3503,9 +3564,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                         self.confirm_experiments.borrow_mut().take();
                         self.reopen_data_packs = true;
                     }
-                    return true;
+                    return (true, true);
                 }
-                None => return false,
+                None => return (false, false),
             }
         }
         if self.experiments.borrow().is_some() {
@@ -3526,7 +3587,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     {
                         f.enabled = !f.enabled;
                     }
-                    return true;
+                    return (true, true);
                 }
                 Some(experiments::Click::Outcome(outcome)) => {
                     // ExperimentsScreen.onDone: the other packs keep their
@@ -3554,20 +3615,20 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     if outcome == experiments::Outcome::Done {
                         self.preparing = true;
                     }
-                    return true;
+                    return (true, true);
                 }
-                None => return false,
+                None => return (false, false),
             }
         }
         let Some(rules) = self.rules.get_mut() else {
-            return false;
+            return (false, false);
         };
         let sound = rules.clicks_button(atlas, cursor, size);
-        let exit = rules.click(atlas, cursor, size);
+        let (exit, handled) = rules.click(atlas, cursor, size);
         if let Some(exit) = exit {
             self.close_rules(exit);
         }
-        sound
+        (sound, handled)
     }
     /// WorldCreationGameRulesScreen's exit callback: Done keeps the edited
     /// rules (`setGameRules`), Cancel drops them.
@@ -4025,7 +4086,7 @@ mod classic_tests {
     }
 
     #[test]
-    fn classic_main_menu_icons_route_mods_language_and_accessibility() {
+    fn classic_main_menu_icons_route_friends_language_and_accessibility() {
         crate::net::JOINS_FRIENDS_IN_TEST.set(true);
         let mut title = Title::new(
             PathBuf::new(),
@@ -4037,10 +4098,9 @@ mod classic_tests {
             let cx = (w / 2.0).floor();
             let y = (h / 4.0).floor() + 48.0;
             for (id, x, enabled, icon) in [
-                (9, cx - 46.0, true, "icon/mods"),
-                (5, cx - 22.0, true, "friends/friends"),
-                (6, cx + 2.0, true, "icon/language"),
-                (7, cx + 26.0, true, "icon/accessibility"),
+                (5, cx - 34.0, true, "friends/friends"),
+                (6, cx - 10.0, true, "icon/language"),
+                (7, cx + 14.0, true, "icon/accessibility"),
             ] {
                 let b = buttons.iter().find(|b| b.id == id).unwrap();
                 assert_eq!(
@@ -4050,7 +4110,6 @@ mod classic_tests {
                 assert_eq!(
                     title.click(x + 10.0, y + 82.0, (w, h)),
                     match id {
-                        9 => (Action::Mods, true),
                         6 => (Action::Language, true),
                         7 => (Action::Accessibility, true),
                         _ => (Action::None, true),
@@ -4069,7 +4128,7 @@ mod classic_tests {
             }
             // The four-pixel gaps around icons must not activate a button.
             assert_eq!(
-                title.click(cx + 24.0, y + 82.0, (w, h)),
+                title.click(cx + 12.0, y + 82.0, (w, h)),
                 (Action::None, false)
             );
             assert_eq!(
@@ -4077,6 +4136,176 @@ mod classic_tests {
                 (Action::None, false)
             );
         }
+    }
+
+    #[test]
+    fn an_added_button_takes_a_full_row_below_realms_only_while_it_shows() {
+        struct ModsRow;
+        impl sunrise_hooks::title::Button for ModsRow {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, title: &sunrise_hooks::title::Title) -> bool {
+                title.mods > 0
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 1] = [&ModsRow];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        let cx = (w / 2.0).floor();
+        let at = |title: &mut Title, id: u8| {
+            let b = title.buttons(w, h).into_iter().find(|b| b.id == id);
+            b.map(|b| (b.x, b.y, b.w))
+        };
+        // No mods: vanilla's title screen, rows from height / 4 + 48 = 108.
+        assert_eq!(at(&mut title, ADDED_IDS), None);
+        assert_eq!(at(&mut title, 8), Some((cx - 100.0, 156.0, 200.0)));
+        assert_eq!(at(&mut title, 3), Some((cx - 100.0, 204.0, 98.0)));
+        assert_eq!(title.click(cx - 90.0, 190.0, (w, h)), (Action::None, false));
+        // One mod: a full-width row below Realms; the rows lift so Options... and Quit Game end
+        // 2 above the copyright line (h - 10).
+        title.mods = 1;
+        let ids: Vec<u8> = title.buttons(w, h).iter().map(|b| b.id).collect();
+        assert_eq!(ids[..4], [1, 4, 8, ADDED_IDS]);
+        assert_eq!(at(&mut title, 8), Some((cx - 100.0, 136.0, 200.0)));
+        assert_eq!(at(&mut title, ADDED_IDS), Some((cx - 100.0, 160.0, 200.0)));
+        assert_eq!(at(&mut title, 5), Some((cx - 34.0, 184.0, 20.0)));
+        assert_eq!(at(&mut title, 3), Some((cx - 100.0, 208.0, 98.0)));
+        assert_eq!(title.click(cx - 90.0, 170.0, (w, h)), (Action::Mods, true));
+        // A tall screen keeps vanilla's top.
+        let tall = title.buttons(960.0, 523.0);
+        assert_eq!(tall.iter().find(|b| b.id == 1).unwrap().y, 178.0);
+        preset_buttons::TEST_BUTTONS.set(None);
+    }
+
+    #[test]
+    fn a_press_resolves_its_registration_without_asking_shown_again() {
+        thread_local! {
+            static SHOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+        }
+        struct Toggle;
+        impl sunrise_hooks::title::Button for Toggle {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, _: &sunrise_hooks::title::Title) -> bool {
+                SHOWN.with(std::cell::Cell::get)
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 1] = [&Toggle];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        let cx = (w / 2.0).floor();
+        title.mods = 1;
+        // The state turns between the row's selection and its press (a mod list changes while
+        // the title is open): the row is no longer laid out, and the press still opens the
+        // screen the selected registration names.
+        SHOWN.with(|s| s.set(false));
+        assert_eq!(title.click(cx - 90.0, 190.0, (w, h)), (Action::None, false));
+        assert_eq!(preset_buttons::added_action(ADDED_IDS), Action::Mods);
+        preset_buttons::TEST_BUTTONS.set(None);
+    }
+
+    #[test]
+    fn an_added_button_keeps_its_id_while_another_stops_showing() {
+        struct Off;
+        impl sunrise_hooks::title::Button for Off {
+            fn label(&self) -> &'static str {
+                "test.title.off"
+            }
+            fn shown(&self, _: &sunrise_hooks::title::Title) -> bool {
+                false
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        struct ModsRow;
+        impl sunrise_hooks::title::Button for ModsRow {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, title: &sunrise_hooks::title::Title) -> bool {
+                title.mods > 0
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 2] = [&Off, &ModsRow];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        let cx = (w / 2.0).floor();
+        title.mods = 1;
+        // The ids are registrations, not places among the rows showing: the second
+        // registration keeps its own id while the first is hidden, and pressing its row opens
+        // its screen.
+        let ids: Vec<u8> = title.buttons(w, h).iter().map(|b| b.id).collect();
+        assert_eq!(ids[..4], [1, 4, 8, ADDED_IDS + 1]);
+        assert_eq!(title.click(cx - 90.0, 170.0, (w, h)), (Action::Mods, true));
+        preset_buttons::TEST_BUTTONS.set(None);
+    }
+
+    #[test]
+    fn added_rows_show_only_while_they_fit_between_banner_and_copyright() {
+        struct ModsRow;
+        impl sunrise_hooks::title::Button for ModsRow {
+            fn label(&self) -> &'static str {
+                "sunrise.mods.screen.title"
+            }
+            fn shown(&self, title: &sunrise_hooks::title::Title) -> bool {
+                title.mods > 0
+            }
+            fn opens(&self) -> sunrise_hooks::title::Opens {
+                sunrise_hooks::title::Opens::Mods
+            }
+        }
+        static ADDED: [&dyn sunrise_hooks::title::Button; 2] = [&ModsRow, &ModsRow];
+        preset_buttons::TEST_BUTTONS.set(Some(&ADDED));
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let (w, h) = (427.0_f32, 240.0_f32);
+        title.mods = 1;
+        let laid = |h: f32| title.buttons(w, h);
+        // Two shown registrations, room for one row between the logo and edition banner
+        // (bottom y 81) and the copyright line: the first shows, the second has no row...
+        assert!(laid(h).iter().any(|b| b.id == ADDED_IDS));
+        assert!(!laid(h).iter().any(|b| b.id == ADDED_IDS + 1));
+        // ...Singleplayer stays below the banner, and Options... and Quit Game end above the
+        // copyright line (h - 10).
+        assert!(laid(h).iter().find(|b| b.id == 1).unwrap().y >= 81.0);
+        assert!(laid(h).iter().find(|b| b.id == 3).unwrap().y + 20.0 <= h - 10.0);
+        // The boundary: at 233 the lifted top lands on the banner's bottom and one row still
+        // fits; at 232 none does and the rows sit where vanilla puts them.
+        assert_eq!(laid(233.0).iter().find(|b| b.id == 1).unwrap().y, 81.0);
+        assert!(laid(233.0).iter().any(|b| b.id == ADDED_IDS));
+        assert!(!laid(232.0).iter().any(|b| b.id == ADDED_IDS));
+        assert_eq!(laid(232.0).iter().find(|b| b.id == 1).unwrap().y, 106.0);
+        preset_buttons::TEST_BUTTONS.set(None);
     }
 
     #[test]
@@ -4132,17 +4361,12 @@ mod classic_tests {
             "gui/title/edition".into(),
             crate::hud::Rect { w: 128, h: 16, ..r },
         );
-        for (i, icon) in [
-            "icon/mods",
-            "friends/friends",
-            "icon/language",
-            "icon/accessibility",
-        ]
-        .into_iter()
-        .enumerate()
+        for (i, icon) in ["friends/friends", "icon/language", "icon/accessibility"]
+            .into_iter()
+            .enumerate()
         {
             atlas.sprites.insert(
-                format!("gui/sprites/{icon}"),
+                icon.to_string(),
                 crate::hud::Rect {
                     u0: 0.25 + i as f32 * 0.125,
                     w: 15,
@@ -4162,7 +4386,7 @@ mod classic_tests {
         assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
         assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
         assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
-        for i in 0..4 {
+        for i in 0..3 {
             let quad = batch
                 .vertices
                 .as_chunks::<6>()
@@ -4170,7 +4394,7 @@ mod classic_tests {
                 .iter()
                 .find(|quad| quad[0].uv == [0.25 + i as f32 * 0.125, 0.0])
                 .unwrap();
-            let x = cx - 46.0 + i as f32 * 24.0 + 3.0;
+            let x = cx - 34.0 + i as f32 * 24.0 + 3.0;
             let y = (batch.height / 4.0).floor() + 48.0 + 72.0 + 3.0;
             assert_eq!(quad[0].pos, [x, y]);
             assert_eq!(quad[2].pos, [x + 15.0, y + 15.0]);

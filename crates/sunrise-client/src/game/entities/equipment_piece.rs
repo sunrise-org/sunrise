@@ -1,6 +1,9 @@
 //! Shared eligibility and material resolution for worn humanoid equipment.
 use super::*;
-use sunrise_client::mobs::Part;
+use sunrise_client::mobs::{
+    finalize::EquipmentRead,
+    render::{ArmorSlot, EquipmentModel},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum EquipmentPass {
@@ -16,49 +19,24 @@ pub(super) struct EquipmentPiece<'a> {
     pub overlay: u32,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum ArmorSlot {
-    Head,
-    Chest,
-    Legs,
-    Feet,
-}
-impl ArmorSlot {
-    pub(super) fn index(self) -> usize {
-        self as usize
-    }
-    pub(super) fn shows(self, name: &str) -> bool {
-        match name {
-            "head" | "hat" => matches!(self, Self::Head),
-            "body" => matches!(self, Self::Chest | Self::Legs),
-            "left_arm" | "right_arm" => matches!(self, Self::Chest),
-            "left_leg" | "right_leg" => matches!(self, Self::Legs | Self::Feet),
-            _ => true,
-        }
-    }
-}
-
 impl Game<'_> {
     pub(super) fn equipment_piece<'a>(
         &'a self,
-        item: &str,
-        stack: Option<&ItemStack>,
+        stack: &EquipmentRead<'_>,
         slot: &str,
         leggings: bool,
         baby: bool,
     ) -> Option<EquipmentPiece<'a>> {
-        let equippable = match stack {
-            Some(stack) => sunrise_client::item_sync::equippable(stack, self.res.items()),
-            None => sunrise_client::item_sync::item_equippable(item, self.res.items()),
-        }?;
+        let base = stack.base();
+        let equippable = sunrise_client::item_sync::equippable(base, self.res.items())?;
         let glint = self
             .res
             .items()
             .enchantments
             .props
-            .get(item)
+            .get(&base.item)
             .and_then(|p| p.glint);
-        let overlay = if stack.is_some_and(|s| s.has_foil(glint)) {
+        let overlay = if stack.has_foil(glint) {
             sunrise_client::mobs::render::ARMOR_GLINT
         } else {
             0
@@ -128,8 +106,8 @@ impl Game<'_> {
         mob: &Mob,
         pass: EquipmentPass,
     ) -> Vec<sunrise_client::mobs::render::Layer> {
-        use sunrise_client::mobs::render;
-        use sunrise_items::equipment::{CHEST, FEET, HEAD, LEGS};
+        use sunrise_client::mobs::{finalize, render};
+        use sunrise_core::equipment_slot::EquipmentSlot::{Chest, Feet, Head, Legs};
         if sunrise_items::equipment::ARMOR
             .iter()
             .all(|&slot| mob.extra.slot_stack(slot).is_none())
@@ -140,21 +118,16 @@ impl Game<'_> {
         }
         let mut out = Vec::new();
         for (slot, layer, worn) in [
-            (CHEST, "chestplate", "chest"),
-            (LEGS, "leggings", "legs"),
-            (FEET, "boots", "feet"),
-            (HEAD, "helmet", "head"),
+            (Chest, "chestplate", "chest"),
+            (Legs, "leggings", "legs"),
+            (Feet, "boots", "feet"),
+            (Head, "helmet", "head"),
         ] {
-            let Some(stack) = mob.extra.slot_stack(slot) else {
+            let Some(read) = finalize::equipment_slot(mob, slot) else {
                 continue;
             };
-            let Some(piece) = self.equipment_piece(
-                &stack.item,
-                Some(stack),
-                worn,
-                layer == "leggings",
-                mob.is_baby(),
-            ) else {
+            let Some(piece) = self.equipment_piece(&read, worn, layer == "leggings", mob.is_baby())
+            else {
                 continue;
             };
             let Some(key) = render::equipment_model_key(mob, layer) else {
@@ -163,7 +136,7 @@ impl Game<'_> {
             // The mob renderer resolves CEM textures before applying their emissive overlay.
             // Do not submit the default texture's glow a second time here.
             for material in self
-                .equipment_materials(&piece, Some(stack), pass)
+                .equipment_materials(&piece, &read, pass)
                 .into_iter()
                 .filter(|m| !m.glows)
             {
@@ -173,8 +146,8 @@ impl Game<'_> {
                     material.color,
                     material.overlay,
                 );
-                layer.equipment_model = material.model.cloned();
-                layer.equipment_texture_final = material.final_texture;
+                layer.equipment_model = material.model.map(|model| (model.clone(), piece.slot));
+                layer.equipment_uv = material.final_texture.then_some(material.binding.uv);
                 out.push(layer);
             }
         }
@@ -192,14 +165,14 @@ pub(super) struct EquipmentMaterial<'a> {
     pub color: u32,
     pub overlay: u32,
     pub glows: bool,
-    pub model: Option<&'a Arc<Part>>,
+    pub model: Option<&'a Arc<EquipmentModel>>,
     pub final_texture: bool,
 }
 
 pub(super) struct ResolvedEquipmentLayer<'a> {
     pub binding: MaterialBinding<'a>,
     pub color: u32,
-    pub model: Option<&'a Arc<Part>>,
+    pub model: Option<&'a Arc<EquipmentModel>>,
     pub final_texture: bool,
 }
 
@@ -207,9 +180,10 @@ impl Game<'_> {
     pub(super) fn equipment_materials<'a>(
         &'a self,
         piece: &EquipmentPiece<'_>,
-        stack: Option<&ItemStack>,
+        read: &EquipmentRead<'_>,
         pass: EquipmentPass,
     ) -> Vec<EquipmentMaterial<'a>> {
+        let stack = read.base();
         let sprites = &self.gui.atlas.sprites;
         let bind = |name: &str| {
             sprites
@@ -219,11 +193,12 @@ impl Game<'_> {
                     uv: [r.u0, r.v0, r.u1, r.v1],
                 })
         };
-        let cit = stack.and_then(|s| self.cit_worn_rule(sunrise_optifine::cit::Kind::Armor, s));
-        let trim = stack
-            .and_then(|s| {
+        let cit = self.cit_worn_rule(sunrise_optifine::cit::Kind::Armor, stack);
+        let trim = read
+            .trim()
+            .and_then(|trim| {
                 self.armor_stand_assets
-                    .trim_texture(&piece.asset, piece.kind, s)
+                    .trim_texture(&piece.asset, piece.kind, trim)
             })
             .and_then(|t| bind(&t.sprite()));
         let emissive = self
@@ -237,13 +212,12 @@ impl Game<'_> {
         };
         let glow = |name: &str| emissive.overlay(name).and_then(bind);
         if pass == EquipmentPass::Draw
-            && let Some(materials) = stack.and_then(|stack| {
-                self.extended_equipment_materials(piece, stack, trim, texture, glow)
-            })
+            && let Some(materials) =
+                self.extended_equipment_materials(piece, read, trim, texture, glow)
         {
             return materials;
         }
-        piece.materials(stack, trim, texture, glow)
+        piece.materials(Some(stack), trim, texture, glow)
     }
 }
 
@@ -440,6 +414,7 @@ mod tests {
                 cull_back: false,
             }],
             children: Vec::new(),
+            layer: None,
         };
         let poses = Poses::new(&model);
         let equipment = HashMap::from([(

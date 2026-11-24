@@ -70,20 +70,20 @@ impl Title {
         self.scroll_worlds(delta, cursor, size);
     }
     pub(super) fn drag_missing_mods(&mut self, cursor: (f32, f32), size: (f32, f32)) -> bool {
-        if !matches!(self.mode, Mode::MissingMods { .. }) {
-            return false;
-        }
         let (top, bottom, _) = layout(size.0, size.1);
         let mut scroll = self.scroll.get();
-        scroll.drag(cursor.1, top, bottom, self.message_lines.get() as f32 * 9.0);
+        let handled = scroll.drag(cursor.1, top, bottom, self.message_lines.get() as f32 * 9.0);
         self.scroll.set(scroll);
-        true
+        handled
     }
-    pub(super) fn wheel_missing_mods(&mut self, delta: f32, size: (f32, f32)) -> bool {
+    pub(super) fn wheel_missing_mods(&mut self, delta: f32, y: f32, size: (f32, f32)) -> bool {
         if !matches!(self.mode, Mode::MissingMods { .. }) {
             return false;
         }
         let (top, bottom, _) = layout(size.0, size.1);
+        if !(top..bottom).contains(&y) {
+            return false;
+        }
         let mut scroll = self.scroll.get();
         scroll.wheel(
             delta,
@@ -95,7 +95,7 @@ impl Title {
         self.scroll.set(scroll);
         true
     }
-    pub(super) fn press_missing_mods(&mut self, cursor: (f32, f32), size: (f32, f32)) -> Action {
+    pub(super) fn press_missing_mods(&mut self, cursor: (f32, f32), size: (f32, f32)) -> bool {
         let (top, bottom, _) = layout(size.0, size.1);
         self.scroll.get_mut().press(
             cursor,
@@ -103,8 +103,7 @@ impl Title {
             top,
             bottom,
             self.message_lines.get() as f32 * 9.0,
-        );
-        Action::None
+        )
     }
     pub(super) fn confirm_missing_mods(&mut self) -> Option<(Action, bool)> {
         let Mode::MissingMods { world, .. } = &self.mode else {

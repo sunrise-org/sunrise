@@ -10,7 +10,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
     default: || 0,
     codec: None,
     copy_on_death: false,
-    sync: false,
+    sync_codec: None,
 };
 
 #[test]
@@ -48,16 +48,10 @@ fn a_bound_boat_keeps_its_registration_through_ticks_until_discard() {
 fn a_bound_boat_commits_the_driven_client_tick() {
     bound_boat_case(true, |game, step| {
         game.riding = Some(71);
-        assert!(
-            game.remote_ride(
-                sunrise_client::sprint::Keys {
-                    forward: true,
-                    ..Default::default()
-                },
-                0
-            )
-            .unwrap()
-        );
+        assert!(game.remote_ride(sunrise_client::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        },));
         assert_eq!(game.boats[0].hurt_time, 6 - step);
         assert!(game.boats[0].input[2]);
         assert!(game.boats[0].position.y < 70.0);

@@ -8,6 +8,8 @@ use crate::inputs::{
 };
 use crate::manifest::Api;
 use crate::package::Pack;
+use sunrise_mod_pipeline::COLOR_HELPERS;
+use sunrise_mod_pipeline::check::Composed;
 
 /// The bind group of a pack's resources; groups 0 to 2 are the renderer's.
 pub const GROUP: u32 = 3;
@@ -132,28 +134,6 @@ const TONEMAP_RESOURCES: [Resource; 4] = [
     LINEAR_SAMPLER,
     NEAREST_SAMPLER,
 ];
-
-/// 0.2's colour boundary, in every 0.2 prelude and in mod pipelines' generated entries:
-/// vanilla's 2.2 power both ways.
-pub const COLOR_HELPERS: &str = "\
-// Negatives and NaN made 0 (a comparison with NaN is false), so no `pow` sees them.
-fn sunrise_sanitize(c: vec3<f32>) -> vec3<f32> {
-    return select(vec3<f32>(0.0), c, c > vec3<f32>(0.0));
-}
-fn sunrise_decode(c: vec3<f32>) -> vec3<f32> {
-    return pow(sunrise_sanitize(c), vec3<f32>(2.2));
-}
-fn sunrise_encode(c: vec3<f32>) -> vec3<f32> {
-    return pow(sunrise_sanitize(c), vec3<f32>(1.0 / 2.2));
-}
-// Alpha is coverage: it stays as it is.
-fn sunrise_decode_rgba(c: vec4<f32>) -> vec4<f32> {
-    return vec4<f32>(sunrise_decode(c.rgb), c.a);
-}
-fn sunrise_encode_rgba(c: vec4<f32>) -> vec4<f32> {
-    return vec4<f32>(sunrise_encode(c.rgb), c.a);
-}
-";
 
 const POST_RESOURCES: [Resource; 12] = [
     FRAME,
@@ -909,30 +889,6 @@ pub fn texture_declarations(textures: &[crate::manifest::PackTexture]) -> String
     out
 }
 
-/// A stage's WGSL, and where each part of it came from.
-#[derive(Debug)]
-pub struct Composed {
-    pub text: String,
-    /// (the file, or `<prelude>` / `<entries>`, its byte range in `text`).
-    pub parts: Vec<(String, std::ops::Range<usize>)>,
-}
-
-impl Composed {
-    /// The file, line and column (1-based) of a byte offset in `text`.
-    pub fn locate(&self, offset: usize) -> (&str, usize, usize) {
-        let (file, range) = self
-            .parts
-            .iter()
-            .find(|(_, r)| r.contains(&offset))
-            .or(self.parts.last())
-            .expect("a composed stage has parts");
-        let before = &self.text[range.start..offset.clamp(range.start, range.end)];
-        let line = before.matches('\n').count() + 1;
-        let column = before.len() - before.rfind('\n').map_or(0, |i| i + 1) + 1;
-        (file, line, column)
-    }
-}
-
 /// The binding of a pack's first post target (`[[post]] output`) in group 3, the others after.
 pub const POST_TARGET_BINDING: u32 = 32;
 
@@ -953,7 +909,9 @@ pub fn post_target_declarations(manifest: &crate::manifest::Manifest) -> String 
 
 /// The WGSL of the stage `kind` whose own file is `file`: the prelude, the
 /// pack's shared files in order, the file, then the entry points, all of the pack's line.
-pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
+/// `entry` is the stage's place among its kind's entries (only `[[post]]` has several, and may
+/// reuse a file: each entry has its own `files`); the other kinds ignore it.
+pub fn compose(pack: &Pack, kind: StageKind, file: &str, entry: usize) -> Composed {
     let api = pack.manifest.api;
     let mut composed = Composed {
         text: String::new(),
@@ -984,7 +942,7 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
         StageKind::Material => m.material.as_ref(),
         StageKind::Vertex => m.vertex.as_ref(),
         StageKind::Weather => m.weather.as_ref(),
-        StageKind::Post => m.post.iter().find(|s| s.file == file),
+        StageKind::Post => m.post.get(entry),
         StageKind::Tonemap => m.tonemap.as_ref(),
         StageKind::Entity => m.entity.as_ref(),
     };

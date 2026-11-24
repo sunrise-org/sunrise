@@ -8,21 +8,44 @@ use std::num::NonZeroU64;
 /// Large enough for a tick of animated sprites at 16x16 with every mip level.
 const CHUNK: u64 = 1 << 20;
 
+/// Largest legal GPU buffer size `<= max_buffer_size`, aligned to `wgpu::COPY_BUFFER_ALIGNMENT`.
+pub(super) fn legal_buffer_limit(device: &wgpu::Device) -> u64 {
+    let align = wgpu::COPY_BUFFER_ALIGNMENT;
+    let limit = device.limits().max_buffer_size;
+    limit - (limit % align)
+}
+
+/// Buffer size for `bytes` (`<= limit`): grows by powers of two without ever rounding past
+/// `limit`, and stays aligned to `wgpu::COPY_BUFFER_ALIGNMENT`.
+pub(super) fn legal_buffer_size(bytes: u64, limit: u64) -> u64 {
+    if bytes == 0 {
+        return 0;
+    }
+    let align = wgpu::COPY_BUFFER_ALIGNMENT;
+    let aligned = bytes.div_ceil(align).saturating_mul(align);
+    let grown = aligned.checked_next_power_of_two().unwrap_or(limit);
+    grown.min(limit).max(aligned)
+}
+
 pub struct Uploads {
     belt: wgpu::util::StagingBelt,
     chunk: u64,
+    limit: u64,
 }
 
 impl Uploads {
     pub fn new(device: &wgpu::Device) -> Self {
         Self::with_chunk(device, CHUNK)
     }
-    /// A belt whose staging buffers hold `chunk` bytes (a larger write gets
-    /// a buffer of its own, rounded up to a power of two).
+    /// A belt whose staging buffers hold up to `chunk` bytes (a larger write gets
+    /// a buffer of its own, rounded up only as far as the device allows).
     pub fn with_chunk(device: &wgpu::Device, chunk: u64) -> Self {
+        let limit = legal_buffer_limit(device);
+        let chunk = chunk.min(limit);
         Self {
             belt: wgpu::util::StagingBelt::new(device.clone(), chunk),
             chunk,
+            limit,
         }
     }
     /// A mapped staging slice of at least `size` bytes. The belt gives a
@@ -31,10 +54,10 @@ impl Uploads {
     /// little every frame (the entity batch while mobs appear) took a new
     /// buffer each frame until the game ran out of memory (#2826). Rounded up
     /// to a power of two, the large buffers it keeps are reused, one per
-    /// doubling.
+    /// doubling, with the last step stopping at the device's buffer limit.
     fn allocate(&mut self, size: NonZeroU64, alignment: NonZeroU64) -> wgpu::BufferSlice<'_> {
         let size = if size.get() > self.chunk {
-            size.checked_next_power_of_two().unwrap_or(size)
+            NonZeroU64::new(legal_buffer_size(size.get(), self.limit)).unwrap_or(size)
         } else {
             size
         };
@@ -124,10 +147,23 @@ impl Uploads {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_admitted_entity_write_fits_staging_on_a_non_power_of_two_device() {
+        use crate::gfx::EntityQuadCapacity;
+
+        let limit = CHUNK + CHUNK / 2 + 3;
+        let capacity = EntityQuadCapacity::from_max_buffer_size(limit);
+        let size =
+            NonZeroU64::new(capacity.max_quads() as u64 * EntityQuadCapacity::VERTEX_QUAD_BYTES)
+                .unwrap();
+        assert!(size.get() <= limit && size.get().next_power_of_two() > limit);
+        let aligned_limit = limit - (limit % wgpu::COPY_BUFFER_ALIGNMENT);
+        assert_eq!(legal_buffer_size(size.get(), aligned_limit), limit - 3);
+    }
+
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::gfx::test_gpu::instance();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        let (_, device, queue) = crate::gfx::test_gpu::optional_device()?;
+        Some((device, queue))
     }
 
     /// Every mip level of one layer, read back as tightly packed RGBA8.
@@ -178,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn belt_uploads_match_queue_writes_on_every_mip_level() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -266,6 +303,7 @@ mod tests {
     /// (the entity batch while mobs appear) got a new exact-size buffer each
     /// frame, all of them kept, until the game ran out of memory.
     #[test]
+    #[ignore = "daily"]
     fn growing_large_writes_reuse_the_belt_buffers() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
@@ -323,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn belt_buffer_writes_land_in_order_at_their_offsets() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {

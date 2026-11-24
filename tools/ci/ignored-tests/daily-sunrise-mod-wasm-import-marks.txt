@@ -1,1 +1,0 @@
-sunrise-mod-wasm every_hook_part_and_point_the_fixture_implements_is_imported_and_checked test:import_identity daily wasm-fixture

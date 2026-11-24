@@ -340,7 +340,7 @@ pub(super) fn expand_modules(index: &mut Index<'_>, modules: &[usize]) -> Vec<St
     for &module in modules {
         let place = {
             let m = &index.modules[module];
-            std::iter::once(m.krate)
+            std::iter::once(m.krate.as_str())
                 .chain(m.path.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join("::")

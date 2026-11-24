@@ -13,12 +13,20 @@ pub trait Hooks {
     /// item loses (below 0: vanilla's `itemDamage` of what is stopped). Set `blocked` to false and nothing is blocked, as NeoForge's `setBlocked(false)`; the event has no cancel. The host is the hit's (`HitHost`): its blocks, random and own
     /// attachments, level sounds, and the own random of the entities the hit lends.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         host = "hit",
         neoforge = "LivingShieldBlockEvent",
-        version = 3,
+        version = 4,
         target = "sunrise_client::game::native_hooks::living_shield_block::HitLevel<'_>::native_living_shield_block"
     )]
-    fn living_shield_block();
+    fn living_shield_block(
+        entity: i32,
+        kind: &str,
+        source: &HurtSource<'_>,
+        damage: f32,
+        original_blocked: bool,
+        block: &mut ShieldBlock,
+    );
 }

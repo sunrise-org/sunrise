@@ -1,4 +1,3 @@
-#![cfg(test)]
 //! Removal exposes the engine's default and still lets a block Part replace it.
 use crate::game::api_values::TryIntoApi;
 use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
@@ -32,8 +31,8 @@ impl Hooks for Probe {
     }
     fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
         event
-            .blocks
-            .push(mod_api::Block::new(BLOCK, "minecraft:stone"));
+            .register(mod_api::Block::new(BLOCK, "minecraft:stone"))
+            .unwrap();
     }
 }
 

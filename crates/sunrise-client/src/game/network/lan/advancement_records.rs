@@ -7,7 +7,7 @@ impl Game<'_> {
         host: &LanHost,
         guest: &sunrise_client::lan::guest::Guest,
     ) {
-        if !guest.placed
+        if !guest.joined()
             || self.crash_save.excludes(guest.conn)
             || guest.released
             || !guest.participates_in_player_simulation()
@@ -32,7 +32,7 @@ impl Game<'_> {
         host: &LanHost,
         guest: &sunrise_client::lan::guest::Guest,
     ) {
-        if !guest.placed
+        if !guest.joined()
             || self.crash_save.excludes(guest.conn)
             || guest.released
             || !guest.participates_in_player_simulation()

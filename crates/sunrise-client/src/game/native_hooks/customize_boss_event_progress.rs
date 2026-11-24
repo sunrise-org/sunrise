@@ -18,8 +18,10 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod customize_boss_event_progress_tests {
+    use crate::game::{api_values::TryIntoApi, native_entity_refs::tests::run_fresh_cases};
     use mod_api::{
         BossBarColor, ClientHost, CustomizeBossEventProgressEvent, Flow, Hooks, ModEntry,
+        text::TextFormError,
     };
     use mod_platform::testing::with_mods;
     use std::sync::{Arc, Mutex};
@@ -88,10 +90,25 @@ mod customize_boss_event_progress_tests {
     #[test]
     #[ignore = "daily"]
     fn an_unconvertible_boss_bar_keeps_vanilla_draws_without_dispatch() {
+        if run_fresh_cases(
+            "game::native_hooks::customize_boss_event_progress::customize_boss_event_progress_tests::an_unconvertible_boss_bar_keeps_vanilla_draws_without_dispatch",
+            "SUNRISE_BOSS_BAR_CONVERSION_CHILD",
+            &["malformed-profile"],
+        ) {
+            return;
+        }
         super::super::super::native_entity_refs::tests::with_game(|game| {
+            // Inject a malformed local component without the packet codec. Its UUID has
+            // three words instead of the four required by vanilla's UUIDUtil.CODEC.
             let name = Tag::compound([
                 ("object", Tag::String("player".into())),
-                ("player", Tag::String("abcdefghijklmnopq".into())),
+                (
+                    "player",
+                    Tag::compound([
+                        ("name", Tag::String("Steve".into())),
+                        ("id", Tag::IntArray(vec![1, 2, 3])),
+                    ]),
+                ),
             ]);
             game.boss_overlay.apply(
                 &BossEvent {
@@ -108,6 +125,10 @@ mod customize_boss_event_progress_tests {
                 },
                 0,
             );
+            assert!(matches!(
+                game.boss_overlay.mod_bar(0, 0).unwrap().try_into_api(),
+                Err(TextFormError::Malformed)
+            ));
             let vanilla = game.boss_bar_draws(480, 270);
             assert!(!backgrounds(&vanilla).is_empty());
             let seen = Seen::default();

@@ -1,5 +1,4 @@
 //! The `block_changed` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0012
 
 pub trait Hooks {
     /// An authoritative server committed a changed state through `Level.setBlock`.
@@ -14,13 +13,20 @@ neighbour updates. It supplies the dimension, position, old and new states, and 
 write. `KNOWN_SHAPE` skips the shape passes but does not suppress this notice. The hook does not observe equal-state
 writes, chunk loading or direct storage writes that bypass `Level.setBlock`. Each listener gets its own event."##]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         version = 2,
-        non_exhaustive = true,
         event_per_listener = true,
         target = "sunrise_client::game::native_hooks::base::GameLevel<'_>::native_block_changed",
         neoforge = "none (NeoForge has no set-block event; IBlockExtension.onBlockStateChange is the block part hook on_block_state_change, at the end of the write)"
     )]
-    fn block_changed();
+    fn block_changed(
+        dimension: LevelDimension,
+        pos: BlockPos,
+        old: BlockState,
+        new: BlockState,
+        flags: BlockUpdateFlags,
+    );
 }

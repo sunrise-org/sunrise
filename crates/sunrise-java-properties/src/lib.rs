@@ -497,8 +497,7 @@ mod tests {
 
     #[test]
     fn the_crate_has_no_dependency_beyond_the_standard_library() {
-        // `sunrise-mod-wasm` links this crate, and its normal dependency closure must stay free of the
-        // engine's world, protocol and thread crates: any entry in these tables would end that.
+        // Keep this small parser free of dependencies.
         let manifest = include_str!("../Cargo.toml");
         let mut table = "";
         for line in manifest.lines().map(str::trim) {

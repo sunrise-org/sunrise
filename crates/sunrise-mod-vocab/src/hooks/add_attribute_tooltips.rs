@@ -18,6 +18,8 @@ pub trait Hooks {
     /// A component deeper than 512 nodes refuses capture or the whole writeback;
     /// no event field is applied if any Text field fails conversion.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "client",
         contract = "listen",
         neoforge = "AddAttributeTooltipsEvent",

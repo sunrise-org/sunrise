@@ -1,322 +1,412 @@
-//! A client mod's view and its own items (docs/modding/src/how-to/native-mods.md, "A client mod's view and items"): the
-//! first block along the view, across the distant terrain past the loaded chunks, and items whose
-//! right-click is the mod's alone, heard as use events the mod polls.
-use super::Game;
-pub use mod_api::game::{HeldItemSlot, ModEvent};
-use std::collections::BTreeMap;
+//! Main-hand input captured by an item behavior, and the client host's view raycast.
+use super::{Game, Screen, api_values::TryIntoApi};
+use mod_api::{
+    __private::{client_item_use, mod_index_on},
+    ClientHost, ClientItemUseBehavior, ItemStack,
+    content::crash::{ModCall, enter_native_mod},
+};
+use std::sync::Arc;
 
-/// The farthest a ray along the view reaches, in blocks.
-pub(crate) const RAYCAST_MAX: f32 = 1024.0;
-/// The ids a mod may claim.
-const CLAIMS_MAX: usize = 64;
-/// Events kept for a mod between two polls.
-const EVENTS_MAX: usize = 256;
-
-/// A claimed item's use under way.
-struct ModUse {
-    mod_id: String,
-    item: HeldItemSlot,
-    /// The player's `using` while it is this use: its slot and ticks.
+/// Client input captured by a main-hand item behavior, not a living entity's item use.
+pub(super) struct ActiveClientItemUse {
+    mod_id: &'static str,
+    mod_index: usize,
+    behavior: Arc<dyn ClientItemUseBehavior>,
+    /// Last known live stack of `item_id` in `slot`, rebound on tick and release like
+    /// `LivingEntity.useItem`.
+    stack: ItemStack,
+    item_id: Arc<str>,
     slot: usize,
     ticks: u32,
 }
 
-/// The items client mods claim, their events waiting for a poll, the use under way, and the
-/// keys they register (`native_key_mappings.rs`).
-#[derive(Default)]
-pub(super) struct ModInput {
-    claims: BTreeMap<String, Vec<String>>,
-    events: BTreeMap<String, Vec<ModEvent>>,
-    using: Option<ModUse>,
-    pub(super) mappings: sunrise_client::keymapping::ModKeys,
-}
-
-impl ModInput {
-    fn claim(&mut self, mod_id: &str, ids: &[String]) {
-        let ids = ids.iter().take(CLAIMS_MAX).cloned().collect();
-        self.claims.insert(mod_id.to_owned(), ids);
-    }
-    /// The mod that claims `item`, the first in id order.
-    pub(super) fn claimant(&self, item: &str) -> Option<&str> {
-        self.claims
-            .iter()
-            .find(|(_, ids)| ids.iter().any(|i| i == item))
-            .map(|(id, _)| id.as_str())
-    }
-    fn push(&mut self, mod_id: &str, event: ModEvent) {
-        let events = self.events.entry(mod_id.to_owned()).or_default();
-        if events.len() < EVENTS_MAX {
-            events.push(event);
-        }
-    }
-    fn poll(&mut self, mod_id: &str) -> Vec<ModEvent> {
-        self.events.remove(mod_id).unwrap_or_default()
-    }
-    /// Mod `mod_id`'s use of `item` in `slot` begins, ending any other first.
-    fn start(&mut self, mod_id: &str, item: HeldItemSlot, slot: usize) {
-        self.end();
-        self.push(mod_id, ModEvent::UseStart(item.clone(), 0));
-        self.using = Some(ModUse {
-            mod_id: mod_id.to_owned(),
-            item,
-            slot,
-            ticks: 0,
-        });
-    }
-    /// Whether the player's use (`Game.using`) is the mod use under way. A
-    /// use the game reset and another item's begun since are not.
-    fn owns(&self, using: Option<(usize, u32)>) -> bool {
-        self.using
-            .as_ref()
-            .is_some_and(|u| using == Some((u.slot, u.ticks)))
-    }
-    fn tick(&mut self) {
-        if let Some(u) = &mut self.using {
-            u.ticks += 1;
-        }
-    }
-    /// The use under way ends: its mod hears `UseStop`.
-    fn end(&mut self) {
-        if let Some(u) = self.using.take() {
-            self.push(&u.mod_id, ModEvent::UseStop(u.item, u.ticks));
-        }
-    }
-}
-
 impl Game<'_> {
-    /// The stack in inventory slot `slot` as a mod's events carry it.
-    fn mod_held(&self, slot: usize) -> Option<HeldItemSlot> {
-        let stack = self.stack_in(slot)?;
-        let extra = stack.extra.as_deref();
-        Some(HeldItemSlot {
-            id: mod_api::__private::item_key(&stack.item)?,
-            count: stack.count,
-            slot: slot as u32,
-            custom_name: extra
-                .and_then(|e| e.custom_name.as_ref())
-                .map(sunrise_client::snbt::to_snbt),
-            custom_data: extra
-                .and_then(|e| e.other("minecraft:custom_data"))
-                .map(sunrise_client::snbt::to_snbt),
-        })
-    }
-    /// The first block along the view within `distance` (at most 1024), past the loaded chunks over the distant terrain.
+    /// The first block along the view within `distance`, in loaded chunks only;
+    /// `None` on a miss or a nonpositive or non-finite `distance`.
     pub(super) fn raycast(&self, distance: f32) -> Option<mod_api::Hit> {
-        let (d, hit) = self.view_hit()?;
-        (d <= distance.clamp(0.0, RAYCAST_MAX)).then_some(hit)
+        let (_, hit) = self.cast_view_ray(Some(f64::from(distance)))?;
+        Some(hit)
     }
-    /// The first block along the view within `RAYCAST_MAX`, and its distance.
+    /// The first block along the view across loaded chunks only, and its distance; `None` on a miss.
     pub(super) fn view_hit(&self) -> Option<(f32, mod_api::Hit)> {
-        self.player.as_ref()?;
+        self.cast_view_ray(None)
+    }
+    fn cast_view_ray(&self, max_distance: Option<f64>) -> Option<(f32, mod_api::Hit)> {
+        use sunrise_client::collisions::SceneCollisions;
+        use sunrise_core::geometry::{Axis, Vec3, traverse_blocks_window};
+        use sunrise_world::{
+            collision_context::{
+                CollisionContext, CollisionEntity, CollisionItem, EntityContextKind,
+            },
+            entity_obstruction::EntityIdentity,
+            world_ray::{RayBlockMode, RayWorld, clip_with_interaction},
+        };
+        let player = self.player.as_ref()?;
         let eye = self.eye_position()?;
         let dir = super::view_vector(self.yaw, self.pitch);
-        let reach = f64::from(RAYCAST_MAX);
-        let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
-            Some(hit) => (
-                hit.pos,
-                hit.point,
-                self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]),
+        let (t_start, t_end) = loaded_ray_segment(
+            self.world.chunks.keys().copied(),
+            self.world.bottom_y(),
+            self.world.top_y(),
+            eye,
+            dir,
+            max_distance,
+        )?;
+        let clip_from = Vec3::new(eye[0], eye[1], eye[2]);
+        let direction = Vec3::new(dir[0], dir[1], dir[2]);
+        let ray_at = |t| clip_from.add_vector(direction.scale(t));
+        let clip_to = max_distance.map(ray_at);
+        let axis = Axis::ALL.into_iter().fold(Axis::X, |best, next| {
+            if direction.component(next).abs() > direction.component(best).abs() {
+                next
+            } else {
+                best
+            }
+        });
+        // The walk keeps the whole segment's nudge, stepping state and candidate order; the loaded
+        // span only says where its visits begin and end.
+        let total = max_distance.unwrap_or(t_end);
+        let walk_to = ray_at(total);
+        let window = (t_start / total, t_end / total);
+        let mut rays = super::explosion::ColliderRays {
+            scene: SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            },
+            context: CollisionContext::for_entity(
+                CollisionEntity {
+                    identity: EntityIdentity(0),
+                    kind: EntityContextKind::Player,
+                    y: player.position.y,
+                    descending: false,
+                    main_hand: Some(CollisionItem::EMPTY),
+                },
+                false,
             ),
-            None => self.lod_ray(eye, dir, reach)?,
+            clip_data: Some(super::explosion::ClipData {
+                facts: self.res.facts(),
+                behaviours: self.res.behaviours(),
+                tables: &self.pack.context.tables,
+                registry: self.pack.assets.registry,
+            }),
         };
-        let distance = (0..3)
-            .map(|i| (point[i] - eye[i]).powi(2))
-            .sum::<f64>()
-            .sqrt();
+        let (bottom_y, top_y) = (self.world.bottom_y(), self.world.top_y());
+        let (state, hit) = traverse_blocks_window(clip_from, walk_to, window, usize::MAX, |p| {
+            if !(bottom_y..top_y).contains(&p.y)
+                || !self.world.chunks.contains_key(&(p.x >> 4, p.z >> 4))
+            {
+                return None;
+            }
+            let state = self.world.block(p.x, p.y, p.z);
+            if self.res.facts().is_air(state) {
+                return None;
+            }
+            match rays
+                .block_shape(state, p, RayBlockMode::Outline)
+                .and_then(|shape| {
+                    let clip_to = if let Some(to) = clip_to {
+                        to
+                    } else {
+                        let Some(bounds) = shape.bounds() else {
+                            return Ok(None);
+                        };
+                        // VoxelShape.clip derives its inside probe from the segment length.
+                        // With no caller endpoint, extend past the candidate's voxel and outline
+                        // along the dominant axis: AABB.clip excludes the segment endpoint.
+                        // This is a bound for the shape clip, not a cap on traversal.
+                        let d = direction.component(axis);
+                        let block = Vec3::from_block(p).component(axis);
+                        let face = if d > 0.0 {
+                            bounds.max(axis).max(1.0)
+                        } else {
+                            bounds.min(axis).min(0.0)
+                        };
+                        let axial_distance = (block + face - clip_from.component(axis)).abs();
+                        ray_at((axial_distance + 1.0) / d.abs())
+                    };
+                    clip_with_interaction(&mut rays, clip_from, clip_to, p, &shape, state)
+                }) {
+                Ok(Some(hit)) => Some(Ok((state, hit))),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .ok()??
+        .ok()?;
+        let distance = clip_from.distance_squared(hit.location).sqrt();
         Some((
             distance as f32,
             mod_api::Hit {
-                block_x: pos[0],
-                block_y: pos[1],
-                block_z: pos[2],
-                x: point[0],
-                y: point[1],
-                z: point[2],
+                block_x: hit.block.x,
+                block_y: hit.block.y,
+                block_z: hit.block.z,
+                x: hit.location.x,
+                y: hit.location.y,
+                z: hit.location.z,
                 block: mod_api::__private::block_key(&self.res.facts().get(state).name)?,
             },
         ))
     }
-    /// A ray over the distant terrain (`Lod::ground`) past the loaded chunks, a block at a time.
-    fn lod_ray(
-        &self,
-        eye: [f64; 3],
-        dir: [f64; 3],
-        reach: f64,
-    ) -> Option<([i32; 3], [f64; 3], sunrise_world::registry::BlockStateId)> {
-        let lod = self.lod.as_ref()?;
-        let mut t = 0.0;
-        while t <= reach {
-            let p = [
-                eye[0] + dir[0] * t,
-                eye[1] + dir[1] * t,
-                eye[2] + dir[2] * t,
-            ];
-            let (x, z) = (p[0].floor() as i32, p[2].floor() as i32);
-            if !self.world.loaded(x, z)
-                && let Some((height, state)) = lod.ground(x, z)
-                && p[1] <= f64::from(height)
-            {
-                return Some(([x, height - 1, z], [p[0], f64::from(height), p[2]], state));
-            }
-            t += 1.0;
+
+    fn can_capture_item_use(&self) -> bool {
+        self.using.is_none()
+            && !self.spectator()
+            && self.screen != Screen::Dead
+            && self
+                .player
+                .as_ref()
+                .is_some_and(|p| p.health.health() > 0.0)
+            && self
+                .remote
+                .as_ref()
+                .is_some_and(|r| r.logged_in && r.session.connected())
+    }
+
+    /// Can the current client still hold this capture? Do not read the stack's components.
+    fn client_item_use_valid(&self, active: &ActiveClientItemUse) -> bool {
+        active.slot == self.selected
+            && self.can_capture_item_use()
+            && self
+                .stack_in(active.slot)
+                .is_some_and(|stack| stack.item == active.item_id && stack.count != 0)
+    }
+
+    /// Read the live hotbar stack at `active.slot` when it still holds the same item kind.
+    fn live_client_item_use_stack(&self, active: &ActiveClientItemUse) -> Option<ItemStack> {
+        let stack = self.stack_in(active.slot)?;
+        if stack.item != active.item_id || stack.count == 0 {
+            return None;
         }
-        None
+        stack.try_into_api().ok()
     }
-    /// Right-clicks with these items (at most 64 ids) are mod `mod_id`'s; a later call replaces the list.
-    pub(super) fn claim_items(&mut self, mod_id: &str, ids: &[String]) {
-        self.native_input.claim(mod_id, ids);
-    }
-    /// Mod `mod_id`'s events since its last poll (at most 256 wait).
-    pub(super) fn poll(&mut self, mod_id: &str) -> Vec<ModEvent> {
-        self.native_input.poll(mod_id)
-    }
-    /// `use_hand`: a right-click with an item a mod claims starts its use for
-    /// that mod and nothing else happens. True when a mod took it.
-    pub(super) fn mod_use_start(&mut self) -> bool {
-        if self.guest_use.is_some() || self.using.is_some() {
-            return false;
-        }
-        // With no use, a mod use the game reset without telling it is over.
-        self.native_input.end();
-        let slot = self.held_slot();
-        let Some(item) = self.mod_held(slot) else {
+
+    /// Give the registered main-hand behavior this click instead of using a target or item.
+    pub(in crate::game) fn start_client_item_use(&mut self) -> bool {
+        let slot = self.selected;
+        let Some(stack) = self.stack_in(slot) else {
             return false;
         };
-        let Some(id) = mod_api::__private::item_key_id(item.id)
-            .and_then(|item| self.native_input.claimant(item))
-            .map(str::to_owned)
-        else {
+        let Some((mod_index, mod_id, behavior)) = client_item_use(&stack.item) else {
             return false;
         };
-        self.native_input.start(&id, item, slot);
-        self.using = Some((slot, 0));
-        self.use_start.item = self.held().cloned();
-        true
-    }
-    /// `tick_used_item` for a claimed item: counts the ticks held and ends
-    /// the use when the button comes up. True when the player's use is a
-    /// mod's; a mod use the game reset ends, and the player's own use goes on.
-    pub(super) fn mod_use_tick(&mut self, slot: usize, ticks: u32, released: bool) -> bool {
-        if !self.native_input.owns(Some((slot, ticks))) {
-            self.native_input.end();
+        if !mod_index_on(mod_index)
+            || !self.can_capture_item_use()
+            || &*stack.item == "minecraft:air"
+        {
             return false;
         }
-        let still_claimed = self.native_input.using.as_ref().is_some_and(|u| {
-            self.stack_in(slot)
-                .is_some_and(|s| self.native_input.claimant(&s.item) == Some(u.mod_id.as_str()))
+        let Ok(initial) = stack.try_into_api() else {
+            return false;
+        };
+        let item_id = Arc::clone(&stack.item);
+        self.client_item_use = Some(ActiveClientItemUse {
+            mod_id,
+            mod_index,
+            behavior: Arc::clone(&behavior),
+            stack: initial.clone(),
+            item_id,
+            slot,
+            ticks: 0,
         });
-        if released || !still_claimed {
-            self.native_input.end();
-            self.using = None;
+        self.call_client_item_use(mod_id, "use_item", |host| {
+            behavior.use_item(host, &initial, slot as u32);
+        });
+        true
+    }
+
+    /// Reset an invalid capture or rebind the live stack and count a held tick. Only input
+    /// handling releases it.
+    pub(in crate::game) fn tick_client_item_use(&mut self) {
+        let Some(active) = self.client_item_use.as_ref() else {
+            return;
+        };
+        let valid = mod_index_on(active.mod_index) && self.client_item_use_valid(active);
+        let live = if valid {
+            self.live_client_item_use_stack(active)
         } else {
-            self.native_input.tick();
-            self.using = Some((slot, ticks + 1));
+            None
+        };
+        let held = self.mapped_key_down("key.use");
+        if !valid {
+            self.reset_client_item_use();
+        } else if let Some(active) = self.client_item_use.as_mut() {
+            if let Some(live) = live {
+                active.stack = live;
+            }
+            if held {
+                active.ticks = active.ticks.saturating_add(1);
+            }
+        }
+    }
+
+    pub(in crate::game) fn reset_client_item_use(&mut self) {
+        self.end_client_item_use(false);
+    }
+
+    /// Retire the capture before entering mod code. Only a valid input release calls
+    /// `release_using`; every other end is a reset. Return whether a capture owned the input.
+    pub(in crate::game) fn end_client_item_use(&mut self, release_requested: bool) -> bool {
+        let Some(mut active) = self.client_item_use.take() else {
+            return false;
+        };
+        if let Some(live) = self.live_client_item_use_stack(&active) {
+            active.stack = live;
+        }
+        if release_requested
+            && mod_index_on(active.mod_index)
+            && self.client_item_use_valid(&active)
+        {
+            self.call_client_item_use(active.mod_id, "release_using", |host| {
+                active.behavior.release_using(
+                    host,
+                    &active.stack,
+                    active.slot as u32,
+                    active.ticks,
+                );
+            });
+        }
+        if mod_index_on(active.mod_index) {
+            self.call_client_item_use(active.mod_id, "on_stop_using", |host| {
+                active.behavior.on_stop_using(
+                    host,
+                    &active.stack,
+                    active.slot as u32,
+                    active.ticks,
+                );
+            });
         }
         true
     }
-    /// The player's use was reset (a respawn, a join, the hand's item
-    /// changed): a mod use under way ends and its mod hears `UseStop`.
-    pub(super) fn end_mod_use(&mut self) {
-        self.native_input.end();
+
+    fn call_client_item_use(
+        &mut self,
+        mod_id: &'static str,
+        phase: &'static str,
+        invoke: impl FnOnce(&mut dyn ClientHost),
+    ) {
+        let _guard = enter_native_mod(ModCall {
+            id: mod_id,
+            hook: phase,
+            part: Some("ClientItemUseBehavior"),
+        });
+        invoke(self);
     }
 }
 
+/// Intersect ray `eye + t * dir` (`t >= 0`, optionally bounded by `max_distance`)
+/// with the padded bounding box of the loaded chunks.
+/// Returns `None` when no chunks are loaded, inputs are non-finite, `max_distance`
+/// is nonpositive or non-finite, or the ray misses the loaded extent.
+fn loaded_ray_segment(
+    chunks: impl IntoIterator<Item = (i32, i32)>,
+    bottom_y: i32,
+    top_y: i32,
+    eye: [f64; 3],
+    dir: [f64; 3],
+    max_distance: Option<f64>,
+) -> Option<(f64, f64)> {
+    if !eye.iter().all(|v| v.is_finite()) || !dir.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let mut t_min = 0.0_f64;
+    let mut t_max = match max_distance {
+        Some(limit) if limit.is_finite() && limit > 0.0 => limit,
+        Some(_) => return None,
+        None => f64::INFINITY,
+    };
+    let mut iter = chunks.into_iter();
+    let (first_cx, first_cz) = iter.next()?;
+    let (mut min_cx, mut max_cx) = (first_cx, first_cx);
+    let (mut min_cz, mut max_cz) = (first_cz, first_cz);
+    for (cx, cz) in iter {
+        min_cx = min_cx.min(cx);
+        max_cx = max_cx.max(cx);
+        min_cz = min_cz.min(cz);
+        max_cz = max_cz.max(cz);
+    }
+    // Pad by one block on each side so a ray entering a boundary chunk's outer face
+    // starts outside that block and steps cleanly across the face.
+    let bounds = [
+        (
+            f64::from(min_cx) * 16.0 - 1.0,
+            (f64::from(max_cx) + 1.0) * 16.0 + 1.0,
+        ),
+        (f64::from(bottom_y) - 1.0, f64::from(top_y) + 1.0),
+        (
+            f64::from(min_cz) * 16.0 - 1.0,
+            (f64::from(max_cz) + 1.0) * 16.0 + 1.0,
+        ),
+    ];
+    for axis in 0..3 {
+        let (lo, hi) = bounds[axis];
+        if dir[axis] == 0.0 {
+            if eye[axis] < lo || eye[axis] > hi {
+                return None;
+            }
+            continue;
+        }
+        let inv = 1.0 / dir[axis];
+        let a = (lo - eye[axis]) * inv;
+        let b = (hi - eye[axis]) * inv;
+        let (near, far) = if a < b { (a, b) } else { (b, a) };
+        t_min = t_min.max(near);
+        t_max = t_max.min(far);
+        if t_min > t_max {
+            return None;
+        }
+    }
+    if !t_min.is_finite() || !t_max.is_finite() || t_max <= t_min {
+        return None;
+    }
+    Some((t_min, t_max))
+}
+
 #[cfg(test)]
-mod input_tests {
-    use super::*;
-
-    fn keys() {
-        mod_platform::__private::part_tests::install_parts_fixture(&[]).unwrap();
-        mod_api::__private::resolve_items(["minecraft:stick"]).unwrap();
-    }
-
-    fn stick(slot: u32) -> HeldItemSlot {
-        HeldItemSlot {
-            id: mod_api::__private::item_key("minecraft:stick").unwrap(),
-            count: 1,
-            slot,
-            custom_name: None,
-            custom_data: Some("{orbital:1b}".into()),
-        }
-    }
+mod ray_extent_tests {
+    use super::loaded_ray_segment;
 
     #[test]
-    fn items_are_claimed_by_the_first_mod_in_id_order() {
-        let mut input = ModInput::default();
-        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        input.claim("zeta", &ids(&["orbital:remote", "minecraft:stick"]));
-        input.claim("alpha", &ids(&["minecraft:stick"]));
-        assert_eq!(input.claimant("minecraft:stick"), Some("alpha"));
-        assert_eq!(input.claimant("orbital:remote"), Some("zeta"));
-        assert_eq!(input.claimant("minecraft:dirt"), None);
-        input.claim("alpha", &[]);
-        assert_eq!(input.claimant("minecraft:stick"), Some("zeta"));
-        let many: Vec<String> = (0..100).map(|i| format!("m:item{i}")).collect();
-        input.claim("alpha", &many);
-        assert_eq!(input.claimant("m:item63"), Some("alpha"));
-        assert_eq!(input.claimant("m:item64"), None, "64 at most");
-    }
+    fn loaded_ray_segment_spans_loaded_chunks_past_1024_and_rejects_invalid_limits() {
+        let chunks = [(0, 0), (0, 100)];
+        let eye = [0.5, 100.0, 0.5];
+        let dir = [0.0, 0.0, 1.0];
 
-    #[test]
-    fn events_wait_for_their_mod_up_to_a_limit() {
-        keys();
-        let mut input = ModInput::default();
-        for _ in 0..EVENTS_MAX + 10 {
-            input.push("a", ModEvent::UseStart(stick(0), 0));
-        }
-        input.push("b", ModEvent::UseStop(stick(0), 3));
-        assert_eq!(input.poll("a").len(), EVENTS_MAX);
-        assert!(input.poll("a").is_empty());
-        assert_eq!(input.poll("b"), vec![ModEvent::UseStop(stick(0), 3)]);
-    }
-
-    #[test]
-    fn a_claimed_use_is_the_mods_while_it_runs() {
-        keys();
-        let mut input = ModInput::default();
-        input.start("orbital", stick(2), 2);
-        assert!(input.owns(Some((2, 0))));
-        input.tick();
-        input.tick();
-        assert!(input.owns(Some((2, 2))));
-        input.end();
-        assert!(!input.owns(Some((2, 2))));
         assert_eq!(
-            input.poll("orbital"),
-            vec![
-                ModEvent::UseStart(stick(2), 0),
-                ModEvent::UseStop(stick(2), 2),
-            ]
+            loaded_ray_segment(chunks, -64, 320, eye, dir, None),
+            Some((0.0, 1616.5))
         );
-    }
-
-    #[test]
-    fn an_interrupted_claimed_use_leaves_the_next_use_alone() {
-        keys();
-        // A respawn ends the use: the mod hears it stop, and a vanilla use
-        // begun next in the same slot is not taken for the mod's.
-        let mut input = ModInput::default();
-        input.start("orbital", stick(0), 0);
-        input.tick();
-        input.end();
-        assert!(!input.owns(Some((0, 0))));
         assert_eq!(
-            input.poll("orbital").last(),
-            Some(&ModEvent::UseStop(stick(0), 1))
+            loaded_ray_segment(chunks, -64, 320, eye, dir, Some(2000.0)),
+            Some((0.0, 1616.5))
         );
-        // A reset the mod use never heard of (`Game.using` cleared alone):
-        // the player's next use, from 0 ticks or in another slot, is still
-        // not the mod's, and ending it then tells the mod once.
-        input.start("orbital", stick(0), 0);
-        input.tick();
-        input.tick();
-        assert!(!input.owns(None));
-        assert!(!input.owns(Some((0, 0))), "a vanilla use from 0 ticks");
-        assert!(!input.owns(Some((1, 2))), "another slot");
-        input.end();
-        input.end();
-        let events = input.poll("orbital");
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[1], ModEvent::UseStop(stick(0), 2));
+        assert_eq!(
+            loaded_ray_segment(chunks, -64, 320, eye, dir, Some(1500.0)),
+            Some((0.0, 1500.0))
+        );
+        // Entering loaded extent from far outside starts at the near face.
+        assert_eq!(
+            loaded_ray_segment([(0, 100)], -64, 320, eye, dir, None),
+            Some((1598.5, 1616.5))
+        );
+        assert_eq!(
+            loaded_ray_segment([(0, 100)], -64, 320, eye, dir, Some(1500.0)),
+            None
+        );
+        // Empty chunk set, misses, and nonpositive or non-finite limits return None.
+        assert_eq!(
+            loaded_ray_segment(std::iter::empty(), -64, 320, eye, dir, None),
+            None
+        );
+        assert_eq!(
+            loaded_ray_segment(chunks, -64, 320, [40.5, 100.0, 0.5], [0.0, -1.0, 0.0], None),
+            None
+        );
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                loaded_ray_segment(chunks, -64, 320, eye, dir, Some(bad)),
+                None
+            );
+        }
     }
 }

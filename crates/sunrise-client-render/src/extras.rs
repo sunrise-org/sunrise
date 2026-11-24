@@ -8,9 +8,46 @@ use std::{collections::VecDeque, path::Path};
 pub const FILE: &str = "sunrise-extras.txt";
 /// The name the options screen uses while the sort key waits for a key.
 pub const SORT_KEY: &str = "sunrise.sort";
+/// The name the options screen uses while the shader pack key waits for a key.
+pub const SHADER_PACK_KEY: &str = "sunrise.shader_pack_key";
 
-/// A screen corner for an overlay.
-pub use mod_api::client::extras::Corner;
+// no wire: this is private to the built-in HUD layout.
+/// A screen corner for Sunrise's internal extras and PvP HUD boxes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+impl Corner {
+    pub const ALL: [Corner; 4] = [
+        Corner::TopLeft,
+        Corner::TopRight,
+        Corner::BottomLeft,
+        Corner::BottomRight,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Corner::TopLeft => "top_left",
+            Corner::TopRight => "top_right",
+            Corner::BottomLeft => "bottom_left",
+            Corner::BottomRight => "bottom_right",
+        }
+    }
+    pub fn parse(s: &str, default: Corner) -> Corner {
+        Self::ALL
+            .into_iter()
+            .find(|c| c.name() == s)
+            .unwrap_or(default)
+    }
+    pub fn top(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::TopRight)
+    }
+    pub fn left(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::BottomLeft)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
@@ -49,6 +86,11 @@ pub struct Extras {
     pub sort: bool,
     /// A vanilla key name: sorts the part under the cursor.
     pub sort_key: String,
+    /// A vanilla key name: turns the picked shader pack off and on.
+    pub shader_pack_key: String,
+    /// The last non-empty shader pack pick, for the toggle key to resume. It follows every
+    /// non-empty pick, whether by menu or by key, and turning shaders off keeps it.
+    pub last_shader_pack: String,
     /// A new chat line slides in from the left while it fades in (`Chat::layout`).
     pub chat_animation: bool,
     /// The indicator bar at the left of a chat line (on by default, as vanilla).
@@ -96,6 +138,8 @@ impl Default for Extras {
             mouse_tweaks_wheel: true,
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
+            shader_pack_key: "key.keyboard.k".into(),
+            last_shader_pack: String::new(),
             chat_animation: false,
             chat_indicator: true,
             no_ai: false,
@@ -154,6 +198,12 @@ impl Extras {
                         e.sort_key = value.to_owned();
                     }
                 }
+                "shaderPackKey" => {
+                    if value.starts_with("key.") {
+                        e.shader_pack_key = value.to_owned();
+                    }
+                }
+                "lastShaderPack" => e.last_shader_pack = value.to_owned(),
                 "chatAnimation" => e.chat_animation = flag(e.chat_animation),
                 "chatIndicator" => e.chat_indicator = flag(e.chat_indicator),
                 sunrise_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
@@ -208,6 +258,8 @@ impl Extras {
         push("mouseTweaksWheel", &bool_text(self.mouse_tweaks_wheel));
         push("sort", &bool_text(self.sort));
         push("sortKey", &self.sort_key);
+        push("shaderPackKey", &self.shader_pack_key);
+        push("lastShaderPack", &self.last_shader_pack);
         push("chatAnimation", &bool_text(self.chat_animation));
         push("chatIndicator", &bool_text(self.chat_indicator));
         push(sunrise_core::no_ai::KEY, &bool_text(self.no_ai));
@@ -233,6 +285,7 @@ impl Extras {
     pub fn set_key(&mut self, name: &str, value: String) -> bool {
         match name {
             SORT_KEY => self.sort_key = value,
+            SHADER_PACK_KEY => self.shader_pack_key = value,
             crate::pvp::HUD_EDITOR_KEY => self.pvp.editor_key = value,
             _ => return false,
         }
@@ -293,12 +346,6 @@ impl Extras {
     }
 }
 
-/// The field-of-view modifier target `Camera.tickFov` eases toward: vanilla's
-/// (`getFieldOfViewModifier`) divided by a mod's zoom (`native_zoom`). A
-/// zoom of 1 leaves it as is.
-pub fn fov_target(vanilla: f32, zoom: f32) -> f32 {
-    if zoom == 1.0 { vanilla } else { vanilla / zoom }
-}
 /// Frame times over the last few seconds: frames per second, the minimum
 /// and the 1% low, recomputed twice a second.
 pub struct FpsCounter {
@@ -398,6 +445,8 @@ pub enum Item {
     MouseTweaksWheel,
     Sort,
     SortKey,
+    /// Turns the picked shader pack off and on, from the Extras page's key.
+    ShaderPackKey,
     /// A new chat line slides in and fades in (`Chat::layout`).
     ChatAnimation,
     /// The coloured bar at the left of a chat line.
@@ -433,6 +482,7 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(ChatIndicator),
         Err("sunrise.extras.header.world"),
         Ok(Pregen),
+        Ok(ShaderPackKey),
         Err("sunrise.extras.header.multiplayer"),
         Err("sunrise.extras.header.sound"),
         Ok(UiSoundReserve),
@@ -456,6 +506,7 @@ impl Item {
             Item::MouseTweaksWheel => "sunrise.extras.mouse_tweaks_wheel",
             Item::Sort => "sunrise.extras.sort",
             Item::SortKey => "sunrise.extras.sort_key",
+            Item::ShaderPackKey => "sunrise.extras.shader_pack_key",
             Item::NoAi => "sunrise.extras.no_ai",
             Item::AgentControl => "sunrise.extras.agent_control",
             Item::ReproKeys => "sunrise.extras.repro_keys",
@@ -480,6 +531,7 @@ impl Item {
             Item::MouseTweaksWheel => "sunrise.extras.mouse_tweaks_wheel.tooltip",
             Item::Sort => "sunrise.extras.sort.tooltip",
             Item::SortKey => "sunrise.extras.sort_key.tooltip",
+            Item::ShaderPackKey => "sunrise.extras.shader_pack_key.tooltip",
             Item::NoAi => "sunrise.extras.no_ai.tooltip",
             Item::AgentControl => "sunrise.extras.agent_control.tooltip",
             Item::ReproKeys => "sunrise.extras.repro_keys.tooltip",
@@ -513,6 +565,7 @@ impl Item {
             Item::MouseTweaksWheel => "Scroll wheel moves items",
             Item::Sort => "Sort buttons",
             Item::SortKey => "Sort key",
+            Item::ShaderPackKey => "Shader pack key",
             Item::ChatAnimation => "Smooth chat",
             Item::ChatIndicator => "Message indicator",
             Item::NoAi => "No AI",
@@ -531,11 +584,10 @@ impl Item {
             UiSoundReserve => return None,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            ChatIndicator => ChatAnimation,
             Pvp(o) => return o.parent().map(Pvp),
             Fullbright | DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
-            | NoAi | AgentControl | ReproKeys | ChatAnimation | WheelCyclesSettings | MusicPage
-            | PackBrowser | Pregen => {
+            | ChatAnimation | ChatIndicator | NoAi | AgentControl | ReproKeys
+            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen | ShaderPackKey => {
                 return None;
             }
         })
@@ -573,6 +625,9 @@ impl Item {
             }
             Item::SortKey => {
                 "Sorts the part under the cursor. Click, then press a key; Escape unbinds it."
+            }
+            Item::ShaderPackKey => {
+                "Turns the picked shader pack off and on. Click, then press a key; Escape unbinds it. The pick is remembered across restarts."
             }
             Item::ChatAnimation => {
                 "A new chat line slides in from the left while it fades in, instead of appearing whole."
@@ -642,6 +697,7 @@ impl Item {
     pub fn value(self, e: &Extras) -> String {
         match self {
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
+            Item::ShaderPackKey => crate::keybinds::display_name(&e.shader_pack_key).plain(),
             Item::Pvp(o) if o.switch(&e.pvp).is_none() => o.value(&e.pvp).unwrap_or_default(),
             other => match other.switch(e) {
                 Some(true) => crate::lang::get_or("On", "On"),
@@ -671,13 +727,14 @@ impl Item {
             Item::PackBrowser => e.pack_browser = !e.pack_browser,
             Item::Pregen => e.pregen = !e.pregen,
             Item::Pvp(o) => o.cycle(&mut e.pvp, back),
-            Item::SortKey => {}
+            Item::SortKey | Item::ShaderPackKey => {}
         }
     }
     /// The key name the options screen waits on for a key item.
     pub fn key_name(self) -> Option<&'static str> {
         match self {
             Item::SortKey => Some(SORT_KEY),
+            Item::ShaderPackKey => Some(SHADER_PACK_KEY),
             Item::Pvp(crate::pvp::Opt::HudEditorKey) => Some(crate::pvp::HUD_EDITOR_KEY),
             _ => None,
         }
@@ -876,31 +933,6 @@ mod tests {
     }
 
     #[test]
-    fn a_mods_zoom_eases_like_the_spyglass() {
-        // Camera.tickFov halves the distance to the target each tick.
-        let mut camera = crate::camera::Camera::default();
-        camera.tick(None, 1.0);
-        for _ in 0..30 {
-            camera.tick(None, 1.0);
-        }
-        let target = fov_target(1.0, 4.0);
-        camera.tick(None, target);
-        let first = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((first - 70.0 * 0.625).abs() < 1e-3, "{first}");
-        for _ in 0..30 {
-            camera.tick(None, target);
-        }
-        let settled = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((settled - 70.0 / 4.0).abs() < 1e-3, "{settled}");
-        // Deeper than the 0.1 floor stops there, as vanilla clamps.
-        for _ in 0..30 {
-            camera.tick(None, fov_target(1.0, 20.0));
-        }
-        let floor = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((floor - 7.0).abs() < 1e-3, "{floor}");
-    }
-
-    #[test]
     fn fps_counter_reports_rate_minimum_and_low() {
         let mut c = FpsCounter::default();
         let mut t = 0.0;
@@ -958,5 +990,32 @@ mod tests {
         for item in rows().into_iter().flatten() {
             assert!(!item.caption().is_empty() && !item.description().is_empty());
         }
+    }
+
+    /// The shader pack key is bound to K out of the box, rebinds through the generic extra-key
+    /// machinery, and the remembered pick round-trips with it.
+    #[test]
+    fn the_shader_pack_key_binds_and_remembers_the_pick() {
+        let mut e = Extras::default();
+        assert_eq!(e.shader_pack_key, "key.keyboard.k");
+        assert_eq!(e.last_shader_pack, "");
+        assert_eq!(Item::ShaderPackKey.key_name(), Some(SHADER_PACK_KEY));
+        assert!(Item::ShaderPackKey.value(&e).contains('K'));
+        assert!(e.set_key(SHADER_PACK_KEY, "key.keyboard.j".into()));
+        assert_eq!(e.shader_pack_key, "key.keyboard.j");
+        assert!(!e.set_key("key.toggleGui", "key.keyboard.j".into()));
+        e.last_shader_pack = "A.zip".into();
+        let back = Extras::parse(&e.serialize());
+        assert_eq!(
+            (
+                back.shader_pack_key.as_str(),
+                back.last_shader_pack.as_str()
+            ),
+            ("key.keyboard.j", "A.zip")
+        );
+        // A bad value is dropped, not kept: the default stays.
+        let bad = Extras::parse("shaderPackKey:foo\n");
+        assert_eq!(bad.shader_pack_key, "key.keyboard.k");
+        assert!(bad.unknown.is_empty());
     }
 }

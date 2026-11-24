@@ -21,10 +21,9 @@ impl Game<'_> {
         let mut sets = HashMap::<String, HashSet<String>>::new();
         if let Some(server) = &self.recipe_ui.server_properties.sets {
             if let Some(remote) = &self.remote {
-                for (key, ids) in server
-                    .iter()
-                    .filter(|(key, _)| !key.starts_with("minecraft:"))
-                {
+                for (key, ids) in server.iter().filter(|(key, _)| {
+                    sunrise_client::lan::recipes::vanilla_property_set(key).is_none()
+                }) {
                     let items = ids
                         .iter()
                         .filter_map(|id| remote.builtin.get("minecraft:item")?.name(*id))
@@ -44,34 +43,19 @@ impl Game<'_> {
                 sets.insert(key.to_owned(), items);
             }
         }
-        let tags = self.native_tag_items().and_then(|items| {
-            // A packet can install other registries without supplying any item tags.
-            if self.options.execution_role.is_client() && !self.remote.as_ref()?.has_item_tags {
-                return None;
-            }
-            // Match the registry that binds ItemKeys, not the raw pack entries: absent
-            // optional names must not count as members or leave gaps in their indices.
-            let registry: HashSet<&str> = self
-                .items()
-                .registry_order
-                .iter()
-                .map(AsRef::as_ref)
-                .collect();
-            Some(
-                items
-                    .item_tag_order
+        let tags = self
+            .native_tag_items()
+            .filter(|items| items.tags_loaded(sunrise_items::items::TagRegistry::Item))
+            .and_then(|items| {
+                // Only members in this generation's item registry can be exposed.
+                let registry = self
+                    .items()
+                    .registry_order
                     .iter()
-                    .map(|(tag, members)| {
-                        let ordered = members
-                            .iter()
-                            .filter(|id| registry.contains(id.as_str()))
-                            .cloned()
-                            .collect();
-                        (tag.clone(), ordered)
-                    })
-                    .collect(),
-            )
-        });
+                    .map(AsRef::as_ref)
+                    .collect();
+                mod_api::__private::BoundItemTags::bind(&items.item_tag_order, &registry)
+            });
         let context = Arc::make_mut(&mut self.loop_context);
         context.set_recipe_properties(Arc::new(sets));
         context.set_item_tags(tags);

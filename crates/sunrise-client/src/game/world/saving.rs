@@ -3,9 +3,17 @@
 use super::{Game, loading_frame};
 use std::{
     collections::{HashSet, VecDeque},
+    sync::mpsc::{Receiver, TryRecvError},
     time::{Duration, Instant},
 };
 use sunrise_client::{Result, hud::HudBatch};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClientQuit {
+    Running,
+    Requested,
+    Stopping,
+}
 
 pub(super) struct ClosingSave {
     pub quit: bool,
@@ -18,7 +26,7 @@ enum Stage {
     Generation,
     Chunks(VecDeque<(i32, i32)>),
     Entities(VecDeque<(i32, i32)>),
-    Writes,
+    Writes(Option<Receiver<std::io::Result<()>>>),
     Server,
     Quit,
 }
@@ -34,20 +42,70 @@ impl Game<'_> {
     /// Save the level's chunk tickets: `/forceload`'s in vanilla's `chunk_tickets.dat`, the
     /// mods' in Sunrise's own `mod_chunk_tickets.dat`.
     pub(super) fn save_chunk_tickets(&self) -> Result<()> {
+        if self.startup_ticket_restore_pending {
+            return Ok(());
+        }
         self.save
             .save_chunk_tickets(self.streaming.commanded(), self.tickets.portal_tickets())?;
-        self.save
-            .save_mod_tickets(self.streaming.mod_tickets(), |slot| {
-                mod_api::TicketController::from_slot(slot).map(|c| c.id())
-            })
+        self.save.save_mod_tickets(
+            self.streaming.mod_tickets(),
+            mod_api::__private::game::ticket_controller_id,
+        )
     }
+
+    /// `Minecraft.stop`: record the request without reentering the client from a hook.
+    pub(super) fn request_client_quit(&self) -> bool {
+        if !self.native_window()
+            || self.client_quit.get() != ClientQuit::Running
+            || sunrise_threads::stop_requests() > 0
+        {
+            return false;
+        }
+        self.client_quit.set(ClientQuit::Requested);
+        true
+    }
+
     pub(super) fn begin_closing_save(&mut self, quit: bool) -> Result<()> {
+        if quit {
+            self.client_quit.set(ClientQuit::Stopping);
+            self.close_client_tasks();
+        }
         if let Some(save) = &mut self.pending_save {
             save.quit |= quit;
             return Ok(());
         }
-        if self.title.is_some() || self.saved_for_exit {
-            // A quit from the title still needs the event loop to finish.
+        // A world still loading has no client in it yet: its server stops and is joined
+        // through the same fallible path as a running one, before the loop may end.
+        if quit && let Some(starting) = self.integrated_starting.take() {
+            starting.handle.request_stop();
+            self.integrated = Some(starting.handle);
+            self.pending_save = Some(ClosingSave {
+                quit,
+                close: true,
+                reply: None,
+                started: Instant::now(),
+                stage: Stage::Server,
+            });
+            return Ok(());
+        }
+        if self.saved_for_exit {
+            // A quit after exit saving has already run still needs the event loop to finish.
+            self.pending_save = Some(ClosingSave {
+                quit,
+                close: true,
+                reply: None,
+                started: Instant::now(),
+                stage: Stage::Quit,
+            });
+            return Ok(());
+        }
+        if self.title.is_some() {
+            // A quit from the title still needs the event loop to finish, and
+            // reaches Minecraft.exitWorldAndClose's disconnect boundary once.
+            if quit {
+                self.client_logging_out();
+                self.saved_for_exit = true;
+            }
             self.pending_save = Some(ClosingSave {
                 quit,
                 close: true,
@@ -92,6 +150,7 @@ impl Game<'_> {
                 stage: Stage::Quit,
             });
         } else {
+            self.client_logging_out();
             self.close_container();
             self.award_custom_stat("leave_game", 1);
             self.lan_close(false);
@@ -123,10 +182,10 @@ impl Game<'_> {
                 .modified
                 .extend(self.world.chunks.keys().copied());
         }
-        self.keys.clear();
+        self.clear_device_keys();
         self.physical_keys.clear();
-        self.left = false;
-        self.right = false;
+        self.set_mapping_held("key.attack", false);
+        self.set_mapping_held("key.use", false);
         self.pending_save = Some(ClosingSave {
             quit: false,
             close: false,
@@ -157,7 +216,12 @@ impl Game<'_> {
         };
         let result = (|| -> Result<bool> {
             match &mut save.stage {
-                Stage::Quit => Ok(true),
+                Stage::Quit => {
+                    if save.quit && !self.saved_for_exit {
+                        self.client_logging_out();
+                    }
+                    Ok(true)
+                }
                 Stage::Server => {
                     let server = self
                         .integrated
@@ -166,20 +230,21 @@ impl Game<'_> {
                     if !server.stopped() {
                         return Ok(false);
                     }
-                    // Drop/join only after completion; leave_server's teardown
-                    // can then run without blocking on the server's writes.
+                    // Drop/join only after completion; finish_leave_server's teardown
+                    // can then run without blocking on the server's writes or firing
+                    // client_logging_out a second time.
                     if save.quit {
                         self.integrated.take().unwrap().stop()?;
                     } else {
-                        self.leave_server(None)?;
+                        self.finish_leave_server(None)?;
                     }
                     Ok(true)
                 }
                 Stage::Generation => {
                     if self.live_world_durability_active() {
                         match self.checkpoint_live_world_levels(&[]) {
-                            Ok(_) => {
-                                self.save_game_metadata()?;
+                            Ok(receipt) => {
+                                self.finish_common_game_save(&receipt, true)?;
                                 return Ok(true);
                             }
                             Err(
@@ -200,11 +265,9 @@ impl Game<'_> {
                         match self.streaming.prepare_poll_save(&mut self.world, deadline) {
                             sunrise_client::streaming::SaveStep::Pending => break,
                             sunrise_client::streaming::SaveStep::Full(chunk) => {
-                                self.native_late_full_chunk_snapshot(&chunk);
-                                self.streaming.save_finished(chunk);
+                                self.save_late_full_chunk(chunk);
                             }
                             sunrise_client::streaming::SaveStep::Protos(protos) => {
-                                self.native_proto_snapshots(&protos);
                                 if self.streaming.submit_protos(protos) {
                                     save.stage = Stage::Chunks(
                                         self.world.modified.iter().copied().collect(),
@@ -220,22 +283,22 @@ impl Game<'_> {
                     let started = Instant::now();
                     for _ in 0..per_frame {
                         let Some(&key) = keys.front() else { break };
+                        // ChunkMap.save consumes the dirty mark before capturing the snapshot.
+                        self.world.modified.remove(&key);
                         let chunks = self.with_entities(self.world.chunks.get(&key));
-                        self.native_full_chunk_snapshots(&chunks);
                         self.save.save_later(
                             &chunks,
                             self.pack.assets.registry,
                             world_biomes!(self),
                         )?;
-                        self.world.modified.remove(&key);
                         keys.pop_front();
                         if started.elapsed() >= budget {
                             break;
                         }
                     }
                     if keys.is_empty() {
-                        self.spawn_loaded_entities();
-                        save.stage = Stage::Entities(self.world.chunks.keys().copied().collect());
+                        save.stage =
+                            Stage::Entities(self.prepare_entity_save().into_iter().collect());
                     }
                     Ok(false)
                 }
@@ -253,16 +316,45 @@ impl Game<'_> {
                     if keys.is_empty() {
                         self.prune_entity_memory();
                         self.save_raids();
-                        self.save.save_attachments(&self.world.attachments)?;
+                        if let Err(error) = self.save.save_attachments(&self.world.attachments)
+                            && !error
+                                .is::<sunrise_mod_runtime::attachments::AttachmentEncodeError>()
+                        {
+                            return Err(error);
+                        }
                         self.save_chunk_tickets()?;
                         self.save_game_metadata()?;
-                        save.stage = Stage::Writes;
+                        save.stage = Stage::Writes(Some(self.save.flush_later()?));
                     }
                     Ok(false)
                 }
-                Stage::Writes => {
-                    let players = self.finish_player_autosaves(false)?;
-                    Ok(self.save.writes_finished()? && players)
+                Stage::Writes(flush) => {
+                    let Some(receive) = flush else {
+                        *flush = Some(self.save.flush_later()?);
+                        return Ok(false);
+                    };
+                    if !self.finish_player_autosaves(false)? {
+                        return Ok(false);
+                    }
+                    let result = match receive.try_recv() {
+                        Ok(result) => result,
+                        Err(TryRecvError::Empty) => return Ok(false),
+                        Err(TryRecvError::Disconnected) => {
+                            Err(std::io::Error::other("the region writer stopped"))
+                        }
+                    };
+                    // A later shutdown barrier must force the files again if this one failed.
+                    *flush = None;
+                    result?;
+                    // The unaffected columns were written; the save did not complete.
+                    self.entity_save_complete()?;
+                    if !save.close {
+                        self.message = Some((
+                            sunrise_client::lang::get("commands.save.success"),
+                            Instant::now(),
+                        ));
+                    }
+                    Ok(true)
                 }
             }
         })();
@@ -297,8 +389,8 @@ impl Game<'_> {
                     let _ =
                         reply.send(serde_json::json!({ "error": error.to_string() }).to_string());
                 }
-                // Keep ownership (and the lock) on errors too. Native shutdown
-                // sees the same durable-write failure instead of declaring success.
+                // Keep ownership (and the lock) on errors too. Native shutdown must
+                // finish a durable barrier before it can declare the save completed.
                 self.pending_save = Some(save);
                 other
             }
@@ -314,7 +406,7 @@ impl Game<'_> {
         }
         let waiting = matches!(
             self.pending_save.as_ref().map(|save| &save.stage),
-            Some(Stage::Server | Stage::Writes)
+            Some(Stage::Server | Stage::Writes(_))
         );
         if waiting {
             thread_local! {
@@ -349,7 +441,7 @@ impl Game<'_> {
         let progress = match self.pending_save.as_ref().map(|save| &save.stage) {
             Some(Stage::Chunks(_)) => 0.25,
             Some(Stage::Entities(_)) => 0.5,
-            Some(Stage::Writes) => 0.9,
+            Some(Stage::Writes(_)) => 0.9,
             _ => 0.0,
         };
         sunrise_client::level_loading::draw_progress(
@@ -358,7 +450,7 @@ impl Game<'_> {
             "Saving world...",
             progress,
         );
-        renderer.render(&loading_frame(&hud))?;
+        renderer.render(&loading_frame(&hud), None)?;
         Ok(())
     }
 
@@ -439,7 +531,6 @@ impl Game<'_> {
             self.native_level_save(self.dim.id());
             return Ok(());
         }
-        self.requeue_failed_chunk_saves();
         // No save holds a player vehicle: a mob a mod seated on a player gets off first.
         self.eject_player_riders(None);
         self.save_border();
@@ -448,11 +539,9 @@ impl Game<'_> {
         loop {
             match self.streaming.prepare_save(&mut self.world, wait, deadline) {
                 sunrise_client::streaming::SaveStep::Full(chunk) => {
-                    self.native_late_full_chunk_snapshot(&chunk);
-                    self.streaming.save_finished(chunk);
+                    self.save_late_full_chunk(chunk);
                 }
                 sunrise_client::streaming::SaveStep::Protos(protos) => {
-                    self.native_proto_snapshots(&protos);
                     self.streaming.finish_save(protos, wait);
                     break;
                 }
@@ -460,14 +549,19 @@ impl Game<'_> {
             }
         }
         let keys: Vec<_> = self.world.modified.iter().copied().collect();
-        self.save.save_attachments(&self.world.attachments)?;
+        if let Err(error) = self.save.save_attachments(&self.world.attachments)
+            && !error.is::<sunrise_mod_runtime::attachments::AttachmentEncodeError>()
+        {
+            return Err(error);
+        }
+        // ChunkMap.save calls tryMarkSaved before creating the snapshot. A record failure
+        // finishes this attempt and does not put the mark back.
+        for key in &keys {
+            self.world.modified.remove(key);
+        }
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
-        self.native_full_chunk_snapshots(&chunks);
         self.save
             .save_later(&chunks, self.pack.assets.registry, world_biomes!(self))?;
-        for chunk in &chunks {
-            self.world.modified.remove(&(chunk.x, chunk.z));
-        }
         // Prepare entities while the chunk writer runs, then use one barrier.
         if !wait {
             self.world.modified.autosaved(&keys, Instant::now());
@@ -481,5 +575,112 @@ impl Game<'_> {
             self.native_level_save(self.dim.id());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::native_entity_refs::tests::with_game;
+    use std::sync::{Arc, mpsc};
+    use sunrise_client::save::{LevelShape, SaveDir};
+    use sunrise_core::nbt::{DISK_WRITE_NESTING_GUARD, Tag};
+
+    fn finish_staged_save(game: &mut Game<'_>) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let quit = game.poll_closing_save().unwrap();
+            if game.pending_save.is_none() {
+                return quit;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the region writer never acknowledged the save"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn both_successful_save_paths_resolve_the_banner_in_the_active_language() {
+        use sunrise_client::lang::{Language, scoped};
+
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            with_game(|game| {
+                let dir = tempfile::tempdir().unwrap();
+                game.world_root = dir.path().to_path_buf();
+                game.save = Arc::new(SaveDir::new(
+                    game.world_root.clone(),
+                    LevelShape::OVERWORLD,
+                    Some(Default::default()),
+                ));
+                let translated = "[test locale]";
+                let language = Language::of(
+                    "en_test",
+                    [("commands.save.success".into(), translated.into())],
+                );
+                scoped(language, || {
+                    game.save_game().unwrap();
+                    let explicit = game.message.take().unwrap().0;
+                    game.pending_save = Some(ClosingSave {
+                        quit: false,
+                        close: false,
+                        reply: None,
+                        started: Instant::now(),
+                        stage: Stage::Writes(Some(game.save.flush_later().unwrap())),
+                    });
+                    assert!(!finish_staged_save(game));
+                    assert!(game.pending_save.is_none());
+                    let incremental = game.message.take().unwrap().0;
+                    assert_eq!(
+                        (explicit.as_str(), incremental.as_str()),
+                        (translated, translated)
+                    );
+                });
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn closing_and_control_saves_complete_after_reporting_a_record_failure() {
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            with_game(|game| {
+                for quit in [false, true] {
+                    let dir = tempfile::tempdir().unwrap();
+                    game.save = Arc::new(SaveDir::new(
+                        dir.path().to_path_buf(),
+                        LevelShape::OVERWORLD,
+                        None,
+                    ));
+                    let invalid = (0..=DISK_WRITE_NESTING_GUARD)
+                        .fold(Tag::Int(0), |nested, _| Tag::List(vec![nested]));
+                    game.save
+                        .save_entities(vec![((2, 0), vec![invalid])])
+                        .unwrap();
+                    assert_eq!(game.save.record_save_failures(), 1);
+                    let (send, receive) = mpsc::channel();
+                    game.pending_save = Some(ClosingSave {
+                        quit,
+                        close: quit,
+                        reply: (!quit).then_some(send),
+                        started: Instant::now(),
+                        stage: Stage::Writes(Some(game.save.flush_later().unwrap())),
+                    });
+                    game.saved_for_exit = false;
+                    game.message = None;
+                    assert_eq!(finish_staged_save(game), quit);
+                    assert!(game.pending_save.is_none());
+                    if !quit {
+                        let reply: serde_json::Value =
+                            serde_json::from_str(&receive.try_recv().unwrap()).unwrap();
+                        assert_eq!(reply, serde_json::json!({"ok": true}));
+                    }
+                    assert_eq!(game.saved_for_exit, quit);
+                    assert_eq!(game.message.is_some(), !quit);
+                }
+            });
+        });
     }
 }

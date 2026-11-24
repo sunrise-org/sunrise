@@ -1,22 +1,20 @@
 //! A package's runtime data files: the `runtime/` folder and the `[runtime]` table that lists
-//! each file with its SHA-512, the way `[wasm]` lists `mod.wasm`.
+//! each file with its SHA-512.
 //!
 //! Runtime files are the bytes a mod's code opens beside itself (a compiled script bundle, a baked
 //! lookup table). They are not pack data: no datapack or resource pack can replace them and no
-//! reload touches them. Both native and wasm packages may carry them.
-use super::wasm::{sha512_hex, sha512_of};
+//! reload touches them.
+use super::hash::{sha512_hex, sha512_of};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 /// The folder of a package that holds its runtime files.
 pub const RUNTIME_DIR: &str = "runtime";
-/// The most one runtime file may weigh: what `mod.wasm` may.
-pub const MAX_RUNTIME_FILE: u64 = 64 << 20;
-/// The most all of a package's runtime files may weigh together.
-pub const MAX_RUNTIME_TOTAL: u64 = 256 << 20;
-/// The most files a package's `[runtime]` may list.
-pub const MAX_RUNTIME_FILES: usize = 256;
 
 /// A `[runtime]` table: each file's name under `runtime/` and its SHA-512.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -29,12 +27,6 @@ impl TryFrom<BTreeMap<String, String>> for RuntimeTable {
     fn try_from(files: BTreeMap<String, String>) -> Result<Self, Self::Error> {
         if files.is_empty() {
             return Err("[runtime] lists no file".into());
-        }
-        if files.len() > MAX_RUNTIME_FILES {
-            return Err(format!(
-                "[runtime] lists {} files, over the {MAX_RUNTIME_FILES}-file runtime cap",
-                files.len()
-            ));
         }
         for (name, hash) in &files {
             if !super::plain_path(name) {
@@ -73,33 +65,13 @@ impl RuntimeTable {
         sha.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// Refuse a package whose `runtime/` holds a file this table does not list, lacks one it
-    /// lists, or goes over a cap. `found` is each file under `runtime/` as `(name below it, bytes)`.
+    /// Refuse a package whose `runtime/` holds a file this table does not list or lacks one it
+    /// lists. `found` is each file under `runtime/` as `(name below it, bytes)`.
     pub fn check_layout(table: Option<&Self>, found: &[(String, u64)]) -> Result<(), String> {
-        if found.len() > MAX_RUNTIME_FILES {
-            return Err(format!(
-                "{RUNTIME_DIR}/ holds {} files, over the {MAX_RUNTIME_FILES}-file runtime cap",
-                found.len()
-            ));
-        }
-        let mut total = 0u64;
-        for (name, size) in found {
+        for (name, _) in found {
             if !table.is_some_and(|table| table.lists(name)) {
                 return Err(format!("{RUNTIME_DIR}/{name}: not listed in [runtime]"));
             }
-            if *size > MAX_RUNTIME_FILE {
-                return Err(format!(
-                    "{RUNTIME_DIR}/{name} is over {} MiB, the per-file runtime cap",
-                    MAX_RUNTIME_FILE >> 20
-                ));
-            }
-            total = total.saturating_add(*size);
-        }
-        if total > MAX_RUNTIME_TOTAL {
-            return Err(format!(
-                "{RUNTIME_DIR}/ is over {} MiB, the package's runtime total cap",
-                MAX_RUNTIME_TOTAL >> 20
-            ));
         }
         if let Some(table) = table
             && let Some(missing) = table
@@ -119,12 +91,6 @@ impl RuntimeTable {
         let Some(hash) = self.0.get(name) else {
             return Err(format!("{RUNTIME_DIR}/{name}: not listed in [runtime]"));
         };
-        if bytes.len() as u64 > MAX_RUNTIME_FILE {
-            return Err(format!(
-                "{RUNTIME_DIR}/{name} is over {} MiB, the per-file runtime cap",
-                MAX_RUNTIME_FILE >> 20
-            ));
-        }
         if sha512_of(bytes) != *hash {
             return Err(format!(
                 "{RUNTIME_DIR}/{name} doesn't match its [runtime] sha512"
@@ -135,66 +101,54 @@ impl RuntimeTable {
 }
 
 /// A package's runtime files, each checked against its hash when the package was opened. Reads
-/// serve these bytes and never hash again.
+/// borrow the retained bytes and never hash again. Clones share the verified data.
 #[derive(Clone, Debug)]
-pub struct RuntimeData {
-    files: BTreeMap<String, Arc<[u8]>>,
+pub struct RuntimeData(Arc<RuntimeContents>);
+
+#[derive(Debug)]
+struct RuntimeContents {
+    // Stored separately to lend all the sorted names as a slice. Indices match `files`.
+    names: Vec<String>,
+    files: Vec<RuntimeFile>,
     digest: String,
-    /// The package folder, when the package is one: the files sit in `<dir>/runtime/`.
-    dir: Option<PathBuf>,
 }
 
-/// The runtime files of the packages the process opened and verified outside the engine (the wasm
-/// loader opens a wasm package before the engine exists), by mod id, so the engine serves those
-/// bytes and the files are hashed once.
-static OPENED: std::sync::Mutex<BTreeMap<String, RuntimeData>> =
-    std::sync::Mutex::new(BTreeMap::new());
+#[derive(Debug)]
+pub(super) struct RuntimeFile {
+    pub(super) bytes: Box<[u8]>,
+    pub(super) path: Option<PathBuf>,
+}
 
 impl RuntimeData {
-    /// Keeps the verified files of mod `id` for [`Self::opened`].
-    pub fn keep_opened(id: &str, data: Self) {
-        OPENED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_owned(), data);
+    /// `files` arrives in name order from the checked [`RuntimeTable`].
+    pub(super) fn new(files: Vec<(String, RuntimeFile)>, digest: String) -> Self {
+        let (names, files) = files.into_iter().unzip();
+        Self(Arc::new(RuntimeContents {
+            names,
+            files,
+            digest,
+        }))
     }
 
-    /// The verified files of mod `id`, when a loader opened its package and kept them.
-    pub fn opened(id: &str) -> Option<Self> {
-        OPENED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(id)
-            .cloned()
-    }
-
-    pub(super) fn new(
-        files: BTreeMap<String, Arc<[u8]>>,
-        digest: String,
-        dir: Option<PathBuf>,
-    ) -> Self {
-        Self { files, digest, dir }
-    }
-
-    /// The file `name` below `runtime/`, `None` for a name the manifest does not list.
-    pub fn file(&self, name: &str) -> Option<Arc<[u8]>> {
-        self.files.get(name).cloned()
-    }
-
-    /// Where the file sits on disk, for a package that is a folder. `None` for a name the
-    /// manifest does not list, and for a `.smod` archive, which has no file to point at.
-    pub fn path(&self, name: &str) -> Option<PathBuf> {
-        self.files.contains_key(name).then_some(())?;
-        Some(self.dir.as_ref()?.join(RUNTIME_DIR).join(name))
+    /// The verified bytes of `name` below `runtime/` and, for a package folder, its live disk
+    /// path. `None` for a name the manifest does not list; an archive's path is always `None`.
+    pub fn file(&self, name: &str) -> Option<(&[u8], Option<&Path>)> {
+        let at = self
+            .0
+            .names
+            .binary_search_by(|listed| listed.as_str().cmp(name))
+            .ok()?;
+        let file = &self.0.files[at];
+        Some((&file.bytes, file.path.as_deref()))
     }
 
     /// The names of the files, in order.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.files.keys().map(String::as_str)
+    pub fn names(&self) -> &[String] {
+        &self.0.names
     }
 
     /// [`RuntimeTable::digest`] of the table these files were checked against.
     pub fn digest(&self) -> &str {
-        &self.digest
+        &self.0.digest
     }
 }

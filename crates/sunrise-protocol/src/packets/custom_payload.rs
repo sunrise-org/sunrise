@@ -29,8 +29,9 @@ mod registry_tests;
 
 use crate::{
     Error, Result,
-    buf::{Codec, Ident, Reader, Writer},
+    buf::{Codec, Ident, Reader},
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// Exact application bytes following a namespaced channel identifier.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,10 +48,13 @@ pub struct PayloadTooLarge {
     pub limit: usize,
 }
 
-/// ServerboundCustomPayloadPacket.MAX_PAYLOAD_SIZE in vanilla 26.3.
-pub const SERVERBOUND_LIMIT: usize = 32_767;
+pub use sunrise_core::vanilla_bytes::SERVERBOUND_CUSTOM_PAYLOAD_LIMIT as SERVERBOUND_LIMIT;
 /// ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE in vanilla 26.3.
 pub const CLIENTBOUND_LIMIT: usize = 1_048_576;
+
+/// Play payloads for server-authoritative cauldron clicks.
+pub const CAULDRON_ENTRIES_CHANNEL: &str = "sunrise:cauldron_entries";
+pub const CAULDRON_USE_CHANNEL: &str = "sunrise:cauldron_use";
 
 /// Common payload with a directional unknown-id limit, excluding the identifier.
 /// Registered payloads use their own codec constraints, not this discard cap.
@@ -78,15 +82,18 @@ fn uses_registered_payload_codec(channel: &str, play: bool, clientbound: bool) -
         "sunrise:lod" => play || clientbound,
         crate::attachment_sync::CHANNEL
         | crate::collider_sync::CHANNEL
+        | crate::connection_groups::CHANNEL
         | crate::live_world_sync::CHANNEL
         | crate::general_entity::CHANNEL
         | crate::anvil_cost::CHANNEL
+        | crate::menu_extra::DATA_CHANNEL
         | crate::passage_sync::CHANNEL
         | "sunrise:recipe_content"
         | "sunrise:selector_tokens" => play && clientbound,
         // Configuration both ways (the capability), play clientbound only.
         crate::menu_extra::CHANNEL => !play || clientbound,
-        "sunrise:recipe_transfer" => play,
+        "sunrise:recipe_transfer" | CAULDRON_USE_CHANNEL => play,
+        CAULDRON_ENTRIES_CHANNEL => play && clientbound,
         crate::passage_sync::CROSS_CHANNEL => play && !clientbound,
         crate::carry_age::CHANNEL => play && !clientbound,
         crate::live_world_actions::CHANNEL => play && !clientbound,
@@ -98,9 +105,11 @@ fn uses_registered_payload_codec(channel: &str, play: bool, clientbound: bool) -
 }
 
 /// Channels owned by engine services or transport control, not mod registrations
-/// or the generic mod packet API. Reuse the codec authority in every direction.
+/// or the generic mod packet API. Shares the engine-channel authority with mod
+/// registration (`sunrise_mod_runtime::engine_channels`) alongside channels that
+/// carry registered protocol codecs (such as `minecraft:brand`).
 pub fn is_reserved_channel(channel: &str) -> bool {
-    channel == crate::payload_negotiation::CHANNEL
+    sunrise_mod_runtime::engine_channels::is_reserved_engine_channel(channel)
         || [false, true].into_iter().any(|play| {
             [false, true]
                 .into_iter()
@@ -235,7 +244,9 @@ mod tests {
             ("sunrise:quiet_commands", [false, true, true, false]),
             ("sunrise:mod_list", [true, false, false, false]),
             ("sunrise:attachment_sync", [false, false, false, true]),
+            ("sunrise:connection_groups", [false, false, false, true]),
             ("sunrise:menu_extra", [true, true, false, true]),
+            ("sunrise:menu_data", [false, false, false, true]),
             ("sunrise:anvil_cost", [false, false, false, true]),
             ("sunrise:passage_sync", [false, false, false, true]),
             ("sunrise:passage_cross", [false, false, true, false]),
@@ -273,6 +284,11 @@ mod tests {
             assert!(ServerboundPayload::check(channel, 32_768, None).is_err());
             assert!(ClientboundPayload::check(channel, 1_048_577, None).is_err());
         }
+        assert!(is_reserved_channel("sunrise:recipe_check"));
+        assert!(is_reserved_channel("sunrise:datapack_registries"));
+        assert!(is_reserved_channel("sunrise:datapack_offer"));
+        assert!(is_reserved_channel("sunrise:perf"));
+        assert!(!is_reserved_channel("sunrise:not_registered"));
     }
 
     #[test]
@@ -372,7 +388,7 @@ mod tests {
 
     #[test]
     fn custom_book_capability_requires_exact_version_in_configuration() {
-        for bytes in [vec![], vec![0], vec![2], vec![1, 0], vec![1; 1_048_577]] {
+        for bytes in [vec![], vec![0], vec![1], vec![2, 0], vec![2; 1_048_577]] {
             let payload = CustomPayload {
                 channel: crate::custom_book::CHANNEL.into(),
                 data: bytes,

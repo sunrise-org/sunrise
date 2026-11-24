@@ -1,150 +1,135 @@
 # Publishing your mod
 
-Sunrise's registry, [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods), lists mods, modpacks,
-resource packs and shader packs at [playsunrise.net/mods](https://playsunrise.net/mods). The
-[registry submission form](https://playsunrise.net/mods/submit) uploads your package and opens a pull request for a
-person to review. To prepare a mod submission locally, follow the steps below with `cargo sunrise-mod publish`,
-then upload the package and open the pull request yourself.
+Use [the Sunrise mod registry](https://playsunrise.net/mods) to distribute a content or native mod. Both ship as
+`.smod` packages. A native release carries its source and its `Cargo.lock`, never compiled libraries: each player's
+computer builds a native mod for the exact game it runs.
 
-## 1. Build and write the submission
+## Registering your repository
 
-Set `version` in `sunrise-mod.toml` to a SemVer without `+build` metadata, at most 64 characters after
-padding missing parts (for example, `1.2` becomes `1.2.0`). The registry uses that version in the release name.
+Register a repository once, before its first release. Its default branch must already hold, for each package:
 
-In your mod's folder (content, native or wasm; add `--wasm` for a wasm mod, as for `build`):
+- `sunrise-mod.toml`, which `cargo sunrise-mod check` accepts;
+- a complete [`page.toml` and screenshots](#your-mods-page);
+- the release workflow caller. `cargo sunrise-mod new` writes it for a new project. For an existing repository or
+  a package in a subfolder, run `cargo sunrise-mod release setup` from the mod's folder on a clean tree, then
+  commit and push the result.
 
-```sh
-cargo sunrise-mod publish --summary "One line about the mod." --owner your-github-login --categories utility
-```
+The repository must be public. Sign in at [Submit a mod](https://playsunrise.net/mods/submit) with a GitHub account
+that administers it, and enter its URL. A repository with packages in subfolders lists one package folder per line,
+with `.` for a package at the root. The form checks those files on the default branch, then opens a registration
+pull request on [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods) that gives each package a
+permanent project ID. A reviewer approves it after checking that you administer the repository and that the
+project is not claiming someone else's. This approves no code: each release is reviewed on its own. Two separate
+projects may use the same mod ID, so a port can sit beside the mod it replaces.
 
-It builds the package as `build` does, which may download the SDK, toolchain and dependencies. It does not contact the
-registry. The submission goes into `target/sunrise-mod/publish/` (change it with `--out <dir>`):
-
-| Path | What it is |
-| --- | --- |
-| `mods/<id>.toml` | The registry entry, filled from `sunrise-mod.toml`: name, description, authors, license, `homepage` as the source, and the version's file name, SHA-256 and date |
-| `<id>-<version>.smod` | The package: attach exactly this file to a release of your repository |
-| `files/<sha256>` | The same file under the name the registry's checks read |
-| `icons/<id>.png` | For a new listing, your `icon.png` from beside `sunrise-mod.toml` |
-| `PULL_REQUEST.md` | The text of the pull request |
-
-What the manifest cannot say comes from flags: `--summary` (at most 160 characters), `--owner <login>` (repeat it for
-several; the GitHub accounts allowed to publish updates), `--categories a,b` (1 to 3 from [your kind's
-list](../reference/registry-index.md#submitting-a-project)), `--tags a,b` and `--changelog <text>`. Anything still
-missing is written as a value that starts with `TODO(publish)`, and the command lists what remains. The registry
-refuses an entry that holds one, so edit `mods/<id>.toml` (or the manifest, then run `publish` again) until the list is empty.
-
-Save `icon.png` beside `sunrise-mod.toml` as a square PNG, 64 to 512 pixels per side and at most 256 KiB, so it fits
-both the package and the registry.
-
-## 2. Check the new file
-
-Run the `cargo sunrise-mod check <file>` command that `publish` prints, from your mod's folder. For example:
+You can also register by opening a
+[Register a repository](https://github.com/sunrise-org/sunrise-mods/issues/new?template=register.yml) issue on
+sunrise-org/sunrise-mods, from a GitHub account that administers the repository. Without a browser, for example
+from an agent, open it with the [GitHub CLI](https://cli.github.com/). `gh issue create --template` cannot fill an
+issue form's fields, so write the body with the form's headings:
 
 ```sh
-cargo sunrise-mod check 'target/sunrise-mod/publish/my_mod-0.1.0.smod'
+gh issue create -R sunrise-org/sunrise-mods \
+  --title "Register <owner>/<repository>" \
+  --body "### Repository
+
+https://github.com/<owner>/<repository>
+
+### Package folders
+
+_No response_"
 ```
 
-This checks the new package and, for a signed project, its signature. `publish` also lists anything left to fill in
-on the entry or page. Registry CI checks the whole checkout and plans installations after staging, with all listed
-files available. Your submission folder does not contain previously published packages or an existing project's images.
+Leave `_No response_` under **Package folders** for a mod at the repository's root; otherwise list one folder per
+line, each holding a `sunrise-mod.toml`. Registration reads the default branch only. A maintainer then checks that
+you administer the repository, opens the registration pull request and links it on the issue, so this route waits
+for a person where the form answers at once. Registering lists nothing: your project appears on Discover once its
+first release is reviewed and merged.
 
-For a first listing, you can also try an index containing just your project once the entry and icon are complete:
+## Releasing
+
+`release` is in the [newest tool from main](../start/install-tool.md#newest-tool-from-main). A Nightly's tool that
+lacks it answers `"release" is not a cargo sunrise-mod command`.
+
+Commit your mod's source, its page, and `Cargo.lock` for a native mod. The lock must match the pinned SDK:
+`cargo sunrise-mod pin` keeps it so, and after moving `[native] sunrise` by hand, `cargo sunrise-mod pin <build>`
+with the build already pinned regenerates it. From the mod's folder on a clean branch
+that is up to date with its upstream:
 
 ```sh
-cargo sunrise-mod registry build 'target/sunrise-mod/publish' --files 'target/sunrise-mod/publish/files' \
-  --out 'target/sunrise-mod/publish/index.json' \
-  --release 'https://github.com/sunrise-org/sunrise-mods/releases/download/'
+cargo sunrise-mod release patch --check
+cargo sunrise-mod release patch
 ```
 
-## 3. Open the pull request
+Use `minor`, `major`, or a higher SemVer instead of `patch` to choose another version. `--check` runs the
+release checks for the proposed version without changing the checkout. Without it, `release` refreshes the
+workflow, commits the version bump signed off (`Signed-off-by`, from your Git `user.name` and `user.email`), and pushes the branch, then the tag, to `origin` in two pushes: GitHub starts no workflow for a tag pushed together with the commit that first adds its workflow file. The tag is `v<version>`
+at the repository root or `<id>/v<version>` for a subfolder package. GitHub Actions builds and attests both the
+`.smod` and its page bundle, with no signing key for you to manage.
 
-1. Create a release of your repository and attach `<id>-<version>.smod` to it. Its address is the artifact URL.
-2. Fork [sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods) and copy in `mods/<id>.toml`.
-   For a first listing, copy in `icons/<id>.png` too. Do not commit the package or `files/`.
-3. Commit with `git commit -s`: every commit needs a `Signed-off-by:` line.
-4. Open the pull request with the text of `PULL_REQUEST.md`, after pasting the artifact URL into it.
-
-## 4. What review and staging do
-
-- A maintainer copies your file from the artifact URL to the registry's `staging` release, named
-  `<sha256>.smod`. Nothing is fetched from an address in a pull request on its own, and you cannot stage a file yourself.
-- The `check` workflow then downloads each listed file, compares its SHA-256 with the entry's, and runs
-  `registry review`, `registry check` and `registry build` on the result.
-- A reviewer reads the change and merges it. The `publish` workflow then releases the file as `<id>-<version>` and
-  adds the project to the index.
-- The hash is checked again before any download reaches the game folder, so a file changed after
-  review is refused.
-
-## 5. A new version
-
-Raise `version` in `sunrise-mod.toml`, then run `publish --registry <your checkout of sunrise-mods>` with an output
-folder separate from the checkout. For a signed project, [build and sign first](#signing). `publish` adds the new
-version row to the entry from the checkout, leaving all existing fields and rows in place. The printed local check
-reads only the new file, so you do not need to download the old files or copy over the icon and screenshots.
-Repeat steps 2 to 4.
-
-`--registry <checkout>` also checks a first listing's id against the checkout's collection ids; without it, the
-registry's CI checks the id when the pull request opens.
-
-Published versions never change and are never removed: a version already in the entry is refused by name, and a file
-that must go is taken down by the registry's maintainers in `revoked.toml`.
-
-## Signing
-
-Authors may sign with an Ed25519 key in [minisign](https://jedisct1.github.io/minisign/) format. The entry then
-holds the public key, every version of the project must be signed with it, and an update signed with another key is
-refused. `cargo sunrise-mod` verifies a signature but does not make keys or signatures: use `minisign`.
-
-Build and sign before calling `publish`, including on the first listing. For example, for a mod with ID `my_mod`
-(add `--wasm` to `build` for a wasm mod):
+If your default branch accepts changes only through pull requests, add `--pull-request`:
 
 ```sh
-cargo sunrise-mod build
-minisign -S -s my_mod.key -m target/sunrise-mod/my_mod.smod
-cargo sunrise-mod publish --summary "..." --owner you --categories utility \
-  --key "$(tail -n 1 my_mod.pub)" --signature target/sunrise-mod/my_mod.smod.minisig
+cargo sunrise-mod release patch --pull-request
 ```
 
-For a new version of an already-signed project, use the same key and replace the page flags (`--summary`, `--owner`,
-`--categories`) with `--registry <your checkout of sunrise-mods>`. With `--key` and `--signature`, `publish` checks
-and stages the exact bytes you signed, without rebuilding. If you change the package, build and sign it again.
+The release commit then goes on a new branch, `release/<tag>`, which is pushed before the tag, and your
+checkout is left on that branch. The tag starts the release as usual. Open the pull request it prints, from
+`release/<tag>` into the branch you released from, and merge it before your next release, so that branch carries
+the new version.
 
-Generate a key pair once with `minisign -G -p my_mod.pub -s my_mod.key`. Keep the secret key (`my_mod.key`) out of
-both your repository and releases; losing it means a new key and a review.
+For each later release, run `release` again. Each run reads the registry's current shared workflow version and
+updates your caller in the release commit when it has moved, so you never edit the workflow by hand.
 
-## A collection
+## After the tag
 
-Add `collections/<id>.toml` and a square PNG at `icons/<id>.png` in one pull request to
-[sunrise-org/sunrise-mods](https://github.com/sunrise-org/sunrise-mods). A collection is not a package: there's no file
-upload or version to publish.
+1. The tag runs [the shared release workflow](https://github.com/sunrise-org/sunrise-mods/blob/main/.github/workflows/release.yml)
+   in your repository. It checks the mod with `cargo sunrise-mod check --release` and builds the `.smod` and the
+   page bundle. A separate job, which never unpacks or runs what the build produced, signs both files with a GitHub
+   artifact attestation that names your repository and the shared workflow, then publishes them on a GitHub
+   release with their attestation bundles. A native `.smod` holds source and `Cargo.lock`, never a compiled library.
+2. The registry bot watches registered repositories. For a new release it opens a pull request on
+   sunrise-org/sunrise-mods that adds the release and updates the project's page. A release whose package is of
+   another kind than the project (a content mod that gained `[native]` code, or the reverse) changes the project's
+   kind in the same pull request and removes the project's earlier releases; `release` says so before it tags.
+3. The bot's checks run on that pull request. They are static checks plus a compile, and never load the mod in the
+   game:
+   - the files' format, sizes and SHA-256 hashes, and both attestations against the registered repository, the
+     shared workflow and the release tag;
+   - a scan of the source that never builds or runs it. A dependency from outside crates.io (a path outside the
+     package included), a stale `Cargo.lock`, or a crate listed as malicious fails the release. Other findings,
+     such as network or process use, `unsafe`, build scripts and changed dependencies, are flagged for the reviewer;
+   - a build of a native mod against its pinned SDK on Linux, and a compile check on Windows and macOS.
+4. A reviewer reads the release's code with the scan's flags and its diff from your last approved release. The
+   review looks only for malware, dangerous patterns and suspicious or obfuscated code. Bugs and suggestions
+   arrive as issues on your repository, never as a reason to hold the release.
+5. Once the pull request merges, the registry works out which game builds the release fits and publishes it in its
+   signed index. A release is offered only for the builds it fits. Players' computers build a native mod from its
+   source for the exact game they run.
 
-```toml
-id = "sunrise_creatures"
-name = "Sunrise Creatures"
-summary = "Fireflies, butterflies and their shared library."
-owners = ["octocat"]
-icon = "icons/sunrise_creatures.png"
-members = [
-  { id = "creature" },
-  { id = "fireflies" },
-  { id = "butterflies", default = false },
-]
-```
+To check a released package and its attestation yourself, use
+[`check <file.smod>`](../reference/sdk/05-commands.md#check-a-released-package).
 
-Members are selected by default unless you set `default = false`. You can add a Markdown `description` and record
-numeric `owner_ids` in the same order as `owners`. `cargo sunrise-mod registry check <base> <head> --files <dir>`
-checks the proposed registry, including the collection; see the [full rules](../reference/registry-index.md#collections).
+## Your mod's page
 
-To add a new mod, list it in the registry, then add its id to `members` in one collection pull request. If you own both
-the collection and the mod, this is a routine membership edit; changes to the page, defaults or owners wait for review.
+For a tagged registry release, edit `page.toml` beside `sunrise-mod.toml`:
 
-## Integrity and takedowns
+- `summary`: a short description of at least 25 characters.
+- `description`: a long description of at least 125 characters. You can use Markdown. Without it the page
+  uses the manifest's `description`.
+- `categories`: an optional list of up to eight distinct IDs from the registry's `registry/categories.toml`.
+  Each category must apply to your package kind (`mod` or `native-mod`).
+- `[[screenshots]]`: at least one entry, with a `path` such as `page/recipes.png` and an optional `caption`.
+  Put the images under `page/`. Use readable PNG (`.png`) or JPEG (`.jpg` or `.jpeg`) files, at most 5 MiB each.
 
-- **Integrity.** Every download is checked against the SHA-256 the index lists before the file reaches the game
-  folder. Unsigned local files stay allowed, with an "unsigned" mark.
-- **Takedowns.** A file the registry takes down (`revoked.toml`) is refused and turned off where installed. What a
-  listed project agrees to is in the registry's `MOD-POLICY.md`.
+Text minimums count Unicode scalar values after trimming surrounding whitespace. `description`, `name`,
+`authors`, `homepage` and `issues` default to the values in `sunrise-mod.toml`; set them in `page.toml` to
+show different ones on the page. The name and each listed author must not be
+blank. Links must be absolute HTTP(S) URLs without credentials. The page uses the mod's own `icon.png`, which a release needs, as it needs a `license` in
+`sunrise-mod.toml`. Screenshot paths must be distinct, must not be `page/icon.png`, and must be names Windows
+can create, and the page bundle must fit the registry's 64 MiB for one release file.
 
-Once a project is published, players can rate it on its page after signing in with GitHub. A player can change their
-rating later. Owners can't rate their own project, and nobody sees who rated.
+Run `cargo sunrise-mod check` to see what you still need before release. Run
+[`cargo sunrise-mod check --release <tag>`](../reference/sdk/05-commands.md) to require a complete page and
+check the tag against the manifest's version. `build` writes `target/sunrise-mod/<id>.page.tar` separately from the
+`.smod` whenever the project has a `page.toml`.

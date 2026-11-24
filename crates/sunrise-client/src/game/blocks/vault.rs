@@ -2,18 +2,23 @@
 //! (`vault`), the block's state as it changes, the rewards it ejects, the
 //! keys players insert (`VaultBlock.useItemOn`) and the display item spinning
 //! inside (`VaultRenderer`).
-use super::Game;
+use super::{
+    Game,
+    item_draw::{BlockItemDraw, block_entity_pose},
+};
 use sunrise_assets::item_model::DisplayContext;
 use sunrise_client::{
     Result,
     block_entities::BlockEntityLease,
     block_entity_render::vertex_light,
+    camera::rotate_degrees,
     containers::BlockEntity,
     item_render,
     items::ItemStack,
     mesher::Vertex,
     vault::{Vault, VaultEvent, VaultLevel, VaultPlayer, VaultState},
 };
+use sunrise_client_render::block_entity_reach::Reach;
 use sunrise_core::random::{LegacyRandom, LevelRandom};
 
 type Pos = (i32, i32, i32);
@@ -251,8 +256,7 @@ impl Game<'_> {
                 VaultEvent::BlockUpdated => self.mark_block_entity_updated(key),
                 VaultEvent::LevelEvent(id, data) => self.level_event_at(id, pos, data),
                 VaultEvent::Sound(name, volume, pitch) => {
-                    self.audio
-                        .play(&format!("minecraft:{name}"), Some(center), volume, pitch)
+                    self.play_audio(&format!("minecraft:{name}"), Some(center), volume, pitch)
                 }
                 // Vec3.atBottomCenterOf(pos).relative(UP, 1.2), lowered by spawnItem.
                 VaultEvent::Eject(stack, v) => {
@@ -284,6 +288,24 @@ impl Game<'_> {
     /// `VaultRenderer`: the display item of every vault near the camera that
     /// shows one, turning above its floor.
     pub(super) fn vault_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        self.vault_items(camera, alpha, |d| {
+            self.submit_item_world(d.state, d.pose, d.light, out);
+        });
+    }
+
+    /// The items [`Self::vault_geometry`] draws: each copy of a display item's
+    /// cluster (`ItemEntityRenderer.renderMultipleFromCount`).
+    pub(super) fn vault_items(
+        &self,
+        camera: glam::DVec3,
+        alpha: f64,
+        mut draw: impl FnMut(BlockItemDraw),
+    ) {
+        let _items = sunrise_client::spans::raw_flight_guard("block_entity_items");
+        let reach = Reach::Default;
+        sunrise_client::spans::note_block_entity_item_visits(|| {
+            self.world.block_entities.len() as u64
+        });
         for (key, entity) in &self.world.block_entities {
             let BlockEntity::Vault(vault) = entity else {
                 continue;
@@ -291,28 +313,36 @@ impl Game<'_> {
             let Some(stack) = &vault.display_item else {
                 continue;
             };
-            let at = glam::DVec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
-            if at.distance_squared(camera) >= 64.0 * 64.0 {
+            if !reach.should_render([key.0, key.1, key.2], camera, 0) {
                 continue;
             }
             let state = self.resolve_item(stack, DisplayContext::Ground, None, 0);
             if state.is_empty() {
                 continue;
             }
-            let pose =
-                glam::Mat4::from_translation(
-                    (at - camera).as_vec3() + glam::Vec3::new(0.5, 0.4, 0.5),
-                ) * glam::Mat4::from_rotation_y(vault.display_spin(alpha as f32).to_radians());
-            let light = self.world.light(key.0, key.1, key.2);
+            let mut pose = block_entity_pose(*key, camera);
+            pose.translate(0.5, 0.4, 0.5);
+            rotate_degrees(&mut pose, 1, vault.display_spin(alpha as f32));
+            let light = vertex_light(self.world.light(key.0, key.1, key.2));
             let seed =
                 i64::from(self.item_number(&stack.item).unwrap_or(0)) + i64::from(stack.damage);
             for copy in item_render::cluster_poses(
                 &state,
-                pose,
+                pose.to_glam(),
                 item_render::rendered_amount(stack.count),
                 seed,
             ) {
-                self.submit_item_world(&state, copy, vertex_light(light), out);
+                draw(BlockItemDraw {
+                    #[cfg(test)]
+                    stack,
+                    #[cfg(test)]
+                    display: DisplayContext::Ground,
+                    #[cfg(test)]
+                    seed: 0,
+                    state: &state,
+                    pose: copy,
+                    light,
+                });
             }
         }
     }

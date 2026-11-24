@@ -4,12 +4,12 @@ use super::*;
 use mod_api::{
     LiveWorldTransferCell as Cell, LiveWorldTransferLimits as Limits,
     LiveWorldTransferPending as Pending, LiveWorldTransferReceipt as Receipt,
-    LiveWorldTransferRef as Token, Transaction,
+    LiveWorldTransferRef as Token, TransactionContext, __private::TransactionFrame,
 };
 
 pub(super) enum State {
     Prepared(PreparedCells),
-    Staged { root: u64, plan: PreparedCells },
+    Staged { root: TransactionFrame, plan: PreparedCells },
     Done(Receipt),
     Refused(Error),
 }
@@ -137,7 +137,7 @@ impl Game<'_> {
         {
             return Err(Error::Unsupported);
         }
-        if self.transaction_current().is_some() {
+        if self.has_open_transaction() {
             #[cfg(test)]
             eprintln!(
                 "LIVE_WORLD_TRANSFER open actual transaction at prepare: {:?}",
@@ -223,23 +223,17 @@ impl Game<'_> {
     pub(in crate::game) fn live_world_transfer_stage(
         &mut self,
         token: Token,
-        tx: &Transaction,
+        tx: &TransactionContext,
     ) -> Result<Pending, Error> {
         self.transfer_frontier()?;
         let entry = self.transfer_authority(token)?;
         let State::Prepared(plan) = &entry.state else {
             return Err(Error::Busy);
         };
-        if self.transaction_depth(tx) != Some(0)
-            || self
-                .transaction_current()
-                .as_ref()
-                .map(mod_api::__private::transaction_token)
-                != Some(mod_api::__private::transaction_token(tx))
-        {
+        let root = self.current_storage_frame().ok_or(Error::Busy)?;
+        if root.depth() != 0 || !root.matches(tx) {
             return Err(Error::Busy);
         }
-        let root = mod_api::__private::transaction_token(tx);
         if self
             .live_world_durability
             .transfers
@@ -296,21 +290,22 @@ impl Game<'_> {
         token: Token,
     ) -> Result<Receipt, Error> {
         self.transfer_frontier()?;
-        if self.transaction_current().is_some() {
+        if self.has_open_transaction() {
             return Err(Error::Busy);
         }
         self.transfer_authority(token)?;
-        let seal = self.transaction_open();
-        let tx = self.transaction_current().ok_or(Error::Busy)?;
-        let result = self.live_world_transfer_stage(token, &tx);
-        self.transaction_close(&seal, result.is_ok());
+        let result = self.storage_transaction_settled(|game, tx| {
+            game.live_world_transfer_stage(token, tx)
+        });
         if self.live_world_session_failed() {
             return Err(Error::Storage);
         }
-        result?;
+        if let Err(mod_api::TransactionError::Aborted(error)) = result {
+            return Err(error);
+        }
         self.live_world_transfer_receipt(token)
     }
-    pub(in crate::game) fn has_staged_live_world_transfer(&self, root: u64) -> bool {
+    pub(in crate::game) fn has_staged_live_world_transfer(&self, root: TransactionFrame) -> bool {
         self.live_world_durability
             .transfers
             .values()
@@ -318,7 +313,7 @@ impl Game<'_> {
     }
     pub(in crate::game) fn finish_live_world_transfer_root(
         &mut self,
-        root: u64,
+        root: TransactionFrame,
         admitted: bool,
     ) -> Result<bool, Error> {
         let id = self

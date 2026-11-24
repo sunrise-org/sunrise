@@ -98,7 +98,7 @@ pub struct Memories {
     pub walk_target: Slot<WalkTarget>,
     pub path: Slot<Path>,
     pub cant_reach_walk_target_since: Slot<i64>,
-    pub attack_target: Slot<Who>,
+    pub(super) attack_target: Slot<warden::AttackTarget>,
     pub attack_cooling_down: Slot<bool>,
     pub roar_target: Slot<Who>,
     pub disturbance_location: Slot<[i32; 3]>,
@@ -116,6 +116,15 @@ pub struct Memories {
     pub sonic_boom_sound_delay: Slot<()>,
 }
 impl Memories {
+    pub(super) fn target(&self) -> Option<Who> {
+        self.attack_target.value().map(|target| target.who)
+    }
+
+    pub(super) fn set_target(&mut self, target: Option<Who>, player_id: Option<u32>) {
+        self.attack_target
+            .set_opt(target.map(|who| warden::AttackTarget::new(who, player_id)));
+    }
+
     fn tick(&mut self) {
         self.nearest_players.tick();
         self.nearest_visible_player.tick();
@@ -199,6 +208,7 @@ struct Entry {
 /// The warden's brain.
 #[derive(Clone, Debug)]
 pub struct Brain {
+    pub(super) generation: u64,
     pub mem: Memories,
     /// `NEAREST_PLAYERS` and `WARDEN_ENTITY_SENSOR`: ticks to the next scan.
     sensors: [i64; 2],
@@ -209,24 +219,14 @@ pub struct Brain {
 }
 impl Default for Brain {
     fn default() -> Self {
-        // No mob id: nothing attaches (a default brain is the empty shell a
-        // warden's state starts from; `init_brain` builds the real one).
-        Self::new("", 0)
+        Self::new(0, 0)
     }
 }
 impl Brain {
-    pub fn new(mob_id: &str, shuffle_seed: i64) -> Self {
-        let mut list = activities(shuffle_seed);
-        // The parts' behaviors join before the sort, so each lands after
-        // vanilla's of its priority (#824); the stable sort keeps vanilla's
-        // own order. Nothing joins a type no part attached to, and nothing
-        // is asked or built then.
-        let before = list.len();
-        attach_behaviors(mob_id, &mut list);
-        if list.len() > before {
-            list.sort_by_key(|e| (e.prio, e.act.slot(), e.act.order()));
-        }
+    pub fn new(generation: u64, shuffle_seed: i64) -> Self {
+        let list = activities(shuffle_seed);
         Self {
+            generation,
             mem: Memories::default(),
             sensors: [0; 2],
             activity: Act::Idle,
@@ -595,13 +595,21 @@ pub(super) fn set_disturbance(m: &mut Mob, w: &MobWorld, position: [i32; 3]) {
     mm.walk_target.clear();
 }
 /// `Warden.setAttackTarget`.
-pub(super) fn set_attack_target(m: &mut Mob, w: &MobWorld, target: Who) {
-    let TargetChange::Set(target) = w.change_target(m, true, Some(target)) else {
+pub(super) fn set_attack_target(m: &mut Mob, w: &MobWorld, target: warden::AttackTarget) {
+    let before = w.selected_player_identity();
+    let TargetChange::Set(chosen) = w.change_target(m, true, Some(target.who)) else {
         return;
+    };
+    let after = w.selected_player_identity();
+    // Keep the proposed identity unless a target hook redirects the mob.
+    let player_id = if chosen == Some(target.who) && before == after {
+        target.player_id
+    } else {
+        after.map(|(_, id)| id)
     };
     let mm = mem(m);
     mm.roar_target.clear();
-    mm.attack_target.set_opt(target);
+    mm.set_target(chosen, player_id);
     mm.cant_reach_walk_target_since.clear();
     mm.sonic_boom_cooldown.set_ttl((), 200);
 }
@@ -640,31 +648,43 @@ fn sound(m: &Mob, name: &'static str, volume: f32, pitch: f32, events: &mut Vec<
 
 // ---- Mod behaviors ------------------------------------------------------
 
-/// The parts' behaviors for this brain (#824): each joins the list with its
-/// activity and priority, refused where this brain has no such activity.
-fn attach_behaviors(mob_id: &str, list: &mut Vec<Entry>) {
-    struct Reg<'a> {
-        list: &'a mut Vec<Entry>,
-        mob_id: &'a str,
+/// Validate that this brain keeps a slot for `activity`.
+pub(super) fn validate_activity(
+    activity: mod_api::Activity,
+) -> Result<(), mod_api::BehaviorRefusal> {
+    act_of(activity).map(|_| ())
+}
+
+/// Apply staged mod behaviors to the warden brain if it is still the same
+/// `generation` instance; otherwise discard them safely and return `false`.
+pub(super) fn apply_staged(
+    m: &mut Mob,
+    generation: u64,
+    staged: Vec<mod_api::RegisteredBehavior>,
+) -> bool {
+    let Some(st) = m.extra.warden.as_deref_mut() else {
+        super::mod_behaviors::discard_registrations(staged);
+        return false;
+    };
+    if st.brain.generation != generation {
+        super::mod_behaviors::discard_registrations(staged);
+        return false;
     }
-    impl mod_api::BehaviorRegistrarBackend for Reg<'_> {
-        fn add_behavior(
-            &mut self,
-            r: mod_api::RegisteredBehavior,
-        ) -> Result<(), mod_api::BehaviorRefusal> {
-            let act = act_of(r.activity)?;
-            self.list.push(Entry {
-                prio: r.priority,
-                act,
-                b: B::Mod(super::mod_behaviors::ModBehavior::new(r)),
-            });
-            Ok(())
-        }
-        fn mob_id(&self) -> &str {
-            self.mob_id
-        }
+    let before = st.brain.list.len();
+    for r in staged {
+        let act = act_of(r.activity).expect("staged activity was validated on add");
+        st.brain.list.push(Entry {
+            prio: r.priority,
+            act,
+            b: B::Mod(super::mod_behaviors::ModBehavior::new(r)),
+        });
     }
-    super::mod_behaviors::attach(mob_id, &mut Reg { list, mob_id });
+    if st.brain.list.len() > before {
+        st.brain
+            .list
+            .sort_by_key(|e| (e.prio, e.act.slot(), e.act.order()));
+    }
+    true
 }
 
 /// This brain's slot for a mod-api activity.
@@ -827,11 +847,11 @@ impl B {
                     return false;
                 }
                 let liquid = m.fluids.in_water || m.fluids.in_lava;
-                if !(m.on_ground || liquid) {
+                if !(m.ground.on_ground || liquid) {
                     return false;
                 }
                 t.begin(cx.level.random(), cx.now);
-                if m.on_ground {
+                if m.ground.on_ground {
                     warden::set_pose(m, Pose::Digging);
                     sound(m, "entity.warden.dig", 5.0, 1.0, cx.events);
                 } else {
@@ -973,7 +993,7 @@ impl B {
                 true
             }),
             B::StopAttackingIfTargetInvalid(r) => one(r, || {
-                let Some(target) = mem(m).attack_target.value() else {
+                let Some(target) = mem(m).target() else {
                     return false;
                 };
                 let alive = cx.w.target_info(target).is_some_and(|t| t.alive);
@@ -988,7 +1008,10 @@ impl B {
                         st.anger.clear(target);
                     }
                     set_dig_cooldown(m);
-                    mem(m).attack_target.set_opt(replacement);
+                    mem(m).set_target(
+                        replacement,
+                        cx.w.selected_player_identity().map(|(_, id)| id),
+                    );
                 }
                 true
             }),
@@ -997,7 +1020,7 @@ impl B {
                 if mm.look_target.present() || !mm.visible_mobs.present() {
                     return false;
                 }
-                let target = mm.attack_target.value();
+                let target = mm.target();
                 let max = (FOLLOW_RANGE as f32 * FOLLOW_RANGE as f32) as f64;
                 let w = cx.w;
                 let found = find_closest(m, w, |m, who| {
@@ -1010,7 +1033,7 @@ impl B {
                 true
             }),
             B::SetWalkTargetFromAttackTarget(r) => one(r, || {
-                let Some(target) = mem(m).attack_target.value() else {
+                let Some(target) = mem(m).target() else {
                     return false;
                 };
                 let w = cx.w;
@@ -1036,7 +1059,7 @@ impl B {
                 if mm.sonic_boom_cooldown.present() {
                     return false;
                 }
-                let Some(target) = mm.attack_target.value() else {
+                let Some(target) = mm.target() else {
                     return false;
                 };
                 let close =
@@ -1065,7 +1088,7 @@ impl B {
                 if mm.attack_cooling_down.present() || !mm.visible_mobs.present() {
                     return false;
                 }
-                let Some(target) = mm.attack_target.value() else {
+                let Some(target) = mm.target() else {
                     return false;
                 };
                 let w = cx.w;
@@ -1266,7 +1289,8 @@ impl B {
                     warden::set_pose(m, Pose::Standing);
                 }
                 if let Some(target) = mem(m).roar_target.value() {
-                    set_attack_target(m, cx.w, target);
+                    let player_id = cx.w.selected_player_identity().map(|(_, id)| id);
+                    set_attack_target(m, cx.w, warden::AttackTarget::new(target, player_id));
                 }
                 mem(m).roar_target.clear();
             }
@@ -1392,7 +1416,11 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
         mm.cant_reach_walk_target_since,
         |t: &i64| t.to_string()
     );
-    slot!("attack_target", mm.attack_target, |e: &Who| who(*e));
+    slot!(
+        "attack_target",
+        mm.attack_target,
+        |e: &warden::AttackTarget| who(e.who)
+    );
     slot!("attack_cooling_down", mm.attack_cooling_down, |t: &bool| t
         .to_string());
     slot!("roar_target", mm.roar_target, |e: &Who| who(*e));
@@ -1567,6 +1595,49 @@ mod warden_owned_memory_tests {
             }
         }
     }
+    #[test]
+    fn a_saved_sonic_boom_cooldown_restores_its_live_expiry() {
+        let kinds = types();
+        let key = "minecraft:sonic_boom_cooldown";
+        for (ttl, loaded) in [
+            (Tag::Int(2), Some(2)),
+            (Tag::String("unreadable".into()), None),
+        ] {
+            let mut raw = input(true, 0);
+            let mut unit = entry(None);
+            put(&mut unit, "ttl", ttl);
+            put(
+                &mut raw,
+                "Brain",
+                Tag::compound([("memories", Tag::compound([(key, unit)]))]),
+            );
+            let mut mob = mob_from_nbt(&raw, &kinds, 91, None).unwrap();
+            let saved = |mob: &Mob| {
+                mob_to_nbt(
+                    mob,
+                    [29, 0, 0, 1],
+                    Some(&raw),
+                    None,
+                    |_| None,
+                    &Default::default(),
+                )
+                .get("Brain")
+                .and_then(|b| b.get("memories"))
+                .and_then(|b| b.get(key))
+                .cloned()
+            };
+            assert_eq!(saved(&mob), Some(entry(loaded)));
+            for expected in if loaded.is_some() {
+                [Some(entry(Some(1))), Some(entry(Some(0))), None]
+            } else {
+                [Some(entry(None)), Some(entry(None)), Some(entry(None))]
+            } {
+                mob.extra.warden.as_mut().unwrap().brain.mem.tick();
+                assert_eq!(saved(&mob), expected);
+            }
+        }
+    }
+
     #[test]
     fn owned_memory_mutations_remove_stale_raw_without_replacing_the_brain() {
         let raw = input(true, 2);

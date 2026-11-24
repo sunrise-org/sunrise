@@ -2,8 +2,9 @@
 //! identifier and target.
 use crate::{
     Error, Result,
-    buf::{Codec, Ident, Reader, Writer},
+    buf::{Codec, Ident, Reader},
 };
+use sunrise_core::vanilla_bytes::Writer;
 
 /// ClientboundTrackedWaypointPacket.Operation, by ordinal.
 pub mod waypoint_operation {

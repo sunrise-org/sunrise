@@ -1,8 +1,8 @@
 //! Happy ghasts on the game side: putting a harness on (and shearing it
 //! off), riding, getting off on top, and the ghastling a dried ghast block
 //! hatches.
-use super::Game;
 use super::level_sounds::LevelSound;
+use super::{Game, item_abilities::ability};
 use mod_api::SoundSource;
 use sunrise_client::actions::Action;
 use sunrise_client::mobs::{MobEvent, happy_ghast};
@@ -21,7 +21,7 @@ impl Game<'_> {
             return false;
         }
         let at = m.center();
-        let sneaking = self.keys.held(Action::Sneak);
+        let sneaking = self.held_mapping(Action::Sneak);
         let harnessed = m.extra.body_id().is_some();
         // Equippable.equipOnInteract: a harness goes on a bare adult.
         if item.ends_with("_harness") && item.starts_with("minecraft:") && !harnessed {
@@ -30,8 +30,7 @@ impl Game<'_> {
                 stack
             });
             self.mobs[index].extra.set_body_stack(held);
-            self.audio
-                .play("minecraft:entity.happy_ghast.equip", Some(at), 1.0, 1.0);
+            self.play_audio("minecraft:entity.happy_ghast.equip", Some(at), 1.0, 1.0);
             self.consume_held();
             let id = self.mobs[index].id;
             let pos = self.mobs[index].position;
@@ -39,13 +38,12 @@ impl Game<'_> {
             return true;
         }
         // Equippable.canBeSheared: shears take the harness off again.
-        if item == "minecraft:shears"
+        if self.held_shears(ability::SHEARS_REMOVE_ARMOR)
             && harnessed
             && !sneaking
             && let Some(harness) = self.mobs[index].take_body_equipment()
         {
-            self.audio
-                .play("minecraft:entity.happy_ghast.unequip", Some(at), 1.0, 1.0);
+            self.play_audio("minecraft:entity.happy_ghast.unequip", Some(at), 1.0, 1.0);
             self.spawn_item(harness, at, [0.0, 0.2, 0.0], 10);
             self.damage_held_tool();
             let id = self.mobs[index].id;
@@ -57,7 +55,11 @@ impl Game<'_> {
             // doPlayerRide: `player.startRiding(this)`, which keeps the
             // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
             let id = self.mobs[index].id;
-            if !self.native_may_board(id) {
+            // `startRiding` without `force` asks `canAddPassenger`: a fifth rider is refused.
+            let aboard = self.seated_passengers(id).len();
+            if !sunrise_client::mobs::riders::can_add_passenger(&self.mobs[index], aboard)
+                || !self.native_may_board(id)
+            {
                 return true;
             }
             self.break_leash(id, true, false);

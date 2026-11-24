@@ -1,5 +1,4 @@
 //! The `item_crafted` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0229
 
 pub trait Hooks {
     /// A player took a crafting grid's result (`ResultSlot.onTake`, NeoForge's
@@ -15,10 +14,11 @@ pub trait Hooks {
     /// included, and not for a stonecutter's, a smithing table's or a
     /// furnace's result. Server-side.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "listen",
         neoforge = "PlayerEvent.ItemCraftedEvent",
         version = 2
     )]
-    fn item_crafted();
+    fn item_crafted(player: u128, recipe: &str, stack: &ItemStack, inputs: &[Option<ItemStack>]);
 }

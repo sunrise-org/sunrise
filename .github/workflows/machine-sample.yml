@@ -79,7 +79,7 @@ jobs:
             # Ordinary rustc invocations through the shared compiler cache, as in lint.
             echo "RUSTC_WRAPPER=$GITHUB_WORKSPACE/tools/ci/compiler-cache.sh" >> "$GITHUB_ENV"
           fi
-          bash tools/ci/rustup_install.sh --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
+          bash tools/ci/rustup_install.sh --profile minimal --component rustfmt --component clippy
       # On Dyna's runner the sample builds this checkout's API crates in the persistent target: keep its source
       # snapshot true, as every job building there does (tools/ci/source_mtimes.py).
       - name: Restore unchanged source timestamps

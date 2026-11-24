@@ -12,8 +12,8 @@
 //! [`NaturalLevel`] so the game and the differential test world
 //! (tools/test_natural_spawn_parity.py) run the same code; random draws follow
 //! vanilla's order.
-use super::Species;
 use super::spawn_rules::{self, Reason, SpawnLevel};
+use super::{MobType, Species};
 use crate::biome::SpawnEntry;
 use crate::fast_hash::FxHashMap;
 use mod_api::{SpawnCheck, SpawnFlags, SpawnLimits};
@@ -25,7 +25,7 @@ use std::{
     path::Path,
 };
 use sunrise_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
     random::RandomSource,
 };
 
@@ -305,7 +305,7 @@ fn is_animal(s: Species) -> bool {
         )
 }
 /// `Mob.getMaxSpawnClusterSize`.
-pub fn max_cluster_size(s: Species) -> u32 {
+pub fn max_cluster_size(s: Species) -> i32 {
     use Species as S;
     match s {
         S::Horse
@@ -323,11 +323,6 @@ pub fn max_cluster_size(s: Species) -> u32 {
         _ => 4,
     }
 }
-/// Whether a group of `size` mobs has reached its limit: `parts`, the limit the new mob's
-/// entity parts answered, else `Mob.getMaxSpawnClusterSize` of its species.
-fn cluster_full(size: u32, parts: Option<u32>, species: Species) -> bool {
-    size >= parts.unwrap_or_else(|| max_cluster_size(species))
-}
 /// `EntityType.canSpawnFarFromPlayer`: creatures, misc, pillagers, shulkers.
 fn spawns_far_from_player(s: Species, category: Category) -> bool {
     matches!(category, Category::Creature | Category::Misc)
@@ -335,9 +330,6 @@ fn spawns_far_from_player(s: Species, category: Category) -> bool {
 }
 
 /// What natural spawning reads from a level beyond the spawn rules.
-/// An entity type's species, width, height and category.
-pub type MobType = (Species, f32, f32, Category);
-
 pub trait NaturalLevel: SpawnLevel {
     /// `MobSpawnEvent.PositionCheck`: what server mods answer for the new mob
     /// of type `entity` at `at`, described by `pending`; `Default` leaves the
@@ -347,9 +339,22 @@ pub trait NaturalLevel: SpawnLevel {
         _entity: &str,
         _reason: Reason,
         _at: [f64; 3],
-        _pending: Pending,
+        _pending: Pending<'_>,
     ) -> SpawnCheck {
         SpawnCheck::Default
+    }
+    /// A spawner's configured entity data, loaded once before its position check
+    /// (`BaseSpawner.serverTick`'s `EntityType.loadEntityRecursive`): the level keeps the
+    /// loaded tree, lends its root to the check and hands the same tree on to finalization and
+    /// admission. False when the data cannot be loaded.
+    fn load_configured(
+        &self,
+        _entity: &sunrise_core::nbt::Compound,
+        _id: &str,
+        _at: [f64; 3],
+        _yaw: f32,
+    ) -> bool {
+        true
     }
     /// The position check just asked refused the mob: what the level made
     /// for it is dropped.
@@ -373,8 +378,8 @@ pub trait NaturalLevel: SpawnLevel {
     /// `DimensionType.ambientLight`.
     fn ambient_light(&self) -> f32;
     fn has_ceiling(&self) -> bool;
-    /// The entity type's species, width, height and category.
-    fn mob_type(&self, entity: &str) -> Option<MobType>;
+    /// The registered living entity type.
+    fn mob_type(&self, entity: &str) -> Option<&MobType>;
     /// The `natural_mob_spawns` lists by category at a position.
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>>;
     /// The `natural_mob_spawns` spawn cost of a type at a position.
@@ -408,7 +413,8 @@ pub trait NaturalLevel: SpawnLevel {
     /// `noCollision(null, box)`: blocks under an empty collision context and
     /// entities that can be collided with.
     fn no_collision(&self, bounds: Aabb) -> bool;
-    /// `isUnobstructed(entity)`: no entity blocking building overlaps.
+    /// `isUnobstructed(entity)`: no entity blocking building overlaps, including
+    /// entities already accepted by this spawn pass.
     fn unobstructed(&self, bounds: Aabb) -> bool;
     /// The `spawn_mobs` game rule.
     fn spawn_mobs(&self) -> bool;
@@ -427,11 +433,23 @@ pub enum Heightmap {
     MotionBlockingNoLeaves,
 }
 impl Heightmap {
-    pub fn from_name(name: &str) -> Self {
-        match name {
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
             "WORLD_SURFACE" => Self::WorldSurface,
             "OCEAN_FLOOR" => Self::OceanFloor,
             "MOTION_BLOCKING" => Self::MotionBlocking,
+            "MOTION_BLOCKING_NO_LEAVES" => Self::MotionBlockingNoLeaves,
+            _ => return None,
+        })
+    }
+}
+
+impl From<mod_api::Heightmap> for Heightmap {
+    fn from(heightmap: mod_api::Heightmap) -> Self {
+        match heightmap {
+            mod_api::Heightmap::WorldSurface => Self::WorldSurface,
+            mod_api::Heightmap::OceanFloor => Self::OceanFloor,
+            mod_api::Heightmap::MotionBlocking => Self::MotionBlocking,
             _ => Self::MotionBlockingNoLeaves,
         }
     }
@@ -588,10 +606,13 @@ pub fn contains_any_liquid<L: SpawnLevel>(l: &L, b: Aabb) -> bool {
 }
 /// `EntityDimensions.makeBoundingBox`: the half width is a float.
 pub fn spawn_box(x: f64, y: f64, z: f64, width: f32, height: f32) -> Aabb {
-    let half = f64::from(width / 2.0);
+    spawn_box_at([x, y, z], f64::from(width / 2.0), f64::from(height))
+}
+
+pub(super) fn spawn_box_at([x, y, z]: [f64; 3], half_width: f64, height: f64) -> Aabb {
     Aabb::new(
-        Vec3::new(x - half, y, z - half),
-        Vec3::new(x + half, y + f64::from(height), z + half),
+        Vec3::new(x - half_width, y, z - half_width),
+        Vec3::new(x + half_width, y + height, z + half_width),
     )
 }
 /// `EntityType.spawnDimensionsScale`: cube mobs are checked for room at
@@ -603,26 +624,25 @@ fn spawn_dimensions_scale(s: Species) -> f32 {
         _ => 1.0,
     }
 }
+/// The half-width and height used by `EntityType.getSpawnAABB`.
+pub(super) fn spawn_extents(s: Option<Species>, width: f32, height: f32) -> (f64, f64) {
+    let scale = s.map_or(1.0, spawn_dimensions_scale);
+    (f64::from(scale * width / 2.0), f64::from(scale * height))
+}
+
 /// `EntityType.getSpawnAABB`.
 pub fn spawn_aabb(s: Species, x: f64, y: f64, z: f64, width: f32, height: f32) -> Aabb {
-    let scale = spawn_dimensions_scale(s);
-    let half = f64::from(scale * width / 2.0);
-    Aabb::new(
-        Vec3::new(x - half, y, z - half),
-        Vec3::new(x + half, y + f64::from(scale * height), z + half),
-    )
+    let (half, height) = spawn_extents(Some(s), width, height);
+    spawn_box_at([x, y, z], half, height)
 }
 /// The mob a position check is about, which the site has not created yet
 /// (vanilla creates it before the check).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pending {
+pub struct Pending<'a> {
     /// The yaw the site creates it with, drawn before the check.
     pub yaw: f32,
-    /// Whether the site creates it fresh from its type (`EntityType.create`):
-    /// natural spawning, and a spawner whose spawn data is the type alone. A
-    /// spawner with entity data loads it, and chunk generation's packs come
-    /// from the generator.
-    pub fresh: bool,
+    /// Configured spawner data, loaded into the candidate before the check.
+    pub configured: Option<&'a sunrise_core::nbt::Compound>,
 }
 /// `Mob.checkSpawnRules` and `checkSpawnObstruction` of a freshly created
 /// mob, unless a mod forces the answer (`MobSpawnEvent.PositionCheck`); then
@@ -632,7 +652,7 @@ pub fn position_ok<L: NaturalLevel>(
     entity: &str,
     reason: Reason,
     at: [f64; 3],
-    pending: Pending,
+    pending: Pending<'_>,
     vanilla: impl FnOnce() -> bool,
 ) -> bool {
     let ok = match l.position_check(entity, reason, at, pending) {
@@ -645,27 +665,35 @@ pub fn position_ok<L: NaturalLevel>(
     }
     ok
 }
-/// `checkSpawnObstruction` of a freshly created mob with the given box, with
-/// the mobs already `spawned` in the way; None in a generation region, which
-/// has no entities (`WorldGenRegion.getEntities`).
+/// `EntityGetter.isUnobstructed`'s shape test after selecting an entity with
+/// `blocksBuilding`. A broad-phase AABB overlap alone is not an obstruction.
+pub fn blocks_spawn_shape(shape: &VoxelShape, query: Aabb, blocker: Aabb) -> bool {
+    blocker.intersects(query)
+        && VoxelShape::from_box(blocker).is_ok_and(|other| {
+            shape
+                .join_is_not_empty(&other, ShapeOp::AND)
+                .unwrap_or(false)
+        })
+}
+
+/// `checkSpawnObstruction` of a freshly created mob with the given box.
+/// Generation skips the entity query (`WorldGenRegion.getEntities` is empty).
 pub fn spawn_obstruction<L: NaturalLevel>(
     s: Species,
     l: &L,
     bounds: Aabb,
-    spawned: Option<&[Aabb]>,
+    check_entities: bool,
     x: i32,
     y: i32,
     z: i32,
 ) -> bool {
-    let unobstructed = |l: &L| {
-        spawned.is_none_or(|s| l.unobstructed(bounds) && !s.iter().any(|b| b.intersects(bounds)))
-    };
+    let unobstructed = || !check_entities || l.unobstructed(bounds);
     match obstruction(s) {
-        Obstruction::NoLiquidUnobstructed => !contains_any_liquid(l, bounds) && unobstructed(l),
-        Obstruction::Unobstructed => unobstructed(l),
+        Obstruction::NoLiquidUnobstructed => !contains_any_liquid(l, bounds) && unobstructed(),
+        Obstruction::Unobstructed => unobstructed(),
         Obstruction::NoLiquid => !contains_any_liquid(l, bounds),
         Obstruction::Ocelot => {
-            if unobstructed(l) && !contains_any_liquid(l, bounds) {
+            if unobstructed() && !contains_any_liquid(l, bounds) {
                 if y < l.sea_level() {
                     return false;
                 }
@@ -829,10 +857,10 @@ fn vanilla_mobs_at<L: NaturalLevel>(
         (monster && id == "minecraft:fortress") || overrides.get(id, category.name()).is_some()
     });
     if category == Category::Monster
-        && name_at(l, x, y - 1, z) == "minecraft:nether_bricks"
         && structures
             .iter()
             .any(|s| s.id == "minecraft:fortress" && s.in_bounds)
+        && name_at(l, x, y - 1, z) == "minecraft:nether_bricks"
     {
         return fortress_enemies();
     }
@@ -1218,18 +1246,16 @@ impl SpawnState {
         change * charge
     }
     /// `SpawnState.afterSpawn`.
-    fn after_spawn<L: NaturalLevel>(
+    fn after_spawn(
         &mut self,
-        l: &L,
+        spawn_cost: impl FnOnce(&str, [i32; 3]) -> Option<SpawnCost>,
         entity: &str,
         category: Category,
         pos: [i32; 3],
     ) {
         let charge = match &self.last_checked {
             Some((p, c)) if *p == pos => *c,
-            _ => l
-                .spawn_cost(entity, pos[0], pos[1], pos[2])
-                .map_or(0.0, |c| c.charge),
+            _ => spawn_cost(entity, pos).map_or(0.0, |c| c.charge),
         };
         self.add_charge(pos, charge);
         self.counts[category.index()] += 1;
@@ -1254,8 +1280,8 @@ pub enum Event<'a> {
     /// A mob spawned.
     Spawn(&'a str, [f64; 3], f32),
 }
-/// A mob the spawner is about to add: the level runs `finalizeSpawn` and
-/// adds it, returning its finalized box and whether a tropical fish schools.
+/// A mob the spawner is about to add: the level runs `finalizeSpawn`,
+/// makes it visible to the pass's entity queries and returns its group data.
 #[derive(Clone, Debug)]
 pub struct SpawnRequest<'a> {
     pub entity: &'a str,
@@ -1268,58 +1294,85 @@ pub struct SpawnRequest<'a> {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Spawned {
-    pub bounds: Aabb,
     /// `TropicalFish.isSchool`.
     pub school: bool,
-    /// The group's size limit the new mob's entity parts answered; `None` leaves
-    /// `Mob.getMaxSpawnClusterSize` of its species.
-    pub cluster_size: Option<u32>,
 }
 
 /// `NaturalSpawner.spawnForChunk` for the categories already filtered.
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_for_chunk<L: NaturalLevel, R: RandomSource>(
+pub fn spawn_for_chunk<L: NaturalLevel, R: RandomSource + Clone>(
     l: &L,
     random: &mut R,
     state: &mut SpawnState,
     categories: &[Category],
     chunk: (i32, i32),
     spawn: &mut dyn FnMut(&L, &SpawnRequest, &mut R) -> Option<Spawned>,
+    cluster_size: &mut dyn FnMut(&L, &SpawnRequest, i32) -> i32,
     trace: &mut dyn FnMut(Event<'_>),
 ) {
     for &category in categories {
         let local = state.can_spawn_local(category, chunk.0, chunk.1);
         trace(Event::Local(category, local));
         if local {
-            spawn_category_for_chunk(l, random, state, category, chunk, spawn, trace);
+            spawn_category_for_chunk(
+                l,
+                random,
+                state,
+                category,
+                chunk,
+                spawn,
+                cluster_size,
+                trace,
+            );
         }
     }
 }
 /// `NaturalSpawner.spawnCategoryForChunk`: `getRandomPosWithin` (a column of
-/// the chunk, a height up to one above the world surface).
-pub fn spawn_category_for_chunk<L: NaturalLevel, R: RandomSource>(
+/// the chunk, a height up to one above the world surface), then the position's pass.
+pub fn spawn_category_for_chunk<L: NaturalLevel, R: RandomSource + Clone>(
     l: &L,
     random: &mut R,
     state: &mut SpawnState,
     category: Category,
     chunk: (i32, i32),
     spawn: &mut dyn FnMut(&L, &SpawnRequest, &mut R) -> Option<Spawned>,
+    cluster_size: &mut dyn FnMut(&L, &SpawnRequest, i32) -> i32,
     trace: &mut dyn FnMut(Event<'_>),
 ) {
+    let start = spawn_start(l, random, chunk);
+    trace(Event::Start(category, start));
+    if start[1] > l.min_y() {
+        spawn_category_for_position(
+            l,
+            random,
+            state,
+            category,
+            chunk,
+            start,
+            spawn,
+            cluster_size,
+            trace,
+        );
+    }
+}
+
+/// NaturalSpawner.getRandomPosWithin.
+pub fn spawn_start(
+    l: &impl NaturalLevel,
+    random: &mut impl RandomSource,
+    chunk: (i32, i32),
+) -> [i32; 3] {
     let x = chunk.0 * 16 + random.next_int_bound(16).unwrap_or(0);
     let z = chunk.1 * 16 + random.next_int_bound(16).unwrap_or(0);
     let top = l.heightmap(Heightmap::WorldSurface, x, z);
     let min = l.min_y();
     let y = min + random.next_int_bound(top - min + 1).unwrap_or(0);
-    trace(Event::Start(category, [x, y, z]));
-    if y > min {
-        spawn_category_for_position(l, random, state, category, chunk, [x, y, z], spawn, trace);
-    }
+    [x, y, z]
 }
-/// `NaturalSpawner.spawnCategoryForPosition` with the spawn state's
-/// `canSpawn` and `afterSpawn`.
+
+/// `NaturalSpawner.spawnCategoryForPosition`, for probes which model insertion locally.
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
+pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource + Clone>(
     l: &L,
     random: &mut R,
     state: &mut SpawnState,
@@ -1327,71 +1380,174 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
     chunk: (i32, i32),
     start: [i32; 3],
     spawn: &mut dyn FnMut(&L, &SpawnRequest, &mut R) -> Option<Spawned>,
+    cluster_size: &mut dyn FnMut(&L, &SpawnRequest, i32) -> i32,
     trace: &mut dyn FnMut(Event<'_>),
 ) {
-    let [x0, y, z0] = start;
-    if l.mob_data().state(l.state(x0, y, z0)).flags & super::data::REDSTONE_CONDUCTOR != 0 {
+    let Some(mut cluster) = SpawnCluster::new(l, state, category, chunk, start) else {
         return;
+    };
+    while let Some(candidate) = cluster.next_candidate(l, random, state, trace) {
+        let request = cluster.request(candidate);
+        let group_index = request.group_index;
+        let Some(result) = spawn(l, &request, random) else {
+            continue;
+        };
+        cluster.after_spawn(
+            |entity, [x, y, z]| l.spawn_cost(entity, x, y, z),
+            state,
+            candidate,
+            candidate.block,
+            trace,
+        );
+        let request = SpawnRequest {
+            group_index,
+            ..cluster.request(candidate)
+        };
+        let size = cluster_size(l, &request, max_cluster_size(candidate.species));
+        cluster.check_limit(candidate, size, result.school);
     }
-    let mut spawned: Vec<Aabb> = Vec::new();
-    let mut cluster = 0u32;
-    let mut nearest = Nearest::new(start, std::mem::take(&mut state.nearby));
-    'groups: for _ in 0..3 {
-        let (mut x, mut z) = (x0, z0);
-        // The group's entry, its type and where it was picked.
-        let mut current: Option<(Cow<'_, SpawnEntry>, Option<MobType>, [i32; 3])> = None;
-        let mut group_index = 0u32;
-        let mut max = (random.next_float() * 4.0).ceil() as i32;
-        let mut ll = 0;
-        while ll < max {
-            ll += 1;
-            x += random.next_int_bound(6).unwrap_or(0) - random.next_int_bound(6).unwrap_or(0);
-            z += random.next_int_bound(6).unwrap_or(0) - random.next_int_bound(6).unwrap_or(0);
+    cluster.finish(state);
+}
+
+/// The natural spawner's search at one start, resumable between the position/finalize checks
+/// (which read the level) and the insertion attempt (which needs the owning level).
+pub struct SpawnCluster {
+    start: [i32; 3],
+    category: Category,
+    chunk: (i32, i32),
+    nearest: Nearest,
+    count: u32,
+    groups: u8,
+    group_index: u32,
+    current: Option<(SpawnEntry, Option<Category>, [i32; 3])>,
+    x: i32,
+    z: i32,
+    attempt: i32,
+    max: i32,
+}
+
+#[derive(Clone, Copy)]
+pub struct SpawnCandidate {
+    block: [i32; 3],
+    position: [f64; 3],
+    yaw: f32,
+    species: Species,
+    category: Category,
+}
+
+impl SpawnCandidate {
+    /// `Mob.getMaxSpawnClusterSize` for this candidate's species.
+    pub fn vanilla_limit(self) -> i32 {
+        max_cluster_size(self.species)
+    }
+}
+
+impl SpawnCluster {
+    pub fn new(
+        l: &impl NaturalLevel,
+        state: &mut SpawnState,
+        category: Category,
+        chunk: (i32, i32),
+        start: [i32; 3],
+    ) -> Option<Self> {
+        let [x, y, z] = start;
+        if l.mob_data().state(l.state(x, y, z)).flags & super::data::REDSTONE_CONDUCTOR != 0 {
+            return None;
+        }
+        Some(Self {
+            start,
+            category,
+            chunk,
+            nearest: Nearest::new(start, std::mem::take(&mut state.nearby)),
+            count: 0,
+            groups: 0,
+            group_index: 0,
+            current: None,
+            x,
+            z,
+            attempt: 0,
+            max: 0,
+        })
+    }
+
+    pub fn next_candidate(
+        &mut self,
+        l: &impl NaturalLevel,
+        random: &mut (impl RandomSource + Clone),
+        state: &mut SpawnState,
+        trace: &mut dyn FnMut(Event<'_>),
+    ) -> Option<SpawnCandidate> {
+        let [x0, y, z0] = self.start;
+        loop {
+            if self.attempt >= self.max {
+                if self.groups >= 3 {
+                    return None;
+                }
+                self.groups += 1;
+                (self.x, self.z) = (x0, z0);
+                self.current = None;
+                self.group_index = 0;
+                self.attempt = 0;
+                self.max = (random.next_float() * 4.0).ceil() as i32;
+                continue;
+            }
+            self.attempt += 1;
+            self.x += random.next_int_bound(6).unwrap_or(0) - random.next_int_bound(6).unwrap_or(0);
+            self.z += random.next_int_bound(6).unwrap_or(0) - random.next_int_bound(6).unwrap_or(0);
+            let (x, z) = (self.x, self.z);
             let (xx, zz) = (f64::from(x) + 0.5, f64::from(z) + 0.5);
             trace(Event::Try(x, z));
             attempt_count(0);
-            let Some(distance) = nearest.distance_sqr(l, xx, f64::from(y), zz) else {
+            let Some(distance) = self.nearest.distance_sqr(l, xx, f64::from(y), zz) else {
                 continue;
             };
-            if !right_distance(l, chunk, [x, y, z], distance) {
+            if !right_distance(l, self.chunk, [x, y, z], distance) {
                 continue;
             }
-            if current.is_none() {
-                let list = if category == Category::WaterAmbient
+            if self.current.is_none() {
+                let list = if self.category == Category::WaterAmbient
                     && l.biome_tag("minecraft:reduce_water_ambient_spawns", x, y, z)
                     && random.next_float() < 0.98
                 {
                     None
                 } else {
-                    // Borrowed from the level unless a mod's hook changed the list.
-                    match mobs_at(l, category, x, y, z) {
-                        Cow::Borrowed(list) => weighted_pick(list, random).map(Cow::Borrowed),
-                        Cow::Owned(list) => weighted_pick(&list, random).cloned().map(Cow::Owned),
-                    }
+                    // Only the chosen entry needs to outlive the read-only level view.
+                    weighted_pick(&mobs_at(l, self.category, x, y, z), random).cloned()
                 };
                 let Some(entry) = list else {
-                    break;
+                    self.attempt = self.max;
+                    continue;
                 };
-                max = sample_count(&entry, random) as i32;
-                let kind = l.mob_type(&entry.entity);
-                current = Some((entry, kind, [x, y, z]));
+                self.max = sample_count(&entry, random) as i32;
+                let type_category = l
+                    .mob_type(&entry.entity)
+                    .map(|t| Category::from_name(&t.category));
+                self.current = Some((entry, type_category, [x, y, z]));
             }
-            let (entry, kind, picked_at) = current.as_ref().unwrap_or_else(|| unreachable!());
+            let (entry, type_category, picked_at) =
+                self.current.as_ref().unwrap_or_else(|| unreachable!());
+            let Some(type_category) = *type_category else {
+                continue;
+            };
+            let Some(kind) = l.mob_type(&entry.entity) else {
+                continue;
+            };
             // The list the entry was picked from holds it where it was picked.
             let listed = *picked_at == [x, y, z];
-            let valid = valid_position_for_type(
+            if !valid_position_for_type(
                 l,
                 random,
-                category,
+                self.category,
                 entry,
-                *kind,
+                kind,
+                type_category,
                 listed,
                 [x, y, z],
                 distance,
-            );
-            let Some((species, width, height, type_category)) = (*kind).filter(|_| valid) else {
+            ) {
                 continue;
-            };
+            }
+            let (species, width, height) = (kind.species, kind.width as f32, kind.height as f32);
             let passed = state.can_spawn(l, &entry.entity, [x, y, z]);
             trace(Event::Test(&entry.entity, [x, y, z], passed));
             if !passed {
@@ -1409,42 +1565,81 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                     &entry.entity,
                     Reason::Natural,
                     [xx, f64::from(y), zz],
-                    Pending { yaw, fresh: true },
+                    Pending {
+                        yaw,
+                        configured: None,
+                    },
                     || {
                         mob_spawn_rules(species, l, x, y, z)
-                            && spawn_obstruction(species, l, bounds, Some(&spawned), x, y, z)
+                            && spawn_obstruction(species, l, bounds, true, x, y, z)
                     },
                 )
             {
                 continue;
             }
-            let request = SpawnRequest {
-                entity: &entry.entity,
-                species,
+            return Some(SpawnCandidate {
+                block: [x, y, z],
                 position: [xx, f64::from(y), zz],
                 yaw,
-                group_index,
-                reason: Reason::Natural,
-            };
-            let Some(result) = spawn(l, &request, random) else {
-                continue;
-            };
-            attempt_count(1);
-            group_index += 1;
-            spawned.push(result.bounds);
-            cluster += 1;
-            state.after_spawn(l, &entry.entity, type_category, [x, y, z]);
-            trace(Event::Spawn(&entry.entity, [xx, f64::from(y), zz], yaw));
-            if cluster_full(cluster, result.cluster_size, species) {
-                break 'groups;
-            }
-            // TropicalFish.isMaxGroupSizeReached.
-            if species == Species::TropicalFish && !result.school {
-                break;
-            }
+                species,
+                category: type_category,
+            });
         }
     }
-    state.nearby = nearest.nearby;
+
+    pub fn request(&self, candidate: SpawnCandidate) -> SpawnRequest<'_> {
+        let (entry, _, _) = self
+            .current
+            .as_ref()
+            .expect("candidate belongs to the selected spawn group");
+        SpawnRequest {
+            entity: &entry.entity,
+            species: candidate.species,
+            position: candidate.position,
+            yaw: candidate.yaw,
+            group_index: self.group_index,
+            reason: Reason::Natural,
+        }
+    }
+
+    /// Account for an attempted insertion, even if the level declined admission.
+    pub fn after_spawn(
+        &mut self,
+        spawn_cost: impl FnOnce(&str, [i32; 3]) -> Option<SpawnCost>,
+        state: &mut SpawnState,
+        candidate: SpawnCandidate,
+        block: [i32; 3],
+        trace: &mut dyn FnMut(Event<'_>),
+    ) {
+        attempt_count(1);
+        self.group_index += 1;
+        self.count += 1;
+        self.nearest.ready = false;
+        let (entry, _, _) = self
+            .current
+            .as_ref()
+            .expect("candidate belongs to the selected spawn group");
+        state.after_spawn(spawn_cost, &entry.entity, candidate.category, block);
+        trace(Event::Spawn(
+            &entry.entity,
+            candidate.position,
+            candidate.yaw,
+        ));
+    }
+
+    /// Compare the cluster size only after the spawn callback.
+    pub fn check_limit(&mut self, candidate: SpawnCandidate, limit: i32, school: bool) {
+        if i64::from(self.count) >= i64::from(limit) {
+            self.groups = 3;
+            self.attempt = self.max;
+        } else if candidate.species == Species::TropicalFish && !school {
+            self.attempt = self.max;
+        }
+    }
+
+    pub fn finish(self, state: &mut SpawnState) {
+        state.nearby = self.nearest.nearby;
+    }
 }
 /// `getNearestPlayer(x, y, z, -1, false)`'s squared distance for the
 /// attempts of one start. The spawn checks only compare it with 24² and the
@@ -1572,19 +1767,18 @@ fn right_distance<L: NaturalLevel>(l: &L, chunk: (i32, i32), pos: [i32; 3], dist
 /// `isValidSpawnPostitionForType`, for the entry's type (`mob_type`).
 /// `listed`: the position is where the entry was picked from `mobsAt`.
 #[allow(clippy::too_many_arguments)]
-fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
+fn valid_position_for_type<L: NaturalLevel, R: RandomSource + Clone>(
     l: &L,
     random: &mut R,
     category: Category,
     entry: &SpawnEntry,
-    kind: Option<MobType>,
+    kind: &MobType,
+    type_category: Category,
     listed: bool,
     pos: [i32; 3],
     distance: f64,
 ) -> bool {
-    let Some((species, width, height, type_category)) = kind else {
-        return false;
-    };
+    let (species, width, height) = (kind.species, kind.width as f32, kind.height as f32);
     if type_category == Category::Misc {
         return false;
     }
@@ -1613,7 +1807,7 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
     if !hooked && !listed && !in_list() {
         return false;
     }
-    if !spawn_rules::check_spawn_rules(&entry.entity, species, l, Reason::Natural, random, pos) {
+    if !spawn_rules::check_spawn_rules(kind.into(), l, Reason::Natural, random, pos) {
         return false;
     }
     l.no_collision(spawn_aabb(
@@ -1637,7 +1831,11 @@ pub enum GenEvent {
 /// the chunk's surface. `rules` is the region's random, which the spawn
 /// predicates and `spawn` (finalizeSpawn) draw from.
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: RandomSource>(
+pub fn spawn_mobs_for_chunk_generation<
+    L: NaturalLevel,
+    R: RandomSource,
+    Q: RandomSource + Clone,
+>(
     l: &L,
     source: [i32; 3],
     chunk: (i32, i32),
@@ -1675,9 +1873,11 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
             let mut attempts = 0;
             while !success && attempts < 4 {
                 attempts += 1;
-                let Some((species, width, height, _)) = kind else {
+                let Some(kind) = kind else {
                     break;
                 };
+                let (species, width, height) =
+                    (kind.species, kind.width as f32, kind.height as f32);
                 let pos = top_non_colliding(l, &entry.entity, x, z);
                 trace(GenEvent::Column(x, z));
                 if spawn_rules::is_spawn_position_ok(
@@ -1700,8 +1900,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                     let (bx, bz) = (fx.floor() as i32, fz.floor() as i32);
                     if !l.no_collision(spawn_aabb(species, fx, fy, fz, width, height))
                         || !spawn_rules::check_spawn_rules(
-                            &entry.entity,
-                            species,
+                            kind.into(),
                             l,
                             Reason::ChunkGeneration,
                             rules,
@@ -1717,10 +1916,13 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                         &entry.entity,
                         Reason::ChunkGeneration,
                         [fx, fy, fz],
-                        Pending { yaw, fresh: false },
+                        Pending {
+                            yaw,
+                            configured: None,
+                        },
                         || {
                             mob_spawn_rules(species, l, bx, pos[1], bz)
-                                && spawn_obstruction(species, l, bounds, None, bx, pos[1], bz)
+                                && spawn_obstruction(species, l, bounds, false, bx, pos[1], bz)
                         },
                     ) {
                         let request = SpawnRequest {
@@ -1753,7 +1955,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
 /// `getTopNonCollidingPos`: the type's heightmap, under the ceiling in
 /// dimensions that have one, then the placement type's adjustment.
 fn top_non_colliding<L: NaturalLevel>(l: &L, entity: &str, x: i32, z: i32) -> [i32; 3] {
-    let heightmap = Heightmap::from_name(l.mob_data().heightmap(entity));
+    let heightmap = l.mob_data().heightmap(entity);
     let mut y = l.heightmap(heightmap, x, z);
     if l.has_ceiling() {
         loop {
@@ -1856,27 +2058,6 @@ mod tests {
             max: 1,
             constant: true,
         }
-    }
-
-    /// Vanilla's limits stand until a part answers; an answer replaces them, higher or lower,
-    /// and a group stops growing at the size the answer names.
-    #[test]
-    fn a_parts_answer_moves_where_a_group_stops_growing() {
-        let stops_at = |parts: Option<u32>, species| {
-            (1..=64)
-                .find(|&size| cluster_full(size, parts, species))
-                .unwrap()
-        };
-        // `Mob.getMaxSpawnClusterSize`: 4 by default, 8 for wolves, 1 for ghasts.
-        assert_eq!(stops_at(None, Species::Zombie), 4);
-        assert_eq!(stops_at(None, Species::Wolf), 8);
-        assert_eq!(stops_at(None, Species::Ghast), 1);
-        assert_eq!(stops_at(Some(2), Species::Zombie), 2);
-        assert_eq!(stops_at(Some(7), Species::Zombie), 7);
-        assert_eq!(stops_at(Some(3), Species::Wolf), 3);
-        assert_eq!(stops_at(Some(5), Species::Ghast), 5);
-        // A limit of 0 ends the group with the mob just spawned, as vanilla's would.
-        assert!(cluster_full(1, Some(0), Species::Zombie));
     }
 
     /// A state over `chunks` spawnable chunks with one player standing in chunk (0, 0).

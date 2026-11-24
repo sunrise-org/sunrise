@@ -1,5 +1,5 @@
 //! JSON-backed codecs validate nesting before entering serde's recursive code.
-use super::{MAX_DEPTH, Reader, Wire, WireError, Writer};
+use super::{MAX_DEPTH, Reader, WireError};
 use serde_json::Value;
 
 pub(super) fn value_depth<'a>(roots: impl IntoIterator<Item = &'a Value>, depth: u16) -> bool {
@@ -50,32 +50,9 @@ pub(super) fn text_depth(text: &str) -> Result<(), WireError> {
 }
 
 pub(super) fn take<T: serde::de::DeserializeOwned>(input: &mut Reader<'_>) -> Result<T, WireError> {
+    // Serde's parsed values and intermediate allocations cannot charge the shared budget.
+    input.ordinary_only()?;
     let text: String = input.take()?;
     text_depth(&text)?;
     serde_json::from_str(&text).map_err(|_| WireError::Invalid("not valid JSON for its type"))
-}
-
-impl Wire for crate::ModelPart {
-    const MIN: usize = String::MIN;
-    layout_via!(String);
-    fn put(&self, out: &mut Writer) {
-        let mut pending = vec![(self, 0u16)];
-        while let Some((part, depth)) = pending.pop() {
-            if depth >= MAX_DEPTH {
-                out.fail(WireError::Depth);
-                return;
-            }
-            pending.extend(part.children().map(|(_, child)| (child, depth + 1)));
-        }
-        match serde_json::to_string(self) {
-            Ok(text) => match text_depth(&text) {
-                Ok(()) => out.put_str(&text),
-                Err(error) => out.fail(error),
-            },
-            Err(_) => out.fail(WireError::Invalid("not valid model JSON")),
-        }
-    }
-    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        take(input)
-    }
 }

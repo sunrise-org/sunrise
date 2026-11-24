@@ -225,17 +225,17 @@ fn storage_agreement_and_existing_menu_limit() {
     ));
     let layout = CheckedSlotLayout::new(
         SlotLayout::Crafting {
-            width: 255,
+            width: 260,
             height: 1,
-            slots: (0..255).collect(),
-            result: 255,
+            slots: (0..260).collect(),
+            result: 260,
         },
-        256,
+        261,
     )
     .unwrap();
     let display = shaped(1, 1, vec![item("oak")]);
     let mapped = layout.map(&display, false).unwrap();
-    assert_eq!(mapped, vec![(127, item("oak")), (255, item("stick"))]);
+    assert_eq!(mapped, vec![(129, item("oak")), (260, item("stick"))]);
 }
 
 #[test]

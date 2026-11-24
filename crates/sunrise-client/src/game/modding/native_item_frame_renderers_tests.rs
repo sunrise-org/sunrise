@@ -1,10 +1,9 @@
 //! `register_entity_renderers` for item frames and glow item frames (#1296): a renderer
 //! registered for `minecraft:item_frame` or `minecraft:glow_item_frame` draws in place of the
 //! frame model and the item or map on its face, reading the frame's own state; with no renderer
-//! the family's own geometry is unchanged; a failing renderer leaves that geometry until a
-//! resource reload resolves it again.
+//! the family's own geometry is unchanged; an `Err` leaves that geometry for just that draw.
 use super::Game;
-use super::native_entity_renderers::EntityRendererTable;
+use super::native_entity_renderers::{EntityRendererTable, RegisteredEntityRenderer};
 use mod_api::{
     BlockEntityDrawContext, Direction, EntityRenderState, EntityRenderer, Hooks,
     RegisterEntityRenderersEvent, RegistrationContext,
@@ -43,7 +42,7 @@ impl EntityRenderer for Frame {
         entity: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        self.0.lock().unwrap().state = Some(*entity);
+        self.0.lock().unwrap().state = Some(entity.clone());
         raised_quad(draw, 100.0);
         Ok(())
     }
@@ -216,22 +215,27 @@ fn an_item_frame_registration_resolves_to_the_frame_slots() {
     let registered = std::collections::BTreeMap::from([
         (
             "minecraft:item_frame".to_owned(),
-            Arc::new(Mark) as Arc<dyn EntityRenderer>,
+            RegisteredEntityRenderer::new(Arc::new(Mark), None),
         ),
         (
             "minecraft:glow_item_frame".to_owned(),
-            Arc::new(Mark) as Arc<dyn EntityRenderer>,
+            RegisteredEntityRenderer::new(Arc::new(Mark), None),
         ),
     ]);
-    let (table, unknown) =
-        EntityRendererTable::resolve(&registered, &[], &Default::default(), |id| {
+    let (table, unknown) = EntityRendererTable::resolve(
+        &registered,
+        &[],
+        &Default::default(),
+        &crate::game::general::GeneralTypeCatalog::freeze(&[]).unwrap(),
+        |id| {
             [
                 "minecraft:item_frame",
                 "minecraft:glow_item_frame",
                 "minecraft:oak_boat",
             ]
             .contains(&id)
-        });
+        },
+    );
     assert!(table.item_frame(false).is_some());
     assert!(table.item_frame(true).is_some());
     assert_eq!(unknown, Vec::<String>::new());
@@ -369,7 +373,12 @@ fn a_registered_item_frame_draws_its_renderer_in_place_of_the_model() {
             game.frame_geometry(CAMERA, ALPHA, &mut drawn);
             assert_eq!(drawn.len(), 4, "one quad, no frame and no item: {drawn:?}");
             assert_raised_at_hanging_pose(&drawn);
-            let state = heard.lock().unwrap().state.expect("the renderer was asked");
+            let state = heard
+                .lock()
+                .unwrap()
+                .state
+                .take()
+                .expect("the renderer was asked");
             assert_frame_state(state, 91, false, 6.5, true);
 
             heard.lock().unwrap().state = None;
@@ -385,6 +394,7 @@ fn a_registered_item_frame_draws_its_renderer_in_place_of_the_model() {
                 .lock()
                 .unwrap()
                 .state
+                .take()
                 .expect("the glow renderer was asked");
             assert_frame_state(state, 94, true, 3.5, false);
         },
@@ -460,26 +470,30 @@ fn an_unregistered_item_frame_is_byte_identical_to_the_vanilla_route() {
     });
 }
 
-/// A failing renderer falls back to the frame model and is asked no more; only a reload's fresh
-/// table asks it again.
+/// A renderer returning `Err` falls back to the frame model for that frame only and stays active
+/// for later frames and after a resource reload.
 #[test]
 #[ignore = "daily"]
-fn a_failed_item_frame_renderer_draws_the_model_until_a_resource_reload() {
+fn a_failed_item_frame_renderer_falls_back_to_the_model_for_that_frame_only() {
     in_scene(
-        "a_failed_item_frame_renderer_draws_the_model_until_a_resource_reload",
+        "a_failed_item_frame_renderer_falls_back_to_the_model_for_that_frame_only",
         |game, _, flaky| {
-            for frame_name in ["the failing frame", "the next frame"] {
-                let drawn = frame_frame(game, 93, false);
-                assert!(!drawn.is_empty(), "{frame_name}: its own model");
-                assert!(
-                    drawn.iter().all(|v| above(v) < 2.0),
-                    "{frame_name}: no quad kept: {drawn:?}"
-                );
-                assert_eq!(flaky.calls(), 1, "{frame_name}: asked once, then no more");
-            }
+            let drawn = frame_frame(game, 93, false);
+            assert!(!drawn.is_empty(), "the failing frame: its own model");
+            assert!(
+                drawn.iter().all(|v| above(v) < 2.0),
+                "the failing frame: no quad kept: {drawn:?}"
+            );
+            assert_eq!(flaky.calls(), 1);
+
+            let drawn = frame_frame(game, 93, false);
+            assert_eq!(flaky.calls(), 2, "asked again on the next frame");
+            assert_eq!(drawn.len(), 4, "one quad and no frame: {drawn:?}");
+            assert!(drawn.iter().all(|v| (400.0..=401.0).contains(&above(v))));
+
             super::model_baking_completed_tests::reload(game);
             let drawn = frame_frame(game, 93, false);
-            assert_eq!(flaky.calls(), 2, "the reload resolved it again");
+            assert_eq!(flaky.calls(), 3, "the reload resolved it again");
             assert_eq!(drawn.len(), 4, "one quad and no frame: {drawn:?}");
             assert!(drawn.iter().all(|v| (400.0..=401.0).contains(&above(v))));
         },

@@ -97,3 +97,16 @@ pub(crate) fn report_missing() {
             .expect("writing missing-data skip report");
     }
 }
+
+/// A state table containing just air, for tests that don't need prepared resources.
+pub(crate) fn air_registry() -> &'static sunrise_world::registry::BlockRegistry {
+    use sunrise_world::registry::BlockRegistry;
+    static REGISTRY: std::sync::OnceLock<BlockRegistry> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        BlockRegistry::from_facts_json(
+            br#"{"defaults":{"minecraft:air":0},"states":[["air",true,false,"","minecraft:air"]]}"#
+                .as_slice(),
+        )
+        .unwrap()
+    })
+}

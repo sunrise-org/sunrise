@@ -1,4 +1,3 @@
-// game-module-cfg: always
 //! The game-test runner: `GameTestInfo`, `GameTestRunner`, `GameTestTicker`,
 //! `MultipleTestTracker`, `ReportGameListener`, `TestCommand.trackAndStartRunner`
 //! and the two test instance types (`BlockBasedTestInstance` and
@@ -11,6 +10,8 @@
 //! Not ported: test sequences (`GameTestSequence`: the built-in tests, only
 //! `always_pass`, do not use them), test environments other than the empty
 //! `all_of`, and removing the entities of a finished test.
+#[cfg(test)]
+use super::test_instances::TestDefSample;
 use super::{
     Dim, Game,
     commands::{Target, execute::Source},
@@ -28,114 +29,13 @@ use sunrise_client::{
     text::{self, Text},
 };
 use sunrise_core::bounding_box::BoundingBox;
+pub(super) use sunrise_gameplay::game_tests::{Retry, TestError, number};
 use sunrise_world::{
     level::flags,
     worldgen::structure::{Mirror, Rotation, StructureTemplate},
 };
 
 type Pos = (i32, i32, i32);
-
-/// `GameTestAssertException`, `GameTestAssertPosException`,
-/// `GameTestTimeoutException` and `UnknownGameTestException`.
-#[derive(Clone, Debug)]
-pub(super) enum TestError {
-    Assert {
-        message: Text,
-        tick: i32,
-    },
-    AssertPos {
-        message: Text,
-        absolute: Pos,
-        relative: Pos,
-        tick: i32,
-    },
-    Timeout(Text),
-    Unknown(String),
-}
-
-fn number(v: i32) -> Text {
-    Text::literal(v.to_string())
-}
-
-impl TestError {
-    /// `getDescription`.
-    pub(super) fn description(&self) -> Text {
-        match self {
-            Self::Assert { message, tick } => {
-                Text::translate("test.error.tick", &[message.clone(), number(*tick)])
-            }
-            Self::AssertPos {
-                message,
-                absolute,
-                relative,
-                tick,
-            } => Text::translate(
-                "test.error.position",
-                &[
-                    message.clone(),
-                    number(absolute.0),
-                    number(absolute.1),
-                    number(absolute.2),
-                    number(relative.0),
-                    number(relative.1),
-                    number(relative.2),
-                    number(*tick),
-                ],
-            ),
-            Self::Timeout(message) => message.clone(),
-            Self::Unknown(reason) => {
-                Text::translate("test.error.unknown", &[Text::literal(reason.clone())])
-            }
-        }
-    }
-
-    /// `getMessage`: the description's characters (a timeout's own message,
-    /// an unknown error's reason).
-    fn message(&self) -> String {
-        match self {
-            Self::Unknown(reason) => reason.clone(),
-            other => other.description().plain(),
-        }
-    }
-}
-
-/// `RetryOptions`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Retry {
-    number_of_tries: i32,
-    halt_on_failure: bool,
-}
-
-impl Retry {
-    pub(super) fn new(number_of_tries: i32, halt_on_failure: bool) -> Self {
-        Self {
-            number_of_tries,
-            halt_on_failure,
-        }
-    }
-
-    /// `noRetries`.
-    pub(super) fn none() -> Self {
-        Self::new(1, true)
-    }
-
-    /// `unlimitedTries`.
-    fn unlimited(&self) -> bool {
-        self.number_of_tries < 1
-    }
-
-    /// `hasTriesLeft`.
-    fn has_tries_left(&self, attempts: i32, successes: i32) -> bool {
-        let has_failures = attempts != successes;
-        let has_more_attempts = self.unlimited() || attempts < self.number_of_tries;
-        has_more_attempts && (!has_failures || !self.halt_on_failure)
-    }
-
-    /// `hasRetries`.
-    fn has_retries(&self) -> bool {
-        self.number_of_tries != 1
-    }
-}
 
 /// What `runAtTickTime` runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +179,7 @@ impl Info {
 pub(super) struct Batch {
     pub(super) index: i32,
     pub(super) environment: String,
+    dimension: Dim,
     pub(super) infos: Vec<Info>,
 }
 
@@ -331,33 +232,27 @@ struct Tracked {
     failed: bool,
 }
 
-/// `GameTestBatchFactory.fromGameTestInfo(size)`: one batch per environment
-/// (and dimension), `size` to a batch.
+/// `GameTestBatchFactory.fromGameTestInfo(size)`: partition each environment
+/// and definition dimension into batches of up to `size`.
 fn batch_infos(infos: Vec<Info>, size: usize) -> Vec<Batch> {
     let mut batches: Vec<Batch> = Vec::new();
-    let mut counts: Vec<(String, i32)> = Vec::new();
     for info in infos {
-        let env = info.def.environment.clone();
-        let open = batches
-            .iter_mut()
-            .find(|b| b.environment == env && b.infos.len() < size);
-        if let Some(batch) = open {
-            batch.infos.push(info);
-            continue;
-        }
-        let index = match counts.iter_mut().find(|(e, _)| *e == env) {
-            Some((_, n)) => {
-                *n += 1;
-                *n
+        let index = match batches.iter_mut().rev().find(|batch| {
+            batch.environment == info.def.environment
+                && batch.dimension == info.dim
+                && batch.infos[0].def.dimension == info.def.dimension
+        }) {
+            Some(batch) if batch.infos.len() < size => {
+                batch.infos.push(info);
+                continue;
             }
-            None => {
-                counts.push((env.clone(), 0));
-                0
-            }
+            Some(full) => full.index + 1,
+            None => 0,
         };
         batches.push(Batch {
             index,
-            environment: env,
+            environment: info.def.environment.clone(),
+            dimension: info.dim,
             infos: vec![info],
         });
     }
@@ -388,6 +283,7 @@ pub(super) fn verify_batches(infos: &[Info], mut next_id: impl FnMut() -> u32) -
             batches.push(Batch {
                 index: ordinal as i32,
                 environment: info.def.environment.clone(),
+                dimension: info.dim,
                 infos: copies,
             });
         }
@@ -440,10 +336,18 @@ struct Runner {
 
 /// The command stack and its output source are different: `execute as`
 /// changes the actor, while the player who issued the command receives it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SummarySource {
     source: Source,
     recipient: Option<Target>,
+}
+
+/// Which `CommandSourceStack` method a delayed `/test` summary line uses.
+#[derive(Clone, Copy)]
+enum SummaryKind {
+    Success { broadcast: bool },
+    Failure,
+    System,
 }
 
 /// `StructureGridSpawner.DimensionGridState`.
@@ -510,20 +414,30 @@ enum Out {
     Players(Text),
     Source {
         context: SummarySource,
+        kind: SummaryKind,
         text: Text,
-        broadcast: bool,
     },
     Coordinates(SummarySource, Vec<Dim>),
 }
 
-fn summary_line(context: Option<SummarySource>, text: Text, broadcast: bool) -> Out {
+fn summary_line(context: Option<SummarySource>, kind: SummaryKind, text: Text) -> Out {
     match context {
         Some(context) => Out::Source {
             context,
+            kind,
             text,
-            broadcast,
         },
-        None => Out::Console { text, broadcast },
+        None => match kind {
+            SummaryKind::Success { broadcast } => Out::Console { text, broadcast },
+            SummaryKind::Failure => Out::Console {
+                text: Text::empty().append(text).with_color(text::RED),
+                broadcast: false,
+            },
+            SummaryKind::System => Out::Console {
+                text,
+                broadcast: false,
+            },
+        },
     }
 }
 
@@ -566,7 +480,7 @@ pub(super) struct GameTests {
     /// `TestBatchSummaryDisplayer`'s lines then and there.
     command_start: bool,
     /// `GameTestRunner.currentEnvironment`.
-    environment: Option<Activation>,
+    environment: Option<(Dim, Activation)>,
 }
 
 impl GameTests {
@@ -592,8 +506,11 @@ impl Game<'_> {
     /// `TestCommand.trackAndStartRunner`: command summaries retain their
     /// original source. Test-block actions and verify keep their existing path.
     pub(super) fn track_and_start_command_runner(&mut self, infos: Vec<Info>, grid: Grid) {
-        let mut source = self.command_source.unwrap_or_else(|| self.player_source());
-        let recipient = if self.console_broadcast.is_some() {
+        let mut source = self
+            .command_source
+            .clone()
+            .unwrap_or_else(|| self.player_source());
+        let recipient = if self.console_broadcast.is_some() || source.native_output.is_some() {
             None
         } else {
             self.lan_acting
@@ -733,7 +650,8 @@ impl Game<'_> {
             return;
         };
         let mut infos = std::mem::take(&mut batch.infos);
-        let (environment, batch_number) = (batch.environment.clone(), batch.index);
+        let (environment, batch_number, dimension) =
+            (batch.environment.clone(), batch.index, batch.dimension);
         // createStructuresForBatch: `StructureSpawner.IN_PLACE`.
         let mut spawned = Vec::new();
         for mut info in infos.drain(..) {
@@ -749,8 +667,8 @@ impl Game<'_> {
         self.end_test_environment();
         match self.test_environment(&environment) {
             Some(definition) => {
-                let activation = self.activate_test_environment(definition);
-                self.game_tests.environment = Some(activation);
+                let activation = self.activate_test_environment(definition, dimension);
+                self.game_tests.environment = Some((dimension, activation));
             }
             None => log::error!("Missing test environment {environment}"),
         }
@@ -763,10 +681,16 @@ impl Game<'_> {
         if self.game_tests.command_start {
             self.feedback(starting);
         } else {
-            self.game_tests.outbox.push(Out::Console {
-                text: starting,
-                broadcast: true,
-            });
+            let context = self
+                .game_tests
+                .runner
+                .as_ref()
+                .and_then(|r| r.summary_source.clone());
+            self.game_tests.outbox.push(summary_line(
+                context,
+                SummaryKind::Success { broadcast: true },
+                starting,
+            ));
         }
         if let Some(runner) = self.game_tests.runner.as_mut() {
             runner.batch_pending = spawned.len();
@@ -777,8 +701,8 @@ impl Game<'_> {
 
     /// `GameTestRunner.endCurrentEnvironment`.
     fn end_test_environment(&mut self) {
-        if let Some(activation) = self.game_tests.environment.take() {
-            self.tear_down_test_environment(activation);
+        if let Some((dimension, activation)) = self.game_tests.environment.take() {
+            self.tear_down_test_environment(activation, dimension);
         }
     }
 
@@ -791,6 +715,7 @@ impl Game<'_> {
         if runner.scheduled.is_empty() {
             runner.batches = Vec::new();
             runner.stopped = true;
+            runner.summary_source = None;
             return;
         }
         let scheduled = std::mem::take(&mut runner.scheduled);
@@ -1406,40 +1331,39 @@ impl Game<'_> {
             .count();
         let halt = runner.halt_on_error;
         if all_done {
-            let context = runner.summary_source;
+            let context = runner.summary_source.clone();
             let out = &mut self.game_tests.outbox;
             out.push(summary_line(
-                context,
+                context.clone(),
+                SummaryKind::Success { broadcast: true },
                 Text::translate("commands.test.summary", &[number(total as i32)])
                     .with_color(text::WHITE),
-                true,
             ));
             if failed_required > 0 {
                 out.push(summary_line(
-                    context,
+                    context.clone(),
+                    SummaryKind::Failure,
                     Text::translate(
                         "commands.test.summary.failed",
                         &[number(failed_required as i32)],
-                    )
-                    .with_color(text::RED),
-                    false,
+                    ),
                 ));
             } else {
                 out.push(summary_line(
-                    context,
+                    context.clone(),
+                    SummaryKind::Success { broadcast: true },
                     Text::translate("commands.test.summary.all_required_passed", &[])
                         .with_color(text::GREEN),
-                    true,
                 ));
             }
             if failed_optional > 0 {
                 out.push(summary_line(
-                    context,
+                    context.clone(),
+                    SummaryKind::System,
                     Text::translate(
                         "commands.test.summary.optional_failed",
                         &[number(failed_optional as i32)],
                     ),
-                    false,
                 ));
             }
             if let Some(context) = context {
@@ -1450,11 +1374,12 @@ impl Game<'_> {
         if !passed && counted {
             self.game_tests.failed.push(info.key.clone());
         }
-        // The runner's batch listener.
+        // GameTestRunner's batch listener clears forces in testInfo.getLevel(),
+        // the level tick_test runs with in place.
         if passed {
             self.remove_test_barriers(info.pos);
         } else if halt {
-            self.release_forced_chunks();
+            self.streaming.clear_forced();
             self.clear_game_tests();
             return;
         }
@@ -1464,7 +1389,7 @@ impl Game<'_> {
         runner.batch_pending = runner.batch_pending.saturating_sub(1);
         if runner.batch_pending == 0 {
             let next = runner.current + 1;
-            self.release_forced_chunks();
+            self.streaming.clear_forced();
             self.run_batch(next);
         }
     }
@@ -1601,10 +1526,10 @@ impl Game<'_> {
                 Out::Console { text, broadcast } => self.test_console_output(text, broadcast),
                 Out::Source {
                     context,
+                    kind,
                     text,
-                    broadcast,
                 } => {
-                    self.test_source_output(context, text, broadcast);
+                    self.test_source_output(&context, kind, text);
                 }
                 Out::Coordinates(context, dimensions) => {
                     if let Some(Target::Guest(conn)) = context.recipient
@@ -1612,8 +1537,8 @@ impl Game<'_> {
                     {
                         continue;
                     }
-                    self.with_source(context.source, |g| {
-                        g.output_test_summary_coordinates(context, &dimensions)
+                    self.with_source(context.source.clone(), |g| {
+                        g.output_test_summary_coordinates(&context, &dimensions)
                     });
                 }
                 Out::Players(text) => {
@@ -1640,34 +1565,44 @@ impl Game<'_> {
             self.console_broadcast = Some(true);
             self.broadcast_to_admins(text);
             self.console_broadcast = None;
-            self.send_admin_feedback(None);
+            self.send_admin_feedback();
             self.admin_feedback.clear();
         }
     }
 
     /// `TestSummaryDisplayer`: feedback uses the original issuer, without
     /// executing another command or invoking the command's result callbacks.
-    fn test_source_output(&mut self, context: SummarySource, text: Text, broadcast: bool) {
+    fn test_source_output(&mut self, context: &SummarySource, kind: SummaryKind, text: Text) {
         if let Some(recipient) = context.recipient {
             let delivered = self.for_player(recipient, |g| {
-                g.with_source(context.source, |g| {
-                    if broadcast {
-                        g.feedback(text);
-                    } else {
-                        g.feedback_unbroadcast(text);
-                    }
+                g.with_source(context.source.clone(), |g| match kind {
+                    SummaryKind::Success { broadcast: true } => g.feedback(text),
+                    SummaryKind::Success { broadcast: false } => g.feedback_unbroadcast(text),
+                    SummaryKind::Failure => g.command_failure(text),
+                    SummaryKind::System => g.command_system_message(text),
                 });
             });
             if delivered.is_some() {
-                let issuer = match recipient {
-                    Target::Guest(conn) => Some(conn),
-                    _ => None,
-                };
-                self.send_admin_feedback(issuer);
+                self.send_admin_feedback();
             }
+        } else if context.source.native_output.is_some() {
+            self.with_source(context.source.clone(), |g| match kind {
+                SummaryKind::Success { broadcast: true } => {
+                    g.feedback(text);
+                    g.send_admin_feedback();
+                }
+                SummaryKind::Success { broadcast: false } => g.feedback_unbroadcast(text),
+                SummaryKind::Failure => g.command_failure(text),
+                SummaryKind::System => g.command_system_message(text),
+            });
         } else if !context.source.silent {
-            self.with_source(context.source, |g| {
+            self.with_source(context.source.clone(), |g| {
                 let previous = g.console_broadcast;
+                let broadcast = matches!(kind, SummaryKind::Success { broadcast: true });
+                let text = match kind {
+                    SummaryKind::Failure => Text::empty().append(text).with_color(text::RED),
+                    _ => text,
+                };
                 g.test_console_output(text, broadcast);
                 g.console_broadcast = previous;
             });
@@ -1677,7 +1612,7 @@ impl Game<'_> {
     /// `TestCommand.outputPlayerCoordinates` / `outputTestCoordinates` after
     /// the summary. Surface reads reuse the existing test-position helper,
     /// including its missing-chunk policy; this is not a new loading policy.
-    fn output_test_summary_coordinates(&mut self, context: SummarySource, dimensions: &[Dim]) {
+    fn output_test_summary_coordinates(&mut self, context: &SummarySource, dimensions: &[Dim]) {
         if let Some(Target::Guest(conn)) = context.recipient
             && self.command_guest(conn).is_none()
         {
@@ -1701,6 +1636,7 @@ impl Game<'_> {
         if let Some((pos, dim, rotation)) = player {
             self.test_source_output(
                 context,
+                SummaryKind::Success { broadcast: false },
                 summary_coordinates(
                     "test.player.coordinates",
                     pos.map(|v| v.floor() as i32),
@@ -1708,7 +1644,6 @@ impl Game<'_> {
                     rotation.map(|v| v.floor() as i32),
                     text::GOLD,
                 ),
-                false,
             );
         }
         let pos = player
@@ -1725,6 +1660,7 @@ impl Game<'_> {
             }
             self.test_source_output(
                 context,
+                SummaryKind::Success { broadcast: false },
                 summary_coordinates(
                     "test.run.coordinates",
                     [pos[0], y, pos[2]],
@@ -1732,7 +1668,6 @@ impl Game<'_> {
                     [0, 0],
                     text::YELLOW,
                 ),
-                false,
             );
         }
     }
@@ -1765,25 +1700,55 @@ pub(in crate::game) mod tests {
     pub(in crate::game) fn server_game<'a>(
         resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
     ) -> Game<'a> {
+        build_server_game(resources, false)
+    }
+
+    /// Puts the process-wide block namespaces back as it found them.
+    pub(in crate::game) struct Published(Option<Vec<String>>);
+    impl Drop for Published {
+        fn drop(&mut self) {
+            sunrise_client::save::level_mods::set_block_namespaces(self.0.take());
+        }
+    }
+
+    /// [`server_game`] over the loading screen's path, which leaves the
+    /// process-wide language and UI metadata alone (its rest tables load on a
+    /// worker joined here), with the block namespaces it publishes put back
+    /// when the returned guard drops. Bind the guard before the game.
+    pub(in crate::game) fn isolated_server_game<'a>(
+        resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
+    ) -> (Published, Game<'a>) {
+        let published = Published(sunrise_client::save::level_mods::block_namespaces());
+        (published, build_server_game(resources, true))
+    }
+
+    fn build_server_game<'a>(
+        resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
+        menu: bool,
+    ) -> Game<'a> {
         use crate::game::*;
         let root = std::path::PathBuf::from(
             std::env::var_os("SUNRISE_TEST_RESOURCES")
                 .expect("set SUNRISE_TEST_RESOURCES to prepared resources"),
         );
         let settings = Settings::default();
-        let loaded = load_resources(
+        let mut gui = None;
+        let mut loaded = load_resources(
             sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
             Vec::new(),
             None,
             &root,
             &settings,
             std::time::Instant::now(),
-            false,
+            menu,
             execution_role::ExecutionRole::IntegratedServer,
             &Progress::new(),
-            &mut |_, _| unreachable!(),
+            &mut |ui, _| gui = Some(ui),
         )
         .unwrap();
+        if let Some(rest) = loaded.rest_loader.take() {
+            rest.finish().unwrap();
+        }
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
         options.resources = root.clone();
         options.execution_role = execution_role::ExecutionRole::IntegratedServer;
@@ -1791,7 +1756,7 @@ pub(in crate::game) mod tests {
         let mut game = Game::new(
             res,
             loaded.pack,
-            loaded.gui.unwrap(),
+            gui.or(loaded.gui).unwrap(),
             options,
             settings,
             Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
@@ -1802,7 +1767,7 @@ pub(in crate::game) mod tests {
         .unwrap();
         game.reset_entity_residency();
         game.native_lifecycle
-            .begin_open(mod_api::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         // Match the server fixture this replaces: commands can force this
         // resident column without starting terrain generation.
         game.world.chunks.insert(
@@ -1834,6 +1799,129 @@ pub(in crate::game) mod tests {
         assert!(!tests.has_tests_in(Dim::Overworld));
         // A rerun keeps the level of the test it copies.
         assert_eq!(tests.ticker[0].copy_reset(2).dim, Dim::Nether);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn game_test_batch_uses_the_weather_parameter_veto() {
+        use mod_api::{Flow, Hooks, ModEntry, ServerHost, WeatherChangeEvent};
+        use std::sync::{Arc, Mutex};
+
+        type Proposal = (String, i32, i32, bool, bool);
+        struct RefuseThunder(Arc<Mutex<Vec<Proposal>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for RefuseThunder {
+            fn weather_change(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut WeatherChangeEvent<'_>,
+            ) -> Flow {
+                self.0.lock().unwrap().push((
+                    event.dimension.to_owned(),
+                    event.clear_ticks,
+                    event.weather_ticks,
+                    event.raining,
+                    event.thundering,
+                ));
+                if event.thundering {
+                    Flow::Cancel
+                } else {
+                    Flow::Continue
+                }
+            }
+        }
+
+        crate::game::in_own_process(
+            "game::game_tests::tests::game_test_batch_uses_the_weather_parameter_veto",
+            || {
+                let seen = Arc::new(Mutex::new(Vec::new()));
+                let mods = vec![ModEntry::new(
+                    "test_weather",
+                    Box::new(RefuseThunder(seen.clone())),
+                )];
+                mod_platform::testing::with_mods(mods.into(), || {
+                    crate::game::native_entity_refs::tests::with_game(|game| {
+                        game.world_root = game.options.game_dir.clone().unwrap();
+                        game.enter_level(Dim::Nether).unwrap();
+                        game.enter_level(Dim::Overworld).unwrap();
+                        let root = tempfile::tempdir().unwrap();
+                        game.options.resources = root.path().to_path_buf();
+                        let environments = root.path().join("data/example/test_environment");
+                        std::fs::create_dir_all(&environments).unwrap();
+                        for weather in ["rain", "thunder"] {
+                            std::fs::write(environments.join(format!("{weather}.json")),
+                                serde_json::json!({"type": "minecraft:weather", "weather": weather}).to_string(),
+                            ).unwrap();
+                        }
+                        // Exercise the real runner's environment lifecycle without spawning a structure.
+                        let run_batch = |game: &mut Game<'_>, dimension, name: &str| {
+                            game.track_and_start_batches(
+                                vec![Batch {
+                                    index: 0,
+                                    environment: format!("example:{name}"),
+                                    dimension,
+                                    infos: Vec::new(),
+                                }],
+                                RunnerOptions::new(false, None, false),
+                            );
+                        };
+                        let parameters = |game: &Game<'_>| {
+                            let w = &game.world.weather;
+                            (
+                                w.clear_time,
+                                w.rain_time,
+                                w.thunder_time,
+                                w.raining,
+                                w.thundering,
+                            )
+                        };
+                        game.world.weather.raining = true;
+                        game.world.weather.thundering = true;
+                        game.world.weather.set_levels(1.0, 1.0);
+                        game.levels
+                            .parked_mut(Dim::Nether)
+                            .unwrap()
+                            .world
+                            .weather
+                            .set_levels(1.0, 1.0);
+                        run_batch(game, Dim::Nether, "rain");
+                        assert_eq!(parameters(game), (0, 100_000, 100_000, true, false));
+                        game.clear_game_tests();
+                        // Neither the shared flags nor the Nether's raw strengths make it wet.
+                        assert_eq!(parameters(game), (100_000, 0, 0, false, false));
+
+                        game.enter_level(Dim::Nether).unwrap();
+                        // The Overworld is still locally thundering despite the now-clear flags.
+                        run_batch(game, Dim::Overworld, "rain");
+                        assert_eq!(parameters(game), (0, 100_000, 100_000, true, false));
+                        game.world.weather.clear_time = 73;
+                        game.clear_game_tests();
+                        // resetWeatherCycle still runs, but the saved thunder write is vetoed.
+                        assert_eq!(parameters(game), (73, 0, 0, false, false));
+
+                        game.world.weather.rain_time = 9;
+                        run_batch(game, Dim::Nether, "thunder");
+                        assert_eq!(parameters(game), (73, 9, 0, false, false));
+                        game.clear_game_tests();
+                        // The vetoed setup must not arrange a teardown that changes the weather.
+                        assert_eq!(parameters(game), (73, 9, 0, false, false));
+                        let nether = || String::from("minecraft:the_nether");
+                        let overworld = || String::from("minecraft:overworld");
+                        assert_eq!(
+                            *seen.lock().unwrap(),
+                            [
+                                (nether(), 0, 100_000, true, false),
+                                (nether(), 100_000, 0, false, false),
+                                (overworld(), 0, 100_000, true, false),
+                                (overworld(), 0, 100_000, true, true),
+                                (nether(), 0, 100_000, true, true),
+                            ]
+                        );
+                        assert_eq!(game.dim, Dim::Nether);
+                    });
+                });
+            },
+        );
     }
 
     #[test]
@@ -1897,30 +1985,6 @@ pub(in crate::game) mod tests {
         let mut ok = info(true, 5, 0);
         ok.succeed();
         assert!(ok.done && ok.error.is_none());
-    }
-
-    #[test]
-    fn unknown_errors_report_their_reason() {
-        let error = TestError::Unknown("no such function".into());
-        assert_eq!(error.message(), "no such function");
-    }
-
-    #[test]
-    fn retry_options_decide_whether_a_test_runs_again() {
-        // noRetries: one try, no rerun.
-        assert!(!Retry::none().has_retries());
-        assert!(!Retry::none().has_tries_left(1, 1));
-        // 3 times, not until failed: runs on through failures.
-        let three = Retry::new(3, false);
-        assert!(three.has_retries());
-        assert!(three.has_tries_left(1, 0));
-        assert!(three.has_tries_left(2, 2));
-        assert!(!three.has_tries_left(3, 3));
-        // Until failed: stops at the first failure, and 0 means unlimited.
-        let until = Retry::new(0, true);
-        assert!(until.unlimited());
-        assert!(until.has_tries_left(50, 50));
-        assert!(!until.has_tries_left(50, 49));
     }
 
     #[test]

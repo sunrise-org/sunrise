@@ -2,10 +2,11 @@
 //! `ServerboundSeenAdvancementsPacket` and `ClientboundAwardStatsPacket`.
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader, TrustedComponent},
     packet,
 };
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 
 /// `DisplayInfo` of an advancement as sent.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,8 +56,8 @@ impl Codec<UpdateAdvancements> for UpdateAdvancements {
                 None
             };
             let display = if r.bool()? {
-                let title = r.nbt()?;
-                let description = r.nbt()?;
+                let title = TrustedComponent::read(r)?;
+                let description = TrustedComponent::read(r)?;
                 let icon = crate::item::Template::read(r)?;
                 let frame = r.varint()?;
                 let flags = r.i32()?;

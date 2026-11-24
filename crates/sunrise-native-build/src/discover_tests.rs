@@ -37,15 +37,6 @@ impl Fixture {
             ("crates/sunrise-client/src/game.rs", ""),
             ("crates/sunrise-mod-api-gen/internals.txt", ""),
             (CROSSING_FOREIGN_FILE, "[]"),
-            (
-                "crates/sunrise-engine-slots/Cargo.toml",
-                "[package]\nname='sunrise-engine-slots'\n",
-            ),
-            ("crates/sunrise-engine-slots/src/lib.rs", ""),
-            (
-                "crates/sunrise-mod-points/Cargo.toml",
-                "[package]\nname='sunrise-mod-points'\n",
-            ),
         ] {
             let path = source.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();

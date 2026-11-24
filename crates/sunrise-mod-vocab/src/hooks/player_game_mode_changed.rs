@@ -1,5 +1,4 @@
 //! The `player_game_mode_changed` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0253
 
 pub trait Hooks {
     /// A server player's game mode is about to change (NeoForge's
@@ -17,11 +16,18 @@ pub trait Hooks {
     /// a player's turn their state is swapped in; for the hardcore respawn
     /// it is not.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         neoforge = "PlayerEvent.PlayerChangeGameModeEvent",
         version = 2
     )]
-    fn player_game_mode_changed();
+    fn player_game_mode_changed(
+        player: u128,
+        name: &str,
+        from: GameMode,
+        to: &mut GameMode,
+        cancel: &mut bool,
+    );
 }

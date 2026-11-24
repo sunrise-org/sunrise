@@ -1,5 +1,4 @@
 //! The `interaction_key_mapping_triggered` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0143
 
 pub trait Hooks {
     /// A projectile hit something (NeoForge's `ProjectileImpactEvent`, posted
@@ -12,7 +11,11 @@ pub trait Hooks {
     /// `[0, 1, 0]` for the top), at the point `at`. Set `canceled` and the impact
     /// does not happen: no damage, no knockback, no sound, no block reaction, the
     /// arrow does not stick, a pearl does not teleport, a potion or a fireball
-    /// does not burst. Cancellation leaves the projectile alive. A flying bobber
+    /// does not burst. Cancellation alone leaves the projectile alive. Resolve
+    /// the live owner with `host.entity(event.projectile)` and call `EntityRef::discard`
+    /// to consume it instead. Removal suppresses the hit even if the event is not
+    /// canceled. A decision invalidated by listener writes is not recomputed.
+    /// A flying bobber
     /// skips hooking and redirection to the hit point, but its ordinary move
     /// still stops against solid blocks. Water is not an impact. Bobbers notify
     /// before vanilla's entity deflection and world-border bounce; rockets notify
@@ -20,13 +23,14 @@ pub trait Hooks {
     /// Covers arrows, tridents, thrown items, fireballs, wither skulls, wind
     /// charges, llama spit, shulker bullets, bobbers and rockets. Other families
     /// skip breeze deflections and hits on wind charges. A dragon part or End crystal is told by the id of the
-    /// dragon or crystal. Heard only when a mod also sets
-    /// `hears_projectile_impacts`. Server-side. Version 2 adds bobbers and rockets;
-    /// listeners retaining the earlier family set filter out `minecraft:fishing_bobber`
-    /// and `minecraft:firework_rocket`. Named injections request `hook_version = 2`.
+    /// dragon or crystal. Server-side. Version 3 fires whenever a mod subscribes to
+    /// `projectile_impact` directly (the separate `hears_projectile_impacts` opt-in
+    /// poll hook is removed); version 2 added bobbers and rockets.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_projectile_impact",
+        dispatch = "api_carrier",
         side = "server",
-        version = 2,
+        version = 3,
         contract = "cancel",
         out = "canceled",
         neoforge = "ProjectileImpactEvent",
@@ -52,9 +56,11 @@ pub trait Hooks {
     /// where they were, a mob does not board, a `/ride` fails, and a rider whose dismount is
     /// canceled keeps riding. Players hear boarding and dismounts by input, `/ride`, hits,
     /// bucking, teleport or spectator mode; mobs hear boarding and dismounts (jockeys,
-    /// ravager raiders, `/ride`, hits), including removal cleanup. A Mob's canceled
-    /// dismount keeps its relationship even when a boat or cart is destroyed; the
-    /// removed vehicle is not a valid handle or query result. Each later dismount asks again.
+    /// ravager raiders, `/ride`, hits), including removal cleanup. The departing rider's own
+    /// dismount is asked first, then its direct passengers in passenger-list order. The
+    /// removed vehicle is no longer a valid handle or query result during these callbacks. A Mob's
+    /// canceled dismount keeps the relationship with a removed boat, cart or mob; each later
+    /// dismount asks again.
     /// A resident Mob retries immediately before its next eligible entity tick:
     /// its chunk must be entity-ticking and its tick must not have been canceled.
     /// A server player retries on its next vehicle tick. Either can be later in the
@@ -69,6 +75,8 @@ pub trait Hooks {
     /// found again by id after the board and dismount checks: gone, the click is spent and
     /// the player is not seated. Server-side.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_mount",
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "canceled",
@@ -96,6 +104,8 @@ pub trait Hooks {
     /// of this flag. Attack and mining swing packets also honour the item swing veto. Pick
     /// only vetoes its packet and never swings. Fires on the window client.
     #[hook(
+        target = "sunrise_client::game::native_hooks::interaction::Game<'_>::native_interaction_key_mapping_triggered",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
@@ -103,5 +113,11 @@ pub trait Hooks {
         version = 2,
         cancellable = true
     )]
-    fn interaction_key_mapping_triggered();
+    fn interaction_key_mapping_triggered(
+        key: InteractionKey,
+        hand: Hand,
+        attempt: InteractionAttempt,
+        swing_hand: &mut bool,
+        canceled: &mut bool,
+    );
 }

@@ -7,7 +7,6 @@ No game window, listening socket, server constructor or world bootstrap is used.
 This is not a full connected-client join/respawn test.
 """
 import argparse
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -70,18 +69,7 @@ def main():
                       'java', cwd=scratch, env=env)
         rows = [r for r in vanilla.read_text(encoding='utf-8').splitlines() if r.startswith('world-spawn\t')]
         assert len(rows) == 7 and len(set(rows)) == 7, 'vanilla oracle did not emit all seven cases'
-        compiled = run(['cargo', 'test', '--locked', '-p', 'sunrise-client', '--lib', '--no-run',
-                        '--message-format=json'], 'compile', cwd=lab.ROOT, env=env)
-        binaries = []
-        for line in compiled.read_text(encoding='utf-8').splitlines():
-            if not line.startswith('{'):
-                continue
-            row = json.loads(line)
-            if (row.get('reason') == 'compiler-artifact' and row.get('executable')
-                    and row.get('target', {}).get('name') == 'sunrise_client'
-                    and row.get('profile', {}).get('test')):
-                binaries.append(Path(row['executable']))
-        assert len(binaries) == 1, 'expected one actual Game test binary'
+        binaries = [lab.parity_fixtures()]
         binary_hash = lab.digest(binaries[0], 'sha256')
         env['SUNRISE_TEST_RESOURCES'] = str(args.resources.resolve())
         result = run([binaries[0], TESTS, '--ignored', '--nocapture'], 'game', cwd=scratch, env=env)

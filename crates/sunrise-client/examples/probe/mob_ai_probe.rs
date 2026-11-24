@@ -602,7 +602,7 @@ fn print_heart(
 /// The damage of a mob's direct hit on the player (others count as none).
 fn player_damage(e: &MobEvent) -> f32 {
     match e {
-        MobEvent::AttackPlayer(amount, _)
+        MobEvent::AttackPlayer(amount, ..)
         | MobEvent::CubeHurtPlayer { amount, .. }
         | MobEvent::Sting {
             target: Who::Player,
@@ -630,7 +630,7 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
         return false;
     };
     match e {
-        MobEvent::AttackPlayer(amount, _)
+        MobEvent::AttackPlayer(amount, ..)
         | MobEvent::CubeHurtPlayer { amount, .. }
         | MobEvent::Sting {
             target: Who::Player,
@@ -694,8 +694,8 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool, now: i6
     let _ = write!(
         out,
         "\tg {}{}\thp {}",
-        u8::from(m.on_ground),
-        u8::from(m.horizontal_collision),
+        u8::from(m.ground.on_ground),
+        u8::from(m.ground.horizontal_collision),
         f(m.health)
     );
     let _ = write!(
@@ -907,8 +907,9 @@ pub fn main() -> sunrise_client::Result<()> {
     let motion = sunrise_client::motion::MotionResources::load(root, &assets)?;
     let data = MobData::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        &facts,
-    );
+        facts.states.len(),
+        false,
+    )?;
     let types = MobTypes::load(root)?;
     // The types a bee leaving its hive is loaded with (EntityType.loadEntityRecursive).
     let arc_types: HashMap<String, Arc<MobType>> = types
@@ -1204,6 +1205,7 @@ pub fn main() -> sunrise_client::Result<()> {
             };
             ($snapshot:expr, $grid:expr) => {
                 MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     mob_maps: sunrise_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                     goal_host: None,
                     teams: Default::default(),
@@ -1227,6 +1229,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     others: $snapshot,
                     live_mobs: None,
                     dragon: None,
+                    armor_stands: &[],
                     leash_boats: &[],
                     who_lookup: None,
                     others_grid: $grid,
@@ -1247,6 +1250,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     biomes: &biomes,
                     mob_griefing: true,
                     universal_anger: false,
+                    pvp: false,
                     mob_drops: true,
                     max_entity_cramming: 24,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
@@ -1263,6 +1267,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     asks_baby_spawn: false,
                     border: None,
                     section_writer: None,
+                    trading_players: None,
                 }
             };
         }
@@ -1336,16 +1341,19 @@ pub fn main() -> sunrise_client::Result<()> {
                     .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
                 mobs[i].damage(&mut test_level.level(), 1.0, Damage::player(at));
                 // Creaking.hurtServer: the heart's reaction, then the sway.
-                if let Some((home, by_player)) = creaking::take_hurt(&mut mobs[i], &w) {
-                    if by_player && let Some((_, h)) = hearts.iter_mut().find(|(at, _)| *at == home)
-                    {
-                        let mut host = Host {
-                            mobs: &mut mobs,
-                            added: Vec::new(),
-                            types: &types,
-                            created: &mut created,
-                            spawning: s.spawning,
-                        };
+                if let Some((home, by_player)) = creaking::take_hurt(&mut mobs[i], &mut events)
+                    && let Some((_, h)) = hearts.iter_mut().find(|(at, _)| *at == home)
+                {
+                    let id = mobs[i].id;
+                    let mut host = Host {
+                        mobs: &mut mobs,
+                        added: Vec::new(),
+                        types: &types,
+                        created: &mut created,
+                        spawning: s.spawning,
+                    };
+                    let protects = creaking_heart::protector(h, &host) == Some(id);
+                    if protects && by_player {
                         creaking_heart::creaking_hurt(
                             h,
                             home,
@@ -1366,7 +1374,9 @@ pub fn main() -> sunrise_client::Result<()> {
                             _ => {}
                         }
                     }
-                    creaking::sway(&mut mobs[i], &mut events);
+                    if protects {
+                        creaking::sway(&mut mobs[i], &mut events);
+                    }
                 }
                 events.append(&mut mobs[i].outbox);
             }
@@ -1433,6 +1443,7 @@ pub fn main() -> sunrise_client::Result<()> {
                     &mut test_level.level(),
                     &mut events,
                     from,
+                    &w.teams,
                 );
                 villager_events(
                     &mut mobs,
@@ -1455,6 +1466,7 @@ pub fn main() -> sunrise_client::Result<()> {
                             target,
                             amount,
                             source,
+                            ..
                         } => (Some((target, amount, source)), false),
                         // IronGolem.doHurtTarget: thrown up only if the hit landed.
                         MobEvent::IronGolemHit {
@@ -1754,6 +1766,12 @@ pub fn main() -> sunrise_client::Result<()> {
                     );
                 } else if let MobEvent::SoundId(name, _, volume, pitch) = e {
                     let _ = writeln!(out, "{t} sound {name} {} {}", f(*volume), f(*pitch));
+                } else if let MobEvent::ConsumeSound(sound, _) = e {
+                    use sunrise_client::items::ConsumeSound;
+                    let name = match sound {
+                        ConsumeSound::Registered(id) | ConsumeSound::Direct { id, .. } => id,
+                    };
+                    let _ = writeln!(out, "{t} sound {name} {} {}", f(1.0), f(1.0));
                 } else if player_hurt(player.as_ref(), e) {
                     // The oracle's survival player, healed and made hurtable every tick,
                     // takes the damage (LivingEntity.playHurtSound).

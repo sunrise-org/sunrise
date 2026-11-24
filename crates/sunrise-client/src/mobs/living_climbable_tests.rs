@@ -124,7 +124,7 @@ fn a_horse_in_vines_is_still_pushable() {
             let pushable_after_a_tick = |id: &str| {
                 let kind = Arc::new(types.types[id].clone());
                 let mut m = Mob::new(1, kind, Vec3::new(1.5, 2.0, 1.5), 0.0);
-                m.on_ground = true;
+                m.ground.on_ground = true;
                 let mut events = Vec::new();
                 crate::mobs::ai::tick(
                     &mut m,
@@ -159,9 +159,9 @@ fn a_horse_falls_through_vines_at_full_speed() {
         crate::mobs::world::with_built_test_world(&[], build, |w, types| {
             let kind = Arc::new(types.types[id].clone());
             let mut m = Mob::new(1, kind, Vec3::new(1.5, 12.0, 1.1), 0.0);
-            m.on_ground = false;
+            m.ground.on_ground = false;
             let mut drops = Vec::new();
-            while !m.on_ground && drops.len() < 200 {
+            while !m.ground.on_ground && drops.len() < 200 {
                 let before = m.position.y;
                 m.travel(
                     w,
@@ -211,7 +211,7 @@ fn a_horse_pressed_into_a_ladder_gains_no_height() {
                 let kind = Arc::new(types.types[id].clone());
                 // In the ladder block, facing the wall at z = 2.
                 let mut m = Mob::new(1, kind, Vec3::new(1.5, 1.0, 1.0), 0.0);
-                m.on_ground = true;
+                m.ground.on_ground = true;
                 // The speed its move control would ask for this tick.
                 m.ai.speed = 0.3;
                 let start = m.position.y;
@@ -223,7 +223,7 @@ fn a_horse_pressed_into_a_ladder_gains_no_height() {
                         Vec3::new(0.0, 0.0, 1.0),
                         &mut Vec::new(),
                     );
-                    pressed |= m.horizontal_collision;
+                    pressed |= m.ground.horizontal_collision;
                 }
                 (pressed, m.position.y - start)
             };

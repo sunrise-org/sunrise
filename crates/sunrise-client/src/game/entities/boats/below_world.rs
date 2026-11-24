@@ -21,13 +21,7 @@ impl Game<'_> {
         if !below_world(self.boats[i].position.y, self.world.shape.min_y) {
             return false;
         }
-        self.eject_boat_mobs(i, true);
-        let id = self.boats[i].id;
-        self.release_vehicle_container(id);
-        self.unpack_loot(super::super::container_loot::LootTarget::Boat(id), None);
-        let b = self.boats.remove(i);
-        self.drop_vehicle_contents(b.position.components(), &b.items);
-        self.boat_removed(&b);
+        self.kill_vehicle_object(crate::game::commands::Target::Boat(self.boats[i].id));
         true
     }
 
@@ -45,11 +39,7 @@ impl Game<'_> {
         if !below_world(self.carts[i].position.y, self.world.shape.min_y) {
             return Some(i);
         }
-        self.eject_cart_mobs(i);
-        self.release_vehicle_container(id);
-        self.unpack_loot(super::super::container_loot::LootTarget::Cart(id), None);
-        let c = self.carts.remove(i);
-        self.drop_vehicle_contents(c.position.components(), &c.items);
+        self.kill_vehicle_object(crate::game::commands::Target::Cart(id));
         self.native_tick_post_one(round, id, kind);
         None
     }

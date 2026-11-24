@@ -27,8 +27,10 @@ pub fn find_supporting_block<W: BlockCollisionWorld>(
 ) -> Result<Option<BlockPos>, CollisionScanError<W::Error>> {
     let mut selected = None;
     let mut closest = f64::MAX;
-    for hit in BlockCollisionScan::new(world, context, bounds, false, candidate_budget)? {
-        let p = hit?.position;
+    for position in
+        BlockCollisionScan::matching_positions(world, context, bounds, candidate_budget)?
+    {
+        let p = position?;
         let dx = f64::from(p.x) + 0.5 - entity_position.x;
         let dy = f64::from(p.y) + 0.5 - entity_position.y;
         let dz = f64::from(p.z) + 0.5 - entity_position.z;
@@ -50,6 +52,20 @@ pub struct GroundState {
     pub supporting_block: Option<BlockPos>,
 }
 impl GroundState {
+    /// At load or spawn only the flag is known; no move has selected support yet.
+    pub fn from_ground_flag(on_ground: bool) -> Self {
+        Self {
+            on_ground,
+            ..Self::default()
+        }
+    }
+
+    /// Drop the previous level/footprint's support when movement state is replaced.
+    pub fn clear_support(&mut self) {
+        self.on_ground_no_blocks = false;
+        self.supporting_block = None;
+    }
+
     /// Entity.setOnGroundWithMovement writes these flags before support queries.
     /// A failed query preserves any earlier writes, as in the native method.
     pub fn set_with_movement<E>(
@@ -89,8 +105,7 @@ impl GroundState {
             }
             self.on_ground_no_blocks = found.is_none();
         } else {
-            self.on_ground_no_blocks = false;
-            self.supporting_block = None;
+            self.clear_support();
         }
         Ok(())
     }

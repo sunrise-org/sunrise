@@ -236,7 +236,7 @@ def check(config, found, base=None, upstream_rows=frozenset()):
     for rel, host in sorted(found):
         if rel in homes or host in vanilla or any(host == h or host.endswith("." + h) for h in vanilla):
             continue
-        if host in not_addresses:
+        if host in not_addresses or f"{rel} {host}" in not_addresses:
             continue
         if (rel, host) in allowed:
             used.add((rel, host))

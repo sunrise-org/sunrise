@@ -3,9 +3,7 @@
 //! so two machines in one chunk don't release
 //! each other's. `Streaming` keeps the union with `/forceload`'s chunks in its
 //! `forced` set, which is all loading and ticking read.
-pub use mod_api::world::mod_chunk_tickets::{
-    ControllerTickets, ModTicket, TicketOwner, TicketSet, TicketValidation,
-};
+pub use mod_api::world::mod_chunk_tickets::{ModTicket, TicketOwner};
 use std::collections::{BTreeSet, HashMap};
 
 /// The tickets of one level.
@@ -21,13 +19,10 @@ pub struct ModTickets {
 
 impl ModTickets {
     /// Tickets read from a save, whose controllers are registered (the save
-    /// drops the others): they wait in the loaded set for
-    /// validation and hold nothing yet.
-    pub fn from_saved(saved: Vec<ModTicket>) -> Self {
-        Self {
-            loaded: saved,
-            ..Self::default()
-        }
+    /// drops the others): they wait in the loaded set for validation and hold
+    /// nothing yet. Tickets already held are unaffected.
+    pub fn stage_saved(&mut self, saved: Vec<ModTicket>) {
+        self.loaded = saved;
     }
     /// Hold `ticket`: true when it was new.
     pub fn insert(&mut self, ticket: ModTicket) -> bool {
@@ -88,6 +83,8 @@ impl ModTickets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::world::mod_chunk_tickets::{ControllerTickets, TicketSet, TicketValidation};
+    use std::collections::BTreeMap;
 
     fn ticket(controller: u32, owner: TicketOwner, chunk: (i32, i32)) -> ModTicket {
         ModTicket {
@@ -137,7 +134,8 @@ mod tests {
     #[test]
     fn saved_tickets_wait_for_validation_and_hold_nothing_yet() {
         let saved = vec![ticket(0, TicketOwner::Entity(1), (4, 4))];
-        let mut tickets = ModTickets::from_saved(saved);
+        let mut tickets = ModTickets::default();
+        tickets.stage_saved(saved);
         assert!(tickets.has_loaded() && !tickets.holds((4, 4)));
         assert_eq!(tickets.to_save().count(), 1);
         for ticket in tickets.take_loaded() {
@@ -153,89 +151,115 @@ mod tests {
         }
     }
 
-    fn in_mod(id: &'static str) -> crate::crash::ModGuard {
-        crate::crash::enter_native_mod(crate::crash::ModCall {
-            id,
-            hook: "test",
-            part: None,
-        })
-    }
-
     #[test]
-    fn validation_shows_and_removes_the_controllers_tickets_to_its_owner_only() {
-        let (block, entity) = (TicketOwner::Block([1, 2, 3]), TicketOwner::Entity(9));
-        let mut v = ControllerTickets::new(
-            "m",
-            vec![
-                ticket(0, block, (0, 0)),
-                ticket(0, block, (0, 1)),
-                ticket(0, entity, (5, 5)),
-            ],
+    fn validation_shows_and_removes_the_controllers_staged_tickets() {
+        let (block, kept_block, entity) = (
+            TicketOwner::Block([1, 2, 3]),
+            TicketOwner::Block([2, 3, 4]),
+            TicketOwner::Entity(9),
         );
-        assert!(v.block_tickets().is_empty(), "no caller, no tickets");
+        let expected_blocks = BTreeMap::from([
+            ([1, 2, 3], set(&[[0, 0], [0, 1]], &[])),
+            ([2, 3, 4], set(&[[2, 2]], &[])),
+        ]);
+        let expected_entities = BTreeMap::from([(9, set(&[[5, 5]], &[]))]);
+        let mut rows = vec![
+            ticket(0, block, (0, 0)),
+            ticket(0, block, (0, 1)),
+            ticket(0, kept_block, (2, 2)),
+            ticket(0, entity, (5, 5)),
+        ];
         {
-            let _other = in_mod("n");
-            assert!(v.block_tickets().is_empty() && v.entity_tickets().is_empty());
-            assert_eq!(v.remove_block_tickets([1, 2, 3]), 0, "not its controller");
-            assert!(!format!("{v:?}").contains("(0, 0)"));
+            let mut v = ControllerTickets::new(&mut rows);
+            assert_eq!(v.block_tickets(), &expected_blocks);
+            assert_eq!(v.entity_tickets(), &expected_entities);
+            assert!(v.remove_block_ticket([1, 2, 3], [0, 1], false));
+            assert!(!v.remove_block_ticket([1, 2, 3], [0, 1], false));
+            assert_eq!(v.block_tickets(), &expected_blocks);
+            assert_eq!(v.entity_tickets(), &expected_entities);
+            assert_eq!(v.remove_entity_tickets(9), 1);
+            assert_eq!(v.remove_entity_tickets(9), 0);
+            assert_eq!(v.entity_tickets(), &expected_entities);
+            assert_eq!(v.remove_block_tickets([1, 2, 3]), 1);
+            assert_eq!(v.remove_block_tickets([1, 2, 3]), 0);
+            assert_eq!(v.block_tickets(), &expected_blocks);
+            v.publish_removals();
         }
-        let _owner = in_mod("m");
-        assert_eq!(
-            v.block_tickets(),
-            vec![([1, 2, 3], set(&[[0, 0], [0, 1]], &[]))]
-        );
-        assert_eq!(v.entity_tickets(), vec![(9, set(&[[5, 5]], &[]))]);
-        assert!(v.remove_block_ticket([1, 2, 3], [0, 1], false));
-        assert!(!v.remove_block_ticket([1, 2, 3], [0, 1], false));
-        assert_eq!(v.remove_entity_tickets(9), 1);
-        assert_eq!(v.remove_block_tickets([1, 2, 3]), 1);
-        assert_eq!(v.into_removed().len(), 3);
+        assert_eq!(rows, [ticket(0, kept_block, (2, 2))]);
     }
 
     #[test]
     fn validation_removes_either_kind_apart_and_remove_all_removes_both() {
         let owner = TicketOwner::Block([4, 5, 6]);
+        let plain = ticket(0, owner, (3, 3));
         let spawning = ModTicket {
             natural_spawning: true,
             ..ticket(0, owner, (3, 3))
         };
-        let both = vec![ticket(0, owner, (3, 3)), spawning];
-        let mut v1 = ControllerTickets::new("m", both.clone());
-        let v = &mut v1;
-        let _m = in_mod("m");
-        assert_eq!(
-            v.block_tickets(),
-            vec![([4, 5, 6], set(&[[3, 3]], &[[3, 3]]))]
-        );
-        // A singular removal takes the kind it names and leaves the other.
-        assert!(v.remove_block_ticket([4, 5, 6], [3, 3], true));
-        assert!(!v.remove_block_ticket([4, 5, 6], [3, 3], true));
-        assert_eq!(v.block_tickets(), vec![([4, 5, 6], set(&[[3, 3]], &[]))]);
-        assert!(v.remove_block_ticket([4, 5, 6], [3, 3], false));
-        assert!(v.block_tickets().is_empty());
-        // The other order, and the entity side.
-        let mut v2 = ControllerTickets::new("m", both.clone());
-        assert!(v2.remove_block_ticket([4, 5, 6], [3, 3], false));
-        assert_eq!(v2.block_tickets(), vec![([4, 5, 6], set(&[], &[[3, 3]]))]);
-        // Remove-all takes both.
-        let mut v3 = ControllerTickets::new("m", both);
-        assert_eq!(v3.remove_block_tickets([4, 5, 6]), 2);
-        assert_eq!(v1.into_removed().len(), 2);
-        assert_eq!(v2.into_removed().len(), 1);
-        assert_eq!(v3.into_removed().len(), 2);
+        let expected_block = BTreeMap::from([([4, 5, 6], set(&[[3, 3]], &[[3, 3]]))]);
+        let mut rows = vec![plain.clone(), spawning.clone()];
+        {
+            let mut v = ControllerTickets::new(&mut rows);
+            assert_eq!(v.block_tickets(), &expected_block);
+            // A singular removal takes the kind it names and leaves the other,
+            // while the lent original map stays fixed for the invocation.
+            assert!(v.remove_block_ticket([4, 5, 6], [3, 3], true));
+            assert!(!v.remove_block_ticket([4, 5, 6], [3, 3], true));
+            assert_eq!(v.block_tickets(), &expected_block);
+            v.publish_removals();
+        }
+        assert_eq!(rows.as_slice(), std::slice::from_ref(&plain));
+
+        rows.push(spawning.clone());
+        {
+            let mut v = ControllerTickets::new(&mut rows);
+            assert_eq!(v.block_tickets(), &expected_block);
+            assert!(v.remove_block_ticket([4, 5, 6], [3, 3], true));
+            assert!(v.remove_block_ticket([4, 5, 6], [3, 3], false));
+            assert!(!v.remove_block_ticket([4, 5, 6], [3, 3], false));
+            assert_eq!(v.block_tickets(), &expected_block);
+            v.publish_removals();
+        }
+        assert!(rows.is_empty());
+
+        // The other order.
+        rows.extend([plain.clone(), spawning.clone()]);
+        {
+            let mut v = ControllerTickets::new(&mut rows);
+            assert!(v.remove_block_ticket([4, 5, 6], [3, 3], false));
+            assert!(!v.remove_block_ticket([4, 5, 6], [3, 3], false));
+            assert_eq!(v.block_tickets(), &expected_block);
+            v.publish_removals();
+        }
+        assert_eq!(rows, [spawning]);
+
+        // Remove-all takes both and keeps the original map intact.
+        rows.push(plain);
+        {
+            let mut v = ControllerTickets::new(&mut rows);
+            assert_eq!(v.remove_block_tickets([4, 5, 6]), 2);
+            assert_eq!(v.remove_block_tickets([4, 5, 6]), 0);
+            assert_eq!(v.block_tickets(), &expected_block);
+            v.publish_removals();
+        }
+        assert!(rows.is_empty());
+
         let entity = TicketOwner::Entity(7);
-        let mut v = ControllerTickets::new(
-            "m",
-            vec![
-                ticket(0, entity, (1, 1)),
-                ModTicket {
-                    natural_spawning: true,
-                    ..ticket(0, entity, (1, 1))
-                },
-            ],
-        );
-        assert!(v.remove_entity_ticket(7, [1, 1], true));
-        assert_eq!(v.entity_tickets(), vec![(7, set(&[[1, 1]], &[]))]);
-        assert!(v.into_removed()[0].natural_spawning);
+        let entity_plain = ticket(0, entity, (1, 1));
+        let entity_spawning = ModTicket {
+            natural_spawning: true,
+            ..ticket(0, entity, (1, 1))
+        };
+        let expected_entity = BTreeMap::from([(7, set(&[[1, 1]], &[[1, 1]]))]);
+        rows.extend([entity_plain.clone(), entity_spawning]);
+        {
+            let mut v = ControllerTickets::new(&mut rows);
+            assert_eq!(v.entity_tickets(), &expected_entity);
+            assert!(v.remove_entity_ticket(7, [1, 1], true));
+            assert!(!v.remove_entity_ticket(7, [1, 1], true));
+            assert_eq!(v.entity_tickets(), &expected_entity);
+            v.publish_removals();
+        }
+        assert_eq!(rows, [entity_plain]);
     }
 }

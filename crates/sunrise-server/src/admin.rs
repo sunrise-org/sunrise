@@ -764,7 +764,7 @@ mod tests {
         .unwrap();
         let inventory = json!([
             {"id": "native_loaded", "version": "2"},
-            {"id": "wasm_loaded", "version": "3"},
+            {"id": "extra_content", "version": "3"},
             {"id": "content_loaded", "version": "4"},
         ]);
         // The mock owns only the transport: the real endpoint must authenticate and issue the query.

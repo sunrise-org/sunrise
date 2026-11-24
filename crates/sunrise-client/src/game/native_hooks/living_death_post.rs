@@ -6,11 +6,9 @@ impl Game<'_> {
     /// experience and the death message (`ServerLivingEntityEvents.AFTER_DEATH`).
     pub(in crate::game) fn native_living_death_post(
         &mut self,
-        entity: u32,
-        damage_type: &str,
-        attacker: u32,
+        call: mod_api::__private::LivingDeathPostCall<'_>,
     ) {
-        self.fire_living_death_post(entity, damage_type, attacker);
+        self.fire_living_death_post(call);
     }
 }
 
@@ -20,7 +18,7 @@ mod tests {
     use super::*;
     use mod_api::{
         Flow, Hooks, LivingDeathEvent, LivingDeathPostEvent, LivingDropsEvent,
-        LivingExperienceDropEvent, MobKilledEvent, ModEntry, ServerHost,
+        LivingExperienceDropEvent, ModEntry, ServerHost,
     };
     use std::sync::{
         Arc, Mutex,
@@ -34,6 +32,10 @@ mod tests {
         entity: Option<u32>,
         damage_type: Option<String>,
         attacker: Option<u32>,
+        kind: Option<String>,
+        player: Option<u128>,
+        credited_player: Option<u128>,
+        message_key: Option<String>,
         drops_before: bool,
         experience_before: bool,
     }
@@ -48,9 +50,6 @@ mod tests {
 
     #[mod_api::__subscriptions]
     impl Hooks for Observer {
-        fn mob_killed(&self, _: &mut dyn ServerHost, _: &mut MobKilledEvent) {
-            self.heard.lock().unwrap().push("killed");
-        }
         fn living_death(&self, _: &mut dyn ServerHost, _: &mut LivingDeathEvent<'_>) -> Flow {
             self.heard.lock().unwrap().push("death");
             if self.cancel.load(Ordering::SeqCst) {
@@ -79,6 +78,10 @@ mod tests {
             post.entity = Some(event.entity);
             post.damage_type = Some(event.damage_type.to_owned());
             post.attacker = Some(event.attacker);
+            post.kind = Some(event.kind.to_owned());
+            post.player = event.player;
+            post.credited_player = event.credited_player;
+            post.message_key = event.message_key.map(str::to_owned);
             post.drops_before = self.drops.load(Ordering::SeqCst) > 0;
             post.experience_before = self.experience.load(Ordering::SeqCst);
         }
@@ -100,7 +103,7 @@ mod tests {
     /// cancelled), the drop list and the experience, and before the tick is
     /// done. A player's blow and fall damage carry their damage types; the
     /// hook names the same last hurt `living_death` heard. A cancelled death
-    /// is not told. The kill-blow hook heard before, the notice comes after.
+    /// is not told.
     #[test]
     #[ignore = "daily"]
     fn living_death_post_fires_once_after_each_finished_death() {
@@ -134,18 +137,20 @@ mod tests {
                 // The last hurt by a player, so the death rolls experience.
                 mob.ai.last_hurt_by_player = 100;
                 game.mobs.last_mut().unwrap().ai.last_hurt_by_player = 100;
-                // The blow that killed it, at the attack: mob_killed's moment.
-                game.native_kill_event(game.mobs.len() - 1);
-                game.mob_died(&mob);
+                game.mob_die(&mob);
                 assert_eq!(
                     *heard.lock().unwrap(),
-                    ["killed", "death", "loot", "xp", "post"]
+                    ["death", "xp", "loot", "post"],
+                    "NeoForge's dropAllDeathLoot: the experience, then the drop list"
                 );
                 {
                     let post = post.lock().unwrap();
                     assert_eq!(post.entity, Some(mob.id));
                     assert_eq!(post.damage_type.as_deref(), Some("minecraft:player_attack"));
                     assert_eq!(post.attacker, Some(0), "no player entity is credited");
+                    assert_eq!(post.kind.as_deref(), Some("minecraft:sheep"));
+                    assert_eq!(post.player, None);
+                    assert_eq!(post.credited_player, None);
                     assert!(post.drops_before, "the drop list was built before it");
                     assert!(post.experience_before, "the experience rolled before it");
                 }
@@ -165,7 +170,7 @@ mod tests {
                     attacker_species: None,
                 };
                 let mob = sheep(game, fall);
-                game.mob_died(&mob);
+                game.mob_die(&mob);
                 assert_eq!(*heard.lock().unwrap(), ["death", "loot", "post"]);
                 assert_eq!(
                     post.lock().unwrap().damage_type.as_deref(),
@@ -205,7 +210,7 @@ mod tests {
                         attacker_species: None,
                     },
                 );
-                game.mob_died(&mob);
+                game.mob_die(&mob);
                 assert_eq!(*heard.lock().unwrap(), ["death"]);
                 assert_eq!(
                     game.mobs.last().unwrap().health,
@@ -246,17 +251,21 @@ mod tests {
                     guest.inventory[0] =
                         Some(sunrise_client::items::ItemStack::new("minecraft:stone", 1));
                 });
-                let id = game.lan.as_ref().unwrap().hub.guests[0].entity_id as u32;
+                let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+                let (id, uuid) = (guest.entity_id as u32, guest.uuid);
 
                 game.guest_die(0, 1);
 
                 assert_eq!(
                     *heard.lock().unwrap(),
-                    ["death", "xp", "post"],
-                    "the inventory drop, the message and the experience ran before it"
+                    ["death", "xp", "loot", "post"],
+                    "the message, the experience and then the inventory drop ran before it"
                 );
                 let post = post.lock().unwrap();
                 assert_eq!(post.entity, Some(id));
+                assert_eq!(post.kind.as_deref(), Some("minecraft:player"));
+                assert_eq!(post.player, Some(uuid));
+                assert_eq!(post.message_key, None);
                 assert_eq!(post.damage_type.as_deref(), Some("minecraft:generic"));
                 assert_eq!(post.attacker, Some(0), "no attacker was recorded");
                 assert!(post.experience_before, "the experience ran before it");

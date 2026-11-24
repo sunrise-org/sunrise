@@ -30,7 +30,7 @@ the other dimensions' levels as `Parked` values and swaps one into place (`enter
 | `ServerLevel.players` | `Hub::here`: the guests whose `dimension` is the level in place |
 | `ServerPlayer.teleport` into another level | `server_travel.rs`: a Respawn packet, then the teleport once the destination has loaded (portals and `execute in … tp`). An End gateway teleports within the End. |
 | `PlayerList.respawn` | `guest_respawn`: into the respawn point's level, the Overworld unless the player has an anchor or a `spawnpoint` elsewhere (`Guest::respawn_elsewhere`), resolved through its block once that level has loaded |
-| `ServerLevel.noPlayersEmptyTime`, chunk unloading | `close_idle_levels`: a level other than the Overworld with nobody in it for 300 ticks is saved and closed |
+| `ServerLevel.noPlayersEmptyTime`, chunk unloading | `evict_idle_levels`: a level other than the Overworld with nobody in it for 300 ticks evicts its chunks and entities without closing the level |
 | `CommandSourceStack.getLevel` | `with_source` puts the source's level in place for a command (`execute in`, `execute at` a player in another level) |
 | the levels' shared `LevelData` | not swapped: game time, day time, weather, game rules, scoreboard, maps, entity ids (`next_entity`, unique across levels) |
 
@@ -64,11 +64,14 @@ is `/tick query`'s average over 100 ticks.
 | guest in the End (the Nether still parked) | 0.9 ms | 1.1 ms | 1324 MB |
 | both back, the Nether and End closed after 300 idle ticks | 0.8 ms | 0.9 ms | 1335 MB |
 
-- A level costs only while a player is in it: its chunks around that player, their entities, and the
-  tick. With nobody outside the Overworld, `tick_server` runs one pass, as before.
-- A closed level's memory goes back to the allocator, not always to the system.
-- Entering a level the first time opens its region files and streaming (`open_level`). That cost
-  comes once, before the player's chunks load.
+- Startup opens all built-in levels, then activates their saved tickets, including `/forceload`
+  and mod tickets, and waits for the chunks they hold. Opening an unticketed level does not by
+  itself preload chunks; spawn preparation can load chunks separately.
+- A level with players or tickets keeps its chunks and entities and runs its tick. If nothing keeps
+  levels outside the Overworld active, the server ticks only the Overworld. Built-in levels stay
+  open until server shutdown while unloading their unticketed chunks when idle.
+- A closed custom level's memory goes back to the allocator, not always to the system. Entering it
+  again reopens its region files and streaming before loading the player's chunks.
 
 ## Saving
 
@@ -120,7 +123,7 @@ portals. The spec is #3716. Built so far: the channel, the client's capability a
 | Client | `viewed_levels_net.rs`, called from `net.rs` | Answers the query before acknowledging `FinishConfiguration`, with revision 4: 2 levels, the other two of vanilla's three dimensions. |
 | Client | `game/network/viewed_worlds/` | On `open`, a world for the level, built from the dimension type the server synced for it. A `run`'s packets change that world: its chunks, light, biomes, blocks, time (an update with no clocks moves its clock on by the game time since, at its rate), weather and entities (`entities.rs`, apart from the player's own). `close` drops it and frees the slot. The client keeps each slot's world with the epoch that bound it (`worlds.rs`): a `run` or `close` at that epoch goes to it, one at an epoch no newer than the latest it was sent but not the slot's is dropped (a late packet of a level the slot no longer holds), and one at a newer epoch closes the connection. Each of these closes the connection with a fixed reason that shows none of the server's text: an `open` whose dimension is not a level id, of a dimension type the server did not sync (never an Overworld fallback), of a level viewed already in another slot, of the player's own level, of a slot past the client's 2, with a column cap past `viewed_levels::MAX_COLUMNS` (4489, the client's ceiling) or with an epoch not newer than the last; a new column past the cap the `open` said; a new entity past 8192 (`viewed_levels::MAX_ENTITIES`) or an entity's effect or attribute past 256; a `swap` the client did not make. A travel's Respawn (keep 3) into one of them swaps it with the player's world (`switch.rs`): its columns, light and block entities become the player's, the player's world becomes the viewed world of the level left, held until the server's `swap` binds it to the slot of the level entered, and no loading screen starts. A Login, any other Respawn (a death's, an End exit's) or a new configuration drops them all. The player's own level (`host.level`) is never one of them, and nothing is drawn yet. |
 | Server | `lan/viewed_levels/{areas,view,send}.rs` | A mod's areas for one player (`Hub::set_viewed_areas`), each `Loaded` or `Ticking`, within the caps (`max_viewed_*`, [hosting](hosting.md)), with centres at most 1,875,000 chunks (the world border's limit) from (0, 0). A client that can view the level is sent `open`, its chunks in runs inside a plain batch, its block, light and block-entity changes, block and level events, its time every 20 ticks, its clocks when they jump or change rate (`time set`, `time add`, `advance_time`) and its weather; chunks no area covers are forgotten 52 ticks later, then `close`. A view holds at most the client's column cap: from revision 4 the per-player `Loaded` cap, sent in `open` and at most 4489 (`viewed_levels::MAX_COLUMNS`, the setting is clamped to it); before revision 4 at most 2048 (`viewed_levels::LEGACY_COLUMNS`), which that client's areas are checked against too (`ViewedCaps::for_client`). A slot is the first free one below the client's level count, with the next epoch (`Viewed::name_new`). |
-| Server | `game/modding/native_chunk_areas.rs` | The mod API, `PlayerRef::set_chunk_areas` ([book](modding/src/how-to/entities/chunk-areas.md)): each mod's areas, kept apart by its id, through `Hub::set_viewed_areas`, whose refusals come back typed with their values. The same on native and wasm mods. |
+| Server | `game/modding/native_chunk_areas.rs` | The mod API, `PlayerRef::set_chunk_areas` ([book](modding/src/how-to/entities/chunk-areas.md)): each mod's areas, kept apart by its id, through `Hub::set_viewed_areas`, whose refusals come back typed with their values. |
 
 | Server | `ticket_levels.rs` (`Sources::viewed`), `game/network/lan/viewed_areas.rs` | The areas' own tickets and `Streaming.extra` squares, never forced chunks or mod chunk tickets. A `Ticking` area puts its level in the tick list, for its chunks only. |
 | Server | `game/world/view_pass.rs` | A level that only `Loaded` areas name is not ticked: after the ticked levels a view pass streams it and sends it, and nothing in it ticks. |

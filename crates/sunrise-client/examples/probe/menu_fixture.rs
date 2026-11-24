@@ -17,6 +17,7 @@ use sunrise_client::{
     furnace::FurnaceCooking,
     item_data::{canon_stack, parse_stack},
     items::Items,
+    lang::{self, Language},
     menu::{Env, Input, Kind, Menu},
 };
 use sunrise_protocol::registry::Ids;
@@ -93,6 +94,8 @@ pub fn main() -> sunrise_client::Result<()> {
             .ok_or("usage: menu_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
+    // This probe runs server menus without the game's resource loader.
+    lang::set(Language::load_default(&root.to_path_buf()));
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     let recipes = Recipes::load(

@@ -140,7 +140,6 @@ impl std::error::Error for UsageError {}
 fn content() -> serde_json::Value {
     use sunrise_mod_package::manifest;
     serde_json::json!({
-        // 0.1 was the WebAssembly code line: no build runs it any more.
         "mod": { "api": [manifest::API] },
         "native_mod": { "exact_build": true, "rebuild": true },
         // The lines it draws: a newer one is read and checked, not drawn yet.

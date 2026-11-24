@@ -6,10 +6,12 @@ pub trait Hooks {
 
 - **`mob_despawn(dimension, mob, kind, pos, result)`** (NeoForge's `MobDespawnEvent`, server): fired once per tick for every mob on the entity tick list just before `Mob.checkDespawn`, including persistent mobs and mobs in peaceful. A mob is on the list when its chunk is entity-ticking, which player tickets give across the whole view distance; listed mobs beyond the simulation distance are checked without being ticked. `result` starts as `Despawn::Default`. `Allow` discards the mob now, `Deny` keeps it this tick (a mod can keep a hostile mob in peaceful, as NeoForge's event documents), and `Default` leaves vanilla's rules to decide. An answer other than `Default` skips vanilla's checks, so it also skips the `nextInt(800)` draw of the idle-despawn roll: the hook fires before that draw. A mob in a loaded chunk that is not entity-ticking is not checked and the hook does not fire for it; the wither and the ender dragon override `checkDespawn` without `super`, so it does not fire for them either. In vanilla the whole of `Mob.checkDespawn` follows the event, the peaceful-mode discard included, so a `Deny` keeps a hostile mob in peaceful.
 - Version 2 makes the ticking mob and snapshot peers readable through the scoped tick host. The ticking mob is read directly; an already-ticked peer exposes post-turn state and a not-yet-ticked peer pre-turn state. A mob spawned during the pass does not resolve in this view until the next pass. Removed mobs do not resolve, unlike dead-but-present mobs.
-- Version 3 narrows the hook to the entity tick list: mobs in loaded chunks that are not entity-ticking no longer fire it or check despawning, as in vanilla. Named injections request `hook_version = 3`.
+- Version 3 narrows the hook to the entity tick list: mobs in loaded chunks that are not entity-ticking no longer fire it or check despawning, as in vanilla.
 - Listeners run on replayed ticks, so they are pure functions of their inputs. Tick-time effect: one `listened` branch per mob per tick with no listeners; the answer sits in a `Mob` field that costs one byte and is reset after the mob's tick.
 - Beyond NeoForge: none. `Despawn` is plain data, `#[non_exhaustive]`."#]
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "server",
         version = 3,
         contract = "listen",
@@ -18,5 +20,5 @@ pub trait Hooks {
         neoforge = "MobDespawnEvent",
         cancellable = false
     )]
-    fn mob_despawn();
+    fn mob_despawn(dimension: &str, mob: MobRef, kind: &str, pos: [f64; 3], result: &mut Despawn);
 }

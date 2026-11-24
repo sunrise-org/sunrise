@@ -11,12 +11,13 @@ impl Renderer {
         sprite_mips: &[crate::mipmap::Settings],
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
+        hud_pages: Option<&crate::hud::HudAtlas>,
         glint: (&[u8], u32, u32),
         glint_armor: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: Arc<panorama::Faces>,
         prepared: Option<PreparedTextures>,
-        previous: Option<&Self>,
+        render_device: RendererDevice<'_>,
         api: GraphicsApi,
         translucent_batching: bool,
         (shader_pack, pack_starts_wide): (bool, bool),
@@ -26,6 +27,10 @@ impl Renderer {
         request: output::FrameRequest,
         display: output::DisplayReading,
     ) -> Result<Self> {
+        let previous = match &render_device {
+            RendererDevice::Reuse(renderer) => Some(*renderer),
+            _ => None,
+        };
         let Opened {
             instance,
             surface,
@@ -34,11 +39,11 @@ impl Renderer {
             queue,
             device_lost,
             configured,
-        } = match previous {
+        } = match render_device {
             // Reload resources on the same device; replacing live Vulkan
             // devices can invalidate the driver's swapchain state on the same
             // window.
-            Some(renderer) => {
+            RendererDevice::Reuse(renderer) => {
                 describe_adapter(&renderer.adapter);
                 check_layers(&renderer.adapter, layers)?;
                 Opened {
@@ -63,10 +68,8 @@ impl Renderer {
                     configured: None,
                 }
             }
-            None => {
-                let _step = crate::spans::startup::step("renderer.open_device");
-                open_device(&window, offscreen, api, layers).await?
-            }
+            RendererDevice::Opened(opened) => *opened,
+            RendererDevice::New => Opened::for_window(&window, offscreen, api, layers).await?,
         };
         // Computed once: the sprite arrays, the shaders' constants and the
         // shader pack atlas all cut the sprites by it.
@@ -905,14 +908,10 @@ impl Renderer {
             &lightmap_sampler,
             &emission_stats.view,
         );
-        let terrain_model_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Native cutout model (unmipped)"),
-            lod_max_clamp: 0.0,
-            ..fluid::SAMPLER
-        });
+        let terrain_model_sampler = device.create_sampler(&terrain_model::MOVING_BLOCK_SAMPLER);
         let terrain_model_group = terrain_group(
             &device,
-            "Native cutout model resources",
+            "Native model resources",
             &bindings,
             &globals,
             &sprite_views,
@@ -977,7 +976,7 @@ impl Renderer {
         let limit = device.limits().max_texture_dimension_2d;
         if atlas_width.max(atlas_height) > limit {
             return Err(format!(
-                "the shared atlas is {atlas_width}x{atlas_height}; this GPU allows {limit}x{limit}"
+                "HUD atlas {atlas_width}x{atlas_height} exceeds device texture limit {limit}"
             )
             .into());
         }
@@ -1067,6 +1066,13 @@ impl Renderer {
             &glint_armor_view,
             &glint_sampler,
             hud_coverage,
+            hud_pages.map_or_else(Vec::new, |atlas| {
+                atlas
+                    .registered_pages
+                    .iter()
+                    .map(|page| crate::hud::upload_atlas_page(&device, &queue, page))
+                    .collect()
+            }),
         )?;
         hud.atlas_texture = Some(atlas.clone());
         let entity_step = crate::spans::startup::step("renderer.entity_pipelines");
@@ -1105,44 +1111,51 @@ impl Renderer {
             label: Some("Atlas"),
             ..Default::default()
         });
-        let entity_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Entity resources"),
-            layout: &entity_bindings,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&glint_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
-                },
-            ],
-        });
+        let entity_group_for = |view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Entity resources"),
+                layout: &entity_bindings,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: globals.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&glint_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                    },
+                ],
+            })
+        };
+        let entity_group = entity_group_for(&atlas_view);
+        let screen_page_groups = hud
+            .atlas_page_views()
+            .map(|view| view.map(entity_group_for))
+            .collect();
         let static_entity_transform =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Static block-entity camera position"),
@@ -1390,24 +1403,40 @@ impl Renderer {
             fragment: "fs_entity_unmarked",
             write_mask: wgpu::ColorWrites::ALL,
         });
-        // RenderPipelines.TEXT_POLYGON_OFFSET: a text display's text and
-        // background win against the surface they lie on (bias 1, 10), from
-        // the front only.
+        // RenderPipelines.TEXT_POLYGON_OFFSET: a display's text/background or a sign's
+        // outlined fill wins against the surface it lies on (bias 1, 10), from the front only.
+        let text_bias = wgpu::DepthBiasState {
+            constant: 10,
+            slope_scale: 1.0,
+            clamp: 0.0,
+        };
         let text_polygon_offset_pipeline = entity_pipeline_with(EntityPipelineOptions {
             label: "Polygon offset text",
             cull_mode: Some(wgpu::Face::Back),
             depth_write: true,
             compare: wgpu::CompareFunction::GreaterEqual,
-            bias: wgpu::DepthBiasState {
-                constant: 10,
-                slope_scale: 1.0,
-                clamp: 0.0,
-            },
+            bias: text_bias,
             blend: alpha_blend,
             clouds: false,
             vertex: "vs_entity",
-            fragment: "fs_entity_unmarked",
+            fragment: "fs_entity_text",
             write_mask: wgpu::ColorWrites::ALL,
+        });
+        // Marked HDR targets store a glowing glyph's tier in alpha. Match the colour pass's
+        // exact depth, bias and culling in each mode so discarded or occluded glyphs never mark.
+        let text_mark_pipelines = [wgpu::DepthBiasState::default(), text_bias].map(|bias| {
+            entity_pipeline_with(EntityPipelineOptions {
+                label: "HDR text mark",
+                cull_mode: Some(wgpu::Face::Back),
+                depth_write: false,
+                compare: wgpu::CompareFunction::Equal,
+                bias,
+                blend: wgpu::BlendState::REPLACE,
+                clouds: false,
+                vertex: "vs_entity",
+                fragment: "fs_text_hdr_mark",
+                write_mask: wgpu::ColorWrites::ALPHA,
+            })
         });
         let world_text_pipeline = world_text::pipeline(
             &device,
@@ -1437,6 +1466,46 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        // `RenderPipelines.BANNER_PATTERN`: blended without depth writes or alpha cutout.
+        let banner_pattern_pipeline = entity_pipeline_with(EntityPipelineOptions {
+            label: "Banner pattern",
+            cull_mode: None,
+            depth_write: false,
+            compare: wgpu::CompareFunction::GreaterEqual,
+            bias: entity_bias,
+            blend: alpha_blend,
+            clouds: false,
+            vertex: "vs_entity",
+            fragment: "fs_banner_pattern",
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        // `RenderPipelines.GLINT`: equal depth against the entity pass, no depth writes,
+        // `BlendFunction.GLINT` RGB addition (squared in `fs_glint`), dst alpha untouched.
+        let glint_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let glint_only_pipeline = entity_pipeline_with(EntityPipelineOptions {
+            label: "Glint overlay",
+            cull_mode: None,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Equal,
+            bias: entity_bias,
+            blend: glint_blend,
+            clouds: false,
+            vertex: "vs_entity",
+            fragment: "fs_glint",
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        let particle_pipelines = particle_draws::ParticlePipelines::new(entity_pipeline_with);
         // The hand as `entity_pipeline` draws it, in the overlays' format.
         let overlay_hand = (overlay_format != frame_format || linear_light).then(|| {
             entity_pipeline_factory(
@@ -1457,6 +1526,51 @@ impl Renderer {
                 clouds: false,
                 vertex: "vs_entity",
                 fragment: "fs_entity",
+                write_mask: wgpu::ColorWrites::ALL,
+            })
+        });
+        let overlay_hand_banner_pattern =
+            (overlay_format != frame_format || linear_light).then(|| {
+                entity_pipeline_factory(
+                    &kept,
+                    &entity_layout,
+                    &cloud_layout,
+                    &entity_shader,
+                    &entity_vertex,
+                    overlay_format,
+                    false,
+                )(EntityPipelineOptions {
+                    label: "First-person hand banner pattern",
+                    cull_mode: None,
+                    depth_write: false,
+                    compare: wgpu::CompareFunction::GreaterEqual,
+                    bias: entity_bias,
+                    blend: alpha_blend,
+                    clouds: false,
+                    vertex: "vs_entity",
+                    fragment: "fs_banner_pattern",
+                    write_mask: wgpu::ColorWrites::ALL,
+                })
+            });
+        let overlay_hand_glint = (overlay_format != frame_format || linear_light).then(|| {
+            entity_pipeline_factory(
+                &kept,
+                &entity_layout,
+                &cloud_layout,
+                &entity_shader,
+                &entity_vertex,
+                overlay_format,
+                false,
+            )(EntityPipelineOptions {
+                label: "First-person hand glint",
+                cull_mode: None,
+                depth_write: false,
+                compare: wgpu::CompareFunction::Equal,
+                bias: entity_bias,
+                blend: glint_blend,
+                clouds: false,
+                vertex: "vs_entity",
+                fragment: "fs_glint",
                 write_mask: wgpu::ColorWrites::ALL,
             })
         });
@@ -1957,13 +2071,24 @@ impl Renderer {
         // Metal draws solid terrain in two passes (`split_solid`): meshes put all
         // their opaque quads first, so each pass draws its part in a run or two.
         crate::mesher::group_parts(adapter.get_info().backend == wgpu::Backend::Metal);
-        // Readable as storage where flat draws run: a shader pack's terrain program reads them.
+        // Readable as storage where flat draws run, or while a `shaders/` pack's terrain programs
+        // read them per section (`arena_storage`): it starts as for the picked pack, taken to
+        // read them, so the pack loading keeps it (`follow_arena_layout`).
+        // `SUNRISE_SHADER_PACK_WITHOUT=vertex-storage` takes reads away as for a pack
+        // (`pack_post::Gpu::vertex_reads`).
+        let terrain_pages = flat::pages_readable(&adapter, &device)
+            && pack_post::Gpu::of(&adapter, device.features()).vertex_reads;
+        let arena_storage = arena_storage(flat_wanted, pack_starts_wide && terrain_pages);
+        // With a normal stream where the pack's per-section draws read no pages
+        // (`follow_arena_layout`), as for the pack's taken to fit with it.
+        let arena_normals = pack_starts_wide && !flat_wanted && !terrain_pages;
         let arena = arena::Arena::new(
             &device,
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
-            flat_wanted,
-        );
+            arena_storage,
+        )
+        .with_normals(arena_normals);
         // Sections as one index list per frame where multi-draw is emulated.
         let mut flat = flat_wanted.then(|| {
             let buffers = [Some(wgpu::VertexBufferLayout {
@@ -2106,7 +2231,14 @@ impl Renderer {
             &device,
             std::mem::size_of::<TerrainVertex>() as u64,
             flat.is_some(),
-            translucent_split(translucent_batching, flat.is_some(), shader_pack, false),
+            translucent_split(
+                translucent_batching,
+                flat.is_some(),
+                pack_starts_wide && terrain_pages,
+                shader_pack,
+                false,
+            ),
+            arena_normals,
         );
         if let (Some(flat), Some(arena)) = (&mut flat, &translucent_arena) {
             flat.set_translucent_page_vertices(arena.page_vertices());
@@ -2227,6 +2359,8 @@ impl Renderer {
             cull_on: cull.is_some(),
             sides_on: true,
             gpu_culling: None,
+            sourced: Default::default(),
+            gpu_sourced_frame: false,
             gpu_culling_offer,
             gpu_frame: false,
             #[cfg(debug_assertions)]
@@ -2247,12 +2381,15 @@ impl Renderer {
             core_sky: None,
             core_particles,
             core_lightmap: None,
+            core_clouds: None,
             debug_lines_opaque,
             debug_lines,
             debug_lines_on_top,
             debug_crosshair,
             overlay_crosshair,
             overlay_hand,
+            overlay_hand_banner_pattern,
+            overlay_hand_glint,
             debug_line_buffer,
             debug_line_capacity: 4096,
             crosshair_group,
@@ -2264,6 +2401,11 @@ impl Renderer {
             world_views: views,
             world_view_side: max_side,
             entity_pipeline,
+            banner_pattern_pipeline,
+            glint_only_pipeline,
+            particle_pipelines,
+            explicit_opaque_particles: Default::default(),
+            explicit_translucent_particles: Default::default(),
             static_entity_pipeline,
             hdr_mark_pipeline,
             hdr_entity_mark_pipeline,
@@ -2287,9 +2429,10 @@ impl Renderer {
             lightning_pipeline,
             lightning: lightning::Renderer::new(),
             see_through_pipeline,
-            world_primitives,
+            world_primitives: Some(world_primitives),
             text_polygon_offset_pipeline,
             world_text_pipeline,
+            text_mark_pipelines,
             fluid_pipeline,
             terrain_model_pipelines,
             celestial,
@@ -2305,6 +2448,7 @@ impl Renderer {
             border_uniform,
             border_vertices,
             screen_pipelines,
+            screen_page_groups,
             screen_buffer,
             screen_capacity,
             entity_group,
@@ -2329,6 +2473,7 @@ impl Renderer {
             static_entity_indices,
             static_entity_index_quads,
             entity_batch: EntityBatch::default(),
+            entity_order: entity_skin::OrdinaryOrder::default(),
             entity_skin,
             group,
             fluid_group,
@@ -2372,6 +2517,7 @@ impl Renderer {
             depth,
             sections: resident::Resident::default(),
             lods: FxHashMap::default(),
+            lod_vertex_bytes: 0,
             lod_cells: lod::TileGrid::default(),
             lod_cull_free: Vec::new(),
             lod_cull_next: 0,
@@ -2395,6 +2541,12 @@ impl Renderer {
             multi_draw,
             visible: Vec::new(),
             visible_lods: Vec::new(),
+            visible_renderable_sections: Vec::new(),
+            visible_renderable_scratch: Vec::new(),
+            hook_geometry: Default::default(),
+            hook_entities_scratch: Vec::new(),
+            hook_see_through_scratch: Vec::new(),
+            translucent_lods: Vec::new(),
             shadow_visible: Vec::new(),
             translucent_draws: Vec::new(),
             translucent_tests: Vec::new(),
@@ -2449,6 +2601,11 @@ impl Renderer {
             pack_material_atlases: None,
             shared_material_maps: [None, None],
             pack_terrain_flat: false,
+            terrain_pages,
+            pack_terrain_pages: false,
+            pack_terrain_normals: false,
+            pack_terrain_bindings: Default::default(),
+            arena_storage,
             separate_ao: false,
             pack_pages: Vec::new(),
             outline_edges_scratch: Vec::new(),
@@ -2473,6 +2630,7 @@ impl Renderer {
             section_draw_calls: 0,
             frame_serial: 0,
             stats_frame: 0,
+            stats_halves: Default::default(),
             uploaded_bytes: 0,
             started: Instant::now(),
             screenshot: None,

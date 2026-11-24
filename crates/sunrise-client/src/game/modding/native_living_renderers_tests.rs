@@ -5,8 +5,8 @@
 //! resource reload resolves it again.
 use super::Game;
 use mod_api::{
-    BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, Hooks,
-    LayerTarget, Pose, PosedParts, RegisterEntityLayersEvent, RegisterEntityRenderersEvent,
+    BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, FrameModel,
+    Hooks, LayerTarget, Pose, RegisterEntityLayersEvent, RegisterEntityRenderersEvent,
     RegistrationContext, RenderLivingPostEvent, RenderLivingPreEvent,
 };
 use std::sync::{
@@ -75,18 +75,20 @@ impl EntityRenderer for Flaky {
     }
 }
 
-/// A layer on the zombie: draws a quad 200 blocks up and records whether it had posed parts.
+/// Records whether the body model was present. When a replacement drew, adds a raised quad.
 struct Layer(Shared);
 impl EntityRenderLayer for Layer {
     fn submit(
         &self,
         entity: &EntityRenderState,
-        parts: Option<&PosedParts>,
+        model: Option<&dyn FrameModel>,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
-        let event = format!("layer {} parts {}", entity.id, parts.is_some());
+        let event = format!("layer {} model {}", entity.id, model.is_some());
         self.0.lock().unwrap().events.push(event);
-        raised_quad(draw, 200.0);
+        if model.is_none() {
+            raised_quad(draw, 200.0);
+        }
         Ok(())
     }
 }
@@ -117,9 +119,11 @@ impl Hooks for Scene {
         _: &RegistrationContext,
         event: &mut RegisterEntityLayersEvent<'_>,
     ) {
-        let target = LayerTarget::Entity("minecraft:zombie".into());
         let layer = Arc::new(Layer(self.heard.clone()));
-        event.layers.add(target, layer).unwrap();
+        for kind in ["minecraft:zombie", "minecraft:cow"] {
+            let target = LayerTarget::Entity(kind.into());
+            event.layers.add(target, layer.clone()).unwrap();
+        }
     }
     fn render_living_pre(
         &self,
@@ -137,9 +141,11 @@ impl Hooks for Scene {
         event: &mut RenderLivingPostEvent<'_>,
     ) {
         let mut heard = self.heard.lock().unwrap();
-        heard
-            .events
-            .push(format!("living_post {}", event.entity.id));
+        heard.events.push(format!(
+            "living_post {} model {}",
+            event.entity.id,
+            event.model.is_some()
+        ));
     }
 }
 
@@ -227,14 +233,21 @@ fn a_registered_living_type_draws_its_renderer_in_place_of_its_model() {
                 [
                     "living_pre 91",
                     "renderer 91 body 30 baby false Standing",
-                    "layer 91 parts false",
-                    "living_post 91"
+                    "layer 91 model false",
+                    "living_post 91 model false"
                 ]
             );
             let cow = frame(game, "minecraft:cow", 92);
             assert!(!cow.is_empty(), "an unregistered type draws its model");
             assert!(cow.iter().all(|v| above(v) < 3.0), "{cow:?}");
-            assert_eq!(events(heard), ["living_pre 92", "living_post 92"]);
+            assert_eq!(
+                events(heard),
+                [
+                    "living_pre 92",
+                    "layer 92 model true",
+                    "living_post 92 model true"
+                ]
+            );
         },
     );
 }
@@ -268,7 +281,7 @@ fn a_screens_entity_keeps_the_layers_beside_a_registered_renderer() {
             let heard = events(heard);
             assert_eq!(heard.len(), 2, "{heard:?}");
             assert!(heard[0].starts_with("renderer 93 "), "{heard:?}");
-            assert_eq!(heard[1], "layer 93 parts false");
+            assert_eq!(heard[1], "layer 93 model false");
         },
     );
 }
@@ -287,27 +300,33 @@ fn a_canceled_living_pre_skips_a_registered_renderer() {
     );
 }
 
-/// A failing renderer leaves the type its model and is asked no more; only a reload's fresh table
-/// asks it again.
+/// A renderer returning `Err` falls back to the type's own model for that frame only and stays
+/// active for later frames and after a resource reload.
 #[test]
 #[ignore = "daily"]
-fn a_failed_renderer_draws_the_types_model_until_a_resource_reload() {
+fn a_failed_renderer_falls_back_to_the_model_for_that_frame_only() {
     in_scene(
-        "a_failed_renderer_draws_the_types_model_until_a_resource_reload",
+        "a_failed_renderer_falls_back_to_the_model_for_that_frame_only",
         |game, _, skeleton| {
-            for frame_name in ["the failing frame", "the next frame"] {
-                let drawn = frame(game, "minecraft:skeleton", 93);
-                assert!(!drawn.is_empty(), "{frame_name}: its own model");
-                assert!(
-                    drawn.iter().all(|v| above(v) < 3.0),
-                    "{frame_name}: no quad kept: {drawn:?}"
-                );
-                let calls = skeleton.calls.load(Ordering::Relaxed);
-                assert_eq!(calls, 1, "{frame_name}: asked once, then no more");
-            }
+            let drawn = frame(game, "minecraft:skeleton", 93);
+            assert!(!drawn.is_empty(), "the failing frame: its own model");
+            assert!(
+                drawn.iter().all(|v| above(v) < 3.0),
+                "the failing frame: no quad kept: {drawn:?}"
+            );
+            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 1);
+
+            let drawn = frame(game, "minecraft:skeleton", 93);
+            assert_eq!(
+                skeleton.calls.load(Ordering::Relaxed),
+                2,
+                "asked again on the next frame"
+            );
+            assert_eq!(quads(&drawn), [400.0], "its quad alone, no bow or model");
+
             super::model_baking_completed_tests::reload(game);
             let drawn = frame(game, "minecraft:skeleton", 93);
-            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 2, "resolved again");
+            assert_eq!(skeleton.calls.load(Ordering::Relaxed), 3, "resolved again");
             assert_eq!(quads(&drawn), [400.0], "its quad alone, no bow or model");
         },
     );

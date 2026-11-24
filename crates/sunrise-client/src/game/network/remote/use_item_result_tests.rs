@@ -70,7 +70,7 @@ fn failed_item_part_still_tries_the_off_hand() {
                 game.guest_use = None;
                 game.swing = Default::default();
                 if client {
-                    game.remote_use_hands(mod_api::InteractionAttempt::Press);
+                    game.remote_use_hands(Hand::Main, mod_api::InteractionAttempt::Press, None);
                 } else {
                     assert_eq!(game.use_item_as_player().unwrap(), None);
                 }

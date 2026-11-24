@@ -12,9 +12,8 @@
 Picking from a diff stays with tools/parity.py --changed (harnesses) and tools/ci/test_scope.py (crates): `run`
 from a diff also tests the crates of the paths no area claims, as test_scope.py picks them. An area names a set of
 tests, adds the daily and LAN tests nothing picks from a diff, and is how to ask for "the explosion tests". `--daily`
-needs the prepared data (SUNRISE_TEST_RESOURCES), as the daily run does, and names the daily tests that need the wasm
-fixture, which run apart; `--lan` builds and starts two games (tools/lan_e2e.py), and the network area holds every
-LAN check (~40 minutes). An opt-in LAN check (LAN_OPT_IN) runs only on a game built for it: `--lan-bin-dir DIR`.
+needs the prepared data (SUNRISE_TEST_RESOURCES), as the daily run does. `--lan` builds and starts two games (tools/lan_e2e.py); the
+network area holds every LAN check. An opt-in LAN check (LAN_OPT_IN) runs only on a game built for it: `--lan-bin-dir DIR`.
 """
 
 import argparse
@@ -104,8 +103,7 @@ def tracked():
 
 
 def daily_rows():
-    """Every daily row (tools/ci/ignored-tests/), with those of the job that builds the wasm fixture: what
-    `run --daily` chooses from."""
+    """Every daily row (tools/ci/ignored-tests/): what `run --daily` chooses from."""
     from tools.ci import ignored_tests
     return [row for row in ignored_tests.listed_entries() if row.mark == "daily"]
 
@@ -147,9 +145,6 @@ def plan(area, harnesses, checks, rows, daily=False, lan=False, by_hand=(), lan_
         commands.append(["cargo", "test", "-p", entry.package, *target_flags(entry.target),
                          *(["--", entry.filter] if entry.filter else [])])
     chosen = [row for row in rows if any(covers(entry, row.package, row.reference, row.test) for entry in area.cargo)]
-    # A row needing an input only one job builds (the wasm fixture) runs in that job, each test alone: named, not run.
-    fixture = [row for row in chosen if row.reason in ignored_tests.DAILY_INPUTS]
-    chosen = [row for row in chosen if row not in fixture]
     if daily:
         groups = defaultdict(list)
         for row in chosen:
@@ -168,7 +163,7 @@ def plan(area, harnesses, checks, rows, daily=False, lan=False, by_hand=(), lan_
     if lan and runnable:
         commands.append([sys.executable, "tools/lan_e2e.py", *(["--bin-dir", lan_bins] if lan_bins else []),
                          *(flag for check in runnable for flag in ("--check", check))])
-    return commands, {"daily": chosen, "fixture": fixture, "harnesses": named,
+    return commands, {"daily": chosen, "harnesses": named,
                       "by_hand": matching(area.harnesses, by_hand), "lan": picked}
 
 
@@ -181,21 +176,11 @@ def describe(area, tiers):
               + (f" -- {entry.filter}" if entry.filter else "") for entry in area.cargo]
     lines.append(f"  daily      {len(tiers['daily'])} tests"
                  + (f" ({', '.join(f'{reason} {count}' for reason, count in sorted(reasons.items()))})" if reasons else ""))
-    if tiers["fixture"]:
-        lines.append(f"  fixture    {len(tiers['fixture'])} daily tests, run apart: "
-                     + "; ".join(apart(tiers["fixture"])))
     lines.append(f"  harnesses  {len(tiers['harnesses'])}: {' '.join(tiers['harnesses'])}")
     if tiers["by_hand"]:
         lines.append(f"  by hand    {len(tiers['by_hand'])}: {' '.join(tiers['by_hand'])}")
     lines.append(f"  lan        {len(tiers['lan'])}: {' '.join(tiers['lan'])}")
     return "\n".join(lines)
-
-
-def apart(rows):
-    """The job's own runner for daily rows needing a built input: every test of that input, each in its process."""
-    from tools.ci import ignored_tests
-    variables = sorted({ignored_tests.DAILY_INPUTS[row.reason] for row in rows})
-    return [f"python3 tools/ci/ignored_tests.py --needs {variable} --one-process-each" for variable in variables]
 
 
 def fallback(selection, workspace):
@@ -310,9 +295,6 @@ def main(argv=None):
     # What the areas hold that this run leaves to another.
     notes = [f"{name} is run by hand: {manual[name]}"
              for name in sorted({name for _, _, tiers in plans for name in tiers["by_hand"]})]
-    fixture = [row for _, _, tiers in plans for row in tiers["fixture"]]
-    if args.daily and fixture:
-        notes.append(f"{len(fixture)} daily tests need an input built apart: {'; '.join(apart(fixture))}")
     if args.lan and not lan_bins:
         opt_in = sorted({check for _, _, tiers in plans for check in tiers["lan"] if check in LAN_OPT_IN})
         notes += [f"{check} needs {LAN_OPT_IN[check]}: pass it with --lan-bin-dir" for check in opt_in]

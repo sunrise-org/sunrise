@@ -1,13 +1,10 @@
 //! Dev-only trusted exact-build Rust ABI probe, not a production loader.
 use std::sync::atomic::Ordering;
-mod phase;
 fn main() {
     // Ensure the actual game (including its global allocator) is a linked dependency.
     std::hint::black_box(sunrise_mod_host::main_with as *const ());
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let (libraries, phase_folders) = args.split_at(2);
-    let libraries: Vec<_> = libraries
-        .iter()
+    let libraries: Vec<_> = std::env::args_os()
+        .skip(1)
         .map(|path| {
             // SAFETY: harness verifies exact SDK/compiler artifacts before starting us.
             // Retain handles until process exit; no unloading Rust implementations.
@@ -18,14 +15,8 @@ fn main() {
     for (index, library) in libraries.iter().enumerate() {
         // SAFETY: these signatures are compiled from the adjacent fixtures with this compiler.
         unsafe {
-            let identity = library
-                .get::<fn() -> [usize; 2]>(b"probe_identity")
-                .unwrap();
+            let identity = library.get::<fn() -> usize>(b"probe_identity").unwrap();
             assert_eq!(identity(), probe_shared::identity());
-            assert_eq!(
-                identity()[1],
-                &mod_points::__private::POINTS as *const _ as usize
-            );
             let bump = library.get::<fn() -> usize>(b"probe_bump").unwrap();
             assert_eq!(bump(), index);
             let exchange = library
@@ -45,16 +36,10 @@ fn main() {
                     hook: "test",
                     part: None,
                 });
-            mod_points::__private::POINTS[0].store(true, Ordering::SeqCst);
             tls(Some("probe"));
-            // Global registry shared across threads, but native call attribution is TLS.
-            std::thread::spawn(move || {
-                assert_eq!(mod_api::content::crash::current_native_mod(), None);
-                mod_points::__private::POINTS[0].store(false, Ordering::SeqCst);
-                tls(None);
-            })
-            .join()
-            .unwrap();
+            // Native call attribution is thread-local even across separately loaded libraries.
+            std::thread::spawn(move || tls(None)).join().unwrap();
+            tls(Some("probe"));
             drop(guard);
             tls(None);
             let enter = library
@@ -67,9 +52,7 @@ fn main() {
         }
     }
     assert_eq!(probe_shared::STATE.load(Ordering::SeqCst), 2);
-    let phase_folders: Vec<_> = phase_folders.iter().map(std::path::Path::new).collect();
-    phase::run(&phase_folders);
     println!(
-        "PASS: a refused Host call in the Setup phase is contained and latched, and a panic=abort and an allocator library are refused at load; two independently loaded mods share game API, points, TLS and dependency state; cross-image allocation/drop completed"
+        "PASS: two independently loaded mods share game API, TLS and dependency state; cross-image allocation/drop completed"
     );
 }

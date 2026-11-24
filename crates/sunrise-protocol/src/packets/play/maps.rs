@@ -2,10 +2,11 @@
 //! patch of map colours it carries.
 use crate::{
     Result,
-    buf::{Bool, Byte, Codec, List, Nbt, Opt, Reader, VarInt, Writer},
+    buf::{Bool, Byte, Codec, List, Nbt, Opt, Reader, VarInt},
     packet,
 };
 use sunrise_core::nbt::Tag;
+use sunrise_core::vanilla_bytes::Writer;
 
 packet!(
 /// MapDecoration: a registry holder, its map position and rotation, and an

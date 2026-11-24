@@ -18,11 +18,10 @@ impl mod_api::Hooks for Logouts {
     }
 }
 
-/// A mod whose logout listener panics for guest 13, so the stop path itself panics, and whose
-/// level-unload listener (heard by the close-failure callback) then starts a new turn for
-/// guest 13, through the handle it kept, that panics too.
-#[derive(Default)]
-struct PanicsInShutdown(Mutex<Option<mod_api::PlayerRef>>);
+/// A mod whose logout listener enters a new turn for guest 13 via `set_game_mode`.
+/// Its inner callback panics in `player_game_mode_changed`, but the dispatch boundary
+/// catches it before the turn unwinds.
+struct PanicsInShutdown;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for PanicsInShutdown {
     fn player_logged_out(
@@ -31,17 +30,10 @@ impl mod_api::Hooks for PanicsInShutdown {
         event: &mut mod_api::PlayerLoggedOutEvent<'_>,
     ) {
         if event.player == 13 {
-            *self.0.lock().unwrap() = host.player(13);
-            panic!("mod panic stopping the server");
+            host.player(13)
+                .expect("guest 13 was online")
+                .set_game_mode(host, mod_api::GameMode::Creative);
         }
-    }
-    fn level_unload(
-        &self,
-        host: &mut dyn mod_api::ServerHost,
-        _: &mut mod_api::LevelUnloadEvent<'_>,
-    ) {
-        let player = self.0.lock().unwrap().expect("guest 13 was online");
-        player.set_game_mode(host, mod_api::GameMode::Creative);
     }
     fn player_game_mode_changed(
         &self,
@@ -63,8 +55,7 @@ fn advancements_file(root: &Path, uuid: u128) -> PathBuf {
     ))
 }
 
-/// A turn that takes the first hotbar stack out of the inventory (an item taken, not yet
-/// placed) and then panics, as a mod's hook can.
+/// A half-done turn: the engine panics after the player's inventory changes.
 fn taking_turn(game: &mut crate::game::Game<'_>) {
     game.inventory[0] = Some(sunrise_client::items::ItemStack {
         item: "minecraft:diamond".into(),
@@ -72,13 +63,20 @@ fn taking_turn(game: &mut crate::game::Game<'_>) {
         damage: 0,
         extra: None,
     });
-    panic!("mod panic in a turn");
+    panic!("engine panic in a turn");
 }
 
-/// Runs the scenario: the panic goes through the real turn helpers, then the real stop path
-/// saves. `nested` puts guest 13's turn inside guest 12's; `callback` has the shutdown itself
-/// panic and the close-failure callback panic in a new turn of guest 13.
-fn scenario(nested: bool, callback: bool) {
+enum Interruption {
+    Single,
+    Nested,
+    AfterFirstCheckpoint,
+    ModePanic,
+}
+
+/// Run the real turn helpers and save path, including a turn interrupted after
+/// shutdown has already decided which players to skip once, and a contained
+/// callback panic during logout that is not an interrupted turn.
+fn scenario(interruption: Interruption) {
     with_guests(|game| {
         game.options.execution_role = ExecutionRole::DedicatedServer;
         let root = tempfile::tempdir().unwrap();
@@ -137,7 +135,7 @@ fn scenario(nested: bool, callback: bool) {
             .unwrap();
 
         let panic = catch_unwind(AssertUnwindSafe(|| {
-            if nested {
+            if matches!(interruption, Interruption::Nested) {
                 game.as_guest(12, |outer| outer.as_guest(13, taking_turn));
             } else {
                 game.as_guest(12, taking_turn);
@@ -146,34 +144,59 @@ fn scenario(nested: bool, callback: bool) {
         .expect_err("the panic still propagates out of the turn helpers");
         assert_eq!(
             crate::game::dedicated::panic_message(panic.as_ref()),
-            "mod panic in a turn"
+            "engine panic in a turn"
         );
         assert!(game.lan_guest_swaps.is_empty() && game.lan_acting.is_none());
 
-        // The stop path saves; no tick has run since, so the record stands.
-        let logouts = std::sync::Arc::new(Mutex::new(Vec::new()));
-        let entry = if callback {
-            game.native_level_opened(game.dim);
-            mod_api::ModEntry::new("panics", Box::new(PanicsInShutdown::default()))
-        } else {
-            mod_api::ModEntry::new("logouts", Box::new(Logouts(logouts.clone())))
+        let initially_interrupted: &[u32] = match interruption {
+            Interruption::Nested => &[12, 13],
+            _ => &[12],
         };
-        mod_platform::testing::with_mods(vec![entry].into(), || {
-            let result = game.run_server_lifecycle(true, |_, began| {
-                *began = true;
-                Ok(())
+        assert_eq!(game.interrupted_turns, initially_interrupted);
+
+        let mode_panic = matches!(interruption, Interruption::ModePanic);
+        if matches!(interruption, Interruption::AfterFirstCheckpoint) {
+            // Reproduce the state left by an engine error in a new turn after the first
+            // shutdown checkpoint. The final save must refresh the earlier exclusion.
+            game.exclude_interrupted_players(false, |_| {});
+            assert!(game.crash_save.excludes(12));
+            assert!(!game.crash_save.excludes(13));
+            let panic = catch_unwind(AssertUnwindSafe(|| game.as_guest(13, taking_turn)))
+                .expect_err("the later turn must also unwind");
+            let message = crate::game::dedicated::panic_message(panic.as_ref());
+            assert_eq!(message, "engine panic in a turn");
+            assert!(game.lan_guest_swaps.is_empty() && game.lan_acting.is_none());
+            assert_eq!(game.interrupted_turns, [12, 13]);
+            game.finish_server_save(true, false).unwrap();
+        } else {
+            let logouts = std::sync::Arc::new(Mutex::new(Vec::new()));
+            let entry = if mode_panic {
+                mod_api::ModEntry::new("panics", Box::new(PanicsInShutdown))
+            } else {
+                mod_api::ModEntry::new("logouts", Box::new(Logouts(logouts.clone())))
+            };
+            mod_platform::testing::with_mods(vec![entry].into(), || {
+                game.run_server_lifecycle(true, |_| Ok(super::ServerRunOutcome::Orderly))
+                    .unwrap();
+                let panics = mod_api::__private::take_hook_panics();
+                if mode_panic {
+                    assert_eq!(
+                        panics,
+                        [mod_api::__private::HookPanicReport {
+                            mod_id: "panics",
+                            hook: "player_game_mode_changed",
+                        }]
+                    );
+                } else {
+                    assert!(panics.is_empty());
+                }
             });
-            assert_eq!(result.is_err(), callback, "{result:?}");
-        });
-        if !callback {
-            // An interrupted player stays online: each login still gets its one logout.
-            let mut left = logouts.lock().unwrap().clone();
-            left.sort_unstable();
-            assert!(
-                left.iter().filter(|&&p| p == 12).count() == 1
-                    && left.iter().filter(|&&p| p == 13).count() == 1,
-                "one logout for each of guests 12 and 13: {left:?}"
-            );
+            if !mode_panic {
+                // An interrupted player stays online: each login still gets its one logout.
+                let mut left = logouts.lock().unwrap();
+                left.sort_unstable();
+                assert_eq!(*left, [12, 13]);
+            }
         }
 
         assert_eq!(
@@ -185,11 +208,14 @@ fn scenario(nested: bool, callback: bool) {
             game.boats.iter().any(|b| b.id == boat),
             "the interrupted player's boat stays in the world, not in a file nobody writes"
         );
-        if nested || callback {
+        if matches!(
+            interruption,
+            Interruption::Nested | Interruption::AfterFirstCheckpoint
+        ) {
             assert_eq!(
                 read(13),
                 before_13,
-                "so does the player whose turn it was inside, or whom a shutdown callback's turn interrupted"
+                "so does the player interrupted by the nested or later turn"
             );
         } else {
             assert_ne!(
@@ -204,7 +230,8 @@ fn scenario(nested: bool, callback: bool) {
 #[test]
 #[ignore = "daily"]
 fn a_crash_save_keeps_the_files_of_players_whose_turn_a_panic_interrupted() {
-    scenario(false, false);
-    scenario(true, false);
-    scenario(false, true);
+    scenario(Interruption::Single);
+    scenario(Interruption::Nested);
+    scenario(Interruption::AfterFirstCheckpoint);
+    scenario(Interruption::ModePanic);
 }

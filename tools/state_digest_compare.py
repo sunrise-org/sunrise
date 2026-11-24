@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Compares two state digests step by step and names the first differing step per group: A/digest.txt B/digest.txt."""
+"""Compares two state digests step by step and names the first differing step per group: A/digest.txt B/digest.txt; a --coverage run's coverage.txt beside them is compared too."""
 import sys
+from pathlib import Path
 
 # `tick` and `dim` are compared too: a changed game time or level routing is a behaviour change.
 GROUPS = ['tick', 'dim', 'entities', 'randoms', 'block_entities', 'level_random', 'counters', 'scheduled']
@@ -44,9 +45,24 @@ def compare(a_lines, b_lines):
     return report, same
 
 
+def compare_coverage(a_dir, b_dir):
+    """The coverage.txt lines of two --coverage runs (spots reached, saved spawner data), or None when neither has one."""
+    a, b = (Path(d) / 'coverage.txt' for d in (a_dir, b_dir))
+    if not a.exists() and not b.exists():
+        return None
+    if a.exists() != b.exists():
+        return ['coverage       only in one run'], False
+    same = a.read_text() == b.read_text()
+    return [f'coverage       {"identical" if same else "DIFFERS"}: ' + ' | '.join(a.read_text().splitlines())], same
+
+
 def main():
     with open(sys.argv[1]) as a, open(sys.argv[2]) as b:
         report, same = compare(a, b)
+    coverage = compare_coverage(Path(sys.argv[1]).parent, Path(sys.argv[2]).parent)
+    if coverage:
+        report = report[:-1] + coverage[0] + [report[-1] if same and coverage[1] else 'DIFFERENT']
+        same = same and coverage[1]
     print('\n'.join(report))
     return 0 if same else 1
 

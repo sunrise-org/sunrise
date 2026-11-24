@@ -188,7 +188,22 @@ impl SignalAccess for ReadLevel<'_, '_> {
     }
 }
 
+impl ReadLevel<'_, '_> {
+    pub(super) fn capability_site(
+        &self,
+        at: mod_api::BlockSide,
+    ) -> Option<mod_api::BlockCapabilitySite> {
+        let [x, y, z] = at.pos;
+        self.game
+            .containers()
+            .capability_site(at, self.game.world.block(x, y, z), false)
+    }
+}
+
 impl LevelHost for ReadLevel<'_, '_> {
+    fn block_states(&self) -> mod_api::BlockStates<'_> {
+        mod_api::BlockStates::of(self.game)
+    }
     fn block_face_sturdy(
         &self,
         pos: [i32; 3],
@@ -204,27 +219,30 @@ impl LevelHost for ReadLevel<'_, '_> {
     fn block_entity(&self, pos: [i32; 3]) -> Option<mod_api::BlockEntityRef> {
         self.game.block_entity(self.level, pos)
     }
+    fn has_item_capability(&self, pos: [i32; 3], side: Option<Direction>) -> Option<bool> {
+        let site = self.capability_site(mod_api::BlockSide {
+            level: self.level,
+            pos,
+            side,
+        })?;
+        Some(mod_api::__private::item_capability_present(self, site))
+    }
     fn container_size(&self, at: mod_api::BlockSide) -> Option<usize> {
-        if at.level != self.level
-            || !self
-                .game
-                .world
-                .is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
-            return None;
-        }
+        (at.level == self.level).then_some(())?;
         self.game.container_size(at)
     }
-    fn container_stack(&self, at: mod_api::BlockSide, slot: usize) -> Option<mod_api::ItemStack> {
-        if at.level != self.level
-            || !self
-                .game
-                .world
-                .is_loaded_at(at.pos[0], at.pos[1], at.pos[2])
-        {
-            return None;
+    fn lend_container_stack(
+        &self,
+        at: mod_api::BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(mod_api::ItemStackView<'a>),
+    ) {
+        if at.level == self.level {
+            self.game.lend_container_stack(at, slot, read);
         }
-        self.game.container_stack(at, slot)?.try_into_api().ok()
+    }
+    fn attachment_read_scope(&self) -> mod_api::AttachmentReadScope<'_> {
+        self.game.attachment_frame_borrow()
     }
     fn block_entity_part_snapshot(
         &self,
@@ -237,9 +255,9 @@ impl LevelHost for ReadLevel<'_, '_> {
             Some(self.level),
             self.game.native_authoritative(),
             self.game.attachment_indexes.get(&self.game.dim),
+            &self.game.transactions.attachment_query_scopes,
             entity,
-            namespace,
-            name,
+            (namespace, name),
         )
     }
     fn block_entity_data(&self, entity: mod_api::BlockEntityRef) -> Option<mod_api::Compound> {
@@ -275,9 +293,6 @@ impl LevelHost for ReadLevel<'_, '_> {
     fn height(&self) -> i32 {
         self.game.world.shape.height
     }
-    fn block_in_tag(&self, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
-        super::native_world_read::block_in_tag(block, tag)
-    }
     fn tags(&self) -> &dyn mod_api::Tags {
         self
     }
@@ -286,18 +301,12 @@ impl LevelHost for ReadLevel<'_, '_> {
             .world
             .is_loaded_at(x, y, z)
             .then(|| self.game.world.block(x, y, z))
-            .and_then(|state| self.game.state_fluid_state(state))
-    }
-    fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
-        self.game
-            .state_fluid_state(state.try_into_engine(&()).ok()?)
-    }
-    fn fluid_in_tag(&self, fluid: &str, tag: &str) -> Option<bool> {
-        Some(super::native_world_read::fluid_in_tag(
-            self.game.items(),
-            fluid,
-            tag,
-        ))
+            .and_then(|state| {
+                super::native_block_tables::BlockTables::of(self.game)
+                    .block_state_fluid_state(state)
+                    .ok()
+                    .flatten()
+            })
     }
     fn state_with_property(
         &self,
@@ -332,6 +341,12 @@ impl LevelHost for ReadLevel<'_, '_> {
         self.game
             .level_is_raining_at(self.level, pos)
             .unwrap_or(false)
+    }
+    fn is_raining(&self) -> Option<bool> {
+        self.game.level_read_is_raining(self.level)
+    }
+    fn sky_darken(&self) -> Option<i32> {
+        self.game.level_get_sky_darken(self.level)
     }
     fn enabled_features(&self) -> mod_api::FeatureFlags {
         mod_api::FeatureFlags::new(self.game.enabled_feature_ids().clone())

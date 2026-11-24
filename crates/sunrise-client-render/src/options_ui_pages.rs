@@ -101,8 +101,8 @@ impl OptionsUi {
     pub(super) fn sunrise_rows(&self, s: &Settings) -> Vec<Row> {
         // Two to a row, as vanilla's OptionsList.addSmall lays out
         // buttons; each opens one of Sunrise's settings pages. Each page has
-        // one way in: graphics and shader packs are Video Settings' (the graphics
-        // screen), the controller is Controls', mods are the Options screen's. The
+        // one way in: graphics and shader packs are Extras' (Sunrise Graphics), the
+        // controller is Controls', mods are the Options screen's. The
         // registry's mod browser is Sunrise's own and opens from here, not from the
         // two-button Mods footer.
         let open = |key: &str, page: Page| button(0.0, 0.0, 150.0, tr(key), Act::Push(page));
@@ -186,14 +186,21 @@ impl OptionsUi {
         match row {
             added::Row::Heading(key) => Row::Heading(key.to_owned()),
             added::Row::Note(text) => Row::Note(text),
-            added::Row::Toggle { label, on } => wide(generic(label, on_off(on))),
+            added::Row::Toggle {
+                label, on, active, ..
+            } => {
+                let wide = button(0.0, 0.0, 310.0, generic(label, on_off(on)), act);
+                Row::Buttons(if active { wide } else { inactive(wide) }, None)
+            }
             added::Row::Cycle { label, value } => wide(generic(label, label_text(value))),
             added::Row::Slider { .. } => Row::Big(Opt::Page(page, r)),
             added::Row::Button { label, active, .. } => {
                 let wide = button(0.0, 0.0, 310.0, tr(label), act);
                 Row::Buttons(if active { wide } else { inactive(wide) }, None)
             }
-            added::Row::Key { label, key } => {
+            added::Row::Key {
+                label, key, active, ..
+            } => {
                 let mut message = keybinds::display_name(&key);
                 if self.selected_key == Some(PAGE_KEY) && self.selected_page_key == Some((page, r))
                 {
@@ -204,6 +211,7 @@ impl OptionsUi {
                 }
                 let caption = button(0.0, 0.0, 150.0, tr(label), Act::None);
                 let change = button(0.0, 0.0, 150.0, message, act);
+                let change = if active { change } else { inactive(change) };
                 Row::Buttons(inactive(caption), Some(change))
             }
             // A row kind newer than this engine: shown empty.
@@ -219,6 +227,9 @@ impl OptionsUi {
         let mut rows = Vec::new();
         registered.rows(&mut rows);
         match rows.get(r) {
+            Some(
+                added::Row::Toggle { active: false, .. } | added::Row::Key { active: false, .. },
+            ) => Vec::new(),
             Some(added::Row::Key { .. }) => {
                 self.selected_key = Some(PAGE_KEY);
                 self.selected_page_key = Some((page, r));
@@ -239,11 +250,47 @@ impl OptionsUi {
         }
     }
 
-    pub(super) fn bind_page_key(&mut self, value: String) -> Vec<Event> {
-        let (i, k) = self.selected_page_key.take().unwrap_or_default();
-        if let Some(page) = registered().get(i) {
-            page.act(k, added::Act::Bind(value));
+    /// The open registered page's rows changed since its layout was made (a row greyed, a value
+    /// moved): lay it out again, and end a key's wait when its row is no longer an active key.
+    pub(super) fn refresh_added_rows(&mut self) {
+        let Page::Added(i) = self.page() else {
+            return;
+        };
+        let Some(page) = registered().get(i) else {
+            return;
+        };
+        let mut rows = Vec::new();
+        page.rows(&mut rows);
+        if rows == self.added_seen {
+            return;
         }
+        if self.selected_key == Some(PAGE_KEY)
+            && let Some((waiting_page, k)) = self.selected_page_key
+            && waiting_page == i
+            && !matches!(rows.get(k), Some(added::Row::Key { active: true, .. }))
+        {
+            self.selected_key = None;
+            self.selected_page_key = None;
+        }
+        self.added_seen = rows;
+        self.relayout();
+    }
+
+    /// Binds the waiting key row, read again first: a row that went inactive or away while it
+    /// waited hears nothing.
+    pub(super) fn bind_page_key(&mut self, value: String) -> Vec<Event> {
+        let Some((i, k)) = self.selected_page_key.take() else {
+            return Vec::new();
+        };
+        let Some(page) = registered().get(i) else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        page.rows(&mut rows);
+        if !matches!(rows.get(k), Some(added::Row::Key { active: true, .. })) {
+            return Vec::new();
+        }
+        page.act(k, added::Act::Bind(value));
         vec![Event::Changed]
     }
 }
@@ -273,18 +320,18 @@ mod tests {
         }
         fn rows(&self, rows: &mut Vec<added::Row>) {
             rows.push(added::Row::Heading("test.sample.heading"));
-            rows.push(added::Row::Toggle {
-                label: "test.sample.switch",
-                on: *self.on.lock().unwrap(),
-            });
+            rows.push(added::Row::toggle(
+                "test.sample.switch",
+                *self.on.lock().unwrap(),
+            ));
             rows.push(added::Row::Cycle {
                 label: "test.sample.step",
                 value: added::Label::Value(self.step.lock().unwrap().to_string()),
             });
-            rows.push(added::Row::Key {
-                label: "test.sample.key",
-                key: self.key.lock().unwrap().clone(),
-            });
+            rows.push(added::Row::key(
+                "test.sample.key",
+                self.key.lock().unwrap().clone(),
+            ));
             let volume = *self.volume.lock().unwrap();
             rows.push(added::Row::Slider {
                 label: "test.sample.volume",
@@ -492,6 +539,103 @@ mod tests {
             *SHAPED.0.lock().unwrap(),
             [3, 5],
             "the inactive half heard nothing"
+        );
+    }
+
+    /// A greyed switch and a greyed key.
+    struct Greyed;
+    impl added::Page for Greyed {
+        fn id(&self) -> &'static str {
+            "test.greyed"
+        }
+        fn title(&self) -> &'static str {
+            "test.greyed.title"
+        }
+        fn place(&self) -> added::Place {
+            added::Place::SunriseSettings
+        }
+        fn rows(&self, rows: &mut Vec<added::Row>) {
+            rows.push(added::Row::toggle("test.greyed.switch", true).active(false));
+            rows.push(added::Row::key("test.greyed.key", "key.keyboard.z").active(false));
+        }
+        fn act(&self, _: usize, _: added::Act) {
+            panic!("a greyed row heard an act");
+        }
+    }
+
+    #[test]
+    fn an_inactive_switch_and_key_are_greyed_and_never_pressed() {
+        static GREYED: Greyed = Greyed;
+        static GREYED_PAGES: [&dyn added::Page; 1] = [&GREYED];
+        TEST_PAGES.set(Some(&GREYED_PAGES));
+        let ui = OptionsUi::default();
+        let rows = ui.added_rows(0);
+        let Row::Buttons(switch, None) = &rows[0] else {
+            panic!("the switch is one wide button");
+        };
+        assert!(matches!(&switch.kind, WKind::Button { active: false, .. }));
+        let Row::Buttons(_, Some(change)) = &rows[1] else {
+            panic!("the key has a change button");
+        };
+        assert!(matches!(&change.kind, WKind::Button { active: false, .. }));
+        let mut ui = ui;
+        assert!(ui.page_act(0, 0, false).is_empty());
+        assert!(ui.page_act(0, 1, false).is_empty());
+        assert_eq!(ui.selected_page_key, None);
+    }
+
+    /// A key row whose greying the test controls, recording what it hears.
+    struct Fading {
+        active: Mutex<bool>,
+        heard: Mutex<Vec<String>>,
+    }
+    impl added::Page for Fading {
+        fn id(&self) -> &'static str {
+            "test.fading"
+        }
+        fn title(&self) -> &'static str {
+            "test.fading.title"
+        }
+        fn place(&self) -> added::Place {
+            added::Place::SunriseSettings
+        }
+        fn rows(&self, rows: &mut Vec<added::Row>) {
+            let active = *self.active.lock().unwrap();
+            rows.push(added::Row::key("test.fading.key", "key.keyboard.z").active(active));
+        }
+        fn act(&self, _: usize, act: added::Act) {
+            self.heard.lock().unwrap().push(format!("{act:?}"));
+        }
+    }
+
+    #[test]
+    fn a_key_row_greyed_while_it_waits_stops_waiting_and_is_never_bound() {
+        static FADING: Fading = Fading {
+            active: Mutex::new(true),
+            heard: Mutex::new(Vec::new()),
+        };
+        static FADING_PAGES: [&dyn added::Page; 1] = [&FADING];
+        TEST_PAGES.set(Some(&FADING_PAGES));
+        let mut ui = OptionsUi::default();
+        ui.stack.push(Page::Added(0));
+        ui.refresh_added_rows();
+        assert!(ui.page_act(0, 0, false).is_empty());
+        assert_eq!(ui.selected_page_key, Some((0, 0)), "the key waits");
+        *FADING.active.lock().unwrap() = false;
+        // A bind that lands before the page is laid out again still reaches nothing.
+        assert!(ui.bind_page_key("key.keyboard.x".into()).is_empty());
+        ui.selected_key = Some(PAGE_KEY);
+        ui.selected_page_key = Some((0, 0));
+        ui.refresh_added_rows();
+        assert_eq!((ui.selected_key, ui.selected_page_key), (None, None));
+        let rows = ui.added_rows(0);
+        let Row::Buttons(_, Some(change)) = &rows[0] else {
+            panic!("the key has a change button");
+        };
+        assert!(matches!(&change.kind, WKind::Button { active: false, .. }));
+        assert!(
+            FADING.heard.lock().unwrap().is_empty(),
+            "the greyed key heard nothing"
         );
     }
 }

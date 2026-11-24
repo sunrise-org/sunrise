@@ -1,10 +1,8 @@
-#![cfg(test)]
-
 use crate::game::native_entity_refs::tests::{bind_local_player, with_game};
 use crate::game::{Game, GuestUse, Hit};
 use mod_api::{
     BlockPart, BlockState, Hooks, ItemPart, LevelSide, MustSurviveEvent, PlacementContextEvent,
-    Registrar, StateForPlacementEvent,
+    PlacementSource, Registrar, StateForPlacementEvent,
 };
 use std::sync::{
     Arc, Mutex,
@@ -13,9 +11,10 @@ use std::sync::{
 use sunrise_client::{items::ItemStack, motion::PlayerMotion};
 use sunrise_core::{
     geometry::{Direction, Vec3},
+    nbt::Tag,
     position::BlockPos,
 };
-use sunrise_world::level::PlaceContext;
+use sunrise_world::level::{PlaceContext, PlacementSource as EnginePlacementSource};
 
 struct Move;
 #[mod_api::sunrise_part]
@@ -26,7 +25,29 @@ impl ItemPart for Move {
         event: &mut PlacementContextEvent<'_>,
     ) -> Option<Option<mod_api::PlacementContext>> {
         let mut context = event.context.clone();
-        context.pos.y -= 2;
+        match event.stack.count() {
+            2 => return None,
+            3 => {
+                let placer = event.placer.expect("the local predicting player");
+                assert_eq!(placer.player().entity().id(), 7);
+                assert_eq!(placer.player().uuid(), 42);
+                assert_eq!(
+                    placer.eye_position(),
+                    [12.5, 64.0 + f64::from(1.62_f32), 12.5]
+                );
+                assert_eq!(
+                    event
+                        .stack
+                        .components()
+                        .unwrap()
+                        .as_nbt()
+                        .get(&"minecraft:custom_name".into()),
+                    Some(&Tag::String("Marker".into()))
+                );
+            }
+            _ => {}
+        }
+        context.pos.y -= i32::try_from(event.stack.count()).unwrap() + 1;
         context.face = Direction::Down;
         Some(Some(context))
     }
@@ -65,6 +86,26 @@ impl ItemPart for Invalid {
         Some(Some(context))
     }
 }
+/// Rewrites the placement into a dispenser-like `DirectionalPlaceContext` at the same cell,
+/// along and clicking East, and claims the clicked block is not replaced.
+struct Directional;
+#[mod_api::sunrise_part]
+impl ItemPart for Directional {
+    fn placement_context(
+        &self,
+        _: LevelSide<'_>,
+        event: &mut PlacementContextEvent<'_>,
+    ) -> Option<Option<mod_api::PlacementContext>> {
+        let mut context = mod_api::PlacementContext::directional(
+            event.context.pos,
+            Direction::East,
+            Direction::East,
+            event.context.item,
+        );
+        context.replace_clicked = false;
+        Some(Some(context))
+    }
+}
 enum Survival {
     Skip,
     RequireWhen(Arc<AtomicBool>),
@@ -84,6 +125,8 @@ impl Hooks for Parts {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
         let stone = r.item_key("minecraft:stone");
         r.item_part(stone, Move);
+        let dandelion = r.item_key("minecraft:dandelion");
+        r.item_part(dandelion, Move);
         let dirt = r.item_key("minecraft:dirt");
         r.item_part(dirt, Refuse);
         let sand = r.item_key("minecraft:sand");
@@ -98,6 +141,14 @@ impl Hooks for Parts {
         r.item_part(torch, Survival::Skip);
         let scaffolding = r.item_key("minecraft:scaffolding");
         r.item_part(scaffolding, Survival::RequireWhen(self.0.clone()));
+        for item in [
+            "minecraft:oak_trapdoor",
+            "minecraft:pointed_dripstone",
+            "minecraft:oak_slab",
+        ] {
+            let key = r.item_key(item);
+            r.item_part(key, Directional);
+        }
     }
 }
 
@@ -142,29 +193,34 @@ fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
                         face: Direction::Up,
                         hit: Vec3::new(4.5, 64.0, 4.5),
                         inside: false,
-                        yaw: 0.0,
-                        pitch: 0.0,
-                        sneaking: false,
+                        source: EnginePlacementSource::Player {
+                            yaw: 0.0,
+                            pitch: 0.0,
+                            sneaking: false,
+                        },
                         item: item.into(),
                         can_use_game_master_blocks: false,
                     };
-                    let placed = b
-                        .placement_preview(level, ticks, &context("minecraft:stone"))
-                        .unwrap();
+                    let preview = |level: &mut crate::game::GameLevel<'_>,
+                                   ticks: &mut _,
+                                   item: &str| {
+                        let stack = ItemStack::new(item, 1);
+                        b.decide_placement(
+                            level,
+                            ticks,
+                            &context(item),
+                            |s| (s, s),
+                            |level, context| level.rewrite_placement_context(&stack, context, None),
+                        )
+                        .map(|(_, preview)| preview)
+                    };
+                    let placed = preview(level, ticks, "minecraft:stone").unwrap();
                     assert_eq!(placed.pos, BlockPos::new(4, 62, 4));
-                    let fallback = b
-                        .placement_preview(level, ticks, &context("minecraft:glass"))
-                        .unwrap();
+                    let fallback = preview(level, ticks, "minecraft:glass").unwrap();
                     assert_eq!(fallback.pos, BlockPos::new(4, 64, 4));
-                    assert!(
-                        b.placement_preview(level, ticks, &context("minecraft:dirt"))
-                            .is_none()
-                    );
+                    assert!(preview(level, ticks, "minecraft:dirt").is_none());
                     for item in ["minecraft:sand", "minecraft:red_sand", "minecraft:gravel"] {
-                        assert!(
-                            b.placement_preview(level, ticks, &context(item)).is_none(),
-                            "{item}"
-                        );
+                        assert!(preview(level, ticks, item).is_none(), "{item}");
                     }
                     assert!(
                         b.placement_preview(level, ticks, &context("minecraft:poppy"))
@@ -176,15 +232,83 @@ fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
                             .is_none(),
                         "standing/wall candidates must survive even when final survival is skipped"
                     );
-                    // Vanilla checks replaceability before the rewrite, not after it.
+                    // Unlike the vanilla rewrite, a part cannot target a nonreplaceable cell.
                     b.set_block(level, ticks, BlockPos::new(4, 62, 4), fallback.state, 3);
-                    assert!(
-                        b.placement_preview(level, ticks, &context("minecraft:stone"))
-                            .is_some()
-                    );
+                    assert!(preview(level, ticks, "minecraft:stone").is_none());
                     b.set_block(level, ticks, BlockPos::new(4, 62, 4), air, 3);
                 });
             }
+
+            // A part's directional rewrite is a `DirectionalPlaceContext`: its
+            // `replacingClickedOnBlock()` comes from the clicked block, not the `false` the part
+            // wrote, and a question vanilla throws on refuses the placement.
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            let slab = registry.default_state("minecraft:oak_slab").unwrap();
+            game.with_level(|b, level, ticks| {
+                level.native_authoritative = true;
+                level.client_side = false;
+                let at = BlockPos::new(4, 64, 4);
+                let context = |item: &str| PlaceContext {
+                    clicked_pos: at,
+                    face: Direction::Up,
+                    hit: Vec3::new(4.5, 64.0, 4.5),
+                    inside: false,
+                    source: EnginePlacementSource::Player {
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        sneaking: false,
+                    },
+                    item: item.into(),
+                    can_use_game_master_blocks: false,
+                };
+                let rewritten =
+                    |level: &mut crate::game::GameLevel<'_>, ticks: &mut _, item: &str| {
+                        let stack = ItemStack::new(item, 1);
+                        b.decide_placement(
+                            level,
+                            ticks,
+                            &context(item),
+                            |s| (s, s),
+                            |level, context| level.rewrite_placement_context(&stack, context, None),
+                        )
+                        .map(|(_, preview)| preview)
+                    };
+                let trapdoor = rewritten(level, ticks, "minecraft:oak_trapdoor")
+                    .expect("the clicked air is replaced");
+                assert_eq!(trapdoor.pos, at);
+                let trapdoor = registry.state(trapdoor.state).unwrap();
+                assert_eq!(trapdoor.properties["facing"], "west");
+                assert_eq!(trapdoor.properties["half"], "top");
+
+                b.set_block(level, ticks, BlockPos::new(4, 65, 4), stone, 3);
+                b.set_block(level, ticks, BlockPos::new(4, 63, 4), stone, 3);
+                assert!(
+                    rewritten(level, ticks, "minecraft:pointed_dripstone").is_none(),
+                    "no vertical look"
+                );
+                let tip = b
+                    .placement_preview(level, ticks, &context("minecraft:pointed_dripstone"))
+                    .expect("a player's placement is unchanged");
+                assert_eq!(
+                    registry.state(tip.state).unwrap().properties["vertical_direction"],
+                    "up"
+                );
+
+                b.set_block(level, ticks, at, slab, 3);
+                assert!(
+                    rewritten(level, ticks, "minecraft:oak_slab").is_none(),
+                    "the slab's canBeReplaced asks the question it answers"
+                );
+                assert!(
+                    b.placement_preview(level, ticks, &context("minecraft:oak_slab"))
+                        .is_some(),
+                    "a player doubles the slab"
+                );
+                let air = registry.default_state("minecraft:air").unwrap();
+                for y in 63..=65 {
+                    b.set_block(level, ticks, BlockPos::new(4, y, 4), air, 3);
+                }
+            });
 
             // Click the end of a scaffold extending six blocks from support.
             // Its horizontal walk reaches distance seven, where only vanilla's
@@ -196,9 +320,11 @@ fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
                     face: Direction::Up,
                     hit: Vec3::new(4.5, 65.0, 4.5),
                     inside: false,
-                    yaw: 0.0,
-                    pitch: 0.0,
-                    sneaking: false,
+                    source: EnginePlacementSource::Player {
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        sneaking: false,
+                    },
                     item: "minecraft:scaffolding".into(),
                     can_use_game_master_blocks: false,
                 };
@@ -215,11 +341,20 @@ fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
             game.options.dedicated = None;
             let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
             game.connect_local(pipe, "PlacementPrediction").unwrap();
+            let remote = game.remote.as_mut().unwrap();
+            remote.logged_in = true;
+            remote.entity_id = 7;
+            remote.profile = 42;
+            game.player =
+                Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
             game.world
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
             game.sync_tick_chunks();
-            game.set_mode_id(0);
+            game.set_local_mode(sunrise_client::command::args::GameMode::Survival);
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            game.world.set(4, 64, 4, stone).unwrap();
+            game.world.set(4, 65, 4, stone).unwrap();
             let hit = crate::game::Hit {
                 pos: [4, 64, 4],
                 face: [0, 1, 0],
@@ -230,17 +365,44 @@ fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
             assert!(!Game::can_hint_block_placement(&stack("minecraft:stone")));
             assert!(!Game::can_hint_block_placement(&stack("minecraft:poppy")));
             assert!(Game::can_hint_block_placement(&stack("minecraft:glass")));
-            let placed = game
-                .remote_can_place(&hit, &stack("minecraft:stone"))
-                .expect("rewritten stone placement");
-            let pos = placed.pos;
-            assert_eq!(pos, BlockPos::new(4, 62, 4));
             assert!(
-                placed
-                    .changes
-                    .contains(&(pos, registry.default_state("minecraft:stone").unwrap()))
+                game.remote_can_place(&hit, &stack("minecraft:glass"))
+                    .is_none()
             );
+            assert!(!game.remote_would_place(&hit, &stack("minecraft:stone")));
+            let decline = ItemStack::new("minecraft:stone", 2);
+            assert!(game.remote_can_place(&hit, &decline).is_none());
+            let mut redirect = ItemStack::new("minecraft:stone", 3);
+            redirect.data_mut().custom_name = Some(Tag::String("Marker".into()));
+            let placed = game
+                .remote_can_place(&hit, &redirect)
+                .expect("redirect from the occupied original destination");
+            let pos = placed.pos;
+            assert_eq!(pos, BlockPos::new(4, 61, 4));
+            assert!(placed.changes.contains(&(pos, stone)));
             assert_eq!(game.world.block(pos.x, pos.y, pos.z), air);
+
+            game.player.as_mut().unwrap().position = Vec3::new(4.5, 63.0, 4.5);
+            assert!(
+                game.remote_can_place(&hit, &stack("minecraft:stone"))
+                    .is_none(),
+                "the player obstructs the final destination"
+            );
+            game.player.as_mut().unwrap().position = Vec3::new(12.5, 64.0, 12.5);
+            game.world.set(4, 65, 4, air).unwrap();
+            assert_eq!(
+                game.remote_can_place(&hit, &decline).unwrap().pos,
+                BlockPos::new(4, 65, 4)
+            );
+            let soil = registry.default_state("minecraft:dirt").unwrap();
+            game.world.set(4, 64, 4, soil).unwrap();
+            assert!(game.remote_would_place(&hit, &stack("minecraft:dandelion")));
+            assert!(
+                game.remote_can_place(&hit, &stack("minecraft:dandelion"))
+                    .is_none(),
+                "the final destination lacks support"
+            );
+            game.world.set(4, 64, 4, air).unwrap();
             assert!(
                 game.remote_can_place(&hit, &stack("minecraft:dirt"))
                     .is_none()
@@ -345,7 +507,7 @@ fn substituted_placement_uses_the_held_item_preclear_and_selected_placed_by() {
                     inside: false,
                 };
                 *game.held_mut() = Some(ItemStack::new(item, 2));
-                game.guest_use = Some(GuestUse::OnBlock(mod_api::Hand::Main));
+                game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
                 assert!(game.use_hand(Some(&hit)).unwrap());
                 assert_eq!(game.held().unwrap().count, remaining);
                 assert_eq!(game.world.block(4, 64, z), primary);
@@ -382,6 +544,29 @@ impl ItemPart for VetoProbe {
     ) -> Option<Option<mod_api::PlacementContext>> {
         let (LevelSide::Server(level) | LevelSide::Client(level)) = level;
         let mut context = event.context.clone();
+        assert_eq!(event.stack.count(), 2);
+        if context.pos.x == 4 {
+            let placer = event.placer.expect("the acting server player");
+            assert_eq!(placer.player().entity().id(), 20);
+            assert_eq!(placer.player().uuid(), 123);
+            assert_eq!(
+                placer.eye_position(),
+                [12.5, 64.0 + f64::from(1.62_f32), 12.5]
+            );
+            assert!(
+                matches!(context.source, PlacementSource::Player { .. }),
+                "player placement carries PlacementSource::Player"
+            );
+        } else {
+            assert!(event.placer.is_none(), "a dispenser has no player");
+            assert_eq!(
+                context.source,
+                PlacementSource::Directional {
+                    direction: Direction::East,
+                },
+                "dispenser shulker box carries Directional {{ East }}"
+            );
+        }
         context.pos.z += 2;
         let BlockPos { x, y, z } = context.pos;
         if level.block_state([x, y, z]) != level.block_state_id("minecraft:air") {
@@ -444,110 +629,315 @@ impl Hooks for VetoProbe {
 #[test]
 #[ignore = "daily"]
 fn player_and_dispenser_apply_only_the_context_seen_by_the_veto() {
-    use crate::game::api_values::TryIntoApi;
+    crate::game::in_own_process(
+        "game::native_hooks::placement_context_tests::player_and_dispenser_apply_only_the_context_seen_by_the_veto",
+        || {
+            use crate::game::api_values::TryIntoApi;
 
-    let trace = Arc::new(Mutex::new(VetoTrace::default()));
-    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
-        "placement_veto",
-        Box::new(VetoProbe(trace.clone())),
-    )]
-    .into();
-    crate::game::api_values::install_parts(&mods).unwrap();
-    mod_platform::testing::with_mods(mods, || {
-        with_game(|game| {
-            game.options.dedicated = Some(Vec::new());
-            game.world
-                .chunks
-                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
-            game.block_ticks
-                .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
-                .unwrap();
-            let registry = game.pack.assets.registry;
-            let state = |name| registry.default_state(name).unwrap();
-            let stone = state("minecraft:stone");
-            let glass = state("minecraft:glass");
-            let air = state("minecraft:air");
-            let obsidian = state("minecraft:obsidian");
-            for x in [4, 10] {
-                for z in [2, 4, 7, 9] {
-                    game.world.set(x, 63, z, stone).unwrap();
-                }
-                for z in [4, 9] {
-                    game.world.set(x, 65, z, glass).unwrap();
-                }
-            }
-            game.player =
-                Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
-            bind_local_player(game, 20, 123);
-            game.lan_acting_name = Some("Placer".into());
-            game.lan_acting_permission = Some(0);
-            game.set_mode_id(0);
+            let trace = Arc::new(Mutex::new(VetoTrace::default()));
+            let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+                "placement_veto",
+                Box::new(VetoProbe(trace.clone())),
+            )]
+            .into();
+            crate::game::api_values::install_parts(&mods).unwrap();
+            mod_platform::testing::with_mods(mods, || {
+                with_game(|game| {
+                    game.options.dedicated = Some(Vec::new());
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                    game.block_ticks
+                        .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                        .unwrap();
+                    let registry = game.pack.assets.registry;
+                    let state = |name| registry.default_state(name).unwrap();
+                    let stone = state("minecraft:stone");
+                    let glass = state("minecraft:glass");
+                    let air = state("minecraft:air");
+                    let obsidian = state("minecraft:obsidian");
+                    for x in [4, 10] {
+                        for z in [2, 4, 7, 9] {
+                            game.world.set(x, 63, z, stone).unwrap();
+                        }
+                        for z in [4, 9] {
+                            game.world.set(x, 65, z, glass).unwrap();
+                        }
+                    }
+                    game.player =
+                        Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+                    bind_local_player(game, 20, 123);
+                    game.lan_acting_name = Some("Placer".into());
+                    game.lan_acting_permission = Some(0);
+                    game.set_mode_id(0);
 
-            for (occupy_target, z) in [(false, 2), (true, 7)] {
-                trace.lock().unwrap().occupy_target = occupy_target;
-                *game.held_mut() = Some(ItemStack::new("minecraft:stone", 2));
-                game.guest_use = Some(GuestUse::OnBlock(mod_api::Hand::Main));
-                let hit = Hit {
-                    pos: [4, 63, z],
-                    face: [0, 1, 0],
-                    point: [4.5, 64.0, f64::from(z) + 0.5],
-                    inside: false,
-                };
-                assert!(game.use_hand(Some(&hit)).unwrap());
-                let left = game
-                    .dispense_item(
-                        (9, 64, z),
-                        Direction::East,
-                        ItemStack::new("minecraft:shulker_box", 2),
-                    )
-                    .unwrap()
-                    .unwrap();
-                let count = if occupy_target { 2 } else { 1 };
-                assert_eq!(game.held().unwrap().count, count);
-                assert_eq!(left.count, count);
-                assert_eq!(
-                    game.world.block(4, 64, z + 2),
-                    if occupy_target { obsidian } else { stone }
-                );
-                let dispenser_state = game.world.block(10, 64, z + 2);
-                if occupy_target {
-                    assert_eq!(dispenser_state, obsidian);
-                } else {
+                    for (occupy_target, z) in [(false, 2), (true, 7)] {
+                        trace.lock().unwrap().occupy_target = occupy_target;
+                        game.world.set(4, 64, z, stone).unwrap();
+                        *game.held_mut() = Some(ItemStack::new("minecraft:stone", 2));
+                        game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
+                        let hit = Hit {
+                            pos: [4, 63, z],
+                            face: [0, 1, 0],
+                            point: [4.5, 64.0, f64::from(z) + 0.5],
+                            inside: false,
+                        };
+                        // Mark the swapped-in body as a server guest's active turn for the click.
+                        game.lan_acting = Some(1);
+                        assert!(game.use_hand(Some(&hit)).unwrap());
+                        game.lan_acting = None;
+                        let left = game
+                            .dispense_item(
+                                (9, 64, z),
+                                Direction::East,
+                                ItemStack::new("minecraft:shulker_box", 2),
+                            )
+                            .unwrap()
+                            .continue_value()
+                            .unwrap()
+                            .unwrap();
+                        let count = if occupy_target { 2 } else { 1 };
+                        assert_eq!(game.held().unwrap().count, count);
+                        assert_eq!(left.count, count);
+                        assert_eq!(
+                            game.world.block(4, 64, z + 2),
+                            if occupy_target { obsidian } else { stone }
+                        );
+                        let dispenser_state = game.world.block(10, 64, z + 2);
+                        if occupy_target {
+                            assert_eq!(dispenser_state, obsidian);
+                        } else {
+                            assert_eq!(
+                                registry.state(dispenser_state).unwrap().name.as_str(),
+                                "minecraft:shulker_box"
+                            );
+                        }
+                        assert_eq!(
+                            game.world.block(4, 64, z),
+                            stone,
+                            "occupied original destination"
+                        );
+                        assert_eq!(game.world.block(10, 64, z), air, "dispenser's front cell");
+                        for x in [4, 10] {
+                            assert_eq!(game.world.block(x, 64, z + 3), air, "second candidate");
+                        }
+                    }
+                    game.world.set(10, 64, 12, stone).unwrap();
+                    let left = game
+                        .dispense_item(
+                            (9, 64, 12),
+                            Direction::East,
+                            ItemStack::new("minecraft:shulker_box", 2),
+                        )
+                        .unwrap()
+                        .continue_value()
+                        .unwrap()
+                        .unwrap();
                     assert_eq!(
-                        registry.state(dispenser_state).unwrap().name.as_str(),
-                        "minecraft:shulker_box"
+                        left.count, 2,
+                        "a blocked dispenser still fails before the hook"
                     );
-                }
-                for x in [4, 10] {
-                    assert_eq!(game.world.block(x, 64, z), air, "original destination");
-                    assert_eq!(game.world.block(x, 64, z + 3), air, "second candidate");
-                }
-            }
-            let trace = trace.lock().unwrap();
-            let targets = [
-                BlockPos::new(4, 64, 4),
-                BlockPos::new(10, 64, 4),
-                BlockPos::new(4, 64, 9),
-                BlockPos::new(10, 64, 9),
-            ];
-            let against = glass.try_into_api().unwrap();
-            assert_eq!(trace.decisions, targets);
-            assert_eq!(trace.vetoes, targets.map(|pos| (pos, against)));
-            assert_eq!(
-                trace.notices,
-                [
-                    Notice {
-                        pos: [4, 64, 4],
-                        face: mod_api::BlockFace::Down,
-                        click: [4.125, 64.75, 4.875]
-                    },
-                    Notice {
-                        pos: [10, 64, 4],
-                        face: mod_api::BlockFace::Down,
-                        click: [10.125, 64.75, 4.875]
-                    },
-                ]
-            );
-        });
-    });
+                    let trace = trace.lock().unwrap();
+                    let targets = [
+                        BlockPos::new(4, 64, 4),
+                        BlockPos::new(10, 64, 4),
+                        BlockPos::new(4, 64, 9),
+                        BlockPos::new(10, 64, 9),
+                    ];
+                    let against = glass.try_into_api().unwrap();
+                    assert_eq!(trace.decisions, targets);
+                    assert_eq!(trace.vetoes, targets.map(|pos| (pos, against)));
+                    assert_eq!(
+                        trace.notices,
+                        [
+                            Notice {
+                                pos: [4, 64, 4],
+                                face: mod_api::BlockFace::Down,
+                                click: [4.125, 64.75, 4.875]
+                            },
+                            Notice {
+                                pos: [10, 64, 4],
+                                face: mod_api::BlockFace::Down,
+                                click: [10.125, 64.75, 4.875]
+                            },
+                        ]
+                    );
+                });
+            });
+        },
+    );
+}
+
+#[derive(Clone, Default)]
+struct SourceSpy(Arc<Mutex<Vec<(bool, BlockPos, PlacementSource)>>>);
+
+#[mod_api::sunrise_part]
+impl BlockPart for SourceSpy {
+    fn state_for_placement(
+        &self,
+        level: LevelSide<'_>,
+        event: &mut StateForPlacementEvent<'_>,
+    ) -> Option<Option<BlockState>> {
+        let on_server = matches!(level, LevelSide::Server(_));
+        self.0
+            .lock()
+            .unwrap()
+            .push((on_server, event.context.pos, event.context.source));
+        None
+    }
+}
+
+#[mod_api::__subscriptions]
+impl Hooks for SourceSpy {
+    fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+        for block in ["minecraft:stone", "minecraft:shulker_box"] {
+            let key = r.block_key(block);
+            r.block_part(key, self.clone());
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn state_for_placement_distinguishes_player_and_dispenser_sources() {
+    crate::game::in_own_process(
+        "game::native_hooks::placement_context_tests::state_for_placement_distinguishes_player_and_dispenser_sources",
+        || {
+            let spy = SourceSpy::default();
+            let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+                "placement_source",
+                Box::new(spy.clone()),
+            )]
+            .into();
+            crate::game::api_values::install_parts(&mods).unwrap();
+            mod_platform::testing::with_mods(mods, || {
+                with_game(|game| {
+                    game.options.dedicated = Some(Vec::new());
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                    game.block_ticks
+                        .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                        .unwrap();
+                    let registry = game.pack.assets.registry;
+                    let stone = registry.default_state("minecraft:stone").unwrap();
+                    game.world.set(4, 63, 4, stone).unwrap();
+                    game.world.set(8, 63, 5, stone).unwrap();
+                    game.player =
+                        Some(PlayerMotion::new(game.motion, Vec3::new(12.5, 64.0, 12.5)).unwrap());
+                    bind_local_player(game, 20, 123);
+                    game.lan_acting_name = Some("Placer".into());
+                    game.lan_acting_permission = Some(0);
+                    game.set_mode_id(0);
+
+                    // Server player placement looking south (yaw 0, pitch 15) must report `Player`,
+                    // distinct from a dispenser facing south.
+                    game.yaw = 0.0;
+                    game.pitch = 15.0;
+                    *game.held_mut() = Some(ItemStack::new("minecraft:stone", 2));
+                    game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
+                    let hit = Hit {
+                        pos: [4, 63, 4],
+                        face: [0, 1, 0],
+                        point: [4.5, 64.0, 4.5],
+                        inside: false,
+                    };
+                    game.lan_acting = Some(1);
+                    assert!(game.use_hand(Some(&hit)).unwrap());
+                    game.lan_acting = None;
+
+                    // Dispenser shulker-box placement facing south and up must report `Directional`.
+                    let left = game
+                        .dispense_item(
+                            (8, 64, 4),
+                            Direction::South,
+                            ItemStack::new("minecraft:shulker_box", 2),
+                        )
+                        .unwrap()
+                        .continue_value()
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(left.count, 1);
+                    let left = game
+                        .dispense_item(
+                            (10, 64, 4),
+                            Direction::Up,
+                            ItemStack::new("minecraft:shulker_box", 2),
+                        )
+                        .unwrap()
+                        .continue_value()
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(left.count, 1);
+
+                    // Client placement prediction also reports `Player`.
+                    game.options.execution_role =
+                        crate::game::execution_role::ExecutionRole::Client;
+                    game.options.dedicated = None;
+                    let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
+                    game.connect_local(pipe, "SourceClient").unwrap();
+                    let remote = game.remote.as_mut().unwrap();
+                    remote.logged_in = true;
+                    remote.entity_id = 7;
+                    remote.profile = 42;
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                    game.sync_tick_chunks();
+                    game.world.set(6, 63, 4, stone).unwrap();
+                    game.yaw = 90.0;
+                    game.pitch = -20.0;
+                    let client_hit = Hit {
+                        pos: [6, 63, 4],
+                        face: [0, 1, 0],
+                        point: [6.5, 64.0, 4.5],
+                        inside: false,
+                    };
+                    assert!(
+                        game.remote_can_place(&client_hit, &ItemStack::new("minecraft:stone", 1))
+                            .is_some()
+                    );
+
+                    let seen = spy.0.lock().unwrap();
+                    assert_eq!(
+                        seen.as_slice(),
+                        &[
+                            (
+                                true,
+                                BlockPos::new(4, 64, 4),
+                                PlacementSource::Player {
+                                    yaw: 0.0,
+                                    pitch: 15.0,
+                                    sneaking: false,
+                                },
+                            ),
+                            (
+                                true,
+                                BlockPos::new(8, 64, 5),
+                                PlacementSource::Directional {
+                                    direction: Direction::South,
+                                },
+                            ),
+                            (
+                                true,
+                                BlockPos::new(10, 65, 4),
+                                PlacementSource::Directional {
+                                    direction: Direction::Up,
+                                },
+                            ),
+                            (
+                                false,
+                                BlockPos::new(6, 64, 4),
+                                PlacementSource::Player {
+                                    yaw: 90.0,
+                                    pitch: -20.0,
+                                    sneaking: false,
+                                },
+                            ),
+                        ]
+                    );
+                });
+            });
+        },
+    );
 }

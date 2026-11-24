@@ -506,14 +506,14 @@ class RunnerPackagesTests(unittest.TestCase):
         self.assertTrue(fallback)
         self.assertLessEqual(set(fallback), set(listed))
 
-    def test_the_image_check_fails_on_any_difference(self):
+    def test_the_image_check_fails_when_the_image_lacks_a_listed_package(self):
         spec = importlib.util.spec_from_file_location("check_runner_packages", Path(__file__).parents[1] / "tools/ci/check_runner_packages.py")
         check = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(check)
         image = ("FROM ${DYNA_CI_BASE}\nRUN apt-get update && apt-get install -y --no-install-recommends \\\n"
                  "    xvfb xauth x11-xkb-utils xkb-data pkg-config libasound2-dev libudev-dev libxkbcommon-x11-dev \\\n"
                  "    libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libxcursor1 libxi6 libxrandr2 \\\n"
-                 "    valgrind libc6-dbg gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \\\n"
+                 "    valgrind libc6-dbg gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gh postgresql-16 nats-server \\\n"
                  "    && rm -rf /var/lib/apt/lists/*\n")
         listed = check.LIST.read_text()
         with tempfile.TemporaryDirectory() as directory:
@@ -529,8 +529,7 @@ class RunnerPackagesTests(unittest.TestCase):
                         return str(failure)
                 return None
             self.assertIsNone(outcome(image, listed))
-            for dropped in ("xauth", "x11-xkb-utils", "xkb-data"):
-                self.assertIn(f"lacks: {dropped}", outcome(image, listed.replace(f"\n{dropped}\n", "\n")))
-            self.assertIn("lacks: extra-package", outcome(image.replace("libxrandr2 ", "libxrandr2 extra-package "), listed))
-            self.assertIn("beyond the image: mesa-vulkan-drivers", outcome(image, listed + "mesa-vulkan-drivers\n"))
+            for dropped in ("xauth", "gh"):
+                self.assertIn(f"lacks runner-packages.txt's: {dropped}", outcome(image.replace(f" {dropped} ", " "), listed))
+            self.assertIn("lacks runner-packages.txt's: mesa-vulkan-drivers", outcome(image, listed + "mesa-vulkan-drivers\n"))
             self.assertIn("no apt-get install", outcome("FROM base\n", listed))

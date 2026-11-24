@@ -1,7 +1,10 @@
 //! Engine-owned mod block entity storage and revision tracking.
 use super::published_shapes::{PublishedShapes, SHAPES_KEY};
 use std::sync::{Arc, LazyLock};
-use sunrise_client_core::block_entity_nbt::saved_item_slot;
+use sunrise_client_core::{
+    block_entity_nbt::saved_mod_item_slot,
+    block_entity_types::{self, RegisteredBlockEntityType},
+};
 use sunrise_core::nbt::{Compound, JavaString, Tag};
 use sunrise_items::items::ItemStack;
 
@@ -16,11 +19,11 @@ static ITEMS: LazyLock<JavaString> = LazyLock::new(|| "Items".into());
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ModBlockEntity {
     pub(crate) id: String,
-    /// `id`'s numeric wire ID (`block_entity_types::numeric_id`), looked up once when the entity is
-    /// made, so a published loop's slot compares types by integer; `None` for an id the table
-    /// does not have, or one made before the table is installed. The table is frozen for the
-    /// process, so the ID never goes stale.
-    pub(crate) numeric_id: Option<u32>,
+    /// Looked up once when the entity is made. `None` for an unknown type or before the
+    /// process's type table is installed. Both the numeric id and keyed Parts are frozen.
+    registered_type: Option<RegisteredBlockEntityType>,
+    /// Its type's key, resolved with `registered_type`; `None` for an unregistered type.
+    kind: Option<mod_api::BlockEntityTypeKey>,
     pub(crate) fields: ModBlockEntityFields,
     pub(crate) revision: ModRevision,
     /// What its block's collision and outline are while it holds some
@@ -48,9 +51,9 @@ impl ModBlockEntityFields {
     /// The retained `Items` rows are their own ownership record. A modeled
     /// stack taking a slot drops its pending saved row from the same snapshot.
     fn claim_modeled_item_rows(&mut self) {
-        if let Some(Tag::List(rows)) = self.nbt.get_mut(&*ITEMS) {
+        if let Some(Tag::List(rows)) = self.nbt.get_mut(&ITEMS) {
             rows.retain(|row| {
-                saved_item_slot(row)
+                saved_mod_item_slot(row)
                     .is_none_or(|slot| self.items.get(slot).is_none_or(Option::is_none))
             });
         }
@@ -86,30 +89,40 @@ impl ModBlockEntity {
     }
 
     pub fn has_opaque_item_slot(&self, slot: usize) -> bool {
-        matches!(self.nbt.get(&*ITEMS), Some(Tag::List(rows)) if
-            rows.iter().any(|row| saved_item_slot(row) == Some(slot)))
+        matches!(self.nbt.get(&ITEMS), Some(Tag::List(rows)) if
+            rows.iter().any(|row| saved_mod_item_slot(row) == Some(slot)))
     }
 
-    /// A write (including an explicit clear) supersedes raw rows for this index.
-    pub fn item_slot_mut(&mut self, slot: usize) -> Option<&mut Option<ItemStack>> {
+    /// A write (including an explicit clear) supersedes raw rows for this index. `items` holds
+    /// the slots up to the last one written, not the holder's capacity (its block declares
+    /// that), so a slot past it reads as empty and a write grows `items` to reach it only.
+    /// The caller has checked `slot` against the declared capacity.
+    pub fn item_slot_mut(&mut self, slot: usize) -> &mut Option<ItemStack> {
+        if let Some(Tag::List(rows)) = self.fields.nbt.get_mut(&ITEMS) {
+            rows.retain(|row| saved_mod_item_slot(row) != Some(slot));
+        }
         if slot >= self.items.len() {
-            return None;
+            self.items.resize(slot + 1, None);
         }
-        if let Some(Tag::List(rows)) = self.fields.nbt.get_mut(&*ITEMS) {
-            rows.retain(|row| saved_item_slot(row) != Some(slot));
-        }
-        self.items.get_mut(slot)
+        &mut self.items[slot]
     }
 
     pub fn new(id: String, mut fields: ModBlockEntityFields) -> Self {
         fields.claim_modeled_item_rows();
-        let numeric_id = sunrise_client_core::block_entity_types::numeric_id(&id);
-        Self::with_numeric_id(id, numeric_id, fields)
+        let registered_type = block_entity_types::registered(&id);
+        let kind = registered_type.and_then(|_| mod_api::__private::block_entity_type_key(&id));
+        Self::with_type(id, registered_type, kind, fields)
     }
-    fn with_numeric_id(id: String, numeric_id: Option<u32>, fields: ModBlockEntityFields) -> Self {
+    fn with_type(
+        id: String,
+        registered_type: Option<RegisteredBlockEntityType>,
+        kind: Option<mod_api::BlockEntityTypeKey>,
+        fields: ModBlockEntityFields,
+    ) -> Self {
         Self {
             id,
-            numeric_id,
+            registered_type,
+            kind,
             fields,
             revision: ModRevision {
                 born: sunrise_mod_runtime::block_entities::new_identity(),
@@ -172,7 +185,17 @@ impl ModBlockEntity {
     /// The type's numeric wire ID, resolved from [`Self::id`] when the entity was made; `None`
     /// for a type the game has not registered.
     pub fn numeric_id(&self) -> Option<u32> {
-        self.numeric_id
+        self.registered_type.map(|kind| kind.numeric_id)
+    }
+
+    /// The resolved route for a resident server tick, only when its type subscribes.
+    pub fn tick_kind(&self) -> Option<mod_api::BlockEntityTypeKey> {
+        self.registered_type?.server_ticker
+    }
+    /// Its type's key (`BlockEntity.getType`), resolved from [`Self::id`] when the entity was
+    /// made; `None` for a type the game has not registered.
+    pub fn kind(&self) -> Option<mod_api::BlockEntityTypeKey> {
+        self.kind
     }
     pub fn revision(&self) -> ModRevision {
         self.revision
@@ -207,6 +230,10 @@ impl ModBlockEntity {
     pub fn set_client_update_fields(&self, fields: Compound) {
         sunrise_mod_runtime::block_entities::set_client_update_fields(self.revision.born, fields);
     }
+    /// Keep the queued one-shot fields for transaction rollback without consuming them.
+    pub fn snapshot_client_update_fields(&self) -> Option<Compound> {
+        sunrise_mod_runtime::block_entities::snapshot_client_update_fields(self.revision.born)
+    }
     /// Take the queued one-shot fields for a tag about to go to every viewer.
     pub fn take_client_update_fields(&self) -> Option<Compound> {
         sunrise_mod_runtime::block_entities::take_client_update_fields(self.revision.born)
@@ -222,15 +249,20 @@ impl Drop for ModBlockEntity {
         drop(self.take_client_update_fields());
     }
 }
-/// The empty placeholder a tick leaves in a mod block entity's place: no type, nothing looked up.
+/// An empty mod block entity with no type id, for tests and defaults.
 impl Default for ModBlockEntity {
     fn default() -> Self {
-        Self::with_numeric_id(String::new(), None, ModBlockEntityFields::default())
+        Self::with_type(String::new(), None, None, ModBlockEntityFields::default())
     }
 }
 impl Clone for ModBlockEntity {
     fn clone(&self) -> Self {
-        let mut copy = Self::with_numeric_id(self.id.clone(), self.numeric_id, self.fields.clone());
+        let mut copy = Self::with_type(
+            self.id.clone(),
+            self.registered_type,
+            self.kind,
+            self.fields.clone(),
+        );
         copy.shapes.clone_from(&self.shapes);
         copy.shapes_cleared = self.shapes_cleared;
         copy

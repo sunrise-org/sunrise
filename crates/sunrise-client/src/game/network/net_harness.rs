@@ -8,7 +8,8 @@
 //! chat, whether the server kept it connected throughout). With `SUNRISE_NET_QUIET` (lines
 //! split by `;`) it then sends them as one batch of a mod's quiet commands
 //! (`sunrise_protocol::quiet`, `tools/quiet_commands_e2e.py`) and waits two
-//! seconds for any chat they bring.
+//! seconds for any chat they bring. `SUNRISE_NET_ENTITY_TAG` also records one
+//! entity type tag at join and waits for its membership to change in play.
 use super::Game;
 use serde_json::json;
 use std::{
@@ -40,6 +41,8 @@ impl Game<'_> {
         let mut signed = false;
         let mut chunks = 0;
         let mut error = None;
+        let entity_tag = std::env::var("SUNRISE_NET_ENTITY_TAG").ok();
+        let mut entity_tag_snapshots = Vec::new();
         while Instant::now() < deadline {
             self.update_world();
             if self.remote.is_none() {
@@ -73,6 +76,14 @@ impl Game<'_> {
             let answered = shown > chat_at
                 || self.command_prompt.is_some()
                 || now - step_at > Duration::from_secs(15);
+            if let Some(tag) = &entity_tag
+                && (step != 0 || spawned_at.is_some() && count > 0)
+            {
+                let members = self.items().entity_type_tags.ordered().get(tag);
+                if entity_tag_snapshots.last().map(Option::as_ref) != Some(members) {
+                    entity_tag_snapshots.push(members.cloned());
+                }
+            }
             match step {
                 0 if spawned_at.is_some()
                     && count > 0
@@ -119,7 +130,7 @@ impl Game<'_> {
                     step = 3;
                     break;
                 }
-                2 if answered => {
+                2 if answered && (entity_tag.is_none() || entity_tag_snapshots.len() >= 2) => {
                     step = 3;
                     break;
                 }
@@ -147,6 +158,7 @@ impl Game<'_> {
                 "signed": signed,
                 "prompts": prompts,
                 "chat_box": chat_box,
+                "entity_tag_snapshots": entity_tag_snapshots,
                 "error": error,
             })
             .to_string(),

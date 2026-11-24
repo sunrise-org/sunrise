@@ -1,4 +1,5 @@
-//! The GPU tests' `wgpu::Instance` and adapters.
+// The GPU tests' `wgpu::Instance` and adapters. The shader pack crate's `test_gpu` keeps its
+// own copy of the helpers its tests call, with the same missing-adapter policy.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -17,25 +18,61 @@ pub(crate) fn lock() -> MutexGuard<'static, ()> {
 /// Default setup for tests that skip when either the adapter or device is unavailable.
 /// The caller must hold [`lock`] until every returned object and GPU resource drops.
 pub(crate) fn optional_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
-    let instance = instance();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).ok()?;
+    let adapter = adapter()?;
+    let (device, queue) = optional_device_with(&adapter, &Default::default())?;
     Some((adapter, device, queue))
 }
 
 #[cfg(test)]
 /// Find an adapter, reporting an unavailable adapter without hiding other failures.
 pub(crate) fn adapter() -> Option<wgpu::Adapter> {
-    let instance = instance();
-    let adapter = match pollster::block_on(instance.request_adapter(&Default::default())) {
-        Ok(adapter) => adapter,
+    request_adapter(&instance(), &Default::default())
+}
+
+#[cfg(test)]
+/// Use the same missing adapter policy for tests that need a custom instance or request.
+pub(crate) fn request_adapter(
+    instance: &wgpu::Instance,
+    options: &wgpu::RequestAdapterOptions<'_, '_>,
+) -> Option<wgpu::Adapter> {
+    match pollster::block_on(instance.request_adapter(options)) {
+        Ok(adapter) => Some(adapter),
         Err(error @ wgpu::RequestAdapterError::NotFound { .. }) => {
-            eprintln!("skipped: no adapter: {error}");
-            return None;
+            missing_adapter(error);
+            None
         }
         Err(error) => panic!("GPU test adapter request failed: {error}"),
-    };
-    Some(adapter)
+    }
+}
+
+#[cfg(test)]
+fn require_adapter() -> bool {
+    std::env::var_os("SUNRISE_GPU_TESTS_REQUIRE_ADAPTER").is_some_and(|value| value == "1")
+}
+
+#[cfg(test)]
+pub(crate) fn missing_adapter(reason: impl std::fmt::Display) {
+    assert!(!require_adapter(), "no GPU adapter: {reason}");
+    eprintln!("skipped: no adapter: {reason}");
+}
+
+#[cfg(test)]
+/// Device creation may skip locally, but must succeed under the CI switch.
+pub(crate) fn optional_device_with(
+    adapter: &wgpu::Adapter,
+    descriptor: &wgpu::DeviceDescriptor<'_>,
+) -> Option<(wgpu::Device, wgpu::Queue)> {
+    match pollster::block_on(adapter.request_device(descriptor)) {
+        Ok(pair) => Some(pair),
+        Err(error) => {
+            assert!(
+                !require_adapter(),
+                "GPU test device creation failed: {error}"
+            );
+            eprintln!("skipped: no GPU device: {error}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -102,7 +139,7 @@ pub(crate) fn instance() -> wgpu::Instance {
 /// GPUs (`gfx/dx12_compiler.rs`); the two compile some shaders differently.
 #[cfg(test)]
 pub(crate) fn each_adapter() -> impl Iterator<Item = (wgpu::Adapter, &'static str)> {
-    [
+    let mut adapters = [
         (wgpu::Backends::VULKAN, Default::default(), "Vulkan"),
         (
             wgpu::Backends::DX12,
@@ -128,4 +165,9 @@ pub(crate) fn each_adapter() -> impl Iterator<Item = (wgpu::Adapter, &'static st
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
         Some((adapter, name))
     })
+    .peekable();
+    if adapters.peek().is_none() {
+        missing_adapter("neither Vulkan nor DirectX 12 found a device");
+    }
+    adapters
 }

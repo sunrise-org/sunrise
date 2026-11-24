@@ -1,2 +1,0 @@
-# Part-state persistence, transactions and compiled guest regressions.
-sunrise-client game::block_entity_part_state_tests::native_and_compiled_wasm_part_state_count_ticks SUNRISE_WASM_FIXTURE needs

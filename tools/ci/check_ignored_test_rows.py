@@ -5,11 +5,8 @@ Fails on a malformed row, a test listed in two files, a folder with no rows or w
 and README.md, and a file at the retired single-list path. The shared reader validates both `needs`
 and `needs-plain` fixture rows; neither is a known failure. Every `daily` row must name a package of a workspace (the game's) and
 one of its test targets, and some leg of the daily run's matrix must run it: its package's shard, or the `daily-rows`
-leg (tools/ci/ignored_shards.py), so no moved test runs nowhere. A row whose reason names an input only one job
-builds (ignored_tests.DAILY_INPUTS: `wasm-fixture`) runs in that job instead, which a workflow must call with
-`--needs VARIABLE`. A `windows` row must name a Windows-only integration test in the game workspace and runs
-in the Windows job instead. Builds only the source-inventory helper,
-not the game or SDK.
+leg (tools/ci/ignored_shards.py), so no moved test runs nowhere. A `windows` row instead names a Windows-only integration
+test in the game workspace and runs in the Windows job. Builds only the source-inventory helper, not the game or SDK.
 
 Every `#[ignore]`d test that no daily shard runs (rowless_problems) has a row of some mark: `daily`, a known
 failure, `needs`, `manual`, ...; otherwise it would run nowhere unseen. In a shard's own targets a rowless
@@ -40,6 +37,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WINDOWS_WORKFLOW = ".github/workflows/windows-runtime-leases.yml"
+OWN_SDK_WORKFLOW = ".github/workflows/book-quickstart.yml"
 ADD_ROW = ("add its row: `python3 tools/ci/move_to_daily.py apply LIST` (its docstring has the list format), or write "
            "`PACKAGE TEST TARGET daily REASON` into tools/ci/ignored-tests/daily-PACKAGE-TOPIC.txt")
 
@@ -48,7 +46,6 @@ def daily_problems(rows, targets, matrix):
     """Why each daily row would not run in the daily matrix `matrix` (shard names), given the workspace's targets."""
     problems = []
     groups = ignored_tests.daily_rows_groups(rows)
-    workflows = "\n".join(path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")))
     windows_wired = not any(row.reason == ignored_tests.WINDOWS_REASON for row in rows) or windows_daily_runs(ROOT)
     for row in rows:
         where = f"{row.file}: {row.package} {row.test}"
@@ -60,9 +57,10 @@ def daily_problems(rows, targets, matrix):
             if not windows_wired:
                 problems.append(f"{where}: daily.yml must call {WINDOWS_WORKFLOW}'s runtime-leases job and run "
                                 "ignored_tests.py --windows-rows --run there")
-        elif variable := ignored_tests.DAILY_INPUTS.get(row.reason):
-            if f"--needs {variable}" not in workflows:
-                problems.append(f"{where}: no workflow runs the tests that need {variable} (ignored_tests.py --needs)")
+        elif row.reason == ignored_tests.OWN_SDK_REASON:
+            if not own_sdk_daily_runs(ROOT, row):
+                problems.append(f"{where}: daily.yml must call {OWN_SDK_WORKFLOW} with own_sdk and run this "
+                                "integration test by exact name there")
         elif ignored_tests.shard_runs(row.package, row.reference):
             if not any(ignored_tests.parse_shard(shard)[0] == row.package for shard in matrix):
                 problems.append(f"{where}: no leg runs {row.package}'s shard")
@@ -70,6 +68,34 @@ def daily_problems(rows, targets, matrix):
                 row.test not in groups.get((row.package, row.reference), ()):
             problems.append(f"{where}: no leg runs it (the {leg} leg is missing)")
     return problems
+
+
+def own_sdk_daily_runs(root, row):
+    """Recognize the daily call and exact test step that run with the calling run's SDK."""
+    if not row.reference.startswith("test:"):
+        return False
+    daily_path = root / ".github/workflows/daily.yml"
+    quickstart_path = root / OWN_SDK_WORKFLOW
+    if not daily_path.is_file() or not quickstart_path.is_file():
+        return False
+    daily = yaml.load(daily_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader) or {}
+    call = daily.get("jobs", {}).get("book-quickstart", {})
+    # The call's own condition (skips, leg selection) is the daily's routing, not this row's concern.
+    needs = call.get("needs") or []
+    if (call.get("uses") != f"./{OWN_SDK_WORKFLOW}"
+            or not {"resolve", "sdk"} <= set([needs] if isinstance(needs, str) else needs)
+            or call.get("with", {}).get("own_sdk") != "true"
+            or call.get("with", {}).get("commit") != "${{ needs.resolve.outputs.commit }}"
+            or re.sub(r"^\$\{\{(.*)\}\}$", r"\1", call.get("if", "").strip()).strip() == "false"):
+        return False
+    enabled = (None, "true", "${{ true }}")
+    quickstart = yaml.load(quickstart_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader) or {}
+    job = quickstart.get("jobs", {}).get("quickstart", {})
+    command = ["cargo", "test", "--locked", "-p", row.package, "--test", row.reference[5:],
+               "--", "--ignored", "--exact", row.test]
+    return job.get("if") in enabled and any(
+        step.get("if") in ("inputs.own_sdk", "${{ inputs.own_sdk }}") and step.get("run", "").split() == command
+        for step in job.get("steps", ()))
 
 
 def windows_daily_runs(root):
@@ -90,7 +116,10 @@ def windows_daily_runs(root):
     # Recognize the daily's non-skipped resolve path and the commit it passes; do not guess whether arbitrary
     # expressions are true. Likewise the called job either is unconditional or accepts a nonempty commit.
     enabled = (None, "true", "${{ true }}")
-    if call.get("if") not in (*enabled, "needs.resolve.outputs.skip == 'false'"):
+    # A full daily (no break-glass leg selection, `legs` empty) always runs it.
+    if call.get("if") not in (*enabled, "needs.resolve.outputs.skip == 'false'",
+                              "needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || "
+                              "contains(fromJSON(needs.resolve.outputs.legs), 'windows-runtime-leases'))"):
         return False
     job = (windows.get("jobs") or {}).get("runtime-leases") or {}
     if (job.get("if") not in enabled and

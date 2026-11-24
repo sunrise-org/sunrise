@@ -2,15 +2,16 @@
 //! would give and records every one-player send.
 use super::*;
 use crate::{
-    Backend, BackendMut, ChunkRef, DimensionKey, EntityRef, Host, IPayloadContext, LevelRef,
-    PayloadAccepted, PayloadBytes, PayloadCodec, PayloadSendError, PayloadToken, PlayerRef,
-    Players, ServerHost, ToClient, VarInt, WorldEpoch,
+    Backend, BackendMut, ChunkRef, DimensionKey, EntityReadError, EntityRef, Host, IPayloadContext,
+    LevelReadError, LevelRef, PayloadAccepted, PayloadBytes, PayloadSendError, PayloadToken,
+    PlayerRef, Players, ServerHost, ToClient, Wire, WorldEpoch,
 };
+use core::ops::ControlFlow;
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq, PayloadCodec)]
+#[derive(Debug, PartialEq, Wire)]
 struct Counter {
-    counter: VarInt,
+    counter: u8,
 }
 
 fn player(id: u32) -> PlayerRef {
@@ -40,6 +41,7 @@ struct Double {
     watchers: Vec<PlayerRef>,
     /// Entity id to the players it is sent to.
     trackers: HashMap<u32, Vec<PlayerRef>>,
+    tracking_unavailable: bool,
     /// Players whose send is refused, as one who left after the list was read.
     refused: Vec<PlayerRef>,
     sent: Vec<(u32, Vec<u8>)>,
@@ -65,24 +67,61 @@ impl ServerHost for Double {
 }
 impl crate::prelude::ServicesServerHost for Double {
     fn players(&self) -> &dyn Players {
+        assert!(
+            !self.tracking_unavailable,
+            "looked up and_self after a refusal"
+        );
         &self.everyone
     }
 }
 crate::impl_server_host_areas!(Double, except(services, payloads));
 impl Backend for Double {}
 impl crate::prelude::LevelEntitiesBackend for Double {
-    fn level_online_players(&self, level: LevelRef) -> Option<Vec<PlayerRef>> {
-        self.levels.get(&level).cloned()
+    fn level_visit_online_players(
+        &self,
+        level: LevelRef,
+        visit: &mut dyn FnMut(PlayerRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, LevelReadError> {
+        Ok(self
+            .levels
+            .get(&level)
+            .ok_or(LevelReadError::Stale)?
+            .iter()
+            .copied()
+            .try_for_each(visit))
     }
 }
 impl crate::prelude::LevelChunksBackend for Double {
-    fn chunk_watchers(&self, _: ChunkRef) -> Option<Vec<PlayerRef>> {
-        Some(self.watchers.clone())
+    fn chunk_visit_watchers(
+        &self,
+        chunk: ChunkRef,
+        visit: &mut dyn FnMut(PlayerRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, LevelReadError> {
+        if self.tracking_unavailable {
+            return Err(LevelReadError::Unavailable);
+        }
+        if !self.levels.contains_key(&chunk.level()) {
+            return Err(LevelReadError::Stale);
+        }
+        Ok(self.watchers.iter().copied().try_for_each(visit))
     }
 }
 impl crate::prelude::EntityIdentityBackend for Double {
-    fn entity_trackers(&self, entity: EntityRef) -> Option<Vec<PlayerRef>> {
-        self.trackers.get(&entity.id()).cloned()
+    fn entity_visit_trackers(
+        &self,
+        entity: EntityRef,
+        visit: &mut dyn FnMut(PlayerRef) -> ControlFlow<()>,
+    ) -> Result<ControlFlow<()>, EntityReadError> {
+        if self.tracking_unavailable {
+            return Err(EntityReadError::Unavailable);
+        }
+        Ok(self
+            .trackers
+            .get(&entity.id())
+            .ok_or(EntityReadError::Stale)?
+            .iter()
+            .copied()
+            .try_for_each(visit))
     }
 }
 impl crate::prelude::EntityPositionBackend for Double {
@@ -122,6 +161,7 @@ impl crate::prelude::PayloadsServerHost for Double {
         id: &PayloadId,
         bytes: PayloadBytes,
     ) -> u32 {
+        assert!(!self.tracking_unavailable, "tried delivery after a refusal");
         players
             .iter()
             .filter(|player| {
@@ -179,7 +219,8 @@ fn setup() -> (Double, ToClient<Counter>, ToClient<Counter>) {
             (4, [1.0, 64.0, 0.0]),
         ]),
         watchers: vec![b, d],
-        trackers: HashMap::from([(2, vec![a, c]), (9, vec![a, b, c])]),
+        trackers: HashMap::from([(2, vec![a, c]), (4, Vec::new()), (9, vec![a, b, c])]),
+        tracking_unavailable: false,
         refused: Vec::new(),
         sent: Vec::new(),
     };
@@ -193,7 +234,7 @@ fn recipients(host: &Double) -> Vec<u32> {
 #[test]
 fn every_group_reaches_its_list_with_the_same_body() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(7) };
+    let value = Counter { counter: 7 };
     assert_eq!(down.send_to_all(&mut host, &value), Ok(4));
     assert_eq!(recipients(&host), [1, 2, 3, 4]);
     assert!(host.sent.iter().all(|(_, body)| *body == [7]));
@@ -208,18 +249,26 @@ fn every_group_reaches_its_list_with_the_same_body() {
 }
 
 #[test]
-fn a_level_nobody_can_list_has_no_recipients() {
+fn a_stale_level_has_no_recipients() {
     let (mut host, down, _) = setup();
-    host.levels.clear();
-    let value = Counter { counter: VarInt(1) };
-    assert_eq!(down.send_in_level(&mut host, overworld(), &value), Ok(0));
+    let stale = LevelRef::new(WorldEpoch::new(2), DimensionKey::OVERWORLD);
+    let value = Counter { counter: 1 };
+    assert_eq!(down.send_in_level(&mut host, stale, &value), Ok(0));
+    assert_eq!(
+        down.send_tracking_chunk(&mut host, ChunkRef::new(stale, [0, 0]), &value),
+        Ok(0)
+    );
+    assert_eq!(
+        down.send_near(&mut host, stale, [0.0, 64.0, 0.0], 100.0, None, &value),
+        Ok(0)
+    );
     assert!(host.sent.is_empty());
 }
 
 #[test]
 fn near_is_strictly_inside_the_radius_in_that_level_and_skips_the_excluded() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     let at = [0.0, 64.0, 0.0];
     // Distances: player 1 is 0, player 2 is 5 (3-4-5), player 3 is 10; player 4 is close
     // but in the nether.
@@ -246,7 +295,7 @@ fn near_is_strictly_inside_the_radius_in_that_level_and_skips_the_excluded() {
 #[test]
 fn a_refused_recipient_is_skipped_and_not_counted() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     host.refused = vec![player(2), player(9)];
     host.everyone.0.push(player(9));
     assert_eq!(down.send_to_all(&mut host, &value), Ok(3));
@@ -256,7 +305,7 @@ fn a_refused_recipient_is_skipped_and_not_counted() {
 #[test]
 fn a_stale_token_is_refused_before_anything_is_sent() {
     let (mut host, _, stale) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     let chunk = ChunkRef::new(overworld(), [0, 0]);
     let at = [0.0; 3];
     let id = PayloadId("test:stale".into());
@@ -279,7 +328,7 @@ fn a_stale_token_is_refused_before_anything_is_sent() {
 #[test]
 fn tracking_an_entity_reaches_its_trackers_and_itself_once_when_asked() {
     let (mut host, down, _) = setup();
-    let value = Counter { counter: VarInt(1) };
+    let value = Counter { counter: 1 };
     let entity = |id| EntityRef::new(WorldEpoch::new(1), id);
     // A zombie (entity 9) seen by players 1, 2 and 3.
     assert_eq!(
@@ -301,9 +350,49 @@ fn tracking_an_entity_reaches_its_trackers_and_itself_once_when_asked() {
     );
     assert_eq!(recipients(&host), [1, 3, 2]);
     host.sent.clear();
-    // A stale entity has no trackers.
+    // Player 4 has an empty tracker set but is still included if requested.
     assert_eq!(
-        down.send_tracking_entity(&mut host, entity(77), false, &value),
+        down.send_tracking_entity(&mut host, entity(4), true, &value),
+        Ok(1)
+    );
+    assert_eq!(recipients(&host), [4]);
+    host.sent.clear();
+    // A stale entity has no recipients, even if the caller requests and_self.
+    assert_eq!(
+        down.send_tracking_entity(&mut host, entity(77), true, &value),
+        Ok(0)
+    );
+    assert!(host.sent.is_empty());
+}
+
+#[test]
+fn unavailable_tracking_refuses_before_any_further_lookup_or_delivery() {
+    let (mut host, down, _) = setup();
+    host.tracking_unavailable = true;
+    let value = Counter { counter: 1 };
+    let chunk = ChunkRef::new(overworld(), [0, 0]);
+    let entity = player(2).entity();
+    assert_eq!(
+        down.send_tracking_chunk(&mut host, chunk, &value),
+        Err(PayloadSendError::Unavailable)
+    );
+    assert_eq!(
+        down.send_tracking_entity(&mut host, entity, true, &value),
+        Err(PayloadSendError::Unavailable)
+    );
+    assert!(host.sent.is_empty());
+}
+
+#[test]
+fn an_empty_tracking_view_is_a_successful_send_to_zero_players() {
+    let (mut host, down, _) = setup();
+    host.watchers.clear();
+    let value = Counter { counter: 1 };
+    let chunk = ChunkRef::new(overworld(), [0, 0]);
+    let entity = player(4).entity();
+    assert_eq!(down.send_tracking_chunk(&mut host, chunk, &value), Ok(0));
+    assert_eq!(
+        down.send_tracking_entity(&mut host, entity, false, &value),
         Ok(0)
     );
     assert!(host.sent.is_empty());

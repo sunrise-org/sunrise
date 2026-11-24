@@ -56,7 +56,7 @@ impl Game<'_> {
     }
 
     /// The kind name (`minecraft:zombie`) a move is for, built on demand.
-    fn move_who_kind(&self, who: MoveWho) -> Cow<'static, str> {
+    fn move_who_kind(&self, who: MoveWho) -> Cow<'_, str> {
         match who {
             MoveWho::Player | MoveWho::Guest(_) => Cow::Borrowed("minecraft:player"),
             MoveWho::Entity(handle) => with_entity!(self, handle, entity => entity.native_type()),

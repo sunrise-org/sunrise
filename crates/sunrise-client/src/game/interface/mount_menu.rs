@@ -7,46 +7,21 @@
 //! server the screen shows the server's menu (`ClientboundMountScreenOpenPacket`)
 //! and its clicks go out as container clicks; a server's players get theirs
 //! from game/network/lan_mount_menu.rs.
-use super::{Game, Screen};
+use super::{
+    Game, Screen,
+    transactions::{After, SaveChunkScope},
+};
 use sunrise_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
-    mobs::{Mob, Species, equine, llama, nautilus},
+    mobs::{Mob, Species, llama, nautilus},
 };
 
-/// Menu slot ids: the saddle, the body armour and the chest from 710.
-pub(super) const SADDLE: usize = 700;
-pub(super) const ARMOR: usize = 701;
-pub(super) const CHEST: usize = 710;
-/// `AbstractChestedHorse.INV_CHEST_COUNT` and `getInventoryColumns`.
+/// `AbstractChestedHorse.INV_CHEST_COUNT`.
 const CHEST_SIZE: usize = 15;
-const COLUMNS: usize = 5;
-
-/// `AbstractHorse.getInventoryColumns`: five for a donkey's or mule's chest,
-/// a llama's strength for its chest, else none.
-pub(super) fn mount_columns(m: &Mob) -> usize {
-    let species = m.species();
-    if llama::is_llama(species) {
-        llama::inventory_columns(m).clamp(0, 5) as usize
-    } else if m.extra.chested && matches!(species, Species::Donkey | Species::Mule) {
-        COLUMNS
-    } else {
-        0
-    }
-}
-/// Whether the mount has a horse inventory (`AbstractHorse`, `AbstractNautilus`).
-pub(super) fn has_mount_menu(species: Species) -> bool {
-    equine::is_equine(species) || llama::is_llama(species) || nautilus::is_nautilus(species)
-}
-/// The saddle slot is active (`canUseSlot(SADDLE)` and `CAN_EQUIP_SADDLE`):
-/// not on llamas.
-fn shows_saddle(species: Species) -> bool {
-    !llama::is_llama(species)
-}
-/// The body slot is active: horse armour, a llama's carpet, or nautilus armour.
-fn shows_body(species: Species) -> bool {
-    can_wear_horse_armor(species) || llama::is_llama(species) || nautilus::is_nautilus(species)
-}
+pub(super) use sunrise_gameplay::mount_rules::{
+    ARMOR, CHEST, SADDLE, body_armor_fits, has_mount_menu, mount_columns, shows_body, shows_saddle,
+};
 
 /// The open mount menu: copies of the mount's slots, written back on every change.
 #[derive(Default)]
@@ -69,22 +44,6 @@ struct Open {
     /// `shouldRenderSaddleSlot` / `shouldRenderArmorSlot`.
     show_saddle: bool,
     show_armor: bool,
-}
-
-/// `EntityTypeTags.CAN_WEAR_HORSE_ARMOR`.
-fn can_wear_horse_armor(species: Species) -> bool {
-    matches!(species, Species::Horse | Species::ZombieHorse)
-}
-/// Whether `item` fits the body slot of the species (`isEquippableInSlot`).
-fn body_armor_fits(species: Species, item: &str) -> bool {
-    if llama::is_llama(species) {
-        return item.ends_with("_carpet");
-    }
-    // EntityTypeTags.CAN_WEAR_NAUTILUS_ARMOR: the nautilus armours.
-    if nautilus::is_nautilus(species) {
-        return item.ends_with("_nautilus_armor");
-    }
-    can_wear_horse_armor(species) && item.ends_with("_horse_armor")
 }
 
 impl Game<'_> {
@@ -119,30 +78,26 @@ impl Game<'_> {
         });
         self.show_mount_menu();
     }
-    /// `ClientPacketListener.handleMountScreenOpen`: a server's horse
-    /// inventory over mount `entity`, its slots to come in the menu's content.
-    pub(super) fn open_remote_mount_menu(&mut self, entity: u32, columns: usize) -> bool {
-        let Some(species) = self
-            .mobs
-            .iter()
-            .find(|m| m.id == entity)
-            .map(Mob::species)
-            .filter(|s| has_mount_menu(*s))
-        else {
-            return false;
-        };
+    /// Open the screen for the server's already installed mount window. Its
+    /// equipment and chest stacks arrive in the menu's content packets.
+    pub(super) fn open_remote_mount_menu(
+        &mut self,
+        entity: u32,
+        species: Species,
+        items: Vec<Option<ItemStack>>,
+    ) {
+        let columns = items.len() / 3;
         self.mount_menu.open = Some(Open {
             mob: entity,
             species,
-            columns: columns.min(COLUMNS),
+            columns,
             saddle: None,
             armor: None,
-            items: vec![None; CHEST_SIZE],
+            items,
             show_saddle: shows_saddle(species),
             show_armor: shows_body(species),
         });
         self.show_mount_menu();
-        true
     }
     fn show_mount_menu(&mut self) {
         if self.remote.is_none() && self.lan_acting.is_none() {
@@ -235,7 +190,7 @@ impl Game<'_> {
         };
         let (saddle, armor) = (open.saddle.clone(), open.armor.clone());
         let body = open.show_armor.then_some(armor);
-        let items = open.items.clone();
+        let items = open.items.iter().take(open.columns * 3).cloned().collect();
         self.mount_store(index, saddle, body, items);
     }
     /// The slots of mount `index` as its menu shows them: the saddle, the
@@ -251,8 +206,9 @@ impl Game<'_> {
         let m = &self.mobs[index];
         let species = m.species();
         let body = shows_body(species).then(|| m.equipment_stacks()[6].clone());
-        let mut items = m.extra.items.clone();
-        items.resize(mount_columns(m) * 3, None);
+        let size = mount_columns(m) * 3;
+        let mut items: Vec<_> = m.extra.items.iter().take(size).cloned().collect();
+        items.resize(size, None);
         (m.saddle_item(), body, items)
     }
     /// The menu's slots back on mount `index` (`body` None: not its slot),
@@ -283,7 +239,6 @@ impl Game<'_> {
                     .unwrap_or_else(|| "minecraft:item.armor.equip_generic".into())
             })
         };
-        let m = &mut self.mobs[index];
         let id = m.id;
         let pos = m.position;
         let saddle_off = m.extra.saddled() && saddle.is_none();
@@ -293,23 +248,35 @@ impl Game<'_> {
         let body_on = body
             .as_ref()
             .is_some_and(|b| b.is_some() && m.extra.body_id().is_none());
+        self.journal_equipment(id);
+        let m = &mut self.mobs[index];
         m.set_saddle(saddle);
         if let Some(body) = body {
             m.extra.set_body_stack(body);
         }
-        let mut items = items;
-        let keep = m.extra.items.len().max(CHEST_SIZE);
-        items.resize(keep, None);
-        m.extra.items = items;
-        let (x, z) = (at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4);
-        self.world.modified.insert((x, z));
-        if let Some(sound) = sound {
-            self.audio.play(&sound, Some(at), 1.0, 1.0);
+        if !items.is_empty() {
+            self.journal_entity(id);
+            let _ = self.edit_entity_slots(id, |slots, _| {
+                for (slot, stack) in slots.iter_mut().zip(items) {
+                    *slot = stack;
+                }
+            });
         }
-        if saddle_put_on || body_on {
-            self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
-        } else if saddle_off || body_off {
-            self.mob_equip_event(id, [pos.x, pos.y, pos.z], false);
+        let chunk = (at[0].floor() as i32 >> 4, at[2].floor() as i32 >> 4);
+        if self.has_open_transaction() {
+            self.journal_chunk_save(chunk, SaveChunkScope::Transaction);
+        } else {
+            self.world.modified.insert(chunk);
+        }
+        let equips = saddle_put_on || body_on;
+        if equips || saddle_off || body_off {
+            self.after_commit(After::MountEquipment {
+                dim: self.dim,
+                id,
+                at: [pos.x, pos.y, pos.z],
+                sound: sound.map(|sound| (sound, at)),
+                equips,
+            });
         }
     }
     pub(super) fn mount_slots(&self) -> Option<Vec<usize>> {
@@ -366,11 +333,17 @@ impl Game<'_> {
             _ => None,
         }
     }
+    pub(super) fn is_mount_chest_slot(&self, i: usize) -> bool {
+        self.mount_menu
+            .open
+            .as_ref()
+            .is_some_and(|open| i >= CHEST && i - CHEST < open.columns * 3)
+    }
     pub(super) fn mount_slot(&self, i: usize) -> &Option<ItemStack> {
         match self.mount_menu.open.as_ref() {
             Some(open) if i == SADDLE => &open.saddle,
             Some(open) if i == ARMOR => &open.armor,
-            Some(open) if i >= CHEST && i - CHEST < CHEST_SIZE => &open.items[i - CHEST],
+            Some(open) if i >= CHEST && i - CHEST < open.items.len() => &open.items[i - CHEST],
             _ => &self.scratch_slot,
         }
     }
@@ -378,7 +351,7 @@ impl Game<'_> {
         match self.mount_menu.open.as_mut() {
             Some(open) if i == SADDLE => &mut open.saddle,
             Some(open) if i == ARMOR => &mut open.armor,
-            Some(open) if i >= CHEST && i - CHEST < CHEST_SIZE => &mut open.items[i - CHEST],
+            Some(open) if i >= CHEST && i - CHEST < open.items.len() => &mut open.items[i - CHEST],
             _ => &mut self.scratch_slot,
         }
     }
@@ -479,34 +452,29 @@ impl Game<'_> {
         if open.columns > 0 {
             batch.sprite_region(
                 atlas,
-                "gui/sprites/container/horse/chest_slots",
+                "container/horse/chest_slots",
                 [ox + 79.0, oy + 17.0, open.columns as f32 * 18.0, 54.0],
                 90.0,
                 54.0,
             );
         }
         if open.show_saddle {
-            batch.sprite(atlas, "gui/sprites/container/slot", ox + 7.0, oy + 17.0);
+            batch.sprite(atlas, "container/slot", ox + 7.0, oy + 17.0);
         }
         if open.show_armor {
-            batch.sprite(atlas, "gui/sprites/container/slot", ox + 7.0, oy + 35.0);
+            batch.sprite(atlas, "container/slot", ox + 7.0, oy + 35.0);
         }
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         if open.show_saddle && open.saddle.is_none() {
-            batch.sprite(
-                atlas,
-                "gui/sprites/container/slot/saddle",
-                ox + 8.0,
-                oy + 18.0,
-            );
+            batch.sprite(atlas, "container/slot/saddle", ox + 8.0, oy + 18.0);
         }
         if open.show_armor && open.armor.is_none() {
             let sprite = if llama::is_llama(open.species) {
-                "gui/sprites/container/slot/llama_armor"
+                "container/slot/llama_armor"
             } else if nautilus::is_nautilus(open.species) {
-                "gui/sprites/container/slot/nautilus_armor_inventory"
+                "container/slot/nautilus_armor_inventory"
             } else {
-                "gui/sprites/container/slot/horse_armor"
+                "container/slot/horse_armor"
             };
             batch.sprite(atlas, sprite, ox + 8.0, oy + 36.0);
         }

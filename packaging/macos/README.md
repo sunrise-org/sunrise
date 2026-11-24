@@ -43,10 +43,14 @@ Releases are signed with Ludovic's **Developer ID** ("Developer ID Application: 
   `accepted` and `source=Notarized Developer ID`.
 - the game (`.github/workflows/game-build.yml`): `sunrise-client`, `sunrise-ctl`, `sunrise-perf`,
   `sunrise-prepare` and `sunrise-server` are signed right after they are built (so the checks and the 1500-frame smoke
-  run use them as players will), and the zip is notarized. Programs outside a bundle can't hold a
+  run use them as players will), and the zip is notarized. `sunrise-client` embeds
+  `packaging/macos/game-info.plist` in `__TEXT,__info_plist` (providing `CFBundleIdentifier`,
+  `CFBundleName` and `NSMicrophoneUsageDescription`) and is signed with
+  `packaging/macos/game-entitlements.plist` (`com.apple.security.device.audio-input`) so hardened-runtime
+  builds can open microphone capture for mods. Programs outside a bundle can't hold a
   ticket: Gatekeeper asks Apple online the first time each one runs.
 
-No entitlements are needed. The launcher checks an update's signature before swapping the new
+The other helper binaries need no entitlements. The launcher checks an update's signature before swapping the new
 Sunrise.app in, and again where it lands; when it doesn't hold, the old app is put back.
 
 The switch is the repository variable `MACOS_SIGN_IDENTITY`: set to the identity's name, the

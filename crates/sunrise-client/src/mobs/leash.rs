@@ -494,7 +494,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.yaw = (f64::from(m.yaw) - m.extra.leash_spin) as f32;
     // Leashable.angularFriction: the block under the mob's movement decides
     // the ground friction, whatever the lead's shape; the product is a float.
-    let friction = if m.on_ground {
+    let friction = if m.ground.on_ground {
         m.friction_at(w, m.on_pos(0.500_001)) * 0.91_f32
     } else if m.is_in_liquid() {
         0.8_f32
@@ -770,7 +770,7 @@ mod tests {
                         mob.extra.age = if kind == "baby" { -24000 } else { 0 };
                         super::super::happy_ghast::ensure_setup(&mut mob, None);
                     }
-                    mob.on_ground = false;
+                    mob.ground.on_ground = false;
                     mob.ai.nav.path = Some(Path {
                         nodes: vec![PathNode {
                             x: 8,
@@ -1184,7 +1184,7 @@ mod tests {
                     Vec3::new(0.5, 64.0, 0.5),
                     0.0,
                 );
-                cow.on_ground = true;
+                cow.ground.on_ground = true;
                 cow.extra.leash = Some(Holder::Player);
                 cow.extra.leash_spin = 1.0;
                 let mut w = world.clone();
@@ -1199,7 +1199,7 @@ mod tests {
                 );
                 assert_eq!(cow.extra.leash_spin, expected, "blue ice, not 0.6");
                 // Off the ground the same lead keeps vanilla's plain drag.
-                cow.on_ground = false;
+                cow.ground.on_ground = false;
                 cow.extra.leash_spin = 1.0;
                 tick(&mut cow, &w, &mut events);
                 assert_eq!(cow.extra.leash_spin, f64::from(0.91_f32));

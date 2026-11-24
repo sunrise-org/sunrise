@@ -8,7 +8,7 @@ impl Game<'_> {
             .ghost
             .iter()
             .filter_map(|ghost| {
-                let slot = ghost.slot.checked_sub(300)?;
+                let slot = crate::game::inventory_slots::container_slot_index(ghost.slot)?;
                 let (x, y) = self.native_screen_slot(slot)?;
                 let (x, y) = (ox + x, oy + y);
                 // Clip in floating-point screen space before the shared integer

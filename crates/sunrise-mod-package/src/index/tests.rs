@@ -365,7 +365,7 @@ fn refuses_broken_indexes() {
     assert!(e.contains("https"), "{e}");
     // A local test registry may list files on disk; the published one may not.
     let local = text.replace(
-        "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/",
+        "https://github.com/sunrise-org/sunrise-mods/releases/download/coords_hud-0.1.0/",
         "file:///tmp/",
     );
     let published = Index::parse(&local).unwrap();
@@ -428,6 +428,94 @@ fn a_project_with_no_usable_version_is_left_out_and_the_rest_loads() {
         ]
     );
     assert!(index.left_out[0].reason.contains("plain file name"));
+}
+
+#[test]
+fn a_version_naming_a_release_the_index_does_not_list_is_left_out() {
+    let mut index = sample();
+    let listed = "26.3-0.1.0";
+    index.releases = Some(vec![SunriseRelease {
+        tag: listed.into(),
+        commit: "0123456789abcdef0123456789abcdef01234567".into(),
+        line: "26.3-0".into(),
+    }]);
+    let project = &mut index.projects[0];
+    let id = project.id.clone();
+    let game = project.versions[0].game.clone();
+    let tag = |release: &str| Some(listed.replace("0.1.0", release).replace("26.3", &game));
+    let mut versions = Vec::new();
+    for (version, release) in [
+        ("9.0.0", Some("0.2.0")),
+        ("9.0.1", Some("0.1.0")),
+        ("9.0.2", None),
+    ] {
+        let mut v = project.versions[0].clone();
+        v.version = version.into();
+        v.sunrise = release.and_then(tag);
+        versions.push(v);
+    }
+    project.versions = versions;
+    let error = index.check().unwrap_err();
+    assert!(error.contains(&id) && error.contains("9.0.0"), "{error}");
+    let read = reread(&index);
+    let kept: Vec<&str> = read
+        .project(&id)
+        .unwrap()
+        .versions
+        .iter()
+        .map(|v| v.version.as_str())
+        .collect();
+    assert_eq!(kept, ["9.0.1", "9.0.2"]);
+    let left_out: Vec<Option<&str>> = read
+        .left_out
+        .iter()
+        .filter(|l| l.id == id)
+        .map(|l| l.version.as_deref())
+        .collect();
+    assert_eq!(left_out, [Some("9.0.0")]);
+
+    // An index that lists no releases makes no claim about the tag.
+    index.releases = None;
+    assert_eq!(reread(&index).project(&id).unwrap().versions.len(), 3);
+}
+
+#[test]
+fn a_takedown_of_the_whole_project_drops_its_nightly_source_for_a_reader() {
+    let mut index = sample();
+    index.projects[0].nightly = Some(Nightly {
+        repo: "author/example".into(),
+        path: None,
+        metadata: Default::default(),
+    });
+    let id = index.projects[0].id.clone();
+    let mut source_only = index.projects[0].clone();
+    source_only.id = "source_only".into();
+    source_only.versions.clear();
+    index.projects.push(source_only);
+    let takedown = |id: &str, sha256: Option<String>| Revoked {
+        id: id.into(),
+        sha256,
+        reason: "Withdrawn test project.".into(),
+        date: String::new(),
+    };
+
+    // By hash: the named package alone.
+    let hash = index.projects[0].versions[0].file.sha256.clone();
+    index.revoked = vec![takedown(&id, Some(hash))];
+    assert_eq!(index.check(), Ok(()));
+    let read = reread(&index);
+    assert!(read.project(&id).unwrap().nightly.is_some());
+    assert!(read.project("source_only").is_some());
+
+    // By id: the source goes too, and a project left with nothing is left out.
+    index.revoked = vec![takedown(&id, None), takedown("source_only", None)];
+    let error = index.check().unwrap_err();
+    assert!(error.contains(&id), "{error}");
+    let read = reread(&index);
+    let project = read.project(&id).unwrap();
+    assert!(project.nightly.is_none() && !project.versions.is_empty());
+    assert!(read.project("source_only").is_none());
+    assert!(read.left_out.iter().any(|l| l.id == "source_only"));
 }
 
 #[test]
@@ -669,19 +757,13 @@ fn shader_packs_pass_the_game_s_own_check() {
     assert!(open(&Kind::Shader).is_ok());
 }
 
-/// A wasm package (a module the loader accepts, its `[wasm]` hash and one `runtime/` file) as a `.smod`.
-fn wasm_package(name: &str, nav: &[u8]) -> PathBuf {
+/// A native source package with one `runtime/` file.
+fn native_package(name: &str, nav: &[u8]) -> PathBuf {
     use std::io::Write;
-    let module = wat::parse_str(
-        r#"(module (@custom "dylink.0" "\01\04\00\00\00\00")
-            (func (export "sunrise_layout")) (func (export "sunrise_in")) (func (export "sunrise_hook")))"#,
-    )
-    .unwrap();
-    let module = module.as_slice();
     let manifest = format!(
         "id='ruby'\nname='Ruby'\nversion='0.1.0'\napi='0.2'\ncapabilities=['registries']\n\
-         [wasm]\nsha512='{}'\ntoolchain='test'\n[runtime]\n\"nav.bin\"='{}'\n",
-        crate::manifest::sha512_of(module),
+         [native]\ngame='26.3'\nsunrise='{0}'\nmixins='{0}'\n[runtime]\n\"nav.bin\"='{1}'\n",
+        "a".repeat(40),
         crate::manifest::sha512_of(b"tables"),
     );
     let path = std::env::temp_dir().join(format!("{name}-{}.smod", std::process::id()));
@@ -689,7 +771,6 @@ fn wasm_package(name: &str, nav: &[u8]) -> PathBuf {
     let options = zip::write::SimpleFileOptions::default();
     for (entry, bytes) in [
         (crate::manifest::MANIFEST, manifest.as_bytes()),
-        ("mod.wasm", module),
         (
             "Cargo.toml",
             b"[package]\nname='ruby'\nversion='0.1.0'\n".as_slice(),
@@ -705,15 +786,32 @@ fn wasm_package(name: &str, nav: &[u8]) -> PathBuf {
 }
 
 #[test]
-fn installing_a_wasm_mod_checks_its_runtime_files_against_the_manifest() {
-    let good = wasm_package("runtime-wasm-ok", b"tables");
-    let facts = inspect(&Kind::Mod, &good);
+fn installing_a_native_mod_checks_its_runtime_files_against_the_manifest() {
+    let good = native_package("runtime-native-ok", b"tables");
+    let facts = inspect(&Kind::NativeMod, &good);
     // The same name and length, different bytes.
-    let edited = wasm_package("runtime-wasm-edited", b"tablez");
-    let refused = inspect(&Kind::Mod, &edited);
+    let edited = native_package("runtime-native-edited", b"tablez");
+    let refused = inspect(&Kind::NativeMod, &edited);
     std::fs::remove_file(good).unwrap();
     std::fs::remove_file(edited).unwrap();
     assert_eq!(facts.unwrap().id.as_deref(), Some("ruby"));
     let error = refused.unwrap_err();
     assert!(error.contains("runtime/nav.bin"), "{error}");
+}
+
+#[test]
+fn a_stable_tag_is_only_its_canonical_form() {
+    assert_eq!(stable_tag("26.3-0.1.0"), Some(("26.3", 0)));
+    assert_eq!(stable_tag("26.3.1-1.2.0"), Some(("26.3.1", 1)));
+    for tag in [
+        "026.3-0.1.0",
+        "26.03-0.1.0",
+        "26.3.1.2-0.1.0",
+        "26-0.1.0",
+        "26.3-0.1.0-rc.1",
+        "26.3-0.1",
+        "26.3-0.1.0+build",
+    ] {
+        assert_eq!(stable_tag(tag), None, "{tag}");
+    }
 }

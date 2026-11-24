@@ -2,9 +2,20 @@
 #[path = "sunrise_look.rs"]
 mod sunrise_look;
 use crate::{crash, game, logging};
+use mod_api::__private::game::TicketActivation;
+use std::sync::OnceLock;
 use sunrise_mod_package::selection::{Argument, LaunchArguments};
 pub(crate) mod dedicated_arguments;
 pub(crate) mod runtime_environment;
+
+static TICKET_ACTIVATION: OnceLock<TicketActivation> = OnceLock::new();
+
+#[cfg(not(test))]
+pub(crate) fn ticket_activation() -> &'static TicketActivation {
+    TICKET_ACTIVATION
+        .get()
+        .expect("startup prepared ticket activation")
+}
 
 /// Validated startup state. No native hooks or workers may run before prepare returns.
 pub struct Startup {
@@ -40,6 +51,13 @@ pub fn prepare() -> Startup {
         std::process::exit(0);
     };
     let capture = sunrise_mod_package::holder::acquire(&launch);
+    // Native libraries (including their initializers and hook factories) have not run yet.
+    TICKET_ACTIVATION.get_or_init(|| {
+        TicketActivation::take_for_startup().unwrap_or_else(|| {
+            eprintln!("Sunrise: refusing startup because ticket activation is already owned");
+            std::process::exit(game::exit_code::ERROR);
+        })
+    });
     Startup {
         launch,
         options,
@@ -66,39 +84,12 @@ fn installation_refusals(patched: &[(&str, &[&str], bool)]) -> Vec<String> {
     }).collect()
 }
 
-/// Code-runtime services supplied by the platform at startup.
-pub struct CodeRuntime {
-    pub initialize: fn(&[mod_api::PackageInfo]),
-    pub refusal: fn(&str) -> Option<String>,
-    pub startup_refused: fn(&str) -> bool,
-}
-static CODE_RUNTIME: std::sync::OnceLock<CodeRuntime> = std::sync::OnceLock::new();
-pub(crate) fn initialize_code(inventory: &[mod_api::PackageInfo]) {
-    let runtime = CODE_RUNTIME
-        .get()
-        .expect("code initialization requires entry::start");
-    (runtime.initialize)(inventory);
-}
-pub(crate) fn code_startup_refused(id: &str) -> bool {
-    CODE_RUNTIME
-        .get()
-        .is_some_and(|runtime| (runtime.startup_refused)(id))
-}
-pub(crate) fn code_refusal(id: &str) -> Option<String> {
-    CODE_RUNTIME.get().and_then(|runtime| (runtime.refusal)(id))
-}
-
 /// Start the engine with dependency-ordered code supplied by the host.
-pub fn start<G>(
+pub fn start(
     native: sunrise_mod_package::runtime::Runtime,
-    load: impl FnOnce(
-        &sunrise_mod_package::runtime::Runtime,
-        &LaunchArguments,
-    ) -> (Vec<&'static str>, G),
-    code: CodeRuntime,
+    load: impl FnOnce(&sunrise_mod_package::runtime::Runtime, &LaunchArguments),
     startup: Startup,
 ) {
-    let _ = CODE_RUNTIME.set(code);
     let Startup {
         launch,
         options,
@@ -153,8 +144,12 @@ pub fn start<G>(
     // Mods' startup bars and lines (`RegistrationContext::progress`), before they register.
     game::startup_progress::install(side == "server");
     // Mod loading emits refusals; both client and dedicated logs must exist first.
-    let (_ids, _loaded_code) = load(&native, &launch);
-    crash::install(home.clone(), side);
+    load(&native, &launch);
+    let save_failure_diagnostics = options.save_failure_diagnostics.clone();
+    let panic_diagnostics = save_failure_diagnostics.clone();
+    crash::install(home.clone(), side, move || {
+        panic_diagnostics.suppressed_summary()
+    });
     let _ = sunrise_world::loot::types::install(crate::game::loot_types::capture);
     if sunrise_world::native_load_hooks::install(
         sunrise_world::native_load_hooks::NativeLoadHooks {
@@ -206,17 +201,33 @@ pub fn start<G>(
     }
     install_client_hooks();
     raise_open_file_limit();
-    if let Err(error) = game::run_with(options, native) {
+    // `Minecraft.run` catches the throwable and then calls `crash`: the panic hook only records,
+    // and the report is built here, after the unwind has released the panicking code's locks.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        game::run_with(options, native)
+    }))
+    .unwrap_or_else(|payload| {
+        crash::report_main_panic(&*payload);
+        logging::flush();
+        std::process::exit(101)
+    });
+    if let Err(error) = outcome {
         // A bad command line is the caller's mistake, not a crash: no report.
         let missing_mods = game::dedicated::is_missing_mods_refusal(error.as_ref());
         let usage = error.is::<game::UsageError>() || missing_mods;
-        if !missing_mods {
+        if let Some(refusals) = error.downcast_ref::<game::mods::DeclarationFailures>() {
+            for line in refusals.lines() {
+                log::error!("Sunrise: {line}");
+            }
+        } else if !missing_mods {
             log::error!("Sunrise: {error}");
         }
         logging::flush();
         // The report's path is the last line on stderr (crash::SAVED_LINE).
         if !usage {
-            crash::report_error(&home, side, &*error);
+            crash::report_error(&home, side, &*error, || {
+                save_failure_diagnostics.suppressed_summary()
+            });
         }
         // Started from Explorer, the console window closes with the game:
         // keep the message on screen until it is read.
@@ -250,25 +261,10 @@ pub(crate) fn install_client_hooks() {
             let context = reader.context();
             mod_api::dispatch_living_heal(&context, entity, amount, cancel);
         },
-        living_breathe: |context, entity, kind, can_breathe, consume, refill| {
-            if !mod_api::__private::listened(mod_api::HookId::LivingBreathe) {
-                return;
-            }
-            let reader = sunrise_client_render::api_context::LoopReader(context);
-            let context = reader.context();
-            mod_api::dispatch_living_breathe(&context, entity, kind, can_breathe, consume, refill);
-        },
-        farmland_trample: |context, entity, pos, state, distance, cancel| {
-            if !mod_api::__private::listened(mod_api::HookId::FarmlandTrample) {
-                return;
-            }
-            let reader = sunrise_client_render::api_context::LoopReader(context);
-            let context = reader.context();
-            mod_api::dispatch_farmland_trample(&context, entity, pos, state, distance, cancel);
-        },
+        living_breathe_heard: || mod_api::__private::listened(mod_api::HookId::LivingBreathe),
         has_mods: || !mod_api::__private::mods().is_empty(),
         player_name_format: |context, username, displayname| {
-            use game::api_values::{TryIntoApi, TryIntoEngine};
+            use game::api_values::TryIntoApi;
             if !mod_api::__private::listened(mod_api::HookId::PlayerNameFormat) {
                 return;
             }
@@ -281,12 +277,12 @@ pub(crate) fn install_client_hooks() {
                 return;
             };
             mod_api::dispatch_player_name_format(&context, &username, &mut converted);
-            if let Ok(converted) = converted.try_into_engine(&()) {
+            if let Ok(converted) = sunrise_client_lib::api_text::to_serialized_engine(&converted) {
                 *displayname = converted;
             }
         },
         player_tab_list_name_format: |context, player, name, display_name| {
-            use game::api_values::{TryIntoApi, TryIntoEngine};
+            use game::api_values::TryIntoApi;
             if !mod_api::__private::listened(mod_api::HookId::PlayerTabListNameFormat) {
                 return;
             }
@@ -296,7 +292,11 @@ pub(crate) fn install_client_hooks() {
                 return;
             };
             mod_api::dispatch_player_tab_list_name_format(&context, player, name, &mut converted);
-            if let Ok(converted) = converted.try_into_engine(&()) {
+            if let Ok(converted) = converted
+                .as_ref()
+                .map(sunrise_client_lib::api_text::to_serialized_engine)
+                .transpose()
+            {
                 *display_name = converted;
             }
         },
@@ -367,13 +367,10 @@ pub(crate) fn install_client_hooks() {
         },
         makes_open_trapdoor_above_climbable:
             crate::game::native_trapdoor_ladder::makes_open_trapdoor_above_climbable,
-        friction: |context, entity, kind, pos, state, friction| {
-            crate::game::native_surface::friction(context, entity, kind, pos, state, friction);
-        },
+        friction: crate::game::native_surface::friction,
         collision_shape: |context, pos, state, query, shape| {
             crate::game::native_collision_shape::collision_shape(context, pos, state, query, shape);
         },
-        collision_shape_refused: crate::game::native_collision_shape::refused,
         player_stays_on_ground_surface: |context, entity, staying| {
             if !mod_api::__private::listened(mod_api::HookId::PlayerStaysOnGroundSurface) {
                 return;
@@ -398,13 +395,12 @@ pub(crate) fn install_client_hooks() {
             let context = reader.context();
             mod_api::dispatch_fluid_flow(&context, fluid, pos, flow);
         },
-        sound_type: |context, pos, state, entity, cause, sound| {
-            crate::game::native_block_sounds::sound_type(context, pos, state, entity, cause, sound);
-        },
+        sound_type: crate::game::native_block_sounds::sound_type,
         can_grindstone_repair: crate::game::native_item_menu_parts::can_grindstone_repair,
         is_combine_repairable: crate::game::native_item_menu_parts::is_combine_repairable,
         can_fit_inside_container_items:
             crate::game::native_item_menu_parts::can_fit_inside_container_items,
+        item_name: crate::game::native_item_menu_parts::item_name,
     }) {
         log::warn!("Native client hooks already installed; keeping the first callbacks");
     }
@@ -472,16 +468,10 @@ mod name_conversion_tests {
     use sunrise_client_core::text::Text;
     use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs, LoopSide};
 
-    // Both crossing directions reject a component tree deeper than 512 nodes.
-    fn deep_engine_text() -> Text {
-        let mut value = serde_json::json!({"text": "leaf"});
-        for _ in 0..mod_api::text::MAX_TEXT_DEPTH {
-            let mut parent = serde_json::Map::new();
-            parent.insert("text".into(), "parent".into());
-            parent.insert("extra".into(), serde_json::Value::Array(vec![value]));
-            value = serde_json::Value::Object(parent);
-        }
-        Text::empty().with_component(value)
+    // Engine -> API rejects unrepresentable opaque metadata (NestedNull);
+    // API -> Engine rejects a component tree deeper than 512 nodes at the serialization boundary.
+    fn unrepresentable_engine_text() -> Text {
+        Text::empty().with_component(serde_json::json!({"text": "leaf", "test:meta": [null]}))
     }
 
     fn deep_api_text() -> mod_api::Text {
@@ -536,19 +526,23 @@ mod name_conversion_tests {
         with_names(|context, calls| {
             let username = Text::literal("Steve");
             let original = Text::literal("Original");
-            let deep = deep_engine_text();
+            let unrepresentable = unrepresentable_engine_text();
             let mut display = original.clone();
-            sunrise_client_lib::lan::hub::native_player_name_format(context, &deep, &mut display);
+            sunrise_client_lib::lan::hub::native_player_name_format(
+                context,
+                &unrepresentable,
+                &mut display,
+            );
             assert_eq!(display.component(), original.component());
             assert_eq!(calls.load(Ordering::Relaxed), 0);
 
-            display = deep.clone();
+            display = unrepresentable.clone();
             sunrise_client_lib::lan::hub::native_player_name_format(
                 context,
                 &username,
                 &mut display,
             );
-            assert_eq!(display.component_view(), deep.component_view());
+            assert_eq!(display.component_view(), unrepresentable.component_view());
             assert_eq!(calls.load(Ordering::Relaxed), 0);
 
             display = original.clone();
@@ -565,8 +559,8 @@ mod name_conversion_tests {
     #[test]
     fn tab_list_name_conversion_failure_keeps_the_engine_name() {
         with_names(|context, calls| {
-            let deep = deep_engine_text();
-            let mut display = Some(deep.clone());
+            let unrepresentable = unrepresentable_engine_text();
+            let mut display = Some(unrepresentable.clone());
             sunrise_client_lib::lan::hub::native_player_tab_list_name_format(
                 context,
                 1,
@@ -575,7 +569,7 @@ mod name_conversion_tests {
             );
             assert_eq!(
                 display.as_ref().unwrap().component_view(),
-                deep.component_view()
+                unrepresentable.component_view()
             );
             assert_eq!(calls.load(Ordering::Relaxed), 0);
 

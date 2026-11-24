@@ -43,6 +43,14 @@ pub const HORIZON_MIXINS_SOURCE: &str =
 /// Where the fork releases the prebuilt horizon-mixins tool; a release's tag and file follow.
 pub const MIXINS_TOOL_RELEASES: &str = "https://github.com/sunrise-org/sunrise/releases/download";
 
+/// The signed v2 mod registry index, used to resolve library mods during a native build: the
+/// minisign signature's four lines, then the index's exact bytes, in one file.
+pub const MOD_REGISTRY_INDEX: &str = "https://sunrise-org.github.io/sunrise-mods/v2/index.signed";
+
+/// Registry metadata on the default branch, used by the mod authoring tool.
+pub const MOD_REGISTRY_METADATA: &str =
+    "https://raw.githubusercontent.com/sunrise-org/sunrise-mods/main/registry";
+
 /// Where the fork publishes each game build's mod SDK (`sdk-<build id>`) and the game releases
 /// whose `sdk.json` names their build; a release's tag and file follow. `SUNRISE_SDK_BASE`
 /// overrides it.
@@ -55,6 +63,9 @@ pub const GAME_SOURCE_FILES: &str = "https://raw.githubusercontent.com/sunrise-o
 /// The fork's newest releases, which `cargo sunrise-mod` reads to find the one SDK a short sha names.
 pub const SDK_RELEASE_LIST: &str =
     "https://api.github.com/repos/sunrise-org/sunrise/releases?per_page=100";
+
+/// The game repository's Git object API, used to resolve stable release tags to their commits.
+pub const GAME_GIT_API: &str = "https://api.github.com/repos/sunrise-org/sunrise/git";
 
 /// The official Horizon Minecraft server's host, as a player types it to join (its SRV record
 /// leads to port 24454). Reached by name, never by IP address, which can shift. The Sunrise layer

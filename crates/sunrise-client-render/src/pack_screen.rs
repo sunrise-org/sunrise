@@ -316,8 +316,8 @@ impl List {
         ((self.height * self.height) as f32 / self.content_height() as f32) as i32
     }
     /// `AbstractScrollArea.mouseDragged` while the scrollbar is held.
-    fn drag(&mut self, y: f64) {
-        let Some(last) = self.held else { return };
+    fn drag(&mut self, y: f64) -> bool {
+        let Some(last) = self.held else { return false };
         if y < self.y as f64 {
             self.set_scroll(0.0);
         } else if y > self.bottom() as f64 {
@@ -329,6 +329,7 @@ impl List {
             self.set_scroll(self.scroll + (y - last) * scale);
         }
         self.held = Some(y);
+        true
     }
 }
 
@@ -717,16 +718,20 @@ impl PackScreen {
     }
     /// A left click (`Screen.mouseClicked`).
     pub fn click(&mut self, m: &Measure, x: f64, y: f64) -> Action {
+        self.click_with_outcome(m, x, y).0
+    }
+
+    pub(crate) fn click_with_outcome(&mut self, m: &Measure, x: f64, y: f64) -> (Action, bool) {
         if self.confirm.is_some() {
             return self.confirm_click(m, x, y);
         }
         if let Some(action) = self.browser_click(m, x, y) {
-            return action;
+            return (action, true);
         }
         if self.search.contains(x, y) {
             self.search.click(m, x, false, false);
             self.set_focus(Focus::Search);
-            return Action::None;
+            return (Action::None, true);
         }
         for side in 0..2 {
             if !self.lists[side].is_over(x, y) {
@@ -742,7 +747,7 @@ impl PackScreen {
             if scrolling {
                 self.lists[side].held = Some(y);
                 self.set_focus(Focus::List(side));
-                return Action::None;
+                return (Action::None, true);
             }
             let l = &self.lists[side];
             let hit = l.entry_at(x as i32, y as i32);
@@ -750,7 +755,7 @@ impl PackScreen {
                 && let Some((id, bx, by)) = self.options_button(side, i)
                 && d::inside((x as i32, y as i32), bx, by, OPTIONS_SIZE, OPTIONS_SIZE)
             {
-                return Action::Options(id);
+                return (Action::Options(id), true);
             }
             let mut took = false;
             if let Some(i) = hit {
@@ -780,19 +785,20 @@ impl PackScreen {
             if took {
                 self.set_focus(Focus::List(side));
             }
-            return Action::None;
+            return (Action::None, took);
         }
         for (i, (bx, by)) in self.footer().into_iter().enumerate() {
             if x >= bx as f64 && y >= by as f64 && x < (bx + 150) as f64 && y < (by + 20) as f64 {
                 self.set_focus(Focus::Button(i));
-                return if i == 0 {
+                let action = if i == 0 {
                     Action::OpenFolder
                 } else {
                     Action::Done
                 };
+                return (action, true);
             }
         }
-        Action::None
+        (Action::None, false)
     }
     /// `PackEntry.mouseClicked`; true when the entry clicked is still the
     /// list's own (nothing was repopulated).
@@ -913,9 +919,9 @@ impl PackScreen {
             [(bx, by), (bx + 154, by)],
         )
     }
-    fn confirm_click(&mut self, m: &Measure, x: f64, y: f64) -> Action {
+    fn confirm_click(&mut self, m: &Measure, x: f64, y: f64) -> (Action, bool) {
         let Some(c) = self.confirm.clone() else {
-            return Action::None;
+            return (Action::None, false);
         };
         let (_, _, buttons) = self.confirm_layout(m, &c);
         for (i, (bx, by)) in buttons.into_iter().enumerate() {
@@ -925,7 +931,7 @@ impl PackScreen {
                 self.reposition(m);
                 if i == 0 {
                     match c.action {
-                        ConfirmAction::Import(paths) => return Action::Import(paths),
+                        ConfirmAction::Import(paths) => return (Action::Import(paths), true),
                         ConfirmAction::Select(id) => {
                             if let Some(index) = self.model_index(0, &id) {
                                 self.model.activate(false, index, true);
@@ -935,10 +941,10 @@ impl PackScreen {
                         }
                     }
                 }
-                return Action::None;
+                return (Action::None, true);
             }
         }
-        Action::None
+        (Action::None, false)
     }
     /// The focus, the lists' rows, scroll and selection (for debugging).
     pub fn debug(&self) -> String {
@@ -970,27 +976,28 @@ impl PackScreen {
     }
     /// The mouse wheel (`AbstractScrollArea.mouseScrolled`).
     /// The pointer moved with the button held: a held scrollbar follows it.
-    pub fn drag(&mut self, y: f64) {
-        for l in &mut self.lists {
-            l.drag(y);
-        }
+    pub fn drag(&mut self, y: f64) -> bool {
+        self.lists.iter_mut().any(|l| l.drag(y))
     }
     /// `onRelease`.
-    pub fn release(&mut self) {
+    pub fn release(&mut self) -> bool {
+        let mut handled = false;
         for l in &mut self.lists {
-            l.held = None;
+            handled |= l.held.take().is_some();
         }
+        handled
     }
-    pub fn scroll(&mut self, x: f64, y: f64, amount: f64) {
+    pub fn scroll(&mut self, x: f64, y: f64, amount: f64) -> bool {
         if self.confirm.is_some() || self.search.contains(x, y) {
-            return;
+            return false;
         }
         for l in &mut self.lists {
             if l.is_over(x, y) {
                 l.set_scroll(l.scroll - amount * 18.0);
-                return;
+                return true;
             }
         }
+        false
     }
     /// Typed text, when the search box has the focus.
     pub fn type_text(&mut self, m: &Measure, s: &str) {

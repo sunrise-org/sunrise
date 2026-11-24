@@ -62,11 +62,6 @@ class MapTests(unittest.TestCase):
                 entries = [entry for area in areas.select(self.map, [path]).areas for entry in area.cargo]
                 self.assertTrue(any(areas.covers(entry, package, "lib", test) for entry in entries))
 
-    def test_the_wasm_fixture_tests_are_named_with_their_area(self):
-        mod_api = next(area for area in self.map.areas if area.name == "mod-api")
-        _, tiers = areas.plan(mod_api, [], [], areas.daily_rows())
-        self.assertTrue(tiers["fixture"])
-
     def test_every_harness_is_in_an_area_or_unassigned(self):
         unplaced = sorted(set(self.harnesses) - self.placed() - set(self.map.unassigned))
         self.assertEqual([], unplaced, "put each new harness in an area of tools/test_areas.toml")
@@ -139,13 +134,6 @@ class SelectionTests(unittest.TestCase):
             commands, _ = areas.plan(area, [], [], [row, other], daily=True)
         self.assertEqual(["cargo", "test", "-p", "game", "--lib", "--", "--ignored", "--exact",
                           "game::tnt::tests::a_fuse_burns"], commands[-1])
-
-    def test_daily_rows_needing_the_wasm_fixture_are_named_not_run(self):
-        area = areas.Area("mods", "", (), (areas.Cargo("game", "lib", "game::wasm::"),), (), ())
-        row = ignored_tests.Row("game", "game::wasm::tests::a_mod_loads", "lib", "daily", "x.txt", "wasm-fixture")
-        commands, tiers = areas.plan(area, [], [], [row], daily=True)
-        self.assertEqual([["cargo", "test", "-p", "game", "--lib", "--", "game::wasm::"]], commands)
-        self.assertEqual(([], [row]), (tiers["daily"], tiers["fixture"]))
 
     def test_a_proof_run_by_hand_is_named_not_passed_to_parity(self):
         area = areas.Area("boom", "", (), (), ("tnt_*",), ())

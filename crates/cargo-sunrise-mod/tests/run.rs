@@ -2,6 +2,101 @@ use std::{path::Path, process::Command};
 
 #[test]
 #[ignore = "daily"]
+fn run_writes_native_registration_logs_to_latest_log() {
+    use std::fs;
+    use std::io::Write;
+
+    let target = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    fs::create_dir_all(target).unwrap();
+    let scratch = tempfile::tempdir_in(target).unwrap();
+    let root = fs::canonicalize(scratch.path()).unwrap();
+    let project = root.join("greeter");
+    let tool = |dir: &Path, args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-sunrise-mod"))
+            .current_dir(dir)
+            .env("SUNRISE_MOD_CACHE", root.join("cache"))
+            .env("SUNRISE_HOME", root.join("home"))
+            .env("SUNRISE_LAUNCHER_HOME", root.join("launcher"))
+            .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
+            .env("SUNRISE_NO_AUDIO", "1")
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    tool(&root, &["new", "greeter", "--template", "native"]);
+    writeln!(
+        fs::OpenOptions::new()
+            .append(true)
+            .open(project.join("Cargo.toml"))
+            .unwrap(),
+        "log = \"0.4\""
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/lib.rs"),
+        r#"
+#[derive(Default)]
+struct Greeter;
+
+#[mod_api::sunrise_mod]
+impl mod_api::Hooks for Greeter {
+    fn register(&self, _: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        log::info!(target: "greeter::registration", "ready for {}", "players");
+        log::debug!(target: "greeter::registration", "not a visible diagnostic");
+        log::logger().flush();
+        std::process::exit(0);
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    // Run the actual game through registration, then exit from the hook before a world or a
+    // window opens. A current full-profile marker and empty registry names table are enough.
+    let resources = root.join("resources");
+    fs::create_dir(&resources).unwrap();
+    for (name, json) in [
+        (
+            "sunrise-resources.json",
+            r#"{"schema":7,"minecraft":"26.3"}"#,
+        ),
+        ("sunrise-prepare.json", r#"{"output_version":8}"#),
+        ("registries.json", "{}"),
+    ] {
+        fs::write(resources.join(name), json).unwrap();
+    }
+    let game = project.join("target/sunrise-mod/run/game");
+    fs::create_dir_all(&game).unwrap();
+    fs::write(game.join("eula.txt"), "eula=true\n").unwrap();
+    tool(
+        &project,
+        &[
+            "run",
+            "--resources",
+            resources.to_str().unwrap(),
+            "--",
+            "--dedicated",
+        ],
+    );
+    let log = fs::read_to_string(game.join("logs/latest.log")).unwrap();
+    assert!(
+        log.lines()
+            .any(|line| line.ends_with("/INFO]: [greeter::registration] ready for players")),
+        "{log}"
+    );
+    assert!(!log.contains("not a visible diagnostic"), "{log}");
+}
+
+#[test]
+#[ignore = "daily"]
 fn run_of_a_native_mod_without_resources_says_how_to_make_them_before_building() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target")
@@ -9,7 +104,8 @@ fn run_of_a_native_mod_without_resources_says_how_to_make_them_before_building()
     let _ = std::fs::remove_dir_all(&dir);
     // A native mod's folder, made by hand: the resources are asked for before anything is fetched or built.
     let project = dir.join("machine");
-    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/lib.rs"), "").unwrap();
     std::fs::write(
         project.join("Cargo.toml"),
         "[package]\nname = 'machine'\nversion = '0.1.0'\n",
@@ -35,6 +131,16 @@ fn run_of_a_native_mod_without_resources_says_how_to_make_them_before_building()
     let error = String::from_utf8(refused.stderr).unwrap();
     assert!(error.contains("--resources <folder>"), "{error}");
     assert!(error.contains("sunrise-prepare --prepare"), "{error}");
+    // A native mod runs on its pinned SDK's game: `--game` is refused, not dropped. Without
+    // resources, a run that did not refuse it would stop at them, before any SDK is looked up.
+    let refused = Command::new(env!("CARGO_BIN_EXE_cargo-sunrise-mod"))
+        .current_dir(&project)
+        .args(["run", "--game", "some-game"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success(), "{refused:?}");
+    let error = String::from_utf8(refused.stderr).unwrap();
+    assert!(error.contains("--game"), "{error}");
     assert!(
         !project.join("target").exists(),
         "run must stop before building"
@@ -77,7 +183,7 @@ fn content_run_keeps_the_previous_package_on_jar_refusal_and_starts_with_the_sta
     )
     .unwrap();
     fs::set_permissions(&game, fs::Permissions::from_mode(0o700)).unwrap();
-    let run = || {
+    let run_with = |more: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_cargo-sunrise-mod"))
             .current_dir(&project)
             .env("SUNRISE_HOME", scratch.path().join("player-home"))
@@ -86,9 +192,11 @@ fn content_run_keeps_the_previous_package_on_jar_refusal_and_starts_with_the_sta
             .arg(&game)
             .arg("--jars")
             .arg(&source)
+            .args(more)
             .output()
             .unwrap()
     };
+    let run = || run_with(&[]);
 
     let refused = run();
     assert!(!refused.status.success(), "{refused:?}");
@@ -101,6 +209,14 @@ fn content_run_keeps_the_previous_package_on_jar_refusal_and_starts_with_the_sta
     assert_eq!(fs::read(&output).unwrap(), previous);
 
     fs::write(source.join(format!("{SHA512}.jar")), b"abc").unwrap();
+
+    // The tool reads `--resources` for a native mod only: for this one it is refused, not dropped.
+    let refused = run_with(&["--resources", "."]);
+    assert!(!refused.status.success(), "{refused:?}");
+    let error = String::from_utf8(refused.stderr).unwrap();
+    assert!(error.contains("--resources"), "{error}");
+    assert!(!project.join("launched").exists());
+
     let ran = run();
     assert!(ran.status.success(), "{ran:?}");
     assert!(project.join("launched").is_file());

@@ -6,14 +6,15 @@ use crate::*;
 pub trait LevelsHost {
     /// Side: both.
     /// Whether a mod with the `sunrise-mod.toml` id `id` is installed: a
-    /// native, wasm or content package (Fabric's `FabricLoader.isModLoaded`,
+    /// native or content-only package (Fabric's `FabricLoader.isModLoaded`,
     /// NeoForge's `ModList.isLoaded`). The list is fixed at startup.
-    #[access(Metadata)]
     #[static_call]
     fn is_loaded(&self, id: &str) -> bool;
     /// Side: both.
-    /// Find a loaded chunk in an open server level.
-    #[access(WorldOnly)]
+    /// Find a loaded chunk in an open server level (`ServerChunkCache.getChunkNow`) or in a
+    /// logged-in client's loaded level. On a server, a FULL chunk found becomes one of the
+    /// level's recent FULL lookups, so a `level.load_chunk` of it before the end of the level's
+    /// next chunk tick places no ticket.
     fn chunk(&self, level: LevelRef, pos: [i32; 2]) -> Option<ChunkRef>;
 }
 /// The handles' client writes of the `levels` area, implemented by the game and reached through [`ClientBackendMut`].
@@ -33,7 +34,6 @@ pub trait LevelsClientBackendMut {
     ///     level.set_client_break_progress(host, -1, [0, 64, 0], 3);
     /// }
     /// ```
-    #[access(WorldOnly)]
     fn level_set_client_break_progress(
         &mut self,
         level: LevelRef,

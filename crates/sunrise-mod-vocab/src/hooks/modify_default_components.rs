@@ -1,5 +1,4 @@
 //! The `modify_default_components` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0092
 
 pub trait Hooks {
     /// NeoForge 26.3's ModifyDefaultComponentsEvent: set or remove entries in
@@ -19,5 +18,5 @@ pub trait Hooks {
         target = "sunrise_world::item_defaults::native_modify_default_components",
         neoforge = "ModifyDefaultComponentsEvent"
     )]
-    fn modify_default_components();
+    fn modify_default_components(item: &str, components: &mut Map<String, Value>);
 }

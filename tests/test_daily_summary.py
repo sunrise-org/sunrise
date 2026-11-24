@@ -31,13 +31,11 @@ def job(name, conclusion="success", failed=()):
 
 
 GREEN_JOBS = [job("shards / plan"), job("shards / ignored-tests-shards (sunrise-world)"),
-              job("wasm-mods / fixture"), job("wasm-mods / Guest stack / ubuntu-latest"),
               job("fn-replace-check / route"), job("fn-replace-check / fn-replace-check"),
+              job("book-quickstart / route"), job("book-quickstart / quickstart"),
               job("windows-runtime-leases / test"),
               job("windows-runtime-leases / runtime-leases"), job("windows-runtime-leases / launcher-processes"),
               job("cargo-sunrise-mod / plan"),
-              job("wasm-std-names / build (linux)"), job("wasm-std-names / build (windows)"),
-              job("wasm-std-names / compare"),
               job("machine-sample / route"), job("machine-sample / build"),
               job("sdk / fresh"), job("sdk / build linux"), job("sdk / build linux-server"),
               job("sdk / fresh"), job("sdk / build windows"), job("sdk / build macos"), job(PARITY_JOB)]
@@ -421,20 +419,25 @@ class DailySummaryTests(unittest.TestCase):
         _, out = self.run_summary(Api(jobs), [shard_report()], results=dict(LEGS, **{"sdk-windows-macos": {"result": "cancelled"}}))
         self.assertIn("sdk_green=false", out)
 
-    def test_a_linux_sdk_check_red_is_one_issue_and_fn_replace_check_missing_its_input_files_none(self):
+    def test_a_linux_sdk_check_red_is_one_issue_and_its_readers_missing_their_input_file_none(self):
         probe = "Two mod libraries share the game's exact Rust state"
-        jobs = [j for j in GREEN_JOBS if j["name"] not in ("sdk / build linux", summary.FN_REPLACE_JOB)] + [
+        readers = (summary.FN_REPLACE_JOB, summary.BOOK_QUICKSTART_JOB)
+        jobs = [j for j in GREEN_JOBS if j["name"] not in ("sdk / build linux", *readers)] + [
             job("sdk / build linux", "failure", [probe]),
-            job(summary.FN_REPLACE_JOB, "failure", ["The Linux legs are here"])]
-        api = Api(jobs, issues=[{"number": 6, "title": "Daily: fn-replace-check / fn-replace-check did not complete"}])
+            job(summary.FN_REPLACE_JOB, "failure", ["The Linux legs are here"]),
+            job(summary.BOOK_QUICKSTART_JOB, "failure", ["Run actions/download-artifact@v4", "The Linux legs are here"])]
+        api = Api(jobs, issues=[{"number": 6, "title": "Daily: fn-replace-check / fn-replace-check did not complete"},
+                                {"number": 7, "title": "Daily: book-quickstart / quickstart did not complete"}])
         _, out = self.run_summary(api, [shard_report()], results=dict(
-            LEGS, sdk={"result": "failure"}, **{"fn-replace-check": {"result": "failure"}}))
+            LEGS, sdk={"result": "failure"}, **{"fn-replace-check": {"result": "failure"},
+                                                "book-quickstart": {"result": "failure"}}))
         self.assertEqual(out.splitlines(), ["green=false", "sdk_green=false"])
         created = [body for _, path, body in api.writes if path == "issues"]
         self.assertEqual([body["title"] for body in created], ["Daily: sdk native linkage probe (linux)"])
-        self.assertIn("`fn-replace-check` could not run: it needs this leg's SDK", created[0]["body"])
-        self.assertFalse(any(path.startswith("issues/6") for _, path, _ in api.writes),
-                         "a blocked fn-replace-check neither comments on nor closes its own issue")
+        self.assertIn("`fn-replace-check` and `book-quickstart` could not run: they need this leg's SDK",
+                      created[0]["body"])
+        self.assertFalse(any(path.startswith(("issues/6", "issues/7")) for _, path, _ in api.writes),
+                         "a blocked reader neither comments on nor closes its own issue")
 
     def test_a_failed_linux_fresh_check_with_no_published_sdk_files_one_issue(self):
         # The Linux call's `fresh` failed, so no Linux build job ran and fn-replace-check found no input.
@@ -471,9 +474,24 @@ class DailySummaryTests(unittest.TestCase):
                               ["Daily: fn-replace-check / fn-replace-check did not complete",
                                "Daily: sdk / build linux-server did not complete"])
 
+    def test_a_source_stage_failure_is_its_own_issue_and_holds_the_sdk(self):
+        step = "The source stages with this commit's build data"
+        jobs = [j for j in GREEN_JOBS if j["name"] != "sdk / build linux"] + [job("sdk / build linux", "failure", [step])]
+        api = Api(jobs)
+        _, out = self.run_summary(api, [shard_report()], results=dict(LEGS, sdk={"result": "failure"}))
+        self.assertEqual(out.splitlines(), ["green=false", "sdk_green=false"])
+        created = [body for _, path, body in api.writes if path == "issues"]
+        self.assertEqual([body["title"] for body in created], ["Daily: sdk source stage (linux)"])
+        self.assertIn(step, created[0]["body"])
+
+    def test_every_sdk_check_is_a_step_of_the_sdk_build(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/prebuilt-game-build.yml").read_text()
+        for step in summary.SDK_CHECKS:
+            self.assertEqual(workflow.count(f"- name: {step}\n"), 1, step)
+
     def test_an_sdk_check_issue_closes_only_when_its_step_passed(self):
         title = "Daily: sdk API-source check (linux)"
-        step = "The starter mod checks against the API source alone, host and wasm32"
+        step = "The starter mod checks against the API source alone"
         # sdk-<sha> already existed: the build skipped, so the check never ran and its issue stays open.
         jobs = [j for j in GREEN_JOBS if not j["name"].startswith("sdk / build ")] + [
             job(name, "skipped") for name in ("sdk / build linux", "sdk / build linux-server",
@@ -590,15 +608,13 @@ class DailySummaryTests(unittest.TestCase):
 
     def test_a_leg_that_failed_without_test_names_gets_one_issue_per_leg(self):
         jobs = [job("shards / ignored-tests-shards (sunrise-world)", "cancelled", ["Prepare checkout-keyed vanilla data"]),
-                job("wasm-mods / fixture", "failure", ["Build tool and shared member"]),
-                job("fn-replace-check / fn-replace-check", "failure", ["Refusals by name"])] + GREEN_JOBS[6:]
+                job("fn-replace-check / fn-replace-check", "failure", ["Refusals by name"])] + GREEN_JOBS[4:]
         api = Api(jobs)
-        self.run_summary(api, [], results=dict(LEGS, shards={"result": "cancelled"}, **{"wasm-mods": {"result": "failure"}},
+        self.run_summary(api, [], results=dict(LEGS, shards={"result": "cancelled"},
                                                **{"fn-replace-check": {"result": "failure"}}), tag=False)
         titles = sorted(body["title"] for method, path, body in api.writes if path == "issues")
         self.assertEqual(titles, ["Daily: fn-replace-check / fn-replace-check did not complete",
-                                  "Daily: shards / ignored-tests-shards (sunrise-world) did not complete",
-                                  "Daily: wasm-mods / fixture did not complete"])
+                                  "Daily: shards / ignored-tests-shards (sunrise-world) did not complete"])
         bodies = " ".join(body["body"] for _, path, body in api.writes if path == "issues")
         self.assertIn("`Refusals by name`", bodies)
         self.assertIn("no daily run has been green yet", bodies)
@@ -613,30 +629,15 @@ class DailySummaryTests(unittest.TestCase):
         self.assertEqual([body["title"] for _, path, body in api.writes if path == "issues"],
                          [f"Daily: {failed} did not complete"])
 
-    def test_a_comparison_skipped_by_a_failed_build_is_not_its_own_issue_but_one_that_failed_or_skipped_alone_is(self):
-        def run(**replace):
-            jobs = [job(entry["name"], *replace[entry["name"]]) if entry["name"] in replace else entry
-                    for entry in GREEN_JOBS]
-            api = Api(jobs)
-            _, out = self.run_summary(api, results=dict(LEGS, **{"wasm-std-names": {"result": "failure"}}))
-            return sorted(body["title"] for _, path, body in api.writes if path == "issues"), out.splitlines()
-        build, compare = "wasm-std-names / build (windows)", "wasm-std-names / compare"
-        self.assertEqual(run(**{build: ("failure", ["Build the std member"]), compare: ("skipped", [])}),
-                         ([f"Daily: {build} did not complete"], ["green=false", "sdk_green=true"]))
-        self.assertEqual(run(**{compare: ("failure", ["Linux's and Windows' std members have the same import and "
-                                                       "export names"])}),
-                         ([f"Daily: {compare} did not complete"], ["green=false", "sdk_green=true"]))
-        self.assertEqual(run(**{compare: ("skipped", [])}),
-                         ([f"Daily: {compare} did not complete"], ["green=false", "sdk_green=true"]))
-
     def test_a_job_skipped_beside_another_leg_jobs_failure_is_still_its_own_issue(self):
-        fixture, stack = "wasm-mods / fixture", "wasm-mods / Guest stack / ubuntu-latest"
-        jobs = [job(fixture, "failure", ["Build tool and shared member"]) if entry["name"] == fixture
-                else job(stack, "skipped") if entry["name"] == stack else entry for entry in GREEN_JOBS]
+        arm = "cargo-sunrise-mod / build aarch64-apple-darwin"
+        windows = "cargo-sunrise-mod / build x86_64-pc-windows-msvc"
+        jobs = [job(arm, "failure", ["Build tool"]) if entry["name"] == arm
+                else job(windows, "skipped") if entry["name"] == windows else entry for entry in GREEN_JOBS]
         api = Api(jobs)
-        _, out = self.run_summary(api, results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
+        _, out = self.run_summary(api, results=dict(LEGS, **{"cargo-sunrise-mod": {"result": "failure"}}))
         self.assertEqual(sorted(body["title"] for _, path, body in api.writes if path == "issues"),
-                         [f"Daily: {stack} did not complete", f"Daily: {fixture} did not complete"])
+                         [f"Daily: {arm} did not complete", f"Daily: {windows} did not complete"])
         self.assertEqual(out.splitlines(), ["green=false", "sdk_green=true"])
 
     def test_a_shard_killed_for_memory_says_by_what_with_its_memory_time_and_running_tests(self):
@@ -697,51 +698,6 @@ class DailySummaryTests(unittest.TestCase):
         _, out = self.run_summary(api, [], results=dict(LEGS, shards={"result": "skipped"}))
         self.assertIn("green=false", out)
         self.assertIn("Daily: shards did not complete", [body["title"] for _, path, body in api.writes if path == "issues"])
-
-    def test_fixture_test_failures_are_filed_by_test_name(self):
-        jobs = GREEN_JOBS[:2] + [job("wasm-mods / fixture", "failure", [summary.FIXTURE_TESTS_STEPS[1]])] + GREEN_JOBS[3:]
-        report = {"needs": "SUNRISE_WASM_FIXTURE", "incomplete": [], "passed": [],
-                  "problems": [failure("game::wasm::wasm_interaction_shared_matrix", None, package="sunrise-client")]}
-        api = Api(jobs)
-        self.run_summary(api, [report], results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
-        titles = [body["title"] for _, path, body in api.writes if path == "issues"]
-        self.assertEqual(titles, ["Daily: sunrise-client game::wasm::wasm_interaction_shared_matrix"])
-
-    def test_the_fixtures_own_test_failures_are_filed_by_name_and_both_reports_count(self):
-        jobs = GREEN_JOBS[:2] + [job("wasm-mods / fixture", "failure", ["Validate and load the fixture"])] + GREEN_JOBS[3:]
-        own = {"needs": "SUNRISE_WASM_FIXTURE", "incomplete": [],
-               "passed": [{"package": "sunrise-mod-wasm", "test": "was_red"}],
-               "problems": [failure("compiled_guest_strict_math", "crates/sunrise-mod-wasm/tests/strict_math.rs:49:13",
-                                    package="sunrise-mod-wasm")]}
-        clients = {"needs": "SUNRISE_WASM_FIXTURE", "incomplete": [], "problems": [],
-                   "passed": [{"package": "sunrise-client", "test": "game::also_red"}]}
-        api = Api(jobs, issues=[{"number": 7, "title": "Daily: sunrise-mod-wasm was_red"},
-                                {"number": 8, "title": "Daily: sunrise-client game::also_red"}])
-        self.run_summary(api, [own, clients], results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
-        titles = [body["title"] for _, path, body in api.writes if path == "issues"]
-        self.assertEqual(titles, ["Daily: sunrise-mod-wasm compiled_guest_strict_math"])
-        closed = [path for method, path, _ in api.writes if method == "PATCH"]
-        self.assertCountEqual(closed, ["issues/7", "issues/8"])
-        # A named failure beside a command that failed without one (a build failure): both are filed.
-        api = Api(jobs)
-        broken = {"shard": "sunrise-mod-points", "reason": "failed without a failed test (a build failure)",
-                  "cargo_exit": 101}
-        self.run_summary(api, [dict(own, incomplete=[broken])], results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
-        created = {body["title"]: body["body"] for _, path, body in api.writes if path == "issues"}
-        self.assertEqual(sorted(created), ["Daily: sunrise-mod-wasm compiled_guest_strict_math",
-                                           "Daily: wasm-mods / fixture did not complete"])
-        self.assertIn("`sunrise-mod-points`: failed without a failed test (a build failure) (cargo exit 101)",
-                      created["Daily: wasm-mods / fixture did not complete"])
-        # The step failed before any report was uploaded: the leg's one issue, never a crash of the filing.
-        api = Api(jobs)
-        self.run_summary(api, [], results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
-        self.assertEqual([body["title"] for _, path, body in api.writes if path == "issues"],
-                         ["Daily: wasm-mods / fixture did not complete"])
-        # A failure there without a test name (a build error) is still the leg's one issue.
-        api = Api(jobs)
-        self.run_summary(api, [dict(own, problems=[])], results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
-        self.assertEqual([body["title"] for _, path, body in api.writes if path == "issues"],
-                         ["Daily: wasm-mods / fixture did not complete"])
 
     def test_a_failing_test_names_the_pull_requests_that_changed_its_package_since_the_previous_run(self):
         shard = "shards / ignored-tests-shards (sunrise-world)"
@@ -975,7 +931,7 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertEqual(jobs["schedule-dispatch"]["runs-on"], "ubuntu-latest")
         self.assertIn("--ref main -f dry_run=false -f scheduled=true", jobs["schedule-dispatch"]["steps"][0]["run"])
         resolve = jobs["resolve"]["steps"][-1]
-        self.assertIn('if [ "$SCHEDULED" = true ] && [ "$DRY_RUN" != true ]', resolve["run"],
+        self.assertIn('if [ "$SCHEDULED" = true ] && [ "$DRY_RUN" = false ]', resolve["run"],
                       "only the schedule stops on a commit already tested; a hand dispatch retries")
         self.assertEqual(self.workflow["on"]["workflow_dispatch"]["inputs"]["scheduled"]["default"], "false")
         self.assertEqual(jobs["resolve"]["if"], "github.event_name == 'workflow_dispatch'")
@@ -984,13 +940,15 @@ class DailyWorkflowTests(unittest.TestCase):
     def test_only_main_without_dry_run_writes(self):
         jobs = self.workflow["jobs"]
         step = jobs["resolve"]["steps"][-1]
-        self.assertEqual(step["env"]["DRY_RUN"], "${{ inputs.dry_run || github.ref != 'refs/heads/main' }}")
-        # A writing run takes only a commit of main: an unmerged commit is never tagged, signed or published.
-        self.assertIn('git merge-base --is-ancestor "$sha" refs/remotes/origin/main', step["run"])
+        # Exactly main or release/26.3, dispatched in this repository, decide it (release_train.py authorize).
+        self.assertEqual(step["env"]["DRY_RUN"], "${{ steps.auth.outputs.dry_run }}")
+        self.assertIn("authorize --publish-kind daily", jobs["resolve"]["steps"][-2]["run"])
+        # A writing run takes only a commit of its branch: an unmerged commit is never tagged, signed or published.
+        self.assertIn('git merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch"', step["run"])
         self.assertEqual(jobs["summary"]["steps"][-1]["env"]["DRY_RUN"], "${{ needs.resolve.outputs.dry_run }}")
         self.assertEqual(jobs["nightly"]["if"],
-                         "always() && needs.summary.outputs.green == 'true' && needs.resolve.outputs.dry_run == 'false'"
-                         " && (needs.sdk-publish.result == 'success' || needs.sdk-publish.result == 'skipped')")
+                         "!cancelled() && needs.green.result == 'success' && needs.resolve.outputs.branch == 'main'"
+                         " && needs.nightly-branch.result == 'success'")
         self.assertEqual(self.workflow["concurrency"]["cancel-in-progress"], "false")
         self.assertEqual(jobs["sdk"]["with"]["commit"], "${{ needs.resolve.outputs.commit }}")
         self.assertNotIn("permissions", jobs["sdk"], "the build leg publishes nothing")
@@ -1001,6 +959,9 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertEqual(jobs["sdk-windows-macos"]["name"], "sdk")
         self.assertEqual(summary.PART_OF, {"sdk-windows-macos": "sdk"})
         self.assertEqual(jobs["fn-replace-check"]["needs"], ["resolve", "sdk"])
+        # The book's quickstart is an ordinary leg that tests this run's own SDK, never the previous Nightly's.
+        self.assertEqual(jobs["book-quickstart"]["needs"], ["resolve", "sdk"])
+        self.assertEqual(jobs["book-quickstart"]["with"]["own_sdk"], "true")
         self.assertIn("sdk-windows-macos", jobs["summary"]["needs"])
         publish = jobs["sdk-publish"]
         self.assertEqual(publish["needs"], ["resolve", "summary", "sdk", "sdk-windows-macos"])
@@ -1016,7 +977,9 @@ class DailyWorkflowTests(unittest.TestCase):
         # The one publish step, signed only on main through the called workflow's `release` environment.
         self.assertEqual(publish["uses"], "./.github/workflows/sdk-publish.yml")
         self.assertEqual(publish["with"], {"commit": "${{ needs.resolve.outputs.commit }}", "publish": "true"})
-        self.assertIn("sdk-publish", jobs["nightly"]["needs"])
+        # The nightly waits for the SDK through `green`, which needs it published (or already out).
+        self.assertIn("sdk-publish", jobs["green"]["needs"])
+        self.assertIn("green", jobs["nightly"]["needs"])
         report = jobs["sdk-publish-report"]
         self.assertIn("sdk-publish", report["needs"])
         self.assertIn("daily_summary.py --after sdk-publish", report["steps"][-1]["run"])
@@ -1043,7 +1006,7 @@ class DailyWorkflowTests(unittest.TestCase):
         toolchain = next(step for step in steps if step.get("uses", "").startswith("dtolnay/rust-toolchain@"))
         probe = next(step for step in steps if step.get("name") == "Two mod libraries share the game's exact Rust state")
         api = next(step for step in steps if step.get("name") ==
-                   "The starter mod checks against the API source alone, host and wasm32")
+                   "The starter mod checks against the API source alone")
         for leg in json.loads(legs["env"]["ALL"]):
             with self.subTest(leg=leg["name"]):
                 wants_probe = leg["name"] in ("linux", "windows")
@@ -1062,7 +1025,6 @@ class DailyWorkflowTests(unittest.TestCase):
         build = 'python tools/sdk_api_source.py build "$RUNNER_TEMP/api-source"'
         check = ('python tools/sdk_api_source.py check "$RUNNER_TEMP/api-source" '
                  '--scratch "$RUNNER_TEMP/sdk-api-source-check"')
-        self.assertLess(api_commands.index("rustup target add wasm32-unknown-unknown"), api_commands.index(build))
         self.assertLess(api_commands.index(build), api_commands.index(check))
 
     def test_the_sdk_build_packs_exactly_the_archives_a_release_needs(self):
@@ -1086,23 +1048,13 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertEqual(steps["actions/upload-artifact@v4"]["with"]["name"], "sdk-leg-${{ matrix.name }}")
         self.assertNotIn("env", build, "no hand-set archive name")
 
-        # The launcher and the mod tool ask for sunrise_mod_package::sdk::Asset::name(kind, target, side):
-        # `{kind}-{target}{-server}.tar.xz`, the kinds named runtime, api and engine; and the release's other files
-        # are its BESIDE_ASSETS. Producer (the legs), publish check (SDK_ARCHIVES, SDK_ASSETS) and launcher agree.
-        sdk = (ROOT / "crates/sunrise-mod-package/src/sdk.rs").read_text()
-        self.assertIn('format!("{}-{target}{suffix}.tar.xz", kind.name())', sdk)
-        self.assertIn('let suffix = if kind.per_side() && side == Side::Server {', sdk)
-        for kind in ("runtime", "api", "engine", "build-data", "api-source", "tool"):
-            self.assertIn(f'=> "{kind}",', sdk)
-        self.assertIn('pub const INDEX: &str = "sdk.json";', sdk)
-        self.assertIn('pub const BESIDE_ASSETS: [&str; 3] = [INDEX, "SHA256SUMS", "SHA256SUMS.sig"];', sdk)
         self.assertEqual(set(nightly.SDK_ASSETS) - set(nightly.SDK_ARCHIVES), {"sdk.json", "SHA256SUMS", "SHA256SUMS.sig"})
 
     def test_the_sdk_is_signed_and_published_only_on_main(self):
         from tests.test_ci_concurrency import ROOT, yaml
         workflow = yaml.load((ROOT / ".github/workflows/sdk-publish.yml").read_text(), Loader=yaml.BaseLoader)
         jobs = workflow["jobs"]
-        on_main = "inputs.publish && github.ref == 'refs/heads/main'"
+        on_main = "needs.authorize.outputs.publish == 'true'"
         self.assertEqual(jobs["sign"]["environment"], f"${{{{ {on_main} && 'release' || '' }}}}")
         sign = jobs["sign"]["steps"][-3]
         self.assertEqual(sign["run"], 'bash tools/ci/sign_release.sh "$TAG" dist/*')
@@ -1115,7 +1067,7 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertEqual(jobs["sign"]["steps"][0]["with"]["sparse-checkout"], "tools/ci/sign_release.sh")
         on_main_check = jobs["sign"]["steps"][1]
         self.assertEqual(on_main_check["if"], f"${{{{ {on_main} }}}}")
-        self.assertIn('git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main', on_main_check["run"])
+        self.assertIn('git merge-base --is-ancestor "$COMMIT" "refs/remotes/origin/$GITHUB_REF_NAME"', on_main_check["run"])
         # The jobs that read the legs' output cannot write; the legs' artifacts only, not an earlier attempt's own.
         for job in ("index", "sign"):
             self.assertEqual(jobs[job]["permissions"], {"contents": "read"}, job)
@@ -1124,7 +1076,8 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertNotIn("environment", jobs["index"])
         self.assertNotIn("environment", jobs["publish"])
         publish = {step.get("name"): step for step in jobs["publish"]["steps"]}
-        self.assertEqual(jobs["publish"]["env"]["PUBLISH"], f"${{{{ {on_main} }}}}")
+        self.assertEqual(jobs["publish"]["env"]["PUBLISH"], "${{ needs.authorize.outputs.publish }}")
+        self.assertEqual(jobs["authorize"]["steps"][-1]["env"]["DRY_INPUT"], "${{ !inputs.publish }}")
         self.assertEqual(publish["Release sdk-<sha>"]["if"], "env.PUBLISH == 'true'")
         order = [step.get("name") for step in jobs["publish"]["steps"]]
         self.assertLess(order.index("The signature, checked as the launcher checks it"), order.index("Release sdk-<sha>"))
@@ -1159,7 +1112,9 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertIn("parity", jobs["summary"]["needs"])
         self.assertIn("sdk-windows-macos", jobs["summary"]["needs"])
         self.assertIn("!cancelled()", jobs["summary"]["if"])
-        self.assertIn("needs.summary.outputs.green == 'true'", jobs["nightly"]["if"])
+        self.assertIn("needs.summary.outputs.green == 'true'", jobs["green"]["if"])
+        self.assertIn("needs.parity.result == 'success'", jobs["green"]["if"])
+        self.assertIn("needs.green.result == 'success'", jobs["nightly"]["if"])
         self.assertIn("needs.summary.outputs.sdk_green == 'true'", jobs["sdk-publish"]["if"])
         self.assertNotIn("parity-report", jobs)
 
@@ -1179,6 +1134,8 @@ class DailyWorkflowTests(unittest.TestCase):
             for ref, dry, commit, required in (("main", "false", "head", "true"),
                                                ("main", "false", "older", "true"),
                                                ("main", "true", "head", "false"),
+                                               ("release/26.3", "false", "head", "true"),
+                                               ("nightly/26.3", "false", "head", "false"),
                                                ("topic", "false", "head", "false")):
                 with self.subTest(ref=ref, dry=dry, commit=commit):
                     out.unlink(missing_ok=True)

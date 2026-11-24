@@ -179,6 +179,9 @@ impl<'r> StateProviderBindings<'r> {
     }
 }
 impl PredicateBlockResolver for StateProviderBindings<'_> {
+    fn block_registry(&self) -> Option<&BlockRegistry> {
+        Some(self.registry)
+    }
     fn predicate_state(&self, json: &str) -> Result<BlockStateId, DecodeError> {
         self.state(json, false)
     }

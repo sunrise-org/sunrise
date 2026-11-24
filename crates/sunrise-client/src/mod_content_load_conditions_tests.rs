@@ -252,9 +252,9 @@ fn a_higher_mod_adds_back_what_a_lower_one_removed() {
     .unwrap();
     // The fold (TagLayers::build) reads the entries in order: x, sand out,
     // sand back in, y.
-    let layers = sunrise_world::tag_layers::TagLayers::from_file(&merged);
+    let layers = sunrise_world::tag_layers::TagLayers::from_file(merged).unwrap();
     assert_eq!(
-        layers.build(|_| Vec::new()),
+        layers.build(|_| true, |_| None).unwrap(),
         ["a:x", "minecraft:sand", "b:y"]
     );
 }

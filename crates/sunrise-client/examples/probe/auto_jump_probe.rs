@@ -115,6 +115,7 @@ pub fn main() -> Result<()> {
         );
         if ready {
             MotionWorld {
+                side: sunrise_client::motion::dry_side(),
                 entities: &[],
                 player: &mut player,
                 scene: &mut scene,

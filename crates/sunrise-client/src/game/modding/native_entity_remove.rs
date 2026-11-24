@@ -2,19 +2,18 @@
 //! (docs/modding/src/how-to/native-mods.md, "Entity and level handles", #7387): `Entity.discard`
 //! and `Entity.remove` with a reason. Nothing dies and nothing drops loot.
 //! `Entity.spawnAtLocation` drops an item at one.
-//! Outside a mod block-entity tick, `Entity.setRemoved` tells the world at the call:
-//! the handle and selectors stop finding it, passengers get off and mods hear it leave.
-//! Inside a transaction the handle stops finding it at the call, and the rest waits for the root
-//! commit (`transactions/entities.rs`); an abort leaves it as it was.
-//! Dropped-item removal inside that tick is instead staged with its final snapshot;
-//! scoped reads hide it immediately, while the leave notification waits for publication. A mob's list entry is marked at once too; the other
+//! `Entity.setRemoved` tells the world at the call: the handle and selectors stop finding it,
+//! passengers get off and mods hear it leave. Inside a transaction the handle stops finding it at
+//! the call and the rest waits for the root commit (`transactions/entities.rs`); an abort leaves
+//! it as it was. A mob's list entry is marked at once too; the other
 //! kinds stay in their lists until the level's next sweep of departed
 //! entities, a few times per tick, so a hook that removes one never shifts the
-//! lists the game is walking. A vehicle with a chest spills it at that sweep, as vanilla's `remove` does.
+//! lists the game is walking. A container vehicle spills before its logical removal;
+//! only taking the row out of its list waits for the sweep.
 use super::{Game, commands::Target};
-use mod_api::{EntityRef, RemovalReason};
-use sunrise_client::items::ItemStack;
-use sunrise_core::{geometry::Vec3, position::BlockPos};
+use mod_api::{EntityRef, LevelWriteError, RemovalReason};
+use sunrise_client::{entities::ItemEntity, items::ItemStack};
+use sunrise_core::geometry::Vec3;
 
 impl Game<'_> {
     /// Removes the entity with no death and no loot (`Entity.discard`): a
@@ -34,9 +33,7 @@ impl Game<'_> {
         match self.native_entity_target(entity) {
             // A part leaves the level with its dragon, never alone.
             None | Some(Target::Player | Target::Guest(_) | Target::DragonPart(_)) => false,
-            Some(Target::Item(id)) if self.block_entity_tick_key.is_some() => {
-                self.stage_tick_item(id, None).unwrap_or(false)
-            }
+            Some(t) if self.persist.preparing_vehicle_removals.contains(&t) => false,
             Some(t) if self.journal_removal(entity, t, killed) => true,
             Some(Target::Mob(id)) => {
                 self.remove_mob_now(id, killed);
@@ -48,39 +45,82 @@ impl Game<'_> {
             }
         }
     }
+    /// Kills the entity as `/kill` does (`Entity.kill(ServerLevel)` and
+    /// `LivingEntity.kill(ServerLevel)` -> `hurtServer(level, damageSources().genericKill(), Float.MAX_VALUE)`):
+    /// a living entity falls and drops its loot, and any other entity is removed
+    /// and posts `minecraft:entity_die`. Reaches entities in parked dimensions.
+    /// An open transaction stages the kill in its level; its effects wait for
+    /// the root commit. A live target that refuses the kill returns `Ok(false)`.
+    pub(super) fn entity_kill(&mut self, entity: EntityRef) -> Result<bool, LevelWriteError> {
+        if !self.is_logical_server() {
+            return Err(LevelWriteError::Unavailable);
+        }
+        if self.native_lifecycle.epoch() != Some(entity.epoch())
+            || self.held_out.contains(&entity.id())
+        {
+            return Err(LevelWriteError::Stale);
+        }
+        let sunrise_client::join_seq::residency::table::EntityLookup::Found { location, value } =
+            self.server_resident_entity(entity.id())
+        else {
+            return Err(LevelWriteError::Stale);
+        };
+        if matches!(value, Target::DragonPart(_)) {
+            return Ok(false);
+        }
+        if location.owner.dimension != self.dim.key() && !self.transactions.is_empty() {
+            return Err(LevelWriteError::InTransaction);
+        }
+        if self.transactions.is_empty() {
+            return Ok(self.kill_target(value));
+        }
+        if !self.can_kill_target_in_level(value) {
+            return Ok(false);
+        }
+        if self.journal_kill(entity) {
+            Ok(true)
+        } else {
+            Ok(self.kill_target(value))
+        }
+    }
     /// `Entity.setRemoved` of `t`, which `entity` names and is no mob, player or dragon part.
     pub(in crate::game) fn remove_target_now(&mut self, entity: EntityRef, t: Target) {
-        // Read before the entity counts as removed: its handle stops resolving.
-        let vehicle_y = match t {
-            Target::Boat(id) => self.boats.iter().find(|b| b.id == id).map(|b| b.position.y),
-            Target::Cart(id) => self.carts.iter().find(|c| c.id == id).map(|c| c.position.y),
-            _ => None,
-        };
-        let passengers: Vec<_> = self
-            .entity_passengers(entity)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|passenger| {
-                vehicle_y.is_none()
-                    || !matches!(self.native_entity_target(*passenger), Some(Target::Mob(_)))
-            })
-            .collect();
+        let id = entity.id();
+        if matches!(t, Target::Boat(_) | Target::Cart(_)) {
+            self.with_vehicle_removal_effects(
+                t,
+                |game| game.prepare_vehicle_removal(t, id),
+                |game| {
+                    // Keep the logical removal visible after the guard is released.
+                    game.persist.removals.push(t);
+                    game.persist.notified_vehicle_removals.insert(id);
+                    game.score_destroyed_vehicle_once(id);
+                    game.native_entity_left(id);
+                },
+            );
+            return;
+        }
+        let position = self.target_position(t);
         // `Entity.setRemoved`: the reason first, so the hooks below see
-        // it removed; then the passengers get off and the level is told.
-        // Only players and mobs ride, so this kind has no vehicle to leave.
+        // it removed; then the riding links are ended and the level is told.
+        let mount = self.native_vehicle_id(t);
         self.persist.removals.push(t);
+        if let Some(vehicle) = mount {
+            // The object is already leaving even if its dismount is vetoed.
+            self.native_mob_may_ride(entity.id(), vehicle, false);
+            self.release_removed_vehicle(vehicle);
+        }
         self.retire_vehicle_registration(t);
-        if vehicle_y.is_some() {
+        if matches!(
+            t,
+            Target::Stand(_) | Target::Tnt(_) | Target::Other(_) | Target::Cushion(_)
+        ) {
+            // The physical sweep uses the same destruction paths, but a
+            // passenger veto here must not trigger another attempt there.
             self.persist.notified_vehicle_removals.insert(entity.id());
         }
-        for passenger in passengers {
-            self.entity_stop_riding(passenger);
-        }
-        if let Some(y) = vehicle_y {
-            // Notify actual Mob edges here, including rejected objects.
-            // A reentrant physical sweep must not notify them again.
-            self.dismount_destroyed_vehicle_mobs(entity.id(), y);
-            self.score_destroyed_vehicle_once(entity.id());
+        if let Some([_, y, _]) = position {
+            self.dismount_removed_passengers(entity.id(), y);
         }
         self.native_entity_left(entity.id());
     }
@@ -130,15 +170,53 @@ impl Game<'_> {
             .then(|| EntityRef::new(entity.epoch(), id))
     }
     /// A mob leaves the level: its effects act first when it was killed.
-    fn remove_mob_now(&mut self, id: u32, killed: bool) {
+    pub(super) fn remove_mob_now(&mut self, id: u32, killed: bool) {
+        self.remove_mob_after(id, killed, |_| {});
+    }
+
+    /// Run the caller's preparation and the killed effects while the mob still resolves.
+    pub(super) fn remove_mob_after(
+        &mut self,
+        id: u32,
+        killed: bool,
+        prepare: impl FnOnce(&mut Self),
+    ) {
         if !self.mobs.iter().any(|m| m.id == id && !m.removed) {
             return;
         }
-        if killed {
-            self.mob_removal_effects(id);
+        if self
+            .with_removal_preparation(Target::Mob(id), |game| {
+                prepare(game);
+                if killed {
+                    game.mob_removal_effects(id);
+                }
+            })
+            .is_some()
+            && self.mobs.iter().any(|m| m.id == id && !m.removed)
+        {
+            self.finish_mob_removal(id);
         }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-            m.removed = true;
+    }
+
+    /// `Entity.setRemoved` for a mob, also reached by the tick and the root
+    /// transaction commit. A departing rider gets off before its own passengers.
+    pub(in crate::game) fn finish_mob_removal(&mut self, id: u32) {
+        let Some(mob) = self.mob_object_mut(id) else {
+            return;
+        };
+        mob.removed = true;
+        let position = mob.position;
+        self.last_hurt_by_player.remove(&id);
+        self.dismount_mob(id);
+        self.dismount_removed_passengers(id, position.y);
+        if self.has_seated_passengers(id)
+            && let Some(mob) = self.mob_object(id)
+        {
+            let vehicle = super::persist::RemovedVehicle::Mob {
+                position,
+                kind: super::native_hooks::mob_kind(mob),
+            };
+            self.retain_removed_vehicle(id, vehicle);
         }
         self.native_entity_left(id);
     }
@@ -156,55 +234,31 @@ impl Game<'_> {
                 .iter()
                 .map(|e| e.id.trim_start_matches("minecraft:"))
                 .collect();
-            let (bounds, mut random) = (m.bounds(), m.random.clone());
-            self.effects_on_death(&names, bounds, false, Some(id), Some(&mut random));
+            let (bounds, silent, mut random) = (m.bounds(), m.silent, m.random.clone());
+            self.effects_on_death(&names, bounds, silent, Some(id), Some(&mut random));
             if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                 m.random = random;
             }
         }
     }
-    /// `AbstractMinecartContainer.remove` and `AbstractChestBoat.remove`: a
-    /// chest or hopper minecart or a chest boat spills what it holds
-    /// (`Containers.dropContents`) for every destroying reason.
-    fn spill_vehicle(&mut self, t: Target) {
-        let id = match t {
-            Target::Cart(id) | Target::Boat(id) => id,
-            _ => return,
-        };
-        // What an open menu edited goes back to the vehicle first.
-        self.release_vehicle_container(id);
-        let take = |at, items: &mut Vec<_>| {
-            if items.iter().all(Option::is_none) {
-                None
-            } else {
-                Some((at, std::mem::take(items)))
+    /// Retires the item rows for removals already announced by `remove_target_now`. The item pass
+    /// also sweeps these while its rows are resident, before it can tick, merge or pick them up.
+    pub(super) fn native_item_removals_flush(&mut self, mut retired: impl FnMut(&ItemEntity)) {
+        let dropped = &mut self.dropped;
+        self.persist.removals.retain(|target| {
+            let Target::Item(id) = *target else {
+                return true;
+            };
+            if let Some(i) = dropped.iter().position(|item| item.id == id) {
+                retired(&dropped.remove(i));
             }
-        };
-        let held = match t {
-            Target::Cart(_) => self
-                .carts
-                .iter()
-                .position(|c| c.id == id)
-                .and_then(|i| self.carts.update(i, |c| take(c.position, &mut c.items))),
-            _ => self
-                .boats
-                .iter()
-                .position(|b| b.id == id)
-                .and_then(|i| self.boats.update(i, |b| take(b.position, &mut b.items))),
-        };
-        let Some((at, items)) = held else {
-            return;
-        };
-        let at = BlockPos {
-            x: at.x.floor() as i32,
-            y: at.y.floor() as i32,
-            z: at.z.floor() as i32,
-        };
-        self.with_level(|_, level, _| level.drop_lost_contents(at, items));
-        self.flush_spill();
+            false
+        });
     }
+
     /// Takes out the entities mods removed since the last sweep.
     pub(super) fn native_removals_flush(&mut self) {
+        self.native_item_removals_flush(|_| {});
         if self.persist.removals.is_empty() {
             return;
         }
@@ -213,14 +267,25 @@ impl Game<'_> {
         let pending = std::mem::take(&mut self.persist.removals);
         let mut already_marked = Vec::new();
         for &target in &pending {
-            if matches!(target, Target::Boat(_) | Target::Cart(_))
-                && !self.persist.destroying_vehicles.insert(target)
-            {
-                already_marked.push(target);
+            match target {
+                // Discard already announced the leave. Remove these owning rows
+                // before any callback in the sweep can resolve them again.
+                Target::Projectile(id) => self.remove_projectile(id),
+                Target::Trident(id) => {
+                    self.tridents.retain(|t| t.id != id);
+                    self.forget_entity(id);
+                }
+                Target::Boat(_) | Target::Cart(_)
+                    if !self.persist.destroying_vehicles.insert(target) =>
+                {
+                    already_marked.push(target);
+                }
+                _ => {}
             }
         }
         for t in pending {
             match t {
+                Target::Projectile(_) | Target::Trident(_) => {}
                 Target::Crystal(id) => self.crystals.retain(|c| c.id != id),
                 Target::Dragon(id) => {
                     if self.dragon.as_ref().is_some_and(|d| d.id == id) {
@@ -229,13 +294,13 @@ impl Game<'_> {
                 }
                 Target::Boat(id) | Target::Cart(id) => {
                     let marked = !already_marked.contains(&t);
-                    self.spill_vehicle(t);
-                    // Actual native removals already notified the edges. A
-                    // raw deferred entry still needs its own guarded pass.
-                    if marked && !self.persist.notified_vehicle_removals.contains(&id) {
+                    if self.persist.notified_vehicle_removals.remove(&id) {
+                        self.take_destroyed_vehicle_row(t, id);
+                    } else if marked {
+                        // A raw deferred entry still needs the whole removal.
                         self.persist.destroying_vehicles.remove(&t);
+                        self.kill_vehicle_object(t);
                     }
-                    self.kill_vehicle_object(t);
                     self.score_destroyed_vehicle_once(id);
                     if marked {
                         self.persist.destroying_vehicles.remove(&t);
@@ -243,8 +308,19 @@ impl Game<'_> {
                     self.native_entity_left(id);
                 }
                 Target::Player | Target::Guest(_) | Target::Mob(_) => {}
+                // Both command kill and handle removal already notified this row's
+                // leave. Retire its owning slot so tracking drops the row too.
+                Target::General(id) => {
+                    let rows = &mut self.resident_entities.general.rows;
+                    if let Some(index) = rows.iter().position(|row| row.id == id) {
+                        rows.remove(index);
+                        self.forget_entity(id);
+                    }
+                }
                 // The remaining kinds `/kill` already removes with no death.
-                t => self.kill_target_in_level(t),
+                t => {
+                    self.kill_target_in_level(t);
+                }
             }
         }
     }
@@ -255,7 +331,7 @@ mod tests {
     use crate::game::api_values::{StackReadError, TryIntoApi, test_snapshot};
     #[test]
     #[ignore = "daily"]
-    fn destroying_a_cart_spills_all_slots_after_the_removal_flush() {
+    fn destroying_a_cart_spills_all_slots_before_removing_its_row() {
         use super::super::{
             minecarts::{CartKind, Minecart},
             native_entity_refs::tests::with_game,
@@ -269,9 +345,8 @@ mod tests {
             game.carts.push(cart);
             let entity = game.entity(600).unwrap();
             assert!(game.entity_remove(entity, RemovalReason::Killed));
-            assert!(game.dropped.is_empty());
-            game.native_removals_flush();
-            assert!(game.carts.is_empty());
+            assert!(game.entity(600).is_none());
+            assert_eq!(game.carts.len(), 1);
             let mut totals = std::collections::BTreeMap::new();
             for item in game.dropped.iter() {
                 *totals.entry(item.stack.item.to_string()).or_insert(0) += item.stack.count;
@@ -285,6 +360,7 @@ mod tests {
             );
             let count = game.dropped.len();
             game.native_removals_flush();
+            assert!(game.carts.is_empty());
             assert_eq!(game.dropped.len(), count);
         });
     }
@@ -292,16 +368,21 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn selectors_stop_matching_a_discarded_entity_before_the_sweep() {
-        use super::super::{commands::OtherEntity, native_entity_refs::tests::with_game};
+        use super::super::{
+            commands::OtherEntity,
+            native_entity_refs::tests::{fixture_resident_column, with_game},
+        };
         use sunrise_core::geometry::Vec3;
 
         with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
             game.others.push(OtherEntity {
+                size_answer: None,
                 attachment_lifetime: Default::default(),
                 knot_check: None,
                 eye: None,
                 join: Default::default(),
-                item_transformation: None,
+                display: None,
                 interaction: None,
                 id: 12,
                 kind: "minecraft:marker".into(),
@@ -407,11 +488,12 @@ mod tests {
                 .chunks
                 .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
             game.others.push(OtherEntity {
+                size_answer: None,
                 attachment_lifetime: Default::default(),
                 knot_check: None,
                 eye: None,
                 join: Default::default(),
-                item_transformation: None,
+                display: None,
                 interaction: None,
                 id: 12,
                 kind: "minecraft:text_display".into(),
@@ -426,6 +508,7 @@ mod tests {
             assert_eq!(
                 SaveDir::new(root.clone(), shape, None)
                     .load_entities(0, 0)
+                    .unwrap()
                     .len(),
                 1
             );
@@ -438,6 +521,7 @@ mod tests {
             assert!(
                 SaveDir::new(root.clone(), shape, None)
                     .load_entities(0, 0)
+                    .unwrap()
                     .is_empty()
             );
             std::fs::remove_dir_all(root).unwrap();
@@ -559,6 +643,7 @@ mod tests {
                 pos: [0, 64, 0],
                 facing: 2,
                 variant: "minecraft:kebab".into(),
+                asset: None,
                 width: 1,
                 height: 1,
                 check_interval: 0,
@@ -597,11 +682,12 @@ mod tests {
 
         with_game(|game| {
             game.others.push(OtherEntity {
+                size_answer: None,
                 attachment_lifetime: Default::default(),
                 knot_check: None,
                 eye: None,
                 join: Default::default(),
-                item_transformation: None,
+                display: None,
                 interaction: None,
                 id: 12,
                 kind: "minecraft:marker".into(),
@@ -614,6 +700,95 @@ mod tests {
             assert!(game.run_command("kill @e[type=minecraft:marker]"));
             assert!(game.others.is_empty());
             assert!(!game.persist.raw.contains_key(&12));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn entity_kill_kills_mobs_non_mobs_parked_entities_and_refuses_stale() {
+        use super::super::native_entity_refs::tests::{fixture_resident_column, with_game};
+        use super::*;
+        use sunrise_client::{entities::ExperienceOrb, mobs::Mob};
+
+        with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
+            // Killing a living mob in the current level kills it; a second kill
+            // while already dead returns Ok(false).
+            let zombie_kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombie")
+                .unwrap()
+                .clone();
+            let zombie_id = game.take_entity_id();
+            game.mobs
+                .push(Mob::new(zombie_id, zombie_kind, Vec3::ZERO, 0.0));
+            let zombie = game.entity(zombie_id).unwrap();
+            assert_eq!(zombie.kill(game), Ok(true));
+            assert!(
+                !game
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == zombie_id)
+                    .unwrap()
+                    .alive()
+            );
+            assert_eq!(zombie.kill(game), Ok(false));
+
+            // Killing a non-mob entity (experience orb) removes it and makes
+            // the handle stale afterwards.
+            let orb_id = game.take_entity_id();
+            game.orbs.push(ExperienceOrb::new(
+                orb_id,
+                Vec3::new(1.0, 70.0, 1.0),
+                Vec3::ZERO,
+                5,
+            ));
+            let orb = game.entity(orb_id).unwrap();
+            assert_eq!(orb.kill(game), Ok(true));
+            assert!(game.orbs.iter().all(|o| o.id != orb_id));
+            assert_eq!(orb.kill(game), Err(LevelWriteError::Stale));
+
+            // Stale handle from another epoch is refused with Stale.
+            let stale_epoch = mod_api::WorldEpoch::new(
+                game.native_lifecycle.epoch().unwrap().get().wrapping_add(1),
+            );
+            let stale = EntityRef::new(stale_epoch, zombie_id);
+            assert_eq!(stale.kill(game), Err(LevelWriteError::Stale));
+
+            // Killing an entity in a parked level routes there outside a
+            // transaction and refuses with InTransaction inside one.
+            let cow_kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+            let cow_id = game.take_entity_id();
+            game.mobs.push(Mob::new(cow_id, cow_kind, Vec3::ZERO, 0.0));
+            let cow = game.entity(cow_id).unwrap();
+            let nether = super::super::Dim::Nether;
+            game.enter_command_level(nether).unwrap();
+
+            game.storage_scope(|game, _| {
+                assert_eq!(cow.kill(game), Err(LevelWriteError::InTransaction));
+                ((), false)
+            });
+
+            assert_eq!(cow.kill(game), Ok(true));
+            assert_eq!(game.dim, nether);
+            assert!(
+                !game
+                    .levels
+                    .parked_mobs(super::super::Dim::Overworld)
+                    .unwrap()
+                    .iter()
+                    .find(|m| m.id == cow_id)
+                    .unwrap()
+                    .alive()
+            );
+            assert_eq!(cow.kill(game), Ok(false));
+
+            // Client side is refused with Unavailable.
+            let role = game.options.execution_role;
+            game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
+            assert_eq!(cow.kill(game), Err(LevelWriteError::Unavailable));
+            game.options.execution_role = role;
         });
     }
 }

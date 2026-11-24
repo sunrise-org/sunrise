@@ -6,9 +6,8 @@ pub trait Hooks {
     /// every server sound not bound to an entity, mobs' own sounds included
     /// (`Entity.playSound` plays at the entity's position). A mod may change
     /// `sound`, `source`, `volume` and `pitch`, or set `cancel` and no player
-    /// hears it; `original_volume` and `original_pitch` are as asked. A sound
-    /// left unplayable (a volume or pitch that isn't finite and at least 0)
-    /// is dropped. Sounds the server's level plays during
+    /// hears it; `original_volume` and `original_pitch` are as asked. The sound
+    /// engine processes the supplied volume and pitch. Sounds the server's level plays during
     /// the tick are asked as they go out, at the end of the tick, with the state
     /// then. `/playsound` sends its packet directly and isn't asked, as in
     /// vanilla on the server. On the client, incoming sound packets ask before
@@ -16,9 +15,13 @@ pub trait Hooks {
     /// requests ask here too. Canceling a sound does not cancel its action or prediction.
     /// Server and client requests are separate:
     /// `HostSide` identifies which one is being edited. UI and sound-engine-only
-    /// playback do not ask this hook. Both sides.
+    /// playback do not ask this hook. For a transactional server request, the hook runs
+    /// synchronously at the call; only the resolved effect is deferred. Sounds emitted by a
+    /// level-sound listener are not re-dispatched to level-sound listeners. Both sides.
     #[hook(
+        dispatch = "api_carrier",
         side = "both",
+        version = 3,
         contract = "cancel",
         out = "cancel",
         neoforge = "PlayLevelSoundEvent.AtPosition",
@@ -43,14 +46,18 @@ pub trait Hooks {
     /// mooshroom, snow golem, bogged, copper golem), dye on a sheep, an axe on a
     /// copper golem, an allay's item and duplication, a ghastling hatching, a
     /// trident thrown (the trident) or riptide (the player), and a mod's sound
-    /// bound to an entity. Asked after the tick's other sounds. The fields and
-    /// their rules are `play_level_sound_at_position`'s. Client entity-sound
+    /// bound to an entity. Queued server sounds are asked as they go out. For a transactional
+    /// server request, the hook runs synchronously at the call; only the resolved effect is
+    /// deferred. Sounds emitted by a level-sound listener are not re-dispatched to level-sound
+    /// listeners. The fields and their rules are `play_level_sound_at_position`'s. Client entity-sound
     /// packets ask before playback and keep following their emitter; an absent
     /// emitter plays nothing. `LocalPlayer.playSound` also asks this hook,
     /// including steps, falls, hurt, bundle clicks and consumption; these remain
     /// positional sounds, not following sounds. Both sides, distinguished by `HostSide`.
     #[hook(
+        dispatch = "api_carrier",
         side = "both",
+        version = 3,
         contract = "cancel",
         out = "cancel",
         neoforge = "PlayLevelSoundEvent.AtEntity",

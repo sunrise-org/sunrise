@@ -1,5 +1,6 @@
 mod stubs {
+    #[derive(Clone, Copy)]
     pub(super) struct SpawnReason;
+    #[derive(Clone, Copy)]
     pub(super) struct SpawnCheck;
-    pub(super) struct Spawner;
 }

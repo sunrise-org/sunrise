@@ -52,14 +52,21 @@ impl ChunkRecord {
         timestamp: u32,
         limits: Limits,
     ) -> io::Result<Self> {
-        let bytes = nbt::write_named(root, limits).map_err(|e| invalid(e.to_string()))?;
+        // `RegionFileStorage.write` is `NbtIo.write`, which has no nesting limit: a tree deeper
+        // than the read limit is written, and its read fails (see `nbt`).
+        let write = Limits {
+            max_depth: nbt::DISK_WRITE_NESTING_GUARD.max(limits.max_depth),
+            ..limits
+        };
+        let bytes = nbt::write_named(root, write).map_err(|e| invalid(e.to_string()))?;
         Ok(Self {
             compression,
             compressed: compression.encode(&bytes)?,
             timestamp,
         })
     }
-    fn check_compressed_size(&self) -> io::Result<()> {
+    /// Check the compressed payload's region-file limit before entering the write lock.
+    pub fn check_compressed_size(&self) -> io::Result<()> {
         if self.compressed.len() > MAX_COMPRESSED {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -86,6 +93,7 @@ impl ChunkRecord {
 
 pub struct RegionFile {
     file: File,
+    writable: bool,
     path: PathBuf,
     position: ChunkPos,
     offsets: [u32; 1024],
@@ -244,7 +252,7 @@ impl RegionFile {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_owned();
         let file = File::open(&path)?;
-        Self::from_file(path, file)
+        Self::from_file(path, file, false)
     }
 
     /// Open for reading and in-place writes (`write`, `clear`), creating an
@@ -257,14 +265,15 @@ impl RegionFile {
             .create(create)
             .truncate(false)
             .open(&path)?;
-        Self::from_file(path, file)
+        Self::from_file(path, file, true)
     }
 
-    fn from_file(path: PathBuf, mut file: File) -> io::Result<Self> {
+    fn from_file(path: PathBuf, mut file: File, writable: bool) -> io::Result<Self> {
         let position = position_from_path(&path)?;
         let (offsets, timestamps) = read_header(&mut file)?;
         let mut region = Self {
             file,
+            writable,
             path,
             position,
             offsets,
@@ -272,15 +281,17 @@ impl RegionFile {
             used: Vec::new(),
             first_free: 0,
         };
-        region.force(0, 2);
-        for offset in offsets.into_iter().filter(|&o| o != 0) {
-            region.force((offset >> 8) as usize, (offset & 255) as usize);
+        if writable {
+            region.force(0, 2);
+            for offset in offsets.into_iter().filter(|&o| o != 0) {
+                region.force((offset >> 8) as usize, (offset & 255) as usize);
+            }
+            region.first_free = region
+                .used
+                .iter()
+                .position(|&u| !u)
+                .unwrap_or(region.used.len());
         }
-        region.first_free = region
-            .used
-            .iter()
-            .position(|&u| !u)
-            .unwrap_or(region.used.len());
         Ok(region)
     }
 
@@ -372,6 +383,15 @@ impl RegionFile {
             return Err(e);
         }
         let old = self.offsets[i];
+        if !external
+            && old != 0
+            && crate::crash_fixture::selected()
+                == Some(crate::crash_fixture::CrashFixture::SaveRegion(chunk))
+            && directory.ends_with("region")
+        {
+            // Kill with the new payload written, but the header still pointing to the old one.
+            crate::crash_fixture::await_save_kill("region");
+        }
         self.offsets[i] = (start as u32) << 8 | sectors as u32;
         self.timestamps[i] = record.timestamp;
         self.write_header()?;
@@ -404,6 +424,33 @@ impl RegionFile {
     /// Flush the writes to the disk.
     pub fn sync(&self) -> io::Result<()> {
         self.file.sync_data()
+    }
+
+    /// `RegionFile.flush`: force file data and metadata. The read-only fallback
+    /// has no writes to force (and some systems require a writable handle).
+    pub fn sync_all(&self) -> io::Result<()> {
+        if self.writable {
+            self.file.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// `RegionFile.close`: pad the last sector, force data and metadata even if
+    /// padding fails, then close the file on either outcome.
+    pub fn close(self) -> io::Result<()> {
+        if !self.writable {
+            return Ok(());
+        }
+        let padding = self.file.metadata().and_then(|metadata| {
+            let len = metadata.len();
+            let padded = len.next_multiple_of(SECTOR as u64);
+            if padded == len {
+                Ok(())
+            } else {
+                self.file.set_len(padded)
+            }
+        });
+        self.file.sync_all().and(padding)
     }
 
     /// Clone the file handle so a caller can flush after releasing the region lock.
@@ -803,5 +850,23 @@ mod tests {
         assert_eq!(saved.compressed, record.compressed);
         assert_eq!(saved.timestamp, record.timestamp);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `NbtIo.write` has no nesting limit, so a chunk tree deeper than the read limit is
+    /// written whole; the read then fails with the depth error and the bytes stay on disk.
+    #[test]
+    fn a_tree_deeper_than_the_read_limit_is_written_and_fails_to_read() {
+        use sunrise_core::nbt::Tag;
+        let mut tag = Tag::compound([("leaf", Tag::Byte(1))]);
+        for _ in 0..600 {
+            tag = Tag::compound([("next", tag)]);
+        }
+        let root = NamedTag {
+            name: Default::default(),
+            tag,
+        };
+        let record = ChunkRecord::from_nbt(&root, Compression::None, 1, Limits::saved()).unwrap();
+        let error = record.nbt(Limits::saved()).unwrap_err();
+        assert!(error.to_string().contains("depth"), "{error}");
     }
 }

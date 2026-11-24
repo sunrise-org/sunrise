@@ -30,6 +30,7 @@ INFO = "tool.json"
 BUILD_INPUTS = ("Cargo.toml", "Cargo.lock", "tools/ci/rust-version", "tools/prebuilt_game.py", "tools/ci/mod_tool.py",
                 "tools/ci/sign_release.sh", ".github/workflows/mod-tool.yml")
 CONTRACT_SOURCE = "crates/sunrise-native-build/src/contract.rs"
+RELEASE_CONTRACT_SOURCE = "crates/sunrise-mod-package/src/page.rs"
 
 
 def run(*command: str, check: bool = True) -> str:
@@ -114,9 +115,11 @@ def decide(force: bool) -> None:
 def tool_json(commit: str, out: Path) -> None:
     """tool.json: what the signed sums bind to the tool beside each archive's hash."""
     contract = re.search(r"pub const CONTRACT: u32 = (\d+);", (ROOT / CONTRACT_SOURCE).read_text())
+    release = re.search(r"pub const RELEASE_CONTRACT: u32 = (\d+);", (ROOT / RELEASE_CONTRACT_SOURCE).read_text())
     date = run("git", "log", "-1", "--format=%cd", "--date=format-local:%Y-%m-%d", commit).strip()
     out.write_text(json.dumps({"schema": 1, "tag": TAG, "commit": commit, "date": date,
                                "native_contract": int(contract.group(1)),
+                               "release_contract": int(release.group(1)),
                                "rust": (ROOT / "tools/ci/rust-version").read_text().strip()}, indent=2) + "\n")
 
 

@@ -1,7 +1,7 @@
 //! Llamas on the game side: `AbstractChestedHorse.mobInteract` and
 //! `Llama.handleEating` (wheat and hay), chests, carpets, shearing a carpet
 //! off and riding.
-use super::Game;
+use super::{Game, item_abilities::ability};
 use sunrise_client::actions::Action;
 use sunrise_client::mobs::{equine, llama};
 use sunrise_core::random::RandomSource;
@@ -10,8 +10,7 @@ impl Game<'_> {
     fn llama_sound(&mut self, index: usize, sound: &str, volume: f32) {
         let at = self.mobs[index].center();
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
-        self.audio
-            .play(&format!("minecraft:{sound}"), Some(at), volume, pitch);
+        self.play_audio(&format!("minecraft:{sound}"), Some(at), volume, pitch);
     }
     /// `Llama.handleEating`: wheat and hay bales heal, age up a baby, raise
     /// the temper and, from a hay bale, put a tame adult in love.
@@ -76,7 +75,7 @@ impl Game<'_> {
         if !m.alive() || Some(m.id) == self.riding {
             return false;
         }
-        let sneaking = self.keys.held(Action::Sneak);
+        let sneaking = self.held_mapping(Action::Sneak);
         let (baby, tamed, vehicle) = (m.is_baby(), m.extra.tame, m.rider.is_some());
         let open_inventory = !baby && tamed && sneaking;
         if !vehicle && !open_inventory && !item.is_empty() {
@@ -108,12 +107,13 @@ impl Game<'_> {
         let m = &self.mobs[index];
         let carpet = |i: &str| i.ends_with("_carpet") && i.starts_with("minecraft:");
         if !item.is_empty() {
-            if item == "minecraft:shears" && m.extra.body_id().is_some_and(carpet) {
+            if self.held_shears(ability::SHEARS_REMOVE_ARMOR)
+                && m.extra.body_id().is_some_and(carpet)
+            {
                 // Equippable.canBeSheared: the carpet comes off.
                 let at = m.center();
                 let carpet = self.mobs[index].take_body_equipment().unwrap();
-                self.audio
-                    .play("minecraft:item.llama_carpet.unequip", Some(at), 1.0, 1.0);
+                self.play_audio("minecraft:item.llama_carpet.unequip", Some(at), 1.0, 1.0);
                 self.spawn_item(carpet, at, [0.0, 0.2, 0.0], 10);
                 self.damage_held_tool();
                 let id = self.mobs[index].id;

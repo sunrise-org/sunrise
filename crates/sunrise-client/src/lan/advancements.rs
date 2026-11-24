@@ -3,29 +3,28 @@
 //! advancements they complete grant their recipes (ServerRecipeBook.addRecipes:
 //! ClientboundRecipeBookAddPacket) and the advancements the player may see go
 //! out in ClientboundUpdateAdvancementsPacket (PlayerAdvancements.flushDirty).
-use super::data::{SyncData, json_to_nbt};
+use super::{
+    data::{SyncData, json_to_nbt},
+    recipes::{BookIngredient, BookProjections, BookRecipe, BookRecipeKind},
+};
 use crate::{
     advancements::{Progress, Tree},
     recipe_book::{Category, RecipeIndex, Settings, crafting_category, crafting_station},
 };
-use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
-use sunrise_protocol::buf::{Codec, Writer};
+use sunrise_core::vanilla_bytes::Writer;
+use sunrise_protocol::buf::Codec;
 
 #[derive(Clone)]
 pub struct ServerAdvancements {
     tree: std::sync::Arc<Tree>,
     kids: Vec<Vec<usize>>,
     layout: Vec<Option<(i32, f32)>>,
-    /// Recipe files by id, as compact JSON text with their ingredient
-    /// objects already resolved to flat item lists (`network_recipes`): a
-    /// book entry parses its recipe when a player gets it (a few µs), and
-    /// the ~1,400 parsed files would keep about 5 MB alive for the server's
-    /// whole run.
-    pub(super) recipes: BTreeMap<String, Box<str>>,
+    /// Typed recipe-book projections built once from the decoded load cohort.
+    pub(super) recipes: BTreeMap<String, BookRecipe>,
     displays: RecipeIndex,
     /// RecipeManager.unpackRecipeInfo's group numbers.
     groups: HashMap<String, i32>,
@@ -52,31 +51,21 @@ impl ServerAdvancements {
     pub fn load(
         resources: &Path,
         overlay: &sunrise_world::loot::PackOverlay,
-        recipes: BTreeMap<String, Box<str>>,
-        groups: HashMap<String, i32>,
+        projections: BookProjections,
     ) -> Self {
-        Self::from_tree(
-            Tree::shared(&resources.join("data"), overlay),
-            recipes,
-            groups,
-        )
+        Self::from_tree(Tree::shared(&resources.join("data"), overlay), projections)
     }
 
-    pub(super) fn from_tree(
-        tree: std::sync::Arc<Tree>,
-        recipes: BTreeMap<String, Box<str>>,
-        groups: HashMap<String, i32>,
-    ) -> Self {
+    pub(super) fn from_tree(tree: std::sync::Arc<Tree>, projections: BookProjections) -> Self {
         let kids = tree.children();
         let layout = tree.layout();
-        let displays = RecipeIndex::from_serialized(&recipes);
         Self {
             tree,
             kids,
             layout,
-            recipes,
-            displays,
-            groups,
+            recipes: projections.recipes,
+            displays: projections.displays,
+            groups: projections.groups,
         }
     }
 
@@ -509,53 +498,46 @@ impl ServerAdvancements {
         book_add(entries, true)
     }
 
-    /// The recipe's display for ClientboundPlaceGhostRecipePacket (the
-    /// recipes the book lists).
+    /// The clicked display for `ClientboundPlaceGhostRecipePacket`
+    /// (`RecipeManager.getRecipeFromDisplay`).
     pub fn ghost_display(
         &self,
-        id: &str,
+        display: i32,
         sync: &SyncData,
     ) -> Option<sunrise_protocol::packets::recipes::RecipeDisplay> {
-        // A recipe with several displays has no ghost here (PlaceRecipe is
-        // not this change's): only a single-display recipe's entry is used.
-        if self.displays.display_ids(id).len() != 1 {
-            return None;
-        }
-        let bytes = self.book_entries(id, sync, 0).into_iter().next()?;
+        let id = self.displays.recipe_of_display(display)?;
+        let ids = self.displays.display_ids(id);
+        let index = usize::try_from(display.checked_sub(ids.start)?).ok()?;
+        let bytes = self.book_entries(id, sync, 0).into_iter().nth(index)?;
         let mut r = sunrise_protocol::buf::Reader::new(&bytes);
         sunrise_protocol::packets::recipes::RecipeBookEntry::read(&mut r)
             .ok()
-            .map(|e| e.display)
+            .filter(|entry| entry.id == display)
+            .map(|entry| entry.display)
     }
 
     /// ClientboundRecipeBookAddPacket.Entry for each display of a recipe:
     /// highlighted, and with a notification unless the recipe turns it off.
     fn book_entries(&self, id: &str, sync: &SyncData, flags: i8) -> Vec<Vec<u8>> {
         let ids = self.displays.display_ids(id);
-        let Some(r) = self
-            .recipes
-            .get(id)
-            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-        else {
+        let Some(recipe) = self.recipes.get(id) else {
             return Vec::new();
         };
-        let r = &r;
-        if r["type"].as_str() == Some("minecraft:crafting_transmute") {
+        if matches!(recipe.kind, BookRecipeKind::Transmute { .. }) {
             return self
-                .transmute_entries(r, ids, sync, flags)
+                .transmute_entries(recipe, ids, sync, flags)
                 .unwrap_or_default();
         }
         if ids.len() != 1 {
             // Special recipes have no display.
             return Vec::new();
         }
-        let kind = r["type"].as_str().unwrap_or("");
         let item = |n: &str| sync.id("minecraft:item", n);
         let slot = |n: &str| sync.id("minecraft:slot_display", n).unwrap_or(0);
         let mut w = Writer::new();
         w.varint(ids.start);
         // The ingredients' TagSlotDisplays, an empty cell as an empty slot.
-        let slots = |w: &mut Writer, cells: &[Option<&Value>]| {
+        let slots = |w: &mut Writer, cells: &[Option<&BookIngredient>]| {
             w.varint(cells.len() as i32);
             for cell in cells {
                 match cell {
@@ -568,15 +550,10 @@ impl ServerAdvancements {
             }
         };
         // The result as its ItemStackSlotDisplay, the station as its item.
-        let result = |w: &mut Writer| {
+        let result_stack = |w: &mut Writer, result_item: Option<&str>, result_count: i32| {
             w.varint(slot("minecraft:item_stack"));
-            w.varint(
-                item(
-                    sunrise_world::loot::recipe_result_id(&r["result"]).unwrap_or("minecraft:air"),
-                )
-                .unwrap_or(0),
-            );
-            w.varint(r["result"]["count"].as_i64().unwrap_or(1) as i32);
+            w.varint(item(result_item.unwrap_or("minecraft:air")).unwrap_or(0));
+            w.varint(result_count);
             w.varint(0);
             w.varint(0);
         };
@@ -586,70 +563,84 @@ impl ServerAdvancements {
         };
         // The display, then the ingredients the craftable filter checks and
         // the category of the tab that lists it.
-        let (category, placed): (&str, Vec<&Value>) = match kind {
-            "minecraft:crafting_shaped" => {
-                let pattern = shrink(r["pattern"].as_array().map_or(&[][..], |p| p));
-                let (width, height) = (pattern.first().map_or(0, Vec::len), pattern.len());
-                w.varint(sync.id("minecraft:recipe_display", kind).unwrap_or(0));
-                w.varint(width as i32);
-                w.varint(height as i32);
-                let cells: Vec<Option<&Value>> = pattern
-                    .iter()
-                    .flatten()
-                    .map(|c| (*c != ' ').then(|| &r["key"][c.to_string()]))
-                    .collect();
-                slots(&mut w, &cells);
-                result(&mut w);
+        let (category, placed): (&str, Vec<&BookIngredient>) = match &recipe.kind {
+            BookRecipeKind::Shaped {
+                width,
+                height,
+                cells,
+                result_item,
+                result_count,
+                category,
+            } => {
+                w.varint(
+                    sync.id("minecraft:recipe_display", "minecraft:crafting_shaped")
+                        .unwrap_or(0),
+                );
+                w.varint(*width as i32);
+                w.varint(*height as i32);
+                let cell_refs: Vec<Option<&BookIngredient>> =
+                    cells.iter().map(Option::as_ref).collect();
+                slots(&mut w, &cell_refs);
+                result_stack(&mut w, result_item.as_deref(), *result_count);
                 station(&mut w, "minecraft:crafting_table");
-                let placed = cells.iter().flatten().copied().collect();
-                (
-                    crafting_category(r["category"].as_str().unwrap_or("")).name(),
-                    placed,
-                )
+                let placed = cell_refs.into_iter().flatten().collect();
+                (crafting_category(category).name(), placed)
             }
-            "minecraft:crafting_shapeless" => {
-                w.varint(sync.id("minecraft:recipe_display", kind).unwrap_or(0));
-                let cells: Vec<Option<&Value>> = r["ingredients"]
-                    .as_array()
-                    .map_or(Vec::new(), |a| a.iter().map(Some).collect());
-                slots(&mut w, &cells);
-                result(&mut w);
+            BookRecipeKind::Shapeless {
+                ingredients,
+                result_item,
+                result_count,
+                category,
+            } => {
+                w.varint(
+                    sync.id("minecraft:recipe_display", "minecraft:crafting_shapeless")
+                        .unwrap_or(0),
+                );
+                let cell_refs: Vec<Option<&BookIngredient>> =
+                    ingredients.iter().map(Some).collect();
+                slots(&mut w, &cell_refs);
+                result_stack(&mut w, result_item.as_deref(), *result_count);
                 station(&mut w, "minecraft:crafting_table");
-                let placed = cells.iter().flatten().copied().collect();
-                (
-                    crafting_category(r["category"].as_str().unwrap_or("")).name(),
-                    placed,
-                )
+                let placed = ingredients.iter().collect();
+                (crafting_category(category).name(), placed)
             }
             // AbstractCookingRecipe.display: the furnace, blast furnace,
             // smoker and campfire share one FurnaceRecipeDisplay; only the
             // station and the category differ.
-            "minecraft:smelting"
-            | "minecraft:blasting"
-            | "minecraft:smoking"
-            | "minecraft:campfire_cooking" => {
+            BookRecipeKind::Cooking {
+                kind,
+                ingredient,
+                result_item,
+                result_count,
+                time,
+                experience,
+                category,
+            } => {
                 w.varint(
                     sync.id("minecraft:recipe_display", "minecraft:furnace")
                         .unwrap_or(0),
                 );
                 w.varint(slot("minecraft:tag"));
-                holder_set(&mut w, &r["ingredient"], &item);
+                holder_set(&mut w, ingredient, &item);
                 w.varint(slot("minecraft:any_fuel"));
-                result(&mut w);
+                result_stack(&mut w, Some(result_item.as_str()), *result_count);
                 station(&mut w, crafting_station(kind));
-                w.varint(r["cookingtime"].as_i64().unwrap_or(0) as i32);
-                w.f32(r["experience"].as_f64().unwrap_or(0.0) as f32);
-                (cooking_category(kind, r), vec![&r["ingredient"]])
+                w.varint(*time);
+                w.f32(*experience);
+                (cooking_category(kind, category), vec![ingredient])
             }
             // DyeRecipe.display: the target, then the dyes kept to those with
             // the DYE component, shown as the demo of dyeing that target.
             // Its placement is the target and the dye.
-            "minecraft:crafting_dye" => {
+            BookRecipeKind::Dye {
+                target,
+                dye,
+                category,
+            } => {
                 let Some(dye_component) = sync.id("minecraft:data_component_type", "minecraft:dye")
                 else {
                     return Vec::new();
                 };
-                let (target, dye) = (&r["target"], &r["dye"]);
                 w.varint(
                     sync.id("minecraft:recipe_display", "minecraft:crafting_shapeless")
                         .unwrap_or(0),
@@ -669,16 +660,18 @@ impl ServerAdvancements {
                 w.varint(slot("minecraft:tag"));
                 holder_set(&mut w, target, &item);
                 station(&mut w, "minecraft:crafting_table");
-                (
-                    crafting_category(r["category"].as_str().unwrap_or("")).name(),
-                    vec![target, dye],
-                )
+                (crafting_category(category).name(), vec![target, dye])
             }
             // ImbueRecipe.display: four materials, the source kept to any
             // potion, four materials again, and the potion-wrapped result.
             // Its placement names the source in the middle cell.
-            "minecraft:crafting_imbue" => {
-                let (source, material) = (&r["source"], &r["material"]);
+            BookRecipeKind::Imbue {
+                source,
+                material,
+                result_item,
+                result_count,
+                category,
+            } => {
                 w.varint(
                     sync.id("minecraft:recipe_display", "minecraft:crafting_shaped")
                         .unwrap_or(0),
@@ -694,19 +687,19 @@ impl ServerAdvancements {
                     holder_set(&mut w, if cell == 4 { source } else { material }, &item);
                 }
                 w.varint(slot("minecraft:with_any_potion"));
-                result(&mut w);
+                result_stack(&mut w, result_item.as_deref(), *result_count);
                 station(&mut w, "minecraft:crafting_table");
                 (
-                    crafting_category(r["category"].as_str().unwrap_or("")).name(),
+                    crafting_category(category).name(),
                     vec![
                         material, material, material, material, source, material, material,
                         material, material,
                     ],
                 )
             }
-            _ => return Vec::new(),
+            BookRecipeKind::Transmute { .. } | BookRecipeKind::NonBook => return Vec::new(),
         };
-        self.entry_tail(&mut w, r, sync, category, &placed, flags);
+        self.entry_tail(&mut w, recipe, sync, category, &placed, flags);
         vec![w.data]
     }
 
@@ -715,14 +708,14 @@ impl ServerAdvancements {
     fn entry_tail(
         &self,
         w: &mut Writer,
-        r: &Value,
+        recipe: &BookRecipe,
         sync: &SyncData,
         category: &str,
-        placed: &[&Value],
+        placed: &[&BookIngredient],
         flags: i8,
     ) {
         let item = |n: &str| sync.id("minecraft:item", n);
-        match r["group"].as_str().and_then(|g| self.groups.get(g)) {
+        match recipe.group.as_deref().and_then(|g| self.groups.get(g)) {
             Some(g) => w.varint(g + 1),
             None => w.varint(0),
         }
@@ -737,8 +730,11 @@ impl ServerAdvancements {
             holder_set(w, v, &item);
         }
         // The notification only where the recipe shows one.
-        let notify = r["show_notification"].as_bool().unwrap_or(true);
-        w.i8(if notify { flags } else { flags & !1 });
+        w.i8(if recipe.show_notification {
+            flags
+        } else {
+            flags & !1
+        });
     }
 
     /// `TransmuteRecipe.display`: one `ShapelessCraftingRecipeDisplay` per
@@ -749,50 +745,56 @@ impl ServerAdvancements {
     /// recipe's display ids, gives no entry at all.
     fn transmute_entries(
         &self,
-        r: &Value,
+        recipe: &BookRecipe,
         ids: std::ops::Range<i32>,
         sync: &SyncData,
         flags: i8,
     ) -> Option<Vec<Vec<u8>>> {
-        let (min, max) = crate::crafting::transmute_material_bounds(r.get("material_count"));
-        if (max + 1).checked_sub(min)? != ids.len() {
+        let BookRecipeKind::Transmute {
+            input,
+            material,
+            min,
+            max,
+            add_material_count,
+            result_item,
+            result_count,
+            has_result_components,
+            category,
+        } = &recipe.kind
+        else {
             return None;
-        }
-        let item = |n: &str| sync.id("minecraft:item", n);
-        let slot = |n: &str| sync.id("minecraft:slot_display", n);
-        let (input, material) = (&r["input"], &r["material"]);
-        let holder = |v: &Value| matches!(v, Value::String(_));
-        if !holder(input) || !holder(material) {
+        };
+        if (max + 1).checked_sub(*min)? != ids.len() {
             return None;
         }
         // TransmuteResult: an item (or none: the input's own items), a count
         // (1) and components, which this does not write.
-        let result = &r["result"];
-        if result
-            .get("components")
-            .is_some_and(|c| !c.as_object().is_some_and(|o| o.is_empty()))
-        {
+        if *has_result_components {
             return None;
         }
-        let base = result["count"].as_i64().unwrap_or(1) as i32;
-        let add = r["add_material_count_to_result"].as_bool().unwrap_or(false);
-        let result_items: Vec<i32> = match result["id"].as_str() {
+        let item = |n: &str| sync.id("minecraft:item", n);
+        let slot = |n: &str| sync.id("minecraft:slot_display", n);
+        let result_items: Vec<i32> = match result_item.as_deref() {
             Some(id) => vec![item(id)?],
             // Composite over the input's items, in the order clients get the tag.
-            None => match input.as_str()? {
-                tag if tag.starts_with('#') => {
-                    let name = &tag[1..];
-                    sync.tags
-                        .registries
-                        .iter()
-                        .find(|t| t.registry == "minecraft:item")?
-                        .tags
-                        .iter()
-                        .find(|t| t.name == name)?
-                        .ids
-                        .clone()
+            None => match input {
+                BookIngredient::Tag(name) => sync
+                    .tags
+                    .registries
+                    .iter()
+                    .find(|t| t.registry == "minecraft:item")?
+                    .tags
+                    .iter()
+                    .find(|t| t.name == *name)?
+                    .ids
+                    .clone(),
+                BookIngredient::Items(items) => {
+                    let ids: Vec<i32> = items.iter().filter_map(|s| item(s)).collect();
+                    if ids.is_empty() {
+                        return None;
+                    }
+                    ids
                 }
-                one => vec![item(one)?],
             },
         };
         let (shapeless, tag, empty_stack) = (
@@ -802,12 +804,12 @@ impl ServerAdvancements {
         );
         let (composite, item_slot) = (slot("minecraft:composite")?, slot("minecraft:item")?);
         let table = item("minecraft:crafting_table")?;
-        let category = crafting_category(r["category"].as_str().unwrap_or("")).name();
-        let placed: Vec<&Value> = std::iter::once(input)
-            .chain(std::iter::repeat_n(material, max))
+        let category = crafting_category(category).name();
+        let placed: Vec<&BookIngredient> = std::iter::once(input)
+            .chain(std::iter::repeat_n(material, *max))
             .collect();
         let mut entries = Vec::with_capacity(ids.len());
-        for (n, id) in (min..=max).zip(ids) {
+        for (n, id) in (*min..=*max).zip(ids) {
             let mut w = Writer::new();
             w.varint(id);
             w.varint(shapeless);
@@ -817,7 +819,11 @@ impl ServerAdvancements {
                 holder_set(&mut w, v, &item);
             }
             // computeResultSize: the materials added to the count, or not.
-            let count = if add { n as i32 + base } else { base };
+            let count = if *add_material_count {
+                n as i32 + *result_count
+            } else {
+                *result_count
+            };
             let stack = |w: &mut Writer, id: i32| {
                 w.varint(empty_stack);
                 w.varint(id);
@@ -825,7 +831,7 @@ impl ServerAdvancements {
                 w.varint(0);
                 w.varint(0);
             };
-            match result["id"].as_str() {
+            match result_item {
                 Some(_) => stack(&mut w, result_items[0]),
                 None => {
                     w.varint(composite);
@@ -837,7 +843,7 @@ impl ServerAdvancements {
             }
             w.varint(item_slot);
             w.varint(table);
-            self.entry_tail(&mut w, r, sync, category, &placed, flags);
+            self.entry_tail(&mut w, recipe, sync, category, &placed, flags);
             entries.push(w.data);
         }
         Some(entries)
@@ -860,80 +866,41 @@ fn book_add(entries: Vec<Vec<u8>>, replace: bool) -> Vec<u8> {
 
 /// `SmeltingRecipe.recipeBookCategory` and the other cooking recipes': the
 /// category of the station's book, from the recipe's `CookingBookCategory`.
-fn cooking_category(kind: &str, r: &Value) -> &'static str {
+fn cooking_category(kind: &str, category_name: &str) -> &'static str {
     let category = match kind {
         // BlastingRecipe: a blocks tab, and one misc tab for the rest.
-        "minecraft:blasting" => match r["category"].as_str() {
-            Some("blocks") => Category::BlastBlocks,
+        "minecraft:blasting" => match category_name {
+            "blocks" => Category::BlastBlocks,
             _ => Category::BlastMisc,
         },
         "minecraft:smoking" => Category::SmokerFood,
         // CampfireCookingRecipe: its own category, which no book's tab lists.
         "minecraft:campfire_cooking" => return "campfire",
         // SmeltingRecipe: blocks, food and misc, the default.
-        _ => match r["category"].as_str() {
-            Some("food") => Category::FurnaceFood,
-            Some("blocks") => Category::FurnaceBlocks,
+        _ => match category_name {
+            "food" => Category::FurnaceFood,
+            "blocks" => Category::FurnaceBlocks,
             _ => Category::FurnaceMisc,
         },
     };
     category.name()
 }
 
-/// ShapedRecipePattern.shrink: the pattern without blank border rows and columns.
-fn shrink(rows: &[Value]) -> Vec<Vec<char>> {
-    let rows: Vec<Vec<char>> = rows
-        .iter()
-        .map(|r| r.as_str().unwrap_or("").chars().collect())
-        .collect();
-    let used = |r: &Vec<char>| r.iter().any(|c| *c != ' ');
-    let (Some(top), Some(bottom)) = (rows.iter().position(used), rows.iter().rposition(used))
-    else {
-        return Vec::new();
-    };
-    let rows = &rows[top..=bottom];
-    let left = rows
-        .iter()
-        .filter_map(|r| r.iter().position(|c| *c != ' '))
-        .min()
-        .unwrap_or(0);
-    let right = rows
-        .iter()
-        .filter_map(|r| r.iter().rposition(|c| *c != ' '))
-        .max()
-        .unwrap_or(0);
-    rows.iter()
-        .map(|r| {
-            (left..=right)
-                .map(|x| r.get(x).copied().unwrap_or(' '))
-                .collect()
-        })
-        .collect()
-}
-
 /// ByteBufCodecs.holderSet for an ingredient: a tag by name, or the items.
 /// An item the registries do not know is left out, not sent as id 0.
-fn holder_set(w: &mut Writer, v: &Value, item: &dyn Fn(&str) -> Option<i32>) {
+fn holder_set(w: &mut Writer, v: &BookIngredient, item: &dyn Fn(&str) -> Option<i32>) {
     match v {
-        Value::String(s) if s.starts_with('#') => {
+        BookIngredient::Tag(tag) => {
             w.varint(0);
-            w.string(&s[1..]);
+            w.string(tag);
         }
-        Value::String(s) => match item(s) {
-            Some(id) => {
-                w.varint(2);
-                w.varint(id);
-            }
-            None => w.varint(1),
-        },
-        Value::Array(a) => {
-            let ids: Vec<i32> = a.iter().filter_map(|s| item(s.as_str()?)).collect();
+        BookIngredient::Items(items) => {
+            let ids: Vec<i32> = items.iter().filter_map(|s| item(s)).collect();
             w.varint(ids.len() as i32 + 1);
             for id in ids {
                 w.varint(id);
             }
         }
-        _ => w.varint(1),
     }
 }
 
@@ -951,7 +918,8 @@ impl ServerAdvancements {
             criteria: vec![Criterion {
                 name: "tick".into(),
                 trigger: "minecraft:tick".into(),
-                conditions: Value::Null.into(),
+                conditions: serde_json::Value::Null.into(),
+                player: None,
             }],
             requirements: vec![vec!["tick".into()]],
             rewards: Rewards {
@@ -959,17 +927,15 @@ impl ServerAdvancements {
                 ..Default::default()
             },
         });
-        let recipe: Box<str> = r#"{"type":"minecraft:crafting_shapeless","ingredients":[["minecraft:stone"]],"result":{"id":"minecraft:diamond"}}"#.into();
-        let recipes: BTreeMap<String, Box<str>> = std::iter::once(rewarded)
-            .chain(others.iter().copied())
-            .map(|id| (id.to_owned(), recipe.clone()))
-            .collect();
+        let projections = BookProjections::from_shapeless(
+            std::iter::once(rewarded).chain(others.iter().copied()),
+        );
         let mut advancements = SyncData::empty().advancements;
         advancements.kids = tree.children();
         advancements.layout = tree.layout();
         advancements.tree = std::sync::Arc::new(tree);
-        advancements.displays = RecipeIndex::from_serialized(&recipes);
-        advancements.recipes = recipes;
+        advancements.displays = projections.displays;
+        advancements.recipes = projections.recipes;
         advancements
     }
 }
@@ -977,6 +943,7 @@ impl ServerAdvancements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::path::PathBuf;
     use sunrise_protocol::{
         buf::Reader,
@@ -1048,7 +1015,7 @@ mod tests {
         let dir = root.join("data/minecraft/recipe");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(root.join("registries.json"), REGISTRIES).unwrap();
-        std::fs::write(root.join("items.json"), "{}").unwrap();
+        std::fs::write(root.join("items.json"), r#"{"minecraft:redstone":{}}"#).unwrap();
         for (id, json) in recipes {
             std::fs::write(dir.join(format!("{id}.json")), json).unwrap();
         }
@@ -1196,6 +1163,7 @@ mod tests {
                     name: name.into(),
                     trigger: "minecraft:tick".into(),
                     conditions: Value::Null.into(),
+                    player: None,
                 })
                 .collect(),
             requirements: vec![vec!["first".into()], vec!["second".into()]],
@@ -1209,11 +1177,16 @@ mod tests {
         sync.advancements.layout = tree.layout();
         sync.advancements.tree = std::sync::Arc::new(tree);
         // A reward names a recipe the server knows: an unknown id is never added to the book.
-        sync.advancements.displays =
-            crate::recipe_book::RecipeIndex::from_serialized(&BTreeMap::from([(
-                "test:reward".to_owned(),
-                r#"{"type":"minecraft:crafting_shapeless"}"#.into(),
-            )]));
+        sync.advancements.displays = crate::recipe_book::RecipeIndex::from_known_entries([(
+            "test:reward".to_owned(),
+            crate::recipe_book::KnownEntry {
+                special: false,
+                displays: 1,
+                station: "minecraft:crafting_table",
+                notify: true,
+                result: None,
+            },
+        )]);
         let advancement = &sync.advancements;
         let mut progress = Progress::default();
         let mut book = Settings::default();
@@ -1546,6 +1519,7 @@ mod tests {
         // the kind, and no sources reach SyncData or the book.
         let error = crate::crafting::ResolvedSources::load(
             &root,
+            &crate::items::Items::empty(),
             &sunrise_world::loot::PackOverlay::NONE,
             &crate::test_resources::server_load(),
         )
@@ -1554,7 +1528,7 @@ mod tests {
         .to_string();
         assert!(error.contains("mymod_kind.json"), "{error}");
         assert!(
-            error.contains("ingredient kind mymod:x is not registered by any mod"),
+            error.contains("ingredient kind mymod:x was not answered by any mod"),
             "{error}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -1671,6 +1645,143 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Both peers number the matching stonecutter buttons from the same
+    /// resolved load; priorities must not be lost in the network's id map.
+    #[test]
+    fn stonecutter_packet_buttons_select_the_same_server_results_with_priorities() {
+        use crate::{
+            banner::Banners,
+            brewing::Brewing,
+            crafting::Recipes,
+            items::{ItemStack, Items},
+            menu::{Env, Kind, Menu},
+            stations::StationRecipes,
+        };
+        use sunrise_world::loot::PackOverlay;
+
+        let root = resources(
+            "stonecutter_priority_buttons",
+            &[
+                (
+                    "a_cut",
+                    r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:raw_copper",
+                    "result":{"id":"minecraft:copper_ingot","count":2}}"#,
+                ),
+                (
+                    "b_cut",
+                    r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:raw_copper",
+                    "result":{"id":"minecraft:redstone","count":3}}"#,
+                ),
+                (
+                    "smelt",
+                    r#"{"type":"minecraft:smelting","ingredient":"minecraft:raw_copper",
+                    "result":{"id":"minecraft:copper_ingot"}}"#,
+                ),
+            ],
+        );
+        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
+        let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
+        let banners = Banners::default();
+        let enchantments = crate::enchant::Enchantments::default();
+        let names = crate::creative::Names::default();
+        // Literal registry ids, counts and item names, independent of either
+        // projection's order. With no file, retain vanilla registration order.
+        for (priority_file, expected) in [
+            (
+                None,
+                [
+                    (1, "minecraft:copper_ingot", 2),
+                    (3, "minecraft:redstone", 3),
+                ],
+            ),
+            (
+                Some(r#"{"entries":{"minecraft:b_cut":5}}"#),
+                [
+                    (3, "minecraft:redstone", 3),
+                    (1, "minecraft:copper_ingot", 2),
+                ],
+            ),
+        ] {
+            if let Some(file) = priority_file {
+                let path = root.join(sunrise_mod_package::content::RECIPE_PRIORITIES_PATH);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, file).unwrap();
+            }
+            let sources = crate::test_resources::server_sources(&root, &PackOverlay::NONE);
+            let sync = SyncData::load(&root, &PackOverlay::NONE, &defaults, &sources).unwrap();
+            let recipes =
+                Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &sources).unwrap();
+            let stations = StationRecipes::from_sources(&root, &items, &sources);
+            let env = Env {
+                crafting_remainder: None,
+                player: None,
+                player_entity_id: None,
+                loop_context: crate::test_resources::server_loop_context(),
+                can_equip: None,
+                items: &items,
+                recipes: &recipes,
+                brewing: &brewing,
+                banners: &banners,
+                station_recipes: &stations,
+                enchantments: &enchantments,
+                names: &names,
+                trade: None,
+                maps: None,
+                limited_crafting: false,
+                known_recipes: None,
+                slot_rules: None,
+                stacked: None,
+            };
+            let mut menu = Menu::new(Kind::Stonecutter);
+            menu.stone.server_buttons = Some(sync.stonecutter_buttons.clone());
+            menu.set_slot(&env, 0, Some(ItemStack::new("minecraft:raw_copper", 1)));
+
+            let mut reader = Reader::new(&sync.recipes);
+            let mut properties = BTreeMap::new();
+            for _ in 0..reader.varint().unwrap() {
+                let key = reader.string(64).unwrap().to_owned();
+                let ids: Vec<_> = (0..reader.varint().unwrap())
+                    .map(|_| reader.varint().unwrap())
+                    .collect();
+                assert!(properties.insert(key, ids).is_none());
+            }
+            assert_eq!(
+                properties,
+                BTreeMap::from([
+                    ("minecraft:smithing_addition".to_owned(), vec![]),
+                    ("minecraft:smithing_base".to_owned(), vec![]),
+                    ("minecraft:smithing_template".to_owned(), vec![]),
+                    ("minecraft:furnace_input".to_owned(), vec![0]),
+                    ("minecraft:blast_furnace_input".to_owned(), vec![]),
+                    ("minecraft:smoker_input".to_owned(), vec![]),
+                    ("minecraft:campfire_input".to_owned(), vec![]),
+                    ("minecraft:brewing_input".to_owned(), vec![]),
+                    ("minecraft:brewing_reagent".to_owned(), vec![]),
+                ])
+            );
+            assert_eq!(reader.varint().unwrap(), 2, "two stonecutter buttons");
+            for (index, (item_id, item_name, count)) in expected.into_iter().enumerate() {
+                assert_eq!(reader.varint().unwrap(), 2, "one explicit input");
+                assert_eq!(reader.varint().unwrap(), 0, "raw copper input");
+                assert_eq!(reader.varint().unwrap(), 5, "item-stack display");
+                assert_eq!(reader.varint().unwrap(), item_id, "button {index}");
+                assert_eq!(reader.varint().unwrap(), count, "result count");
+                assert_eq!(reader.varint().unwrap(), 0, "no added components");
+                assert_eq!(reader.varint().unwrap(), 0, "no removed components");
+                // Public server button handling invokes stone_setup_result.
+                assert!(menu.button(&env, index as i32));
+                let result = menu.slot(1).expect("selected server result");
+                assert_eq!(&*result.item, item_name, "button {index}");
+                assert_eq!(result.count, count as u32, "button {index}");
+                assert_eq!(result.damage, 0);
+                assert!(result.extra.is_none());
+            }
+            assert_eq!(reader.remaining(), 0, "the complete packet was decoded");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A world's own load over the data its packs gave (`SyncData::load_over`, which keeps
@@ -1997,6 +2108,7 @@ mod tests {
             &PacketNames {
                 item: &item,
                 category: &category,
+                component: &|_| None,
                 tag: &tag,
             },
         );

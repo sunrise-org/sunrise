@@ -8,10 +8,18 @@ pub trait Hooks {
     /// and player-storage epochs after callbacks; it refuses stale decisions without selecting
     /// another placement. Listener writes and refusal use the normal host transaction.
     #[hook(
+        target = "sunrise_client::game::native_hooks::live_world_admission::Game<'_>::native_live_world_admission",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "canceled",
-        cancellable = true
+        cancellable = true,
+        neoforge = "none (Sunrise live world placement admission)"
     )]
-    fn live_world_admission();
+    fn live_world_admission(
+        live_world: LiveWorldRef,
+        player: Option<PlayerRef>,
+        changes: &[LiveWorldPlacementCell],
+        canceled: &mut bool,
+    );
 }

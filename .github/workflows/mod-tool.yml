@@ -9,7 +9,7 @@ name: mod tool
 # Runs when dyna-checks finishes a main push and by dispatch, never on a pull request (a run that starts at the push
 # would look for the gate before it had finished), and builds only when the tool changed: the folders
 # are the workspace crates cargo-sunrise-mod depends on, from `cargo metadata` (tools/ci/mod_tool.py), plus the files
-# that build and sign it. Like release.yml's snapshot, it needs dyna-checks' gate green on the commit.
+# that build and sign it. Like release.yml's Dev build, it needs dyna-checks' gate green on the commit.
 # - `decide` (no secrets, a read-only token) refuses a commit that is not on main in a step of this file, before any
 #   code of that commit runs; then refuses one not containing what `mod-tool` holds, finds whether the tool changed
 #   since, and needs the gate green on the commit (a cancelled gate is run again by hand, or the next push covers it).
@@ -17,7 +17,7 @@ name: mod tool
 # - `assemble` (no secrets) writes tool.json beside the three archives.
 # - `sign` is the only job with the release key, only for a publishing run on main (the `release` environment): it
 #   checks out nothing but tools/ci/sign_release.sh. Any other run signs with a throwaway key.
-# - `verify` (a read-only token) checks the signature as users' install blocks do (sunrise-release-sign verify) and the
+# - `verify` (a read-only token) checks the signature as users' install blocks do (tools/ci/nightly.py verify-sums) and the
 #   asset set; a dry run ends here.
 # - `publish` exists only for a publishing run on main and is the only job with a write token: it checks that the
 #   published tool is not newer, then replaces the assets. It compiles nothing.
@@ -157,6 +157,8 @@ jobs:
       - name: Build and pack the tool
         env:
           SUNRISE_TOOL_COMMIT: ${{ needs.decide.outputs.commit }}
+          # Marks this build as the rolling release's, the only one `self-update` follows.
+          SUNRISE_TOOL_CHANNEL: mod-tool
         run: python tools/prebuilt_game.py tool dist
       - name: The tool starts and names this commit
         run: |
@@ -274,10 +276,10 @@ jobs:
       COMMIT: ${{ needs.decide.outputs.commit }}
       PUBLISH: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' }}
     steps:
+      # The workflow's own checker, never the built commit's.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ needs.decide.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: mod-tool-release
@@ -294,8 +296,9 @@ jobs:
       - name: The signature, checked as an install block checks it
         run: |
           key=(); [[ "$PUBLISH" != true ]] && key=(--key "$(cat key/ephemeral.pub)")
-          cargo run --locked --quiet -p sunrise-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "$TAG" \
-            --publishing "${key[@]}" dist
+          # The workflow checkout's Python and the runner's OpenSSL against main's release keys: nothing is compiled, and
+          # no binary of the release runs.
+          python3 tools/ci/nightly.py verify-sums --tag "$TAG" --publishing "${key[@]}" dist
       - name: Exactly the assets an install block takes
         run: |
           expected=$(printf '%s\n' tool-x86_64-unknown-linux-gnu.tar.xz tool-x86_64-pc-windows-gnu.tar.xz \
@@ -313,8 +316,8 @@ jobs:
 
   publish:
     needs: [decide, verify]
-    # The only job with a write token, and only for a publishing run on main. It runs no code but
-    # tools/ci/mod_tool.py of a commit `decide` found on main, and compiles nothing.
+    # The only job with a write token, and only for a publishing run on main. It runs no code but the workflow's own
+    # tools/ci/mod_tool.py (never the built commit's), and compiles nothing.
     if: needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -325,11 +328,11 @@ jobs:
       GH_REPO: ${{ github.repository }}
       COMMIT: ${{ needs.decide.outputs.commit }}
     steps:
+      # The workflow's own checkout, with main's history: `decide` found the built commit on main.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.decide.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           name: mod-tool-release

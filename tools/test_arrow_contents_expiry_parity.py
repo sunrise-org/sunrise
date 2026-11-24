@@ -114,18 +114,7 @@ def main():
         def native_run(label):
             (build/(label+'.log')).unlink(missing_ok=True)
             provenance['production_source_sha256']={path:sha((root/path).read_bytes()) for path in PRODUCTION}
-            command=['cargo','test','-p','sunrise-client','--lib','--no-run','--message-format=json']
-            run(command,label+'-build',env)
-            artifacts=[]
-            for line in (build/(label+'-build.log')).read_text(encoding='utf-8',errors='replace').splitlines():
-                if not line.startswith('{'):
-                    continue
-                message=json.loads(line)
-                target=message.get('target',{})
-                if message.get('reason')=='compiler-artifact' and message.get('executable') and Path(target.get('src_path','')).resolve()==(root/'crates/sunrise-client/src/lib.rs').resolve():
-                    artifacts.append(Path(message['executable']).resolve())
-            assert len(set(artifacts))==1, ('expected exactly one gameplay library test artifact',artifacts)
-            binary=artifacts[0]
+            binary=lab.parity_fixtures().resolve()
             provenance['native_binary_path']=str(binary)
             provenance['native_binary_sha256']=lab.digest(binary,'sha256')
             run([binary,'--list'],label+'-list',env,cwd=scratch,timeout=30)

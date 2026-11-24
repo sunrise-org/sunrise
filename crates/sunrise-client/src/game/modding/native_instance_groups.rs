@@ -6,11 +6,10 @@ use mod_api::{GroupError, InstanceGroupRef, InstanceGroups, ModelInstance, Model
 use glam::{DVec3, Mat4};
 use sunrise_client::{gfx::PreparedModelInstance, world_geometry::row_major_3x4};
 
-const MOD_CAPACITY: usize = 65_536;
-
 struct Group {
     generation: u64,
     owner: Option<&'static str>,
+    submitted: bool,
     model: ModelRef,
     copies: Vec<ModelInstance>,
     len: usize,
@@ -54,6 +53,7 @@ impl Group {
 pub(super) struct InstanceGroupStorage {
     next: u64,
     groups: Vec<Option<Group>>,
+    retired: sunrise_client::fast_hash::FxHashMap<u64, Group>,
 }
 impl InstanceGroupStorage {
     #[cfg(test)]
@@ -66,6 +66,7 @@ impl InstanceGroupStorage {
     }
     pub(super) fn clear(&mut self) {
         self.groups.clear();
+        self.retired.clear();
     }
     pub(super) fn retire_disabled(&mut self, disabled: &std::collections::BTreeSet<String>) {
         for slot in &mut self.groups {
@@ -73,7 +74,10 @@ impl InstanceGroupStorage {
                 .as_ref()
                 .is_some_and(|g| g.owner.is_some_and(|id| disabled.contains(id)))
             {
-                *slot = None;
+                let group = slot.take().expect("disabled slot has a group");
+                if group.submitted {
+                    self.retired.insert(group.generation, group);
+                }
             }
         }
     }
@@ -82,14 +86,24 @@ impl InstanceGroupStorage {
         handle: InstanceGroupRef,
         model_generation: u64,
     ) -> Result<&mut Group, GroupError> {
+        self.get_owned(
+            mod_api::content::crash::current_native_mod(),
+            handle,
+            model_generation,
+        )
+    }
+    fn get_owned(
+        &mut self,
+        _owner: Option<&'static str>,
+        handle: InstanceGroupRef,
+        model_generation: u64,
+    ) -> Result<&mut Group, GroupError> {
         let fields = handle.fields();
         self.groups
             .get_mut(fields.slot as usize)
             .and_then(Option::as_mut)
             .filter(|g| {
-                g.owner == mod_api::content::crash::current_native_mod()
-                    && g.generation == fields.generation
-                    && g.model.fields().generation == model_generation
+                g.generation == fields.generation && g.model.fields().generation == model_generation
             })
             .ok_or(GroupError::Stale)
     }
@@ -101,26 +115,14 @@ impl InstanceGroups for Game<'_> {
         if fields.generation != self.standalone_geometry.generation() {
             return Err(GroupError::Model(mod_api::ModelError::StaleModel));
         }
-        let slot = self
-            .standalone_geometry
+        self.standalone_geometry
             .instance_slot(fields.slot)
             .ok_or(GroupError::Model(mod_api::ModelError::UnknownModel))?;
-        if slot.translucent {
-            return Err(GroupError::Translucent);
-        }
         let owner = mod_api::content::crash::current_native_mod();
         let mut storage = self.instance_groups.borrow_mut();
-        let reserved: usize = storage
-            .groups
-            .iter()
-            .flatten()
-            .filter(|g| g.owner == owner)
-            .map(|g| g.copies.len().max(1))
-            .sum();
-        if capacity > 16_384 || reserved + (capacity as usize).max(1) > MOD_CAPACITY {
-            return Err(GroupError::CapacityExceeded);
-        }
-        self.prepared_model_draws.borrow_mut().reserve(16_384);
+        self.prepared_model_draws
+            .borrow_mut()
+            .reserve((capacity as usize).min(16_384));
         storage.next = storage
             .next
             .checked_add(1)
@@ -128,6 +130,7 @@ impl InstanceGroups for Game<'_> {
         let mut group = Group {
             generation: storage.next,
             owner,
+            submitted: false,
             model,
             copies: vec![ModelInstance::at([0.0; 3], 0xFFFF_FFFF); capacity as usize],
             len: 0,
@@ -217,7 +220,12 @@ impl Game<'_> {
     ) -> Result<(), GroupError> {
         let mut storage = self.instance_groups.borrow_mut();
         storage.get(handle, self.standalone_geometry.generation())?;
-        storage.groups[handle.fields().slot as usize] = None;
+        let group = storage.groups[handle.fields().slot as usize]
+            .take()
+            .expect("validated group slot");
+        if group.submitted {
+            storage.retired.insert(group.generation, group);
+        }
         Ok(())
     }
     pub(super) fn draw_instance_group(
@@ -227,20 +235,61 @@ impl Game<'_> {
     ) -> Result<(), GroupError> {
         let mut storage = self.instance_groups.borrow_mut();
         let group = storage.get(handle, self.standalone_geometry.generation())?;
-        if draw.has_group(handle) {
-            return Ok(());
-        }
-        if !draw.group_room() {
-            return Err(GroupError::CapacityExceeded);
-        }
-        self.draw_cached_model_instances(
-            draw,
-            group.model,
-            &group.composed[..group.len],
-            Some(&group.records[..group.len]),
-        )?;
-        draw.mark_group(handle);
+        group.submitted = true;
+        draw.queue_group(handle);
         Ok(())
+    }
+
+    /// Resolve live data after the prepare hook, or the last data of an accepted group that
+    /// was destroyed. The latter no longer occupies a public handle slot.
+    pub(super) fn resolve_submitted_groups(
+        &self,
+        draw: &mut sunrise_client::world_geometry::WorldGeometry,
+    ) {
+        let mut storage = self.instance_groups.borrow_mut();
+        let mut submitted = draw.take_submitted_groups();
+        for &handle in &submitted {
+            let fields = handle.fields();
+            let group = if let Some(group) = storage.retired.get(&fields.generation) {
+                group
+            } else if let Some(group) = storage.groups[fields.slot as usize]
+                .as_mut()
+                .filter(|group| group.generation == fields.generation)
+            {
+                group.submitted = false;
+                group
+            } else {
+                unreachable!("accepted group must be live or retained");
+            };
+            let _ = self.draw_cached_model_instances(
+                draw,
+                group.model,
+                &group.composed[..group.len],
+                Some(&group.records[..group.len]),
+            );
+        }
+        for handle in submitted.drain(..) {
+            storage.retired.remove(&handle.fields().generation);
+        }
+        draw.recycle_submitted_groups(submitted);
+    }
+
+    /// A frame can stop before prepare, for example on graphics device loss.
+    pub(super) fn discard_submitted_groups(
+        &self,
+        draw: &mut sunrise_client::world_geometry::WorldGeometry,
+    ) {
+        let mut storage = self.instance_groups.borrow_mut();
+        for handle in draw.drain_submitted_groups() {
+            let fields = handle.fields();
+            if storage.retired.remove(&fields.generation).is_none()
+                && let Some(group) = storage.groups[fields.slot as usize]
+                    .as_mut()
+                    .filter(|group| group.generation == fields.generation)
+            {
+                group.submitted = false;
+            }
+        }
     }
 }
 
@@ -254,6 +303,7 @@ mod tests {
         let mut group = Group {
             generation: 1,
             owner: None,
+            submitted: false,
             model: mod_api::__private::built::model_ref(1, 0),
             copies: vec![copy; 2],
             len: 2,
@@ -315,21 +365,50 @@ mod tests {
             ]
         );
         let handle = mod_api::__private::built::instance_group_ref(1, 0);
+        let owned_handle = mod_api::__private::built::instance_group_ref(2, 1);
+        let owned = Group {
+            generation: 2,
+            owner: Some("group-owner"),
+            submitted: false,
+            model: mod_api::__private::built::model_ref(1, 0),
+            copies: vec![copy],
+            len: 1,
+            transform: Mat4::IDENTITY,
+            composed: vec![copy],
+            records: vec![PreparedModelInstance::new(
+                Mat4::IDENTITY,
+                DVec3::ZERO,
+                DVec3::ZERO,
+                [1.0; 4],
+                0,
+            )],
+            converted_bytes: 0,
+        };
         let mut storage = InstanceGroupStorage {
-            next: 1,
-            groups: vec![Some(group)],
+            next: 2,
+            groups: vec![Some(group), Some(owned)],
+            retired: Default::default(),
         };
         assert!(storage.get(handle, 1).is_ok());
-        // Disabling a mod must not retire unmarked engine-owned groups.
+        assert!(storage.get(owned_handle, 1).is_ok());
+        // Access checks generation and model lifetime, not the TLS caller mod name.
+        {
+            let _other =
+                mod_platform::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
+                    id: "other",
+                    hook: "test",
+                    part: None,
+                });
+            assert!(storage.get(handle, 1).is_ok());
+            assert!(storage.get(owned_handle, 1).is_ok());
+            assert!(matches!(storage.get(handle, 2), Err(GroupError::Stale)));
+        }
+        // Disabling the owner still retires its groups without touching engine-owned ones.
         storage.retire_disabled(&std::collections::BTreeSet::from(["group-owner".into()]));
         assert!(storage.get(handle, 1).is_ok());
-        assert!(matches!(storage.get(handle, 2), Err(GroupError::Stale)));
-        let _owner =
-            mod_platform::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
-                id: "other",
-                hook: "test",
-                part: None,
-            });
-        assert!(matches!(storage.get(handle, 1), Err(GroupError::Stale)));
+        assert!(matches!(
+            storage.get(owned_handle, 1),
+            Err(GroupError::Stale)
+        ));
     }
 }

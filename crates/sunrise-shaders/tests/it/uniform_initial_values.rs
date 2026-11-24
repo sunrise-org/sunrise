@@ -26,6 +26,7 @@ fn program(declarations: &str) -> sunrise_shaders::Program {
             "{declarations}\nout vec4 color; void main() {{ color = vec4(1.0); }}"
         )),
         Target::Buffers,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
     .unwrap()
 }
@@ -125,16 +126,23 @@ fn shared_stage_defaults_merge_by_value_and_conflicts_report_original_location()
         &vertex,
         &fragment("uniform float gain = 1.0 / 4.0;"),
         Target::Buffers,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
     .unwrap();
     assert_eq!(words(&p, "gain", 1), [0.25f32.to_bits()]);
-    let p =
-        translate_composite(&vertex, &fragment("uniform float gain;"), Target::Buffers).unwrap();
+    let p = translate_composite(
+        &vertex,
+        &fragment("uniform float gain;"),
+        Target::Buffers,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+    )
+    .unwrap();
     assert_eq!(words(&p, "gain", 1), [0.25f32.to_bits()]);
     let error = translate_composite(
         &vertex,
         &fragment("uniform float gain = 0.75;"),
         Target::Buffers,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
     .err()
     .unwrap();
@@ -165,7 +173,7 @@ fn compute_programs_receive_initial_contents_and_nonconstant_uniform_initializer
             .flat_map(|v| v.to_le_bytes())
             .collect::<Vec<_>>()
     );
-    assert!(translate_composite(&source(VERTEX), &source("uniform float runtime; uniform float value = runtime; out vec4 c; void main(){ c=vec4(value); }"), Target::Buffers).is_err());
+    assert!(translate_composite(&source(VERTEX), &source("uniform float runtime; uniform float value = runtime; out vec4 c; void main(){ c=vec4(value); }"), Target::Buffers, naga::front::glsl::InterfaceLimits::WGPU_DEFAULT).is_err());
 }
 
 #[test]

@@ -1,69 +1,104 @@
 //! A client mod's reads of the levels the server opened for viewing (#3981, gap 10), as Immersive
 //! Portals' `ClientWorldLoader.getWorld(dim)` hands out the far `ClientLevel`: on a client,
 //! `host.level(dim)` also names each level the server keeps open on `sunrise:levels`, and
-//! `block_state`, `clip`, `collision_boxes` and `has_collisions` read its world (`viewed_worlds`),
-//! as do the reads built on `level_block_state`: `block`, `block_property` and the both-sided
-//! fluid reads (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`,
-//! `fluid_can_be_replaced_with`). A read never writes and never loads a column: a column the
-//! world does not hold is None. The handle answers None from the server's close of the level,
-//! and from a Login, a Respawn or a new configuration phase, which drop every viewed world. A
-//! `LevelRef` names a level and the client level's epoch, not one open of the view: a close and
-//! a later open within the same epoch make the old handle read again, while a Login, a
-//! reconfiguration or a Respawn into another level starts a new epoch, so the old handle stays
+//! `block_state`, `brightness`, `clip`, `visit_block_collision(s)` and `has_collisions` read its world
+//! (`viewed_worlds`), as do the reads built on `level_block_state`: `block`, `block_property`
+//! and the both-sided fluid reads (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`,
+//! `fluid_can_be_replaced_with`). `get_enchant_power_bonus` uses the viewed level as context. A read never writes and never loads a column: direct block
+//! reads return None for missing columns, `clip` reads missing columns and out-of-height cells
+//! as air (`ClientChunkCache.getChunk(..., true)`), and the collision scan skips missing columns.
+//! The handle answers
+//! None after the server closes the level or a Login, Respawn or new configuration phase drops
+//! every viewed world. A `LevelRef` names a level and the client level's epoch, not one open of
+//! the view. A close and a later open within the same epoch make the old handle read again. A
+//! Login, reconfiguration or Respawn into another level starts a new epoch, so the old handle stays
 //! stale and a mod asks `host.level` again (a same-level Respawn keeps the epoch). Writes,
 //! server-only reads, the other reads and the entity reads (until step 9d) refuse it.
 use super::Game;
-use mod_api::{DimensionKey, LevelRef};
+use mod_api::{DimensionKey, LevelReadError, LevelRef};
 use sunrise_client::world::World;
 
 impl Game<'_> {
-    /// On a client, the key of the level `dimension` names: the one it shows, or one the server
-    /// opened for viewing while that view is open. None before login.
-    pub(super) fn client_level_key(&self, dimension: &str) -> Option<DimensionKey> {
+    /// Resolve the constructor's level by name during Load; otherwise the installed level or
+    /// a view the server opened. The constructor and installed level have distinct epochs.
+    pub(super) fn client_level_by_name(&self, dimension: &str) -> Option<LevelRef> {
         let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
-        if remote.level == dimension {
-            return Some(remote.level_key);
+        if let Some(level) = &remote.constructing_level
+            && level.handle.dimension_id() == dimension
+        {
+            return Some(level.handle);
         }
-        remote.viewed.key_of(dimension)
+        let key: DimensionKey = if remote.level == dimension {
+            remote.level_key
+        } else {
+            remote.viewed.key_of(dimension)?
+        };
+        Some(LevelRef::new(self.native_lifecycle.epoch()?, key))
     }
     /// On a client, the world a handle names now: the player's own, or a viewed level's while
     /// the server keeps it open. None before login, for a stale handle and for any other level.
     pub(super) fn client_view_world(&self, level: LevelRef) -> Option<&World> {
-        let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
+        self.client_view_world_result(level).ok()
+    }
+
+    pub(super) fn client_view_world_result(
+        &self,
+        level: LevelRef,
+    ) -> Result<&World, LevelReadError> {
+        let remote = self
+            .remote
+            .as_ref()
+            .filter(|r| r.logged_in)
+            .ok_or(LevelReadError::Unavailable)?;
+        if let Some(constructing) = remote.constructing(level) {
+            return Ok(&constructing.world);
+        }
         if self.native_lifecycle.epoch() != Some(level.epoch()) {
-            return None;
+            return Err(LevelReadError::Stale);
         }
         if level.dimension() == remote.level_key {
-            return Some(&self.world);
+            return Ok(&self.world);
         }
-        remote.viewed.world_of(level.dimension())
+        remote
+            .viewed
+            .world_of(level.dimension())
+            .ok_or(LevelReadError::Stale)
     }
     /// On a client, the handle the player's own level answers to now (its key and the client
     /// level's epoch): what a world view naming a level is compared with, resolved with the
     /// same rules as `client_view_world`. None before login.
-    fn client_own_level(&self) -> Option<LevelRef> {
+    pub(super) fn client_own_level(&self) -> Option<LevelRef> {
         let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
         Some(LevelRef::new(
             self.native_lifecycle.epoch()?,
             remote.level_key,
         ))
     }
-    /// The frusta of the frame's camera `[fov_degrees, yaw, pitch]` and its world views, which are
-    /// asked for here: each view's level handle is resolved once, first, against the player's own.
+    /// The frusta of the frame's camera `[fov_degrees, yaw, pitch, roll]` and its world views,
+    /// which are asked for here: each view's level handle is resolved once, first, against the
+    /// player's own.
     pub(in crate::game) fn world_view_frustum(
         &mut self,
         camera: glam::DVec3,
-        [fov_degrees, yaw, pitch]: [f32; 3],
-        bob: glam::Mat4,
+        [fov_degrees, yaw, pitch, roll]: [f32; 4],
+        view_transform: glam::Mat4,
         depth_far: f32,
     ) -> Option<sunrise_client::gfx::JoinedFrusta> {
         let own_level = self.client_own_level();
         let renderer = self.renderer.as_mut()?;
         renderer.set_world_view_own_level(own_level);
-        Some(renderer.camera_frustum(camera, fov_degrees, yaw, pitch, bob, depth_far))
+        Some(renderer.camera_frustum(
+            camera,
+            fov_degrees,
+            yaw,
+            pitch,
+            roll,
+            view_transform,
+            depth_far,
+        ))
     }
-    /// The world `block_state` and `clip` read: on a server an open level, in place or parked
-    /// (`native_level_world`), on a client `client_view_world`.
+    /// The world for reads such as `block_state`, `brightness` and `clip`: on a server an open
+    /// level, in place or parked (`native_level_world`), on a client `client_view_world`.
     pub(super) fn native_level_view_world(&self, level: LevelRef) -> Option<&World> {
         if self.is_logical_server() {
             self.native_level_world(level)
@@ -78,12 +113,14 @@ mod tests {
     use crate::game::{
         Game,
         api_values::TryIntoApi,
+        native_entity_refs::tests::{collect_entities_in, run_fresh_cases},
         viewed_worlds::tests::{client, close, column, layered, open, run, spawn},
     };
     use mod_api::{
-        BlockFace, BlockState, BlockUpdateFlags, ClipBlock, ClipFluid, Host, LevelRef,
-        LevelWriteError,
+        BlockFace, BlockState, BlockUpdateFlags, ClipBlock, ClipFluid, Host, LevelReadError,
+        LevelRef, LevelWriteError, LightLayer, WorldEpoch,
     };
+    use std::ops::ControlFlow;
     use sunrise_protocol::packets::play::{self, Clientbound as C};
     use sunrise_world::registry::BlockStateId;
 
@@ -145,6 +182,62 @@ mod tests {
         assert_eq!(game.level("minecraft:the_end"), None);
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn brightness_reads_the_requested_client_world() {
+        if run_fresh_cases(
+            "game::native_viewed_levels::tests::brightness_reads_the_requested_client_world",
+            "SUNRISE_TEST_VIEWED_LEVEL_BRIGHTNESS",
+            &["brightness"],
+        ) {
+            return;
+        }
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let lit_column = |sky, block| {
+            let C::LevelChunkWithLight(mut packet) = layered(0, 0, 0) else {
+                unreachable!("layered returns a chunk with light")
+            };
+            // Light section 1 is the first block section, above the bottom padding.
+            packet.light.sky_mask = vec![0b10];
+            packet.light.block_mask = vec![0b10];
+            packet.light.sky = vec![vec![sky; 2048]];
+            packet.light.block = vec![vec![block; 2048]];
+            C::LevelChunkWithLight(packet)
+        };
+        game.handle_packet(lit_column(0xCC, 0x55)).unwrap();
+        game.handle_packet(open(1, "test:void")).unwrap();
+        game.handle_packet(run(1, &[lit_column(0x77, 0x22)]))
+            .unwrap();
+        let own = game.level("minecraft:overworld").unwrap();
+        let viewed = game.level("test:void").unwrap();
+        let read = |host: &dyn Host, level: LevelRef, pos| {
+            (
+                level.brightness(host, LightLayer::Sky, pos),
+                level.brightness(host, LightLayer::Block, pos),
+            )
+        };
+
+        let lit = [3, -60, 5];
+        assert_eq!(read(&game, own, lit), (Some(12), Some(5)));
+        assert_eq!(read(&game, viewed, lit), (Some(7), Some(2)));
+        let missing = [16, -60, 5];
+        assert_eq!(read(&game, own, missing), (None, None));
+        assert_eq!(read(&game, viewed, missing), (None, None));
+        assert!(!game.world.chunks.contains_key(&(1, 0)));
+        let world = &game.remote.as_ref().unwrap().viewed.get(1).unwrap().world;
+        assert!(!world.chunks.contains_key(&(1, 0)));
+
+        let stale = LevelRef::new(
+            WorldEpoch::new(viewed.epoch().get() + 1),
+            viewed.dimension(),
+        );
+        assert_eq!(read(&game, stale, lit), (None, None));
+        game.handle_packet(close(1)).unwrap();
+        assert_eq!(read(&game, viewed, lit), (None, None));
+        assert_eq!(read(&game, own, lit), (Some(12), Some(5)));
+    }
+
     /// A ray down onto the viewed level's stone hits its top, while the same ray in the
     /// player's own level, all air there, misses.
     #[test]
@@ -166,6 +259,20 @@ mod tests {
         }
     }
 
+    fn collect_collision_boxes(
+        game: &Game<'_>,
+        level: LevelRef,
+        bounds: [f64; 6],
+    ) -> Vec<[f64; 6]> {
+        let mut boxes = Vec::new();
+        let result = level.visit_block_collisions(game, bounds, &mut |shape| {
+            boxes.extend(shape.boxes());
+            ControlFlow::Continue(())
+        });
+        assert_eq!(result, Some(ControlFlow::Continue(())));
+        boxes
+    }
+
     /// The viewed level's collision boxes are its own: none in the pocket the player's own
     /// level fills with stone, the stone's box where the player's level is air.
     #[test]
@@ -174,45 +281,255 @@ mod tests {
         let mut resources = None;
         let mut game = client(&mut resources);
         let (own, viewed) = viewing(&mut game);
-        let pocket = [3.0, 70.0, 5.0, 4.0, 71.0, 6.0];
-        assert_eq!(viewed.collision_boxes(&game, pocket), Some(vec![]));
+        let pocket = [3.25, 70.25, 5.25, 3.75, 70.75, 5.75];
+        assert!(collect_collision_boxes(&game, viewed, pocket).is_empty());
         assert_eq!(viewed.has_collisions(&game, pocket), Some(false));
-        assert_eq!(own.collision_boxes(&game, pocket), Some(vec![pocket]));
+        assert_eq!(
+            collect_collision_boxes(&game, own, pocket),
+            [[3.0, 70.0, 5.0, 4.0, 71.0, 6.0]]
+        );
         assert_eq!(own.has_collisions(&game, pocket), Some(true));
-        let top = [8.0, 79.0, 8.0, 9.0, 80.0, 9.0];
-        assert_eq!(viewed.collision_boxes(&game, top), Some(vec![top]));
+        let top = [8.25, 79.25, 8.25, 8.75, 79.75, 8.75];
+        let cube = [8.0, 79.0, 8.0, 9.0, 80.0, 9.0];
+        assert_eq!(collect_collision_boxes(&game, viewed, top), [cube]);
         assert_eq!(viewed.has_collisions(&game, top), Some(true));
-        assert_eq!(own.collision_boxes(&game, top), Some(vec![]));
+        assert!(collect_collision_boxes(&game, own, top).is_empty());
         assert_eq!(own.has_collisions(&game, top), Some(false));
+
+        // More than a million cursor cells, mostly after the first hit along z.
+        // An early hit exercises the removed cap without walking those cells.
+        let long = [8.25, 79.25, 8.25, 8.75, 79.75, 120_000.75];
+        let mut visits = 0;
+        assert_eq!(
+            viewed.visit_block_collisions(&game, long, &mut |shape| {
+                visits += 1;
+                let mut boxes = shape.boxes();
+                assert_eq!(boxes.next(), Some(cube));
+                assert_eq!(boxes.next(), None);
+                ControlFlow::Break(())
+            }),
+            Some(ControlFlow::Break(()))
+        );
+        assert_eq!(visits, 1);
+        assert_eq!(viewed.has_collisions(&game, long), Some(true));
     }
 
-    /// A column the viewed world does not hold answers None, and reading it loads nothing.
+    #[test]
+    #[ignore = "daily"]
+    fn block_collision_visit_uses_the_named_level_and_stops_on_break() {
+        use crate::game::native_entity_refs::tests::run_fresh_cases;
+        use core::ops::ControlFlow::{Break, Continue};
+
+        if run_fresh_cases(
+            "game::native_viewed_levels::tests::block_collision_visit_uses_the_named_level_and_stops_on_break",
+            "SUNRISE_BLOCK_COLLISION_VISIT_CHILD",
+            &["viewed"],
+        ) {
+            return;
+        }
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let (own, viewed) = viewing(&mut game);
+        let mut boxes = Vec::new();
+        assert_eq!(
+            own.visit_block_collision(&game, POCKET, &mut |bounds| {
+                boxes.push(bounds);
+                Continue(())
+            }),
+            Ok(Continue(()))
+        );
+        assert_eq!(boxes, [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]);
+        assert_eq!(
+            viewed.visit_block_collision(&game, POCKET, &mut |_| panic!("viewed air is empty")),
+            Ok(Continue(()))
+        );
+
+        // A straight stair has a bottom slab and an upper half-block.
+        let stair = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone_stairs")
+            .unwrap();
+        game.world
+            .set(POCKET[0], POCKET[1], POCKET[2], stair)
+            .unwrap();
+        boxes.clear();
+        assert_eq!(
+            own.visit_block_collision(&game, POCKET, &mut |bounds| {
+                boxes.push(bounds);
+                Continue(())
+            }),
+            Ok(Continue(()))
+        );
+        assert_eq!(boxes.len(), 2);
+        let mut visited = 0;
+        assert_eq!(
+            own.visit_block_collision(&game, POCKET, &mut |_| {
+                visited += 1;
+                Break(())
+            }),
+            Ok(Break(()))
+        );
+        assert_eq!(visited, 1);
+
+        game.handle_packet(close(1)).unwrap();
+        assert_eq!(
+            viewed.visit_block_collision(&game, POCKET, &mut |_| panic!("closed level is stale")),
+            Err(LevelReadError::Stale)
+        );
+    }
+
+    /// Missing columns refuse direct reads, read as empty chunks for `clip`, and are skipped by
+    /// the block collision scan, without mutating either client world.
     #[test]
     #[ignore = "daily"]
     fn a_column_the_viewed_world_does_not_hold_is_none() {
         let mut resources = None;
         let mut game = client(&mut resources);
-        let (_, viewed) = viewing(&mut game);
+        let (own, viewed) = viewing(&mut game);
         assert_eq!(state(&game, viewed, [20, 70, 5]), None);
-        // Through the air above the stone: a miss inside column 0, None once into column 1.
-        let ray = |to: f64| {
+        // Through the air above the stone: misses inside column 0 and across missing column 1.
+        let ray = |game: &Game<'_>, to: f64| {
             viewed.clip(
-                &game,
+                game,
                 [8.5, 85.5, 8.5],
                 [to, 85.5, 8.5],
                 ClipBlock::Collider,
                 ClipFluid::None,
             )
         };
-        assert!(ray(15.5).unwrap().miss);
-        assert_eq!(ray(24.5), None);
-        let inside = [8.0, 85.0, 8.0, 9.0, 86.0, 9.0];
-        assert_eq!(viewed.collision_boxes(&game, inside), Some(vec![]));
-        let across = [15.0, 85.0, 8.0, 17.0, 86.0, 9.0];
-        assert_eq!(viewed.collision_boxes(&game, across), None);
-        assert_eq!(viewed.has_collisions(&game, across), None);
+        let inside_miss = ray(&game, 15.5).unwrap();
+        assert!(inside_miss.miss);
+        assert_eq!(inside_miss.block, [15, 85, 8]);
+        assert_eq!(inside_miss.face, BlockFace::West);
+        assert_eq!(inside_miss.location, [15.5, 85.5, 8.5]);
+        let missing_miss = ray(&game, 24.5).unwrap();
+        assert!(missing_miss.miss);
+        assert_eq!(missing_miss.block, [24, 85, 8]);
+        assert_eq!(missing_miss.face, BlockFace::West);
+        assert_eq!(missing_miss.location, [24.5, 85.5, 8.5]);
+        assert!(!missing_miss.inside && !missing_miss.world_border);
+        let above_miss = viewed
+            .clip(
+                &game,
+                [8.5, 325.5, 8.5],
+                [24.5, 325.5, 8.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+            )
+            .unwrap();
+        assert!(above_miss.miss);
+        assert_eq!(above_miss.block, [24, 325, 8]);
+        assert_eq!(above_miss.face, BlockFace::West);
+        assert_eq!(above_miss.location, [24.5, 325.5, 8.5]);
+        let own_miss = own
+            .clip(
+                &game,
+                [8.5, 85.5, 8.5],
+                [24.5, 85.5, 8.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+            )
+            .unwrap();
+        assert!(own_miss.miss);
+        assert_eq!(own_miss.block, [24, 85, 8]);
+        assert_eq!(own_miss.face, BlockFace::West);
+        assert_eq!(own_miss.location, [24.5, 85.5, 8.5]);
+        let across = [15.25, 85.25, 8.25, 32.75, 85.75, 8.75];
+        assert!(collect_collision_boxes(&game, viewed, across).is_empty());
+        assert_eq!(viewed.has_collisions(&game, across), Some(false));
+
+        game.handle_packet(run(1, &[layered(2, 0, 0), set([32, 85, 8], 1)]))
+            .unwrap();
+        assert_eq!(
+            collect_collision_boxes(&game, viewed, across),
+            [[32.0, 85.0, 8.0, 33.0, 86.0, 9.0]]
+        );
+        assert_eq!(viewed.has_collisions(&game, across), Some(true));
+        for mode in [ClipBlock::Collider, ClipBlock::Outline] {
+            let after_gap = viewed
+                .clip(
+                    &game,
+                    [8.5, 85.5, 8.5],
+                    [34.5, 85.5, 8.5],
+                    mode,
+                    ClipFluid::None,
+                )
+                .unwrap();
+            assert!(!after_gap.miss);
+            assert_eq!(after_gap.block, [32, 85, 8]);
+            assert_eq!(after_gap.face, BlockFace::West);
+            assert_eq!(after_gap.location, [32.0, 85.5, 8.5]);
+            assert!(!after_gap.inside && !after_gap.world_border);
+        }
+        let from_east = viewed
+            .clip(
+                &game,
+                [34.5, 85.5, 8.5],
+                [8.5, 85.5, 8.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+            )
+            .unwrap();
+        assert!(!from_east.miss);
+        assert_eq!(from_east.block, [32, 85, 8]);
+        assert_eq!(from_east.face, BlockFace::East);
+        assert_eq!(from_east.location, [33.0, 85.5, 8.5]);
+
+        // Straight ray hitting beyond 4096 cells in a viewed world across missing columns.
+        game.handle_packet(run(1, &[layered(300, 0, 0), set([4805, 85, 8], 1)]))
+            .unwrap();
+        let far_hit = viewed
+            .clip(
+                &game,
+                [33.5, 85.5, 8.5],
+                [4810.5, 85.5, 8.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+            )
+            .unwrap();
+        assert!(!far_hit.miss);
+        assert_eq!(far_hit.block, [4805, 85, 8]);
+        assert_eq!(far_hit.face, BlockFace::West);
+        assert_eq!(far_hit.location, [4805.0, 85.5, 8.5]);
+        assert!(!far_hit.inside && !far_hit.world_border);
+        let far_miss = viewed
+            .clip(
+                &game,
+                [33.5, 86.5, 8.5],
+                [4810.5, 86.5, 8.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+            )
+            .unwrap();
+        assert!(far_miss.miss);
+        assert_eq!(far_miss.block, [4810, 86, 8]);
+        assert_eq!(far_miss.face, BlockFace::West);
+        assert_eq!(far_miss.location, [4810.5, 86.5, 8.5]);
         let world = &game.remote.as_ref().unwrap().viewed.get(1).unwrap().world;
-        assert_eq!(world.chunks.len(), 1);
+        assert!(!world.chunks.contains_key(&(1, 0)));
+        assert!(!world.chunks.contains_key(&(3, 0)));
+        assert_eq!(world.chunks.len(), 3);
+
+        // The client's own world also hits after a missing-column gap without loading the gap.
+        game.handle_packet(layered(2, 0, 0)).unwrap();
+        game.handle_packet(set([32, 85, 8], 1)).unwrap();
+        let own_hit = own
+            .clip(
+                &game,
+                [8.5, 85.5, 8.5],
+                [34.5, 85.5, 8.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+            )
+            .unwrap();
+        assert!(!own_hit.miss);
+        assert_eq!(own_hit.block, [32, 85, 8]);
+        assert_eq!(own_hit.face, BlockFace::West);
+        assert_eq!(own_hit.location, [32.0, 85.5, 8.5]);
+        assert!(!game.world.chunks.contains_key(&(1, 0)));
+        assert_eq!(game.world.chunks.len(), 2);
     }
 
     /// Writes, server-only reads and the entity reads refuse a viewed level, which keeps its
@@ -229,7 +546,10 @@ mod tests {
         );
         assert_eq!(state(&game, viewed, POCKET), Some(0));
         assert_eq!(viewed.fluid_state(&game, POCKET), None);
-        assert_eq!(viewed.entities_in(&game, [0.0; 3], [16.0; 3]), None);
+        assert_eq!(
+            collect_entities_in(&game, viewed, [0.0; 3], [16.0; 3]),
+            Err(LevelReadError::Unavailable)
+        );
     }
 
     /// The server's close, and a Respawn, end the handle: it and `host.level` answer None until
@@ -244,7 +564,11 @@ mod tests {
         assert_eq!(game.level(NETHER), None);
         assert_eq!(state(&game, viewed, [3, 71, 5]), None);
         assert_eq!(
-            viewed.collision_boxes(&game, [8.0, 79.0, 8.0, 9.0, 80.0, 9.0]),
+            viewed.visit_block_collisions(
+                &game,
+                [8.0, 79.0, 8.0, 9.0, 80.0, 9.0],
+                &mut |_| panic!("stale level")
+            ),
             None
         );
         game.handle_packet(open(1, NETHER)).unwrap();

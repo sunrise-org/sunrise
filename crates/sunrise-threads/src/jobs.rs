@@ -206,7 +206,8 @@ impl Pool {
     /// [`Pool::new`] whose workers free their buffers after `idle_release`.
     pub fn with_idle_release(threads: usize, name: &str, idle_release: Duration) -> Self {
         Self::with_spawner(threads, idle_release, |worker, i| {
-            sunrise_guest_stack::builder()
+            std::thread::Builder::new()
+                .stack_size(crate::GAME_THREAD_STACK_BYTES)
                 .name(format!("{name}-{i}"))
                 .spawn(move || {
                     crate::behind_server();

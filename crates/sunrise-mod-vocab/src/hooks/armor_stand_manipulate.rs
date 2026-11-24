@@ -1,5 +1,4 @@
 //! The `armor_stand_manipulate` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0239
 
 pub trait Hooks {
     /// A player takes an item from an armor stand or puts one on it
@@ -20,11 +19,19 @@ pub trait Hooks {
     /// drop), a dispenser putting armour on one, a mod's own changes.
     /// Server-side, for every player of the world.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_armor_stand_manipulate",
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "cancel",
         neoforge = "none (Bukkit's PlayerArmorStandManipulateEvent)",
         cancellable = true
     )]
-    fn armor_stand_manipulate();
+    fn armor_stand_manipulate(
+        player: u128,
+        name: &str,
+        stand_id: i32,
+        slot: &str,
+        cancel: &mut bool,
+    );
 }

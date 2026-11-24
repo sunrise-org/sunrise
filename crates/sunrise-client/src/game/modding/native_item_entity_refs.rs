@@ -1,67 +1,86 @@
 //! Dropped-item handles for native server mods.
-use super::{Game, commands::Target};
-use mod_api::{EntityRef, ItemEntityRef};
+use super::{
+    Game,
+    api_values::{project_stack, stack_read_metadata},
+    commands::Target,
+};
+use mod_api::{EntityRef, ItemEntityRef, ItemStackView};
 use sunrise_client::{
+    entities::ItemEntity,
     items::ItemStack,
     lan::playerdata::{ints_uuid, uuid_ints},
 };
 
 impl Game<'_> {
-    fn native_item_entity_index(&self, item: ItemEntityRef) -> Option<usize> {
-        let Target::Item(id) = self.native_entity_target(item.entity())? else {
+    /// Resolve the stable item identity, reusing the caller's known slot while it still matches.
+    pub(super) fn native_item_entity_index(
+        &self,
+        item: ItemEntityRef,
+        hint: Option<usize>,
+    ) -> Option<usize> {
+        let (Target::Item(_), Some(location)) =
+            self.native_entity_target_with_location(item.entity())?
+        else {
             return None;
         };
-        self.dropped.iter().position(|entity| entity.id == id)
+        hint.filter(|&i| {
+            self.dropped
+                .get(i)
+                .is_some_and(|row| row.join == location.join)
+        })
+        .or_else(|| self.dropped.locate(location.join))
     }
 
     /// Narrows an entity to a dropped item, or None for another kind, a
     /// stale handle, a client, or an item temporarily taken out for ticking.
     pub(super) fn item_entity(&self, entity: EntityRef) -> Option<ItemEntityRef> {
         let item = ItemEntityRef::new(entity);
-        self.native_item_entity_index(item).map(|_| item)
+        self.native_item_entity_index(item, None).map(|_| item)
     }
 
-    /// `ItemEntity.getItem`: the complete stack, or None if unavailable.
-    pub(super) fn item_entity_stack(&self, item: ItemEntityRef) -> Option<ItemStack> {
-        if self.block_entity_tick_items.is_some() {
-            return self.scoped_item_entity_stack(item);
-        }
-        self.unscoped_item_entity_stack(item)
-    }
-    /// Writes a nonempty complete stack using `ItemEntity.setItem`. Empty
-    /// stacks are refused: vanilla discards the item on its next tick. To
-    /// remove an item entity, use the removal handle. False also for an
-    /// unavailable item or outside a server.
-    pub(super) fn item_entity_set_stack(&mut self, item: ItemEntityRef, stack: ItemStack) -> bool {
-        if stack.count == 0
-            || &*stack.item == "minecraft:air"
-            || self.native_item_entity_index(item).is_none()
-        {
-            return false;
-        }
-        self.native_set_item_entity(self.dim.id(), item.entity().id(), stack)
-    }
-
-    /// The signed pickup delay; the legacy infinite sentinel reads as vanilla's
-    /// 32767. None also covers a stored value outside i32.
-    pub(super) fn item_entity_pickup_delay(&self, item: ItemEntityRef) -> Option<i32> {
-        let delay = self
+    /// Lend `ItemEntity.getItem`. Encode components only when the reader projects the view.
+    pub(super) fn item_entity_stack(
+        &self,
+        item: ItemEntityRef,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) -> Option<()> {
+        let stack = &self
             .dropped
-            .get(self.native_item_entity_index(item)?)?
-            .pickup_delay;
-        if delay == i64::from(u32::MAX) {
-            Some(i32::from(i16::MAX))
-        } else {
-            i32::try_from(delay).ok()
-        }
+            .get(self.native_item_entity_index(item, None)?)?
+            .stack;
+        let metadata = stack_read_metadata(stack).ok()?;
+        let project = |metadata| project_stack(stack, metadata).ok();
+        read(ItemStackView::resident(metadata, &project));
+        Some(())
+    }
+    /// Writes a stack using `ItemEntity.setItem`. Passing `None` or an air stack
+    /// stores an empty stack, which normal `ItemEntity.tick` discards on its next
+    /// tick (use the removal handle to discard immediately). False for an
+    /// unavailable item or outside a server.
+    pub(super) fn item_entity_set_stack(
+        &mut self,
+        item: ItemEntityRef,
+        stack: Option<ItemStack>,
+    ) -> bool {
+        let Some(index) = self.native_item_entity_index(item, None) else {
+            return false;
+        };
+        self.journal_set_item_entity_at(index, stack);
+        true
+    }
+
+    /// The signed pickup delay (`ItemEntity.pickupDelay`). `32767` is vanilla's
+    /// infinite-delay sentinel (`set_never_pickup`).
+    pub(super) fn item_entity_pickup_delay(&self, item: ItemEntityRef) -> Option<i32> {
+        Some(self.dropped[self.native_item_entity_index(item, None)?].pickup_delay)
     }
 
     /// `ItemEntity.setPickUpDelay`.
     pub(super) fn item_entity_set_pickup_delay(&mut self, item: ItemEntityRef, ticks: i32) -> bool {
-        let Some(index) = self.native_item_entity_index(item) else {
+        let Some(index) = self.native_item_entity_index(item, None) else {
             return false;
         };
-        self.dropped[index].pickup_delay = i64::from(ticks);
+        self.journal_set_item_pickup_delay(index, ticks);
         true
     }
 
@@ -77,19 +96,23 @@ impl Game<'_> {
 
     /// `ItemEntity.setNeverPickUp`: the infinite-delay sentinel 32767.
     pub(super) fn item_entity_set_never_pickup(&mut self, item: ItemEntityRef) -> bool {
-        self.item_entity_set_pickup_delay(item, i32::from(i16::MAX))
+        self.item_entity_set_pickup_delay(item, ItemEntity::INFINITE_PICKUP_DELAY)
     }
 
     /// `ItemEntity.getAge`, including negative lifetime sentinels.
     pub(super) fn item_entity_age(&self, item: ItemEntityRef) -> Option<i32> {
-        Some(self.dropped.get(self.native_item_entity_index(item)?)?.age)
+        Some(
+            self.dropped
+                .get(self.native_item_entity_index(item, None)?)?
+                .age,
+        )
     }
 
     /// The UUID set by `ItemEntity.setTarget`, limiting pickup to that player;
     /// None also means an unavailable item. This is not the thrower.
     pub(super) fn item_entity_target(&self, item: ItemEntityRef) -> Option<u128> {
         self.dropped
-            .get(self.native_item_entity_index(item)?)?
+            .get(self.native_item_entity_index(item, None)?)?
             .target
             .map(ints_uuid)
     }
@@ -100,10 +123,10 @@ impl Game<'_> {
         item: ItemEntityRef,
         target: Option<u128>,
     ) -> bool {
-        let Some(index) = self.native_item_entity_index(item) else {
+        let Some(index) = self.native_item_entity_index(item, None) else {
             return false;
         };
-        self.dropped[index].target = target.map(uuid_ints);
+        self.journal_set_item_target(index, target.map(uuid_ints));
         true
     }
 
@@ -113,7 +136,7 @@ impl Game<'_> {
     pub(super) fn item_entity_owner(&self, item: ItemEntityRef) -> Option<EntityRef> {
         let uuid = self
             .dropped
-            .get(self.native_item_entity_index(item)?)?
+            .get(self.native_item_entity_index(item, None)?)?
             .thrower?;
         let target = self.target_by_uuid(ints_uuid(uuid))?;
         if self.target_level(target) != self.dim {
@@ -124,14 +147,12 @@ impl Game<'_> {
     }
 }
 
-include!("native_item_entity_refs/tick_item_read.rs");
-
 #[cfg(test)]
 mod tests {
-    use super::super::native_entity_refs::tests::with_game;
+    use super::super::native_entity_refs::tests::{fixture_resident_column, with_game};
     use super::*;
     use crate::game::api_values::test_snapshot;
-    use mod_api::WorldEpoch;
+    use mod_api::{HostTransaction, WorldEpoch};
     use sunrise_client::{entities::ArmorStand, mobs::Mob};
     use sunrise_core::geometry::Vec3;
 
@@ -139,6 +160,7 @@ mod tests {
     #[ignore = "daily"]
     fn item_handles_preserve_stacks_and_distinguish_target_from_thrower() {
         with_game(|game| {
+            fixture_resident_column(&mut game.world, (0, 0));
             game.options.dedicated = Some(Vec::new());
             let mut stack = ItemStack {
                 item: "minecraft:diamond_pickaxe".into(),
@@ -152,29 +174,39 @@ mod tests {
             let entity = game.entity(game.dropped[0].id).unwrap();
             let item = game.item_entity(entity).unwrap();
             assert_eq!(item.entity(), entity);
-            let read = item.stack(game).unwrap();
             assert_eq!(
-                (read.item().id(game).as_str(), read.count(), read.damage()),
-                ("minecraft:diamond_pickaxe", 1, 17)
+                item.with_stack(game, |read| (
+                    read.item().id(game),
+                    read.count(),
+                    read.damage()
+                )),
+                Some((Some("minecraft:diamond_pickaxe"), 1, 17))
             );
             let mut changed = stack;
             changed.damage = 21;
             let changed = test_snapshot(&changed);
-            assert_eq!(item.set_stack(game, changed.clone()), Ok(true));
-            assert_eq!(item.stack(game), Some(changed));
+            assert_eq!(item.set_stack(game, Some(changed.clone())), Ok(true));
+            assert_eq!(
+                item.with_stack(game, |stack| stack.project()).flatten(),
+                Some(changed.clone())
+            );
             assert!(item.set_pickup_delay(game, -7));
             assert_eq!(item.pickup_delay(game), Some(-7));
             assert!(item.set_default_pickup_delay(game));
             assert_eq!(item.pickup_delay(game), Some(10));
-            game.dropped[0].pickup_delay = i64::from(u32::MAX);
-            assert_eq!(item.pickup_delay(game), Some(32767));
             assert!(item.set_never_pickup(game));
-            assert_eq!(game.dropped[0].pickup_delay, 32767);
-            assert_eq!(item.pickup_delay(game), Some(32767));
+            assert_eq!(
+                game.dropped[0].pickup_delay,
+                ItemEntity::INFINITE_PICKUP_DELAY
+            );
+            assert_eq!(
+                item.pickup_delay(game),
+                Some(ItemEntity::INFINITE_PICKUP_DELAY)
+            );
             assert!(item.set_no_pickup_delay(game));
             assert_eq!(item.pickup_delay(game), Some(0));
-            game.dropped[0].age = -32768;
-            assert_eq!(item.age(game), Some(-32768));
+            game.dropped[0].age = ItemEntity::INFINITE_LIFETIME;
+            assert_eq!(item.age(game), Some(ItemEntity::INFINITE_LIFETIME));
             let target = 0x12345678_9abcdef0_10203040_50607080_u128;
             assert!(item.set_target(game, Some(target)));
             assert_eq!(item.target(game), Some(target));
@@ -200,16 +232,46 @@ mod tests {
                 entity.id(),
             ));
             assert_eq!(stale.age(game), None);
+            assert!(stale.with_stack(game, |_| ()).is_none());
             assert!(!stale.set_target(game, Some(target)));
-            let mut empty = item.stack(game).unwrap();
+            let mut empty = item
+                .with_stack(game, |stack| stack.project())
+                .flatten()
+                .unwrap();
             assert_eq!(empty.set_count(0), Err(mod_api::StackError::Empty));
+            // `ItemEntity.setItem` accepts empty stacks (`None` or air) without immediate removal;
+            // the entity remains resident with an empty stack until its next tick discards it.
             let air = test_snapshot(&ItemStack::new("minecraft:air", 1));
-            assert_eq!(item.set_stack(game, air), Ok(false));
-            assert_eq!(item.stack(game).unwrap().damage(), 21);
+            assert_eq!(item.set_stack(game, Some(air)), Ok(true));
+            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.dropped[0].stack.count, 0);
+            assert_eq!(&*game.dropped[0].stack.item, "minecraft:air");
+            assert!(item.with_stack(game, |_| ()).is_none());
+            // Writing back a nonempty stack keeps the item alive; aborting a transaction
+            // that empties it restores the prior stack.
+            assert_eq!(item.set_stack(game, Some(changed.clone())), Ok(true));
+            assert_eq!(item.with_stack(game, |stack| stack.damage()), Some(21));
+            let host: &mut dyn mod_api::ServerHost = game;
+            let _ = host.transaction(|host, _tx| {
+                assert_eq!(item.set_stack(host, None), Ok(true));
+                assert!(item.with_stack(host, |_| ()).is_none());
+                Err::<(), ()>(())
+            });
+            assert_eq!(item.with_stack(game, |stack| stack.damage()), Some(21));
             let taken = game.dropped.lift();
-            assert!(item.stack(game).is_none());
+            assert!(item.with_stack(game, |_| ()).is_none());
             assert!(!item.set_no_pickup_delay(game));
-            game.dropped = taken;
+            game.put_back_dropped(taken);
+            // Committing an empty stack leaves the item resident until its next tick discards it.
+            assert_eq!(item.set_stack(game, None), Ok(true));
+            assert_eq!(game.dropped.len(), 1);
+            game.ticked_entities_through = u32::MAX;
+            let mut round = game.native_tick_round();
+            game.tick_dropped_items(&mut round);
+            assert!(
+                game.dropped.is_empty(),
+                "normal ItemEntity.tick discards an item entity holding an empty stack"
+            );
         });
     }
 }

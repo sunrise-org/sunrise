@@ -9,21 +9,17 @@ pub trait EntityFlagsBackend {
     /// Side: server.
     /// Whether the mob makes no sounds (`Entity.isSilent`, its `Silent`
     /// tag); false for a player.
-    #[access(WorldOnly)]
     fn entity_is_silent(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
     /// Returns the mob's persistent glowing tag (`Entity.hasGlowingTag`).
-    #[access(WorldOnly)]
     fn entity_glowing(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
-    /// Returns the mob's no-gravity flag (`Entity.isNoGravity`).
-    #[access(WorldOnly)]
+    /// Returns the mob's or dropped item's no-gravity flag (`Entity.isNoGravity`).
     fn entity_no_gravity(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
     /// Whether the entity's model is hidden (`Entity.isInvisible`): the
-    /// invisibility effect on a player or a mob, a mob's or an armor stand's
-    /// flag.
-    #[access(WorldOnly)]
+    /// invisibility effect on a player or a mob, the flag of a mob, an armor
+    /// stand or an item frame.
     fn entity_is_invisible(&self, entity: EntityRef) -> Option<bool>;
 }
 /// The handles' writes of the `entity_flags` area, implemented by the game and reached through [`BackendMut`].
@@ -34,18 +30,16 @@ pub trait EntityFlagsBackendMut {
     /// Side: server.
     /// Silences the mob or lets it make sounds again (`Entity.setSilent`).
     /// False for the other kinds.
-    #[access(WorldOnly)]
     fn entity_set_silent(&mut self, entity: EntityRef, silent: bool) -> bool;
     /// Side: server.
     /// Sets the mob's persistent glowing tag (`Entity.setGlowingTag`). Returns false for players and guests.
-    #[access(WorldOnly)]
     fn entity_set_glowing(&mut self, entity: EntityRef, glowing: bool) -> bool;
     /// Side: server.
-    /// Sets the mob's no-gravity flag (`Entity.setNoGravity`). Returns false for players and guests.
-    #[access(WorldOnly)]
+    /// Sets the mob's or dropped item's no-gravity flag (`Entity.setNoGravity`).
+    /// Returns false for players and guests.
     fn entity_set_no_gravity(&mut self, entity: EntityRef, no_gravity: bool) -> bool;
     /// Side: server.
-    /// Sets the entity's shared invisibility flag (`Entity.setInvisible`). Returns false for players and guests.
-    #[access(WorldOnly)]
+    /// Sets the entity's shared invisibility flag (`Entity.setInvisible`) on a mob, an armor
+    /// stand or an item frame. Returns false for players, guests and other kinds.
     fn entity_set_invisible(&mut self, entity: EntityRef, invisible: bool) -> bool;
 }

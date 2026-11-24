@@ -1,8 +1,8 @@
-#![cfg(test)]
 //! `on_block_state_change` heard by a block Part at the end of `Level.setBlock`: after the
 //! neighbours' shapes settled, where `block_changed` hears the write before them, and on a
 //! client for each block the server sends and each write of a piston's replay.
 use crate::game::native_entity_refs::tests::with_game;
+use crate::game::remote::RemoteDimensionEntry;
 use mod_api::{
     BlockChangedEvent, BlockPart, BlockState, BlockUpdateFlags, Hooks, LevelHost, LevelSide,
     OnBlockStateChangeEvent, Registrar,
@@ -194,7 +194,7 @@ fn a_client_hears_each_block_the_server_sends_and_each_write_of_a_piston_replay(
                 portal_cooldown: 0,
                 sea_level: 63,
             };
-            game.enter_remote_dimension(&spawn, false, Reason::Other);
+            game.enter_remote_dimension(&spawn, RemoteDimensionEntry::Login, Reason::Other);
             game.remote.as_mut().unwrap().logged_in = true;
             game.world
                 .chunks

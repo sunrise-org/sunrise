@@ -1,1 +1,0 @@
-The block tint registry `register_block_tint_sources` hands out: NeoForge's `RegisterColorHandlersEvent.BlockTintSources`.

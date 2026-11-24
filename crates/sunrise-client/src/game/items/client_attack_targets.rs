@@ -40,14 +40,15 @@ impl Game<'_> {
             | Target::DragonPart(_)
             | Target::Cushion(_) => true,
             Target::Other(id) => self.interactions.contains_key(&(id as i32)),
-            Target::Projectile(id) => self.creatures.projectiles.iter().any(|p| {
-                p.id == id
-                    && (super::deflect::redirectable(p)
-                        || matches!(
-                            p.kind,
-                            sunrise_client::projectiles::ProjectileKind::ShulkerBullet { .. }
-                        ))
-            }),
+            Target::Projectile(id) => self
+                .creatures
+                .projectiles
+                .iter()
+                .any(|p| p.id == id && self.projectile_is_pickable(p)),
+            Target::Trident(id) => self
+                .tridents
+                .iter()
+                .any(|t| t.id == id && self.trident_is_pickable(t)),
             _ => false,
         };
         if !attackable {
@@ -97,7 +98,11 @@ impl Game<'_> {
                 if let Some((_, point)) = selected.filter(|(selected, _)| *selected == entity) {
                     // This is the stored pick, not an independently requested batch target.
                     // Preserve its point and occlusion policy for this stored decision.
-                    (self.crosshair_target() == committed).then(|| self.pick_distance(point))
+                    if self.crosshair_target() == committed {
+                        self.attack_hit_distance(point)
+                    } else {
+                        None
+                    }
                 } else {
                     self.targeting_entity_hit(entity)
                         .map(|(_, distance)| distance)
@@ -155,7 +160,10 @@ mod tests {
         }
     }
 
-    fn finish_login(server: &mut sunrise_protocol::connection::Connection) {
+    fn finish_login(
+        game: &mut crate::game::Game<'_>,
+        server: &mut sunrise_protocol::connection::Connection,
+    ) {
         use sunrise_protocol::packets::{Empty, configuration as cfg, login};
         server.recv().unwrap(); // Intention.
         server.recv().unwrap(); // Hello.
@@ -182,6 +190,7 @@ mod tests {
         server
             .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
             .unwrap();
+        game.acknowledge_test_configuration();
         let (id, payload) = server.recv().unwrap();
         assert!(matches!(
             cfg::Serverbound::decode(id, &payload).unwrap(),
@@ -236,9 +245,8 @@ mod tests {
                     .reader
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();
-                finish_login(&mut server);
-                game.native_lifecycle
-                    .begin_open(mod_api::Authority::RemoteClient);
+                finish_login(game, &mut server);
+                game.native_lifecycle.begin_open(None);
                 game.title = None;
                 game.player =
                     Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 1.0, 0.5)).unwrap());
@@ -302,8 +310,7 @@ mod tests {
                     sent_attacks(game, &mut server).is_empty(),
                     "explicit extra batch targets still obey occlusion"
                 );
-                game.native_lifecycle
-                    .begin_open(mod_api::Authority::RemoteClient);
+                game.native_lifecycle.begin_open(None);
                 assert!(game.mod_attack_targets());
                 assert!(sent_attacks(game, &mut server).is_empty());
             })

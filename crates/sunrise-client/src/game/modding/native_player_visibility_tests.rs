@@ -241,3 +241,213 @@ fn a_client_cannot_ack_show_or_ask_who_sees() {
         assert_eq!(ghost.sees(game, ghost), Err(Refusal::Client));
     });
 }
+
+/// `hide` and `set_nickname` read back through `hidden` and `nickname`: the player's own value,
+/// shown for another, and shown again after being cleared.
+#[test]
+#[ignore = "daily"]
+fn hide_level_and_nickname_read_back() {
+    with_guests(|game| {
+        let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
+        assert!(a.hide(game, Some(2)));
+        assert_eq!(a.hidden(game), Ok(Some(2)));
+        assert_eq!(b.hidden(game), Ok(None));
+        assert!(a.hide(game, None));
+        assert_eq!(a.hidden(game), Ok(None));
+
+        assert!(a.set_nickname(game, Some("Cap")));
+        assert_eq!(a.nickname(game), Ok(Some("Cap")));
+        assert_eq!(b.nickname(game), Ok(None));
+        assert!(a.set_nickname(game, None));
+        assert_eq!(a.nickname(game), Ok(None));
+
+        // A vanish is kept by UUID after the player leaves; a nickname needs them online.
+        assert!(a.hide(game, Some(3)));
+        assert!(a.set_nickname(game, Some("Cap")));
+        game.lan.as_mut().unwrap().hub.guests.clear();
+        assert_eq!(a.hidden(game), Ok(Some(3)));
+        assert_eq!(a.nickname(game), Err(Refusal::Stale));
+    });
+}
+
+/// An unpublished single-player world runs a hub for its owner, but nobody else can join it
+/// yet: a hide level set there reads back as stored, before and after the world is published,
+/// as `hide` stores it, and so does a nickname.
+#[test]
+#[ignore = "daily"]
+fn an_unpublished_single_player_world_reads_the_stored_hide_level() {
+    with_guests(|game| {
+        let owner = game.player(12).unwrap();
+        game.serving = Some(super::integrated::Serving::fixture(0));
+        assert!(owner.hide(game, Some(2)));
+        assert!(owner.set_nickname(game, Some("Cap")));
+        assert_eq!(owner.hidden(game), Ok(Some(2)));
+        assert_eq!(owner.nickname(game), Ok(Some("Cap")));
+        game.serving = Some(super::integrated::Serving::fixture(25565));
+        assert_eq!(owner.hidden(game), Ok(Some(2)));
+        assert_eq!(owner.nickname(game), Ok(Some("Cap")));
+    });
+}
+
+/// A guest's latency is what its keep-alives measured; a fake player has none.
+#[test]
+#[ignore = "daily"]
+fn latency_reads_what_the_keep_alives_measured() {
+    use std::sync::atomic::Ordering;
+    with_guests(|game| {
+        let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
+        assert_eq!((a.latency(game), b.latency(game)), (Ok(0), Ok(0)));
+        let guests = &game.lan.as_ref().unwrap().hub.guests;
+        for (conn, ms) in [(12, 45), (13, 120)] {
+            guests
+                .iter()
+                .find(|g| g.conn == conn)
+                .unwrap()
+                .latency
+                .store(ms, Ordering::Relaxed);
+        }
+        assert_eq!((a.latency(game), b.latency(game)), (Ok(45), Ok(120)));
+        let machine = fake(game);
+        assert_eq!(machine.latency(game), Ok(0));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn player_support_uses_the_footprint_then_the_exact_feet_offset_on_both_sides() {
+    use super::native_client_session::tests::logged_client;
+    use mod_api::BlockPos;
+    use sunrise_client::{chunk::Chunk, motion::PlayerMotion};
+    use sunrise_core::geometry::Vec3;
+    use sunrise_world::entity_move::MoverType::SelfMovement;
+
+    let setup = |game: &mut super::Game<'_>| {
+        game.streaming
+            .insert_remote(&mut game.world, Chunk::empty(0, 0));
+        let slab = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone_slab")
+            .unwrap();
+        game.world.set(0, 64, 0, slab).unwrap();
+    };
+    let land = |game: &mut super::Game<'_>| {
+        // The player's centre is over air. Only the edge overlaps the slab.
+        game.player.as_mut().unwrap().position = Vec3::new(1.125, 65.0, 0.5);
+        game.move_local_player(SelfMovement, Vec3::new(0.0, -1.0, 0.0), false)
+            .unwrap();
+    };
+
+    with_guests(|game| {
+        setup(game);
+        let player = game.player(12).unwrap();
+        assert!(game.command_guest(12).unwrap().motion.is_none());
+        assert_eq!(player.supporting_block(game), Ok(None));
+        assert_eq!(player.on_block(game), Ok(Some(BlockPos::new(3, 63, 5))));
+        assert_eq!(player.entity().on_block(game), Some([3, 63, 5]));
+        game.lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .update_guest(12, |guest| guest.position[1] = 64.1)
+            .unwrap();
+        assert_eq!(player.on_block(game), Ok(Some(BlockPos::new(3, 64, 5))));
+        assert_eq!(player.entity().on_block(game), Some([3, 64, 5]));
+
+        game.as_guest(12, land).unwrap();
+        let slab = BlockPos::new(0, 64, 0);
+        // Changing the world without moving the guest must not replace the
+        // support retained by the guest's last movement with a fresh scan.
+        let air = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:air")
+            .unwrap();
+        game.world.set(0, 64, 0, air).unwrap();
+        assert_eq!(player.supporting_block(game), Ok(Some(slab)));
+        assert_eq!(player.on_block(game), Ok(Some(slab)));
+        assert_eq!(player.entity().on_block(game), Some([0, 64, 0]));
+
+        for (dy, block_y) in [(0.5, 64), (0.1, 65)] {
+            game.as_guest(12, |game| {
+                game.move_local_player(SelfMovement, Vec3::new(0.0, dy, 0.0), false)
+                    .unwrap();
+            })
+            .unwrap();
+            assert_eq!(player.supporting_block(game), Ok(None));
+            assert_eq!(
+                player.on_block(game),
+                Ok(Some(BlockPos::new(1, block_y, 0)))
+            );
+            assert_eq!(player.entity().on_block(game), Some([1, block_y, 0]));
+        }
+        game.lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .update_guest(12, |guest| guest.position[1] = 66.1)
+            .unwrap();
+        assert_eq!(player.on_block(game), Ok(Some(BlockPos::new(1, 66, 0))));
+        assert_eq!(player.entity().on_block(game), Some([1, 66, 0]));
+        assert_eq!(stale(player).supporting_block(game), Ok(None));
+        assert_eq!(stale(player).on_block(game), Ok(None));
+    });
+
+    with_client_game(|game| {
+        let _server = logged_client(game);
+        let player = game.local_player().unwrap();
+        let mut body = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+        body.entity_id = player.entity().id() as i32;
+        game.player = Some(body);
+        setup(game);
+        land(game);
+
+        let slab = BlockPos::new(0, 64, 0);
+        assert_eq!(player.supporting_block(game), Ok(Some(slab)));
+        assert_eq!(player.on_block(game), Ok(Some(slab)));
+        for (dy, block_y) in [(0.5, 64), (0.1, 65)] {
+            game.move_local_player(SelfMovement, Vec3::new(0.0, dy, 0.0), false)
+                .unwrap();
+            assert_eq!(player.supporting_block(game), Ok(None));
+            assert_eq!(
+                player.on_block(game),
+                Ok(Some(BlockPos::new(1, block_y, 0)))
+            );
+        }
+
+        let other = mod_api::__private::game::player_ref(
+            EntityRef::new(player.entity().epoch(), player.entity().id() + 1),
+            player.uuid() + 1,
+        );
+        for invalid in [stale(player), other] {
+            assert_eq!(invalid.supporting_block(game), Ok(None));
+            assert_eq!(invalid.on_block(game), Ok(None));
+        }
+    });
+}
+
+/// A stale handle is refused as stale, for all three.
+#[test]
+#[ignore = "daily"]
+fn a_stale_handle_is_refused_latency_hide_level_and_nickname() {
+    with_guests(|game| {
+        let old = stale(game.player(12).unwrap());
+        assert_eq!(old.latency(game), Err(Refusal::Stale));
+        assert_eq!(old.hidden(game), Err(Refusal::Stale));
+        assert_eq!(old.nickname(game), Err(Refusal::Stale));
+    });
+}
+
+/// A client has no server list to read: all three name the client.
+#[test]
+#[ignore = "daily"]
+fn a_client_is_refused_latency_hide_level_and_nickname() {
+    with_client_game(|game| {
+        let player = mod_api::__private::game::player_ref(EntityRef::new(WorldEpoch::new(0), 1), 1);
+        assert_eq!(player.latency(game), Err(Refusal::Client));
+        assert_eq!(player.hidden(game), Err(Refusal::Client));
+        assert_eq!(player.nickname(game), Err(Refusal::Client));
+    });
+}

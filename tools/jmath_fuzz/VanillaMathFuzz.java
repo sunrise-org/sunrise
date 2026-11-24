@@ -71,6 +71,7 @@ public final class VanillaMathFuzz {
             case "projectile_rot": return 2;
             case "input_vector": return 3;
             case "blocking_angle": return 1;
+            case "mth_rounding": return 4;
             default: throw new IllegalArgumentException("unknown function " + f);
         }
     }
@@ -129,6 +130,16 @@ public final class VanillaMathFuzz {
                 var d = source.subtract(position);
                 var flat = new net.minecraft.world.phys.Vec3(d.x, 0.0, d.z).normalize();
                 return new double[] {Math.acos(flat.dot(view))};
+            }
+            case "mth_rounding": {
+                // Mth.floor and Mth.ceil of a float and of a double, from -3e9 to 3e9 in class 0 (past the int
+                // range on both sides).
+                float x = angle(i, -3e9f, 3e9f);
+                double d = coord(i, -3e9, 3e9);
+                return new double[] {
+                    net.minecraft.util.Mth.floor(x), net.minecraft.util.Mth.ceil(x),
+                    net.minecraft.util.Mth.floor(d), net.minecraft.util.Mth.ceil(d),
+                };
             }
             default: throw new IllegalArgumentException("unknown function " + f);
         }

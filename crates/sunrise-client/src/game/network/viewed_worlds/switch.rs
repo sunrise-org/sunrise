@@ -12,6 +12,7 @@
 //! clients retain their revision's implicit swap behavior; this client answers revision 4.
 use super::{routing::default_clock, worlds::ViewedWorld};
 use crate::game::Game;
+use crate::game::remote::RemoteDimensionEntry;
 use std::sync::Arc;
 use sunrise_client::level_loading::Reason;
 use sunrise_protocol::packets::{
@@ -33,16 +34,21 @@ impl Game<'_> {
     /// `handleRespawn`'s new level: a travel into a viewed level swaps the worlds; any other
     /// Respawn drops every viewed world (the server opens again what it still views) and enters
     /// the level with its loading screen.
-    pub(in crate::game) fn enter_respawn_level(&mut self, p: &play::Respawn, reason: Reason) {
+    pub(in crate::game) fn enter_respawn_level(
+        &mut self,
+        p: &play::Respawn,
+        entry: RemoteDimensionEntry,
+        reason: Reason,
+    ) {
         let Some(travel) = self.take_travel(p) else {
             if let Some(r) = self.remote.as_mut() {
                 r.viewed.clear();
             }
-            self.enter_remote_dimension(&p.spawn, true, reason);
+            self.enter_remote_dimension(&p.spawn, entry, reason);
             return;
         };
         self.keep_as_viewed(travel.slot, travel.entered.columns, p.spawn.seed);
-        self.enter_remote_dimension(&p.spawn, true, reason);
+        self.enter_remote_dimension(&p.spawn, entry, reason);
         self.adopt_viewed_world(travel.entered);
     }
 
@@ -52,7 +58,6 @@ impl Game<'_> {
         if p.keep != KEEP_ALL_DATA {
             return None;
         }
-        let base = self.res.environment();
         let r = self.remote.as_mut()?;
         if p.spawn.dimension == r.level {
             return None;
@@ -61,7 +66,7 @@ impl Game<'_> {
         let opened = r.viewed.get_mut(slot)?.world.shape;
         // A level whose dimension type changed since its `open` (a server's error) is entered
         // afresh: its columns would not fit.
-        if r.level_format(&p.spawn, base).shape != opened {
+        if r.level_format(&p.spawn).shape != opened {
             return None;
         }
         let entered = r.viewed.take(slot)?;
@@ -74,11 +79,21 @@ impl Game<'_> {
     /// mods, as when it goes (`forget_all_remote_columns`); a placeholder stands until
     /// `enter_remote_dimension` makes the new level's world.
     fn keep_as_viewed(&mut self, slot: i32, cap: u32, seed: i64) {
+        // Hidden ring slots are not part of the view the server is replacing this level with.
+        let mut hidden = self
+            .world
+            .chunks
+            .resident_keys()
+            .filter(|key| !self.world.chunks.contains_key(key))
+            .collect();
+        self.forget_remote_columns(&mut hidden, false);
         let mut columns: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
         columns.sort_unstable();
         for (x, z) in columns {
             self.client_chunk_unload(x, z, false);
         }
+        // The mods' extra block models were for the player's level.
+        self.world.clear_extra_models();
         let air = self.res.facts().air;
         let world = std::mem::replace(&mut self.world, Self::world_for_mods(air, seed));
         let Some(r) = self.remote.as_mut() else {
@@ -112,11 +127,15 @@ impl Game<'_> {
         }
         let mut kept: Vec<(i32, i32, i32)> = world.block_entities.keys().copied().collect();
         kept.sort_unstable();
-        for pos in kept {
-            if let Some(entity) = world.block_entities.remove(&pos) {
-                self.world.block_entities.insert(pos, entity);
-                let state = self.world.block(pos.0, pos.1, pos.2);
-                self.sync_block_entity(pos, None, state);
+        if !kept.is_empty() {
+            let _load = sunrise_client::spans::raw_flight_guard("load_block_entities");
+            for pos in kept {
+                if let Some(entity) = world.block_entities.remove(&pos) {
+                    self.world.block_entities.insert(pos, entity);
+                    sunrise_client::spans::note_block_entity_loads(1);
+                    let state = self.world.block(pos.0, pos.1, pos.2);
+                    self.sync_block_entity(pos, None, state);
+                }
             }
         }
         for key in columns {
@@ -127,6 +146,7 @@ impl Game<'_> {
             self.client_chunk_load(key.0, key.1);
         }
         if let Some(r) = self.remote.as_mut() {
+            r.awaiting_viewed_chunk_center = true;
             r.level_load.finish();
         }
         self.send(S::PlayerLoaded(Empty));

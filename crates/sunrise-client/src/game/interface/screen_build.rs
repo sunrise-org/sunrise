@@ -14,6 +14,7 @@
 //! once per build.
 
 use mod_api::ScreenView;
+use sunrise_client::hud::HudBatch;
 use sunrise_client::inventory_effects::{EffectsLayout, EffectsSpace};
 use sunrise_client::window::GuiSize;
 
@@ -21,30 +22,41 @@ use super::{Game, Screen};
 
 /// What the native hooks see of the screen showing (`observe_screen`), kept
 /// beside its build so one `ScreenState` holds both.
+#[derive(Clone)]
 pub(super) struct ObservedScreen {
     pub(super) id: &'static str,
     /// Not a `Screen` value: the title's own screen or an overlay drawn over
     /// gameplay (sign editor, book, dialog, prompt). `set_screen` never sees
     /// it open or close.
     pub(super) overlay: bool,
+    pub(super) mod_screen: Option<String>,
     pub(super) menu: Option<String>,
+    pub(super) menu_generation: Option<u64>,
+    /// Dialog, warning and waiting screens share one public id, not one receiver.
+    pub(super) dialog_key: Option<(bool, bool, Option<u64>)>,
     pub(super) title: Option<std::sync::Arc<mod_api::Text>>,
     pub(super) rect: [f32; 4],
+    /// Actual GUI-scaled screen dimensions (`width`, `height`), used to detect
+    /// viewport/GUI-scale resizes independently of a panel's `rect`.
+    pub(super) screen_size: [f32; 2],
     pub(super) slots: usize,
     pub(super) mouse: [f32; 2],
     pub(super) partial_tick: f32,
+    pub(super) regions: Vec<mod_api::ScreenRegion>,
 }
 
 impl ObservedScreen {
     pub(super) fn view(&self) -> ScreenView<'_> {
         ScreenView::from(mod_api::__private::built::ScreenView {
             id: self.id,
+            mod_screen: self.mod_screen.as_deref(),
             menu: self.menu.as_deref(),
             title: self.title.as_deref(),
             rect: self.rect,
             slots: self.slots,
             mouse: self.mouse,
             partial_tick: self.partial_tick,
+            regions: &self.regions,
         })
     }
 }
@@ -292,12 +304,38 @@ impl ScreenBuild {
     }
 }
 
+/// The last handled mouse press on a screen, for vanilla's 250ms double-click
+/// detection (`MouseHandler.LastClick`, `MouseHandler.java:101-106`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LastScreenClick {
+    time: u64,
+    title_mode: Option<u64>,
+    pub(super) screen_instance: u64,
+    pub(super) button: i32,
+}
+
 /// What the game knows about the screen showing: the snapshot the native hooks
 /// see (`ObservedScreen`) and the build the screen's drawing will read.
 #[derive(Default)]
 pub(super) struct ScreenState {
     pub(super) observed: Option<ObservedScreen>,
     pub(super) build: ScreenBuildState,
+    /// The last draw's regions and the screen they are of (`ScreenView::regions`).
+    regions: (Option<Screen>, Vec<mod_api::ScreenRegion>),
+    /// The box the recipe book's tab (and category arrow) sprites made as this
+    /// frame painted them (`recipe_book_screen::sprite_bounds`); None when the
+    /// book drew none.
+    pub(super) drawn_book_tabs: std::cell::Cell<Option<[f32; 4]>>,
+    pub(super) widgets: super::screen_widgets::MountedScreenWidgets,
+    /// Monotonic identity of the currently open screen instance. Bumped on
+    /// every screen open, close, or replacement, and preserved across
+    /// same-instance resize/rebuild (`Screen.resize`/`rebuildWidgets`).
+    pub(super) screen_instance: u64,
+    /// Identity of the text field that last owned IME composition, so switching
+    /// directly between two fields clears the old field's preedit and area.
+    pub(super) ime_focus: Option<u64>,
+    /// Last handled screen mouse press for 250ms double-click detection.
+    pub(super) last_click: Option<LastScreenClick>,
     /// A mod's `ScreenOpening::Vanilla` answer is opening its screen: that
     /// change fires no screen hook again.
     pub(super) replacing: bool,
@@ -305,6 +343,50 @@ pub(super) struct ScreenState {
     /// (a mod's `Cancel`, `ModScreen` or `Vanilla`): a caller's grab after it
     /// leaves the screen that shows its pointer. Never set with no listener.
     pub(super) answered: std::cell::Cell<bool>,
+}
+
+impl ScreenState {
+    /// Advance the receiving screen's identity. Rebuilding children is not a replacement.
+    pub(super) fn bump_instance(&mut self) -> u64 {
+        self.screen_instance = self.screen_instance.wrapping_add(1);
+        self.last_click = None;
+        self.screen_instance
+    }
+
+    /// Whether a press at `now` on `screen_instance` with `button` is a vanilla
+    /// double-click (within 250ms on the same screen instance and button,
+    /// `MouseHandler.java:101-106`).
+    pub(super) fn is_double_click(
+        &self,
+        now: u64,
+        screen_instance: u64,
+        title_mode: Option<u64>,
+        button: i32,
+    ) -> bool {
+        self.last_click.is_some_and(|last| {
+            now.checked_sub(last.time)
+                .is_some_and(|elapsed| elapsed < 250)
+                && last.title_mode == title_mode
+                && last.screen_instance == screen_instance
+                && last.button == button
+        })
+    }
+
+    /// Record a handled mouse press for subsequent double-click detection.
+    pub(super) fn record_click(
+        &mut self,
+        now: u64,
+        screen_instance: u64,
+        title_mode: Option<u64>,
+        button: i32,
+    ) {
+        self.last_click = Some(LastScreenClick {
+            time: now,
+            title_mode,
+            screen_instance,
+            button,
+        });
+    }
 }
 
 /// One frame's `RenderInventoryMobEffects` answer and what it was taken for.
@@ -478,10 +560,15 @@ impl ScreenBuildState {
 }
 
 impl Game<'_> {
-    /// The framebuffer's size and its GUI-scaled size and scale, as the HUD
-    /// computes them (`HudBatch::new`). Never asks for the renderer: before one
-    /// exists, the window's own size serves.
-    fn gui_frame_now(&self) -> ([u32; 2], GuiSize) {
+    /// `Gui.setScreen`: `KeyMapping.releaseAll` on a successful screen or overlay
+    /// opening/replacement transition (never on per-frame observation or resize).
+    pub(in crate::game) fn release_mappings_on_screen_open(&mut self) {
+        self.mod_keys.release_all();
+        self.release_screen_mappings();
+    }
+
+    /// Framebuffer size and GUI projection, including before the renderer is initialized.
+    pub(super) fn gui_frame_now(&self) -> ([u32; 2], GuiSize) {
         let framebuffer = self.renderer.as_ref().map_or_else(
             || {
                 self.window.as_ref().map_or([1280, 720], |window| {
@@ -492,23 +579,22 @@ impl Game<'_> {
             |renderer| [renderer.config.width, renderer.config.height],
         );
         let inputs = self.settings.gui_scale_inputs();
-        let gui = GuiSize::new(framebuffer, inputs.requested, inputs.unicode);
-        (framebuffer, gui)
+        (
+            framebuffer,
+            GuiSize::new(framebuffer, inputs.requested, inputs.unicode),
+        )
     }
 
-    /// `Screen.init`/`Screen.resize` for the game's open screen: builds it
-    /// when it opens, remakes it when the window or the GUI scale changed it,
-    /// and drops it when it closes. A frame that changes neither builds
-    /// nothing, so `observe_screen` calls it every frame.
+    /// `Screen.init`/`Screen.resize` builds the open screen, and drops it when it closes.
     pub(super) fn build_screen(&mut self) {
+        self.build_screen_at(self.gui_frame_now().0);
+    }
+
+    fn build_screen_at(&mut self, framebuffer: [u32; 2]) {
         let shown =
             self.screen != Screen::Playing || self.title.is_some() || self.screen_over_playing();
-        // Gui.setScreen: KeyMapping.releaseAll, as the screen or overlay opens.
-        if shown {
-            self.native_input.mappings.release_all();
-            self.release_screen_mappings();
-        }
-        let (framebuffer, gui) = self.gui_frame_now();
+        let inputs = self.settings.gui_scale_inputs();
+        let gui = GuiSize::new(framebuffer, inputs.requested, inputs.unicode);
         let identity = self
             .title
             .as_ref()
@@ -599,6 +685,85 @@ impl Game<'_> {
         self.screen_state
             .build
             .sync(self.screen, shown, identity, gui, layout);
+    }
+
+    /// What the open container screen draws outside its panel, from the
+    /// `layout` that draws it in a window `width` wide: the recipe book's
+    /// panel beside the window (not one a narrow window draws over it) and
+    /// each creative tab of the page shown, then the effects beside the
+    /// window. The book's tabs join them as painted (`publish_screen_regions`).
+    fn collect_screen_regions(
+        &self,
+        screen: Screen,
+        layout: &ContainerLayout,
+        width: f32,
+        out: &mut Vec<mod_api::ScreenRegion>,
+    ) {
+        use mod_api::{ScreenRegion, ScreenRegionKind};
+        if let Some(book) = layout.book
+            && !self.book_covers_menu(width)
+        {
+            out.push(ScreenRegion::new(ScreenRegionKind::RecipeBook, book));
+        }
+        if screen == Screen::Creative {
+            // `CreativeModeInventoryScreen.extractTabButton`: 26 x 32 each.
+            let (ox, oy) = (layout.image[0], layout.image[1]);
+            let creative = &self.creative_screen;
+            for tab in creative.tabs.iter().filter(|t| creative.on_page(t)) {
+                let (x, y) = sunrise_client::creative::Creative::tab_position(tab);
+                out.push(ScreenRegion::new(
+                    ScreenRegionKind::CreativeTab,
+                    [ox + x, oy + y, 26.0, 32.0],
+                ));
+            }
+        }
+        if let Some(effects) = layout.effects {
+            out.push(ScreenRegion::new(ScreenRegionKind::Effects, effects));
+        }
+    }
+
+    /// What this frame drew outside the panel becomes what the hooks read
+    /// (`ScreenView::regions`): the layout's regions and the book's tabs as
+    /// painted, or nothing when `screen_render_pre` cancelled the drawing.
+    /// Called once the screen has drawn, before `screen_render_post`; the
+    /// input hooks then read it until the next draw.
+    pub(super) fn publish_screen_regions(
+        &mut self,
+        batch: &HudBatch,
+        region_screen: Option<Screen>,
+    ) {
+        use mod_api::{ScreenRegion, ScreenRegionKind};
+        let (_, mut regions) = std::mem::take(&mut self.screen_state.regions);
+        regions.clear();
+        let tabs = self.screen_state.drawn_book_tabs.take();
+        let shown = region_screen.filter(|_| self.screen_view_listened());
+        if let Some(screen) = shown
+            && let Some(layout) = self.built_container(batch)
+        {
+            self.collect_screen_regions(screen, layout, batch.width, &mut regions);
+            if screen == Screen::Inventory
+                && let Some(tabs) = tabs
+            {
+                let at = regions
+                    .iter()
+                    .position(|r| r.kind == ScreenRegionKind::RecipeBook)
+                    .map_or(0, |n| n + 1);
+                regions.insert(
+                    at,
+                    ScreenRegion::new(ScreenRegionKind::RecipeBookTabs, tabs),
+                );
+            }
+        }
+        self.screen_state.regions = (shown, regions);
+    }
+
+    /// The last published draw's regions of `screen` (`ScreenView::regions`).
+    /// Empty for another screen and when no screen hook listens.
+    pub(super) fn screen_regions(&self, screen: Screen) -> &[mod_api::ScreenRegion] {
+        match &self.screen_state.regions {
+            (Some(of), regions) if *of == screen => regions,
+            _ => &[],
+        }
     }
 
     /// The build's container layout, when it holds `batch`'s size.
@@ -1009,10 +1174,10 @@ mod tests {
                 (113.0, 98.0, 98.0, "gui.advancements", 4, true),
             ],
             icons: [
-                (173.0, 122.0, "gui/sprites/pause_menu/bug"),
-                (197.0, 122.0, "gui/sprites/pause_menu/social_interactions"),
-                (221.0, 122.0, "gui/sprites/friends/friends"),
-                (245.0, 122.0, "gui/sprites/pause_menu/player_reporting"),
+                (173.0, 122.0, "pause_menu/bug"),
+                (197.0, 122.0, "pause_menu/social_interactions"),
+                (221.0, 122.0, "friends/friends"),
+                (245.0, 122.0, "pause_menu/player_reporting"),
             ],
         };
         state.sync(
@@ -1417,5 +1582,195 @@ mod tests {
                 });
             });
         }
+    }
+
+    /// Each `ScreenView::regions` kind where vanilla 26.3 draws it, from its
+    /// constants, as the hooks' view of the screen carries it: the effects
+    /// beside the inventory, every creative tab, the recipe book's panel and
+    /// the tab column it drew, and none for a book drawn over the window. In
+    /// its own process: the game it opens publishes process-wide tables.
+    #[test]
+    #[ignore = "daily"]
+    fn each_screen_region_is_where_vanilla_draws_it() {
+        use mod_api::{
+            ClientHost, Flow, Hooks, ModEntry, ScreenRegion, ScreenRegionKind as Kind,
+            ScreenRenderInventoryMobEffectsEvent, ScreenRenderPostEvent, ScreenRenderPreEvent,
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::screen_build::tests::each_screen_region_is_where_vanilla_draws_it",
+            "SUNRISE_SCREEN_REGIONS_CHILD",
+            &["regions"],
+        ) {
+            return;
+        }
+
+        #[derive(Default)]
+        struct Observer {
+            canceled: AtomicBool,
+            posts: Mutex<Vec<Vec<ScreenRegion>>>,
+        }
+
+        struct Observe(Arc<Observer>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Observe {
+            fn screen_render_inventory_mob_effects(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut ScreenRenderInventoryMobEffectsEvent<'_>,
+            ) -> Flow {
+                event.horizontal_offset += 5;
+                Flow::Continue
+            }
+
+            fn screen_render_pre(
+                &self,
+                _: &dyn ClientHost,
+                _: &mut ScreenRenderPreEvent<'_>,
+            ) -> Flow {
+                if self.0.canceled.load(Ordering::Relaxed) {
+                    Flow::Cancel
+                } else {
+                    Flow::Continue
+                }
+            }
+
+            fn screen_render_post(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut ScreenRenderPostEvent<'_>,
+            ) {
+                self.0
+                    .posts
+                    .lock()
+                    .unwrap()
+                    .push(event.screen.regions.to_vec());
+            }
+        }
+
+        let observer = Arc::new(Observer::default());
+        let mods: mod_api::Mods = vec![ModEntry::new(
+            "regions",
+            Box::new(Observe(observer.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                // The inventory and creative screen belong to a client in a world. An
+                // in-memory connection supplies the client registry holder for creative tabs.
+                let _server = crate::game::native_client_session::tests::logged_client(game);
+                game.native_lifecycle.begin_open(None);
+                game.player = Some(
+                    sunrise_client::motion::PlayerMotion::new(
+                        game.motion,
+                        sunrise_core::geometry::Vec3::ZERO,
+                    )
+                    .unwrap(),
+                );
+                game.title = None;
+                game.container = None;
+                game.craft_size = 2;
+                game.screen = Screen::Inventory;
+                game.settings.gui_scale = 1;
+                game.settings.force_unicode = false;
+                let crafting = sunrise_client::recipe_book::BookType::Crafting.index();
+                game.level.recipe_book.recipes.clear();
+                game.level.recipe_book.open[crafting] = false;
+
+                let render = |game: &mut crate::game::Game<'_>, size| {
+                    game.hud_layers(size);
+                    let mut posts = observer.posts.lock().unwrap();
+                    assert_eq!(posts.len(), 1, "one Render.Post per draw");
+                    posts.pop().unwrap()
+                };
+                let small = [320, 240];
+                game.build_screen_at(small);
+                assert!(render(game, small).is_empty());
+
+                // EffectsInInventory at 320 x 240: leftPos + imageWidth + 2,
+                // shifted five pixels right by the subscriber, one compact row.
+                game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
+                    "speed", 200, 0,
+                )];
+                game.build_screen_at(small);
+                let compact = ScreenRegion::new(Kind::Effects, [255.0, 37.0, 32.0, 32.0]);
+                assert_eq!(render(game, small), [compact]);
+
+                // Build twice in the same frame, opening a book whose only tab
+                // is Search. At 427 x 240 the book and shifted compact effect
+                // fit on opposite sides of the inventory.
+                let wide = [854, 480];
+                game.settings.gui_scale = 2;
+                game.build_screen_at(wide);
+                game.level.recipe_book.open[crafting] = true;
+                game.build_screen_at(wide);
+                assert_eq!(
+                    render(game, wide),
+                    [
+                        ScreenRegion::new(Kind::RecipeBook, [54.0, 37.0, 147.0, 166.0]),
+                        ScreenRegion::new(Kind::RecipeBookTabs, [22.0, 40.0, 35.0, 27.0]),
+                        ScreenRegion::new(Kind::Effects, [385.0, 37.0, 32.0, 32.0]),
+                    ]
+                );
+
+                observer.canceled.store(true, Ordering::Relaxed);
+                assert!(render(game, wide).is_empty());
+                assert!(game.screen_regions(Screen::Inventory).is_empty());
+                observer.canceled.store(false, Ordering::Relaxed);
+
+                // The narrow book covers the inventory, so its panel is not a side region.
+                game.settings.gui_scale = 1;
+                game.build_screen_at(small);
+                assert_eq!(
+                    render(game, small),
+                    [
+                        ScreenRegion::new(Kind::RecipeBookTabs, [54.0, 40.0, 35.0, 27.0]),
+                        compact
+                    ]
+                );
+
+                // Switch directly from drawing the book to drawing Creative.
+                // Vanilla's painted 26 x 32 tabs are in two rows. The player
+                // can use the operator utilities, including the tab in column five.
+                game.potions.effects.list.clear();
+                game.set_local_mode(sunrise_client::command::args::GameMode::Creative);
+                game.ui.registries.permission = 2;
+                game.settings.operator_items_tab = true;
+                game.screen = Screen::Creative;
+                game.refresh_creative_tabs();
+                game.build_screen_at(small);
+                let mut tabs = render(game, small);
+                let by_origin = |a: &ScreenRegion, b: &ScreenRegion| {
+                    a.rect[..2].partial_cmp(&b.rect[..2]).unwrap()
+                };
+                tabs.sort_by(by_origin);
+                let mut expected = Vec::new();
+                for x in [62.0, 89.0, 116.0, 143.0, 170.0, 204.0, 231.0] {
+                    for y in [24.0, 184.0] {
+                        expected.push(ScreenRegion::new(Kind::CreativeTab, [x, y, 26.0, 32.0]));
+                    }
+                }
+                assert_eq!(tabs, expected);
+
+                // AnvilScreen does not paint the inventory's EffectsInInventory panel.
+                game.set_local_mode(sunrise_client::command::args::GameMode::Survival);
+                game.potions.effects.list = vec![sunrise_client::effects::EffectInstance::new(
+                    "speed", 200, 0,
+                )];
+                game.remote_open_station(
+                    1,
+                    "minecraft:anvil".into(),
+                    crate::game::stations::Kind::Anvil,
+                    sunrise_client::text::Text::literal("Anvil"),
+                    [0; 3],
+                );
+                game.build_screen_at(small);
+                assert!(render(game, small).is_empty());
+            });
+        });
     }
 }

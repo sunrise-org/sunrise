@@ -115,7 +115,6 @@ jobs:
           find crates/sunrise-mod-api/src crates/sunrise-mod-vocab/src -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --check --config skip_children=true
           find crates/sunrise-client/src/game -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --config skip_children=true --check
           rustup run stable rustfmt --edition 2024 --check crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/*.rs crates/sunrise-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs
-          rustup run stable rustfmt --edition 2024 --check crates/sunrise-mod-wasm/wire-loopback/tests/wire_loopback/*.rs
           cargo +stable clippy --workspace --all-targets --locked -- -D warnings
           # The server build (released as sunrise-engine): the game without sound or controllers.
           cargo +stable clippy -p sunrise-client -p sunrise-game -p sunrise-mod-host --all-targets --locked --no-default-features -- -D warnings
@@ -174,67 +173,6 @@ jobs:
           for result in "$TREE" "$LINT" "$TEST"; do
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
-  # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
-  # (`gh workflow run checks --ref <branch>`): GitHub's runner queue is the bottleneck, and main's runs gate the
-  # releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this
-  # 90-minute job. The Nightly builds and checks these binaries on every run.
-  windows-arm64:
-    name: Windows ARM64 game
-    if: github.event_name == 'workflow_dispatch' && !inputs.verify
-    runs-on: windows-11-vs2026-arm
-    timeout-minutes: 90
-    env:
-      RUSTFLAGS: -C target-feature=+crt-static
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Use every runner core for Cargo
-        shell: pwsh
-        run: |
-          $cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-          "CARGO_BUILD_JOBS=$cores" >> $env:GITHUB_ENV
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: windows-arm64-game
-      - name: Check LLVM assembler used by ring
-        shell: pwsh
-        run: |
-          $llvmBin = Join-Path $env:ProgramFiles 'LLVM\bin'
-          if (-not (Get-Command clang -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $llvmBin 'clang.exe'))) {
-            $env:PATH = "$llvmBin;$env:PATH"
-            "PATH=$env:PATH" >> $env:GITHUB_ENV
-          }
-          $clang = Get-Command clang -ErrorAction Stop
-          Write-Output "Using $($clang.Source)"
-          & $clang.Source --version
-      - name: Build the game for native Windows ARM64 (the official game, as game-build.yml ships it)
-        run: cargo build --release --locked --target aarch64-pc-windows-msvc -p sunrise-official --bin sunrise-official -p sunrise-client-lib --bin sunrise-ctl -p sunrise-perf --bin sunrise-perf -p sunrise-prepare --bin sunrise-prepare -p sunrise-server --bin sunrise-server -p sunrise-port-pack --bin sunrise-port-pack
-      - name: Check the game's PE machine
-        run: python tools/check_pe_arch.py arm64 target/aarch64-pc-windows-msvc/release/sunrise-official.exe target/aarch64-pc-windows-msvc/release/sunrise-ctl.exe target/aarch64-pc-windows-msvc/release/sunrise-perf.exe target/aarch64-pc-windows-msvc/release/sunrise-prepare.exe target/aarch64-pc-windows-msvc/release/sunrise-server.exe target/aarch64-pc-windows-msvc/release/sunrise-port-pack.exe
-      - name: Check game DLL imports
-        run: python tools/check_imports.py target/aarch64-pc-windows-msvc/release/sunrise-official.exe target/aarch64-pc-windows-msvc/release/sunrise-ctl.exe target/aarch64-pc-windows-msvc/release/sunrise-perf.exe target/aarch64-pc-windows-msvc/release/sunrise-prepare.exe target/aarch64-pc-windows-msvc/release/sunrise-server.exe target/aarch64-pc-windows-msvc/release/sunrise-port-pack.exe
-      - name: Start every game executable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $client = 'target/aarch64-pc-windows-msvc/release/sunrise-official.exe'
-          $output = & $client --help 2>&1
-          if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch '--resources') { throw 'sunrise-client --help failed' }
-          foreach ($binary in @('sunrise-ctl.exe', 'sunrise-perf.exe', 'sunrise-prepare.exe', 'sunrise-server.exe', 'sunrise-port-pack.exe')) {
-            $path = "target/aarch64-pc-windows-msvc/release/$binary"
-            $output = & $path --help 2>&1
-            if ($LASTEXITCODE -ne 0 -or -not $output) { throw "$binary --help failed" }
-          }
-          foreach ($binary in @('sunrise-prepare.exe', 'sunrise-server.exe', 'sunrise-port-pack.exe')) {
-            $path = "target/aarch64-pc-windows-msvc/release/$binary"
-            $output = & $path --version 2>&1
-            if ($LASTEXITCODE -ne 0 -or -not $output) { throw "$binary --version failed" }
-            Write-Output ($output -join "`n")
-          }
   jfr-analysis:
     if: github.event_name == 'workflow_dispatch' && !inputs.verify
     runs-on: [self-hosted, linux, sunrise-game]

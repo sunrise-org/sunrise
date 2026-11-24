@@ -344,12 +344,18 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
             };
             let layout = std430(ty);
             let end_before = offset;
+            // Sizes are the pack's: an offset past `u32` is unknown, as one after a size that is
+            // not a number (naga then refuses the type as too large to lay out).
             let at = offset
                 .zip(layout)
-                .map(|(o, (align, _))| o.next_multiple_of(align));
+                .and_then(|(o, (align, _))| o.checked_next_multiple_of(align));
             offset = at.zip(layout).and_then(|(at, (align, size))| match &array {
-                None => Some(at + size),
-                Some(len) => Some(at + len.parse::<u32>().ok()? * size.next_multiple_of(align)),
+                None => at.checked_add(size),
+                Some(len) => at.checked_add(
+                    len.parse::<u32>()
+                        .ok()?
+                        .checked_mul(size.next_multiple_of(align))?,
+                ),
             });
             let Some((scalar, size)) = integer_vector(ty) else {
                 continue;
@@ -695,6 +701,36 @@ mod tests {
         assert!(out.contains("ivec3 l = hz_get_sh_lo();"));
         assert!(out.contains("ivec3 h = sh.hi;"));
         assert!(out.contains("sh.n += 1u;"));
+    }
+
+    /// A buffer block's offsets past `u32` (the pack's array sizes) are unknown, not a panic: the
+    /// vector after them stays whole, and naga refuses the array as too large to lay out.
+    #[test]
+    fn buffer_offsets_past_u32_leave_the_vector_whole() {
+        let block = |members: &str| Preprocessed {
+            code: format!(
+                "layout(std430) buffer B {{ {members} uvec2 v; }} b;\n\
+                 void f() {{ atomicAdd(b.v.x, 1u); }}\n"
+            ),
+            lines: Vec::new(),
+            files: Vec::new(),
+            version: None,
+            extensions: Vec::new(),
+            comments: Vec::new(),
+            diagnostics: Vec::new(),
+            warnings: Vec::new(),
+        };
+        // The control: a known offset splits the vector.
+        let out = rewrite(&block("float small[4];")).expect("rewritten").code;
+        assert!(out.contains("uint v_hz[2];"), "{out}");
+        // An array's bytes past u32; an end past u32; an alignment past u32.
+        for members in [
+            "float big[2000000000];",
+            "float a[1000000000]; float c[1000000000];",
+            "float a[1073741823];",
+        ] {
+            assert!(rewrite(&block(members)).is_none(), "{members}");
+        }
     }
 
     #[test]

@@ -4,8 +4,9 @@
 //! click, so the click code and the game are separate values and the game is whole while the
 //! hub runs.
 use super::*;
-use std::{cell::RefCell, rc::Rc};
-use sunrise_client::menu::{PlanningRules, RuleAnswers, StackedOutcome, StoredRules};
+use crate::game::{lan_menus::ClickReply, stacked_on_other::Pickup};
+use std::cell::RefCell;
+use sunrise_client::menu::StackedOutcome;
 
 impl Game<'_> {
     /// Run `f` with the LAN host taken out of `self.lan`, then put it back. `f` is given the whole
@@ -31,20 +32,18 @@ impl Game<'_> {
     /// what the click may do and the container it clicks; a pickup the mods listen to is then
     /// decided with the game whole (`stacked_pickup`: they are fired with `HostSide`, the LAN host
     /// still in place); and the click itself runs with the host lifted out of the game. Returns
-    /// the stacks the click threw out.
-    pub(super) fn lan_hub_click(&mut self, conn: u32, p: &play::ContainerClick) -> Vec<ItemStack> {
-        let projected_eye = self.projection_menu_eye(conn);
-        let Some(host) = self.lan.as_mut() else {
-            return Vec::new();
-        };
-        let Some(mut prepared) =
-            host.hub
-                .prepare_click_with_eye(conn, p, &self.world, projected_eye)
-        else {
-            return Vec::new();
-        };
+    /// the stacks the click threw out, or `None` for a refused click.
+    pub(super) fn lan_hub_click(
+        &mut self,
+        conn: u32,
+        p: &play::ContainerClick,
+    ) -> Option<Vec<ItemStack>> {
+        let host = self.lan.as_mut()?;
+        let mut prepared = host.hub.prepare_click(conn, p, &self.world, false)?;
         let frozen = if Self::stacked_listened() {
-            host.hub.stacked_click(&mut prepared, p)
+            host.hub
+                .stacked_click(&mut prepared, p)
+                .filter(Self::stacked_listens_for)
         } else {
             None
         };
@@ -60,40 +59,13 @@ impl Game<'_> {
                 _ => Vec::new(),
             })
             .unwrap_or_default();
-        // Plan: ask the slot rules for what the click would consult, once for each distinct
-        // question and for each way the hook can leave it, on state put back afterwards.
-        let answers = Rc::new(RuleAnswers::default());
-        if frozen.is_some() {
-            self.with_lan_lifted(|game, host| {
-                let planning = PlanningRules {
-                    rules: Some(&*game),
-                    answers: &answers,
-                };
-                for outcome in [
-                    StackedOutcome::default(),
-                    StackedOutcome {
-                        canceled: true,
-                        ..StackedOutcome::default()
-                    },
-                ] {
-                    let rules = ItemRules(
-                        world_items!(game),
-                        &world_stations!(game).enchantments,
-                        Some(&planning),
-                        Some(&outcome),
-                        prepared.container_insert_rules().to_vec(),
-                    );
-                    host.hub.plan_click(&mut prepared, p, &rules);
-                }
-            });
-        }
-        let prepared = Rc::new(RefCell::new(Some(prepared)));
-        let drops = Rc::new(RefCell::new(Vec::new()));
+        let prepared = RefCell::new(Some(prepared));
+        let outcome = RefCell::new(None);
         if let Some(frozen) = frozen {
-            let (shared, thrown, packet) = (prepared.clone(), drops.clone(), p.clone());
-            let stored = answers.clone();
-            let (stacks, slot) = (frozen.clone(), frozen.slot);
-            self.stacked_pickup(
+            let shared = &prepared;
+            let outcome_ref = &outcome;
+            let (stacks, slot, primary) = (frozen.clone(), frozen.slot, frozen.primary);
+            let picked = self.stacked_pickup(
                 route,
                 frozen,
                 move |game| {
@@ -104,6 +76,25 @@ impl Game<'_> {
                             .click_stacks(conn, slot, &game.world)?;
                     (carried == stacks.carried && clicked == stacks.clicked).then(|| stacks.clone())
                 },
+                |game, carried, clicked| {
+                    game.with_lan_lifted(|game, host| {
+                        let mut prepared = prepared.borrow_mut();
+                        let Some(prepared) = prepared.as_mut() else {
+                            return false;
+                        };
+                        let rules = ItemRules(
+                            world_items!(game),
+                            &world_stations!(game).enchantments,
+                            Some(&*game),
+                            None,
+                            prepared.container_insert_rules().to_vec(),
+                        );
+                        host.hub.probe_carried_vanilla_override(
+                            prepared, slot, primary, carried, clicked, &rules,
+                        )
+                    })
+                    .unwrap_or(false)
+                },
                 move |game, answer| {
                     // What the click writes belongs to the action: the guest's inventory and
                     // cursor, and the container's block entities.
@@ -111,21 +102,27 @@ impl Game<'_> {
                     for key in blocks {
                         game.journal_block_entity(key);
                     }
-                    game.hub_click_run(conn, &packet, &shared, &thrown, answer, Some(&*stored))
+                    *outcome_ref.borrow_mut() = game.hub_click_run(conn, p, shared, answer);
                 },
             );
+            if matches!(picked, Pickup::Refused) {
+                self.reply_menu_click(conn, ClickReply::Resend(p.container));
+                return None;
+            }
         } else {
-            self.hub_click_run(conn, p, &prepared, &drops, None, None);
+            // Plain hub routing writes the parked guest's inventory and cursor directly.
+            // A surrounding transaction must keep that storage before the hub takes it.
+            if !self.transactions.is_empty() {
+                self.journal_parked_player(self.guest_index(conn)?);
+            }
+            for key in blocks {
+                self.journal_block_entity(key);
+            }
+            *outcome.borrow_mut() = self.hub_click_run(conn, p, &prepared, None);
         }
-        // A click the decision refused never ran: the container, the drag and the client are put
-        // back as they were.
-        if let Some(prepared) = prepared.take()
-            && let Some(host) = self.lan.as_mut()
-        {
-            host.hub
-                .finish_click(prepared, p, &mut self.world, (Vec::new(), Vec::new()));
-        }
-        drops.take()
+        let (drops, changed) = outcome.into_inner()?;
+        self.reply_predicted_menu_click(conn, p, changed);
+        Some(drops)
     }
 
     /// Run the prepared click with the LAN host lifted out of the game, the game lent to it as
@@ -136,32 +133,23 @@ impl Game<'_> {
         conn: u32,
         p: &play::ContainerClick,
         prepared: &RefCell<Option<sunrise_client::lan::containers::PreparedClick>>,
-        drops: &RefCell<Vec<ItemStack>>,
-        answer: Option<&sunrise_client::menu::StackedOutcome>,
-        stored: Option<&RuleAnswers>,
-    ) {
+        answer: Option<&StackedOutcome>,
+    ) -> Option<(Vec<ItemStack>, Vec<usize>)> {
         if !self.projection_menu_apply_fresh(conn) {
-            return;
+            return None;
         }
-        let Some(mut click) = prepared.take() else {
-            return;
-        };
-        let thrown = self.with_lan_lifted(|game, host| {
-            // Decided clicks use only the answers their plan kept; plain ones ask the game.
-            let stored = stored.map(StoredRules);
+        let mut click = prepared.take()?;
+        self.with_lan_lifted(|game, host| {
             let rules = ItemRules(
                 world_items!(game),
                 &world_stations!(game).enchantments,
-                match &stored {
-                    Some(stored) => Some(stored),
-                    None => Some(&*game),
-                },
+                Some(&*game),
                 answer,
                 click.container_insert_rules().to_vec(),
             );
             let outcome = host.hub.run_click(&mut click, p, &rules);
-            host.hub.finish_click(click, p, &mut game.world, outcome)
-        });
-        drops.borrow_mut().extend(thrown.unwrap_or_default());
+            host.hub.write_click(click, &mut game.world);
+            outcome
+        })
     }
 }

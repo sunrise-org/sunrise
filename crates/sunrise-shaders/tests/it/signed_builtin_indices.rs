@@ -28,9 +28,25 @@ fn translate(code: &str, path: &str) -> Program {
     let fragment = source("void main() { gl_FragColor = vec4(1.0); }");
     let inputs = GbuffersInputs::default();
     let result = match path {
-        "composite" => translate_composite(&vertex, &fragment, Target::Buffers),
-        "gbuffers" => translate_gbuffers(&vertex, &fragment, Target::Buffers, &inputs),
-        "shadow" => translate_shadow(&vertex, &fragment, &inputs),
+        "composite" => translate_composite(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+        ),
+        "gbuffers" => translate_gbuffers(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            &inputs,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+        ),
+        "shadow" => translate_shadow(
+            &vertex,
+            &fragment,
+            &inputs,
+            naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
+        ),
         _ => unreachable!(),
     };
     result.unwrap_or_else(|errors| panic!("{path}: {errors:?}\n{code}"))
@@ -140,6 +156,7 @@ fn folded_geometry_keeps_source_vertex_ids_signed() {
             index: "uint(@)".into(),
             ..Default::default()
         },
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"));
     assert_eq!(triangles, 1);

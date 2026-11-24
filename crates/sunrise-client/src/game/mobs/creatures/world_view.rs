@@ -10,8 +10,10 @@ impl Game<'_> {
         let weather = self.can_have_weather();
         let player = self.player_view();
         MobWorld {
+            side: self,
             mob_maps: self.mob_maps(),
             section_writer: None,
+            trading_players: Some(self),
             professions: self.stations().professions.as_ref(),
             loop_context: &self.loop_context,
             world: &self.world,
@@ -31,6 +33,7 @@ impl Game<'_> {
             others,
             live_mobs: None,
             dragon: self.dragon_target(),
+            armor_stands: &self.armor_stands,
             leash_boats: &self.leash_boats,
             others_grid: None,
             others_index: None,
@@ -62,6 +65,10 @@ impl Game<'_> {
                 .ui
                 .rules
                 .bool_at(sunrise_client::gamerules::vanilla::MOB_DROPS),
+            pvp: self
+                .ui
+                .rules
+                .bool_at(sunrise_client::gamerules::vanilla::PVP),
             max_entity_cramming: self
                 .ui
                 .rules
@@ -95,7 +102,12 @@ impl Game<'_> {
                     .any(mod_api::__private::has_scoped_hook)))
             .then_some(self as &dyn sunrise_client::mobs::MobHooks),
             goal_host: (self.native_authoritative()
-                && (mod_api::__private::has_entity_parts()
+                && ([
+                    mod_api::HookId::RegisterGoals,
+                    mod_api::HookId::RegisterBehaviors,
+                ]
+                .into_iter()
+                .any(mod_api::__private::has_scoped_hook)
                     || mod_api::__private::listened(mod_api::HookId::LivingChangeTarget)))
             .then_some(self as &dyn sunrise_client::mobs::part_goals::GoalHost),
             asks_animal_tame: self.remote.is_none()

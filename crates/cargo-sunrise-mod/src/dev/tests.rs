@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
     move |name| {
@@ -81,4 +82,254 @@ fn the_staged_record_is_the_builds_libraries_as_the_loader_reads_them() {
     assert_eq!(json["libraries"][0]["file"], "libmod_greeter.so");
     assert_eq!(json["libraries"][0]["mod"], "greeter");
     assert_eq!(json["libraries"][0]["identity"], "b greeter 0.1.0 1.99.1");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "daily"]
+fn a_retained_sdk_builds_a_lower_mixin_with_its_signed_tool() {
+    use lzma_rust2::{XzOptions, XzWriter};
+    use serde_json::json;
+    use sunrise_release_sign::{self as sign, SigningKey};
+
+    const BUILD: &str = "0123456789abcdef0123456789abcdef01234567";
+    const HOST: &str = "x86_64-unknown-linux-gnu";
+    const MODULE: &str = "sunrise_mod_render::render";
+    const TARGET: &str = "sunrise_mod_render::render::world_drawn";
+    const FILE: &str = "crates/sunrise-mod-render/src/render.rs";
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().join("releases");
+    let tag = format!("sdk-{BUILD}");
+    let release = base.join(&tag);
+    fs::create_dir_all(&release).unwrap();
+    fs::write(release.join(sdk_fetch::SURFACE), r#"{"hash":"ab"}"#).unwrap();
+    let pack = |kind, path: &str, bytes: &[u8], mode| {
+        let name = sdk::Asset::name(kind, HOST, sdk::Side::Client);
+        let archive = fs::File::create(release.join(&name)).unwrap();
+        let encoder = XzWriter::new(archive, XzOptions::with_preset(0)).unwrap();
+        let mut tar = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(mode);
+        header.set_size(bytes.len() as u64);
+        tar.append_data(&mut header, path, bytes).unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+        name
+    };
+    let mut identity = json!({
+        "package_format": sdk::PACKAGE_FORMAT,
+        "commit": BUILD,
+        "rustc": format!("release: {}", sunrise_native_build::rust::VERSION),
+        "side": "client",
+        "target": HOST,
+        "registry_lock": "version = 4\n",
+        "registry_patches": {},
+        "native_links": [],
+        "facade_crates": [],
+        "game_features": [],
+        "slices": { "runtime": ["sunrise-prebuilt.json"], "api": ["internals.json"] }
+    });
+    pack(
+        sdk::Kind::Runtime,
+        "sunrise-prebuilt.json",
+        &serde_json::to_vec(&identity).unwrap(),
+        0o644,
+    );
+    pack(sdk::Kind::Api, "internals.json", b"{}", 0o644);
+    let source = b"pub fn world_drawn() {}";
+    let hash = sign::sha256_hex(source);
+    let functions = json!({
+        "build": { "commit": BUILD },
+        "crates": { "sunrise_mod_render": {
+            "library": "mod_render",
+            "modules": { (MODULE): [{ "path": FILE, "sha256": hash }] }
+        }},
+        "functions": { (TARGET): {
+            "module": MODULE, "file": FILE, "span": [0, source.len()],
+            "signature_hash": hash, "sha256": hash
+        }},
+        "refused": {}
+    });
+    pack(
+        sdk::Kind::Engine,
+        "functions.json",
+        &serde_json::to_vec(&functions).unwrap(),
+        0o644,
+    );
+
+    // The older executable stands in for native-build, not for the current generator. Its
+    // transcript proves what received the plan without compiling a real game or downloading Rust.
+    let result = contract::Event::Built {
+        route: "prebuilt".into(),
+        binary: "from-pinned-tool".into(),
+        libraries: Vec::new(),
+        records: Vec::new(),
+        mods: vec!["fixture".into()],
+        internals: Default::default(),
+        mixins: sunrise_native_build::MIXINS_REV.to_owned(),
+        used: Vec::new(),
+    };
+    let script = format!(
+        "#!/bin/sh\n[ \"$1\" = native-build ] || exit 2\nIFS= read -r plan || exit 2\n\
+         case \"$plan\" in *'\"contract\":2'*'\"registry\":true'*) ;; *) exit 2;; esac\n\
+         printf '%s\\n' '{}'\n",
+        serde_json::to_string(&result).unwrap(),
+    );
+    let tool = pack(
+        sdk::Kind::Tool,
+        "cargo-sunrise-mod",
+        script.as_bytes(),
+        0o755,
+    );
+    let index = Index::of_folder(
+        &release,
+        sdk::Build {
+            commit: BUILD.into(),
+            game: sdk::GAME.into(),
+            date: "2026-11-13".into(),
+            nightly: None,
+        },
+        sunrise_native_build::rust::VERSION.into(),
+    )
+    .unwrap();
+    let bytes = index.to_json().into_bytes();
+    let sums = sign::sums_file(&[(sdk::INDEX.into(), sign::sha256_hex(&bytes))]);
+    let (key, _) = SigningKey::generate().unwrap();
+    fs::write(release.join(sdk::INDEX), bytes).unwrap();
+    fs::write(release.join(sign::SUMS), &sums).unwrap();
+    fs::write(
+        release.join(sign::SIGNATURE),
+        key.sign(&tag, sums.as_bytes()),
+    )
+    .unwrap();
+    let cache = root.path().join("cache");
+    let keys = [key.public()];
+    let base = Base::Folder(base);
+    sdk_fetch::fetch(&base, &keys, BUILD, &cache, false).unwrap();
+    let sdk = NativeSdk {
+        index: Index::read(&fs::read(cache.join(sdk::INDEX)).unwrap(), BUILD).unwrap(),
+        rust: Unpacked {
+            dir: root.path().into(),
+            target: HOST.into(),
+            cargo_home: root.path().into(),
+            cargo_config: Vec::new(),
+            c_bin: None,
+        },
+        stamp: CacheStamp::new(BUILD, &keys),
+        base,
+        dir: cache,
+    };
+    let plan = contract::Plan {
+        contract: contract::CONTRACT,
+        package: sdk.slices(sdk::Side::Client, Route::Engine).unwrap(),
+        toolchain: sdk.rust.clone(),
+        target: contract::TargetName::Client,
+        mods: root.path().join("mod"),
+        work: root.path().join("work"),
+        registry: Some(true),
+        mixins_from_source: false,
+    };
+    let bundle = Bundle {
+        dir: plan.mods.clone(),
+        manifest: sunrise_mod_package::Manifest::parse(&format!(
+            "id='fixture'\nname='Fixture'\nversion='1.0.0'\n[native]\ngame='26.3'\nsunrise='{BUILD}'\n\
+             [[native.mixin]]\nid='draw'\nkind='HEAD'\ntarget='{TARGET}'\nhelper='src/draw.rs'\n"
+        )).unwrap(),
+    };
+    sunrise_native_build::MixinsIdentity::resolve([&bundle], Some(&sdk.index.mixins)).unwrap();
+
+    let tool = release.join(tool);
+    let good = fs::read(&tool).unwrap();
+    fs::write(&tool, b"not the signed asset").unwrap();
+    let mut events = Events::default();
+    assert!(
+        sdk.compile(std::slice::from_ref(&bundle), &plan, &mut events)
+            .is_err()
+    );
+    assert!(events.built.is_none());
+    fs::write(&tool, good).unwrap();
+    sdk.compile(std::slice::from_ref(&bundle), &plan, &mut events)
+        .unwrap();
+    assert_eq!(events.built, Some(result));
+
+    // An explicitly empty map is still this tool's schema, not an older one. A missing
+    // lower-crate entry in that schema must not run the pinned tool in its place.
+    identity["lower_crate_cfg"] = json!({});
+    fs::write(
+        plan.package.runtime.join("sunrise-prebuilt.json"),
+        serde_json::to_vec(&identity).unwrap(),
+    )
+    .unwrap();
+    assert!(!prebuilt::needs_pinned_patch_tool(&plan.package, &bundle).unwrap());
+}
+
+/// The Motion Blur 0.1.5 case: the pin moved, the SDK's `sunrise-core` changed its dependencies,
+/// and the committed lock still named the old ones.
+#[test]
+#[ignore = "daily"]
+fn a_lock_the_pinned_sdk_moved_is_refused_until_refreshed() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let write = |path: &str, text: &str| {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    let package = |path: &str, name: &str, dependencies: &str| {
+        write(
+            &format!("{path}Cargo.toml"),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependencies}"
+            ),
+        );
+        write(&format!("{path}src/lib.rs"), "");
+    };
+    let sdk = ".sunrise/sdk/api/crates/";
+    package(
+        "",
+        "mod-fixture",
+        "sunrise-mod-api = { path = \".sunrise/sdk/api/crates/sunrise-mod-api\" }\n",
+    );
+    package(
+        &format!("{sdk}sunrise-mod-api/"),
+        "sunrise-mod-api",
+        "sunrise-core = { path = \"../sunrise-core\" }\n",
+    );
+    // Local stand-ins for the registry packages, so Cargo needs no network.
+    package(&format!("{sdk}crc-fast/"), "crc-fast", "");
+    package(&format!("{sdk}stacker/"), "stacker", "");
+    let core = |dependency: &str| {
+        package(
+            &format!("{sdk}sunrise-core/"),
+            "sunrise-core",
+            &format!("{dependency} = {{ path = \"../{dependency}\" }}\n"),
+        )
+    };
+    core("crc-fast");
+    let found = found().expect("a rustc on PATH");
+    let rust = Unpacked {
+        dir: found.sysroot,
+        target: found.host,
+        cargo_home: root.join("cargo-home"),
+        cargo_config: Vec::new(),
+        c_bin: None,
+    };
+    refresh_lock(&rust, root).unwrap();
+    check_lock(&rust, root, "old").unwrap();
+
+    // The new pin's SDK.
+    core("stacker");
+    let stale = fs::read_to_string(root.join("Cargo.lock")).unwrap();
+    let error = check_lock(&rust, root, "new").unwrap_err();
+    assert!(error.contains("pinned SDK (Sunrise new)"), "{error}");
+    assert!(error.contains("cargo sunrise-mod pin new"), "{error}");
+    assert_eq!(fs::read_to_string(root.join("Cargo.lock")).unwrap(), stale);
+
+    refresh_lock(&rust, root).unwrap();
+    check_lock(&rust, root, "new").unwrap();
+    let lock = fs::read_to_string(root.join("Cargo.lock")).unwrap();
+    assert!(
+        lock.contains("\"stacker\"") && !lock.contains("crc-fast"),
+        "{lock}"
+    );
 }

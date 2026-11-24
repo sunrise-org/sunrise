@@ -209,14 +209,13 @@ impl SaveDir {
             .generation
             .checked_add(1)
             .ok_or("live-world queue generation exhausted")?;
-        // All captures complete before pending reads change. DiskRecord's callback is still lazy,
-        // run once by freeze on its disk worker, never by an eager independent writer.
+        // Capture callbacks run on the owner before the bounded encoding worker sees the records.
+        // The completed snapshot is published only after the entire batch passes admission.
         let records = records
             .into_iter()
             .map(|(key, record)| self.capture_disk_record(record).map(|record| (key, record)))
             .collect::<Result<Vec<_>>>()?;
-        // Byte admission is measured from the actual ordinary payload, on a disk worker. DiskRecord
-        // caches the callback once; freeze reuses it. No reader executes a callback or sees a future owner.
+        // Measure the actual payload on a disk worker. Freeze reuses the encoded snapshot.
         let costs = std::thread::scope(|scope| {
             scope
                 .spawn(|| -> std::io::Result<Vec<u64>> {
@@ -382,8 +381,8 @@ impl SaveDir {
                 )
             })
             .collect();
-        // The single existing queue implementation supplies cache invalidation, pending readers and fsync.
+        // The existing queue supplies its per-record outcomes, cache invalidation and fsync.
         // Tag/Delete cannot enter capture_disk_record's callback branch.
-        self.queue_unfenced(folder, records, true)
+        self.write_prepared_records(folder, records)
     }
 }

@@ -18,6 +18,8 @@ pub(super) struct Var {
     /// Of a struct type: the pack's declaration stays as a private global, and the members
     /// travel in varyings of ours (`struct_parts`).
     pub(super) structure: bool,
+    /// The token of its type, where an error about it points.
+    pub(super) at: usize,
 }
 
 /// `layout(rgba16f) uniform writeonly image2D colorimg4;`
@@ -79,7 +81,8 @@ pub(super) struct Stage<'p> {
     pub(super) sampler_functions: HashMap<String, Vec<bool>>,
     /// The pack's structs: each member's type and name with its array suffix.
     pub(super) structs: HashMap<String, Vec<(String, String)>>,
-    /// `out struct S { .. } s;`: the qualifiers and `S`, read with the declarators after `}`.
+    /// `out struct S { .. } s;` or `struct S { .. } s;`: the qualifiers and `S`, read with the
+    /// declarators after `}`.
     struct_qualifiers: Vec<usize>,
     pub(super) outputs: BTreeSet<u32>,
     pub(super) frag_coord: bool,
@@ -87,8 +90,16 @@ pub(super) struct Stage<'p> {
     pub(super) replaced: HashMap<usize, String>,
     /// Globals whose initializer runs in our `main` (`g = hz_init_g();`), in order.
     pub(super) inits: Vec<String>,
+    /// Globals without an initializer or `const` (`T g;`): the `;` that ends each one's
+    /// declaration, its name and its type, for a stage run again to set it back to its first
+    /// value (`hz_zero_g`, a global of ours declared after it and never written).
+    pub(super) uninitialized: Vec<(usize, String, String)>,
     /// Authored global names; automatic core matrix inputs must not hide them.
     pub(super) globals: BTreeSet<String>,
+    /// The other names the stage declares at file scope: its structs' and blocks' names, a
+    /// block's instances, and the members of a block without one, which the stage reads as
+    /// globals (GLSL 4.60, 4.3.9). A game input of one of these names isn't given.
+    pub(super) declared: BTreeSet<String>,
     /// Their captured array size constants and declarator ends: `.length()` stays type-only.
     pub(super) runtime_array_lengths: HashMap<String, (String, usize)>,
     pub(super) errors: Vec<Error>,
@@ -235,6 +246,37 @@ pub(super) fn significant(t: &str) -> bool {
     !t.trim().is_empty()
 }
 
+/// A layout qualifier's value as `Stage::layout_value` reads it.
+enum LayoutValue {
+    Value(u32),
+    /// Past `u32::MAX`, as the pack wrote it: refused where it is used, never wrapped.
+    TooLarge(String),
+    /// Missing, negative or not a constant Sunrise can work out: where it is used, the output
+    /// takes the next free location, or component 0.
+    Unread,
+}
+
+/// The note for a fragment output whose `component` (as written) doesn't fit the location's four.
+fn unsupported_component(
+    name: &str,
+    ty: &str,
+    array: &str,
+    component: &dyn std::fmt::Display,
+) -> String {
+    format!("`{name}`: a `{ty}{array}` output at component {component} is not supported")
+}
+
+/// `word` is an integer literal of any size as `ConstantSize` reads one: `0x` and hexadecimal
+/// digits, or decimal digits (an octal literal, or one with a leading `0` that `ConstantSize`
+/// reads as decimal), with an optional `u`.
+fn is_integer_literal(word: &str) -> bool {
+    let digits = word.strip_suffix(['u', 'U']).unwrap_or(word);
+    match digits.strip_prefix("0x").or(digits.strip_prefix("0X")) {
+        Some(hex) => !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()),
+        None => !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()),
+    }
+}
+
 /// A fragment output narrower than four components: the vec4 of its kind, and the components
 /// that fill it (alpha 1).
 fn widened(ty: &str) -> Option<(&'static str, &'static str)> {
@@ -272,6 +314,79 @@ fn output_kind(ty: &str) -> Option<(&'static str, usize, &'static str)> {
 /// `sampler2D`, `isampler3D`, `usampler2D`, `sampler2DShadow`...
 pub(super) fn is_sampler_type(t: &str) -> bool {
     t.trim_start_matches(['i', 'u']).starts_with("sampler")
+}
+
+/// The members a struct's or a block's body declares, from its `{` at `open` (GLSL 4.60, 4.1.8
+/// and 4.3.9: `[layout(...)] [qualifiers] type[...] name[...], name[...];`, no definition
+/// inside): each name's token, and the body's `}` (or the end).
+pub(super) fn members(tokens: &[&str], open: usize) -> (Vec<usize>, usize) {
+    let next = |mut i: usize| {
+        while i < tokens.len() && !significant(tokens[i]) {
+            i += 1;
+        }
+        i
+    };
+    let at = |i: usize| tokens.get(i).copied().unwrap_or("}");
+    // Past the bracket opened at `i` (`(` or `[`), to its match.
+    let past = |i: usize| {
+        let mut depth = 0;
+        for (j, &t) in tokens.iter().enumerate().skip(i) {
+            match t {
+                "(" | "[" => depth += 1,
+                ")" | "]" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return next(j + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        tokens.len()
+    };
+    let mut names = Vec::new();
+    let mut i = next(open + 1);
+    while at(i) != "}" {
+        loop {
+            match at(i) {
+                "layout" => i = past(next(i + 1)),
+                w if QUALIFIERS.contains(&w)
+                    || matches!(
+                        w,
+                        "readonly" | "writeonly" | "coherent" | "volatile" | "restrict"
+                    ) =>
+                {
+                    i = next(i + 1)
+                }
+                _ => break,
+            }
+        }
+        // The type, and its dimensions (`float[2] a`).
+        i = next(i + 1);
+        while at(i) == "[" {
+            i = past(i);
+        }
+        loop {
+            if is_ident(at(i)) {
+                names.push(i);
+                i = next(i + 1);
+            }
+            while at(i) == "[" {
+                i = past(i);
+            }
+            if at(i) != "," {
+                break;
+            }
+            i = next(i + 1);
+        }
+        while !matches!(at(i), ";" | "}") {
+            i += 1;
+        }
+        if at(i) == ";" {
+            i = next(i + 1);
+        }
+    }
+    (names, i.min(tokens.len()))
 }
 
 pub(super) fn is_ident(t: &str) -> bool {
@@ -351,7 +466,9 @@ impl<'p> Stage<'p> {
             paged_maps: false,
             replaced: HashMap::new(),
             inits: Vec::new(),
+            uninitialized: Vec::new(),
             globals: BTreeSet::new(),
+            declared: BTreeSet::new(),
             runtime_array_lengths: HashMap::new(),
             errors: Vec::new(),
         };
@@ -372,6 +489,7 @@ impl<'p> Stage<'p> {
                 "{" if depth == 0 && parens == 0 => {
                     s.global(start, i, true);
                     s.structure(start, i);
+                    s.declared_with_body(start, i);
                     depth = 1;
                 }
                 "{" => depth += 1,
@@ -501,6 +619,7 @@ impl<'p> Stage<'p> {
                 name,
                 decl: format!("{ty} @;"),
                 structure: false,
+                at: 0,
             });
         }
     }
@@ -597,15 +716,14 @@ impl<'p> Stage<'p> {
         let mut words: Vec<usize> = (from..to)
             .filter(|&i| significant(self.tokens[i]))
             .collect();
-        // A struct defined in an interface declaration (GLSL 4.60, 4.1.8): `flat out struct S
-        // { .. } s;` declares `s` as `flat out S s;` would, after the definition.
+        // A struct defined with its variables: `struct S { .. } a, b;` declares `a` and `b` as
+        // `S a, b;` would, after the definition, and in an interface declaration (GLSL 4.60,
+        // 4.1.8) `flat out struct S { .. } s;` as `flat out S s;` would. An anonymous struct
+        // has its name by now (`anonymous_structs`).
         let pending = std::mem::take(&mut self.struct_qualifiers);
         if body {
             if let Some(s) = words.iter().position(|&i| self.tokens[i] == "struct")
                 && let Some(&name) = words.get(s + 1)
-                && words[..s]
-                    .iter()
-                    .any(|&i| matches!(self.tokens[i], "in" | "out" | "varying"))
             {
                 self.struct_qualifiers = words[..s].to_vec();
                 self.struct_qualifiers.push(name);
@@ -630,6 +748,8 @@ impl<'p> Stage<'p> {
         let mut storage = None;
         let mut location = None;
         let mut component = None;
+        // A `location` or `component` past `u32`.
+        let mut too_large = None;
         let mut format = None;
         let mut access = "";
         let mut coherent = false;
@@ -642,15 +762,15 @@ impl<'p> Stage<'p> {
                 while let Some(&t) = words.get(j) {
                     j += 1;
                     match self.tokens[t] {
-                        "location" => {
-                            location = words
-                                .get(j + 1)
-                                .and_then(|&n| self.tokens[n].parse::<u32>().ok());
-                        }
-                        "component" => {
-                            component = words
-                                .get(j + 1)
-                                .and_then(|&n| self.tokens[n].parse::<usize>().ok());
+                        key @ ("location" | "component") => {
+                            let (value, end) = self.layout_value(&words, j);
+                            match value {
+                                LayoutValue::Value(n) if key == "location" => location = Some(n),
+                                LayoutValue::Value(n) => component = Some(n),
+                                LayoutValue::TooLarge(text) => too_large = Some((key, text)),
+                                LayoutValue::Unread => {}
+                            }
+                            j = end;
                         }
                         f if IMAGE_FORMATS.contains(&f) => format = Some(f),
                         ")" => break,
@@ -780,6 +900,7 @@ impl<'p> Stage<'p> {
                         name,
                         decl,
                         structure: true,
+                        at: ty_at,
                     };
                     if input {
                         self.ins.push(var);
@@ -791,12 +912,32 @@ impl<'p> Stage<'p> {
                     name,
                     decl,
                     structure: false,
+                    at: ty_at,
                 }),
                 _ if fragment => {
+                    // A location or component past `u32` can't be the output's: refused, not
+                    // wrapped to another.
+                    if let Some((key, text)) = &too_large {
+                        let message = if *key == "component" {
+                            unsupported_component(&name, &ty, &array, text)
+                        } else {
+                            format!("`{name}`: its `location` {text} is past 4294967295")
+                        };
+                        self.errors.push(self.error(ty_at, &message));
+                        continue;
+                    }
                     let n = location.unwrap_or(self.outputs.len() as u32);
+                    // Ours declares it again with the location as a decimal literal, an `int`
+                    // (GLSL 4.60, 4.1.3): one past `i32::MAX` is refused here, at the pack's line.
+                    if i32::try_from(n).is_err() {
+                        let message = format!("`{name}`: its `location` {n} is past 2147483647");
+                        self.errors.push(self.error(ty_at, &message));
+                        continue;
+                    }
+                    let component = component.unwrap_or(0);
                     let shared = self.wide_outs.contains_key(&n);
-                    if component.is_some_and(|c| c > 0) || shared {
-                        self.output_part(n, component.unwrap_or(0), &ty, &name, &array, ty_at);
+                    if component > 0 || shared {
+                        self.output_part(n, component, &ty, &name, &array, ty_at);
                         continue;
                     }
                     self.outputs.insert(n);
@@ -824,6 +965,7 @@ impl<'p> Stage<'p> {
                     name,
                     decl,
                     structure: false,
+                    at: ty_at,
                 }),
             }
         }
@@ -835,20 +977,28 @@ impl<'p> Stage<'p> {
     fn output_part(
         &mut self,
         n: u32,
-        component: usize,
+        component: u32,
         ty: &str,
         name: &str,
         array: &str,
         ty_at: usize,
     ) {
         let kind = output_kind(ty).filter(|_| array.is_empty());
-        let Some((wide, width, fill)) = kind.filter(|&(_, width, _)| component + width <= 4) else {
-            let message = format!(
-                "`{name}`: a `{ty}{array}` output at component {component} is not supported"
-            );
+        // The components it fills, `start..end`, within the location's four.
+        let fits = |width: usize| {
+            let start = usize::try_from(component).ok()?;
+            start
+                .checked_add(width)
+                .filter(|&end| end <= 4)
+                .map(|end| (start, end))
+        };
+        let Some(((wide, width, fill), (start, end))) =
+            kind.and_then(|kind| Some((kind, fits(kind.1)?)))
+        else {
+            let message = unsupported_component(name, ty, array, &component);
             return self.errors.push(self.error(ty_at, &message));
         };
-        let mask = ((1u8 << width) - 1) << component;
+        let mask = ((1u8 << width) - 1) << start;
         match self.wide_outs.get_mut(&n) {
             Some((other, _)) if *other != wide => {
                 let message =
@@ -873,9 +1023,42 @@ impl<'p> Stage<'p> {
                 self.out_copies.push(format!("hz_out{n} = {fill};"));
             }
         }
-        let swizzle = &"xyzw"[component..component + width];
+        let swizzle = &"xyzw"[start..end];
         self.out_copies
             .push(format!("hz_out{n}.{swizzle} = {name};"));
+    }
+
+    /// The value of the layout qualifier whose `=` is `words[at]` (`location = 1u`,
+    /// `component = 1 + 1`), read as GLSL's integer constant expressions are (4.4), and the index
+    /// of the `,` or `)` that ends it.
+    fn layout_value(&self, words: &[usize], at: usize) -> (LayoutValue, usize) {
+        if words.get(at).is_none_or(|&i| self.tokens[i] != "=") {
+            return (LayoutValue::Unread, at);
+        }
+        let mut depth = 0usize;
+        let mut end = at + 1;
+        while let Some(&i) = words.get(end) {
+            match self.tokens[i] {
+                "(" => depth += 1,
+                ")" if depth > 0 => depth -= 1,
+                "," | ")" if depth == 0 => break,
+                _ => {}
+            }
+            end += 1;
+        }
+        let value: Vec<&str> = words[at + 1..end].iter().map(|&i| self.tokens[i]).collect();
+        let too_large = || LayoutValue::TooLarge(value.join(" "));
+        let value = match super::ConstantSize::value(&value) {
+            Some(v) => match u32::try_from(v) {
+                Ok(v) => LayoutValue::Value(v),
+                Err(_) if v > 0 => too_large(),
+                Err(_) => LayoutValue::Unread,
+            },
+            // A lone integer literal too large for the evaluator (`18446744073709551615`).
+            None if matches!(value[..], [word] if is_integer_literal(word)) => too_large(),
+            None => LayoutValue::Unread,
+        };
+        (value, end)
     }
 
     /// A global `T name = a ? b : c;` or, without `const`, any initialized global: naga only
@@ -883,11 +1066,13 @@ impl<'p> Stage<'p> {
     /// also take uniforms and other globals there), so each initializer becomes a function of
     /// ours on the same line (`T a; T hz_init_a() { return T(...); } T b; ...`), called by our
     /// `main` before the pack's, in file order. The return converts as GLSL's initialization
-    /// does (`vec2 v = ivec2(...)`).
+    /// does (`vec2 v = ivec2(...)`). A declarator without one beside them (`T a, b = 1.0;`) is
+    /// recorded as `uninitialized` records `T a;`, with the same type. Types and sizes are
+    /// written as the rewrite writes their words (`written_words`).
     pub(super) fn initializer(&mut self, words: &[usize], to: usize) {
         let text = |i: usize| self.tokens[i];
         let Some(eq) = words.iter().position(|&i| text(i) == "=") else {
-            return;
+            return self.uninitialized(words, to);
         };
         // Declarators, split at top-level commas: (first word, `=` if any, end).
         let mut declarators = Vec::new();
@@ -979,8 +1164,10 @@ impl<'p> Stage<'p> {
         if ty.is_empty() {
             return;
         }
+        let ty = self.written_words(&ty);
         let mut replaced = Vec::new();
         let mut names = Vec::new();
+        let mut zeros = Vec::new();
         for (n, &(begin, assign, end)) in declarators.iter().enumerate() {
             let name_at = if n == 0 { name_at } else { begin };
             let name = text(words[name_at]).to_owned();
@@ -996,6 +1183,12 @@ impl<'p> Stage<'p> {
                     None => return,
                 }
             }
+            let array = self.written_words(&array);
+            let declared = format!(
+                "{}{}",
+                reversed_array_dimensions(&ty),
+                reversed_array_dimensions(&array),
+            );
             let next = if n + 1 < declarators.len() {
                 let qualifier = if constant && !runtime[n + 1] {
                     "const "
@@ -1007,6 +1200,10 @@ impl<'p> Stage<'p> {
                 String::new()
             };
             let end_token = words.get(end).copied().unwrap_or(to);
+            // `T a, b = 1.0;`: `a` is set back as `T a;` is (`uninitialized`).
+            if assign.is_none() {
+                zeros.push((to, name.clone(), declared.clone()));
+            }
             match assign {
                 Some(a) if runtime[n] => {
                     let dimensions = if array.is_empty() { &ty } else { &array };
@@ -1039,14 +1236,9 @@ impl<'p> Stage<'p> {
                     } else {
                         (String::new(), "")
                     };
-                    let return_ty = format!(
-                        "{}{}",
-                        reversed_array_dimensions(&ty),
-                        reversed_array_dimensions(&array),
-                    );
                     replaced.push((
                         words[a],
-                        format!(";{capture} {return_ty} hz_init_{name}() {{ return {open}"),
+                        format!(";{capture} {declared} hz_init_{name}() {{ return {open}"),
                     ));
                     replaced.push((end_token, format!("{close}; }}{next}")));
                     names.push(name);
@@ -1062,6 +1254,48 @@ impl<'p> Stage<'p> {
         }
         self.replaced.extend(replaced);
         self.inits.extend(names);
+        self.uninitialized.extend(zeros);
+    }
+
+    /// A global `T a, b[2];` with neither storage nor an initializer (`uninitialized`): its
+    /// declarators, with the type written as `hz_init_*` returns it. Not `precision`'s
+    /// statement; `invariant gl_Position;` has no declarator after its "type".
+    fn uninitialized(&mut self, words: &[usize], to: usize) {
+        let text = |i: usize| self.tokens[i];
+        let mut k = 0;
+        while words.get(k).is_some_and(|&i| QUALIFIERS.contains(&text(i))) {
+            k += 1;
+        }
+        let Some(&ty_at) = words.get(k) else { return };
+        if text(ty_at) == "precision" {
+            return;
+        }
+        // `T[2] a`: the dimensions after the type are the type's.
+        let mut ty = text(ty_at).to_owned();
+        let mut j = k + 1;
+        while words.get(j).is_some_and(|&i| text(i) == "[") {
+            while let Some(&i) = words.get(j) {
+                ty.push_str(text(i));
+                j += 1;
+                if text(i) == "]" {
+                    break;
+                }
+            }
+        }
+        // No `(` here: a global statement with one before any `=` is a prototype (`global`).
+        for declarator in words[j..].split(|&i| text(i) == ",") {
+            let Some((&name, array)) = declarator.split_first() else {
+                continue;
+            };
+            let array: String = array.iter().map(|&i| text(i)).collect();
+            let ty = format!(
+                "{}{}",
+                reversed_array_dimensions(&ty),
+                reversed_array_dimensions(&array)
+            );
+            self.uninitialized
+                .push((to, text(name).to_owned(), self.written_words(&ty)));
+        }
     }
 
     /// `layout(std430, binding = n) buffer Name {`: an SSBO, in set 4 at its binding. Its
@@ -1130,6 +1364,46 @@ impl<'p> Stage<'p> {
             }
         }
         self.structs.insert(name.to_owned(), members);
+    }
+
+    /// `struct S {`, or a block (`uniform B {`, `buffer B {`, `in`/`out` `B {`), at token `open`,
+    /// whose words start at `from`: the names it declares (`declared`). A block's members are
+    /// the stage's globals when no instance follows its `}`.
+    fn declared_with_body(&mut self, from: usize, open: usize) {
+        let head: Vec<&str> = self.tokens[from..open]
+            .iter()
+            .copied()
+            .filter(|t| significant(t))
+            .collect();
+        let Some(&name) = head.last().filter(|n| is_ident(n)) else {
+            return; // a function, or an anonymous struct
+        };
+        if head.contains(&"struct") {
+            self.declared.insert(name.to_owned());
+            return;
+        }
+        if !head
+            .iter()
+            .any(|w| matches!(*w, "uniform" | "buffer" | "in" | "out"))
+        {
+            return;
+        }
+        self.declared.insert(name.to_owned());
+        let (members, close) = members(&self.tokens, open);
+        let instances: Vec<&str> = (self.tokens.get(close + 1..).unwrap_or_default())
+            .iter()
+            .copied()
+            .filter(|t| significant(t))
+            .take_while(|t| *t != ";")
+            .filter(|t| is_ident(t))
+            .take(1)
+            .collect();
+        let names = if instances.is_empty() {
+            members.iter().map(|&i| self.tokens[i]).collect()
+        } else {
+            instances
+        };
+        self.declared.extend(names.into_iter().map(str::to_owned));
     }
 
     /// A function definition or prototype: remember which parameters are samplers.

@@ -1,19 +1,19 @@
 //! Read-only fluid-state definitions from the owning host's loaded registry.
 use crate::{
-    Backend, BackendRef, BlockStateId, FluidKey, FluidState, Host, StateConstraint, StateProperty,
+    Backend, BackendRef, BlockState, FluidKey, FluidState, Host, StateConstraint, StateProperties,
 };
 
+// no wire: world definitions borrow the host's resident properties.
 /// A registered fluid's world-state definition, or an identity used only in tanks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-#[derive(sunrise_mod_api_macros::Wire)]
-pub enum FluidDefinition {
+pub enum FluidDefinition<'a> {
     /// A world fluid's default and legal serialized property values.
     World {
         /// Default world state.
         default: FluidState,
-        /// Property names and legal values.
-        properties: Vec<StateProperty>,
+        /// Borrowed property names and legal values, empty for a world fluid with no properties.
+        properties: StateProperties<'a>,
     },
     /// A registered fluid without world states.
     TankOnly,
@@ -21,8 +21,8 @@ pub enum FluidDefinition {
 
 /// What a registered fluid is, apart from any level or entity. Vanilla reads the entity
 /// behaviours off `FluidTags.WATER` and `FluidTags.LAVA`, so `minecraft:flowing_water` answers as
-/// `minecraft:water`. The empty fluid and a tank-only fluid emit no light, nothing can be done in
-/// them, their fall modifier scales nothing and they drip nothing and never tick randomly.
+/// `minecraft:water`. Nothing can be done in the empty fluid and a tank-only fluid, their fall
+/// modifier scales nothing and they drip nothing and never tick randomly.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -30,7 +30,8 @@ pub struct FluidTypeProperties {
     /// `FluidType.getDescriptionId`: `fluid_type.<mod>.<name>`, vanilla's by its block
     /// (`block.minecraft.water`, `block.minecraft.air` for the empty fluid).
     pub description_id: String,
-    /// `FluidType.getLightLevel`: what the fluid's block emits, 0 through 15.
+    /// `FluidType.getLightLevel`, 0 through 15: 15 for lava, 0 for water and the empty fluid,
+    /// and what a mod fluid's file states (`light_level`, 0 by default), with or without a block.
     pub light_level: u8,
     /// `FluidType.getFallDistanceModifier`: what an entity's fall distance is multiplied by
     /// each tick in the fluid: water's 0 resets it, lava's 0.5 halves it.
@@ -56,6 +57,15 @@ pub struct FluidTypeProperties {
     /// `Fluid.getDripParticle`: the particle id a block of the fluid drips beneath it
     /// (`minecraft:dripping_water`, `minecraft:dripping_lava`), none for any other fluid.
     pub drip_particle: Option<String>,
+    /// `FluidType.getTemperature`: how hot it is, roughly in kelvin. Water and a mod's fluid
+    /// that states none are 300, lava 1300 and the empty fluid 0.
+    pub temperature: i32,
+    /// `FluidType.getDensity`: how dense it is, roughly in kg/m³; below 0 is lighter than air.
+    /// Water and a mod's fluid that states none are 1000, lava 3000 and the empty fluid 0.
+    pub density: i32,
+    /// `FluidType.getViscosity`: how thick it is, 0 or more. Water and a mod's fluid that
+    /// states none are 1000, lava 6000 and the empty fluid 0.
+    pub viscosity: i32,
 }
 
 /// Why fluid-state constraints could not be validated.
@@ -97,23 +107,26 @@ impl<H: Host + ?Sized> HostFluidStates for H {
         }
     }
 }
-impl FluidStates<'_> {
-    /// The definition, or none without a resolved registry. Missing prepared world
-    /// definitions fail resource loading; they are never reported as tank-only.
-    pub fn definition(&self, fluid: FluidKey) -> Option<FluidDefinition> {
+impl<'a> FluidStates<'a> {
+    /// The fluid's definition with properties borrowed from the host's tables, or `None`
+    /// for an unknown key or unavailable registry. Missing prepared world definitions fail
+    /// resource loading; they are never reported as tank-only.
+    pub fn definition(&self, fluid: FluidKey) -> Option<FluidDefinition<'a>> {
         self.backend?.fluid_state_definition(fluid)
     }
+}
+impl FluidStates<'_> {
     /// The fluid's type properties, or none without a resolved registry or for a key it
     /// doesn't hold. Resolve a name with `Host::fluid_key`, which is none for an unknown one.
     pub fn type_properties(&self, fluid: FluidKey) -> Option<FluidTypeProperties> {
         self.backend?.fluid_type_properties(fluid)
     }
-    /// `FluidState.createLegacyBlock`: the block state that holds `state` in the world, a water
-    /// or lava block of the matching level, a mod's world fluid's block, or air for the empty
-    /// fluid. None for a state no fluid can be in (a tank-only fluid, an amount above 8, a zero
-    /// amount for anything but the empty fluid, a source that isn't full) and without a resolved
-    /// registry.
-    pub fn legacy_block(&self, state: FluidState) -> Option<BlockStateId> {
+    /// `FluidState.createLegacyBlock`: the canonical block state that holds `state` in the world.
+    /// A water or lava state keeps its level; a mod's world fluid uses its block, and the empty
+    /// fluid uses air. Returns `None` without a resolved registry or for a state no fluid can be
+    /// in (tank-only, an amount above 8, a zero amount for anything but empty, or a source that
+    /// isn't full).
+    pub fn legacy_block(&self, state: FluidState) -> Option<BlockState> {
         self.backend?.fluid_legacy_block(state)
     }
     /// Validate partial constraints in input order, without matching a particular state.

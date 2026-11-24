@@ -11,6 +11,7 @@ use wgpu::{TextureFormat as T, util::DeviceExt};
 const ATLAS: [u8; 4] = [10, 200, 30, 255];
 
 #[test]
+#[ignore = "daily"]
 fn unknown_samplers_and_colortex0_to_3_in_gbuffers_terrain_read_the_atlas() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else { return };
@@ -91,6 +92,7 @@ fn unknown_samplers_and_colortex0_to_3_in_gbuffers_terrain_read_the_atlas() {
                 material_maps: false,
                 ids: None,
                 cull: false,
+                pages: false,
             }),
             block_ids: &[],
             sprite_rects: &[],

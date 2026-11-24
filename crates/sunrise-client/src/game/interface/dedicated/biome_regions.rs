@@ -1,5 +1,5 @@
 //! `server.toml`'s `[biome_regions]`: what a dedicated server chooses for an existing world's
-//! saved biome regions (docs/design/mod-api/mod-biome-regions.md), where the client asks
+//! saved biome regions, where the client asks
 //! in the world list. `missing = "refuse" | "vanilla"` (default `"refuse"`) answers for the
 //! regions of mods no longer installed; `adopt_installed = true` takes the installed mods'
 //! regions for new chunks.
@@ -19,8 +19,11 @@ fn parse(text: &str) -> Result<Settings, String> {
 
 /// Records `server.toml`'s choices in `world`'s biome regions before it opens. A section that
 /// does not read stops the start.
-pub(super) fn choose(world: &std::path::Path) -> sunrise_client::Result<()> {
-    let settings = match std::fs::read_to_string("server.toml") {
+pub(in crate::game) fn choose(
+    world: &std::path::Path,
+    config: &std::path::Path,
+) -> sunrise_client::Result<()> {
+    let settings = match std::fs::read_to_string(config) {
         Ok(text) => parse(&text).map_err(|e| format!("server.toml: {e}"))?,
         Err(why) if why.kind() == std::io::ErrorKind::NotFound => Settings::default(),
         Err(why) => return Err(format!("server.toml: {why}").into()),

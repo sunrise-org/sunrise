@@ -1,7 +1,16 @@
 //! Mob handles for native server mods.
 use super::{Game, commands::Target};
 use mod_api::{EntityRef, LivingRef, MobRef};
-use sunrise_client::mobs::{self, Mob, Species, Who, ai::brain_target};
+use sunrise_client::{
+    mobs::{self, Mob, MobWorld, Species, Who, ai::brain_target},
+    scoreboard::Team,
+};
+use sunrise_core::geometry::{Aabb, Axis};
+
+fn warden_mob_target_bounds(mob: &Mob) -> Option<Aabb> {
+    (!mob.removed && mob.alive() && !mob.is_invulnerable() && mob.species() != Species::Warden)
+        .then(|| mob.bounds())
+}
 
 /// What decides whether a player can be a mob's target.
 pub(super) struct PlayerFacts {
@@ -109,7 +118,7 @@ impl Game<'_> {
     /// [`Mob::valid_target`] (#1175) a goal tick's view shares.
     pub(super) fn native_mob_valid_target(&self, mob: &Mob, target: Target) -> bool {
         if mob.species() == Species::Warden {
-            return self.native_warden_valid_target(mob, target);
+            return self.warden_valid_target(self.mob_team_of(mob), target);
         }
         match target {
             Target::Mob(id) => {
@@ -158,18 +167,70 @@ impl Game<'_> {
             _ => false,
         }
     }
+    /// `Warden.getTarget` resolves the stored entity and validates the read;
+    /// the brain memory is not changed when that entity becomes invalid.
+    pub(super) fn warden_attack_target(
+        &self,
+        mob: &Mob,
+        scope: Option<(&Mob, &MobWorld<'_>)>,
+    ) -> Option<(u32, Target)> {
+        use sunrise_client::join_seq::residency::table::EntityLookup;
+        let id = mobs::warden::brain_target_id(mob)?;
+        let own_team = scope.map_or_else(
+            || self.mob_team_of(mob),
+            |(actor, world)| self.mob_team_scoped(mob, actor, world),
+        );
+        if let Some((actor, world)) = scope {
+            // The actor and disjoint mob loan are not in Game's resident list
+            // during a tick. Players and the dragon remain on the level.
+            let loaned = if id == actor.id {
+                Some(actor)
+            } else {
+                world.live_mobs.and_then(|mobs| mobs.find(id))
+            };
+            if let Some(other) = loaned {
+                let bounds = warden_mob_target_bounds(other)?;
+                let team = self.mob_team_scoped(other, actor, world);
+                return self
+                    .warden_target_in_bounds(bounds, own_team, team)
+                    .then_some((id, Target::Mob(id)));
+            }
+        }
+        match self.server_resident_entity(id) {
+            EntityLookup::Found { location, value }
+                if location.owner.dimension == self.dim.key()
+                    && self.warden_valid_target(own_team, value) =>
+            {
+                Some((id, value))
+            }
+            _ => None,
+        }
+    }
+
     /// `Warden.canTargetEntity`, which overrides the usual `Mob.canAttack`.
-    fn native_warden_valid_target(&self, mob: &Mob, target: Target) -> bool {
-        use sunrise_core::geometry::Axis;
+    fn warden_valid_target(&self, own_team: Option<&Team>, target: Target) -> bool {
         let (bounds, team) = match target {
             Target::Mob(id) => {
-                let Some(other) = self.mobs.iter().find(|m| m.id == id && !m.removed) else {
+                let Some(other) = self.mobs.iter().find(|m| m.id == id) else {
                     return false;
                 };
-                if !other.alive() || other.invulnerable_flag || other.species() == Species::Warden {
+                let Some(bounds) = warden_mob_target_bounds(other) else {
+                    return false;
+                };
+                (bounds, self.mob_team_of(other))
+            }
+            Target::Dragon(id) => {
+                let Some((_, target)) = self
+                    .dragon_target()
+                    .filter(|(target_id, _)| *target_id == id)
+                else {
+                    return false;
+                };
+                let (flag, window) = self.saved_invulnerability(id);
+                if flag || window > 0 {
                     return false;
                 }
-                (other.bounds(), self.mob_team(id))
+                (target.bounds, self.mob_team(id))
             }
             Target::Guest(conn) => {
                 let Some(g) = self.command_guest(conn) else {
@@ -179,7 +240,9 @@ impl Game<'_> {
                     || g.dead
                     || g.health <= 0.0
                     || matches!(g.game_mode, 1 | 3)
-                    || g.motion.as_ref().is_some_and(|p| p.invulnerable)
+                    || g.motion.as_ref().is_some_and(|p| {
+                        p.health.permanently_invulnerable || p.health.invulnerable_time > 0
+                    })
                 {
                     return false;
                 }
@@ -191,7 +254,8 @@ impl Game<'_> {
                 };
                 if matches!(self.mode_id(), 1 | 3)
                     || player.health.dead_or_dying()
-                    || player.invulnerable
+                    || player.health.permanently_invulnerable
+                    || player.health.invulnerable_time > 0
                 {
                     return false;
                 }
@@ -199,8 +263,17 @@ impl Game<'_> {
             }
             _ => return false,
         };
+        self.warden_target_in_bounds(bounds, own_team, team)
+    }
+
+    fn warden_target_in_bounds(
+        &self,
+        bounds: Aabb,
+        own: Option<&Team>,
+        other: Option<&Team>,
+    ) -> bool {
         let border = self.border.geometry();
-        !sunrise_client::scoreboard::teams_allied(self.mob_team(mob.id), team)
+        !sunrise_client::scoreboard::teams_allied(own, other)
             && border.is_within_bounds(bounds.min(Axis::X), bounds.min(Axis::Z), 0.0)
             && border.is_within_bounds(
                 bounds.max(Axis::X) - f64::from(1.0e-5_f32),
@@ -238,6 +311,13 @@ impl Game<'_> {
             return self.native_dragon_target(mob.entity());
         };
         let mob = self.mobs.iter().find(|m| m.id == id)?;
+        if mob.species() == Species::Warden {
+            let (id, _) = self.warden_attack_target(mob, None)?;
+            return Some(LivingRef::new(EntityRef::new(
+                self.native_lifecycle.epoch()?,
+                id,
+            )));
+        }
         let target = brain_target(mob).unwrap_or(mob.ai.target)?;
         let target_id = match target {
             Who::Mob(id) => id,
@@ -397,10 +477,9 @@ impl Game<'_> {
         let Some(who) = self.native_mob_bind_target(id, target) else {
             return false;
         };
-        self.mobs
-            .iter_mut()
-            .find(|m| m.id == id)
-            .is_some_and(|m| sunrise_client::mobs::ai::set_brain_target(m, who))
+        self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+            sunrise_client::mobs::ai::set_brain_target(m, who, target.map(|t| t.entity().id()))
+        })
     }
 
     /// The mob flag a handle names: a mob's, or the dragon's own.
@@ -454,6 +533,35 @@ impl Game<'_> {
         self.native_mob_set_flag(mob, MobFlag::Aggressive, value)
     }
 
+    /// `TamableAnimal.isInSittingPose`: the synced pose, which only a sit goal
+    /// or this write changes. None for a horse, another mob kind, the dragon,
+    /// a stale or removed handle, or a client.
+    pub(super) fn mob_is_in_sitting_pose(&self, mob: MobRef) -> Option<bool> {
+        let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
+            return None;
+        };
+        let mob = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        mob.is_tamable_animal().then_some(mob.extra.sitting_pose)
+    }
+
+    /// `TamableAnimal.setInSittingPose`: writes the synced pose and marks the
+    /// mob for sync, leaving the saved order alone. False for a horse,
+    /// another mob kind, the dragon, a stale or removed handle, or a client.
+    pub(super) fn mob_set_in_sitting_pose(&mut self, mob: MobRef, sitting: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
+            return false;
+        };
+        if !mob.is_tamable_animal() {
+            return false;
+        }
+        mob.extra.sitting_pose = sitting;
+        mob.needs_sync = true;
+        true
+    }
+
     /// `Mob.isPersistenceRequired`. The dragon never despawns
     /// (`EnderDragon.checkDespawn` is empty), but keeps and saves the flag
     /// (`PersistenceRequired`).
@@ -489,7 +597,7 @@ impl Game<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        Some(self.mobs.iter().find(|m| m.id == id && !m.removed)?.no_ai)
+        super::native_living_body::body_no_ai(self.native_living_body(Target::Mob(id))?)
     }
 
     /// `Mob.setNoAi`: whether the mob's own AI runs. With no AI the mob
@@ -813,6 +921,36 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn sitting_pose_reads_and_writes_a_tamable_animal_only() {
+        with_game(|game| {
+            let wolf = add_mob(game, 12, "minecraft:wolf");
+            let horse = add_mob(game, 13, "minecraft:horse");
+            assert_eq!(wolf.is_in_sitting_pose(game), Some(false));
+            assert!(wolf.set_in_sitting_pose(game, true));
+            assert!(game.mobs[0].extra.sitting_pose);
+            assert!(game.mobs[0].needs_sync);
+            assert_eq!(wolf.is_in_sitting_pose(game), Some(true));
+            assert!(wolf.set_in_sitting_pose(game, false));
+            assert!(!game.mobs[0].extra.sitting_pose);
+            assert_eq!(wolf.is_in_sitting_pose(game), Some(false));
+            // A horse is tamed another way and has no TamableAnimal pose.
+            assert_eq!(horse.is_in_sitting_pose(game), None);
+            assert!(!horse.set_in_sitting_pose(game, true));
+            assert!(!game.mobs[1].extra.sitting_pose);
+            // A cat is tamable too.
+            let cat = add_mob(game, 14, "minecraft:cat");
+            assert_eq!(cat.is_in_sitting_pose(game), Some(false));
+            assert!(cat.set_in_sitting_pose(game, true));
+            assert!(game.mobs[2].extra.sitting_pose);
+            // A removed handle is stale: it reads nothing and writes nothing.
+            game.mobs[0].removed = true;
+            assert_eq!(wolf.is_in_sitting_pose(game), None);
+            assert!(!wolf.set_in_sitting_pose(game, true));
+        })
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn leash_holder_reads_live_state() {
         use super::super::{boats::Boat, lan::LanSettings};
         use mobs::leash::{Holder, Pending};
@@ -850,7 +988,7 @@ mod tests {
                 seed: 0,
                 max_players: 2,
                 integrated: true,
-                levels: game.level_shapes,
+                levels: game.level_shapes.clone(),
                 level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
@@ -1561,16 +1699,7 @@ mod tests {
             assert_eq!(brain.target(game), Some(other));
             let warden = game.mob(game.entity(19).unwrap()).unwrap();
             let ghast = game.living(game.entity(21).unwrap()).unwrap();
-            let warden_mob = game.mobs.iter_mut().find(|m| m.id == 19).unwrap();
-            warden_mob
-                .extra
-                .warden
-                .as_mut()
-                .unwrap()
-                .brain
-                .mem
-                .attack_target
-                .set(Who::Mob(21));
+            assert!(warden.set_brain_target(game, Some(ghast)));
             assert_eq!(
                 warden.target(game),
                 Some(ghast),

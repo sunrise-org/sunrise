@@ -2,7 +2,7 @@
 //! (1.20.5) and `ParticleUnflatteningFix`.
 use super::dynamic::{
     as_bool, as_bool_opt, as_double, as_int, as_long, as_number, as_str, as_string, empty_map,
-    int_list, is_empty_map, namespaced, remove, rename, set, stream, string,
+    int_list, is_empty_map, namespaced, put, remove, rename, set, stream, string,
 };
 use super::json;
 use sunrise_core::{
@@ -253,14 +253,15 @@ const SPAWN_EGG_MOBS: &[&str] = &[
 
 /// The read hook of item stacks in the schema at `k` (before 1.20.5): V99's tables below V704,
 /// V704's block entities with V99's entities up to V705, V705's from then on.
-pub(super) fn add_names_at(stack: &mut Tag, k: super::schema::Key) {
+pub(super) fn add_names_at(stack: &mut Tag, k: super::schema::Key) -> super::tables::Result {
     use super::schema::key;
     if k >= key(705, 0) {
-        return add_names(stack);
+        add_names(stack);
+        return Ok(());
     }
     let item = namespaced(&as_str(stack.get("id")).unwrap_or_else(|| "minecraft:air".into()));
     let Some(tag) = stack.get_mut("tag") else {
-        return;
+        return Ok(());
     };
     if let Some(be) = tag.get_mut("BlockEntityTag")
         && item != "minecraft:air"
@@ -268,8 +269,7 @@ pub(super) fn add_names_at(stack: &mut Tag, k: super::schema::Key) {
         let found = if k >= key(704, 0) {
             ITEM_TO_BLOCK_ENTITY.iter().find(|(i, _)| *i == item)
         } else {
-            super::tables::tables()
-                .item_to_block_entity_v99
+            super::tables::item_to_block_entity_v99()?
                 .iter()
                 .find(|(i, _)| *i == item)
         };
@@ -289,6 +289,7 @@ pub(super) fn add_names_at(stack: &mut Tag, k: super::schema::Key) {
             set(e, "id", string(id));
         }
     }
+    Ok(())
 }
 
 /// `V99.addNames` with V704/V705's tables: the read hook of item stacks before 1.20.5.
@@ -395,16 +396,16 @@ impl Stack {
             self.set_component("minecraft:custom_data", tag);
         }
         if !is_empty_map(&self.components) {
-            set(&mut result, "components", self.components);
+            put(&mut result, "components", self.components);
         }
-        // mergeRemainder: the remainder's fields under the stack's own.
+        // mergeRemainder: size from the prefix alone, then overlay the encoded
+        // stack's fields in the fresh record's iteration order.
         let mut out = self.remainder;
-        if let (Tag::Compound(o), Tag::Compound(r)) = (&mut out, result) {
-            o.extend(r);
-            out
-        } else {
-            out
+        if let (Tag::Compound(prefix), Tag::Compound(fields)) = (&mut out, result) {
+            *prefix = std::mem::take(prefix).into_shallow_copy();
+            prefix.extend(fields);
         }
+        out
     }
 }
 

@@ -49,7 +49,7 @@ pub fn internals(
     discover_catalog(rust, folder, &game)
 }
 
-/// The pinned game's build data (`internals.json`, `points.json`) with only this mod's modules applied, copied into `output`, which must not exist yet.
+/// The pinned game's `internals.json` with only this mod's modules applied, copied into `output`, which must not exist yet.
 /// `sdk` is only needed when the executing tool came from outside that SDK.
 pub fn catalog(
     rust: &dyn Toolchain,
@@ -59,9 +59,11 @@ pub fn catalog(
 ) -> Result<PathBuf, Error> {
     let game = catalog_for_mod(rust, folder, sdk)?;
     fs::create_dir(output).map_err(|e| format!("{}: {e}", output.display()))?;
-    for name in [build_data::INTERNALS, build_data::POINTS] {
-        fs::copy(game.join(name), output.join(name)).map_err(|e| e.to_string())?;
-    }
+    fs::copy(
+        game.join(build_data::INTERNALS),
+        output.join(build_data::INTERNALS),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(output.to_path_buf())
 }
 
@@ -81,7 +83,6 @@ fn catalog_for_mod(
             crate::run(
                 crate::apply(rust, &tool, prepared, input, fresh),
                 "horizon-mixins",
-                |_| {},
             )
         },
     )
@@ -99,15 +100,15 @@ fn discover_catalog(
         )
     })?;
     let projects = [api::Project::read(&bundle).map_err(|e| e.to_string())?];
-    let declared = [dependencies::from_manifest(
-        &bundle.manifest.dependencies,
+    let declared = [dependencies::build_dependencies(
+        &bundle.manifest,
         sunrise_mod_package::manifest::Side::Both,
+        |id| bundle.manifest.id == id,
     )];
     let inputs = [dependencies::Mod {
         id: &bundle.manifest.id,
         version: &bundle.manifest.version,
         dependencies: &declared[0],
-        has_api: true,
         code: true,
     }];
     let resolution = dependencies::resolve_links(&inputs).map_err(|e| e.to_string())?;
@@ -118,8 +119,10 @@ fn discover_catalog(
     crate::host::mark_used(&cache)?;
     let stage = cache.join("stage");
     prepare_stage(game, &stage, bundle.needs_mixins())?;
-    let mut listed = internals::Catalog::read(&stage)?;
-    listed.discovery = true;
+    let listed = internals::Catalog {
+        internals: catalog::read(&stage.join(build_data::INTERNALS))?,
+        discovery: true,
+    };
     api::stage(&stage, &projects, &declared, &resolution, &listed)?;
     let mod_dir = stage.join("native-api").join(&bundle.manifest.id);
     let mut cmd = crate::cargo(rust, &stage, "check");
@@ -210,7 +213,6 @@ fn catalog_for_mod_with(
     }
     sunrise_platform::mod_build::api_gen::staging::stage(
         &fresh,
-        &fresh.join("points.json"),
         &fresh.join(internals::INTERNALS),
         sunrise_platform::mod_build::api_gen::staging::Mode::Discovery,
         &sunrise_platform::mod_build::api_gen::staging::Build {

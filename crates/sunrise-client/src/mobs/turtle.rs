@@ -17,11 +17,11 @@ use super::{
 };
 use crate::blocks::Fluid;
 use crate::health::DamageLevel;
+use std::ops::ControlFlow;
 use sunrise_core::{
-    geometry::{Vec3, trig},
+    geometry::{Axis, Vec3, trig},
     random::RandomSource,
 };
-use sunrise_world::move_gate::MoveGate;
 
 /// `Turtle.registerGoals`, and the path maluses and navigation `Turtle` and
 /// `TurtlePathNavigation` give it.
@@ -125,7 +125,7 @@ fn update_speed(m: &mut Mob) {
         if m.is_baby() {
             m.set_speed((m.ai.speed / 3.0).max(0.06));
         }
-    } else if m.on_ground {
+    } else if m.ground.on_ground {
         m.set_speed((m.ai.speed / 2.0).max(0.06));
     }
 }
@@ -156,23 +156,21 @@ pub fn move_control(m: &mut Mob) {
 /// `Turtle.travelInWater`: swims at 0.1 move speed with 0.9 drag, and sinks
 /// slowly unless it has a target or is going home and near its home. On
 /// land the usual travel.
-pub fn travel(
+pub(super) fn travel(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    if !m.fluids.in_water {
-        return false;
-    }
+    pause: bool,
+) -> ControlFlow<super::living::TravelPause> {
     m.move_relative(0.1, input);
-    m.do_move(w, level, events, &mut MoveGate::new());
-    m.velocity = m.velocity.scale(0.9);
-    if m.ai.target.is_none() && (!going_home(m) || !close_to_home(m, 20.0)) {
-        m.velocity.y -= 0.005;
-    }
-    true
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.set_velocity(m.velocity.scale(0.9));
+        if m.ai.target.is_none() && (!going_home(m) || !close_to_home(m, 20.0)) {
+            m.set_velocity(m.velocity.with_component(Axis::Y, m.velocity.y - 0.005));
+        }
+    })
 }
 /// `Turtle.aiStep`: while digging, sand crumbs fly every fifth tick.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -541,7 +539,7 @@ mod tests {
         k.speed = 0.25;
         k.step_height = 1.0;
         let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
-        m.on_ground = true;
+        m.ground.on_ground = true;
         let node = PathNode {
             x: 0,
             y: 0,
@@ -636,7 +634,7 @@ mod tests {
         // 0.25, and it lifts the turtle 0.005 a tick. (Tests only the move
         // control's speed; Turtle.travelInWater is ported in travel().)
         let mut m = strolling_turtle();
-        m.on_ground = false;
+        m.ground.on_ground = false;
         m.fluids.in_water = true;
         let s = speeds(&mut m, 60);
         assert_eq!(s[0], 0.125 * 0.25);
@@ -644,14 +642,14 @@ mod tests {
         assert!((m.velocity.y - 60.0 * 0.005).abs() < 1.0e-9);
         // More than 16 blocks from home: max(speed / 2, 0.08) first.
         let mut m = strolling_turtle();
-        m.on_ground = false;
+        m.ground.on_ground = false;
         m.fluids.in_water = true;
         m.extra.home = Some([0, 0, 40]);
         let far = 0.08_f32 + 0.125 * (0.25 - 0.08_f32);
         assert_eq!(speeds(&mut m, 20), vec![far; 20]);
         // A baby: max(speed / 3, 0.06).
         let mut m = strolling_turtle();
-        m.on_ground = false;
+        m.ground.on_ground = false;
         m.fluids.in_water = true;
         m.extra.age = -24000;
         let young = 0.06_f32 + 0.125 * (0.25 - 0.06_f32);

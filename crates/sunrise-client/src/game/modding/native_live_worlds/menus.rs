@@ -1,6 +1,6 @@
 //! Continuing ordinary block menus in their actual source World. Only identity/context is stored here.
 use super::*;
-use crate::game::Dim;
+use crate::game::{Dim, lan_actions::MenuOpen, transactions::StorageSettlement};
 use mod_api::__private::game::Fields as _;
 use sunrise_client::lan::{guest::Guest, menu::Slots};
 
@@ -14,7 +14,6 @@ pub(super) struct ProjectedMenu {
     slots: Slots,
     membership: u64,
     holders: Vec<mod_api::BlockEntityRef>,
-    pose: LiveWorldPose,
 }
 
 pub(in crate::game) struct PreparedMenu(ProjectedMenu);
@@ -25,7 +24,6 @@ pub(super) struct PendingOpen {
     pos: (i32, i32, i32),
     destination: LevelRef,
     canceled: bool,
-    opener_released: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -39,7 +37,6 @@ pub(super) struct MenuScope {
     membership: u64,
     source_revision: u64,
     physical_eye: [f64; 3],
-    local_eye: [f64; 3],
 }
 
 fn keys(slots: Slots, pos: Option<(i32, i32, i32)>) -> Vec<[i32; 3]> {
@@ -69,7 +66,6 @@ impl Game<'_> {
         let Some(destination) = destination else {
             self.close_ender_chest();
             self.container = None;
-            self.container_openers_changed(pos, false);
             return;
         };
         // A guest's temporary ender inventory must be closed in its actual source frame.
@@ -81,7 +77,6 @@ impl Game<'_> {
                 pos,
                 destination,
                 canceled: false,
-                opener_released: false,
             },
         );
     }
@@ -93,61 +88,23 @@ impl Game<'_> {
     ) -> Option<Result<bool, Error>> {
         let pending = self.live_worlds.get_mut().pending_opens.remove(&conn)?;
         let action = pending.action;
-        let result = if pending.canceled || pending.pos != pos {
+        Some(if pending.canceled || pending.pos != pos {
             Err(Error::Revision)
         } else {
             self.with_projected_actor(action.handle, action.player, action.hit, |game, _| {
-                let seal = game.transaction_open();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if !game.projection_actor_target_fresh(action) {
-                        return Err(Error::Revision);
-                    }
-                    Ok(game.lan_open_container(conn, pos))
-                }));
-                game.transaction_close(
-                    &seal,
-                    result
-                        .as_ref()
-                        .is_ok_and(|answer| matches!(answer, Ok(true))),
-                );
-                match result {
-                    Ok(answer) => answer,
-                    Err(panic) => std::panic::resume_unwind(panic),
+                let scope = game.storage_scope_guard(true);
+                if !scope.game.projection_actor_target_fresh(action) {
+                    return Err(Error::Revision);
                 }
+                let opened = scope.game.lan_open_container(conn, pos) == MenuOpen::Opened;
+                let settled = scope.close(opened);
+                if opened && !matches!(settled, Some(StorageSettlement::Committed(_))) {
+                    game.forget_projection_menu(conn);
+                    return Err(Error::Unavailable);
+                }
+                Ok(opened)
             })
-        };
-        if !matches!(result, Ok(true))
-            && !pending.opener_released
-            && let Err(error) = self.release_projection_pending_open(pending)
-        {
-            return Some(Err(error));
-        }
-        Some(result)
-    }
-
-    fn release_projection_pending_open(&mut self, pending: PendingOpen) -> Result<(), Error> {
-        let source = pending.action.handle.level();
-        if !self.projection_action_transaction_allowed(source) {
-            return Err(Error::Busy);
-        }
-        if !self.level_handle_current(source) {
-            return Err(Error::NotResident);
-        }
-        let target = Dim::from_id(source.dimension_id());
-        let back = self.enter_command_level(target);
-        if self.dim != target {
-            return Err(Error::NotResident);
-        }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.container_openers_changed(pending.pos, false);
-        }));
-        if let Some(back) = back {
-            self.enter_level(back).map_err(|_| Error::Unavailable)?;
-        }
-        if let Err(panic) = result {
-            std::panic::resume_unwind(panic);
-        }
-        Ok(())
+        })
     }
 
     /// Prepare after all open/lock/start callbacks, before any OpenScreen publication.
@@ -210,7 +167,6 @@ impl Game<'_> {
             slots,
             membership: entry.membership,
             holders,
-            pose: entry.sample.current,
         })))
     }
 
@@ -240,10 +196,9 @@ impl Game<'_> {
         self.live_worlds.borrow().menus.contains_key(&conn)
     }
     pub(in crate::game) fn projection_menu_in_scope(&self, conn: u32) -> bool {
-        self.live_worlds
-            .borrow()
-            .menu_scope
-            .is_some_and(|scope| scope.conn == conn)
+        self.live_worlds.borrow().menu_scope.is_some_and(|scope| {
+            scope.conn == conn && self.dim.id() == scope.handle.level().dimension_id()
+        })
     }
     pub(in crate::game) fn forget_projection_menu(&mut self, conn: u32) {
         self.live_worlds.get_mut().menus.remove(&conn);
@@ -296,14 +251,6 @@ impl Game<'_> {
         Some(menu.still_valid_with_eye(&self.lan.as_ref()?.hub.loop_context, world, guest, eye))
     }
 
-    pub(in crate::game) fn projection_menu_eye(&self, conn: u32) -> Option<[f64; 3]> {
-        self.live_worlds
-            .borrow()
-            .menu_scope
-            .filter(|scope| scope.conn == conn)
-            .map(|scope| scope.local_eye)
-    }
-
     /// Before the decided click applies, after the existing ordinary callbacks. A stale scope
     /// refuses the prepared action; it never recomputes a plan or replays a callback.
     pub(in crate::game) fn projection_menu_apply_fresh(&self, conn: u32) -> bool {
@@ -321,6 +268,7 @@ impl Game<'_> {
             && entry.destination == scope.destination
             && entry.membership == scope.membership
             && entry.sample.revision == scope.pose_revision
+            && self.dim.id() == scope.handle.level().dimension_id()
             && self.world.revision == scope.source_revision
             && guest.uuid == scope.uuid
             && guest.eye() == scope.physical_eye
@@ -366,28 +314,15 @@ impl Game<'_> {
             return Err(Error::Stale);
         }
         let physical_eye = guest.eye();
-        let (local_eye, pose_revision, membership) = {
-            let table = self.live_worlds.borrow();
-            let entry = table
-                .entries
-                .get(&binding.handle.generation())
-                .filter(|entry| entry.handle == binding.handle);
-            let (pose, revision, membership) =
-                entry.map_or((binding.pose, 0, binding.membership), |entry| {
-                    (
-                        entry.sample.current,
-                        entry.sample.revision,
-                        entry.membership,
-                    )
-                });
-            (
-                checked_pose(pose)?
-                    .to_local(vector(physical_eye))
-                    .components(),
-                revision,
-                membership,
-            )
-        };
+        let (pose_revision, membership) = self
+            .live_worlds
+            .borrow()
+            .entries
+            .get(&binding.handle.generation())
+            .filter(|entry| entry.handle == binding.handle)
+            .map_or((0, binding.membership), |entry| {
+                (entry.sample.revision, entry.membership)
+            });
         let source_revision = self
             .native_level_world(binding.handle.level())
             .ok_or(Error::NotResident)?
@@ -407,7 +342,6 @@ impl Game<'_> {
             membership,
             source_revision,
             physical_eye,
-            local_eye,
         });
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self)));
         self.live_worlds.get_mut().menu_scope = previous;
@@ -420,8 +354,9 @@ impl Game<'_> {
         }
     }
 
-    /// Run once in each destination's ordinary server pass, while player-tick cancellation is known.
+    /// Exercise the automatic projected menu close without running the full player tick.
     /// Slots/progress sync itself stays in Hub::sync_containers on the ordinary SOURCE pass.
+    #[cfg(test)]
     pub(in crate::game) fn tick_projection_menus(&mut self) {
         if self.live_worlds.borrow().menus.is_empty() {
             return;
@@ -449,21 +384,9 @@ impl Game<'_> {
         &mut self,
         handle: LiveWorldRef,
     ) -> Result<(), Error> {
-        let pending: Vec<_> = self
-            .live_worlds
-            .borrow()
-            .pending_opens
-            .iter()
-            .filter_map(|(&conn, pending)| {
-                (pending.action.handle == handle && !pending.opener_released)
-                    .then_some((conn, *pending))
-            })
-            .collect();
-        for (conn, pending) in pending {
-            self.release_projection_pending_open(pending)?;
-            if let Some(pending) = self.live_worlds.get_mut().pending_opens.get_mut(&conn) {
+        for pending in self.live_worlds.get_mut().pending_opens.values_mut() {
+            if pending.action.handle == handle {
                 pending.canceled = true;
-                pending.opener_released = true;
             }
         }
         let conns: Vec<_> = self

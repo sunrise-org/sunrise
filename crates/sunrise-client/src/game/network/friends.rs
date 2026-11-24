@@ -1,4 +1,3 @@
-// game-module-cfg: feature = "friends"
 //! Play with friends, host side: "Start Sharing" on the Play with Friends
 //! screen (`screen`, the pause menu's Friends button) opens the world to LAN if
 //! it isn't (with Open to LAN's defaults) and shares that port behind an
@@ -217,14 +216,14 @@ impl Game<'_> {
             &mut |phase, batch| self.draw_screen_phase(batch, phase),
         );
     }
-    pub(super) fn friends_screen_click(&mut self) {
+    pub(super) fn friends_screen_click(&mut self) -> bool {
         let view = self.friends_view();
         let Some(action) =
             friends_screen::click(&self.gui.atlas, self.gui_size(), self.cursor, &view)
         else {
-            return;
+            return false;
         };
-        self.audio.play_button_click();
+        self.play_audio_button_click();
         match action {
             Action::Share => {
                 if let Err(e) = self.friends_start() {
@@ -247,6 +246,7 @@ impl Game<'_> {
             }
             Action::Done => self.set_screen(super::Screen::Paused),
         }
+        true
     }
 
     /// Whether the pause menu offers Play with Friends (a singleplayer world).

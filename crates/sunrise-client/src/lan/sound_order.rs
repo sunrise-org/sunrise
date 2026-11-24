@@ -107,6 +107,9 @@ impl Hub {
             return waiting;
         }
         packets.retain_mut(|body| {
+            if body.is_prepared() {
+                return true;
+            }
             let mut reader = Reader::new(body);
             if reader.varint().unwrap() != ids::REMOVE_ENTITIES {
                 return true;

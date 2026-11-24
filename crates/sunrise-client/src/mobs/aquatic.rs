@@ -2,7 +2,7 @@
 //! tropical fish and pufferfish (`AbstractFish`, puffing), and dolphins
 //! (breathing, smooth swimming).
 use super::{
-    Damage, Mob, MobEvent, MobWorld, Species, Who,
+    Mob, MobEvent, MobWorld, Species,
     anim::{Poses, State},
     control::MoveKind,
     goals::{
@@ -16,9 +16,9 @@ use crate::health::DamageLevel;
 use crate::join_seq::JoinList;
 use crate::particles::ParticleType;
 use std::f32::consts::PI;
+use std::ops::ControlFlow;
 use sunrise_core::geometry::trig::Mth;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
-use sunrise_world::move_gate::MoveGate;
 
 // Squid animation slots in AnimState.v.
 const TENTACLE_MOVEMENT: usize = 0;
@@ -167,7 +167,7 @@ pub fn register(m: &mut Mob) {
             // `Dolphin`'s `moistness` field starts full.
             m.extra.counter = 2400;
             let g = &mut m.ai.goals;
-            g.add(0, BreathAir);
+            g.add(0, BreathAir::default());
             g.add(0, TryFindWater::default());
             g.add(1, super::dolphin::SwimToTreasure::default());
             g.add(2, super::dolphin::SwimWithPlayer::new(4.0));
@@ -308,12 +308,20 @@ fn grow_up(m: &mut Mob, events: &mut Vec<MobEvent>) {
                     preserve_can_pick_up_loot: false,
                 },
                 after: super::conversion::After::Finalize,
+                // `Tadpole.aiStep` ages it after `super.aiStep()`, so after travel.
+                before_travel: false,
             });
         }
     }
 }
-/// Species aiStep additions.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut Vec<MobEvent>) {
+/// Species aiStep additions. True leaves a dry dolphin's hop to the tick tail,
+/// so the owner can settle its dry-out hurt first.
+pub(super) fn ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     use Species as S;
     match m.species() {
         S::Squid => squid_ai_step(m),
@@ -323,14 +331,14 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &
         }
         S::Tadpole => {
             grow_up(m, events);
-            if !m.fluids.in_water && m.on_ground && m.vertical_collision_below {
+            if !m.fluids.in_water && m.ground.on_ground && m.vertical_collision_below {
                 let (a, b) = (m.random.next_float(), m.random.next_float());
                 m.velocity = Vec3::new(
                     m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.05),
                     m.velocity.y + 0.4,
                     m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.05),
                 );
-                m.on_ground = false;
+                m.ground.on_ground = false;
                 m.voice("entity.tadpole.flop", events);
             }
             // Tadpole.aiStep: the age lock's particles, after the age.
@@ -338,14 +346,14 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &
         }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             // AbstractFish.aiStep flops on land (applied before travel next tick).
-            if !m.fluids.in_water && m.on_ground && m.vertical_collision_below {
+            if !m.fluids.in_water && m.ground.on_ground && m.vertical_collision_below {
                 let (a, b) = (m.random.next_float(), m.random.next_float());
                 m.velocity = Vec3::new(
                     m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.05),
                     m.velocity.y + 0.4,
                     m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.05),
                 );
-                m.on_ground = false;
+                m.ground.on_ground = false;
                 let flop = match m.species() {
                     S::Cod => "entity.cod.flop",
                     S::Salmon => "entity.salmon.flop",
@@ -369,19 +377,25 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &
                     // death message names dehydration, not drowning.
                     m.damage(level, 1.0, super::Damage::of(super::DamageKind::DryOut));
                 }
-                if m.on_ground {
-                    let (a, b) = (m.random.next_float(), m.random.next_float());
-                    m.velocity = Vec3::new(
-                        m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.2),
-                        m.velocity.y + 0.5,
-                        m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.2),
-                    );
-                    m.yaw = m.random.next_float() * 360.0;
-                    m.on_ground = false;
-                }
+                return true;
             }
         }
         _ => {}
+    }
+    false
+}
+
+/// `Dolphin.tick`: after the dry-out hurt, a grounded dolphin hops and turns.
+pub(super) fn dolphin_hop(m: &mut Mob) {
+    if m.ground.on_ground {
+        let (a, b) = (m.random.next_float(), m.random.next_float());
+        m.velocity = Vec3::new(
+            m.velocity.x + f64::from((a * 2.0 - 1.0) * 0.2),
+            m.velocity.y + 0.5,
+            m.velocity.z + f64::from((b * 2.0 - 1.0) * 0.2),
+        );
+        m.yaw = m.random.next_float() * 360.0;
+        m.ground.on_ground = false;
     }
 }
 
@@ -419,25 +433,17 @@ pub(super) fn sting_touching_mobs(m: &mut Mob, w: &MobWorld, events: &mut Vec<Mo
         return;
     }
     let area = m.bounds().inflate(Vec3::new(0.3, 0.3, 0.3));
-    let own = w.teams.of(Who::Mob(m.id));
-    let from = [m.position.x, m.position.y, m.position.z];
     let mob_id = m.id;
-    let size = m.extra.size;
-    let amount = 1.0 + size as f32;
-    let poison_ticks = 60 * size;
     for o in w.others_near(area) {
         if o.id != mob_id
             && o.alive
             && !not_scary_for_pufferfish(o.species)
             && o.bounds.intersects(area)
-            && crate::scoreboard::teams_allow_damage(own, w.teams.of(Who::Mob(o.id)))
         {
             events.push(MobEvent::PufferfishSting {
                 mob: mob_id,
                 target: o.id,
-                amount,
-                source: Damage::mob(mob_id, from),
-                poison_ticks,
+                target_join: None,
             });
         }
     }
@@ -598,49 +604,36 @@ fn squid_step(m: &mut Mob, client: bool) {
         v[X_BODY_ROT] += (-90.0 - v[X_BODY_ROT]) * 0.02;
     }
 }
-/// Species travel overrides. Returns true when handled.
-pub fn travel(
+/// Water travel for axolotls, fish and dolphins.
+pub(super) fn travel_in_water(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    use Species as S;
-    match m.species() {
-        // Squid.travel: move by the current velocity only.
-        S::Squid | S::GlowSquid => {
-            m.do_move(w, level, events, &mut MoveGate::new());
-            true
+    pause: bool,
+) -> ControlFlow<super::living::TravelPause> {
+    let speed = match m.species() {
+        Species::Axolotl | Species::Dolphin => m.ai.speed,
+        _ => 0.01,
+    };
+    m.move_relative(speed, input);
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.set_velocity(Vec3::new(
+            m.velocity.x * 0.9,
+            m.velocity.y * 0.9,
+            m.velocity.z * 0.9,
+        ));
+        // Axolotl.travelInWater has no fish sinking or generic water gravity.
+        if m.species() != Species::Axolotl && m.ai.target.is_none() {
+            // `Vec3.add(0.0, -0.005, 0.0)`: adding 0.0 turns a -0.0 into 0.0.
+            m.set_velocity(Vec3::new(
+                m.velocity.x + 0.0,
+                m.velocity.y - 0.005,
+                m.velocity.z + 0.0,
+            ));
         }
-        // Axolotl.travelInWater: no fish sinking or generic water gravity.
-        S::Axolotl if m.fluids.in_water => {
-            m.move_relative(m.ai.speed, input);
-            m.do_move(w, level, events, &mut MoveGate::new());
-            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
-            true
-        }
-        // AbstractFish.travelInWater / Dolphin.travelInWater.
-        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Tadpole | S::Dolphin
-            if m.fluids.in_water =>
-        {
-            let speed = if m.species() == S::Dolphin {
-                m.ai.speed
-            } else {
-                0.01
-            };
-            m.move_relative(speed, input);
-            m.do_move(w, level, events, &mut MoveGate::new());
-            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
-            if m.ai.target.is_none() {
-                // `Vec3.add(0.0, -0.005, 0.0)`: adding 0.0 turns a -0.0 into 0.0.
-                m.velocity =
-                    Vec3::new(m.velocity.x + 0.0, m.velocity.y - 0.005, m.velocity.z + 0.0);
-            }
-            true
-        }
-        _ => false,
-    }
+    })
 }
 /// FishMoveControl.tick (fish use it instead of the default move control).
 pub fn fish_move_control(m: &mut Mob) {
@@ -1308,6 +1301,7 @@ mod pufferfish_sting_tests {
                 );
                 let others = [target.seen(None, &crate::items::Items::empty())];
                 let world = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     goal_host: None,
                     others: &others,
                     ..w.clone()
@@ -1330,21 +1324,11 @@ mod pufferfish_sting_tests {
                         let stings: Vec<_> = events
                             .iter()
                             .filter_map(|event| match event {
-                                MobEvent::PufferfishSting {
-                                    target,
-                                    amount,
-                                    source,
-                                    poison_ticks,
-                                    ..
-                                } => Some((*target, *amount, *poison_ticks, source.attacker)),
+                                MobEvent::PufferfishSting { target, .. } => Some(*target),
                                 _ => None,
                             })
                             .collect();
-                        let expected = if puff == 2 {
-                            vec![(2, 3.0, 120, Some(Who::Mob(1)))]
-                        } else {
-                            Vec::new()
-                        };
+                        let expected = if puff == 2 { vec![2] } else { Vec::new() };
                         assert_eq!(stings, expected, "NoAI={no_ai}, puff={puff}");
                     }
                 }
@@ -1367,39 +1351,31 @@ mod pufferfish_sting_tests {
             };
             let mut fish = mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
             fish.extra.size = puff;
-            let seen: Vec<_> = others
+            let targets: Vec<_> = others
                 .iter()
                 .enumerate()
-                .map(|(i, (name, x))| {
-                    mob(i as u32 + 2, name, Vec3::new(0.5 + x, 64.0, 0.5))
-                        .seen(None, &crate::items::Items::empty())
-                })
+                .map(|(i, (name, x))| mob(i as u32 + 2, name, Vec3::new(0.5 + x, 64.0, 0.5)))
                 .collect();
-            built = Some((fish, seen));
+            built = Some((fish, targets));
         });
-        let (mut fish, seen) = built?;
+        let (mut fish, targets) = built?;
+        let seen: Vec<_> = targets
+            .iter()
+            .map(|m| m.seen(None, &crate::items::Items::empty()))
+            .collect();
         let mut events = Vec::new();
-        with_test_world(&seen, |w, _| ai_step(&mut fish, w, level, &mut events));
+        with_test_world(&seen, |w, _| {
+            ai_step(&mut fish, w, level, &mut events);
+        });
+        let expected_health: Vec<_> = targets.iter().map(|mob| mob.health).collect();
+        let mut mobs: JoinList<_> = std::iter::once(fish).chain(targets).collect();
+        apply_brain_events(&mut mobs, level, &mut events, 0, &Default::default());
         Some(
-            events
-                .iter()
-                .filter_map(|e| match e {
-                    MobEvent::PufferfishSting {
-                        mob: 1,
-                        target,
-                        amount,
-                        source,
-                        poison_ticks,
-                    } => {
-                        assert_eq!(source.attacker, Some(Who::Mob(1)));
-                        assert_eq!(
-                            *poison_ticks,
-                            60 * puff,
-                            "Pufferfish.touch's POISON lasts 60 * getPuffState()"
-                        );
-                        Some((*target, *amount))
-                    }
-                    _ => None,
+            mobs.iter()
+                .skip(1)
+                .zip(expected_health)
+                .filter_map(|(mob, health)| {
+                    (mob.health != health).then_some((mob.id, health - mob.health))
                 })
                 .collect(),
         )
@@ -1413,11 +1389,12 @@ mod pufferfish_sting_tests {
     fn a_puffed_pufferfish_stings_the_mobs_that_touch_it() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
-        let Some(half) = stings(level, 1, &[("minecraft:zombie", 0.5)]) else {
+        // A pig has no innate armor, so its health loss equals the base damage.
+        let Some(half) = stings(level, 1, &[("minecraft:pig", 0.5)]) else {
             return;
         };
         assert_eq!(half, vec![(2, 2.0)], "puff state 1 stings for 1 + 1");
-        let full = stings(level, 2, &[("minecraft:zombie", 0.5)]).unwrap();
+        let full = stings(level, 2, &[("minecraft:pig", 0.5)]).unwrap();
         assert_eq!(full, vec![(2, 3.0)], "puff state 2 stings for 1 + 2");
         assert!(
             stings(level, 0, &[("minecraft:zombie", 0.5)])
@@ -1464,6 +1441,7 @@ mod pufferfish_sting_tests {
                     let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
                     let seen = [pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1492,6 +1470,7 @@ mod pufferfish_sting_tests {
                     let far_pig = make_mob(5, "minecraft:pig", Vec3::new(5.0, 64.0, 5.0));
                     let seen_far = [far_pig.seen(None, &crate::items::Items::empty())];
                     let world_far = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen_far,
                         ..w.clone()
@@ -1515,6 +1494,7 @@ mod pufferfish_sting_tests {
                     invuln_pig.invulnerable_flag = true;
                     let seen = [invuln_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1527,7 +1507,7 @@ mod pufferfish_sting_tests {
                             .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
                     );
                     let mut mobs: JoinList<_> = [fish, invuln_pig].into_iter().collect();
-                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    apply_brain_events(&mut mobs, level, &mut events, 0, &Default::default());
                     assert_eq!(mobs[1].health, 10.0, "invulnerable mob takes no damage");
                     assert!(
                         mobs[1].extra.effects.is_empty(),
@@ -1548,6 +1528,7 @@ mod pufferfish_sting_tests {
                     cooldown_pig.last_hurt = 3.0; // Pufferfish deals 1 + 2 = 3.0 <= 3.0
                     let seen = [cooldown_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1560,7 +1541,7 @@ mod pufferfish_sting_tests {
                             .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
                     );
                     let mut mobs: JoinList<_> = [fish, cooldown_pig].into_iter().collect();
-                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    apply_brain_events(&mut mobs, level, &mut events, 0, &Default::default());
                     assert_eq!(mobs[1].health, 10.0, "cooldown mob takes no damage");
                     assert!(
                         mobs[1].extra.effects.is_empty(),
@@ -1582,6 +1563,7 @@ mod pufferfish_sting_tests {
                     let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
                     let seen = [pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1596,7 +1578,7 @@ mod pufferfish_sting_tests {
                             .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
                     );
                     let mut mobs: JoinList<_> = [fish, pig].into_iter().collect();
-                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    apply_brain_events(&mut mobs, level, &mut events, 0, &Default::default());
 
                     // Assertions after fish tick and apply_brain_events:
                     assert_eq!(
@@ -1620,6 +1602,7 @@ mod pufferfish_sting_tests {
                     // World Tick 1 continued: Pig ticks later in the same level tick
                     let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
                     let world_for_pig = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &fish_seen,
                         ..w.clone()
@@ -1650,6 +1633,7 @@ mod pufferfish_sting_tests {
                     noai_pig.no_ai = true;
                     let seen = [noai_pig.seen(None, &crate::items::Items::empty())];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1657,11 +1641,12 @@ mod pufferfish_sting_tests {
                     let mut events = Vec::new();
                     noai_fish.tick(&world, level, &mut events);
                     let mut mobs: JoinList<_> = [noai_fish, noai_pig].into_iter().collect();
-                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    apply_brain_events(&mut mobs, level, &mut events, 0, &Default::default());
                     assert_eq!(mobs[1].health, 7.0);
                     assert_eq!(mobs[1].extra.effects[0].duration, 120);
                     let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
                     let world_for_pig = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &fish_seen,
                         ..w.clone()
@@ -1688,6 +1673,7 @@ mod pufferfish_sting_tests {
                         pig_b.seen(None, &crate::items::Items::empty()),
                     ];
                     let world = MobWorld {
+                        side: sunrise_client::motion::dry_side(),
                         goal_host: None,
                         others: &seen,
                         ..w.clone()
@@ -1700,7 +1686,7 @@ mod pufferfish_sting_tests {
                         .collect();
                     assert_eq!(stings.len(), 2, "both touching pigs stung");
                     let mut mobs: JoinList<_> = [fish, pig_a, pig_b].into_iter().collect();
-                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    apply_brain_events(&mut mobs, level, &mut events, 0, &Default::default());
                     assert_eq!(mobs[1].health, 7.0, "pig A damaged");
                     assert_eq!(mobs[2].health, 7.0, "pig B damaged");
                     assert_eq!(

@@ -2,17 +2,20 @@
 
 In a mod folder, `cargo sunrise-mod` does this for you from the SDK it fetched into `.sunrise/sdk/`:
 
-- `cargo sunrise-mod check` runs `cargo check` for the project's own target (this computer for a native mod, wasm32 for a wasm mod; `--wasm` or `--native` asks for the other), checks the package rules,
+- `cargo sunrise-mod check` runs `cargo check` for this computer, checks the package rules,
   and prints what the mod uses: `Greeter uses 14 items of the API (6 hooks, 5 methods, 3 types). Made for
   nightly-2026-11-13 (afe471c).` With `--uses` it lists each item with the line that brought it in.
 - `cargo sunrise-mod build` packs the list into the package as `uses.json`, with each item's fingerprint at the
-  pinned build. A mod with a `[native.*]` table or internals is made for exactly one build and gets no list.
-- `cargo sunrise-mod fits` says, one line per build, whether the mod fits the current Nightly, or each build
-  `--build` names. `cargo sunrise-mod fits greeter.smod --build nightly-2026-11-20` asks the same of a package.
+  pinned build, and each mixin target, loop and internal the manifest declares with its fingerprint there. A mod
+  with a `[[native.module]]` or `[[native.bridge]]` row is made for exactly one build and gets no list.
+- `cargo sunrise-mod check --build nightly` asks whether the mod fits the current Nightly.
+  Repeat `--build` for a report on each named build, or pass a package:
+  `cargo sunrise-mod check greeter.smod --build nightly-2026-11-20`.
+  This is a fit report instead of the ordinary check; it takes only the build names and optional package path.
   It exits 0 when every build fits, 1 when one does not, and 2 when it cannot tell or the question does not
   apply (a mod made for one build, a content mod, or a package with no `uses.json`).
-- `cargo sunrise-mod update` prints what moving the pin breaks in this mod, item by item with the line that uses
-  it and the closest item in the new build, then moves the pin.
+- `cargo sunrise-mod pin [<build>]` reports what moving the pin breaks, where the mod uses each changed item,
+  and the closest replacement it can find, then moves the pin. With no build given it pins the current Nightly.
 - `cargo sunrise-mod hooks <text>` searches the pinned build's hooks by id, doc and their NeoForge, Fabric and
   Paper names, offline; `--all` searches every item. `cargo sunrise-mod sdk diff <build> <build>` prints what
   changed between two builds, from their small files alone, so it works for builds whose game files are pruned.
@@ -30,13 +33,17 @@ sunrise-stage uses MADE_FOR_SURFACE MOD_DIR --json uses.json --made-for BUILD
 sunrise-stage fits uses.json TARGET_SURFACE
 ```
 
+`uses` reads [`sunrise-mod.toml`](../../reference/manifest.md) with the package reader when the file is
+present, including the default `registries` capability when the manifest leaves `capabilities` out.
+With no manifest, it scans the Rust sources alone.
+
 `uses` prints each API item the mod uses with the place that brought it in, then how the mod builds each struct
 it builds with a literal. The table it writes records, per item, its hash at the made-for build. It also records
 the type's trait impls and the public paths the mod writes it by. For each struct the mod names, it records
 whether the mod builds it in full, with `..`, or not at all, and the field set when built in full. For a trait's
 member, it records every host trait in the mod's list that leads to the member's trait.
 
-`fits` exits 0 when the mod fits (`fits (N items, made for BUILD)`). It exits 1 when it does not, printing
+`sunrise-stage fits` exits 0 when the mod fits (`fits (N items, made for BUILD)`). It exits 1 when it does not, printing
 `does not fit: K of the N items it uses changed` and one line per changed item, for example
 ``the method `PlayersHost::player` (removed)`` or
 ``the type `DimensionSettings` gained the field `ultrawarm`, and `src/world.rs:12` builds it field by field``.
@@ -55,6 +62,12 @@ stand: an API struct name followed by `{` or `(` is a build, in full unless it e
 (`a < Pos(1, 2)`, `for Pos(x, y) in v`). A tuple or unit struct's name with no bracket after it is a build too,
 except where only a type stands or as a type written after `name:` in parameters, a `let` or a struct's fields
 (`.map(Pos)`, `{ Marker }` and `make: Pos` count).
+
+A positional read counts when the scan can tie it to a tuple struct path: `p.0` on a typed parameter or
+binding, a read on a constructor result (directly or through a binding), `self.0` in a known `impl`, or the
+positions a tuple pattern lists before `..`. If the path is proven to name a mod-local type or constructor,
+or an enum variant, it does not count for a same-named API tuple struct. An unresolved path keeps its
+plausible API fields.
 
 What the scan cannot place is left to the compile, and records nothing:
 - a literal of a name that is no API struct's: a macro's `$t { … }`, another crate's type;
@@ -78,8 +91,7 @@ Some sources cannot be judged at all:
   comparisons between plain names (`[a < b, c < d, …]`) is also refused, though it would compile;
 - a `use` statement nested deeper than 64 groups;
 - a symbolic link;
-- a `#[path]` or `include!` that leaves the mod's folder or is computed, or an `include!` renamed by a `use`;
-- any source when the scan runs where it cannot give the parser a stack of its own (on wasm).
+- a `#[path]` or `include!` that leaves the mod's folder or is computed, or an `include!` renamed by a `use`.
 
 The parser runs first in a separate process, the same program started again with the mod's source on its
 input, never on its command line. If that process runs out of stack, or takes longer than 15 seconds, the
@@ -87,5 +99,7 @@ source cannot be judged, and the program that asked carries on. On Linux the pro
 4 GiB, and on Linux and macOS its processor time too; Windows and macOS have no memory cap, so there only the
 15 seconds bound it.
 
-A mod with a `[native.*]` table or internals is made for exactly one build, and this check does not apply to
-it. A mod that fits is still compiled against the target build, and the binary built is exact to that build.
+This by-hand check covers the mod API's items. The game code a mod declares is compared by
+`cargo sunrise-mod check --build <name>`, from the target build's build data; `sunrise-stage` refuses such a mod
+and such a list by name. A mod with a `[[native.module]]` or `[[native.bridge]]` row is made for exactly one build, and no check
+applies to it. A mod that fits is still compiled against the target build, and the binary built is exact to that build.

@@ -1,16 +1,16 @@
 //! Whole stacks for server mods: one given to a player as `/give` gives it
 //! (`player_give_stack`), and one read from SNBT as a saved item is (`item_from_snbt`).
-use super::Game;
+use super::{
+    Game,
+    api_values::{StackReadError, TryIntoApi},
+};
 use mod_api::{PlayerDataRefusal, PlayerRef};
 use sunrise_client::{items::ItemStack, lan::playerdata};
-
-/// The most SNBT text `item_from_snbt` reads: `NbtAccounter`'s default quota, 2 MiB.
-const MAX_SNBT_BYTES: usize = 2 * 1024 * 1024;
+use sunrise_items::item_nbt;
 
 impl Game<'_> {
     /// `GiveCommand.giveItem` for one stack: `Inventory.add`, the rest thrown for the player
-    /// alone to pick up, in the player's turn. For a player in another level the rest comes
-    /// back instead.
+    /// alone to pick up in their level, even when the hook is running in another one.
     pub(super) fn player_give_stack(
         &mut self,
         player: PlayerRef,
@@ -33,27 +33,32 @@ impl Game<'_> {
         }
     }
 
-    /// `ItemStack.CODEC` reading the compound `snbt` stands for (`TagParser`): only that
-    /// compound and whitespace. At most 2 MiB and 512 levels: vanilla's SNBT parser has
-    /// neither limit (deep text ends in a stack overflow); they are this API's bound so
-    /// mod-supplied text cannot overflow the parser.
-    pub(super) fn item_from_snbt(&self, snbt: &str) -> Option<ItemStack> {
-        if snbt.len() > MAX_SNBT_BYTES {
-            return None;
-        }
-        let (tag, end) = sunrise_core::nbt::parse_snbt(snbt).ok()?;
-        if !snbt.as_bytes()[end..].iter().all(u8::is_ascii_whitespace) {
-            return None;
-        }
-        // `ItemStack.CODEC`'s `count` is 1 to 99 and is refused outside it: a stack read here
-        // is never a different count from the one written.
-        if let Some(count) = tag.get("count")
-            && sunrise_client_core::nbt_value::number(Some(count))
-                .is_none_or(|n| !(1..=99).contains(&n))
-        {
-            return None;
-        }
-        let stack = sunrise_items::item_nbt::item_from_nbt(&tag)?;
-        self.items().get(&stack.item).is_some().then_some(stack)
+    /// `TagParser.parseCompoundFully` followed by `ItemStack.CODEC`. This is text, not
+    /// binary input to `NbtAccounter`.
+    pub(super) fn item_from_snbt(&self, snbt: &str) -> Option<mod_api::ItemStack> {
+        let allow_custom = self
+            .remote
+            .as_ref()
+            .is_none_or(|remote| remote.registries.custom_components);
+        item_nbt::item_from_snbt_with(
+            snbt,
+            |id| allow_custom && sunrise_protocol::item::custom::id(id).is_some(),
+            |id| self.items().get(id).is_some(),
+        )
+        .and_then(|stack| {
+            self.items()
+                .get(&stack.item)
+                .ok_or_else(|| format!("unknown item {}", stack.item))?;
+            stack.try_into_api().map_err(|error| match error {
+                StackReadError::UnknownItem => format!("unresolved item key {}", stack.item),
+                StackReadError::Empty => "empty item stack".into(),
+                StackReadError::InvalidComponents(reason) => reason.to_string(),
+            })
+        })
+        .inspect_err(|error| {
+            let caller = mod_api::content::crash::current_native_mod().unwrap_or("game");
+            log::warn!("{caller}: item_from_snbt: {error}");
+        })
+        .ok()
     }
 }

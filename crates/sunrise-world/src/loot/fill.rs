@@ -67,19 +67,23 @@ impl LootData {
         context: ContainerLootContext<'_>,
     ) -> Option<Vec<LootStack>> {
         let json = self.tables.get(table)?;
-        let entity = context.entity.map(|this| EntityLootParams {
-            this: this.clone(),
-            ..Default::default()
+        let entity = context.entity.map(|this| EntityFacts {
+            this,
+            damage: None,
+            player: None,
+            attacker: None,
         });
         let mut c = Context {
             query: query::current_query(),
+            place: current_native_loot_place(),
             data: self,
+            local_bindings: None,
             random: random.clone(),
             biome: context.biome,
             visited: Vec::new(),
             luck: context.luck,
             open_water: None,
-            entity: entity.as_ref(),
+            entity,
             enchanted_level: None,
         };
         let items = c.roll_root(Some(table), json);

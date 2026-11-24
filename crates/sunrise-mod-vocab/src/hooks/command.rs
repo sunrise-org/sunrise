@@ -1,5 +1,4 @@
-//! The `command` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0016
+//! The `update_shape` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
     /// An authoritative server is about to compute the state the block
@@ -17,6 +16,7 @@ pub trait Hooks {
     /// short.
     /// A disabled owner's subscribed update keeps the input state instead of running the template.
     #[hook(
+        receiver = "read",
         side = "server",
         contract = "replace",
         inert = "*new = Some(state);",
@@ -24,7 +24,8 @@ pub trait Hooks {
         scope = "block",
         key = "state",
         target = "sunrise_client::game::native_hooks::base::GameLevel<'_>::native_update_shape",
-        neoforge = "none (vanilla BlockBehaviour.updateShape; NeoForge adds no event or extension for it)"
+        neoforge = "none (vanilla BlockBehaviour.updateShape; NeoForge adds no event or extension for it)",
+        version = 2
     )]
     fn update_shape(
         dimension: LevelDimension,
@@ -34,17 +35,6 @@ pub trait Hooks {
         neighbour_pos: BlockPos,
         neighbour: BlockState,
         new: &mut Option<BlockState>,
+        #[engine] ticks: &mut Ticks,
     );
-    /// A command the local player typed or clicked in chat, without its
-    /// slash, before the server and Sunrise's commands see it: set `ran`
-    /// when the mod ran it. Client-side: a server never asks, not for
-    /// command blocks, guests or the console.
-    #[hook(
-        side = "client",
-        contract = "cancel",
-        out = "ran",
-        version = 2,
-        neoforge = "none (ClientChatEvent is for chat messages; client commands are added by RegisterClientCommandsEvent)"
-    )]
-    fn command();
 }

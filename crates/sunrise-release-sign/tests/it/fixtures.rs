@@ -47,7 +47,7 @@ fn a_release_signed_by_the_script_installs_and_nothing_else_passes_for_it() {
         )
         .is_err()
     );
-    for tag in ["v2026.10.20", "nightly", "snapshot", "sdk-v2026.10.19"] {
+    for tag in ["v2026.10.20", "nightly", "dev", "sdk-v2026.10.19"] {
         assert!(digest(tag).is_err(), "{tag}");
     }
     assert!(
@@ -69,32 +69,28 @@ fn a_release_signed_by_the_script_installs_and_nothing_else_passes_for_it() {
 
 #[test]
 fn a_build_installs_by_its_own_version_and_never_by_the_channel_or_the_other_channel() {
-    for (channel, dir, version, other) in [
+    for (channel, dir, version, other, public_key) in [
         (
             Channel::Nightly,
             "nightly",
             "nightly-2026-10-28-0c02067",
-            Channel::Snapshot,
+            Channel::Dev,
+            "test.pub",
         ),
         (
-            Channel::Snapshot,
-            "snapshot",
-            "snapshot-2026-11-13-0c02067",
+            Channel::Dev,
+            "dev",
+            "dev-2026-11-13-0c02067",
             Channel::Nightly,
+            "dev/ephemeral.pub",
         ),
     ] {
         let sums = read(&format!("{dir}/{SUMS}"));
         let v2 = text(&format!("{dir}/{SIGNATURE_V2}"));
         let channel_signature = text(&format!("{dir}/{SIGNATURE}"));
+        let keys = release::parse_keys(&text(public_key)).unwrap();
         let digest = |channel, version: &str, signature: &str| {
-            release::build_digest(
-                channel,
-                version,
-                LINUX,
-                Some(&sums),
-                Some(signature),
-                &keys(),
-            )
+            release::build_digest(channel, version, LINUX, Some(&sums), Some(signature), &keys)
         };
         assert_eq!(
             digest(channel, version, &v2),
@@ -107,14 +103,15 @@ fn a_build_installs_by_its_own_version_and_never_by_the_channel_or_the_other_cha
         );
         assert!(digest(other, version, &v2).is_err(), "{version}");
         assert!(digest(channel, &version.replace("0c02067", "0c02068"), &v2).is_err());
-        assert!(release::verify(channel.tag(), &sums, &channel_signature, &keys()).is_ok());
+        assert!(release::verify(channel.tag(), &sums, &channel_signature, &keys).is_ok());
+        assert!(release::verify(version, &sums, &channel_signature, &keys).is_err());
         assert!(
             release::signed_digest(
                 channel.tag(),
                 LINUX,
                 Some(&sums),
                 Some(&channel_signature),
-                &keys()
+                &keys
             )
             .is_err()
         );

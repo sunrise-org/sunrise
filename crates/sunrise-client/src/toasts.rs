@@ -64,8 +64,6 @@ impl Slide {
 /// has passed since its last change, or until it is hidden.
 pub struct SystemToast {
     pub slide: Slide,
-    /// `ToastInstance.firstSlotIndex`: its 32-pixel slot once shown.
-    pub slot: Option<usize>,
     pub title: Text,
     pub message: Option<Text>,
     /// `changed`: the next update takes its time as `lastChanged`.
@@ -85,7 +83,6 @@ impl SystemToast {
     pub fn new(title: Text, message: Option<Text>) -> Self {
         Self {
             slide: Slide::default(),
-            slot: None,
             title,
             message,
             changed: false,
@@ -117,6 +114,7 @@ impl SystemToast {
     /// `addOrUpdate` on a toast that is still shown: `reset` to `other`'s text.
     pub fn reset_from(&mut self, other: SystemToast) {
         self.title_color = other.title_color;
+        self.display_time = other.display_time;
         self.reset(other.title, other.message);
     }
     pub fn force_hide(&mut self) {
@@ -146,21 +144,108 @@ impl SystemToast {
             + 30.0;
         let x = batch.width - width * self.slide.portion;
         background(atlas, batch, x, y, width);
-        let yellow = self.title_color;
-        match &self.message {
-            Some(message) => {
-                batch.text_styled(atlas, &self.title, x + 18.0, y + 7.0, yellow, false);
-                batch.text_styled(atlas, message, x + 18.0, y + 19.0, u32::MAX, false);
-            }
-            None => {
-                batch.text_styled(atlas, &self.title, x + 18.0, y + 12.0, yellow, false);
+        self.draw_lines(
+            atlas,
+            batch,
+            [x + 18.0, y],
+            std::slice::from_ref(&self.title),
+            self.message.as_slice(),
+        );
+    }
+
+    /// `SystemToast.update` and `recalculateWidth` for a notification with wrapped text.
+    pub fn layout(&self, atlas: &HudAtlas, has_icon: bool) -> SystemToastLayout {
+        let wrap = |text: &Text| atlas.font.split_formatted(text, 200.0);
+        let title = wrap(&self.title);
+        let message = self.message.as_ref().map_or_else(Vec::new, wrap);
+        let icon_indent = if has_icon { 12.0 } else { 0.0 };
+        let width = title
+            .iter()
+            .chain(&message)
+            .map(|line| atlas.font.width_text(line))
+            .reduce(f32::max)
+            .unwrap_or(200.0)
+            .max(160.0)
+            + 30.0
+            + icon_indent;
+        let height = 20 + 12 * (title.len() + message.len().max(1) - 1);
+        SystemToastLayout {
+            title,
+            message,
+            width,
+            height,
+            text_x: 18.0 + icon_indent,
+        }
+    }
+
+    /// Draw the wrapped system toast; return its origin for the caller's icon.
+    pub fn draw_wrapped(
+        &self,
+        layout: &SystemToastLayout,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        slot: usize,
+    ) -> [f32; 2] {
+        let x = batch.width - layout.width * self.slide.portion;
+        // Toast.yPos: the first slot index times the toast's rendered height.
+        let y = slot as f32 * layout.height as f32;
+        crate::ui::nine_slice(
+            batch,
+            atlas,
+            "toast/system",
+            x,
+            y,
+            layout.width,
+            layout.height as f32,
+            u32::MAX,
+        );
+        self.draw_lines(
+            atlas,
+            batch,
+            [x + layout.text_x, y],
+            &layout.title,
+            &layout.message,
+        );
+        [x, y]
+    }
+
+    fn draw_lines(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        [x, y]: [f32; 2],
+        title: &[Text],
+        message: &[Text],
+    ) {
+        let mut y = y + if message.is_empty() { 12.0 } else { 7.0 };
+        for (lines, color) in [(title, self.title_color), (message, u32::MAX)] {
+            for line in lines {
+                batch.text_styled(atlas, line, x, y, color, false);
+                y += 12.0;
             }
         }
     }
 }
+
+/// The text and dimensions `SystemToast` computes at add or reset.
+pub struct SystemToastLayout {
+    title: Vec<Text>,
+    message: Vec<Text>,
+    width: f32,
+    height: usize,
+    text_x: f32,
+}
+
+impl SystemToastLayout {
+    /// `Toast.occcupiedSlotCount`: one slot per 32 pixels of height, rounding up.
+    pub fn slots(&self) -> usize {
+        self.height.div_ceil(32)
+    }
+}
+
 /// SystemToast's 32-pixel background keeps the notice icon and borders intact.
 pub fn background(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, y: f32, width: f32) {
-    let Some(rect) = atlas.sprites.get("gui/sprites/toast/system").copied() else {
+    let Some(rect) = atlas.sprites.get("toast/system").copied() else {
         return;
     };
     let source_x = [0.0, 17.0, rect.w as f32 - 4.0, rect.w as f32];
@@ -333,7 +418,7 @@ fn draw_now_playing_text(
 ) {
     let [x, width] = placement;
     // `toast/now_playing`: a nine slice of 160 by 32 with a border of 4, here 30 high.
-    if let Some(rect) = atlas.sprites.get("gui/sprites/toast/now_playing").copied() {
+    if let Some(rect) = atlas.sprites.get("toast/now_playing").copied() {
         let (du, dv) = (
             (rect.u1 - rect.u0) / rect.w as f32,
             (rect.v1 - rect.v0) / rect.h as f32,
@@ -362,7 +447,7 @@ fn draw_now_playing_text(
             }
         }
     }
-    if let Some(rect) = atlas.sprites.get("gui/sprites/icon/music_notes").copied() {
+    if let Some(rect) = atlas.sprites.get("icon/music_notes").copied() {
         batch.rect_uv(
             x + 7.0,
             7.0,

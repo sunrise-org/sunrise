@@ -12,7 +12,10 @@ use std::{
 };
 use sunrise_client::{
     hud::{HudAtlas, HudBatch},
-    hud_layout::{self, GuiDraw, HealthHud, HealthInputs, HeartKind, HotbarInputs, IDENTITY, Pose},
+    hud_layout::{
+        self, AirInputs, FoodInputs, GuiDraw, HealthHud, HealthInputs, HeartKind, HotbarInputs,
+        IDENTITY, Pose,
+    },
     lang,
     text::Text,
 };
@@ -219,15 +222,33 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
             offhand: !c["offhand"].is_null(),
             slots,
             offhand_pop: pop(&c["offhand"]).unwrap_or(0.0),
-            attack: (indicator == "HOTBAR").then(|| float("attackScale", 1.0)),
         };
         draws.extend(hud_layout::hotbar(w, h, &inputs));
+        if indicator == "HOTBAR" {
+            hud_layout::hotbar_attack_indicator(
+                w,
+                h,
+                inputs.right_handed,
+                float("attackScale", 1.0),
+                &mut draws,
+            );
+        }
     }
     let vehicle_hearts = if c.get("vehicleMaxHealth").is_some() {
         hud_layout::vehicle_max_hearts(float("vehicleMaxHealth", 0.0))
     } else {
         0
     };
+    let mut heights = hud_layout::StatusBarHeights::default();
+    let mut vehicle = Vec::new();
+    hud_layout::vehicle_health(
+        w,
+        h,
+        vehicle_hearts,
+        float("vehicleHealth", 0.0),
+        &mut heights,
+        &mut vehicle,
+    );
     if survival {
         let millis = 1_000_000_000i64;
         let mut hud = HealthHud {
@@ -246,35 +267,46 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
         } else {
             HeartKind::Normal
         };
-        let inputs = HealthInputs {
-            tick: int("tick", 0),
+        let tick = int("tick", 0);
+        let blink = hud.update_health(
+            float("health", 20.0),
+            tick,
             millis,
-            health: float("health", 20.0),
+            int("damageCooldown", 0) > 0,
+        );
+        let health = HealthInputs {
+            tick,
             max_health: float("maxHealth", 20.0),
             absorption: float("absorption", 0.0),
-            armor: int("armor", 0),
-            food: int("food", 20),
-            saturation: float("saturation", 5.0),
-            kind,
             regeneration: has("minecraft:regeneration"),
-            hunger: has("minecraft:hunger"),
             hardcore: c["hardcore"].as_bool().unwrap_or(false),
-            damage_cooldown: int("damageCooldown", 0) > 0,
+            blink,
+        };
+        let start = draws.len();
+        hud.health_level(&health, kind, w, h, &mut heights, &mut draws);
+        let hearts_end = draws.len();
+        hud_layout::armor_level(int("armor", 0), w, h, &mut heights, &mut draws);
+        // The vanilla oracle records armour before hearts; the live NeoForge slots
+        // draw hearts first so armour stacks above whatever the heart body drew.
+        draws[start..].rotate_left(hearts_end - start);
+        if vehicle_hearts == 0 {
+            let food = FoodInputs {
+                tick,
+                food: int("food", 20),
+                saturation: float("saturation", 5.0),
+                hunger: has("minecraft:hunger"),
+            };
+            hud.food_level(&food, w, h, &mut heights, &mut draws);
+        }
+        let air = AirInputs {
+            tick,
             air: int("air", 300),
             max_air: int("maxAir", 300),
             under_water: c["underWater"].as_bool().unwrap_or(false),
-            vehicle_hearts,
         };
-        draws.extend(hud.layout(&inputs, w, h));
+        let _ = hud.air_level(&air, w, h, &mut heights, &mut draws);
     }
-    if vehicle_hearts > 0 {
-        draws.extend(hud_layout::vehicle_health(
-            w,
-            h,
-            vehicle_hearts,
-            float("vehicleHealth", 0.0),
-        ));
-    }
+    draws.extend(vehicle);
     let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
     let level = if survival { int("xpLevel", 0) } else { 0 };
     draws.extend(hud_layout::experience(
@@ -282,7 +314,8 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
         h,
         float("xpProgress", 0.0),
         level,
-        c["experienceBar"].as_bool().unwrap_or(false),
+        // Hud.nextContextualInfoState picks the experience bar only for a game mode with experience.
+        survival && c["experienceBar"].as_bool().unwrap_or(false),
         &width,
     ));
     draws

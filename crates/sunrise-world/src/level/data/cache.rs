@@ -5,10 +5,8 @@
 //! versions, corrupt payloads and write failures always use the normal loader.
 //! Snapshots live in the game's own cache folder ([`set_dir`]), never in the
 //! resource folder: that one is shared by worktrees and copied between installed
-//! versions by the launcher. Its key includes a hash of the code that resolves
-//! the tables (this crate, `sunrise-core`, their dependencies; see `build.rs`),
-//! so a build that resolves them differently never reads another build's
-//! snapshot, while a rebuild that only touched other crates keeps them.
+//! versions by the launcher. Its key is the format version plus a hash of the
+//! resources the snapshot is resolved from, so no build input decides it.
 use super::*;
 use crate::registry::snapshot as registry_snapshot;
 use serde::{Deserialize, Serialize};
@@ -23,9 +21,10 @@ use std::{
     time::SystemTime,
 };
 
+// Bump a version, and its file name, with any change to how its snapshot is resolved, stored or restored.
 const MAGIC: &[u8; 8] = b"HZBEHAV\0";
-const VERSION: u32 = 7;
-const FILE_NAME: &str = "behaviours-v7.bin";
+const VERSION: u32 = 8;
+const FILE_NAME: &str = "behaviours-v8.bin";
 const REGISTRY_MAGIC: &[u8; 8] = b"HZREGIS\0";
 const REGISTRY_VERSION: u32 = 1;
 const REGISTRY_FILE_NAME: &str = "registry-v1.bin";
@@ -45,6 +44,7 @@ pub(in crate::level) fn set_dir(dir: PathBuf) {
 struct Snapshot {
     tags: HashMap<String, Vec<u64>>,
     facts: Vec<Fact>,
+    placement_events: Vec<String>,
     shapes: Vec<Shape>,
     shape_info: Vec<[u8; 3]>,
     fluid_tags: [u8; 6],
@@ -65,6 +65,7 @@ struct Fact {
     emission: u8,
     dampening: u8,
     hardness: f32,
+    placement_sound: (usize, f32, f32),
     push: u8,
     instrument: u8,
     shape: i32,
@@ -101,15 +102,6 @@ struct SetTypeSnapshot {
 }
 
 #[derive(Serialize, Deserialize)]
-struct SoundsSnapshot {
-    volume: f32,
-    pitch: f32,
-    place: String,
-    break_: String,
-    fall: String,
-}
-
-#[derive(Serialize, Deserialize)]
 struct Block {
     chain: Vec<u16>,
     interfaces: u16,
@@ -132,7 +124,6 @@ struct Block {
     weather: u8,
     ignite_odds: i32,
     burn_odds: i32,
-    sounds: SoundsSnapshot,
     item: String,
     dynamic_shape: bool,
     declared_vegetation: bool,
@@ -147,18 +138,9 @@ struct Item {
     game_master: bool,
 }
 
-/// The build that resolves the tables: a hash of this crate's and
-/// `sunrise-core`'s sources, `Cargo.lock` and the profile (`build.rs`). The
-/// version constant alone misses loader changes that keep a snapshot's layout.
-fn hash_build(hasher: &mut Sha256) {
-    hash_str(hasher, env!("SUNRISE_WORLD_SOURCES"));
-}
-
 fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"sunrise resolved behaviours 2");
-    // The build that resolved the tables.
-    hash_build(&mut hasher);
     hasher.update(sources_digest(root)?);
     // The registry argument may be modified independently of facts.json.
     hasher.update((registry.len() as u64).to_le_bytes());
@@ -401,29 +383,6 @@ impl From<SetTypeSnapshot> for SetType {
         }
     }
 }
-impl From<&Sounds> for SoundsSnapshot {
-    fn from(value: &Sounds) -> Self {
-        Self {
-            volume: value.volume,
-            pitch: value.pitch,
-            place: value.place.to_string(),
-            break_: value.break_.to_string(),
-            fall: value.fall.to_string(),
-        }
-    }
-}
-impl From<SoundsSnapshot> for Sounds {
-    fn from(value: SoundsSnapshot) -> Self {
-        Self {
-            volume: value.volume,
-            pitch: value.pitch,
-            place: Arc::from(value.place),
-            break_: Arc::from(value.break_),
-            fall: Arc::from(value.fall),
-        }
-    }
-}
-
 impl Snapshot {
     fn capture(behaviours: &Behaviours) -> Self {
         let tags = behaviours
@@ -431,6 +390,8 @@ impl Snapshot {
             .iter()
             .map(|(key, value)| (key.clone(), value.0.clone()))
             .collect();
+        let mut events = HashMap::new();
+        let mut placement_events = Vec::new();
         let facts = behaviours
             .facts
             .iter()
@@ -446,6 +407,16 @@ impl Snapshot {
                 emission: fact.emission,
                 dampening: fact.dampening,
                 hardness: fact.hardness,
+                placement_sound: {
+                    let sound = &fact.placement_sound;
+                    let name = sound.event.as_str();
+                    let index = *events.entry(name).or_insert_with(|| {
+                        let index = placement_events.len();
+                        placement_events.push(name.to_owned());
+                        index
+                    });
+                    (index, sound.volume, sound.pitch)
+                },
                 push: push_index(fact.push),
                 instrument: fact.instrument,
                 shape: fact.shape,
@@ -539,7 +510,6 @@ impl Snapshot {
                 weather: block.weather,
                 ignite_odds: block.ignite_odds,
                 burn_odds: block.burn_odds,
-                sounds: SoundsSnapshot::from(block.sounds.as_ref()),
                 item: block.item.to_string(),
                 dynamic_shape: block.dynamic_shape,
                 declared_vegetation: block.declared_vegetation,
@@ -564,6 +534,7 @@ impl Snapshot {
         Self {
             tags,
             facts,
+            placement_events,
             shapes,
             shape_info,
             fluid_tags,
@@ -628,6 +599,13 @@ impl Snapshot {
                 wall_cover: row[2],
             })
             .collect();
+        let placement_events = self
+            .placement_events
+            .iter()
+            .map(|name| {
+                SoundEventKey::parse(name).ok_or_else(|| invalid("invalid cached placement event"))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
         let facts = self
             .facts
             .into_iter()
@@ -652,6 +630,11 @@ impl Snapshot {
                     .unwrap_or_else(|| {
                         FluidState::new(fluid_kind, wire.fluid_amount, wire.fluid_falling)
                     });
+                let (event, volume, pitch) = wire.placement_sound;
+                let event = placement_events
+                    .get(event)
+                    .ok_or_else(|| invalid("cached placement event index out of range"))?
+                    .clone();
                 Ok(StateFacts {
                     flags: wire.flags,
                     sturdy: wire.sturdy,
@@ -661,6 +644,11 @@ impl Snapshot {
                     emission: wire.emission,
                     dampening: wire.dampening,
                     hardness: wire.hardness,
+                    placement_sound: BlockSound {
+                        event,
+                        volume,
+                        pitch,
+                    },
                     push: push(wire.push)?,
                     resolved_push: super::super::piston_reactions::CachedReaction::new(push(
                         wire.push,
@@ -723,7 +711,6 @@ impl Snapshot {
                     weather: wire.weather,
                     ignite_odds: wire.ignite_odds,
                     burn_odds: wire.burn_odds,
-                    sounds: Arc::new(Sounds::from(wire.sounds)),
                     item: Arc::from(wire.item),
                     dynamic_shape: wire.dynamic_shape,
                     declared_vegetation: wire.declared_vegetation,
@@ -896,7 +883,6 @@ fn write(
 fn registry_fingerprint(root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"sunrise block registry 1");
-    hash_build(&mut hasher);
     hasher.update(paths_digest(root, &[root.join("facts.json")])?);
     Ok(hasher.finalize().into())
 }
@@ -995,6 +981,36 @@ mod tests {
             }
         }
         Some(FixtureDir(dir))
+    }
+
+    /// The key is the format version and the resource bytes: no resources needed.
+    #[test]
+    fn key_follows_the_format_version_and_the_resource_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "sunrise-snapshot-key-test-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = FixtureDir(dir);
+        fs::write(dir.0.join("facts.json"), b"[1]").unwrap();
+        let key = registry_fingerprint(&dir.0).unwrap();
+        assert_eq!(key, registry_fingerprint(&dir.0).unwrap());
+        write_snapshot(
+            &dir.0,
+            "k.bin",
+            REGISTRY_MAGIC,
+            REGISTRY_VERSION,
+            &key,
+            b"payload",
+        )
+        .unwrap();
+        let bytes = fs::read(dir.0.join("k.bin")).unwrap();
+        let read = |version| decode_snapshot(&bytes, REGISTRY_MAGIC, version, &key);
+        assert_eq!(read(REGISTRY_VERSION).as_deref(), Some(&b"payload"[..]));
+        assert!(read(REGISTRY_VERSION + 1).is_none());
+        fs::write(dir.0.join("facts.json"), b"[1, 2]").unwrap();
+        assert_ne!(key, registry_fingerprint(&dir.0).unwrap());
     }
 
     #[test]

@@ -394,7 +394,7 @@ impl Goal for RandomSitting {
         !m.fluids.in_water
             && pose_time(m) >= 400
             && m.extra.leash.is_none()
-            && m.on_ground
+            && m.ground.on_ground
             && !super::equine::controlled(m)
             && !super::riders::mob_controlled(m, cx.w)
             && can_change_pose(m, cx.w)
@@ -415,7 +415,7 @@ impl Goal for RandomSitting {
 /// `Camel.tick`: the dash clock, water stands it up; keyframe states. The
 /// move that stops a sitting camel lives in `Mob::travel` (`Camel.travel`).
 pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    if m.extra.flag2 && m.extra.anim_ticks < 50 && (m.on_ground || m.fluids.in_water) {
+    if m.extra.flag2 && m.extra.anim_ticks < 50 && (m.ground.on_ground || m.fluids.in_water) {
         m.extra.flag2 = false;
     }
     if m.extra.anim_ticks > 0 {
@@ -488,7 +488,7 @@ pub fn dash(m: &mut Mob, context: &LoopContext, amount: f32, events: &mut Vec<Mo
     if m.extra.anim_ticks > 0 || refuse_to_move(m) {
         return true;
     }
-    if !m.on_ground {
+    if !m.ground.on_ground {
         return false;
     }
     let yaw = m.yaw.to_radians();
@@ -613,7 +613,7 @@ mod tests {
             let mut m = camel?;
             m.age = 1000;
             m.extra.egg_time = 0;
-            m.on_ground = true;
+            m.ground.on_ground = true;
             let mut started = false;
             assert!(
                 with_test_world(&seen, |w, _| {
@@ -643,6 +643,7 @@ mod tests {
     fn camel() -> Mob {
         let model = Arc::new(Part::parse("root", &json!({"children": {"head": {}}})));
         let kind = Arc::new(MobType {
+            type_key: Default::default(),
             shadow: None,
             id: "minecraft:camel".into(),
             species: Species::Camel,
@@ -808,7 +809,7 @@ mod tests {
                 let mut m = Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.5), 0.0);
                 register(&mut m);
                 m.extra.in_love = 600;
-                m.on_ground = true;
+                m.ground.on_ground = true;
                 m
             };
             pair = Some((make(1, 0.5), make(2, 2.5)));
@@ -884,7 +885,7 @@ mod tests {
                     m.extra.camel_sitting = true;
                     // 20 seconds in the pose (`getPoseTime() >= 20 * 20`).
                     m.extra.egg_time = (i64::from(m.age) - 401) as i32;
-                    m.on_ground = true;
+                    m.ground.on_ground = true;
                     m.random.set_seed(1234 + i64::from(id));
                     m
                 };

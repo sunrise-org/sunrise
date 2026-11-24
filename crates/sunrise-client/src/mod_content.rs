@@ -19,6 +19,10 @@ use crate::{
     blocks::MAP_COLORS,
     mobs::data::{PartAnswers, PathComputationType, VALID_EMPTY_SPAWN},
 };
+use mod_api::{
+    __private::{DeclarationKind, DeclarationRefusal},
+    DeclarationError,
+};
 use serde::{Deserialize, Serialize, de};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -33,7 +37,7 @@ use sunrise_core::{
 };
 use sunrise_mod_package::content::{
     Block, BlockEntityType, BlockShapes, Content, ContextCollision, CreativeTab, EntityType,
-    FluidLook, MenuType, MobEffect, Rarity, StateProperty, StateValues,
+    FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, StateProperty, StateValues,
 };
 use sunrise_mod_package::manifest::{
     JarInputsError, JarRef, collect_jar_requirements, missing_jars,
@@ -53,42 +57,68 @@ pub struct ContentMod {
     pub jars: Vec<JarRef>,
 }
 
-/// Leaves out a mod with an item whose `crafting_remainder` names an item the mod does not have:
-/// a file item that named a code-declared one the declaration check then refused. Left in, the
-/// overlay would fail on it and no content mod at all would load. Returns what was left out.
-pub fn drop_dangling_remainders(mods: &mut Vec<ContentMod>) -> Vec<String> {
+/// Refuse a package whose crafting remainder does not resolve to an admitted item.
+/// A refusal can invalidate a reference in another package, so repeat until no package is dropped.
+pub fn drop_dangling_remainders(
+    base: &Path,
+    mods: &mut Vec<ContentMod>,
+) -> Result<Vec<(String, String)>> {
+    if !mods
+        .iter()
+        .flat_map(|m| &m.content.items)
+        .any(|item| item.crafting_remainder.is_some())
+    {
+        return Ok(Vec::new());
+    }
+    let vanilla = builtin_item_keys(base)?;
     let mut dropped = Vec::new();
-    mods.retain(|m| {
-        // The mod's items and its blocks that have an item (`Content::read`'s own rule).
-        let ids: BTreeSet<&str> = m
-            .content
-            .items
+    loop {
+        let admitted: BTreeSet<_> = mods
             .iter()
-            .map(|i| i.id.as_str())
-            .chain(
-                m.content
-                    .blocks
-                    .iter()
-                    .filter(|b| b.item)
-                    .map(|b| b.id.as_str()),
-            )
+            .flat_map(declared_item_ids)
+            .map(str::to_owned)
             .collect();
-        let dangling = m.content.items.iter().find(|i| {
-            i.crafting_remainder
-                .as_deref()
-                .is_some_and(|r| !r.starts_with("minecraft:") && !ids.contains(r))
+        let before = mods.len();
+        mods.retain(|layer| {
+            let invalid = layer.content.items.iter().find_map(|item| {
+                let rest = item.crafting_remainder.as_deref()?;
+                (rest == "minecraft:air" || !(vanilla.contains(rest) || admitted.contains(rest)))
+                    .then(|| format!("{}: crafting_remainder {rest:?} is not an item", item.id))
+            });
+            if let Some(error) = invalid {
+                dropped.push((layer.id.clone(), error));
+                false
+            } else {
+                true
+            }
         });
-        if let Some(item) = dangling {
-            dropped.push(format!(
-                "mod {} content not loaded: {}: crafting_remainder {:?} is not one of its items",
-                m.id,
-                item.id,
-                item.crafting_remainder.as_deref().unwrap_or_default()
-            ));
+        if mods.len() == before {
+            return Ok(dropped);
         }
-        dangling.is_none()
-    });
-    dropped
+    }
+}
+
+fn builtin_item_keys(base: &Path) -> Result<BTreeSet<String>> {
+    match read_json(&base.join("items.json"))? {
+        J::Obj(entries) => Ok(entries.into_iter().map(|(id, _)| id).collect()),
+        _ => Err("items.json is not an object".into()),
+    }
+}
+
+fn declared_item_ids(layer: &ContentMod) -> impl Iterator<Item = &str> {
+    layer
+        .content
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .chain(
+            layer
+                .content
+                .blocks
+                .iter()
+                .filter(|block| block.item)
+                .map(|block| block.id.as_str()),
+        )
 }
 
 /// The mods' mob effects in registry order: by id, as items are. Their
@@ -114,17 +144,26 @@ pub fn entity_types(mods: &[ContentMod]) -> Vec<&EntityType> {
     types
 }
 
-/// the mods' menu types in registry order, by id as effects are.
-pub fn menu_types(mods: &[ContentMod]) -> Vec<&MenuType> {
-    let mut menus: Vec<&MenuType> = mods.iter().flat_map(|m| &m.content.menu_types).collect();
-    menus.sort_by(|a, b| a.id.cmp(&b.id));
+/// The mods' menu types and their owning package IDs, sorted by menu ID.
+pub fn menu_types(mods: &[ContentMod]) -> Vec<(&MenuType, &str)> {
+    let mut menus: Vec<_> = mods
+        .iter()
+        .flat_map(|m| {
+            m.content
+                .menu_types
+                .iter()
+                .map(|menu| (menu, m.id.as_str()))
+        })
+        .collect();
+    menus.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
     menus
 }
 
 static FLUID_LOOKS: std::sync::RwLock<BTreeMap<String, FluidLook>> =
     std::sync::RwLock::new(BTreeMap::new());
 
-/// Remembers how the mods' fluids look (`data/<id>/sunrise/fluid/`), for what the client draws.
+/// Remembers how the mods' fluids look (`data/<id>/sunrise/fluid/`), for what the client draws,
+/// and their measures, for `FluidTypeProperties` on either side.
 pub fn set_fluid_looks(mods: &[ContentMod]) {
     let looks: BTreeMap<String, FluidLook> = mods
         .iter()
@@ -142,14 +181,15 @@ pub fn register_world_fluids(
 ) -> std::result::Result<Vec<String>, sunrise_world::fluid::ModFluidRegistrationError> {
     let mut names = Vec::new();
     for look in mods.iter().flat_map(|m| &m.content.fluids) {
-        let Some(world) = look.world else { continue };
+        let Some(world) = &look.world else { continue };
         let flowing_id = look.flowing_id();
         names.push(look.id.clone());
         names.push(flowing_id.clone());
         sunrise_world::fluid::register_mod_fluid(sunrise_world::fluid::ModFluidType {
             id: look.id.clone(),
             flowing_id,
-            bucket: look.bucket_id(),
+            // Only a bucket the game registers pours this fluid; one the mod names keeps its own.
+            bucket: look.bucket_id().filter(|_| world.bucket),
             rules: sunrise_world::fluid::ModFluidRules {
                 tick_delay: world.tick_delay,
                 drop_off: world.drop_off,
@@ -163,7 +203,26 @@ pub fn register_world_fluids(
 
 #[path = "mod_content_fluid_declarations.rs"]
 mod fluid_declarations;
-pub use fluid_declarations::{accept_world_fluids, fluid_interactions, set_fluid_interactions};
+pub use fluid_declarations::{fluid_interactions, set_fluid_interactions};
+
+/// The temperature, density and viscosity a mod's fluid file states for `id`, copied without
+/// the rest of its look.
+pub fn fluid_measures(id: &str) -> Option<sunrise_mod_package::content::FluidMeasures> {
+    FLUID_LOOKS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .map(|look| look.measures)
+}
+
+/// The item a bucket of the mod fluid `id` is (`Fluid.getBucket`), a tank-only one's too.
+pub fn fluid_bucket(id: &str) -> Option<String> {
+    FLUID_LOOKS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)?
+        .bucket_id()
+}
 
 /// How the fluid `id` looks, when a mod declares it.
 pub fn fluid_look(id: &str) -> Option<FluidLook> {
@@ -724,23 +783,6 @@ impl std::fmt::Display for UnknownBaseBlock {
 }
 impl std::error::Error for UnknownBaseBlock {}
 
-/// A native block entity declaration uses vanilla's reserved namespace.
-#[derive(Debug)]
-pub struct ReservedBlockEntityNamespace {
-    /// The refused type's registry ID.
-    pub kind: String,
-}
-impl fmt::Display for ReservedBlockEntityNamespace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "block entity type {} cannot use the minecraft namespace",
-            self.kind
-        )
-    }
-}
-impl std::error::Error for ReservedBlockEntityNamespace {}
-
 /// A block ID resolved against the complete content and vanilla registry.
 struct KnownBlock<'a>(&'a str);
 
@@ -754,6 +796,7 @@ enum SkylightRule {
 
 /// A block being added: its declaration and where its states go.
 struct NewBlock<'a> {
+    stew_effects: Option<J>,
     decl: &'a Block,
     base_block: Option<KnownBlock<'a>>,
     rename: Rename,
@@ -880,89 +923,150 @@ fn component_types(map: &J) -> BTreeSet<String> {
     }
 }
 
-/// Code declarations, joined to their manifest owner. Each owner's namespaces
-/// validate together, independent of namespace order, with all-or-nothing refusal.
-/// Unknown namespaces become synthetic content-only mods. Checked as files are
-/// ([`sunrise_mod_package::Content::declare`], [`accept_mod`]).
+/// A native package's staged declarations. Its dispatch owner is the map key,
+/// regardless of the namespaces used in these entries.
+#[derive(Clone, Default)]
+pub struct DeclaredContent {
+    pub blocks: Vec<LocalDeclaration<Block>>,
+    pub items: Vec<LocalDeclaration<Item>>,
+    pub types: Vec<BlockEntityType>,
+    pub fluids: Vec<FluidLook>,
+}
+
+/// Join code declarations to their manifest owner, even when no files were admitted.
+/// Validate the independent checks before deciding whether to add the owner's batch.
 pub fn accept_declared(
     mods: &mut Vec<ContentMod>,
-    blocks: &[sunrise_mod_package::content::Block],
-    items: &[sunrise_mod_package::content::Item],
-    types: &[BlockEntityType],
+    declared: &BTreeMap<&'static str, DeclaredContent>,
+    manifests: &[&sunrise_mod_package::Manifest],
     known: &BTreeSet<String>,
-) -> Vec<String> {
-    let owners: BTreeMap<_, _> = mods
-        .iter()
-        .flat_map(|m| {
-            m.content
-                .namespaces
-                .iter()
-                .map(|ns| (ns.clone(), m.id.clone()))
-        })
-        .collect();
-    let owner = |id: &str| {
-        let ns = id.split_once(':').map_or("", |(ns, _)| ns);
-        owners.get(ns).cloned().unwrap_or_else(|| ns.to_owned())
-    };
-    let mut by_owner: BTreeMap<String, (Vec<_>, Vec<_>)> = Default::default();
-    for block in blocks {
-        by_owner
-            .entry(owner(&block.id))
-            .or_default()
-            .0
-            .push(block.clone());
-    }
-    for item in items {
-        by_owner
-            .entry(owner(&item.id))
-            .or_default()
-            .1
-            .push(item.clone());
-    }
-    for kind in types {
-        by_owner.entry(owner(&kind.id)).or_default();
-    }
-    let mut errors = Vec::new();
-    for (id, (blocks, items)) in by_owner {
-        let types = types.iter().filter(|t| owner(&t.id) == id).cloned();
-        let result = match mods.iter().position(|m| m.id == id) {
-            Some(i) => {
-                let mut content = sunrise_mod_package::Content::declared(&mods[i].id);
-                content.namespaces.clone_from(&mods[i].content.namespaces);
-                content.blocks.clone_from(&mods[i].content.blocks);
-                content.items.clone_from(&mods[i].content.items);
-                content
-                    .declare(&blocks, &items)
-                    .and_then(|()| {
-                        let mut added = sunrise_mod_package::Content::declared(&id);
-                        added.blocks.clone_from(&blocks);
-                        added.items.clone_from(&items);
-                        validate_components(&added, known).map_err(|e| e.to_string())
-                    })
-                    .map(|()| {
-                        mods[i].content.blocks.extend(blocks);
-                        mods[i].content.items.extend(items);
-                        mods[i].content.block_entity_types.extend(types);
-                    })
+    errors: &mut Vec<DeclarationRefusal>,
+) -> Result<()> {
+    let mut namespace_error = None;
+    for (&id, batch) in declared {
+        let already_refused = errors.iter().any(|refusal| refusal.mod_id == id);
+        let before = errors.len();
+        let existing = mods.iter().position(|m| m.id == id);
+        let mut content = Content::declared(id);
+        if let Some(manifest) = manifests.iter().find(|m| m.id == id) {
+            content.namespaces = manifest.owned_namespaces().map(str::to_owned).collect();
+        }
+        if let Some(i) = existing {
+            content.blocks.clone_from(&mods[i].content.blocks);
+            content.items.clone_from(&mods[i].content.items);
+        }
+        if let Err(refusals) = content.declare_validated(&batch.blocks, &batch.items) {
+            errors.extend(
+                refusals
+                    .into_iter()
+                    .map(|(kind, error)| DeclarationRefusal::new(id, kind, error)),
+            );
+        }
+        for block in &batch.blocks {
+            let block_id = block.get().id.as_str();
+            if let Some(other) = mods.iter().find(|m| {
+                m.id != id
+                    && (m.content.blocks.iter().any(|b| b.id == block_id)
+                        || (block.get().item && m.content.items.iter().any(|i| i.id == block_id)))
+            }) {
+                errors.push(DeclarationRefusal::new(
+                    id,
+                    DeclarationKind::Block,
+                    DeclarationError::Rejected {
+                        id: block_id.to_owned(),
+                        reason: format!("declared twice (already declared by mod {})", other.id),
+                    },
+                ));
             }
-            None => {
-                let mut content = sunrise_mod_package::Content::declared(&id);
-                content.declare(&blocks, &items).and_then(|()| {
-                    content.block_entity_types.extend(types);
-                    let candidate = ContentMod {
-                        id: id.clone(),
-                        content,
-                        jars: Vec::new(),
-                    };
-                    accept_mod(mods, candidate, known).map_err(|e| e.to_string())
-                })
+        }
+        for item in &batch.items {
+            let item_id = item.get().id.as_str();
+            if let Some(other) = mods.iter().find(|m| {
+                m.id != id
+                    && (m.content.items.iter().any(|i| i.id == item_id)
+                        || m.content.blocks.iter().any(|b| b.item && b.id == item_id))
+            }) {
+                errors.push(DeclarationRefusal::new(
+                    id,
+                    DeclarationKind::Item,
+                    DeclarationError::Rejected {
+                        id: item_id.to_owned(),
+                        reason: format!(
+                            "declared twice, or is also a block's item (already declared by mod {})",
+                            other.id
+                        ),
+                    },
+                ));
             }
+        }
+        for (kind, name, components) in batch
+            .items
+            .iter()
+            .map(|i| i.get())
+            .map(|i| (DeclarationKind::Item, &i.id, &i.components))
+            .chain(
+                batch
+                    .blocks
+                    .iter()
+                    .map(|b| b.get())
+                    .filter(|b| b.item)
+                    .map(|b| (DeclarationKind::Block, &b.id, &b.components)),
+            )
+        {
+            if let Err(reason) = validate_components_for(components, known) {
+                errors.push(DeclarationRefusal::new(
+                    id,
+                    kind,
+                    DeclarationError::Rejected {
+                        id: name.clone(),
+                        reason: reason.to_string(),
+                    },
+                ));
+            }
+        }
+        if already_refused || errors.len() != before {
+            continue;
+        }
+        let target = if let Some(i) = existing {
+            let target = &mut mods[i].content;
+            target.blocks = content.blocks;
+            target.items = content.items;
+            target
+        } else {
+            if let Some(error) = mods.iter().find_map(|m| {
+                sunrise_mod_package::content::clash(
+                    (&m.id, &m.content.namespaces),
+                    (id, &content.namespaces),
+                )
+            }) {
+                namespace_error.get_or_insert(error);
+                continue;
+            }
+            mods.push(ContentMod {
+                id: id.into(),
+                content,
+                jars: vec![],
+            });
+            &mut mods.last_mut().unwrap().content
         };
-        if let Err(e) = result {
-            errors.push(format!("native blocks and items of {id}: {e}"));
+        target.block_entity_types.extend_from_slice(&batch.types);
+        // A file's fluid look still says how the code-declared fluid looks.
+        for fluid in &batch.fluids {
+            match target.fluids.iter_mut().find(|f| f.id == fluid.id) {
+                Some(look) => {
+                    look.world.clone_from(&fluid.world);
+                    if fluid.bucket_item.is_some() {
+                        look.bucket_item.clone_from(&fluid.bucket_item);
+                    }
+                }
+                None => target.fluids.push(fluid.clone()),
+            }
         }
     }
-    errors
+    match namespace_error {
+        Some(error) => Err(error.into()),
+        None => Ok(()),
+    }
 }
 
 /// Check and accept one mod without disturbing previously accepted mods.
@@ -997,11 +1101,17 @@ fn validate_components(
             .filter(|b| b.item)
             .map(|b| (&b.id, &b.components)),
     ) {
-        let patch = component_patch(id, components)?;
-        patch_components(&mut J::Obj(Vec::new()), &patch, known)
-            .map_err(|e| format!("{id}: {e}"))?;
+        validate_components_for(components, known).map_err(|error| format!("{id}: {error}"))?;
     }
     Ok(())
+}
+
+fn validate_components_for(
+    components: &BTreeMap<String, serde_json::Value>,
+    known: &BTreeSet<String>,
+) -> Result<()> {
+    let patch = component_patch(components)?;
+    Ok(patch_components(&mut J::Obj(Vec::new()), &patch, known)?)
 }
 
 /// An item's component patch on its entry; `known` holds every type a vanilla item has, so typos fail.
@@ -1025,22 +1135,16 @@ fn patch_components(
 }
 
 /// A declared component patch, as the overlay's JSON.
-fn component_patch(
-    id: &str,
-    components: &BTreeMap<String, serde_json::Value>,
-) -> Result<Vec<(String, J)>> {
+fn component_patch(components: &BTreeMap<String, serde_json::Value>) -> Result<Vec<(String, J)>> {
     components
         .iter()
         .map(|(key, value)| {
             if !key.starts_with('!') && sunrise_protocol::item::custom::id(key).is_some() {
                 let tag = sunrise_client_core::scoreboard::json_to_tag(value);
                 sunrise_core::nbt::validate_component_value(&tag)
-                    .map_err(|error| format!("{id}: component {key}: {error}"))?;
+                    .map_err(|error| format!("component {key}: {error}"))?;
             }
-            Ok((
-                key.clone(),
-                serde_json::from_value(value.clone()).map_err(|error| format!("{id}: {error}"))?,
-            ))
+            Ok((key.clone(), serde_json::from_value(value.clone())?))
         })
         .collect()
 }
@@ -1090,13 +1194,7 @@ use entity_sounds::mod_entity_row;
 
 impl<'a> Plan<'a> {
     fn new(base: &Path, mods: &'a [ContentMod]) -> Result<Self> {
-        let vanilla_items = match base.join("items.json").exists() {
-            true => match read_json(&base.join("items.json"))? {
-                J::Obj(entries) => entries.into_iter().map(|(id, _)| id).collect(),
-                _ => return Err("items.json is not an object".into()),
-            },
-            false => BTreeSet::new(),
-        };
+        let vanilla_items = builtin_item_keys(base)?;
         // Class chains are most-derived first. Fluid-dependent overrides must
         // use the resolved state's fluid, not the template's cached dry answer.
         let mut skylight_rules = BTreeMap::new();
@@ -1220,10 +1318,21 @@ impl<'a> Plan<'a> {
             (names[start + len..].iter().all(|n| n != name))
                 .then_some(start as u32..(start + len) as u32)
         };
-        let declared_ids: BTreeSet<&str> = mods
-            .iter()
-            .flat_map(|m| m.content.blocks.iter().map(|b| b.id.as_str()))
-            .collect();
+        // Native declarations can share a namespace with another package, not a registry key.
+        let mut declared_ids = BTreeSet::new();
+        let mut item_ids = BTreeSet::new();
+        for m in mods {
+            for block in &m.content.blocks {
+                if defaults.contains_key(&block.id) || !declared_ids.insert(block.id.as_str()) {
+                    return Err(format!("{}: {} is already a block", m.id, block.id).into());
+                }
+            }
+            for id in declared_item_ids(m) {
+                if vanilla_items.contains(id) || !item_ids.insert(id) {
+                    return Err(format!("{}: {id} is already an item", m.id).into());
+                }
+            }
+        }
         let mut block_entity_types: Vec<(&str, &BlockEntityType)> = mods
             .iter()
             .flat_map(|m| {
@@ -1245,17 +1354,11 @@ impl<'a> Plan<'a> {
             };
             let mut ids: BTreeSet<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
             for (mod_id, kind) in &block_entity_types {
-                if kind.id.starts_with("minecraft:") {
-                    return Err(ReservedBlockEntityNamespace {
-                        kind: kind.id.clone(),
-                    }
-                    .into());
-                }
                 if !ids.insert(&kind.id) {
                     return Err(format!("block entity type {} is already declared", kind.id).into());
                 }
                 for block in &kind.blocks {
-                    if block.starts_with("minecraft:") {
+                    if defaults.contains_key(block.as_str()) {
                         return Err(format!(
                             "mod {mod_id}: block entity type {} cannot own vanilla block {block}",
                             kind.id
@@ -1281,6 +1384,23 @@ impl<'a> Plan<'a> {
                 }
             }
         }
+        let effects = mob_effects(mods);
+        let mut stew_effect_ids = BTreeSet::new();
+        if mods.iter().flat_map(|m| &m.content.blocks).any(|b| {
+            b.suspicious_stew_effects
+                .as_ref()
+                .is_some_and(|effects| !effects.is_empty())
+        }) {
+            let registry = read_json(&base.join("registries.json"))?;
+            let Some(J::Obj(entries)) = registry
+                .get("minecraft:mob_effect")
+                .and_then(|r| r.get("entries"))
+            else {
+                return Err("no minecraft:mob_effect entries".into());
+            };
+            stew_effect_ids.extend(entries.iter().map(|(id, _)| id.clone()));
+            stew_effect_ids.extend(effects.iter().map(|effect| effect.id.clone()));
+        }
         let mut blocks = Vec::new();
         let mut next = names.len() as u32;
         let mut sorted: Vec<&ContentMod> = mods.iter().collect();
@@ -1292,6 +1412,33 @@ impl<'a> Plan<'a> {
             let mut declared: Vec<&Block> = m.content.blocks.iter().collect();
             declared.sort_by(|a, b| a.id.cmp(&b.id));
             for decl in declared {
+                let stew_effects = decl
+                    .suspicious_stew_effects
+                    .as_ref()
+                    .map(|effects| {
+                        effects
+                            .iter()
+                            .map(|effect| {
+                                let id = sunrise_core::identifier::Identifier::parse(&effect.id)
+                                    .ok()
+                                    .map(|id| id.to_string());
+                                let id = id.filter(|id| stew_effect_ids.contains(id)).ok_or_else(
+                                    || {
+                                        format!(
+                                            "{}: suspicious_stew_effects: unknown mob effect {:?}",
+                                            decl.id, effect.id
+                                        )
+                                    },
+                                )?;
+                                Ok::<_, String>(J::Obj(vec![
+                                    ("id".into(), J::Str(id)),
+                                    ("duration".into(), J::Num(effect.duration.into())),
+                                ]))
+                            })
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map(J::Arr)
+                    })
+                    .transpose()?;
                 let base_block = match decl.base_block.as_deref() {
                     Some(base) if defaults.contains_key(base) || declared_ids.contains(base) => {
                         Some(KnownBlock(base))
@@ -1305,9 +1452,6 @@ impl<'a> Plan<'a> {
                     }
                     None => None,
                 };
-                if defaults.contains_key(&decl.id) {
-                    return Err(format!("{}: {} is already a block", m.id, decl.id).into());
-                }
                 if decl.shapes_from_block_entity
                     && !block_entity_factories.contains_key(decl.id.as_str())
                 {
@@ -1356,11 +1500,23 @@ impl<'a> Plan<'a> {
                     };
                     row.get(4)?.get("properties")
                 };
+                let declaration_source = || {
+                    // File declarations take their id from this path. A code declaration
+                    // in the same mod has no file, so name only its block id.
+                    if let Some((namespace, path)) = decl.id.split_once(':') {
+                        let file = format!("data/{namespace}/sunrise/block/{path}.json");
+                        if m.content.files.binary_search(&file).is_ok() {
+                            return format!("{file}: {}", decl.id);
+                        }
+                    }
+                    decl.id.clone()
+                };
                 for key in decl.state_properties.keys() {
                     if properties(default).is_some_and(|p| p.get(key).is_some()) {
                         return Err(format!(
-                            "{}: state property {key} is already on {}",
-                            decl.id, decl.template
+                            "{}: state_properties.{key} is already on {}",
+                            declaration_source(),
+                            decl.template
                         )
                         .into());
                     }
@@ -1369,7 +1525,7 @@ impl<'a> Plan<'a> {
                     if liquid_templates.contains(&decl.template) {
                         return Err(format!(
                             "{}: state_properties.waterlogged cannot be added: template {} is a standalone liquid block",
-                            decl.id, decl.template
+                            declaration_source(), decl.template
                         ).into());
                     }
                     let template_water = water_states
@@ -1378,7 +1534,7 @@ impl<'a> Plan<'a> {
                     if template_water.iter().all(|water| *water) {
                         return Err(format!(
                             "{}: state_properties.waterlogged cannot be added: every state of template {} already holds water",
-                            decl.id, decl.template
+                            declaration_source(), decl.template
                         ).into());
                     }
                 }
@@ -1558,6 +1714,7 @@ impl<'a> Plan<'a> {
                     wanted_sounds.push(s.clone());
                 }
                 blocks.push(NewBlock {
+                    stew_effects,
                     decl,
                     base_block,
                     rename,
@@ -1672,7 +1829,8 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(item, &b.decl.id),
                     max_stack_size: None,
                     rarity: None,
-                    components: component_patch(&b.decl.id, &b.decl.components)?,
+                    components: component_patch(&b.decl.components)
+                        .map_err(|error| format!("{}: {error}", b.decl.id))?,
                     crafting_remainder: None,
                     block: None,
                     arm_pose: None,
@@ -1693,7 +1851,8 @@ impl<'a> Plan<'a> {
                     rename: Rename::new(&i.template, &i.id),
                     max_stack_size: i.max_stack_size,
                     rarity: i.rarity,
-                    components: component_patch(&i.id, &i.components)?,
+                    components: component_patch(&i.components)
+                        .map_err(|error| format!("{}: {error}", i.id))?,
                     crafting_remainder: i.crafting_remainder.clone(),
                     block: i.block.clone(),
                     arm_pose: i.arm_pose,
@@ -1722,7 +1881,7 @@ impl<'a> Plan<'a> {
             blocks,
             items,
             vanilla_items,
-            effects: mob_effects(mods),
+            effects,
             fluids: fluids(mods),
             entity_types: entity_types(mods),
             block_entity_types: block_entity_types
@@ -1730,7 +1889,7 @@ impl<'a> Plan<'a> {
                 .map(|(_, kind)| kind)
                 .collect(),
             block_entity_factories,
-            menu_types: menu_types(mods),
+            menu_types: menu_types(mods).into_iter().map(|(menu, _)| menu).collect(),
             states: names.len(),
             defaults,
             sounds,
@@ -2036,6 +2195,14 @@ impl<'a> Plan<'a> {
             };
             let mut v = v.clone();
             v.rename(&i.rename, false);
+            if !components
+                && i.template.is_none()
+                && let Some(fields) = v.get_mut("fields")
+            {
+                // The generated BlockItem points to its new block, not to the
+                // template's main block if the template shared another item.
+                fields.set("block", J::Str(i.rename.to.clone()));
+            }
             if let Some(wall) = &i.wall_block
                 && let Some(fields) = v.get_mut("fields")
             {
@@ -2074,7 +2241,7 @@ impl<'a> Plan<'a> {
             }
             for i in &self.items {
                 if let Some(rest) = &i.crafting_remainder
-                    && map.get(rest).is_none()
+                    && (rest == "minecraft:air" || map.get(rest).is_none())
                 {
                     return Err(format!(
                         "{}: crafting_remainder {rest:?} is not an item",
@@ -2249,6 +2416,9 @@ impl<'a> Plan<'a> {
                         }
                         if b.decl.properties.vegetation {
                             v.set("declared_vegetation", J::Bool(true));
+                        }
+                        if let Some(effects) = &b.stew_effects {
+                            v.set("suspicious_stew_effects", effects.clone());
                         }
                         blocks.push(v);
                     }
@@ -2704,7 +2874,7 @@ impl<'a> Plan<'a> {
         let Tag::Compound(c) = tag else {
             return;
         };
-        for (key, value) in c.iter_mut() {
+        c.for_each_mut(|key, value| {
             match (key.to_string_lossy().as_str(), value) {
                 ("states", Tag::List(list)) if list.len() == self.states => {
                     for b in &self.blocks {
@@ -2764,7 +2934,7 @@ impl<'a> Plan<'a> {
                 (_, inner @ Tag::Compound(_)) => self.nbt(inner),
                 _ => {}
             }
-        }
+        });
     }
 }
 
@@ -2959,6 +3129,7 @@ fn place_in_biomes(
     base: &Path,
     overlay: &Overlay<'_>,
     modifiers: &[biomes::Modifier],
+    modifier_sources: Vec<[String; 3]>,
     enabled_mods: Vec<String>,
     biome_tags: Option<J>,
     placed: Option<J>,
@@ -2999,7 +3170,7 @@ fn place_in_biomes(
         carver_ids,
         carver_tags: modifier_tags(base, overlay, tags, "worldgen/carver")?,
         enabled_mods,
-        modifiers: modifiers.iter().map(|m| m.source.clone()).collect(),
+        modifiers: modifier_sources,
         unmodified: BTreeMap::new(),
         feature_tags,
         entity_categories,
@@ -3162,17 +3333,34 @@ pub fn biome_modifiers_over_packs(
             Err(_) => Ok(BTreeMap::new()),
         }
     };
+    let builtin_sounds = biomes::load_sound_events(root);
+    let registered_sound = |name: &str| {
+        builtin_sounds
+            .as_ref()
+            .is_some_and(|b| crate::music::registered_sound(b, name))
+    };
     let mut warnings = Vec::new();
     let mut modifiers = Vec::new();
-    for [m, file, text] in saved.modifiers.iter().chain(declared) {
-        modifiers.extend(biomes::Modifier::read(m, file, text, &mut warnings)?);
+    let sources = || saved.modifiers.iter().chain(declared);
+    biomes::check_registry(sources().map(|[owner, file, _]| (owner.as_str(), file.as_str())))?;
+    for [m, file, text] in sources() {
+        modifiers.extend(biomes::Modifier::read(
+            m,
+            file,
+            text,
+            &registered_sound,
+            &mut warnings,
+        )?);
     }
     // What the generator reads without the modifiers over the packs.
     let packed = packs.apply("biomes", read(BIOMES)?);
     let mut start = packed.clone();
     for (id, text) in &saved.unmodified {
-        if packs.entries("biomes").all(|(p, _)| p != id) {
-            start.insert(id.clone(), text.clone());
+        if packs.entries("biomes").all(|(p, _)| p != id)
+            && let Some(value) = start.get_mut(id)
+        {
+            // Restore the pre-modifier value, not a holder refused by the world load.
+            value.clone_from(text);
         }
     }
     let mut doc = J::Obj(start.into_iter().map(|(id, t)| (id, J::Str(t))).collect());
@@ -3606,16 +3794,48 @@ fn load_layers<'a>(jar_store: &Path, mods: &'a [ContentMod]) -> Result<Vec<ModLa
             )?);
         }
         if !m.content.files.is_empty() {
-            let source = m.content.source().to_owned();
-            layers.push(ModLayer::new(
-                m.id.clone(),
+            use crate::packs::Source;
+            let source = if let Some(content) = m.content.admitted_source() {
+                use std::hash::{DefaultHasher, Hash, Hasher};
+                use sunrise_assets::resource_source::ResourceSource;
+                use sunrise_mod_package::content::ReadError;
+                let reader = content.clone();
+                Source::Opened(ResourceSource::fixed(
+                    content.names(),
+                    move |name, limit| {
+                        let reader = reader.reader();
+                        limit
+                            .map_or_else(|| reader.read(name), |max| reader.read_head(name, max))
+                            .map_err(|error| {
+                                let kind = match error {
+                                    ReadError::NotFound(_) => std::io::ErrorKind::NotFound,
+                                    ReadError::Other(_) => std::io::ErrorKind::InvalidData,
+                                };
+                                std::io::Error::new(kind, error)
+                            })
+                    },
+                    move |name| {
+                        let mut hash = DefaultHasher::new();
+                        if content.is_archive() {
+                            content.reader().read(name).ok()?.hash(&mut hash);
+                        } else {
+                            let path = content.reader().path(name).ok()??;
+                            let meta = fs::metadata(path).ok()?;
+                            meta.len().hash(&mut hash);
+                            meta.modified().ok()?.hash(&mut hash);
+                        }
+                        Some(hash.finish())
+                    },
+                ))
+            } else {
+                let source = m.content.source().to_owned();
                 if source.is_dir() {
-                    crate::packs::Source::Dir(source)
+                    Source::Dir(source)
                 } else {
-                    crate::packs::Source::Zip(source)
-                },
-                None,
-            )?);
+                    Source::Zip(source)
+                }
+            };
+            layers.push(ModLayer::new(m.id.clone(), source, None)?);
         }
         loaded.push(ModLayers { source: m, layers });
     }
@@ -3712,10 +3932,14 @@ pub fn resolved_resources(
             assets_base = ResourceSource::indexed(files);
         }
     }
-    let mod_layers = loaded
+    let data_layers: std::sync::Arc<[(String, ResourceSource)]> = loaded
         .iter()
         .flat_map(|group| &group.layers)
-        .map(|layer| layer.data.source().clone())
+        .map(|layer| (layer.data.id.clone(), layer.data.source().clone()))
+        .collect();
+    let mod_layers = data_layers
+        .iter()
+        .map(|(_, source)| source.clone())
         .collect();
     let layers = loaded
         .into_iter()
@@ -3741,7 +3965,7 @@ pub fn resolved_resources(
     Ok(ResourceRoot::new(prepared, cache, assets)
         .with_data(
             ResourceSource::indexed(data),
-            ResourceSource::indexed(changes),
+            ResourceSource::indexed_with_sources(changes, data_layers),
         )
         .with_mod_layers(mod_layers))
 }
@@ -3749,8 +3973,7 @@ pub fn resolved_resources(
 /// The root to load: `base` itself with no content, else the mods' overlay
 /// over it, built in `cache/mod-content/<stamp>`: one folder per mod set, so
 /// a running game keeps reading the root it was given while a switch builds
-/// another (docs/design/mod-hotload.md). Roots of other sets unused for a day
-/// are removed.
+/// another. Roots of other sets unused for a day are removed.
 ///
 /// The root is built once and kept: later starts with the same build, base
 /// and mod files reuse it. With ATM10's carried mods a build takes about
@@ -3793,10 +4016,10 @@ fn real_base(base: &Path) -> Result<PathBuf> {
     Ok(fs::canonicalize(base).map_err(|e| format!("{}: {e}", base.display()))?)
 }
 
-/// Whether turning a content mod on or off can apply in a running game
-/// (docs/design/mod-hotload.md): its assets and data can, through the
-/// resource reload and the server's data reload. What a world numbers or
-/// generates from cannot yet: then the translation key of why.
+/// Whether turning a content mod on or off can apply in a running game:
+/// its assets and data can, through the resource reload and the server's data
+/// reload. What a world numbers or generates from cannot yet: then the
+/// translation key of why.
 pub fn live_switch(content: &Content) -> std::result::Result<(), &'static str> {
     if !content.blocks.is_empty()
         || !content.items.is_empty()
@@ -3910,7 +4133,7 @@ fn stamp(
             .clone()?,
     };
     let mut parts = vec![
-        "sunrise mod content 8".to_owned(),
+        "sunrise mod content 10".to_owned(),
         serde_json::to_string(inventory)?,
     ];
     parts.push(exe);
@@ -3940,11 +4163,20 @@ fn stamp(
             "{:?} {:?} {:?}",
             m.content.blocks, m.content.items, m.content.block_entity_types
         ));
-        let source = m.content.source();
         if m.content.files.is_empty() {
             // Declared in code only: nothing to read.
-        } else if source.is_dir() {
-            for file in &m.content.files {
+            continue;
+        }
+        let source = m.content.source();
+        let admitted = m.content.admitted_source();
+        if let Some(content) = admitted.as_ref().filter(|content| content.is_archive()) {
+            let reader = content.reader();
+            for file in m.content.files.iter() {
+                let digest = Sha256::digest(reader.read(file)?);
+                parts.push(format!("{file} {digest:x}"));
+            }
+        } else if admitted.is_some() || source.is_dir() {
+            for file in m.content.files.iter() {
                 parts.push(format!("{file} {}", hash(&source.join(file))?));
             }
         } else {

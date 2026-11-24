@@ -1,10 +1,10 @@
 //! Shared exception: dispatch infrastructure and cross-area fixture types/tests; no new hooks.
-use mod_api::mod_api::client::hud_layout::GuiDraw;
+use mod_api::mod_api::{BlockEntityDataView, BlockEntityTypeKey, BlockRemovalEffects};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use sunrise_core::game_mode::GameMode;
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct ItemStack {
     item: Arc<str>,
     count: u32,
@@ -12,23 +12,22 @@ struct ItemStack {
 // Dispatch tests isolate the runtime key table: the fixture key retains its name.
 // Production key resolution and slot stability are tested in mod-runtime.
 #[derive(Clone, Copy)]
-struct ItemKey<'a>(&'a str);
+struct ItemKey(&'static str);
 impl ItemStack {
     fn count(&self) -> u32 {
         self.count
     }
-    fn item(&self) -> ItemKey<'_> {
-        ItemKey(&self.item)
+    fn item(&self) -> ItemKey {
+        ItemKey(Box::leak(self.item.to_string().into_boxed_str()))
     }
 }
 #[derive(Debug)]
-enum StackWriteError {}
+enum StackWriteError {
+    /// The engine's `CountExceeded { maximum }`, for a fixture validator to refuse an
+    /// overstacked edit with (the fixture never reads the maximum).
+    CountExceeded,
+}
 mod content {
-    pub(super) mod crash {
-        pub fn current_native_mod() -> Option<&'static str> {
-            None
-        }
-    }
     pub(super) mod registry_keys {
         pub(in crate::tests) fn block_key(name: &str) -> Option<super::super::BlockKey> {
             match name {
@@ -42,31 +41,155 @@ mod content {
         ) -> Option<&'static str> {
             Some("test:counter")
         }
-        pub(in crate::tests) fn entity_type_name(_: u32) -> Option<&'static str> {
-            Some("test:entity")
-        }
-        pub(in crate::tests) fn item_id(key: super::super::ItemKey<'_>) -> Option<&str> {
+        pub(in crate::tests) fn item_id(key: super::super::ItemKey) -> Option<&'static str> {
             Some(key.0)
+        }
+        pub(in crate::tests) fn effect_id(key: super::super::EffectKey) -> Option<&'static str> {
+            match key.0 {
+                0 => Some("test:effect"),
+                _ => None,
+            }
         }
     }
 }
 
+struct ItemPlace;
 struct BlockEntityDraw(Vec<u32>);
 use serde_json::{Map, Value};
 use stubs::*;
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Text;
+#[derive(Debug)]
+enum TextFormError {}
 #[derive(Clone)]
 struct ScreenshotImage;
-#[derive(Debug, PartialEq)]
-struct Zoom(u32);
 enum Flow {
     Continue,
     Cancel,
 }
 trait Host {}
-trait ServerHost: Host {}
+trait ServerHost: Host {
+    fn transaction_refusal(
+        &mut self,
+    ) -> Option<item::transaction::TransactionError<core::convert::Infallible>> {
+        None
+    }
+}
 trait ClientHost: Host {}
+
+mod client {
+    pub(super) mod tooltip_components {
+        pub(in crate::tests) fn retain_gather_tooltip_payloads(
+            _: &'static str,
+            _: &[super::super::TooltipElement],
+        ) {
+        }
+        pub(in crate::tests) fn invoke_tooltip_image<P: ?Sized, R>(
+            part: &&P,
+            call: impl FnOnce(&P) -> Option<R>,
+        ) -> Option<R> {
+            let disabled = super::super::DISABLED_BLOCK_PART.get();
+            if disabled == Some(std::ptr::from_ref(*part).cast())
+                || super::super::runtime::poisoned(super::super::HookId::TooltipImage, "part")
+            {
+                return None;
+            }
+            super::super::runtime::invoke(
+                super::super::HookId::TooltipImage,
+                "tooltip_image",
+                "part",
+                || call(*part),
+            )
+            .flatten()
+        }
+    }
+}
+
+mod item {
+    pub(super) mod transaction {
+        use super::super::ServerHost;
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(in crate::tests) enum TransactionError<E> {
+            Aborted(E),
+            Unavailable,
+            InvalidContext,
+            CommitRefused,
+        }
+
+        // The game exercises the actual journal; these fixtures have no world state.
+        pub(in crate::tests) trait HostTransaction {
+            fn transaction<T, E>(
+                &mut self,
+                call: impl FnOnce(&mut dyn ServerHost, &()) -> Result<T, E>,
+            ) -> Result<T, TransactionError<E>>;
+        }
+        impl HostTransaction for dyn ServerHost + '_ {
+            fn transaction<T, E>(
+                &mut self,
+                call: impl FnOnce(&mut dyn ServerHost, &()) -> Result<T, E>,
+            ) -> Result<T, TransactionError<E>> {
+                match self.transaction_refusal() {
+                    None => call(self, &()).map_err(TransactionError::Aborted),
+                    Some(TransactionError::Unavailable) => Err(TransactionError::Unavailable),
+                    Some(TransactionError::InvalidContext) => Err(TransactionError::InvalidContext),
+                    Some(TransactionError::CommitRefused) => {
+                        call(self, &()).map_err(TransactionError::Aborted)?;
+                        Err(TransactionError::CommitRefused)
+                    }
+                    Some(TransactionError::Aborted(never)) => match never {},
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn transaction_fixture_distinguishes_admission_and_settlement_refusal() {
+    use core::convert::Infallible;
+    use item::transaction::{HostTransaction, TransactionError};
+
+    struct RefusingHost(Option<TransactionError<Infallible>>);
+    impl Host for RefusingHost {}
+    impl ServerHost for RefusingHost {
+        fn transaction_refusal(&mut self) -> Option<TransactionError<Infallible>> {
+            self.0.take()
+        }
+    }
+
+    for (refusal, ran) in [
+        (TransactionError::Unavailable, false),
+        (TransactionError::InvalidContext, false),
+        (TransactionError::CommitRefused, true),
+    ] {
+        let mut host = RefusingHost(Some(refusal));
+        let mut called = false;
+        let result = (&mut host as &mut dyn ServerHost).transaction(|_, _| {
+            called = true;
+            Ok::<_, Infallible>(())
+        });
+        assert_eq!(result, Err(refusal));
+        assert_eq!(called, ran);
+    }
+}
+
+/// Owner, hook and field for one generated dispatch refusal.
+type OutputRefusal = (&'static str, &'static str, &'static str);
+thread_local! {
+    static OUTPUT_REFUSALS: std::cell::RefCell<Option<Vec<OutputRefusal>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn capture_output_refusals(call: impl FnOnce()) -> Vec<OutputRefusal> {
+    struct Restore(Option<Vec<OutputRefusal>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OUTPUT_REFUSALS.replace(self.0.take());
+        }
+    }
+    let _restore = Restore(OUTPUT_REFUSALS.replace(Some(Vec::new())));
+    call();
+    OUTPUT_REFUSALS.take().unwrap()
+}
 trait WorldDrawContext {}
 trait DrawContext {
     fn mark(&mut self, value: u32);
@@ -109,6 +232,18 @@ impl LevelSide<'_> {
         }
     }
 }
+enum LevelRandomSide<'a> {
+    Server(&'a mut dyn LevelRandomHost),
+    Client(&'a dyn LevelHost),
+}
+impl LevelRandomSide<'_> {
+    fn reborrow(&mut self) -> LevelRandomSide<'_> {
+        match self {
+            Self::Server(host) => LevelRandomSide::Server(&mut **host),
+            Self::Client(host) => LevelRandomSide::Client(*host),
+        }
+    }
+}
 struct TestHost;
 struct TestLevel;
 impl LevelHost for TestLevel {}
@@ -117,6 +252,20 @@ impl HitHost for TestLevel {}
 impl Host for TestHost {}
 impl ServerHost for TestHost {}
 impl ClientHost for TestHost {}
+
+#[test]
+fn level_random_dispatch_reborrows_the_active_side() {
+    let mut host = TestLevel;
+    assert!(matches!(
+        LevelRandomSide::Server(&mut host).reborrow(),
+        LevelRandomSide::Server(_)
+    ));
+    assert!(matches!(
+        LevelRandomSide::Client(&host).reborrow(),
+        LevelRandomSide::Client(_)
+    ));
+}
+
 #[allow(dead_code)]
 mod generated {
     pub(super) mod mod_api {
@@ -126,12 +275,14 @@ mod generated {
         pub struct Item {
             pub id: String,
         }
-        pub(super) use super::super::ItemStack;
-        // The generated standalone-model dispatch builds the stub `Answered` and names the type through this path.
+        pub(super) use super::super::{ItemKey, ItemPlace, ItemStack, ItemStackView};
+        // Generated registration dispatch builds the stub `Answered` through this path.
         pub(super) use super::super::Answered;
         pub(super) use super::super::{
-            Command, Config, Dispensed, InteractionResult, MapDecoration, MapInfo, Screen, Zoom,
+            ClientCommandRegistration, CommandRegistration, Dispensed, InteractionResult,
+            MapDecoration, MapInfo,
         };
+        pub(super) use super::super::{LevelRef, PlayerRef};
         #[derive(Clone)]
         pub struct FluidModel;
         #[derive(Clone, Copy)]
@@ -139,15 +290,10 @@ mod generated {
         include!(concat!(env!("OUT_DIR"), "/dispatch_fixtures_api.rs"));
     }
     include!(concat!(env!("OUT_DIR"), "/mod_api_generated.rs"));
-    pub(super) use self::mod_api::{
-        BlockEntityTickReply, BlockFace, BlockKey, BlockState, CrosshairTarget,
-    };
+    pub(super) use self::mod_api::InlineImageReplacement;
+    pub(super) use self::mod_api::{BlockFace, BlockKey, BlockState, CrosshairTarget};
+    use self::mod_api::{GuiCanvas, StandaloneModelRegistration};
     pub use sunrise_mod_api_macros::__subscriptions;
-    // What `#[__subscriptions]` marks each implemented hook with: these listeners are not built for wasm.
-    macro_rules! __sunrise_mark {
-        ($owner:literal $method:ident) => {};
-    }
-    pub(crate) use __sunrise_mark;
 }
 use generated::*;
 struct Installed {
@@ -191,23 +337,20 @@ fn receives_cancelled(hook: HookId) -> bool {
     MODS.get()
         .is_some_and(|installed| installed.subscribers.receives_cancelled(hook as usize))
 }
-fn entered(hook_id: HookId, hook: &'static str) -> impl Iterator<Item = &'static dyn Hooks> {
-    entered_with_id(hook_id, hook).map(|(_, hooks)| hooks)
-}
 fn entered_with_id(
     hook_id: HookId,
     hook: &'static str,
 ) -> impl Iterator<Item = (&'static str, &'static dyn Hooks)> {
-    listening(hook_id).map(move |(_, entry)| {
-        let ((), hooks) = enter_listener(entry, hook);
-        (entry.id, hooks)
-    })
+    runtime::entered_with_id_matching(hook_id, hook, |_| true)
 }
 fn listening(hook_id: HookId) -> impl Iterator<Item = (bool, &'static ModEntry)> {
     MODS.get().into_iter().flat_map(move |installed| {
         installed
             .subscribers
             .subscribers(hook_id as usize)
+            .filter(move |subscriber| {
+                !runtime::poisoned(hook_id, installed.mods[subscriber.index].id)
+            })
             .map(move |subscriber| {
                 (
                     subscriber.receives_cancelled,
@@ -237,17 +380,33 @@ impl ModEntry {
     }
 }
 trait Registrar {}
-/// The goal registrar of the generated `EntityPart`, as the fixture sees
-/// it: no methods, its type is all the generated trait asks of the scope.
-#[expect(dead_code)]
+/// The goal registrar of the generated `EntityPart`, as the fixture sees it.
 struct GoalRegistrar<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
-/// The behavior registrar of the generated `EntityPart` (#824), as the
-/// fixture sees it: like [`GoalRegistrar`], only its type is asked for.
-#[expect(dead_code)]
+impl GoalRegistrar<'_> {
+    fn route_kind(&self) -> &str {
+        "test:mob"
+    }
+    fn set_owner(&mut self, _: &'static str, _: &'static str) {}
+    fn checkpoint(&self) -> usize {
+        0
+    }
+    fn rollback(&mut self, _: usize) {}
+}
+/// The behavior registrar of the generated `EntityPart` (#824), as the fixture sees it.
 struct BehaviorRegistrar<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
+}
+impl BehaviorRegistrar<'_> {
+    fn route_kind(&self) -> &str {
+        "test:mob"
+    }
+    fn set_owner(&mut self, _: &'static str, _: &'static str) {}
+    fn checkpoint(&self) -> usize {
+        0
+    }
+    fn rollback(&mut self, _: usize) {}
 }
 /// Scope fixtures install their own Parts. Block attachments retain their API keys;
 /// other scopes keep their existing single-target fixture tables.
@@ -257,6 +416,7 @@ struct Parts {
     owner_slot: Option<(BlockKey, usize)>,
     block_entities: Vec<&'static dyn BlockEntityPart>,
     items: Vec<&'static dyn ItemPart>,
+    effects: Vec<&'static dyn MobEffectPart>,
     menus: Vec<&'static dyn MenuPart>,
     fluids: Vec<&'static dyn FluidPart>,
     entities: Vec<&'static dyn EntityPart>,
@@ -266,6 +426,7 @@ static NO_PARTS: Parts = Parts {
     owner_slot: None,
     block_entities: Vec::new(),
     items: Vec::new(),
+    effects: Vec::new(),
     menus: Vec::new(),
     fluids: Vec::new(),
     entities: Vec::new(),
@@ -287,6 +448,7 @@ fn has_part_hook(_: HookId) -> bool {
     !parts.blocks.is_empty()
         || !parts.block_entities.is_empty()
         || !parts.items.is_empty()
+        || !parts.effects.is_empty()
         || !parts.menus.is_empty()
         || !parts.entities.is_empty()
 }
@@ -333,10 +495,16 @@ impl Parts {
     fn item<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn ItemPart] {
         &self.items
     }
+    fn effect<'k>(&self, id: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn MobEffectPart] {
+        match id() {
+            Some("test:effect") => &self.effects,
+            _ => &[],
+        }
+    }
     fn menu<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn MenuPart] {
         &self.menus
     }
-    fn menu_screen(&self, _: &str, _: Option<&str>) -> &[&'static dyn MenuPart] {
+    fn menu_for_opener(&self, _: &str, _: Option<&str>) -> &[&'static dyn MenuPart] {
         &self.menus
     }
     fn fluid<'k>(&self, _: impl FnOnce() -> Option<&'k str>) -> &[&'static dyn FluidPart] {
@@ -368,14 +536,45 @@ fn any_mod_disabled() -> bool {
     DISABLED_BLOCK_PART.get().is_some()
 }
 fn entered_parts<'a, P: ?Sized>(
+    hook_id: HookId,
     parts: &'a [&'a P],
     _: &'static str,
-) -> impl Iterator<Item = &'a P> {
+) -> impl Iterator<Item = (&'static str, &'a P)> {
     let disabled = DISABLED_BLOCK_PART.get();
     parts
         .iter()
         .copied()
-        .filter(move |part| disabled != Some(std::ptr::from_ref(*part).cast()))
+        .filter(move |part| {
+            disabled != Some(std::ptr::from_ref(*part).cast())
+                && !runtime::poisoned(hook_id, "part")
+        })
+        .map(|part| ("part", part))
+}
+fn entered_parts_with_owner<'a, P: ?Sized>(
+    hook: generated::HookId,
+    parts: &'a [&'a P],
+    name: &'static str,
+) -> impl Iterator<Item = (&'static str, &'static str, &'a P)> {
+    entered_parts(hook, parts, name).map(|(id, part)| (id, "Part", part))
+}
+fn entered_parts_with_slot<'a, P: ?Sized>(
+    _: generated::HookId,
+    parts: &'a [&'a P],
+    _: &'static str,
+) -> impl Iterator<Item = (&'static str, (usize, usize), &'a P)> {
+    let disabled = DISABLED_BLOCK_PART.get();
+    parts
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(move |(_, part)| disabled != Some(std::ptr::from_ref(*part).cast()))
+        .map(|(order, part)| ("part", (0, order), part))
+}
+fn part_slot<'a, P: ?Sized>(parts: &'a [&'a P], slot: (usize, usize)) -> Option<&'a [&'a P]> {
+    match slot {
+        (0, order) => parts.get(order).map(std::slice::from_ref),
+        _ => None,
+    }
 }
 
 #[test]
@@ -387,7 +586,7 @@ fn a_disabled_owner_answers_only_at_its_dispatch_position() {
         }
         fn use_without_item(
             &self,
-            _: &mut dyn ServerHost,
+            _: HostSide<'_>,
             _: &mut UseWithoutItemEvent<'_>,
         ) -> Option<InteractionResult> {
             self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -413,7 +612,7 @@ fn a_disabled_owner_answers_only_at_its_dispatch_position() {
         });
         let mut answer = None;
         dispatch_use_without_item(
-            &mut TestHost,
+            HostSide::Server(&mut TestHost),
             BlockState::new(BlockKey::Test, 0),
             &BlockClick(&()),
             &mut answer,
@@ -569,21 +768,10 @@ impl BlockEntityPart for Mod {
     fn block_entity_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
     }
-    fn menu_button(&self, _: &mut dyn ServerHost, event: &mut MenuButtonEvent<'_>) {
-        assert_eq!(event.context.player, 123);
-        assert_eq!(event.context.player_entity_id, 42);
-        assert_eq!(event.context.pos, [1, 2, 3]);
-        assert_eq!(event.context.id, 9);
-        assert_eq!(event.entity.id(), "machine");
-        event.entity.data.push(9);
-        *event.carried = Some(ItemStack {
-            item: "bucket".into(),
-            count: 1,
-        });
-    }
     fn block_entity_submit(&self, _: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
         assert_eq!(event.pos, [1, 2, 3]);
         assert_eq!(event.block, "example:machine");
+        assert_eq!(event.entity.id(), "example:subject");
         event.draw.mark(self.id);
     }
 }
@@ -591,13 +779,35 @@ impl MenuPart for Mod {
     fn menu_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
     }
+    fn menu_button(&self, event: &mut MenuButtonEvent<'_>) {
+        assert_eq!(event.context.player, 123);
+        assert_eq!(event.context.player_entity_id, 42);
+        assert_eq!(event.context.id, 9);
+        let pos = event.context.pos;
+        if event
+            .subject
+            .with_view(|entity| {
+                assert_eq!(pos, Some([1, 2, 3]));
+                assert_eq!(entity.id(), "machine");
+                entity.data.push(9);
+            })
+            .is_none()
+        {
+            assert_eq!(pos, None);
+        }
+        *event.carried = Some(ItemStack {
+            item: "bucket".into(),
+            count: 1,
+        });
+    }
     fn menu_slot_rules(&self, _: &dyn Host, event: &mut MenuSlotRulesEvent<'_>) {
         // The context arrives as the game passed it: who, where and the other slots.
         let context = event.context;
         assert_eq!((context.player, context.pos), (Some(7), Some([1, 2, 3])));
         assert_eq!(event.container, MenuContainer::Grid);
-        assert_eq!(context.slots.len(), 2);
-        assert!(context.slots[1][0].is_none() && context.slots[1][1].is_some());
+        assert!(context.slot(MenuContainer::Grid, 0).is_none());
+        let stack = context.slot(MenuContainer::Grid, 1).unwrap();
+        assert_eq!((stack.item.as_ref(), stack.count), ("planks", 4));
         event.may_place = false;
         event.max_stack = self.id;
     }
@@ -606,11 +816,7 @@ impl EntityPart for Mod {
     fn entity_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
     }
-    fn general_entity_tick(
-        &self,
-        _host: &mut dyn ServerHost,
-        event: &mut GeneralEntityTickEvent<'_>,
-    ) {
+    fn general_entity_tick(&self, event: &mut GeneralEntityTickEvent<'_>) {
         assert_eq!(event.kind, "mymod:robot");
         self.calls.lock().unwrap().push(self.id);
     }
@@ -619,8 +825,8 @@ impl ItemPart for Mod {
     fn item_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
     }
-    fn tooltip(&self, _: &dyn ClientHost, event: &mut TooltipEvent<'_>) {
-        event.lines.push((Text, self.id));
+    fn tooltip(&self, _: &dyn ClientHost, event: &mut TooltipEvent<'_, '_>) {
+        event.lines.push((Text, self.id)).unwrap();
     }
     fn use_on(&self, _: HostSide<'_>, _: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         self.calls.lock().unwrap().push(self.id);
@@ -678,16 +884,23 @@ impl Hooks for Mod {
     fn level_tick_pre(&self, _: HostSide, _: &mut LevelTickPreEvent) {
         self.calls.lock().unwrap().push(self.id);
     }
-    fn zoom(&self, _: &dyn ClientHost, _: &mut ZoomEvent) -> Option<Zoom> {
+    fn prepare_item_craft(
+        &self,
+        _: &mut dyn ServerHost,
+        _: &mut PrepareItemCraftEvent<'_>,
+    ) -> Option<ItemStack> {
         self.calls.lock().unwrap().push(self.id);
-        Some(Zoom(self.id))
+        Some(ItemStack {
+            item: "test:crafted".into(),
+            count: self.id,
+        })
     }
     fn living_incoming_damage(
         &self,
         _: &mut dyn HitHost,
         event: &mut LivingIncomingDamageEvent<'_>,
     ) -> Flow {
-        event.container.0 = event.container.0 * 2.0 + self.id as f32;
+        *event.container.0 = *event.container.0 * 2.0 + self.id as f32;
         if self.id == 2 {
             Flow::Cancel
         } else {
@@ -702,7 +915,31 @@ fn part(id: u32, calls: &Arc<Mutex<Vec<u32>>>) -> &'static Mod {
     })
 }
 
+// The vocabulary's own list type, so a list hook's fixture drives the real journal; the
+// fixtures use only part of it.
+#[allow(dead_code)]
+mod hook_list {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../sunrise-mod-vocab/src/hook_list.rs"
+    ));
+}
 mod stubs {
     pub(super) use super::generated::mod_api::LivingRef;
-    pub(super) use crate::tests::mod_api::mod_api::{BlockEntityTickReply, DamageContainer};
+    pub(super) use super::hook_list::{HookList, HookListJournal, HookListStorage};
+    pub(super) use crate::tests::mod_api::mod_api::DamageContainer;
+}
+mod crate_root {
+    // Dispatch fixtures isolate ordering; the vocabulary's own tests cover what the client
+    // validators refuse. One module for every client hook's validator.
+    mod client {
+        pub(crate) mod hud_layout {
+            pub(crate) fn validate_hotbar_attack_indicator_progress(
+                _: &f32,
+                _: &f32,
+            ) -> Result<(), &'static str> {
+                Ok(())
+            }
+        }
+    }
 }

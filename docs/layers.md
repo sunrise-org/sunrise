@@ -79,15 +79,19 @@ Vanilla Minecraft: Java Edition 26.3, and nothing else.
 ### Portable crates
 
 `sunrise-core`, `sunrise-world`, `sunrise-protocol`, `sunrise-items`, `sunrise-command`, `sunrise-client-core`
-and `sunrise-assets` hold vanilla's rules and data with no desktop in them. `sunrise-threads` and
-`sunrise-guest-stack` provide the desktop-free execution plumbing: worker scheduling, sampling and stack
-reservations, and `sunrise-java-properties` reads and writes Java-properties files with the standard library alone. These portable crates have no window, GPU, sound, gamepad or clipboard library, no HTTP client,
+and `sunrise-assets` hold vanilla's rules and data with no desktop in them. `sunrise-threads` provides worker
+scheduling and sampling, and `sunrise-java-properties` reads and writes Java-properties files with the standard
+library alone. These portable crates have no window, GPU, sound, gamepad or clipboard library, no HTTP client,
 and no engine crate outside the portable list. The platform sits on the desktop engine
 (`wgpu`, `winit`, `cpal`), which a handheld console or a browser can't run, so a port there builds on these crates
 instead. They stay that way: the layer check fails when one takes `winit`, `wgpu`, `cpal`, `gilrs`, `arboard` or
-`ureq`, or an engine crate outside the list (#13002). Gameplay itself still lives in `sunrise-client`; step P of
+`ureq`, or an engine crate outside the list (#13002). Most gameplay still lives in `sunrise-client`; step P of
 the [plan](#plan) moves it into `sunrise-gameplay` (what the server jar holds) and `sunrise-client-gameplay`
-(client only) over time. `sunrise-gameplay` is not on the list yet: `portable.pending` in `tools/layers.json`
+(client only) over time. Done so far (#2210, waves 1 and 2): the modules that need no `Game`, such as the mob
+families on `MobLevel`, the cat spawner's picks and the wandering trader's state, stats, the block-entity ticker
+helpers, the server halves of `lan/` and `dedicated/`, and occlusion and particle culling. Not done: `LanHost`, the
+types `World`, `ChunkMap`, `Mob` and `ItemEntity`, level events and the dispatchers, the custom spawners' dispatch and
+the village siege, and the block-entity tick loop. `sunrise-gameplay` is not on the list yet: `portable.pending` in `tools/layers.json`
 lets it take `sunrise-client-lib` until the types it needs move down, and only ever shrinks.
 
 ## Platform
@@ -162,7 +166,7 @@ Sunrise's own extras and its product, and every built-in address of an outside s
 
 ## Tools
 
-Developer tools that no player runs: `xtask`, `sunrise-bots`, `sunrise-mod-api-gen-tests`, `sunrise-mod-wasm-wire-loopback`, and the Python in
+Developer tools that no player runs: `xtask`, `sunrise-bots`, `sunrise-mod-api-gen-tests`, and the Python in
 `tools/`. They may depend on anything, and no shipped crate depends on them. `cargo-sunrise-mod`, the mod author's
 tool, is one: it fetches and checks Sunrise's signed mod SDK, so it reads `sunrise-addresses` and
 `sunrise-release-sign` beside the engine's mod crates.
@@ -181,11 +185,10 @@ A feature often splits along this rule: the part others build on is platform, an
 is Sunrise (PvP & HUD and replays, [above](#controllers-replays-and-ui-pages)).
 
 The mod interface follows that split too: `sunrise-mod-vocab` is an engine crate, while
-`sunrise-mod-api` preserves the mod-facing paths through re-exports. The build-time generator,
-procedural macros and point-shape parser are engine dependencies of that interface. Sunrise's launcher
-reaches the generator and point-shape parser through `sunrise-platform`'s optional `mod-build` feature.
-The initial extraction also carries dispatch's crash markers, profiling, resource codec, phase access,
-and Parts registration state; it is not yet a stateless or unsafe-free interface ([#2587](https://github.com/arismoko/horizon/issues/2587)).
+`sunrise-mod-api` preserves the mod-facing paths through re-exports. The build-time generator
+and procedural macros are engine dependencies of that interface. The vocabulary holds dispatch and installed
+lookups; the platform owns profiling, resource access and Parts authoring. See the
+[checked state inventory](layering/mod-vocab-state.md).
 
 | I add... | Layer | Where |
 |---|---|---|
@@ -193,7 +196,7 @@ and Parts registration state; it is not yet a stateless or unsafe-free interface
 | A speed-up that keeps vanilla's results | engine | next to the code it speeds up |
 | A call to a Mojang or Microsoft service vanilla makes | engine | `auth.rs`, `realms/`, `skins.rs`, `sunrise-server-files` |
 | A place mods, ports or Sunrise can hook into | engine + platform | an extension point in the engine crate, naming no type from above; its public face in the platform |
-| A mod hook or host interface | engine + platform | `sunrise-mod-vocab` owns the engine vocabulary and dispatch; `sunrise-mod-api` re-exports it for mods and owns guest transport |
+| A mod hook or host interface | engine + platform | `sunrise-mod-vocab` owns the engine vocabulary and dispatch; `sunrise-mod-api` re-exports it for mods and links the native mod to the platform |
 | A mod package format | platform | `sunrise-mod-package` |
 | A shader or resource pack format vanilla doesn't read | platform | `sunrise-shaders`, `sunrise-optifine`, `sunrise-polytone`, or a new platform crate |
 | Controller support: a device, bindings, glyphs, pad menus | platform | the pad modules, on the engine's input hooks ([Controllers](#controllers-replays-and-ui-pages)) |
@@ -238,8 +241,7 @@ that. sunrise-plain becomes a plain build of this repository.
 **Licence.** The project's licence is being decided (the poll ends around 2026-11-10); the Sunrise repository's
 licence follows from it. If this repository becomes GPL, the official game links the Sunrise crates into the same
 executable as the engine and the platform, so the Sunrise layer must be GPL-compatible too: no closed native code in
-it. Mods loaded as WebAssembly run as separate modules, not linked into the executable, so they could stay closed
-(duckybertduck's reading; the licence decision settles it).
+it.
 
 **Every official download includes it.** These paths must ship the Sunrise layer:
 
@@ -265,6 +267,12 @@ The seam's points 1-3 above, as they work today (layer plan M5).
 | `sunrise-platform` | platform | `sunrise_platform::hooks`: `Hooks`, `Started`, `register`, without the dispatch |
 | `sunrise-game` | platform | The game for an executable to start: `sunrise_game::main()`, the allocator, the mod API mark. The platform's own parts register here as they leave the engine (M6) |
 | `sunrise-official` | Sunrise | The official executable: `register()` adds the Sunrise crates' hooks, then it runs `sunrise_game::main()` |
+
+If you embed the game in your own executable, remove calls to and imports of the retired
+`sunrise_game::prepare_main_stack`, `sunrise_platform::prepare_main_stack` and
+`sunrise_mod_host::prepare_main_stack` re-exports. Register your hooks as before, then call
+`sunrise_game::main()`. On Windows, reserve the main stack at your executable's link as the
+[game build does](release-flow.md#builds).
 
 A Sunrise crate that runs in the game:
 
@@ -300,7 +308,7 @@ context for HUD and chat overlays, a settings page) comes with that type's platf
 that belongs to one subsystem (an input source, the compositor) lives in the engine crate that owns it, with the
 same shape: registered before the game runs, read-only after.
 
-**What players get.** The release builds (`game-build.yml`, so the nightly and the release; `tools/ci/build-musl.sh`)
+**What players get.** The release builds (`game-build.yml`, so the nightly and the release)
 build `sunrise-official` and ship it as `sunrise-client`, the name the launcher and players know. The fixed client
 executable in the prebuilt SDK links the same official layer and calls `sunrise_official::register()` before starting
 with native mods. The dedicated server build (`sunrise-engine`)
@@ -310,16 +318,17 @@ sunrise-client`, the harnesses and sunrise-plain build, has none either. The fir
 
 ## Platform registries
 
-The spec for the three registries that let a platform or Sunrise crate add settings, pages and HUD drawing without
-an engine file naming it. Controllers, replays (M6) and Sunrise's extras (M5) move out on them.
+The spec for the four registries that let a platform or Sunrise crate add settings, pages, HUD drawing and title
+screen buttons without an engine file naming it. Controllers, replays (M6) and Sunrise's extras (M5) move out on
+them.
 Status: each registry lands in its own PR (layer plan M5, seam): the settings store (#14036), pages (#14070:
 `SunriseSettings` and every row but `Slider`; #14110: `Slider` and `tooltip`; `Title` and `Pause` next), the HUD
-hook (#14081), `seat()` (#14096).
+hook (#14081), `seat()` (#14096), the title screen buttons (#2535).
 
-**One shape for all three.** As with `Hooks` above:
+**One shape for all four.** As with `Hooks` above:
 
 - The trait and its `register` are in `sunrise-hooks` (engine; no dependencies, so it names no type from above).
-  `sunrise-platform` re-exports them as `sunrise_platform::{settings, pages, hud}`. They take plain data
+  `sunrise-platform` re-exports them as `sunrise_platform::{settings, pages, hud, title}`. They take plain data
   (strings, numbers, translation keys) and no engine type. `sunrise-platform` stays light because the launcher
   and the telemetry server build it.
 - A crate registers a `&'static` value before the game runs (`sunrise-official`'s `register()` for Sunrise,
@@ -539,6 +548,31 @@ fn draw(&self, c: &dyn Container, canvas: &mut dyn hud::Canvas);                
 - The only text is a stack's shown name. The rest is ids and numbers, so the API names no engine type
   (`ItemStack` stays in the engine).
 
+### Title screen buttons (`sunrise_platform::title`)
+
+The title registry, shaped like the ones above: full-width buttons on the title screen, each on its own row below
+Minecraft Realms, as NeoForge adds Mods. The engine's title code names none of them: the platform's mod host adds
+Mods (`sunrise-mod-host`'s `mods_button.rs`), shown while one or more mods are installed, with its label in the
+same crate's lang files, registered beside the button.
+
+```rust
+pub struct Title { pub mods: usize }            // what the screen knows: packages in the mods folder
+pub enum Opens { Mods }                         // the engine screen a press opens
+pub trait Button: Sync {
+    fn label(&self) -> &'static str;            // a translation key
+    fn shown(&self, title: &Title) -> bool;     // asked each time the buttons lay out
+    fn opens(&self) -> Opens;
+}
+pub const FIRST_ID: u8 = 200;                   // each registration takes the next main-menu id
+pub const MAX_BUTTONS: usize = 56;              // and `register` refuses one with no id left
+```
+
+- Rows keep the order buttons registered in, and a press carries the row's id, so it resolves the registration it
+  selected without asking `shown` again. The icon row, Options... and Quit Game move down a row for each shown
+  button, and lift on a short screen so they stay above the copyright line; a screen too short for the lifted
+  block to also clear the logo and edition banner shows fewer rows — the ones that fit.
+- With no button shown the title screen is vanilla's.
+
 ### Lang files (`sunrise_platform::lang`)
 
 A crate keeps the text for its keys in its own folder, `crates/<name>/assets/lang/<code>.json`, with the same
@@ -644,7 +678,8 @@ Rust and finds every host. It skips tests, placeholders (`example.com`, `*.test`
 
 - `homes`: the list file;
 - `vanilla`: vanilla's endpoints, allowed anywhere;
-- `not_addresses`: strings that look like hosts but are not contacted, each with its reason;
+- `not_addresses`: strings that look like hosts but are not contacted, each with its reason. A `path host`
+  entry applies only in that file;
 - `allowed`: today's addresses outside the list file, as "path host".
 
 `allowed` only shrinks. A branch may move an entry with its code, but it may not add a host or grow the list.
@@ -657,7 +692,7 @@ Vanilla's endpoints (engine, the same as Java Edition):
 | `textures.minecraft.net` | skins and capes | `skins.rs` |
 | `pc.realms.minecraft.net`, `java.frontend.realms.minecraft-services.net` | Realms | `realms/client.rs` |
 | `aka.ms/…` | vanilla's help links (accessibility, moderation, EULA, Realms terms), opened only on a click | `game/options.rs`, `game/screens.rs`, `ban_notice.rs`, `realms.rs`, `eula.rs` |
-| `libraries.minecraft.net`, `piston-meta.mojang.com`, `resources.download.minecraft.net` | the vanilla jars, libraries and assets | `sunrise-prepare`, launcher |
+| `libraries.minecraft.net`, `piston-meta.mojang.com`, `launchermeta.mojang.com`, `piston-data.mojang.com`, `resources.download.minecraft.net` | vanilla jars, the Java runtime, libraries and assets | `sunrise-prepare`, launcher |
 
 Sunrise's own and third-party addresses (Sunrise layer):
 
@@ -666,8 +701,7 @@ Sunrise's own and third-party addresses (Sunrise layer):
 | `playsunrise.net/perf`, `playsunrise.net/api/perf/captures` | the performance viewer Open shows a saved capture in, and the upload behind Share (`SUNRISE_PERF_VIEWER`, `SUNRISE_PERF_CAPTURES` override them) | `sunrise-addresses`, used by `sunrise-perf-share` |
 | `telemetry.playsunrise.net` | opt-in telemetry, the "I'm playing" ping, benchmark uploads | `sunrise-addresses` (#12993) |
 | `stun.cloudflare.com`, `stun.l.google.com` | Play with Friends NAT discovery | `sunrise-addresses` (#12993) |
-| `sunrise-org.github.io/sunrise-mods`, `github.com/sunrise-org/sunrise-mods`, `playsunrise.net/mods` | Sunrise's mod registry: the launcher's index, icons and screenshots, report form and project pages (`SUNRISE_MOD_INDEX` overrides the index) | `sunrise-launcher-addresses` in the launcher repository; `cargo-sunrise-mod` uses the Pages base URL to build the index |
-| `horizon-rust.github.io/horizon-mods`, `github.com/horizon-rust/horizon-mods` | Horizon's mod registry, index and files: the registry tool's defaults and the submission service's | `sunrise-mods/src/index*.rs`, `cargo-sunrise-mod`, `sunrise-mod-registry` |
+| `sunrise-org.github.io/sunrise-mods`, `github.com/sunrise-org/sunrise-mods`, `playsunrise.net/mods` | Sunrise's mod registry: index, mirrored release assets, icons and screenshots, report form and project pages (`SUNRISE_MOD_INDEX` overrides the index) | `sunrise-launcher-addresses` in the launcher repository; `cargo-sunrise-mod` reads `sunrise_addresses::MOD_REGISTRY_INDEX` and `MOD_REGISTRY_METADATA`; `sunrise_mod_package::index` (`REGISTRY_REPO`, `FILE_HOST`) supplies the registry release defaults for `sunrise-mod-registry` |
 | `api.modrinth.com`, `cdn.modrinth.com` | the in-game resource pack browser, modpack porting | `pack_browser.rs`, `sunrise-port-pack` |
 | `github.com`, `raw.githubusercontent.com`, `gitlab.com`, `maven.neoforged.net` | modpack porting's sources | `sunrise-port-pack` |
 | `play.playhorizon.dev` | the official Horizon server, which the client identity hook answers for | `sunrise-addresses`, `sunrise-official` |
@@ -678,7 +712,6 @@ Sunrise's own and third-party addresses (Sunrise layer):
 
 These are not addresses:
 
-- `bluemap_detect.rs` lists dynamic-DNS suffixes, to guess a server's own map host;
 - `sunrise-server/src/discord.rs` lists the hosts a webhook URL may have;
 - the Windows, Apple and SOAP schema URLs in manifests and requests, and the UPnP multicast group.
 
@@ -712,7 +745,7 @@ mechanical steps (checks, M1–M4) continue meanwhile. M5 and M6 started on 2026
 | M4 | Cosmetics leave `sunrise-client-render` (#13094); Sunrise later removed them, with the player-model hooks they drew through | render → cosmetics | #13094, merged; then removed |
 | M5 | Sunrise's in-game parts (extras, Discord, Friends, ping, benchmark upload) leave `sunrise-client` for Sunrise crates linked into the official build through platform hooks | client, client-lib → friends, telemetry, bench | started 2026-11-09 |
 | M6 | The engine crates stop depending on platform crates: the renderer's shader-pack, pack-format, HDR and theme code moves behind engine extension points; the mod host and agent control move to platform crates; controllers, replay recording and the UI page API move to platform crates on the engine's input-source and screen hooks; the launcher and `sunrise-server` reach the engine through platform API (done, #13905) | the engine → platform and Sunrise → engine exceptions | started 2026-11-09; HDR's part with NikitaMGrimm, below |
-| P | Optional, longer: gameplay into the portable crates. `Game` holds the world and its presentation (renderer, screens, particles, sound): split its state module by module, turn gameplay's direct particle and sound calls into level events as vanilla's server sends them, then move each clean module into `sunrise-gameplay` (server side) or `sunrise-client-gameplay` (client only) | | any time, small PRs |
+| P | Optional, longer: gameplay into the portable crates. `Game` holds the world and its presentation (renderer, screens, particles, sound): split its state module by module, turn gameplay's direct particle and sound calls into level events as vanilla's server sends them, then move each clean module into `sunrise-gameplay` (server side) or `sunrise-client-gameplay` (client only); waves 1 and 2 of #2210 moved the modules that need no `Game`, and `LanHost`, `World`, `ChunkMap`, `Mob`, `ItemEntity` and the level events wait for wave 3+ | | any time, small PRs |
 | R | The Sunrise layer moves to its own repository and ships in every official download (the table above) | | after the split, Ludovic's call |
 
 HDR in M6: moving HDR behind engine extension points moves the frame pipeline (float targets, tone mapping,
@@ -722,15 +755,6 @@ by default), so the pipeline moves once. HDR off stays bit-exact.
 The mod API work on arismoko/horizon lands upstream as part of the platform. The API owns its types,
 `sunrise-mod-runtime` gets no game dependency, and its CI property check stays as a stricter check inside the
 platform.
-
-The portable engine crate `sunrise-engine-slots` owns the final registration seal socket
-and the generated point records, their copy-in constructors, typed dispatchers and activity table.
-The host installs its seal provider before engine startup and registers native API listeners
-after dependency ordering and installation. At sealing, `sunrise-mod-points` installs the
-set-once dispatch provider before publishing activity flags. Ordering, owner guards,
-replacement authority and listener dispatch remain in the platform registry. Staged point
-sites name only engine-owned paths; staging does not inject point dependencies into engine manifests.
-The seal refuses repeat or re-entrant sealing and late provider installation.
 
 Engine crates import `sunrise-mod-vocab` as `mod_api`. Their test-only
 `mod_platform` dependency reaches `sunrise-mod-api`; dev-dependencies are exempt

@@ -4,7 +4,7 @@
 //! as vanilla's `submit` does (no block-entity placement transform) and
 //! reports `getExtents` over the same posed parts.
 use super::{Foil, ItemQuad, ItemRenderer, ItemSink, SpecialHost, argb};
-use crate::{block_entity_render::ModelPart, hud::Rect, mobs::EntityModelDocument};
+use crate::{block_entity_render::ModelPart, camera::joml, hud::Rect, mobs::EntityModelDocument};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use std::{collections::HashMap, f32::consts::PI, path::Path};
@@ -61,7 +61,26 @@ pub(super) fn load_parts(root: &Path) -> HashMap<String, ModelPart> {
 pub(super) fn load_parts_from_document(
     document: &EntityModelDocument,
 ) -> HashMap<String, ModelPart> {
-    load_parts_from_value(document.value())
+    fn render_part(part: crate::mobs::Part) -> ModelPart {
+        ModelPart {
+            pose: part.pose,
+            polygons: part
+                .polygons
+                .into_iter()
+                .map(|poly| poly.vertices)
+                .collect(),
+            children: part
+                .children
+                .into_iter()
+                .map(|mut child| (std::mem::take(&mut child.name), render_part(child)))
+                .collect(),
+        }
+    }
+    LAYERS
+        .iter()
+        .chain(COPPER_GOLEM_LAYERS.iter())
+        .filter_map(|(key, layer)| Some(((*key).to_owned(), render_part(document.model(layer)?))))
+        .collect()
 }
 
 fn load_parts_from_value(all: &Value) -> HashMap<String, ModelPart> {
@@ -95,6 +114,19 @@ impl ItemSink for OitEntity<'_> {
     }
 }
 
+/// Marks every quad passed on as drawn with `RenderTypes.bannerPattern` (`cull = true`,
+/// `BlendFunction.TRANSLUCENT`, no depth writes, no alpha cutout).
+struct BannerPattern<'a>(&'a mut dyn ItemSink);
+impl ItemSink for BannerPattern<'_> {
+    fn quad(&mut self, quad: ItemQuad) {
+        self.0.quad(ItemQuad {
+            cull_back: true,
+            banner_pattern: true,
+            ..quad
+        });
+    }
+}
+
 /// A pose override for a named part (`setupAnim`).
 type Adjust<'a> = &'a dyn Fn(&str, &mut [f32; 9]);
 fn none(_: &str, _: &mut [f32; 9]) {}
@@ -116,6 +148,8 @@ fn draw(
     sprite: Rect,
     color: u32,
     foil: Foil,
+    entity_glint: bool,
+    glint_rect: Option<Rect>,
     sink: &mut dyn ItemSink,
 ) {
     let mut p = part.pose;
@@ -146,38 +180,66 @@ fn draw(
                 ]
             }),
             foil_uv: poly.map(|v| [v[3], v[4]]),
-            gui_glint_uv: None,
+            gui_glint_uv: glint_rect
+                .map(|r| poly.map(|v| [r.u0 + (r.u1 - r.u0) * v[3], r.v0 + (r.v1 - r.v0) * v[4]])),
             normal,
             color,
             foil,
+            entity_glint,
             light_emission: 0,
             cull_back: false,
             translucent: false,
             oit: false,
+            banner_pattern: false,
         });
     }
     for (child_name, child) in &part.children {
-        draw(child, child_name, m, adjust, sprite, color, foil, sink);
+        draw(
+            child,
+            child_name,
+            m,
+            adjust,
+            sprite,
+            color,
+            foil,
+            entity_glint,
+            glint_rect,
+            sink,
+        );
     }
 }
-/// `ModelPart.getExtentsForGui` from an identity pose.
-fn extents_of(part: &ModelPart, name: &str, parent: Mat4, adjust: Adjust, out: &mut Vec<Vec3>) {
+/// `ModelPart.getExtentsForGui` from an identity pose, posed and transformed as JOML does
+/// (`translateAndRotate`: the rotation only when one is set, the scale only when not 1).
+fn extents_of(
+    part: &ModelPart,
+    name: &str,
+    parent: &joml::Mat4,
+    adjust: Adjust,
+    out: &mut Vec<Vec3>,
+) {
     if part.polygons.is_empty() && part.children.is_empty() {
         return;
     }
     let mut p = part.pose;
     adjust(name, &mut p);
-    let m = part_matrix(parent, &p);
+    let mut m = *parent;
+    m.translate(p[0] / 16.0, p[1] / 16.0, p[2] / 16.0);
+    if p[3] != 0.0 || p[4] != 0.0 || p[5] != 0.0 {
+        m.rotate(joml::Quat::rotation_zyx(p[5], p[4], p[3]));
+    }
+    if p[6] != 1.0 || p[7] != 1.0 || p[8] != 1.0 {
+        m.scale(p[6], p[7], p[8]);
+    }
     for poly in &part.polygons {
         for v in poly {
-            let q = m.transform_point3(Vec3::new(v[0], v[1], v[2]) / 16.0);
+            let q = Vec3::from_array(m.transform_position([v[0] / 16.0, v[1] / 16.0, v[2] / 16.0]));
             if !out.contains(&q) {
                 out.push(q);
             }
         }
     }
     for (child_name, child) in &part.children {
-        extents_of(child, child_name, m, adjust, out);
+        extents_of(child, child_name, &m, adjust, out);
     }
 }
 fn child<'a>(part: &'a ModelPart, name: &str) -> Option<&'a ModelPart> {
@@ -324,10 +386,10 @@ fn statue_layer(pose: &str) -> &'static str {
 /// `SpecialModelRenderer.getExtents`.
 pub(super) fn extents(renderer: &ItemRenderer, model: &SpecialModel) -> Vec<Vec3> {
     let mut out = Vec::new();
-    let id = Mat4::IDENTITY;
+    let id = joml::Mat4::IDENTITY;
     let mut add = |key: &str, adjust: Adjust| {
         if let Some(part) = renderer.part(key) {
-            extents_of(part, "root", id, adjust, &mut out);
+            extents_of(part, "root", &id, adjust, &mut out);
         }
     };
     match &model.kind {
@@ -357,7 +419,7 @@ pub(super) fn extents(renderer: &ItemRenderer, model: &SpecialModel) -> Vec<Vec3
                 // `neck`, `top` and `bottom` are posed from an identity stack.
                 for name in ["neck", "top", "bottom"] {
                     if let Some(part) = child(base, name) {
-                        extents_of(part, name, id, &none, &mut out);
+                        extents_of(part, name, &id, &none, &mut out);
                     }
                 }
             }
@@ -443,15 +505,27 @@ pub(super) fn submit_banner_result(
     let Some(flag) = renderer.part("standing_banner_flag") else {
         return;
     };
-    let mut part = |texture: &str, color: u32| {
+    let part = |texture: &str, color: u32, target: &mut dyn ItemSink| {
         if let Some(r) = sprites.get(texture).copied() {
-            draw(flag, "root", pose, &flag_pose, r, color, Foil::None, sink);
+            draw(
+                flag,
+                "root",
+                pose,
+                &flag_pose,
+                r,
+                color,
+                Foil::None,
+                false,
+                None,
+                target,
+            );
         }
     };
-    part("entity/banner/banner_base", argb(-1));
-    part("entity/banner/base", dye(base));
+    part("entity/banner/banner_base", argb(-1), sink);
+    let mut pattern_sink = BannerPattern(sink);
+    part("entity/banner/base", dye(base), &mut pattern_sink);
     for (texture, color) in layers.iter().take(16) {
-        part(texture, dye(color));
+        part(texture, dye(color), &mut pattern_sink);
     }
 }
 
@@ -476,7 +550,18 @@ pub(super) fn submit_book(
     };
     // forAnimation at time 0: (sin(0) * 0.1 + 1.25) * open.
     let pose_for = book_pose(1.25 * open, page1, page2);
-    draw(book, "root", pose, &pose_for, r, argb(-1), Foil::None, sink);
+    draw(
+        book,
+        "root",
+        pose,
+        &pose_for,
+        r,
+        argb(-1),
+        Foil::None,
+        false,
+        None,
+        sink,
+    );
 }
 
 /// `SpecialModelRenderer.submit`.
@@ -494,7 +579,7 @@ pub(super) fn submit(
     let white = argb(-1);
     let mut part = |key: &str, adjust: Adjust, texture: &str, color: u32, foil: Foil| {
         if let (Some(p), Some(r)) = (renderer.part(key), sprites.get(texture).copied()) {
-            draw(p, "root", pose, adjust, r, color, foil, sink);
+            draw(p, "root", pose, adjust, r, color, foil, false, None, sink);
         }
     };
     match &model.kind {
@@ -579,13 +664,20 @@ pub(super) fn submit(
                     r,
                     white,
                     Foil::None,
+                    false,
+                    None,
                     &mut OitEntity(sink),
                 );
             }
         }
         SpecialKind::Trident => {
             let foil = if has_foil { Foil::Standard } else { Foil::None };
-            part("trident", &none, "entity/trident/trident", white, foil);
+            if let (Some(p), Some(r)) = (
+                renderer.part("trident"),
+                sprites.get("entity/trident/trident").copied(),
+            ) {
+                draw(p, "root", pose, &none, r, white, foil, true, None, sink);
+            }
         }
         SpecialKind::Banner { color, wall } => {
             let (main, flag) = if *wall {
@@ -602,16 +694,39 @@ pub(super) fn submit(
                 Foil::None,
             );
             // `submitPatterns`: the base layer in the banner's colour, then up to 16 layers.
-            part(
-                flag,
-                &flag_pose,
-                "entity/banner/base",
-                dye(color),
-                Foil::None,
-            );
-            for (pattern, color) in pattern_layers(argument).into_iter().take(16) {
-                if let Some(t) = pattern_texture(host, true, &pattern) {
-                    part(flag, &flag_pose, &t, dye(&color), Foil::None);
+            if let Some(p) = renderer.part(flag) {
+                let mut pattern_sink = BannerPattern(sink);
+                if let Some(r) = sprites.get("entity/banner/base").copied() {
+                    draw(
+                        p,
+                        "root",
+                        pose,
+                        &flag_pose,
+                        r,
+                        dye(color),
+                        Foil::None,
+                        false,
+                        None,
+                        &mut pattern_sink,
+                    );
+                }
+                for (pattern, color) in pattern_layers(argument).into_iter().take(16) {
+                    if let Some(t) = pattern_texture(host, true, &pattern)
+                        && let Some(r) = sprites.get(&t).copied()
+                    {
+                        draw(
+                            p,
+                            "root",
+                            pose,
+                            &flag_pose,
+                            r,
+                            dye(&color),
+                            Foil::None,
+                            false,
+                            None,
+                            &mut pattern_sink,
+                        );
+                    }
                 }
             }
         }
@@ -624,27 +739,46 @@ pub(super) fn submit(
             } else {
                 "entity/shield/shield_base_nopattern"
             };
-            // Without patterns: `entitySolidGlint`. With them, vanilla draws
-            // `patternedShieldGlint` last, the glint alone over the finished
-            // plate. A foil quad here is its texture with the glint over it
-            // (the GUI adds the glint masked by the layer's alpha, the world
-            // shader composites it), so every layer carries the foil: each
-            // pixel ends with the glint once, over the layers below it.
-            // Redrawing the base with the foil would cover the patterns.
-            let foil = if has_foil { Foil::Standard } else { Foil::None };
-            part("shield", &none, base, white, foil);
-            if has_patterns {
-                part(
-                    "shield",
-                    &none,
+            let glint_rect = has_foil
+                .then(|| {
+                    let atlas = renderer
+                        .shield_glint_atlas
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    atlas.get_or_missing(base)
+                })
+                .flatten();
+            let shield_part = |texture: &str,
+                               color: u32,
+                               foil: Foil,
+                               rect: Option<Rect>,
+                               target: &mut dyn ItemSink| {
+                if let (Some(p), Some(r)) = (renderer.part("shield"), sprites.get(texture).copied())
+                {
+                    draw(p, "root", pose, &none, r, color, foil, true, rect, target);
+                }
+            };
+            if !has_patterns {
+                let foil = if has_foil { Foil::Standard } else { Foil::None };
+                shield_part(base, white, foil, glint_rect, sink);
+            } else {
+                shield_part(base, white, Foil::None, None, sink);
+                let mut pattern_sink = BannerPattern(sink);
+                shield_part(
                     "entity/shield/base",
                     dye(base_color.unwrap_or("white")),
-                    foil,
+                    Foil::None,
+                    None,
+                    &mut pattern_sink,
                 );
                 for (pattern, color) in patterns.into_iter().take(16) {
                     if let Some(t) = pattern_texture(host, false, &pattern) {
-                        part("shield", &none, &t, dye(&color), foil);
+                        shield_part(&t, dye(&color), Foil::None, None, &mut pattern_sink);
                     }
+                }
+                if has_foil {
+                    // `ShieldSpecialRenderer.submit`: one `patternedShieldGlint` pass after patterns.
+                    shield_part(base, white, Foil::GlintOnly, glint_rect, sink);
                 }
             }
         }
@@ -659,7 +793,18 @@ pub(super) fn submit(
             {
                 for name in ["neck", "top", "bottom"] {
                     if let Some(p) = child(base, name) {
-                        draw(p, name, pose, &none, r, white, Foil::None, sink);
+                        draw(
+                            p,
+                            name,
+                            pose,
+                            &none,
+                            r,
+                            white,
+                            Foil::None,
+                            false,
+                            None,
+                            sink,
+                        );
                     }
                 }
             }
@@ -667,7 +812,18 @@ pub(super) fn submit(
                 for (i, name) in ["back", "left", "right", "front"].into_iter().enumerate() {
                     let texture = pot_side(sides[i].as_deref());
                     if let (Some(p), Some(r)) = (child(side_parts, name), sprites.get(&texture)) {
-                        draw(p, name, pose, &none, *r, white, Foil::None, sink);
+                        draw(
+                            p,
+                            name,
+                            pose,
+                            &none,
+                            *r,
+                            white,
+                            Foil::None,
+                            false,
+                            None,
+                            sink,
+                        );
                     }
                 }
             }
@@ -744,6 +900,8 @@ mod tests {
                 sprite,
                 argb(-1),
                 Foil::None,
+                false,
+                None,
                 &mut quads,
             );
             assert_eq!(quads.len(), 1);
@@ -810,20 +968,46 @@ mod tests {
                 ((*t).to_owned(), rect)
             })
             .collect();
-        let drawn = |argument: Value, has_foil: bool| {
-            let mut quads: Vec<ItemQuad> = Vec::new();
-            submit(
-                &renderer,
-                &SpecialModel {
-                    kind: SpecialKind::Shield,
-                },
-                &argument,
-                has_foil,
-                Mat4::IDENTITY,
-                &sprites,
-                &super::super::NoHost,
-                &mut quads,
-            );
+        use super::super::{ItemRenderState, LayerGeometry, LayerRender, LayerTints, NoHost};
+        use sunrise_assets::item_model::{DisplayContext, FoilType};
+        let display = DisplayContext::ThirdPersonRightHand;
+        let drawn = |argument: Value, has_foil: bool, tint: Option<u32>| {
+            let mut state = ItemRenderState {
+                display,
+                layers: vec![LayerRender {
+                    geometry: LayerGeometry::Special {
+                        model: SpecialModel {
+                            kind: SpecialKind::Shield,
+                        },
+                        argument,
+                    },
+                    tints: LayerTints::Owned(Vec::new()),
+                    foil: if has_foil {
+                        FoilType::Standard
+                    } else {
+                        FoilType::None
+                    },
+                    matrix: Mat4::IDENTITY,
+                    particle: "".into(),
+                    uses_block_light: false,
+                    extents: Default::default(),
+                    display,
+                }],
+                oversized_in_gui: false,
+                animated: false,
+                cit_glint: None,
+                hdr_tier: 0,
+                hdr_light: 0,
+                held_tint: None,
+            };
+            if let Some(rgb) = tint {
+                state.set_held_tint(rgb);
+            }
+            let mut quads = Vec::new();
+            state.submit(&renderer, &sprites, &NoHost, Mat4::IDENTITY, &mut quads);
+            quads
+        };
+        let texture_and_foil = |quads: &[ItemQuad]| {
             quads
                 .iter()
                 .map(|q| {
@@ -831,7 +1015,7 @@ mod tests {
                         .iter()
                         .find(|t| sprites[**t].u0 == q.uv[0][0].min(q.uv[1][0]))
                         .unwrap();
-                    (*texture, q.foil)
+                    (*texture, q.foil, q.banner_pattern)
                 })
                 .collect::<Vec<_>>()
         };
@@ -843,26 +1027,41 @@ mod tests {
                 "color": "blue"
             }]
         });
+        let untinted = drawn(banner.clone(), true, None);
         assert_eq!(
-            drawn(banner.clone(), true),
+            texture_and_foil(&untinted),
             [
-                ("entity/shield/shield_base", Foil::Standard),
-                ("entity/shield/base", Foil::Standard),
-                ("entity/shield/stripe_bottom", Foil::Standard),
+                ("entity/shield/shield_base", Foil::None, false),
+                ("entity/shield/base", Foil::None, true),
+                ("entity/shield/stripe_bottom", Foil::None, true),
+                ("entity/shield/shield_base", Foil::GlintOnly, false),
             ]
         );
         assert_eq!(
-            drawn(banner, false),
+            texture_and_foil(&drawn(banner.clone(), false, None)),
             [
-                ("entity/shield/shield_base", Foil::None),
-                ("entity/shield/base", Foil::None),
-                ("entity/shield/stripe_bottom", Foil::None),
+                ("entity/shield/shield_base", Foil::None, false),
+                ("entity/shield/base", Foil::None, true),
+                ("entity/shield/stripe_bottom", Foil::None, true),
             ]
         );
         assert_eq!(
-            drawn(Value::Null, true),
-            [("entity/shield/shield_base_nopattern", Foil::Standard)]
+            texture_and_foil(&drawn(Value::Null, true, None)),
+            [("entity/shield/shield_base_nopattern", Foil::Standard, false)]
         );
+        // Removing green acts on the base and both pattern passes without altering the glint pass.
+        let expected = untinted
+            .into_iter()
+            .map(|q| ItemQuad {
+                color: if q.foil == Foil::GlintOnly {
+                    q.color
+                } else {
+                    q.color & 0xFFFF_00FF
+                },
+                ..q
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(drawn(banner, true, Some(0xFF_00_FF)), expected);
     }
     /// `DecoratedPotRenderer` draws every part with `RenderTypes.entitySolid`,
     /// whose pipeline culls back faces: the pot's flat `top` and `bottom`

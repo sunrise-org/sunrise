@@ -162,10 +162,15 @@ fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
     for axis in ["x", "y", "z"] {
         tag.insert(axis.into(), Tag::Int(0));
     }
+    let tag = Tag::Compound(tag);
+    // Declared types load with the same storage shape as placed and saved mod entities.
+    let decoded = if declared.is_some() {
+        crate::save::decode_block_entity_for_block(&tag, block)
+    } else {
+        crate::save::decode_block_entity(&tag)
+    };
     // A saved kind the client cannot decode keeps the block's own entity.
-    crate::save::decode_block_entity(&Tag::Compound(tag))
-        .map(|(_, entity)| entity)
-        .or(fallback)
+    decoded.map(|(_, entity)| entity).or(fallback)
 }
 
 /// Client block entities for the generated block entities of a chunk, and the
@@ -228,25 +233,72 @@ mod tests {
             ]
             .into(),
             vec!["test:machine".into()],
+            ["test:machine".into()],
         ))
         .unwrap();
-        let Tag::Compound(nbt) = sunrise_core::nbt::parse_snbt(
-            r#"{id:"minecraft:banner",energy:900L,LootTable:"test:loot",Items:[{Slot:0b,id:"minecraft:stone",count:3}]}"#,
-        ).unwrap().0 else {
-            panic!("not a compound");
-        };
-        for block in ["test:ornate_banner", "test:press"] {
-            let Some(BlockEntity::Mod(entity)) = generated_block_entity(block, &nbt) else {
-                panic!("declared type did not override {block}");
-            };
-            assert_eq!(entity.id(), "test:machine");
-            assert_eq!(entity.nbt.get(&"energy".into()), Some(&Tag::Long(900)));
-            assert_eq!(
-                entity.nbt.get(&"LootTable".into()),
-                Some(&Tag::String("test:loot".into()))
-            );
-            assert_eq!(entity.items[0].as_ref().unwrap().count, 3);
+        struct PressStorage;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for PressStorage {
+            fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+                let press = r.block_key("test:press");
+                r.block_container(
+                    &press,
+                    mod_api::ModContainer {
+                        slots: 256,
+                        ..Default::default()
+                    },
+                );
+            }
         }
+        let mods = vec![mod_api::ModEntry::new("test", Box::new(PressStorage))];
+        mod_platform::testing::with_mods(mods.into(), || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
+            let Tag::Compound(nbt) = sunrise_core::nbt::parse_snbt(
+                r#"{id:"minecraft:banner",energy:900L,LootTable:"test:loot",Items:[{Slot:0b,id:"minecraft:stone",count:3},{Slot:-1b,id:"minecraft:dirt",count:7}]}"#,
+            ).unwrap().0 else {
+                panic!("not a compound");
+            };
+            for block in ["test:ornate_banner", "test:press"] {
+                let generated = generated_block_entity(block, &nbt).unwrap();
+                let BlockEntity::Mod(entity) = &generated else {
+                    panic!("declared type did not override {block}");
+                };
+                assert_eq!(entity.id(), "test:machine");
+                assert_eq!(entity.nbt.get(&"energy".into()), Some(&Tag::Long(900)));
+                assert_eq!(
+                    entity.nbt.get(&"LootTable".into()),
+                    Some(&Tag::String("test:loot".into()))
+                );
+                if block == "test:ornate_banner" {
+                    assert!(entity.items.is_empty());
+                    assert_eq!(entity.nbt.get(&"Items".into()), nbt.get(&"Items".into()));
+                    continue;
+                }
+                assert_eq!(entity.items[0].as_ref().unwrap().count, 3);
+                let expected = ItemStack::new("minecraft:dirt", 7);
+                assert_eq!(
+                    entity.items.get(255).and_then(Option::as_ref),
+                    Some(&expected)
+                );
+                let saved = crate::save::block_entity_encode::encode(
+                    (3, 64, 5),
+                    &generated,
+                    block,
+                    &Default::default(),
+                );
+                let (pos, BlockEntity::Mod(reloaded)) =
+                    crate::save::decode_block_entity_for_block(&saved, block).unwrap()
+                else {
+                    panic!("generated press did not reload as a mod block entity");
+                };
+                assert_eq!(pos, (3, 64, 5));
+                assert_eq!(
+                    reloaded.items.get(255).and_then(Option::as_ref),
+                    Some(&expected)
+                );
+            }
+        });
     }
 
     #[test]

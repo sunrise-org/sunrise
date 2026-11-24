@@ -472,9 +472,9 @@ impl MultiLineEdit {
             crate::widgets::Kind::Field,
         );
         let sprite = if self.focused {
-            "gui/sprites/widget/text_field_highlighted"
+            "widget/text_field_highlighted"
         } else {
-            "gui/sprites/widget/text_field"
+            "widget/text_field"
         };
         ui::nine_slice(
             batch,

@@ -269,7 +269,7 @@ impl Title {
                         };
                         let lit = if on_icon { "_highlighted" } else { "" };
                         for name in names {
-                            let sprite = format!("gui/sprites/world_list/{name}{lit}");
+                            let sprite = format!("world_list/{name}{lit}");
                             batch.sprite_scaled(atlas, &sprite, x, y, 32.0, 32.0, u32::MAX);
                         }
                     }
@@ -317,9 +317,18 @@ impl Title {
             Mode::CreateBuffet { buffet, .. } => {
                 buffet::draw(self, atlas, batch, cursor, buffet, phases)
             }
-            Mode::CreatePreset { .. } => {
+            Mode::CreatePreset { session, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
+                let fallback;
+                let title = match session.title() {
+                    Some(title) => title,
+                    None => {
+                        fallback = preset_editors::preset_label(&session.preset);
+                        &fallback
+                    }
+                };
+                centered(atlas, batch, title, 8.0, u32::MAX);
             }
             Mode::Edit { name, focused, .. } => {
                 self.draw_edit(atlas, batch, (w, h), name, *focused, phases)
@@ -514,10 +523,10 @@ impl Title {
                 crate::widgets::target([x, y, width, BOX]);
                 let hover = (x..x + width).contains(&cursor.0) && (y..y + BOX).contains(&cursor.1);
                 let sprite = match (*erase_cache, hover) {
-                    (true, true) => "gui/sprites/widget/checkbox_selected_highlighted",
-                    (true, false) => "gui/sprites/widget/checkbox_selected",
-                    (false, true) => "gui/sprites/widget/checkbox_highlighted",
-                    (false, false) => "gui/sprites/widget/checkbox",
+                    (true, true) => "widget/checkbox_selected_highlighted",
+                    (true, false) => "widget/checkbox_selected",
+                    (false, true) => "widget/checkbox_highlighted",
+                    (false, false) => "widget/checkbox",
                 };
                 batch.sprite_scaled(atlas, sprite, x, y, BOX, BOX, u32::MAX);
                 batch.text(
@@ -671,7 +680,7 @@ impl Title {
                 crate::ui::nine_slice(
                     batch,
                     atlas,
-                    "gui/sprites/widget/text_field",
+                    "widget/text_field",
                     box_x,
                     box_y,
                     box_w,
@@ -707,10 +716,10 @@ impl Title {
                     .hovered(hover)
                 });
                 let sprite = match (*check, hover) {
-                    (true, true) => "gui/sprites/widget/checkbox_selected_highlighted",
-                    (true, false) => "gui/sprites/widget/checkbox_selected",
-                    (false, true) => "gui/sprites/widget/checkbox_highlighted",
-                    (false, false) => "gui/sprites/widget/checkbox",
+                    (true, true) => "widget/checkbox_selected_highlighted",
+                    (true, false) => "widget/checkbox_selected",
+                    (false, true) => "widget/checkbox_highlighted",
+                    (false, false) => "widget/checkbox",
                 };
                 batch.sprite_scaled(atlas, sprite, x, y, BOX, BOX, u32::MAX);
                 batch.text(
@@ -785,22 +794,14 @@ impl Title {
             let is_focused = self.focused_button == Some(b.id);
             let hover = b.enabled && (inside || is_focused);
             let sprite = if !b.enabled {
-                "gui/sprites/widget/button_disabled"
+                "widget/button_disabled"
             } else if hover {
-                "gui/sprites/widget/button_highlighted"
+                "widget/button_highlighted"
             } else {
-                "gui/sprites/widget/button"
+                "widget/button"
             };
-            // Nine-slice approximation: left and right halves of the 200-wide sprite.
-            if let Some(r) = atlas.sprites.get(sprite).copied() {
-                let half = b.w / 2.0;
-                let mut left = r;
-                left.u1 = r.u0 + (r.u1 - r.u0) * (half / r.w as f32);
-                batch.rect_uv(b.x, b.y, half, 20.0, left, u32::MAX);
-                let mut right = r;
-                right.u0 = r.u1 - (r.u1 - r.u0) * (half / r.w as f32);
-                batch.rect_uv(b.x + half, b.y, half, 20.0, right, u32::MAX);
-            }
+            // `AbstractButton.extractDefaultSprite`: `blitSprite`, as the sprite's `gui.scaling` says.
+            crate::ui::nine_slice(batch, atlas, sprite, b.x, b.y, b.w, 20.0, u32::MAX);
             let color = if b.enabled {
                 u32::MAX
             } else {
@@ -811,7 +812,7 @@ impl Title {
                 // a 15px icon in a 20px button starts at 10 - 7 = 3, not 2.
                 batch.sprite_scaled(
                     atlas,
-                    &format!("gui/sprites/{icon}"),
+                    icon,
                     b.x + (b.w / 2.0).floor() - (size / 2.0).floor(),
                     b.y + 10.0 - (size / 2.0).floor(),
                     size,
@@ -825,7 +826,7 @@ impl Title {
                 // TextAndIcon: `x + width - spriteWidth - 2`, centred in the height.
                 batch.sprite_scaled(
                     atlas,
-                    &format!("gui/sprites/{icon}"),
+                    icon,
                     b.x + b.w - size - 2.0,
                     b.y + 10.0 - (size / 2.0).floor(),
                     size,
@@ -867,9 +868,6 @@ impl Title {
         if let Some((key, rect)) = button_tooltip {
             let lines = atlas.font.split(&Text::translate(key, &[]), 170.0);
             crate::ui::tooltip_menu(batch, atlas, &lines, cursor, rect);
-        }
-        if let Some(toast) = &self.toast {
-            toast.draw(atlas, batch, 0.0);
         }
     }
 }

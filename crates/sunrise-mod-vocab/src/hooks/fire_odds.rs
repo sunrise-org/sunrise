@@ -1,5 +1,4 @@
 //! The `fire_odds` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0215
 
 pub trait Hooks {
     /// How fire treats the block `state` at `pos` on either side
@@ -16,8 +15,7 @@ pub trait Hooks {
     /// isn't asked. Answer only for your own blocks and leave `odds` empty
     /// otherwise; the level is read-only. Asked hundreds of times per fire
     /// tick: keep it short.
-    #[hook(
-        side = "both",
+    #[hook(receiver = "read", dispatch = "flat", side = "both",
         version = 2,
         contract = "replace",
         out = "odds",
@@ -31,5 +29,11 @@ pub trait Hooks {
             "IBlockExtension.isFlammable"
         ]
     )]
-    fn fire_odds();
+    fn fire_odds(
+        dimension: LevelDimension,
+        state: BlockState,
+        pos: BlockPos,
+        face: Direction,
+        odds: &mut Option<(i32, i32)>,
+    );
 }

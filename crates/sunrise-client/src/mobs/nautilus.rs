@@ -14,8 +14,8 @@ use super::{
 use crate::blocks::Fluid;
 use crate::health::DamageLevel;
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use sunrise_core::{geometry::Vec3, random::RandomSource};
-use sunrise_world::move_gate::MoveGate;
 
 // Nautilus state: `tame`/`owner`, the saddle, `head` the body armour,
 // `variant` the zombie's variant (0 temperate, 1 warm), `anim_ticks` the
@@ -167,21 +167,23 @@ fn sound(m: &Mob, name: &'static str, events: &mut Vec<MobEvent>) {
     events.push(MobEvent::Sound(name, m.center(), 1.0, 1.0));
 }
 /// `AbstractNautilus.travelInWater`: its own speed, no fluid drag but 0.9.
-pub fn travel(
+pub(super) fn travel(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
     input: Vec3,
     events: &mut Vec<MobEvent>,
-) -> bool {
-    if !m.fluids.in_water {
-        return false;
-    }
+    pause: bool,
+) -> ControlFlow<super::living::TravelPause> {
     let speed = m.ai.speed;
     m.move_relative(speed, input);
-    m.do_move(w, level, events, &mut MoveGate::new());
-    m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
-    true
+    m.travel_move(w, level, events, pause, |m, _, _, _| {
+        m.set_velocity(Vec3::new(
+            m.velocity.x * 0.9,
+            m.velocity.y * 0.9,
+            m.velocity.z * 0.9,
+        ));
+    })
 }
 /// `tickRidden` and `getRiddenInput`: turn half way to the rider, swim along
 /// their look, faster in water (`getRiddenSpeed`), and dash on the jump.
@@ -566,12 +568,13 @@ impl Goal for Charge {
         let amount = m.attrs.attack_damage;
         cx.events.push(match who {
             Who::Player => {
-                cx.w.route_player_event(MobEvent::AttackPlayer(amount, from))
+                cx.w.route_player_event(MobEvent::AttackPlayer(amount, from, None))
             }
             Who::Mob(id) => MobEvent::AttackMob {
                 target: id,
                 amount,
                 source: super::Damage::mob(m.id, from),
+                remember_target: false,
             },
         });
         let level = |e: &str| {
@@ -657,7 +660,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
 }
 /// `TamableAnimal.addAdditionalSaveData`: owner and ordered Sitting, plus
 /// the saddle, the zombie's variant and the brain's attack cooldown.
-pub fn to_nbt(m: &Mob, map: &mut sunrise_core::nbt::Compound) {
+pub fn to_nbt(m: &Mob, map: &mut crate::entity_nbt::EntityTagWriter) {
     use sunrise_core::nbt::Tag;
     if let Some(owner) = m.extra.owner {
         map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));

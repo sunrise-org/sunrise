@@ -25,6 +25,7 @@ fn translates(source: &str) {
         &stage("void main() { gl_Position = gl_Vertex; }"),
         &stage(source),
         Target::Window,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
     .unwrap_or_else(|e| panic!("{source}\n{e:?}"));
     let info = naga::valid::Validator::new(

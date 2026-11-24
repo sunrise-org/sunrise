@@ -1,3 +1,5 @@
-// The draw-side records `DrawContext::widget_text_field` takes and answers, and the focused box
-// `Hooks::screen_char_typed_pre` hands over.
-pub use crate::client::widgets::{TextEdit, TextFieldLayout, TextFieldView};
+// Mounted screen widgets, button sprites, and the shared text editing core.
+pub use crate::client::widgets::{
+    Button, ButtonSprites, ButtonState, ScreenChild, ScreenWidget, ScreenWidgetId, ScreenWidgets,
+    TextEdit, TextField,
+};

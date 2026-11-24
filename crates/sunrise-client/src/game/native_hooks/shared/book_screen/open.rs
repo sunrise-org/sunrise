@@ -1,114 +1,147 @@
 use super::*;
 
 impl Game<'_> {
-    /// The screen of menu type `menu`: a book-enabled menu's startup-validated
-    /// registered one, which is its block's alone, else what the menu type's
-    /// parts answer `native_screen`. `block` is the mod block whose menu it is.
-    fn menu_screen(&self, menu: &str, block: Option<&str>) -> Option<mod_api::Screen> {
-        let mut screen = mod_api::RecipeBookLayout::registered_screen(menu);
-        if screen.is_some() {
-            // Its book places recipes into its block's grid.
-            return screen.filter(|_| block.is_some());
-        }
-        self.native_screen(menu, block, &mut screen);
-        screen
-    }
-    /// The mod screen of a menu of type `menu` opened at `target`, with the
-    /// mod block whose menu it is: a mod menu type's screen is its type's
-    /// (`menu_screen`) whatever opened it, and a vanilla type gets a mod's
-    /// screen only as the menu of the mod block at `target` that opens it.
-    fn opened_screen(
-        &self,
-        menu: &str,
-        target: Option<Pos>,
-    ) -> Option<(Option<String>, mod_api::Screen)> {
-        let block = target.and_then(|t| self.menu_opener_block(t, menu));
-        if block.is_none() && sunrise_client::containers::mod_menu_type(menu).is_none() {
-            return None;
-        }
-        let screen = self.menu_screen(menu, block.as_deref())?;
-        Some((block, screen))
-    }
-    /// The container slots (of `size`) that the mod's screen for a menu of
-    /// type `menu` opened at `target` does not show: the server's menu does
-    /// not have them either, so a shift-click never moves an item where the
-    /// player cannot see it.
-    pub(in crate::game) fn native_hidden_slots(
-        &self,
-        menu: &str,
-        target: Option<Pos>,
-        size: usize,
-    ) -> Vec<usize> {
-        let Some((_, screen)) = self.opened_screen(menu, target) else {
-            return Vec::new();
-        };
-        (0..size)
-            .filter(|&i| screen.slots.get(i).is_none_or(Option::is_none))
-            .collect()
-    }
     /// The mod block at `pos` when its container opens menu type `menu`, the
-    /// `block` its screen hooks are told. Only when this is the menu that
+    /// `block` its screen factory is told. Only when this is the menu that
     /// block opens: a position outlives the use that set it, so another menu
     /// opened later (a command's, another mod's) is not the last clicked
-    /// machine's. Asked of the block's container, as a client's world has no
-    /// mod containers.
-    fn menu_opener_block(&self, pos: Pos, menu: &str) -> Option<String> {
+    /// machine's. Read the declaration directly, as a client's world has no
+    /// server-side mod container table.
+    pub(in crate::game) fn menu_opener_block(&self, pos: Pos, menu: &str) -> Option<&str> {
         let block = &self
             .res
             .facts()
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name;
-        if block.starts_with("minecraft:") {
-            return None;
-        }
-        let mut container = None;
-        self.native_block_entity_container(block, &mut container);
-        let opens = container.and_then(|c| mod_menu(c.menu.as_deref()?).map(|(m, _)| m));
-        (opens == Some(menu)).then(|| block.to_string())
+        let container = mod_api::__private::parts_installation::block_container(block)?;
+        let (opens, _) = mod_menu(container.menu.as_deref()?)?;
+        (opens == menu).then_some(block.as_ref())
     }
-    /// A menu opened on this client with its slots under `key`, at `target`:
-    /// its screen is `opened_screen`'s. `extra` is what the server sent for
-    /// this window first.
+    /// Stage the current remote opening's screen for the window. Its slots
+    /// are stored under `key`; `extra` was already matched to this opening.
+    /// The packet handler checked for required factories before changing menus.
+    /// False refuses the opening; an ordinary stock menu needs no mod screen.
     pub(in crate::game) fn open_native_screen(
         &mut self,
         key: Pos,
         target: Option<Pos>,
-        window: i32,
-        menu: &str,
+        backing_slots: usize,
         extra: Option<sunrise_protocol::menu_extra::Message>,
-    ) {
-        self.clear_mod_book_placement_screen();
-        self.mod_screen = None;
-        if let Some((block, mut screen)) = self.opened_screen(menu, target) {
-            // Resolve sprite identifiers once at the client declaration boundary.
-            for slot in screen.slots.iter_mut().flatten() {
-                if let Some(icon) = &mut slot.no_item_icon {
-                    let key = sunrise_client::hud::atlas_key_of_gui_sprite(icon);
-                    if !self.gui.atlas.sprites.contains_key(&key) {
-                        let of = block.as_deref().unwrap_or(menu);
-                        log::error!("screen for {of}: unknown empty-slot GUI sprite {icon:?}");
-                        return;
-                    }
-                    *icon = key;
-                }
-            }
-            self.mod_screen = Some(OpenNativeScreen {
-                slot_moves: Default::default(),
-                layout_revision: {
-                    static NEXT: std::sync::atomic::AtomicU64 =
-                        std::sync::atomic::AtomicU64::new(1);
-                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                },
-                key,
-                window,
-                menu: menu.to_owned(),
-                block,
-                screen,
-                data: Vec::new(),
-                extra,
-            });
-            self.begin_mod_book_placement();
-            self.ensure_mod_book_catalog();
+    ) -> bool {
+        if self.is_logical_server() || self.lan_acting.is_some() {
+            return false;
         }
+        let Some(remote) = self.remote.as_ref() else {
+            return false;
+        };
+        let Some((window, name)) = remote.menu.as_ref() else {
+            return false;
+        };
+        let mod_type = sunrise_client::containers::mod_menu_type(name);
+        let block = target.and_then(|pos| self.menu_opener_block(pos, name));
+        let binding = mod_api::RecipeBookLayout::registered(name);
+        let of = block.unwrap_or(name);
+        // A matching payload supplies the position, including an explicit absence.
+        // Otherwise only a verified clicked opener supplies one, never the slot storage key.
+        let pos = extra.as_ref().map_or_else(
+            || {
+                target
+                    .filter(|_| block.is_some())
+                    .map(|(x, y, z)| [x, y, z])
+            },
+            |extra| extra.pos,
+        );
+        let open = mod_api::MenuScreenOpen {
+            window: *window,
+            menu: name,
+            block,
+            pos,
+            title: remote.menu_title_snapshot(),
+            backing_slots,
+            player_slots: mod_type
+                .map_or(36, sunrise_client::containers::ModMenuType::player_slots),
+            data_slots: mod_type.map_or(0, |kind| kind.data_slots),
+            extra: extra.as_ref().map_or(&[], |extra| extra.data.as_slice()),
+        };
+        let created = mod_api::__private::create_menu_screen(self, open);
+        // Opening bytes are construction-only; the result owns its presentation.
+        drop(extra);
+        let Some((owner, created)) = created else {
+            return true;
+        };
+        let mut instance = match created {
+            Ok(Some(instance)) => instance,
+            Ok(None) => {
+                log::warn!("mod {owner} declined to create a screen for {of}");
+                return false;
+            }
+            Err(reason) => {
+                log::error!("mod {owner} screen for {of}: {reason}");
+                return false;
+            }
+        };
+        let screen = instance.layout_mut();
+        if let Some((book, _, _)) = &binding
+            && screen.recipe_book.as_ref() != Some(book)
+        {
+            log::error!("screen for {of}: expected the menu's bound recipe book {book:?}");
+            return false;
+        }
+        if ![screen.width, screen.height]
+            .into_iter()
+            .all(|size| size.is_finite() && size > 0.0)
+            || ![screen.inventory_x, screen.inventory_y]
+                .into_iter()
+                .chain(screen.title_label.into_iter().flatten())
+                .chain(screen.inventory_label.into_iter().flatten())
+                .chain(
+                    screen
+                        .recipe_book_toggle
+                        .into_iter()
+                        .flat_map(|toggle| [toggle.x, toggle.y]),
+                )
+                .all(f32::is_finite)
+        {
+            log::error!("screen for {of}: invalid dimensions or coordinates");
+            return false;
+        }
+        if screen.slots.len() > backing_slots {
+            log::error!("screen for {of}: layout is longer than its {backing_slots} backing slots");
+            return false;
+        }
+        // Every slot uses its backing index; `None` (including omitted trailing
+        // entries) marks an initially inactive slot (`Slot.isActive()`).
+        for (index, slot) in screen.slots.iter().enumerate() {
+            if let Some(slot) = slot
+                && !slot.position.into_iter().all(f32::is_finite)
+            {
+                log::error!("screen for {of}: nonfinite slot {index} coordinates");
+                return false;
+            }
+        }
+        screen.slots.resize_with(backing_slots, || None);
+        let title = remote.menu_title_snapshot().cloned();
+        self.mod_screen = Some(OpenNativeScreen {
+            menu: OpenNativeMenu {
+                key,
+                window: *window,
+                generation: remote.menu.generation,
+                name: name.clone(),
+                title,
+                block: block.map(str::to_owned),
+                pos,
+                mod_type,
+                data: Vec::new(),
+            },
+            slot_moves: Default::default(),
+            layout_revision: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
+            screen: instance,
+            shown: false,
+            detached: false,
+        });
+        true
     }
 }

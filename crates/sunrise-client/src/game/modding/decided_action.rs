@@ -1,6 +1,6 @@
 //! One decision for a hook that is not a pickup click (`stacked_on_other.rs` is the pickup's): the
-//! mod menu's shift-click (`menu_quick_move`) and the click on a menu a mod opened
-//! (`menu_clicked`). The same coordinator, the same savepoint, the same refusal.
+//! mod menu's shift-click (`menu_quick_move`), workstations and trades. The same coordinator, the
+//! same savepoint, the same refusal.
 //!
 //! With no listener the caller makes the ordinary call and nothing here runs. With one, the game
 //! opens an action savepoint, fires the hook, checks that nothing the action read was written
@@ -9,17 +9,13 @@
 //! undone with every write the listener made rolled back.
 use super::*;
 use crate::game::transactions::decision::{
-    self, ActionTarget, GameHost, Identity, InvalidReason, MenuId, Outcome, Reply, Side,
-    StaleReason,
+    self, ActionTarget, GameHost, Identity, InvalidReason, MenuId, Outcome, Reply, StaleReason,
 };
 use mod_api::EntityRef;
 use std::{cell::RefCell, rc::Rc};
 
 /// What a decision reads of the journals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::game) enum Epoch {
-    /// Nothing: the action reads no state a listener could write.
-    Off,
     /// Players' state (inventory, cursor, menu storage). The epoch is one count for all players,
     /// so a write to any player's state makes the decision stale, not only the acting player's: a
     /// cautious refusal, never a partial move. A write to another block, which a mod's move
@@ -27,9 +23,15 @@ pub(in crate::game) enum Epoch {
     Player,
 }
 
+/// The decision's menu owner and the lifecycle identity of its actor and target.
+pub(in crate::game) struct DecidedTarget {
+    pub(in crate::game) route: MenuId,
+    pub(in crate::game) identity: Identity,
+}
+
 #[cfg(test)]
 thread_local! {
-    /// How many times `decided_action` was entered: the no-listener tests prove it stays zero.
+    /// How many times `decided_action_on` was entered: the no-listener tests prove it stays zero.
     pub(in crate::game) static DECIDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -78,9 +80,8 @@ impl<'a, 'g> ActionTarget<GameHost<'a, 'g>> for Action<'_> {
         false
     }
     fn validate(&self, host: &GameHost<'a, 'g>, reads: &Reads) -> std::result::Result<(), Outcome> {
-        if self.shared.epoch == Epoch::Player
-            && host.game.transactions.player_writes() != reads.player_writes
-        {
+        let Epoch::Player = self.shared.epoch;
+        if host.game.transactions.player_writes() != reads.player_writes {
             return Err(Outcome::Stale(StaleReason::Mutation));
         }
         if (self.shared.fresh)(host.game) {
@@ -96,29 +97,19 @@ impl<'a, 'g> ActionTarget<GameHost<'a, 'g>> for Action<'_> {
 }
 
 impl Game<'_> {
-    /// Decide an action `name` on the menu `route` for the player entity `actor`: `fire` calls the
-    /// hook and validates what it answered (`Reply::Allow`, or `Invalid` to refuse), `fresh` says
-    /// the menu is still the one the action froze, and `perform` is the action, run once inside the
-    /// savepoint when the decision stands. The result says whether it did.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::game) fn decided_action<'p>(
+    /// Run a decision whose action target is distinct from its acting player.
+    pub(in crate::game) fn decided_action_on<'p>(
         &mut self,
         name: &'static str,
-        route: MenuId,
-        actor: EntityRef,
+        target: DecidedTarget,
         epoch: Epoch,
         fresh: impl Fn(&Game<'_>) -> bool + 'p,
         fire: impl FnOnce(&mut Game<'_>) -> Reply,
         perform: impl FnOnce(&mut Game<'_>) + 'p,
     ) -> bool {
+        let DecidedTarget { route, identity } = target;
         #[cfg(test)]
         DECIDED.set(DECIDED.get() + 1);
-        let identity = Identity {
-            side: Side::Server,
-            world: actor.epoch(),
-            actor,
-            target: actor,
-        };
         let target = Action {
             id: route,
             shared: Rc::new(Shared {
@@ -128,15 +119,12 @@ impl Game<'_> {
             }),
         };
         // The action's savepoint needs a transaction to nest in: the open one, or this one.
-        let seal = self.transaction_open();
-        let outcome = {
-            let mut host = GameHost {
-                game: &mut *self,
-                identity,
-            };
-            decision::run(&mut host, &target, |_, _| Plan, |host| fire(host.game))
-        };
-        self.transaction_close(&seal, matches!(outcome, Ok(Outcome::Applied)));
+        let outcome = self.storage_scope(|game, _| {
+            let mut host = GameHost { game, identity };
+            let outcome = decision::run(&mut host, &target, |_, _| Plan, |host| fire(host.game));
+            let commit = matches!(outcome, Ok(Outcome::Applied));
+            (outcome, commit)
+        });
         match outcome {
             Ok(Outcome::Applied) => true,
             // A cancelled action is the listener's own answer, not a refusal: the caller goes on.
@@ -157,50 +145,5 @@ impl Game<'_> {
         let epoch = self.native_lifecycle.epoch()?;
         let entity = self.lan.as_ref()?.hub.guest(conn)?.entity_id;
         Some(EntityRef::new(epoch, u32::try_from(entity).ok()?))
-    }
-
-    /// The decision's menu id for the guest `conn`'s hub menus.
-    pub(in crate::game) fn guest_route(&mut self, conn: u32) -> Option<MenuId> {
-        Some(self.lan.as_mut()?.menus.entry(conn).or_default().hub.id())
-    }
-}
-
-impl Game<'_> {
-    /// `native_menu_clicked`, the mods told of a click on a menu one of them opened. With a
-    /// listener the notice runs in an action: a listener that fails, or whose menu is busy, has its
-    /// writes undone. The click moved nothing, so there is nothing to apply and nothing read. A
-    /// click drained after its guest left (no actor) is still told, with the plain call.
-    pub(in crate::game) fn menu_clicked_decided(
-        &mut self,
-        uuid: u128,
-        window: i32,
-        slot: i32,
-        button: i32,
-        mode: i32,
-    ) {
-        if !mod_api::__private::listened(mod_api::HookId::MenuClicked) {
-            return self.native_menu_clicked(uuid, window, slot, button, mode);
-        }
-        let decided = self
-            .lan
-            .as_ref()
-            .and_then(|host| host.hub.guests.iter().find(|g| g.uuid == uuid))
-            .map(|g| g.conn)
-            .and_then(|conn| Some((self.guest_actor(conn)?, self.guest_route(conn)?)));
-        let Some((actor, route)) = decided else {
-            return self.native_menu_clicked(uuid, window, slot, button, mode);
-        };
-        self.decided_action(
-            "menu_clicked",
-            route,
-            actor,
-            Epoch::Off,
-            |_| true,
-            |game| {
-                game.native_menu_clicked(uuid, window, slot, button, mode);
-                Reply::Allow
-            },
-            |_| {},
-        );
     }
 }

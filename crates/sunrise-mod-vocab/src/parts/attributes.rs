@@ -54,18 +54,19 @@ pub fn attribute_bounds_widenings() -> &'static [AttributeBoundsWidening] {
 /// Registration of new attribute types ([`Registrar::declare_attribute`](AttributesRegistrar::declare_attribute))
 /// and wider bounds for existing ones ([`Registrar::widen_attribute_bounds`](AttributesRegistrar::widen_attribute_bounds)).
 pub trait AttributesRegistrar {
-    /// Declare an attribute type of the mod's own (vanilla's
+    /// Declare an attribute type (vanilla's
     /// `RangedAttribute` in `BuiltInRegistries.ATTRIBUTE`, NeoForge's
-    /// `RegisterEvent`): `path` in the mod's namespace (`mana` of `mymod` is
-    /// `mymod:mana`), its `default` and `[min, max]` bounds, whether it
-    /// joins the attribute sync (`Attribute.setSyncable`), and the sentiment
+    /// `RegisterEvent`): a bare `path` uses this mod's namespace (`mana` of `mymod`
+    /// is `mymod:mana`), while an explicit valid `namespace:path` keeps its namespace.
+    /// Supply its `default` and `[min, max]` bounds, whether it
+    /// joins the attribute sync (`Attribute.setSyncable`), the sentiment
     /// that colors its tooltip lines (`Attribute.setSentiment`, POSITIVE by
     /// default; the translation key is `attribute.name.<ns>.<path>`), and how its
     /// tooltip lines read (`tooltip`: percentages, on/off, a base modifier; NeoForge's
     /// `PercentageAttribute`, `BooleanAttribute` and `IAttributeExtension.getBaseId`).
     ///
-    /// Only both-side packages may declare attributes; other sides refuse because
-    /// declarations assign network registry IDs.
+    /// Only both-side packages (and both-side served namespace suppliers) may declare attributes;
+    /// other sides refuse because declarations assign network registry IDs.
     /// The declarations join the attribute catalog once, at load, appended
     /// after every vanilla attribute **sorted by declaring mod id, then by
     /// attribute id** — the order is the network id's, so every side running
@@ -74,9 +75,8 @@ pub trait AttributesRegistrar {
     /// may name the mod's own new attribute. Sanitizing a value (NaN → min,
     /// else clamp) is the definition's own `sanitize`.
     ///
-    /// An id outside the mod's manifest-owned namespaces (a vanilla attribute's included),
-    /// a malformed id, a duplicate — of this mod's or another's, caught
-    /// where the declarations join the catalog — a non-finite default or
+    /// A malformed id, a duplicate — of this mod's, another's or a built-in
+    /// attribute — a non-finite default or
     /// bound, bounds the default is not inside (`min > max` included), or a
     /// base modifier that is not a namespaced id refuses, naming the mod.
     fn declare_attribute(
@@ -104,9 +104,10 @@ pub trait AttributesRegistrar {
     /// nothing. The default value never moves. An attribute without bounds
     /// stays without them.
     ///
-    /// Only both-side packages may widen bounds, so the client and the server
-    /// build the same catalog; the mod-set check at join is all a client
-    /// needs. A non-finite bound or `min > max` refuses here, naming the mod;
+    /// Only both-side packages may widen bounds. If the attribute is in a namespace supplied
+    /// by a package the caller serves via `served_by`, that supplier must also be `side = "both"`.
+    /// The client and server then build the same catalog; the mod-set check at join is all a
+    /// client needs. A non-finite bound or `min > max` refuses here, naming the mod;
     /// an attribute the catalog does not have, or one whose default is not
     /// inside `[min, max]`, refuses the load where the asks join the catalog,
     /// naming the mod.

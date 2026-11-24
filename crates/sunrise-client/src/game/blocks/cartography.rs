@@ -105,7 +105,7 @@ impl Game<'_> {
         let id = map.as_ref().and_then(map_id);
         let state = id.and_then(|id| self.map(id).map(|m| (m.locked, m.scale)));
         let mut locked = false;
-        let error = "gui/sprites/container/cartography_table/error";
+        let error = "container/cartography_table/error";
         if let Some((is_locked, scale)) = state {
             if is_locked {
                 locked = true;
@@ -121,7 +121,7 @@ impl Game<'_> {
         let sprite = |batch: &mut HudBatch, game: &Self, name: &str, x: f32, y: f32| {
             batch.sprite(
                 &game.gui.atlas,
-                &format!("gui/sprites/container/cartography_table/{name}"),
+                &format!("container/cartography_table/{name}"),
                 ox + x,
                 oy + y,
             );
@@ -164,7 +164,7 @@ impl Game<'_> {
             return;
         };
         for d in map.decorations.iter().filter(|d| shown_on_frame(d.sprite)) {
-            let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
+            let Some(s) = self.gui.atlas.gui_rect(d.sprite).copied() else {
                 continue;
             };
             batch.quad(
@@ -198,7 +198,7 @@ impl Game<'_> {
         }
         // A native mod's own icons (`native_map_decorations`).
         for d in self.mod_map_decorations(id, true) {
-            let Some(s) = self.gui.atlas.sprites.get(d.sprite.as_str()).copied() else {
+            let Some(s) = self.gui.atlas.gui_rect(d.sprite.as_str()).copied() else {
                 continue;
             };
             batch.quad(

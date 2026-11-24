@@ -140,6 +140,7 @@ mod tests {
             permission: 0,
             sunrise: true,
             general_entity: false,
+            attachment_sender: None,
             moved: true,
             position: [1.0e6, 64.0, 1.0e6],
             view_distance: 2,
@@ -148,7 +149,9 @@ mod tests {
             tracker,
             out: &mut out,
         }];
-        level.tick(&entities, &Riding::default(), &mut viewer, |_| Some(1));
+        level.tick(&entities, &Riding::default(), &mut viewer, None, |_| {
+            Some(1)
+        });
     }
 
     /// Immersive Portals' rule, from the area and not the player's place: a zombie (tracked 8

@@ -20,7 +20,7 @@ fn game_event_key_registry_data_reload_and_unavailable_sides() {
             game.world_root = root.path().to_owned();
             game.options.dedicated = Some(Vec::new());
             let step = game.game_event_key("minecraft:step").unwrap();
-            assert_eq!(step.id(game), Ok("minecraft:step".into()));
+            assert_eq!(step.id(game).as_deref(), Ok("minecraft:step"));
             assert_eq!(game.game_event_key("test:nope"), None);
             assert_eq!(
                 step.data(game, &Frequencies),
@@ -50,7 +50,7 @@ fn game_event_key_registry_data_reload_and_unavailable_sides() {
                 assert_eq!(game.game_event_key("minecraft:step"), Some(step));
                 assert_eq!(
                     step.data(game, &Frequencies),
-                    Ok(Some(Tag::Compound(std::collections::BTreeMap::from([(
+                    Ok(Some(Tag::Compound(sunrise_core::nbt::Compound::from([(
                         "frequency".into(),
                         Tag::Int(frequency)
                     )]))))

@@ -4,42 +4,46 @@ use std::{fs, path::Path};
 use sunrise_mod_package::mod_surface::uses::USES_FILE;
 use sunrise_mod_package::{Package, manifest};
 
+/// Return the validated native project, if this directory has a package manifest.
+/// A present but invalid manifest is reported by the canonical package reader.
 pub fn read(dir: &Path) -> Result<Option<Bundle>, String> {
-    for old in [
-        "sunrise-native.json",
-        "horizon-mixin.toml",
-        "native",
-        "rust",
-    ] {
-        if dir.join(old).exists() {
-            return Err(format!("{}: unsupported package path {old}", dir.display()));
+    read_with(dir, crate::host::tr)
+}
+
+fn read_with(dir: &Path, tr: for<'a> fn(&'a str) -> &'a str) -> Result<Option<Bundle>, String> {
+    let path = dir.join(manifest::MANIFEST);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
         }
+        Err(e) => return Err(format!("{}: {e}", path.display())),
     }
-    if !dir.join(manifest::MANIFEST).is_file() {
+    let package = read_package(dir, tr)?;
+    if !package.is_native() {
         return Ok(None);
-    }
-    let package = Package::read(dir)?;
-    if package.manifest.native.is_none()
-        && (package.manifest.wasm.is_none() || package.manifest.inject.is_empty())
-    {
-        return Ok(None);
-    }
-    if let Some(state) = package
-        .manifest
-        .native
-        .as_ref()
-        .and_then(|native| native.state.first())
-    {
-        return Err(crate::host::trf(
-            "E_MIXIN_STATE_LAYOUT: {mod}:{state}: native state changes the prebuilt game's layout; use an attachment instead",
-            &[("mod", &package.manifest.id), ("state", &state.id)],
-        ));
     }
     package.directory_files(dir)?;
     Ok(Some(Bundle {
         manifest: package.manifest,
         dir: dir.to_owned(),
     }))
+}
+
+fn read_package(dir: &Path, tr: for<'a> fn(&'a str) -> &'a str) -> Result<Package, String> {
+    Package::read_detailed(dir).map_err(|error| match error {
+        manifest::PackageReadError::NativeStateLayout { mod_id, row } => crate::host::trf_with(
+            tr,
+            "E_MIXIN_STATE_LAYOUT: {mod}:{state}: native state changes the prebuilt game's layout; use an attachment instead",
+            &[("mod", &mod_id), ("state", &row)],
+        ),
+        other => other.to_string(),
+    })
 }
 
 /// Generate tool input in the build's incoming copy, never in a modder's project.
@@ -62,7 +66,6 @@ pub fn tool_manifest(bundle: &Bundle) -> Result<(), String> {
     for (name, rows) in [
         ("injection", toml::Value::try_from(&bundle.native().mixin)),
         ("bridge", toml::Value::try_from(&bundle.native().bridge)),
-        ("state", toml::Value::try_from(&bundle.native().state)),
     ] {
         let rows = rows.map_err(|error| error.to_string())?;
         if rows.as_array().is_some_and(|rows| !rows.is_empty()) {
@@ -83,7 +86,7 @@ pub fn tool_manifest(bundle: &Bundle) -> Result<(), String> {
 }
 
 fn checked_files(bundle: &Bundle) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
-    Package::read(&bundle.dir)?.directory_files(&bundle.dir)
+    read_package(&bundle.dir, crate::host::tr)?.directory_files(&bundle.dir)
 }
 
 pub fn files(bundle: &Bundle) -> Result<Vec<(String, std::path::PathBuf)>, String> {
@@ -127,193 +130,89 @@ fn copy_files(to: &Path, files: impl IntoIterator<Item = (String, Vec<u8>)>) -> 
     Ok(())
 }
 
-/// Check target-crossing edges before the native-only dependency resolver.
-///
-/// A package that can't be read stops the scan, naming the mod: every enabled native mod compiles
-/// into one game binary, and every other native refusal stops that build the same way. Leaving
-/// one mod out would quietly build a different set than the player enabled.
-pub fn checked_bundles(folder: &Path) -> Result<Vec<Bundle>, String> {
-    let paths = sunrise_mod_package::find(folder)
-        .into_iter()
-        .chain(sunrise_mod_package::find(
-            &folder
-                .parent()
-                .unwrap_or(folder)
-                .join(sunrise_mod_package::mod_list::DIR),
-        ));
-    if let Some((id, error)) = sunrise_mod_package::selection::package_errors(paths)
-        .into_iter()
-        .next()
-    {
-        return Err(format!("{id}: {error}"));
-    }
-    let found = super::scan_bundles(folder)?;
-    let wasm: Vec<_> = sunrise_mod_package::find(folder)
-        .into_iter()
-        .chain(sunrise_mod_package::find(
-            &folder
-                .parent()
-                .unwrap_or(folder)
-                .join(sunrise_mod_package::mod_list::DIR),
-        ))
-        .filter_map(|path| sunrise_mod_package::Package::read(&path).ok())
-        .filter(|package| package.manifest.wasm.is_some())
-        .collect();
-    for bundle in &found {
-        let dependent = sunrise_mod_package::Package::read(&bundle.dir)?;
-        for library in &wasm {
-            if !dependent
-                .manifest
-                .dependencies
-                .contains_key(&library.manifest.id)
-            {
-                continue;
-            }
-            let reason = if let Some(name) = dependent
-                .layouts
-                .first_difference(&library.manifest.id, &library.layouts)
-            {
-                crate::host::trf(
-                    "{mod}: layout mismatch in library {library} for type {type}",
-                    &[
-                        ("mod", &dependent.manifest.id),
-                        ("library", &library.manifest.id),
-                        ("type", name),
-                    ],
-                )
-            } else {
-                crate::host::trf(
-                    "{library} is a wasm mod; native mod {mod} depends on it: mixed native and wasm dependencies aren't supported yet",
-                    &[
-                        ("library", &library.manifest.id),
-                        ("mod", &dependent.manifest.id),
-                    ],
-                )
-            };
-            return Err(reason);
-        }
-    }
-    Ok(found)
-}
-
 #[cfg(test)]
-mod mixed_tests {
+mod tests {
     use super::*;
+    use crate::tests::write_bundle;
 
     #[test]
-    fn malformed_layout_retains_identity() {
-        let why = refusal("malformed");
-        assert!(why.contains("lib: layouts.json is malformed"), "{why}");
-    }
-    fn refusal(hash: &str) -> String {
-        refusal_with(hash)
+    fn scan_skips_non_packages_and_reads_native_projects_with_unrelated_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        fs::create_dir_all(workspace.join("rust")).unwrap();
+        fs::write(workspace.join("horizon-mixin.toml"), "not a package").unwrap();
+        let project = workspace.join("example");
+        write_bundle(&project, "example", "");
+        fs::create_dir(project.join("native")).unwrap();
+        fs::write(project.join("sunrise-native.json"), "not a manifest").unwrap();
+
+        let bundles = crate::scan_bundles(&workspace).unwrap();
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].manifest.id, "example");
+        assert_eq!(bundles[0].dir, project);
     }
 
-    fn refusal_with(hash: &str) -> String {
-        let home = tempfile::tempdir().unwrap();
-        let addon = home.path().join("addon");
-        let library = home.path().join("lib");
-        fs::create_dir_all(addon.join("src")).unwrap();
-        fs::create_dir_all(&library).unwrap();
+    #[test]
+    fn a_present_malformed_manifest_is_not_skipped() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(manifest::MANIFEST)).unwrap();
+        let error = read(root.path()).unwrap_err();
+        assert_eq!(
+            error,
+            "sunrise-mod.toml: unsupported file type in a content mod"
+        );
+    }
+
+    #[test]
+    fn native_state_refusal_does_not_expand_holes_in_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        write_bundle(dir.path(), "stateful{state}", "");
+        let path = dir.path().join(manifest::MANIFEST);
+        let text = fs::read_to_string(&path).unwrap();
         fs::write(
-            addon.join("Cargo.toml"),
-            "[package]\nname='addon'\nversion='1.0.0'\n",
-        )
-        .unwrap();
-        fs::write(addon.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-        let header = |id| {
-            format!("id='{id}'\nname='{id}'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n")
-        };
-        fs::write(
-            addon.join(manifest::MANIFEST),
-            format!(
-                "{}[dependencies]\nlib='*'\n[native]\ngame='26.3'\nsunrise='{}'\nmixins='{}'\n",
-                header("addon"),
-                "a".repeat(40),
-                "b".repeat(40)
-            ),
-        )
-        .unwrap();
-        let module = b"\x00\x61\x73\x6d\x01\x00\x00\x00\x00\x0f\x08\x64\x79\x6c\x69\x6e\x6b\x2e\x30\x01\x04\x00\x00\x00\x00\x01\x04\x01\x60\x00\x00\x03\x02\x01\x00\x07\x2e\x03\x0e\x73\x75\x6e\x72\x69\x73\x65\x5f\x6c\x61\x79\x6f\x75\x74\x00\x00\x0a\x73\x75\x6e\x72\x69\x73\x65\x5f\x69\x6e\x00\x00\x0c\x73\x75\x6e\x72\x69\x73\x65\x5f\x68\x6f\x6f\x6b\x00\x00\x0a\x04\x01\x02\x00\x0b";
-        fs::write(library.join("mod.wasm"), module).unwrap();
-        fs::write(
-            library.join(manifest::MANIFEST),
-            format!(
-                "{}[wasm]\nsha512='{}'\ntoolchain='t'\nbuilt_with='t'\n",
-                header("lib"),
-                sunrise_mod_package::manifest::sha512_of(module),
-            ),
-        )
-        .unwrap();
-        fs::write(
-            addon.join("layouts.json"),
-            br#"{"lib":{"T":"0123456789abcdef0123456789abcdef"}}"#,
-        )
-        .unwrap();
-        fs::write(
-            library.join("layouts.json"),
-            format!(r#"{{"lib":{{"T":"{hash}"}}}}"#),
+            path,
+            format!("{text}[[native.state]]\nid='autosave{{mod}}'\n"),
         )
         .unwrap();
 
-        if hash == "malformed" {
-            fs::write(library.join("layouts.json"), b"{").unwrap();
+        assert_eq!(
+            read_with(dir.path(), |en| en).unwrap_err(),
+            "E_MIXIN_STATE_LAYOUT: stateful{state}:autosave{mod}: native state changes the prebuilt game's layout; use an attachment instead"
+        );
+    }
+
+    #[test]
+    fn native_state_is_refused_by_the_package_reader_before_staging() {
+        fn localized(en: &str) -> &str {
+            match en {
+                "E_MIXIN_STATE_LAYOUT: {mod}:{state}: native state changes the prebuilt game's layout; use an attachment instead" => {
+                    "E_MIXIN_STATE_LAYOUT: localized {mod}/{state}"
+                }
+                other => other,
+            }
         }
-        checked_bundles(home.path()).expect_err("mixed dependency must refuse")
-    }
 
-    #[test]
-    fn native_to_wasm_layout_mismatch_names_the_type() {
-        assert_eq!(
-            refusal("1123456789abcdef1123456789abcdef"),
-            "addon: layout mismatch in library lib for type T"
-        );
-    }
-
-    #[test]
-    fn native_to_wasm_matching_layout_is_still_unsupported() {
-        assert_eq!(
-            refusal("0123456789abcdef0123456789abcdef"),
-            "lib is a wasm mod; native mod addon depends on it: mixed native and wasm dependencies aren't supported yet"
-        );
-    }
-}
-
-#[cfg(test)]
-mod state_tests {
-    #[test]
-    fn native_state_is_refused_before_staging() {
-        let dir = super::super::tests::dir("state-refusal");
-        super::super::tests::write_bundle(&dir, "stateful", "");
-        let path = dir.join(sunrise_mod_package::manifest::MANIFEST);
-        let mut text = std::fs::read_to_string(&path).unwrap();
-        text.push_str("\n[[native.state]]\nid='autosave'\ntarget='game::Game'\nty='u32'\ninitial='0'\nconstructor=[]\n");
-        std::fs::write(path, text).unwrap();
-        let error = super::read(&dir).err().unwrap();
-        assert!(error.contains("E_MIXIN_STATE_LAYOUT"), "{error}");
-        assert!(error.contains("attachment"), "{error}");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn a_source_bundle_with_old_width_layout_metadata_validates_and_stages() {
-        let dir = super::super::tests::dir("legacy-layouts");
-        super::super::tests::write_bundle(&dir, "old", "");
-        std::fs::write(
-            dir.join(sunrise_mod_package::layouts::FILE),
-            br#"{"old":{"old::T":"0123456789abcdef"}}"#,
-        )
-        .unwrap();
-        let bundle = super::read(&dir).unwrap().expect("a bundle");
-        let names: Vec<_> = super::files(&bundle)
-            .unwrap()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        assert!(names.iter().any(|name| name == "layouts.json"), "{names:?}");
-        let staged = dir.join("staged");
-        super::copy(&bundle, &staged).unwrap();
-        assert!(staged.join("layouts.json").is_file());
-        std::fs::remove_dir_all(dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_bundle(dir.path(), "stateful", "");
+        let path = dir.path().join(manifest::MANIFEST);
+        let text = fs::read_to_string(&path).unwrap();
+        for (row, table) in [
+            (
+                "autosave",
+                "[[native.state]]\nid='autosave'\ntarget='game::Game'\nty='u32'\ninitial='0'\nconstructor=[]\n",
+            ),
+            ("native.state", "state = []\n"),
+        ] {
+            fs::write(&path, format!("{text}{table}")).unwrap();
+            let error = format!(
+                "E_MIXIN_STATE_LAYOUT: stateful:{row}: native state changes the prebuilt game's layout; use an attachment instead"
+            );
+            assert_eq!(Package::read(dir.path()).err().unwrap(), error);
+            assert_eq!(read(dir.path()).unwrap_err(), error);
+            assert_eq!(
+                read_with(dir.path(), localized).unwrap_err(),
+                format!("E_MIXIN_STATE_LAYOUT: localized stateful/{row}")
+            );
+        }
     }
 }

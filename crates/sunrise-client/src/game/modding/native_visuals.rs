@@ -74,7 +74,7 @@ impl Game<'_> {
                 ));
             }
         }
-        let Some(player) = self.native_player() else {
+        let Some(position) = self.player.as_ref().map(|player| player.position) else {
             return visuals;
         };
         let mut rims = Vec::new();
@@ -82,9 +82,9 @@ impl Game<'_> {
         self.native_visuals(&mut rims, &mut lights);
         let close = |at: [f64; 3]| {
             at.iter().all(|v| v.is_finite())
-                && (at[0] - player.x).powi(2)
-                    + (at[1] - player.y).powi(2)
-                    + (at[2] - player.z).powi(2)
+                && (at[0] - position.x).powi(2)
+                    + (at[1] - position.y).powi(2)
+                    + (at[2] - position.z).powi(2)
                     <= 1024.0
         };
         let mut edges = 0;

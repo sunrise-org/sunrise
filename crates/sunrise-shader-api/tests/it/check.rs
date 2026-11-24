@@ -203,7 +203,7 @@ fn a_stages_files_are_its_own() {
     );
     pack.manifest.post[0].files.push("only_post.wgsl".into());
     let file = pack.manifest.post[0].file.clone();
-    let post = sunrise_shader_api::compose(&pack, sunrise_shader_api::StageKind::Post, &file);
+    let post = sunrise_shader_api::compose(&pack, sunrise_shader_api::StageKind::Post, &file, 0);
     let names: Vec<_> = post.parts.iter().map(|p| p.0.as_str()).collect();
     let (extra, own) = (
         names.iter().position(|n| *n == "only_post.wgsl").unwrap(),
@@ -212,9 +212,33 @@ fn a_stages_files_are_its_own() {
     assert!(extra < own, "{names:?}");
     let material = pack.manifest.material.clone().unwrap().file;
     let other =
-        sunrise_shader_api::compose(&pack, sunrise_shader_api::StageKind::Material, &material);
+        sunrise_shader_api::compose(&pack, sunrise_shader_api::StageKind::Material, &material, 0);
     assert!(other.parts.iter().all(|p| p.0 != "only_post.wgsl"));
     assert!(pack.manifest.files().contains(&"only_post.wgsl"));
+    check(&pack).unwrap();
+}
+
+/// A file reused by two `[[post]]` entries takes the `files` of each entry, not the first's.
+#[test]
+fn reused_post_file_gets_its_own_files() {
+    let mut pack = sample();
+    for (name, text) in [
+        ("h.wgsl", "fn only_h() -> f32 { return 1.0; }\n"),
+        ("v.wgsl", "fn only_v() -> f32 { return 2.0; }\n"),
+    ] {
+        pack.files.insert(name.into(), text.as_bytes().to_vec());
+    }
+    let (mut h, mut v) = (pack.manifest.post[0].clone(), pack.manifest.post[0].clone());
+    h.files = vec!["h.wgsl".into()];
+    v.files = vec!["v.wgsl".into()];
+    let file = h.file.clone();
+    pack.manifest.post.splice(0..1, [h, v]);
+    let post = |entry| {
+        sunrise_shader_api::compose(&pack, sunrise_shader_api::StageKind::Post, &file, entry).text
+    };
+    let (first, second) = (post(0), post(1));
+    assert!(first.contains("only_h") && !first.contains("only_v"));
+    assert!(second.contains("only_v") && !second.contains("only_h"));
     check(&pack).unwrap();
 }
 

@@ -236,22 +236,12 @@ impl Hub {
             name: self.player_display_name(uuid, &name),
             target: None,
         };
-        // The `ServerChatEvent` counterpart runs here:
-        // the game tells the mods, then broadcasts what they left.
-        if crate::native_client_hooks::has_mods() {
-            events.push(HostEvent::ChatSubmitted {
-                message: Box::new(message),
-                bound: Box::new(bound),
-                name,
-            });
-            return;
-        }
-        let line = format!("<{name}> {}", message.content);
-        // No mods here (`has_mods` above), so no `chat_recipient` listener hides anyone.
-        self.broadcast_chat(&message, &bound, line, &[], events);
-        events.push(HostEvent::PlayerChat {
-            sender: uuid,
-            text: message.content,
+        // The game owns publication: ServerChatEvent, then PlayerList's log
+        // and per-player delivery, even when no mod is listening.
+        events.push(HostEvent::ChatSubmitted {
+            message: Box::new(message),
+            bound: Box::new(bound),
+            name,
         });
     }
 
@@ -337,24 +327,15 @@ impl Hub {
         }
     }
 
-    /// PlayerList.broadcastChatMessage: logged (`[Not Secure]` unless signed
-    /// and fresh), then sent to every player but the ones in `hidden` (the
-    /// receivers a mod kept it from, `chat_recipient`).
-    pub fn broadcast_chat(
-        &mut self,
-        message: &ChatMessage,
-        bound: &play::ChatTypeBound,
-        line: String,
-        hidden: &[u128],
-        events: &mut Vec<HostEvent>,
-    ) {
-        let secure = message.trusted(now_millis());
-        events.push(HostEvent::Chat { line, secure });
-        for k in 0..self.guests.len() {
-            if self.guests[k].placed && !hidden.contains(&self.guests[k].uuid) {
-                self.send_chat(k, message, bound);
-            }
-        }
+    /// Look up a live public-chat recipient just before deciding or sending their copy.
+    pub fn chat_recipient(&self, conn: u32) -> Option<(usize, u128)> {
+        let index = self.guests.connection_index(conn)?;
+        let guest = &self.guests[index];
+        (guest.placed
+            && guest.participates_online()
+            && !guest.disconnect_pending
+            && guest.info.chat_visibility == 0)
+            .then_some((index, guest.uuid))
     }
 
     /// ServerPlayer.sendChatMessage (players who show chat) and
@@ -404,7 +385,7 @@ impl Hub {
 
     /// sendChatMessage of a system message: a disguised chat, to players
     /// who show chat.
-    fn send_disguised(&self, k: usize, message: Tag, chat_type: play::ChatTypeBound) {
+    pub fn send_disguised(&self, k: usize, message: Tag, chat_type: play::ChatTypeBound) {
         let g = &self.guests[k];
         if g.info.chat_visibility == 0 {
             g.send(&C::DisguisedChat(play::DisguisedChat {
@@ -491,68 +472,6 @@ impl Hub {
         })
     }
 
-    /// `PlayerList.broadcastChatMessage` for a non-player command source:
-    /// an unsigned message with the source's display name, visible as player chat.
-    /// `except` is a connection that gets the line another way (with its
-    /// command's captured output).
-    pub fn broadcast_source_chat(
-        &self,
-        chat_type: &str,
-        name: Tag,
-        message: Tag,
-        except: Option<u32>,
-    ) {
-        let bound = play::ChatTypeBound {
-            chat_type: self.chat_type_id(chat_type),
-            name,
-            target: None,
-        };
-        for (k, guest) in self.guests.iter().enumerate() {
-            if guest.placed && Some(guest.conn) != except {
-                self.send_disguised(k, message.clone(), bound.clone());
-            }
-        }
-    }
-
-    /// A message command's chat (SayCommand, EmoteCommands): to everyone but
-    /// the players in `hidden`, bound to `chat_type` and the sender's name.
-    pub fn broadcast_command_chat(
-        &mut self,
-        i: usize,
-        chat_type: &str,
-        message: Option<ChatMessage>,
-        text: &str,
-        hidden: &[u128],
-        events: &mut Vec<HostEvent>,
-    ) {
-        let (uuid, name) = (self.guests[i].uuid, self.guests[i].name.clone());
-        let bound = play::ChatTypeBound {
-            chat_type: self.chat_type_id(chat_type),
-            name: self.player_display_name(uuid, &name),
-            target: None,
-        };
-        let line = match chat_type {
-            "say_command" => format!("[{name}] {text}"),
-            _ => format!("* {name} {text}"),
-        };
-        match message {
-            Some(message) => self.broadcast_chat(&message, &bound, line, hidden, events),
-            // An unsigned command packet (no signing context):
-            // PlayerChatMessage.system, a disguised chat.
-            None => {
-                events.push(HostEvent::Chat {
-                    line,
-                    secure: false,
-                });
-                for k in 0..self.guests.len() {
-                    if self.guests[k].placed && !hidden.contains(&self.guests[k].uuid) {
-                        self.send_disguised(k, literal(text), bound.clone());
-                    }
-                }
-            }
-        }
-    }
-
     /// MsgCommand.sendMessage to each target: the outgoing line for the
     /// sender, the incoming one for the target. Nothing is logged.
     pub fn whisper(
@@ -593,7 +512,7 @@ impl Hub {
     }
 
     /// A chat type's registry id.
-    fn chat_type_id(&self, name: &str) -> i32 {
+    pub fn chat_type_id(&self, name: &str) -> i32 {
         self.sync
             .id("minecraft:chat_type", &format!("minecraft:{name}"))
             .unwrap_or(self.chat_type)

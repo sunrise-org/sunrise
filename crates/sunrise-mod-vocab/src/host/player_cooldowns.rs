@@ -9,16 +9,13 @@ pub trait PlayerCooldownsBackend {
     /// Side: server.
     /// Every group the player waits on and its ticks left, ordered by
     /// group.
-    #[access(WorldOnly)]
     fn player_item_cooldowns(&self, player: PlayerRef) -> Option<Vec<ItemCooldown>>;
     /// Side: server.
     /// `ItemCooldowns.isOnCooldown`: whether `group` still has time to run.
-    #[access(WorldOnly)]
     fn player_has_item_cooldown(&self, player: PlayerRef, group: &str) -> Option<bool>;
     /// Side: server.
     /// `ItemCooldowns.getCooldownPercent(group, 0)`: what is left of the
     /// group's cooldown, from 1 (just started) to 0 (none).
-    #[access(WorldOnly)]
     fn player_item_cooldown_percent(&self, player: PlayerRef, group: &str) -> Option<f32>;
 }
 /// The handles' writes of the `player_cooldowns` area, implemented by the game and reached through [`BackendMut`].
@@ -29,13 +26,12 @@ pub trait PlayerCooldownsBackendMut {
     /// Side: server.
     /// `ItemCooldowns.addCooldown(group, ticks)`: starts (or restarts) the
     /// group's cooldown, and the player's client draws it on every item of the
-    /// group (`ServerItemCooldowns.onCooldownStarted`).
-    #[access(WorldOnly)]
+    /// group (`ServerItemCooldowns.onCooldownStarted`). A resident dead player can still be edited.
     fn player_set_item_cooldown(&mut self, player: PlayerRef, group: &str, ticks: i32) -> bool;
     /// Side: server.
     /// `ItemCooldowns.removeCooldown(group)`: ends the group's cooldown now,
-    /// on the client too (`ServerItemCooldowns.onCooldownEnded`).
-    #[access(WorldOnly)]
+    /// on the client too (`ServerItemCooldowns.onCooldownEnded`), even while the resident
+    /// player is dead.
     fn player_remove_item_cooldown(&mut self, player: PlayerRef, group: &str) -> bool;
     /// Side: server.
     /// Sets the player's `WardenSpawnTracker.cooldownTicks`: sculk shriekers
@@ -43,6 +39,5 @@ pub trait PlayerCooldownsBackendMut {
     /// one tracker here, the integrated server owner's (the shriekers read it
     /// for whoever sets them off), so this is every player's.
     /// False, changing nothing, for anyone but the tracker's owner until each player has their own.
-    #[access(WorldOnly)]
     fn player_set_warden_warning_cooldown(&mut self, player: PlayerRef, ticks: u32) -> bool;
 }

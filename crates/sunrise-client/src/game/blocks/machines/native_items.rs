@@ -2,12 +2,21 @@
 //! container slots and the composter's state-backed input/output, by the rules hoppers follow.
 //! Side-local slots are numbered from zero. It acts where the world is simulated, never on
 //! a client's copy, and only on the level in place.
-use super::{Game, Insertion, Kind, MoveIn, PlacementAttempt, Pos, Slots, View};
-use crate::game::transactions::After;
-use mod_api::__private::game::CapabilityChecked;
-use mod_api::{BlockSide, LevelRef, Transaction};
-use sunrise_client::items::ItemStack;
+use super::{
+    Game, Insertion, Kind, MoveIn, PlacementAttempt, Pos, Slots, TakeAsk, TakeAttempt, View,
+};
+use crate::game::{
+    api_values::{project_stack, stack_read_metadata},
+    decorated_pot::DECORATED_POT,
+    transactions::After,
+};
+use mod_api::{
+    BlockCapabilitySite, BlockSide, ItemResource, ItemStackView, LevelReadError, LevelRef,
+    TransactionContext,
+};
+use sunrise_client::{containers::BlockEntity, items::ItemStack, save};
 use sunrise_core::geometry::Direction;
+use sunrise_world::registry::BlockStateId;
 
 impl View {
     /// Composter capability ports keep one slot as their level changes; hopper views retain
@@ -21,34 +30,130 @@ impl View {
     }
 }
 
+/// What the game offers without looking at any stack contents or walking a double chest.
+enum ItemTarget {
+    Composter(i32),
+    Pot,
+    Container,
+}
+
+/// `Level.isInValidBounds` and the resident-only `getChunkNow` / `getChunk(..., false)` query.
+fn valid_resident_position(world: &sunrise_client::world::World, [x, y, z]: [i32; 3]) -> bool {
+    sunrise_client::streaming::chunk_pos_is_valid((x >> 4, z >> 4)) && world.is_loaded_at(x, y, z)
+}
+
 impl super::Containers<'_> {
-    fn capability_view(&self, at: BlockSide) -> Option<View> {
-        if !self.world.is_loaded_at(at.pos[0], at.pos[1], at.pos[2]) {
+    fn item_target(
+        &self,
+        state: BlockStateId,
+        side: Option<Direction>,
+        entity: Option<&BlockEntity>,
+    ) -> Option<ItemTarget> {
+        match self.name(state) {
+            // NeoForge `ComposterWrapper.get`: no unsided or horizontal port. Inactive
+            // ports use the level-7 container's transfer rules but still have a handler.
+            "minecraft:composter" => {
+                let level = self.prop(state, "level")?.parse().ok()?;
+                match side {
+                    Some(Direction::Up) if level < 7 => Some(ItemTarget::Composter(level)),
+                    Some(Direction::Down) if level == 8 => Some(ItemTarget::Composter(8)),
+                    Some(Direction::Up | Direction::Down) => Some(ItemTarget::Composter(7)),
+                    _ => None,
+                }
+            }
+            // The pot's implicit entity and saved slot use the block's resident state, not
+            // `world.block_entities`. A new empty pot need not have a saved tag yet.
+            DECORATED_POT => Some(ItemTarget::Pot),
+            _ => match entity? {
+                BlockEntity::Mod(_) => self
+                    .world
+                    .block_entities
+                    .mod_container(state.0)
+                    .map(|_| ItemTarget::Container),
+                entity => (!entity.slots().is_empty()).then_some(ItemTarget::Container),
+            },
+        }
+    }
+
+    pub(in crate::game) fn capability_site(
+        &self,
+        at: BlockSide,
+        state: BlockStateId,
+        entity_removed: bool,
+    ) -> Option<BlockCapabilitySite> {
+        use crate::game::{api_values::TryIntoApi, native_block_entity_refs::block_entity_handle};
+        if !valid_resident_position(self.world, at.pos) {
             return None;
         }
-        let mut view = self.view((at.pos[0], at.pos[1], at.pos[2]), false)?;
-        if let Kind::Composter(level) = view.kind {
-            view.kind = Kind::Composter(match at.side {
-                None | Some(Direction::Up) if level < 7 => level,
-                Some(Direction::Down) if level == 8 => 8,
-                None | Some(Direction::Up | Direction::Down) => 7,
-                _ => return None,
-            });
-            return Some(view);
+        let [x, y, z] = at.pos;
+        let entity = if entity_removed {
+            None
+        } else {
+            self.world.block_entities.get(&(x, y, z))
+        };
+        let resident = entity.and_then(|entity| {
+            let handle = block_entity_handle(self.world, at.level, at.pos)?;
+            let kind = mod_api::__private::block_entity_type_key(save::block_entity_id(
+                entity,
+                self.name(state),
+            ));
+            Some((handle, kind))
+        });
+        Some(BlockCapabilitySite::new(
+            at,
+            state.try_into_api().ok()?,
+            resident,
+            self.item_target(state, at.side, entity).is_some(),
+        ))
+    }
+
+    fn capability_view(&self, at: BlockSide) -> Option<View> {
+        if !valid_resident_position(self.world, at.pos) {
+            return None;
         }
-        (view.len() > 0).then_some(view)
+        let [x, y, z] = at.pos;
+        let pos = (x, y, z);
+        let state = self.world.block(x, y, z);
+        let entity = self.world.block_entities.get(&pos);
+        match self.item_target(state, at.side, entity)? {
+            ItemTarget::Composter(level) => Some(View {
+                first: (pos, 1),
+                second: None,
+                kind: Kind::Composter(level),
+                container: None,
+            }),
+            ItemTarget::Pot => Some(View {
+                first: (pos, 1),
+                second: None,
+                kind: Kind::Pot,
+                container: None,
+            }),
+            ItemTarget::Container => self.view(pos, false),
+        }
     }
     pub(in crate::game) fn capability_size(&self, at: BlockSide) -> Option<usize> {
         Some(self.capability_view(at)?.capability_slots(at.side).count())
     }
-    pub(in crate::game) fn capability_stack(
+    pub(in crate::game) fn lend_capability_stack(
         &self,
         at: BlockSide,
         slot: usize,
-    ) -> Option<ItemStack> {
-        let view = self.capability_view(at)?;
-        let slot = view.capability_slots(at.side).nth(slot)?;
-        self.get(&view, slot).cloned()
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) {
+        let Some(view) = self.capability_view(at) else {
+            return;
+        };
+        let Some(slot) = view.capability_slots(at.side).nth(slot) else {
+            return;
+        };
+        let Some(stack) = self.insertion_item(&view, slot) else {
+            return;
+        };
+        let Ok(metadata) = stack_read_metadata(&stack) else {
+            return;
+        };
+        let project = |metadata| project_stack(&stack, metadata).ok();
+        read(ItemStackView::resident(metadata, &project));
     }
 }
 impl Game<'_> {
@@ -89,7 +194,6 @@ impl Game<'_> {
         &mut self,
         part: &mod_api::Capability<dyn mod_api::ResourceHandler<mod_api::ItemResource>>,
         stack: &ItemStack,
-        at: [i32; 3],
         source: &View,
         slot: usize,
     ) -> bool {
@@ -98,15 +202,14 @@ impl Game<'_> {
             return false;
         };
         let resource = mod_api::ItemResource::of(&snapshot);
-        mod_api::run_transaction(self, |game, tx| {
+        self.storage_transaction(|game, tx| {
             let (pos, index) = source.locate(slot).ok_or(())?;
             game.journal_block_entity_slot(pos, index);
             // Reserve the offered item before writable insertion notices can re-enter.
             let reserved = game.take_one(source, slot).ok_or(())?;
-            let went = part.insert_any(game, tx, &resource, 1);
             // A part answering more than it was offered is a broken mod: abort, undoing
             // whatever its insertion moved. A plain refusal still commits.
-            let accepted = part.checked(went, 1, &at).ok_or(())? == 1;
+            let accepted = part.insert(game, tx, &resource, 1).map_err(|_| ())? == 1;
             if !accepted {
                 match game.slot_mut_at(source, slot).ok_or(())? {
                     Some(held) if held.same_item_same_components(&reserved) => {
@@ -135,7 +238,7 @@ impl Game<'_> {
     }
     /// The level in place, as a handle: where the game's capability lookups (a hopper's) are.
     /// None where no world is simulated.
-    pub(super) fn native_level_here(&self) -> Option<LevelRef> {
+    pub(in crate::game) fn native_level_here(&self) -> Option<LevelRef> {
         let epoch = self.native_lifecycle.epoch()?;
         self.native_simulates()
             .then(|| self.level_ref(epoch, self.dim.key()))
@@ -143,8 +246,27 @@ impl Game<'_> {
     /// Up to `count` out of slot `slot` of `view`, without `setChanged`.
     fn take_up_to(&mut self, view: &View, slot: usize, count: u32) -> Option<ItemStack> {
         if matches!(view.kind, Kind::Composter(_)) {
-            let (x, y, z) = view.parts[0].0;
+            let (x, y, z) = view.first.0;
             return self.composter_capability_extract([x, y, z], count);
+        }
+        if view.kind == Kind::Pot {
+            let pos = view.first.0;
+            let at = [pos.0, pos.1, pos.2];
+            let mut tag = super::spill::saved_entity(&self.world, at)?;
+            let mut item = tag.get("item").and_then(save::item_from_nbt)?;
+            let taken = count.min(item.count);
+            let out = ItemStack {
+                count: taken,
+                ..item.clone()
+            };
+            item.count -= taken;
+            Self::set_pot_slot(
+                self.res.items(),
+                &mut tag,
+                (item.count != 0).then_some(item),
+            );
+            super::spill::put_saved_entity(&mut self.world, at, tag);
+            return Some(out);
         }
         self.containers().get(view, slot)?;
         let target = self.slot_mut_at(view, slot)?;
@@ -173,9 +295,9 @@ impl Game<'_> {
         &mut self,
         at: BlockSide,
         limit: u32,
-        tx: &Transaction,
+        tx: &TransactionContext,
     ) -> bool {
-        if !self.transaction_holds(tx) {
+        if !self.transaction_context_is_current(tx) {
             return false;
         }
         if !(1..=99).contains(&limit) {
@@ -187,7 +309,7 @@ impl Game<'_> {
         if matches!(view.kind, Kind::Composter(_)) {
             return false;
         }
-        for &(pos, _) in &view.parts {
+        for (pos, _) in view.parts() {
             self.journal_block_entity(pos);
             self.world.set_container_stack_limit(pos, limit);
         }
@@ -200,20 +322,27 @@ impl Game<'_> {
         self.level_in_place(at.level).then_some(())?;
         self.containers().capability_size(at)
     }
-    /// The stack in slot `slot` of those `at`'s side reaches (`container_size`).
-    pub(in crate::game) fn container_stack(&self, at: BlockSide, slot: usize) -> Option<ItemStack> {
-        self.level_in_place(at.level).then_some(())?;
-        self.containers().capability_stack(at, slot)
+    /// Lend the resident stack in a side-local slot of the level in place.
+    pub(in crate::game) fn lend_container_stack(
+        &self,
+        at: BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) {
+        if self.level_in_place(at.level) {
+            self.containers().lend_capability_stack(at, slot, read);
+        }
     }
     /// Keeps what a capability write to slot `slot` of `view` changes: that slot alone where a
     /// write there changes nothing else, else each block entity of the view whole.
     pub(super) fn journal_view_slot(&mut self, view: &View, slot: usize) {
-        if matches!(view.kind, Kind::Composter(_)) {
-            return;
+        match view.kind {
+            Kind::Composter(_) => return,
+            Kind::Pot => return self.journal_saved_pot(view.first.0),
+            _ => {}
         }
         let slot_only = match view.kind {
-            // Plain item slots: no state beside the slot changes. Vanilla containers defer
-            // their implicit notice; mod-owned storage writes remain silent.
+            // Plain item slots: no state beside the slot changes.
             Kind::Generic | Kind::Shulker | Kind::Mod => true,
             // State beside the slot: filling an empty input restarts a furnace's cooking; an
             // insert into an empty hopper sets its cooldown; a jukebox's disc starts its song;
@@ -222,22 +351,21 @@ impl Game<'_> {
             // Not shown to change only the slot (a crafter's disabled slots, a brewing stand's
             // brew), so kept whole as before.
             Kind::Crafter | Kind::Brewing => false,
-            // A pot's item lives in saved data; composter writes use the block-state journal.
-            Kind::Pot | Kind::Composter(_) => false,
+            Kind::Pot | Kind::Composter(_) => unreachable!("handled above"),
         };
         if slot_only && let Some((pos, slot)) = view.locate(slot) {
             return self.journal_block_entity_slot(pos, slot);
         }
-        for &(part, _) in &view.parts {
+        for (part, _) in view.parts() {
             self.journal_block_entity(part);
         }
     }
-    /// Game-held vanilla containers coalesce their implicit notice at the root commit.
+    /// Default capability writes to engine-managed containers notify once at root commit.
     fn view_told(&mut self, view: &View) {
-        if matches!(view.kind, Kind::Composter(_) | Kind::Mod) {
+        if matches!(view.kind, Kind::Composter(_)) {
             return;
         }
-        for &(pos, _) in &view.parts {
+        for (pos, _) in view.parts() {
             self.after_commit(After::Changed(pos));
         }
     }
@@ -250,15 +378,18 @@ impl Game<'_> {
         slot: usize,
         resource: &ItemStack,
         amount: u32,
-        tx: &Transaction,
+        tx: &TransactionContext,
     ) -> Option<ItemStack> {
+        if !self.transaction_context_is_current(tx) {
+            return Some(ItemStack {
+                count: amount,
+                ..resource.clone()
+            });
+        }
         let stack = ItemStack {
             count: amount,
             ..resource.clone()
         };
-        if !self.transaction_holds(tx) {
-            return Some(stack);
-        }
         let Some(view) = self.capability_view(at) else {
             return Some(stack);
         };
@@ -303,7 +434,7 @@ impl Game<'_> {
         };
         let c = self.containers();
         view.capability_slots(at.side)
-            .filter_map(|slot| c.get(&view, slot))
+            .filter_map(|slot| c.insertion_item(&view, slot))
             .filter(|held| held.same_item_same_components(resource))
             .try_fold(0u64, |total, held| total.checked_add(u64::from(held.count)))
     }
@@ -324,25 +455,30 @@ impl Game<'_> {
                 total.checked_add(u64::from(c.planning_room(&view, slot, resource)))
             })
     }
-    /// What the slots `at`'s side reaches hold, from its `from`th to before its
-    /// `from + limit`th (fewer at the end), empty ones included: never more than
-    /// `MAX_STORAGE_PAGE` slots, whatever `limit` asks, so a request cannot make the game
-    /// allocate more than one page.
-    pub(in crate::game) fn container_listing(
+    /// Visits the occupied slots `at`'s side reaches, in order, converting only reached stacks.
+    pub(in crate::game) fn container_visit_entries(
         &self,
         at: BlockSide,
-        from: usize,
-        limit: usize,
-    ) -> Option<Vec<Option<ItemStack>>> {
-        let view = self.capability_view(at)?;
+        visitor: &mut dyn FnMut(&ItemResource, u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<(), LevelReadError> {
+        use crate::game::api_values::TryIntoApi;
+        let Some(view) = self.capability_view(at) else {
+            return Ok(());
+        };
         let c = self.containers();
-        Some(
-            view.capability_slots(at.side)
-                .skip(from)
-                .take(limit.min(mod_api::MAX_STORAGE_PAGE))
-                .map(|slot| c.get(&view, slot).cloned())
-                .collect(),
-        )
+        for stack in view
+            .capability_slots(at.side)
+            .filter_map(|slot| c.insertion_item(&view, slot))
+        {
+            let stack = stack
+                .as_ref()
+                .try_into_api()
+                .map_err(|_| LevelReadError::Unavailable)?;
+            if visitor(&ItemResource::of(&stack), u64::from(stack.count())).is_break() {
+                break;
+            }
+        }
+        Ok(())
     }
     /// Puts up to `amount` of `resource` into the slots `at`'s side reaches, those holding it
     /// first and then the empty ones, in transaction `tx`, on one view of the container: what
@@ -352,9 +488,12 @@ impl Game<'_> {
         at: BlockSide,
         resource: &ItemStack,
         amount: u64,
-        tx: &Transaction,
+        tx: &TransactionContext,
     ) -> u64 {
-        if amount == 0 || !self.transaction_holds(tx) {
+        if !self.transaction_context_is_current(tx) {
+            return 0;
+        }
+        if amount == 0 {
             return 0;
         }
         let Some(view) = self.capability_view(at) else {
@@ -373,7 +512,7 @@ impl Game<'_> {
                 if left == 0 {
                     break;
                 }
-                let pick = match self.containers().get(&view, slot) {
+                let pick = match self.containers().insertion_item(&view, slot) {
                     Some(held) => holding && held.same_item_same_components(resource),
                     None => !holding,
                 };
@@ -405,27 +544,35 @@ impl Game<'_> {
         at: BlockSide,
         resource: &ItemStack,
         amount: u64,
-        tx: &Transaction,
+        tx: &TransactionContext,
     ) -> u64 {
-        if amount == 0 || !self.transaction_holds(tx) {
+        if !self.transaction_context_is_current(tx) {
+            return 0;
+        }
+        if amount == 0 {
             return 0;
         }
         let Some(view) = self.capability_view(at) else {
             return 0;
         };
         let (mut left, mut told) = (amount, false);
+        let mut attempt = TakeAttempt::default();
         for slot in view.capability_slots(at.side) {
             if left == 0 {
                 break;
             }
             let c = self.containers();
-            let Some(held) = c.get(&view, slot) else {
+            let Some(held) = c.insertion_item(&view, slot) else {
                 continue;
             };
             if !held.same_item_same_components(resource)
-                || at
-                    .side
-                    .is_some_and(|face| !c.can_take(&view, slot, held, face))
+                || at.side.is_some_and(|face| {
+                    let ask = TakeAsk {
+                        game: self,
+                        attempt: &mut attempt,
+                    };
+                    !c.can_take(&view, slot, &held, face, ask)
+                })
             {
                 continue;
             }
@@ -443,19 +590,24 @@ impl Game<'_> {
     }
     /// How many of `stack` slot `slot` of those `at`'s side reaches holds when empty, as
     /// NeoForge's `isValid` and `getCapacityAsLong` answer: none where it may not go in (a
-    /// furnace's output, `canPlaceItem`), else the slot's limit for it.
+    /// furnace's output, `canPlaceItem`), else the slot's limit for it. `None` asks for the
+    /// general slot limit before item-specific rules.
     pub(in crate::game) fn container_capacity(
         &self,
         at: BlockSide,
         slot: usize,
-        stack: &ItemStack,
+        stack: Option<&ItemStack>,
     ) -> u32 {
         let Some(view) = self.capability_view(at) else {
             return 0;
         };
-        view.capability_slots(at.side)
-            .nth(slot)
-            .map_or(0, |slot| self.containers().capacity(&view, slot, stack))
+        view.capability_slots(at.side).nth(slot).map_or(0, |slot| {
+            let containers = self.containers();
+            match stack {
+                Some(stack) => containers.capacity(&view, slot, stack),
+                None => containers.slot_stack_limit(&view, slot, None),
+            }
+        })
     }
     /// Takes up to `max` out of slot `slot` of those `at`'s side reaches, in transaction `tx`;
     /// through a side, only what that side may take (`canTakeItemThroughFace`). What came out.
@@ -464,19 +616,23 @@ impl Game<'_> {
         at: BlockSide,
         slot: usize,
         max: u32,
-        tx: &Transaction,
+        tx: &TransactionContext,
     ) -> Option<ItemStack> {
-        if !self.transaction_holds(tx) {
+        if !self.transaction_context_is_current(tx) {
             return None;
         }
         let view = self.capability_view(at)?;
         let slot = view.capability_slots(at.side).nth(slot)?;
         let c = self.containers();
-        let stack = c.get(&view, slot)?;
+        let stack = c.insertion_item(&view, slot)?;
         if max == 0
-            || at
-                .side
-                .is_some_and(|face| !c.can_take(&view, slot, stack, face))
+            || at.side.is_some_and(|face| {
+                let ask = TakeAsk {
+                    game: self,
+                    attempt: &mut TakeAttempt::default(),
+                };
+                !c.can_take(&view, slot, &stack, face, ask)
+            })
         {
             return None;
         }
@@ -497,7 +653,8 @@ mod tests {
 
     fn view(kind: Kind, slots: usize) -> View {
         View {
-            parts: vec![((0, 0, 0), slots)],
+            first: ((0, 0, 0), slots),
+            second: None,
             kind,
             container: (kind == Kind::Mod).then(|| {
                 Arc::new(ModContainer {
@@ -529,7 +686,3 @@ mod tests {
 #[cfg(test)]
 #[path = "storage_attempt_tests.rs"]
 mod storage_attempt_tests;
-
-#[cfg(test)]
-#[path = "storage_attempt_wasm_tests.rs"]
-mod storage_attempt_wasm_tests;

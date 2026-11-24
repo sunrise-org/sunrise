@@ -74,7 +74,7 @@ impl Hub {
             self.refuse_passage(i, cross.id, why);
             return false;
         }
-        // No client tick: the prediction's record starts again at the confirmation.
+        // No client tick's move: the player's ground flag and look stay as the server has them.
         let g = &self.guests[i];
         let flags = u8::from(g.on_ground);
         let rot = (g.yaw, g.pitch);

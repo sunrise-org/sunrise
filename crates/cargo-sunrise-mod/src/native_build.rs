@@ -48,10 +48,10 @@ pub(crate) fn install_host(work: &Path) {
 
 /// Fetches through the proxy named in the environment (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`).
 fn get(url: &str) -> Result<host::Body, String> {
-    match sunrise_port_pack::net::agent(url).get(url).call() {
+    match sunrise_proxy::get(url, &[], None) {
         Ok(response) => Ok(Some(Box::new(response.into_reader()))),
-        Err(ureq::Error::Status(404, _)) => Ok(None),
-        Err(error) => Err(format!("{url}: {error}")),
+        Err(error) if error.status() == Some(404) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -241,9 +241,10 @@ pub fn layout(args: &[String]) -> ExitCode {
 fn laid_out(plan: &contract::LayoutPlan) -> Result<serde_json::Value, (&'static str, String)> {
     use sunrise_native_build::prebuilt;
     let layout = || -> Result<prebuilt::Package, String> {
-        prebuilt::check_identity(&plan.prebuilt, &plan.build, &plan.host, plan.target.into())?;
+        let sdk =
+            prebuilt::check_identity(&plan.prebuilt, &plan.build, &plan.host, plan.target.into())?;
         let _ = std::fs::remove_dir_all(&plan.out);
-        prebuilt::lay_out(&plan.prebuilt, &plan.out, true)
+        prebuilt::lay_out(&plan.prebuilt, &plan.out, true, &sdk)
     };
     layout()
         .and_then(|package| serde_json::to_value(package).map_err(|e| e.to_string()))

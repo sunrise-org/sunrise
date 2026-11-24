@@ -1,14 +1,81 @@
-use super::{Attack, HurtSource, names_its_projectile};
+use super::{Attack, DirectEntity, HurtSource, names_its_projectile};
 use crate::mobs::{Damage, DamageKind, Who};
 
 impl Attack {
+    /// `Enchantment.damageContext`: type predicates see the entities named by
+    /// this damage source, not the last attacker or another hit's projectile.
+    pub fn enchantment_context<'a>(
+        &'a self,
+        source: HurtSource<'a>,
+        victim: &'a str,
+    ) -> crate::enchant::EffectContext<'a> {
+        let actor = |id| {
+            [
+                self.enchantment_attacker.as_ref(),
+                self.enchantment_direct.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|actor| actor.id == id)
+        };
+        let causing = actor(source.causing);
+        let direct = actor(source.direct);
+        crate::enchant::EffectContext {
+            this: Some(victim),
+            damage_type: Some(source.damage_type),
+            is_direct: source.causing == source.direct,
+            attacker: causing.map(|actor| actor.kind.as_ref()),
+            attacker_motion: causing.and_then(|actor| actor.motion),
+            direct_attacker: direct.map(|actor| actor.kind.as_ref()),
+            direct_motion: direct.and_then(|actor| actor.motion),
+            ..Default::default()
+        }
+    }
+
+    /// The vanilla class family of this hit's resolved `DamageSource.getDirectEntity()`.
+    pub fn direct_entity(&self, damage: &Damage) -> DirectEntity {
+        let source = mob_source(damage, self);
+        if let Some(direct) = self.direct {
+            if direct == 0 {
+                return DirectEntity::Other;
+            }
+            if let Some(kind) = self.direct_kind {
+                return kind;
+            }
+            if self.projectile == Some(direct) {
+                return self.projectile_kind;
+            }
+            return DirectEntity::Other;
+        }
+        if melee(damage.kind) {
+            return if damage.attacker.is_some() {
+                DirectEntity::Living
+            } else {
+                DirectEntity::Other
+            };
+        }
+        if self
+            .projectile
+            .is_some_and(|entity| entity != 0 && source.direct == entity)
+        {
+            return self.projectile_kind;
+        }
+        DirectEntity::Other
+    }
     /// `WitherBoss.hurtServer` / `Shulker.hurtServer`: test the direct entity's
     /// `AbstractArrow` family, independently of the damage type's name or tags.
     pub fn direct_is_arrow(&self, damage: &Damage) -> bool {
-        self.projectile_is_arrow
-            && self
-                .projectile
-                .is_some_and(|entity| entity != 0 && mob_source(damage, self).direct == entity)
+        self.direct_entity(damage).is_arrow()
+    }
+    /// `Ghast.isReflectedFireball`: test whether the direct entity is a
+    /// `LargeFireball`, independently of the damage type's name or tags.
+    pub fn direct_is_large_fireball(&self, damage: &Damage) -> bool {
+        self.direct_entity(damage).is_large_fireball()
+    }
+    /// `DamageSource.isDirect`: whether the cause and direct entity are identical (including absent).
+    pub fn is_direct(&self, damage: &Damage) -> bool {
+        let source = mob_source(damage, self);
+        source.causing == source.direct
     }
     /// `DamageSource.getWeaponItem`: melee's direct living entity or a projectile's saved weapon.
     pub fn weapon_of(&self, direct: i32) -> Option<&crate::items::ItemStack> {
@@ -37,7 +104,7 @@ impl Attack {
         let melee = direct_entity_source(damage_type);
         HurtSource {
             damage_type,
-            causing,
+            causing: self.arrow_cause(damage_type, causing),
             direct: self.direct.unwrap_or_else(|| {
                 if melee {
                     causing
@@ -46,6 +113,18 @@ impl Attack {
                 }
             }),
             position: self.position,
+        }
+    }
+
+    fn arrow_cause(&self, damage_type: &str, causing: i32) -> i32 {
+        if causing == 0
+            && self.direct.is_none()
+            && matches!(damage_type, "minecraft:arrow" | "minecraft:trident")
+        {
+            // AbstractArrow/ThrownTrident name themselves as cause if their owner is gone.
+            self.projectile.unwrap_or(0)
+        } else {
+            causing
         }
     }
 }
@@ -135,7 +214,7 @@ pub fn mob_source(damage: &Damage, attack: &Attack) -> HurtSource<'static> {
     let melee = melee(damage.kind);
     HurtSource {
         damage_type,
-        causing,
+        causing: attack.arrow_cause(damage_type, causing),
         direct: if let Some(direct) = attack.direct {
             direct
         } else if melee {

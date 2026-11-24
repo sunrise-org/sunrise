@@ -1,15 +1,28 @@
 //! The `screen_key_released_pre` hook: declarations the mod API generator reads (see `hooks/mod.rs`).
-// catalog-order: 0120
 
 pub trait Hooks {
-    /// Before an open screen handles a named key's release (same screen gate as key presses).
-    /// Cancel bypasses screen handling; physical keys and mapped keyboard hold/toggle state release.
+    /// Before the currently open screen handles a named key's release.
+    /// Window releases, control-socket `key ... up`, and the release phase of `key ... tap`
+    /// reach the current receiving screen, even if it did not see the press. Cancel skips
+    /// the screen handler and Post. A cancelled window Pre still releases the device key and
+    /// applies mapped keyboard release cleanup. A cancelled socket Pre skips the ordinary
+    /// control-key release; a held mapping can stay down. Cancelling an unhandled release in
+    /// Post instead skips normal mapped release on either route, after the screen has declined.
     #[hook(
+        target = "sunrise_client::game::native_hooks::base::Game<'_>::native_screen_key_released_pre",
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
         neoforge = "ScreenEvent.KeyReleased.Pre",
-        cancellable = true
+        cancellable = true,
+        version = 3
     )]
-    fn screen_key_released_pre();
+    fn screen_key_released_pre(
+        screen: &ScreenView<'_>,
+        key: &str,
+        modifiers: u32,
+        canceled: &mut bool,
+    );
 }

@@ -245,6 +245,9 @@ impl Cull for ShadowCull {
     fn tight(&self) -> bool {
         self.casters.is_none()
     }
+    fn vertical_clamp(&self) -> bool {
+        false
+    }
 }
 /// The shadow camera's box that the shadow pass draws terrain in: the sides of `view.cull`, and
 /// its near and far planes only with `depth_planes`.

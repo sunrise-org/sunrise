@@ -89,6 +89,9 @@ const KEY: &str = "discordPresence";
 const LABEL: &str = "sunrise.extras.discord_presence";
 const ABOUT: &str = "sunrise.extras.discord_presence.tooltip";
 
+/// The switch's localized label and tooltip, registered only with the crate.
+pub static LANG: &sunrise_platform::lang::Files = include!(concat!(env!("OUT_DIR"), "/locales.rs"));
+
 /// The process-wide switch (off until Sunrise has a Discord application).
 static ON: AtomicBool = AtomicBool::new(false);
 
@@ -170,10 +173,7 @@ impl Page for Section {
         if !owns_switch() {
             return;
         }
-        rows.push(Row::Toggle {
-            label: LABEL,
-            on: enabled(),
-        });
+        rows.push(Row::toggle(LABEL, enabled()));
     }
     fn act(&self, row: usize, act: Act) {
         if row == 0 && owns_switch() && matches!(act, Act::Press | Act::PressBack) {
@@ -572,6 +572,19 @@ fn open(path: &std::path::Path) -> io::Result<Box<dyn Pipe>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn its_text_lives_in_its_own_lang_folder() {
+        assert!(LANG.iter().any(|(code, _)| *code == "en_us"));
+        for (code, body) in LANG {
+            serde_json::from_str::<Value>(body)
+                .unwrap_or_else(|e| panic!("{code}.json does not parse: {e}"));
+        }
+        let en_us = LANG.iter().find(|(code, _)| *code == "en_us").unwrap().1;
+        let text: Value = serde_json::from_str(en_us).unwrap();
+        assert!(text.get(LABEL).is_some_and(Value::is_string));
+        assert!(text.get(ABOUT).is_some_and(Value::is_string));
+    }
+
     fn world(play: Play, dimension: Dimension) -> Status {
         Status::World {
             play,
@@ -725,13 +738,7 @@ mod tests {
         assert_eq!(wanted(), Status::Off);
         let mut rows = Vec::new();
         SECTION.rows(&mut rows);
-        assert_eq!(
-            rows,
-            [Row::Toggle {
-                label: LABEL,
-                on: false
-            }]
-        );
+        assert_eq!(rows, [Row::toggle(LABEL, false)]);
         let mut lines = Vec::new();
         Setting.save(&mut |k, v| lines.push(format!("{k}:{v}")));
         assert_eq!(lines, ["discordPresence:false"]);

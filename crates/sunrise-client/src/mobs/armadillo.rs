@@ -317,6 +317,9 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
 }
 /// `DamageTypeTags.PANIC_ENVIRONMENTAL_CAUSES`.
 pub fn environmental(kind: DamageKind) -> bool {
+    if let DamageKind::Named(named) = kind {
+        return named.has(super::NamedDamage::PANIC_ENVIRONMENTAL_CAUSES);
+    }
     matches!(
         kind,
         DamageKind::Cactus
@@ -409,7 +412,11 @@ pub fn server_ai_step(m: &mut Mob, cx: &mut Cx) {
     if m.extra.armadillo.danger == 0 && scared(m) {
         roll_out(m, events);
     }
-    if m.extra.armadillo.panic_activity && !m.extra.armadillo.ball_up && m.on_ground && !liquid(m) {
+    if m.extra.armadillo.panic_activity
+        && !m.extra.armadillo.ball_up
+        && m.ground.on_ground
+        && !liquid(m)
+    {
         // ArmadilloBallUp.start.
         m.extra.armadillo.ball_up = true;
         roll_up(m, events);
@@ -439,7 +446,7 @@ fn ball_up_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     }
     if a.state == ROLLING && a.in_state_ticks > animation_duration(ROLLING) {
         set_state(m, SCARED);
-        if m.on_ground {
+        if m.ground.on_ground {
             play(m, events, "entity.armadillo.land");
         }
         return;
@@ -452,7 +459,7 @@ fn ball_up_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     m.extra.armadillo.danger_was_around = around;
     let state = m.extra.armadillo.state;
     if state == SCARED {
-        if m.extra.armadillo.next_peek == 0 && m.on_ground && around {
+        if m.extra.armadillo.next_peek == 0 && m.ground.on_ground && around {
             peek(m, events);
             m.extra.armadillo.next_peek = next_peek_timer(m);
         }
@@ -651,7 +658,7 @@ mod tests {
         k.id = "minecraft:armadillo".into();
         k.species = Species::Armadillo;
         let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
-        m.on_ground = true;
+        m.ground.on_ground = true;
         m
     }
 
@@ -742,7 +749,7 @@ mod tests {
             out = Some(at.map(|[x, y, z]| {
                 id += 1;
                 let mut m = Mob::new(id, kind.clone(), Vec3::new(x, y, z), 0.0);
-                m.on_ground = true;
+                m.ground.on_ground = true;
                 m
             }));
         });

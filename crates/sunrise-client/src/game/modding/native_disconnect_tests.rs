@@ -53,8 +53,7 @@ fn a_leave_request_does_not_follow_a_world_switch() {
         game.connect_local(pipe, "Steve").unwrap();
         let host: &mut dyn ClientHost = game;
         assert_eq!(host.disconnect(Some(kicked())), Ok(()));
-        game.native_lifecycle
-            .begin_open(mod_api::Authority::RemoteClient);
+        game.native_lifecycle.begin_open(None);
         game.native_leave_if_asked().unwrap();
         assert!(game.remote.is_some(), "the new world is not left");
         assert!(game.title.is_none());
@@ -109,27 +108,31 @@ fn a_translatable_reason_reads_in_the_players_language() {
     });
 }
 
-/// A malformed reason is refused by name through the generated forwarder, before anything
-/// changes: the client stays connected and no screen is built.
+/// The local disconnect screen does not serialize its reason.
 #[test]
 #[ignore = "daily"]
-fn a_too_deep_reason_is_refused_by_name_and_leaves_the_world_joined() {
+fn a_deep_local_disconnect_reason_reaches_the_screen() {
     with_client_game(|game| {
         game.title = None;
         let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
         game.connect_local(pipe, "Steve").unwrap();
-        let mut too_deep = Text::literal("leaf");
-        for _ in 1..513 {
-            too_deep = Text::literal("parent").append(too_deep);
+        let mut deep = Text::literal("leaf");
+        for _ in 0..mod_api::text::MAX_TEXT_DEPTH {
+            deep = Text::literal("").append(deep);
         }
         let host: &mut dyn ClientHost = game;
-        assert_eq!(
-            host.disconnect(Some(too_deep)),
-            Err(DisconnectError::Text(mod_api::text::TextFormError::TooDeep))
+        host.disconnect(Some(deep)).unwrap();
+        assert!(
+            game.remote.is_some(),
+            "the call queues the leave until frame end"
         );
-        assert!(game.remote.is_some(), "the refused call leaves the world");
         game.native_leave_if_asked().unwrap();
-        assert!(game.remote.is_some());
-        assert!(game.title.is_none());
+        assert!(game.remote.is_none());
+        let Mode::Multiplayer(sunrise_client::multiplayer::Screen::Disconnected { reason, .. }) =
+            &game.title.as_ref().unwrap().mode
+        else {
+            panic!("disconnect screen")
+        };
+        assert_eq!(reason.plain(), "leaf");
     });
 }

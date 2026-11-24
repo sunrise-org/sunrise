@@ -203,21 +203,27 @@ fn template(kind: &str) -> Option<&'static str> {
     Some(types[i].1)
 }
 
-/// a native mod's general entity type (#792): its declared tracking range in
-/// chunks (kept wide: the broadcast percentage scales it before the view
-/// distance caps it) and update interval, deltas on. The declaration takes any
-/// `i32`, as vanilla's builder does: a range below 0 tracks from nowhere, and an
-/// interval of `i32::MAX` (vanilla's "never"), or one below 1, never updates.
-/// Asked for a live general row only (`EntityState::general`), never for a key:
-/// a quarantined record keeps its type's key.
-pub fn general(kind: &str) -> Option<(i32, u32, bool)> {
-    let declarations = mod_api::__private::general_entity_type_declarations();
-    let declared = declarations.iter().find(|d| d.id == kind)?;
-    let interval = match declared.update_interval {
-        i32::MAX => 0,
-        n => u32::try_from(n).unwrap_or(0),
-    };
-    Some((declared.tracking_chunks.max(0), interval, true))
+/// A live general row's tracking settings, read from its resolved type slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct General {
+    /// Base range in chunks, kept wide until view distance caps the scaled range.
+    pub range: i32,
+    /// Update interval in ticks, or zero for no periodic updates.
+    pub interval: u32,
+}
+
+impl From<&mod_api::__private::GeneralEntityTypeDeclaration> for General {
+    fn from(declared: &mod_api::__private::GeneralEntityTypeDeclaration) -> Self {
+        // The declaration takes signed values. A range below zero never pairs;
+        // an interval below one or equal to vanilla's "never" never updates.
+        Self {
+            range: declared.tracking_chunks.max(0),
+            interval: match declared.update_interval {
+                i32::MAX => 0,
+                n => u32::try_from(n).unwrap_or(0),
+            },
+        }
+    }
 }
 
 /// the settings of one entity type: a content mod's type takes its

@@ -33,7 +33,6 @@ fn components_map_id_decodes_signed_numbers_and_matches_live_values() {
         r#"{"type":"neoforge:components","items":"minecraft:filled_map","components":{"minecraft:map_id":4294967289}}"#,
     ] {
         let json: Value = serde_json::from_str(source).unwrap();
-        Ingredient::validate_recipe(&json, &items).unwrap();
         let ingredient = Ingredient::parse(&json, &items).unwrap();
         assert_eq!(
             ingredient.shown.as_ref().unwrap()[0].data().unwrap().map_id,
@@ -91,7 +90,14 @@ fn components_map_id_decodes_signed_numbers_and_matches_live_values() {
         "ingredients": [bad],
         "result": {"id": "minecraft:map"},
     });
-    assert!(Ingredient::validate_recipe(&bad_recipe, &items).is_err());
+    assert!(
+        crate::crafting::ResolvedSources::resolve(
+            vec![("demo:bad_map".into(), bad_recipe)],
+            &items,
+            &load,
+        )
+        .is_err()
+    );
 
     let mut defaults = Items::empty();
     defaults.component_defaults = std::sync::Arc::new(std::collections::HashMap::from([(

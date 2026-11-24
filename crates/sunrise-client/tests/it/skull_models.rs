@@ -1,8 +1,12 @@
 //! The skull types native mods register (`create_skull_models`): what is kept, what is left
-//! out, and that only a kept kind is a `minecraft:head` kind. Its own test binary, as both the
-//! model layers and the skull types are registered once per process.
+//! out, and that only a kept kind is a `minecraft:head` kind. Only this test in the
+//! integration binary freezes the model layer and skull tables.
 
-use mod_api::{CubeListBuilder, LayerDefinition, MeshDefinition, PartPose, SkullModel};
+use mod_api::{
+    __private::game::RegistrationContextNew, CubeListBuilder, Hooks, LayerDefinition,
+    MeshDefinition, ModEntry, PartPose, RegisterLayerDefinitionsEvent, RegistrationContext,
+    SkullModel,
+};
 use sunrise_assets::item_model::{SpecialKind, SpecialModel, is_skull_kind};
 use sunrise_client::{mobs::model_layers, skull_models};
 
@@ -16,16 +20,29 @@ fn skull(kind: &str, layer: &str, texture: &str) -> SkullModel {
 
 #[test]
 fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
-    let mut mesh = MeshDefinition::new();
-    let root = mesh.root();
-    let head = CubeListBuilder::create()
-        .tex_offs(0, 0)
-        .add_box([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
-    mesh.add_or_replace_child(root, "head", head, PartPose::offset(0.0, 1.0, 0.0));
-    model_layers::register(vec![(
-        "skulltest:goblin_head#main".into(),
-        LayerDefinition::create(mesh, 64, 32),
-    )]);
+    struct Goblin;
+    #[mod_api::__subscriptions]
+    impl Hooks for Goblin {
+        fn register_layer_definitions(
+            &self,
+            _: &RegistrationContext,
+            event: &mut RegisterLayerDefinitionsEvent<'_>,
+        ) {
+            event.register("skulltest:goblin_head#main", || {
+                let mut mesh = MeshDefinition::new();
+                let head = CubeListBuilder::create()
+                    .tex_offs(0, 0)
+                    .add_box([-4.0, -8.0, -4.0], [8.0, 8.0, 8.0]);
+                mesh.add_or_replace_child(
+                    mesh.root(),
+                    "head",
+                    head,
+                    PartPose::offset(0.0, 1.0, 0.0),
+                );
+                LayerDefinition::create(mesh, 64, 32)
+            });
+        }
+    }
     // A vanilla layer, read from `entity-models.json` under the vanilla root.
     let vanilla_root = std::env::temp_dir().join(format!("skull-models-{}", std::process::id()));
     std::fs::create_dir_all(&vanilla_root).unwrap();
@@ -35,6 +52,14 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
             {"head": {"pose": [0,2,0,0,0,0,1,1,1], "polygons": [[[0,0,0,0,0],[1,0,0,1,0],[1,1,0,1,1],[0,1,0,0,1]]]}}}}"#,
     )
     .unwrap();
+    mod_platform::testing::with_mods(
+        vec![ModEntry::new("skulltest", Box::new(Goblin))].into(),
+        || {
+            let mut layers = Vec::new();
+            mod_api::dispatch_register_layer_definitions(&RegistrationContext::new(), &mut layers);
+            model_layers::register(layers, &vanilla_root).unwrap();
+        },
+    );
     let kept = skull_models::register(
         vec![
             skull(
@@ -55,9 +80,20 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
             ),
             // No texture.
             skull("skulltest:blank", "skulltest:goblin_head#main", ""),
-            // Vanilla's namespace, an unnamespaced kind, and a kind registered twice.
+            // A custom `minecraft:` skull kind is accepted; built-in vanilla skull types, an
+            // unnamespaced kind, and a kind registered twice are rejected.
             skull(
                 "minecraft:goblin",
+                "skulltest:goblin_head#main",
+                "skulltest:entity/goblin",
+            ),
+            skull(
+                "minecraft:skeleton",
+                "skulltest:goblin_head#main",
+                "skulltest:entity/goblin",
+            ),
+            skull(
+                "minecraft:dragon",
                 "skulltest:goblin_head#main",
                 "skulltest:entity/goblin",
             ),
@@ -74,7 +110,14 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
         ],
         &vanilla_root,
     );
-    assert_eq!(kept, ["skulltest:goblin", "skulltest:zombie_like"]);
+    assert_eq!(
+        kept,
+        [
+            "skulltest:goblin",
+            "skulltest:zombie_like",
+            "minecraft:goblin"
+        ]
+    );
     // An item renderer loaded afterwards draws a mod head as it draws a vanilla one: the kind's
     // model with its default texture, resolved when the renderer loads.
     let drawn = heads_drawn(&vanilla_root);
@@ -112,10 +155,16 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
     assert_eq!(zombie_like.children[0].1.pose[1], 2.0);
     assert_eq!(zombie_like.children[0].1.polygons.len(), 1);
 
+    let minecraft_goblin =
+        skull_models::part("minecraft:goblin").expect("custom minecraft: skull kind");
+    assert_eq!(minecraft_goblin.children[0].1.polygons.len(), 6);
+    assert!(is_skull_kind("minecraft:goblin"));
+
     for left_out in [
         "skulltest:ghost",
         "skulltest:blank",
-        "minecraft:goblin",
+        "minecraft:skeleton",
+        "minecraft:dragon",
         "goblin",
     ] {
         assert!(skull_models::part(left_out).is_none(), "{left_out}");
@@ -130,8 +179,13 @@ fn skull_types_keep_a_known_layer_and_leave_out_the_rest() {
         head("skulltest:goblin").map(|m| m.kind),
         Ok(SpecialKind::Head { kind, .. }) if kind == "skulltest:goblin"
     ));
+    assert!(matches!(
+        head("minecraft:goblin").map(|m| m.kind),
+        Ok(SpecialKind::Head { kind, .. }) if kind == "minecraft:goblin"
+    ));
     assert!(head("skulltest:ghost").is_err());
     assert!(head("skulltest:blank").is_err());
+    assert!(head("minecraft:skeleton").is_err());
     // Registration happens once; a second call keeps nothing, not even the kind.
     let late = skull(
         "skulltest:late",

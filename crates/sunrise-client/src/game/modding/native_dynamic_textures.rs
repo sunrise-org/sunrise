@@ -18,15 +18,9 @@ impl Game<'_> {
         rgba: &[u8],
     ) -> Result<(), DynamicTextureError> {
         let owner = mod_api::content::crash::current_native_mod();
-        let atlas = &mut self.gui.atlas;
-        self.dynamic_textures.create(
-            atlas.dynamic_texture_pool.as_ref(),
-            &mut atlas.sprites,
-            owner,
-            id,
-            [width, height],
-            rgba,
-        )
+        let (pool, mut names) = self.gui.atlas.dynamic_names();
+        self.dynamic_textures
+            .create(pool, &mut names, owner, id, [width, height], rgba)
     }
     /// The calling mod's image `id` given new pixels, written into its slot with the next frame.
     pub(in crate::game) fn update_dynamic_texture(
@@ -37,15 +31,9 @@ impl Game<'_> {
         rgba: &[u8],
     ) -> Result<(), DynamicTextureError> {
         let owner = mod_api::content::crash::current_native_mod();
-        let atlas = &mut self.gui.atlas;
-        self.dynamic_textures.update(
-            atlas.dynamic_texture_pool.as_ref(),
-            &mut atlas.sprites,
-            owner,
-            id,
-            [width, height],
-            rgba,
-        )
+        let (pool, mut names) = self.gui.atlas.dynamic_names();
+        self.dynamic_textures
+            .update(pool, &mut names, owner, id, [width, height], rgba)
     }
     /// The calling mod's image `id` freed: its name and slot go at once.
     pub(in crate::game) fn free_dynamic_texture(
@@ -53,13 +41,8 @@ impl Game<'_> {
         id: &Identifier,
     ) -> Result<(), DynamicTextureError> {
         let owner = mod_api::content::crash::current_native_mod();
-        let atlas = &mut self.gui.atlas;
-        self.dynamic_textures.free(
-            atlas.dynamic_texture_pool.as_ref(),
-            &mut atlas.sprites,
-            owner,
-            id,
-        )
+        let (pool, mut names) = self.gui.atlas.dynamic_names();
+        self.dynamic_textures.free(pool, &mut names, owner, id)
     }
     /// What the calling mod may still create.
     pub(in crate::game) fn dynamic_texture_budget(

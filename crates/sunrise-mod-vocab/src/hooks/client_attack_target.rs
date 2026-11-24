@@ -12,6 +12,7 @@ pub trait Hooks {
 
 `client_attack_target` runs with a ClientHost from the remote client's start-attack input path after interaction cancellation and before ordinary melee dispatch. Spear jabs bypass it. Cancellation suppresses attacks; an explicit target batch is deduplicated in first-occurrence order and the unchanged crosshair entry preserves its committed tick-pick point and occlusion policy without re-hitting it. Additional targets are checked for lifetime, reach, held-item range and occlusion. The server remains authoritative."#]
     #[hook(
+        dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "canceled",
@@ -19,5 +20,5 @@ pub trait Hooks {
         cancellable = true,
         version = 2
     )]
-    fn client_attack_target();
+    fn client_attack_target(targets: &mut Vec<EntityRef>, canceled: &mut bool);
 }

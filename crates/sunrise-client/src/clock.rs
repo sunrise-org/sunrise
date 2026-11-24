@@ -311,6 +311,10 @@ pub struct FixedStep {
     manager: ServerTickRateManager,
     now: std::time::Duration,
     pause: bool,
+    animation_phase: f64,
+    animation_level_ticks: Option<u64>,
+    /// Offset from the live residual; `None` means the animation must rebase before resuming.
+    animation_offset: Option<f64>,
     sprint_checked: bool,
     sprint_report: Option<SprintReport>,
     tick_times: [i64; SAMPLES],
@@ -344,6 +348,9 @@ impl FixedStep {
             manager: ServerTickRateManager::default(),
             now: std::time::Duration::ZERO,
             pause: false,
+            animation_phase: 0.0,
+            animation_level_ticks: None,
+            animation_offset: Some(0.0),
             sprint_checked: false,
             sprint_report: None,
             tick_times: [0; SAMPLES],
@@ -417,6 +424,33 @@ impl FixedStep {
     pub fn reset(&mut self) {
         self.timer = Timer::new(20.0, self.now_ms());
         self.timer.update_pause_state(self.pause);
+        self.animation_offset = None;
+    }
+    /// Sample mod animation time after the frame's packets and client ticks. Freeze holds the
+    /// last drawn phase even during single steps, which advance only the whole tick count.
+    pub fn update_animation_phase(&mut self, level_ticks: u64) {
+        let previous_level_ticks = self.animation_level_ticks.replace(level_ticks);
+        if self.frozen() {
+            self.animation_offset = None;
+        } else if !self.pause {
+            let live = f64::from(self.window_fraction());
+            if let Some(offset) = self.animation_offset {
+                self.animation_phase = live + offset;
+            } else {
+                // Rebase the total draw time, not just the residual. Ordinary ticks may have
+                // already run on this frame; subtract them from the phase to keep the pose.
+                // Frozen steps already counted in the previous sample are not subtracted.
+                if let Some(previous_level_ticks) = previous_level_ticks {
+                    self.animation_phase -= level_ticks.saturating_sub(previous_level_ticks) as f64;
+                }
+                self.animation_offset = Some(self.animation_phase - live);
+            }
+        }
+    }
+    /// Add to the number of ticks the level has run to get this frame's mod animation time.
+    /// This is not a world or camera partial tick and need not be between zero and one.
+    pub fn animation_phase(&self) -> f64 {
+        self.animation_phase
     }
     /// The partial tick for interpolation (`getGameTimeDeltaPartialTick(false)`).
     pub fn fraction(&self) -> f64 {
@@ -435,6 +469,13 @@ impl FixedStep {
             return 1.0;
         }
         f64::from(self.timer.game_time_delta_partial_tick(true))
+    }
+    /// `Camera.getCameraEntityPartialTicks`: `1.0` when frozen (`isEntityFrozen`), else partial tick.
+    pub fn camera_fraction_for(&self, entity_frozen: bool) -> f64 {
+        if entity_frozen {
+            return 1.0;
+        }
+        self.camera_fraction()
     }
     /// After a frame: whether the game is paused by a screen (the residual
     /// stops accumulating) and whether the level is frozen.
@@ -476,6 +517,10 @@ impl FixedStep {
     }
     pub fn rate(&self) -> f32 {
         self.manager.base.tickrate()
+    }
+    /// `TickRateManager.millisecondsPerTick`: finite even for a NaN rate (it is from the nanoseconds).
+    pub fn millis_per_tick(&self) -> f32 {
+        self.manager.base.milliseconds_per_tick()
     }
     pub fn set_rate(&mut self, rate: f32) {
         self.manager.set_tick_rate(rate);
@@ -558,12 +603,12 @@ impl FixedStep {
     }
     /// `getTickTimesNanos`: the last 100 ticks' durations in nanoseconds, the tick numbered
     /// `n` at index `n % 100` (0 where none was recorded yet).
-    pub fn tick_times(&self) -> Vec<u64> {
-        self.tick_times.iter().map(|&t| t.max(0) as u64).collect()
+    pub fn tick_times(&self) -> impl ExactSizeIterator<Item = u64> + '_ {
+        self.tick_times.iter().map(|&t| t.max(0) as u64)
     }
     /// The sorted `getTickTimesNanos` array (always 100 entries).
     pub fn sorted_samples(&self) -> Vec<u64> {
-        let mut v: Vec<u64> = self.tick_times.iter().map(|&t| t.max(0) as u64).collect();
+        let mut v: Vec<u64> = self.tick_times().collect();
         v.sort_unstable();
         v
     }
@@ -581,13 +626,13 @@ mod tests {
         for took in [7, 8, 9] {
             clock.record(std::time::Duration::from_nanos(took));
         }
-        let times = clock.tick_times();
+        let times: Vec<_> = clock.tick_times().collect();
         assert_eq!(times.len(), 100);
         assert_eq!(times[..4], [7, 8, 9, 0]);
         for took in 10..=109 {
             clock.record(std::time::Duration::from_nanos(took));
         }
-        let times = clock.tick_times();
+        let times: Vec<_> = clock.tick_times().collect();
         assert_eq!(times[..4], [107, 108, 109, 10]);
         assert_eq!(times[99], 106);
     }
@@ -609,6 +654,73 @@ mod tests {
         t.update_pause_state(false);
         assert_eq!(t.game_time_delta_partial_tick(false), 0.5);
     }
+    fn animation_frame(
+        clock: &mut FixedStep,
+        level_ticks: &mut u64,
+        ms: u64,
+        target: f32,
+        running_ticks: u64,
+    ) -> f64 {
+        let mut ran = 0;
+        for _ in 0..clock.advance(std::time::Duration::from_millis(ms), target) {
+            ran += u64::from(clock.world_runs());
+        }
+        assert_eq!(ran, running_ticks);
+        *level_ticks += ran;
+        clock.update_animation_phase(*level_ticks);
+        clock.end_frame(false);
+        *level_ticks as f64 + clock.animation_phase()
+    }
+
+    #[test]
+    fn animation_phase_holds_and_rebases_without_changing_world_pacing() {
+        let mut clock = FixedStep::new(false);
+        let mut ticks = 0;
+        assert_eq!(animation_frame(&mut clock, &mut ticks, 25, 50.0, 0), 0.5);
+
+        // A freeze arrives before ticks, after the previous frame showed half a tick.
+        clock.set_frozen(true);
+        assert_eq!(animation_frame(&mut clock, &mut ticks, 25, 50.0, 0), 0.5);
+        assert_eq!(clock.fraction(), 1.0);
+        assert_eq!(clock.camera_fraction(), 0.0);
+
+        assert!(clock.start_step(1));
+        assert_eq!(animation_frame(&mut clock, &mut ticks, 50, 50.0, 1), 1.5);
+
+        clock.set_frozen(false);
+        assert_eq!(animation_frame(&mut clock, &mut ticks, 25, 100.0, 0), 1.5);
+        assert_eq!(clock.camera_fraction(), 0.25);
+
+        assert_eq!(animation_frame(&mut clock, &mut ticks, 25, 100.0, 0), 1.75);
+        assert_eq!(animation_frame(&mut clock, &mut ticks, 50, 100.0, 1), 2.25);
+    }
+
+    #[test]
+    fn animation_time_holds_if_ordinary_ticks_run_before_the_first_thawed_draw() {
+        // Thaw exactly at a tick boundary, then thaw mid-tick with two ticks already run.
+        for (thaw_ms, thaw_ticks, residual, next_ticks) in [(25, 1, 0.0, 0), (100, 2, 0.5, 1)] {
+            let mut clock = FixedStep::new(false);
+            let mut ticks = 0;
+            assert_eq!(animation_frame(&mut clock, &mut ticks, 75, 50.0, 1), 1.5);
+            clock.set_frozen(true);
+            assert_eq!(animation_frame(&mut clock, &mut ticks, 50, 50.0, 0), 1.5);
+            assert!(clock.start_step(1));
+            assert_eq!(animation_frame(&mut clock, &mut ticks, 50, 50.0, 1), 2.5);
+
+            clock.set_frozen(false);
+            assert_eq!(
+                animation_frame(&mut clock, &mut ticks, thaw_ms, 50.0, thaw_ticks),
+                2.5
+            );
+            assert_eq!(clock.fraction(), residual);
+            assert_eq!(clock.camera_fraction(), residual);
+            assert_eq!(
+                animation_frame(&mut clock, &mut ticks, 25, 50.0, next_ticks),
+                3.0
+            );
+        }
+    }
+
     #[test]
     fn frozen_step_runs_exactly_the_requested_ticks() {
         let mut m = ServerTickRateManager::default();

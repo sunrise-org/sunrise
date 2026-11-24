@@ -1,10 +1,11 @@
 use sunrise_perf_format::v1::{
-    Capture, GameRules, Machine, Options, Overhead, Settings, Side, Start, Stop, SunriseOptions,
+    Capture, ClientSettings, GameRules, Machine, Options, Overhead, Settings, Side, Start, Stop,
+    SunriseOptions,
 };
 
 use super::rows::{
-    BuildInfo, GameRulesInfo, MachineInfo, MetaRow, ModInfo, OptionsInfo, OverheadInfo, Row,
-    Sections, SettingsInfo, StartInfo, StopInfo, SunriseOptionsInfo, TimingRow,
+    BuildInfo, ClientSettingsInfo, GameRulesInfo, MachineInfo, MetaRow, ModInfo, OptionsInfo,
+    OverheadInfo, Row, Sections, SettingsInfo, StartInfo, StopInfo, SunriseOptionsInfo, TimingRow,
 };
 use super::{Ctx, QueryError, Reply, fine, num, opt_num};
 use crate::wire::{KindName, SideName, Unit};
@@ -73,6 +74,7 @@ fn start_info(s: &Start) -> StartInfo {
         settings: s.settings.as_ref().map(settings_info),
         game_rules: s.game_rules.as_ref().map(game_rules_info),
         sunrise_options: s.sunrise_options.as_ref().map(sunrise_options_info),
+        client_settings: s.client_settings.as_ref().map(client_settings_info),
         mods: s
             .mods
             .iter()
@@ -134,6 +136,17 @@ fn sunrise_options_info(h: &SunriseOptions) -> SunriseOptionsInfo {
     }
 }
 
+fn client_settings_info(c: &ClientSettings) -> ClientSettingsInfo {
+    ClientSettingsInfo {
+        view_distance: c.view_distance,
+        loaded_view_distance: c.loaded_view_distance,
+        simulation_distance: c.simulation_distance,
+        far_terrain_distance: c.far_terrain_distance,
+        far_terrain_active: c.far_terrain_active,
+        graphics_preset: c.graphics_preset.clone(),
+    }
+}
+
 fn settings_info(s: &Settings) -> SettingsInfo {
     SettingsInfo {
         view_distance: s.view_distance,
@@ -160,6 +173,7 @@ fn overhead_info(o: &Overhead) -> OverheadInfo {
         dropped_samples: o.dropped_samples,
         dropped_messages: o.dropped_messages,
         timeline_stopped_t: opt_num(o.timeline_stopped_t),
+        memory_snapshot_ns: (o.memory_snapshot_ns != 0).then_some(o.memory_snapshot_ns),
     }
 }
 

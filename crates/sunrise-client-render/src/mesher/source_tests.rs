@@ -12,7 +12,9 @@ impl Drop for Scratch {
     }
 }
 
-fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
+type Fixture = (Scratch, Assets, RenderAssets, MeshTables, Biomes);
+
+fn scratch() -> Scratch {
     let path = std::env::temp_dir().join(format!(
         "terrain-source-{}-{}",
         std::process::id(),
@@ -22,19 +24,24 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
             .as_nanos()
     ));
     std::fs::create_dir_all(&path).unwrap();
-    let write = |name: &str, value: serde_json::Value| {
-        let file = path.join(name);
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(file, value.to_string()).unwrap();
-    };
+    Scratch(path)
+}
+
+fn write(root: &std::path::Path, name: &str, value: serde_json::Value) {
+    let file = root.join(name);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, value.to_string()).unwrap();
+}
+
+fn fixture() -> Fixture {
+    let scratch = scratch();
+    let path = scratch.0.clone();
+    let write = |name: &str, value: serde_json::Value| write(&path, name, value);
     let registry = json!({"defaults":{"minecraft:air":0,"fixture:signal":1},"states":[
         ["air",true,false,"", "minecraft:air"],
         ["signal",false,false,"",{"id":"fixture:signal","properties":{"active":"false","waterlogged":"false"}}],
         ["signal",false,true,"",{"id":"fixture:signal","properties":{"active":"true","waterlogged":"true"}}]
     ]});
-    let registry = Box::leak(Box::new(
-        BlockRegistry::from_facts_json(registry.to_string().as_bytes()).unwrap(),
-    ));
     write(
         "assets/fixture/blockstates/signal.json",
         json!({"multipart":[
@@ -53,7 +60,152 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
             }),
         );
     }
-    // The same authored sprite is used by every part of both states.
+    let facts = BTreeMap::from([(
+        "fixture:signal".into(),
+        json!({
+            "schema":{"active":{"named":["false","true"]},"waterlogged":{"named":["false","true"]}},
+            "states":[{"active":"false","waterlogged":"false"},{"active":"true","waterlogged":"true"}]
+        }),
+    )]);
+    let air = air_info();
+    let info = vec![
+        air,
+        Info {
+            air: false,
+            model: true,
+            ..air
+        },
+        Info {
+            air: false,
+            model: true,
+            emission: 13,
+            fluid: FluidState::WATER,
+            ..air
+        },
+    ];
+    let properties = [
+        (true, false, false, false),
+        (false, false, false, false),
+        (false, true, false, false),
+    ];
+    assemble(scratch, registry, &facts, &properties, info)
+}
+
+/// The blocks `shaped_mesh` meshes: (state, cell in the section). A whole cube, whose faces are
+/// on the block grid, twice; a stair, a door and a path, whose faces are mostly off it. Apart,
+/// so each face lies in its own block's cell.
+pub(crate) const SHAPED_BLOCKS: [(u32, [i32; 3]); 5] = [
+    (1, [1, 2, 3]),
+    (2, [4, 2, 3]),
+    (3, [7, 2, 3]),
+    (4, [10, 2, 3]),
+    (1, [12, 9, 5]),
+];
+
+/// The section of `SHAPED_BLOCKS` as the mesher makes it for a shader pack, sorted, and in the
+/// compact layout when `compact`.
+pub(crate) fn shaped_mesh(compact: bool) -> SectionMesh {
+    let scratch = scratch();
+    let path = scratch.0.clone();
+    let write = |name: &str, value: serde_json::Value| write(&path, name, value);
+    let shapes: [(&str, &[([i32; 3], [i32; 3])]); 4] = [
+        ("cube", &[([0, 0, 0], [16, 16, 16])]),
+        (
+            "stair",
+            &[([0, 0, 0], [16, 8, 16]), ([8, 8, 0], [16, 16, 16])],
+        ),
+        ("door", &[([0, 0, 0], [3, 16, 16])]),
+        ("path", &[([0, 0, 0], [16, 15, 16])]),
+    ];
+    let mut states = vec![json!(["air", true, false, "", "minecraft:air"])];
+    let mut defaults = serde_json::Map::from_iter([("minecraft:air".into(), json!(0))]);
+    let mut facts = BTreeMap::new();
+    for (i, (name, elements)) in shapes.into_iter().enumerate() {
+        let id = format!("fixture:{name}");
+        states.push(json!([name, false, false, "", id]));
+        defaults.insert(id.clone(), json!(i + 1));
+        facts.insert(id, json!({"schema":{}, "states":[{}]}));
+        write(
+            &format!("assets/fixture/blockstates/{name}.json"),
+            json!({"variants":{"":{"model":format!("fixture:block/{name}")}}}),
+        );
+        let face = json!({"texture":"#all"});
+        let faces =
+            json!({"down":face,"up":face,"north":face,"south":face,"west":face,"east":face});
+        let elements: Vec<_> = elements
+            .iter()
+            .map(|(from, to)| json!({"from":from,"to":to,"faces":faces}))
+            .collect();
+        write(
+            &format!("assets/fixture/models/block/{name}.json"),
+            json!({"textures":{"all":"fixture:block/shared"},"elements":elements}),
+        );
+    }
+    let registry = json!({"defaults":defaults,"states":states});
+    let air = air_info();
+    let block = Info {
+        air: false,
+        model: true,
+        ..air
+    };
+    let mut properties = vec![(true, false, false, false)];
+    properties.resize(5, (false, false, false, false));
+    let (_scratch, assets, render, tables, biomes) = assemble(
+        scratch,
+        registry,
+        &facts,
+        &properties,
+        vec![air, block, block, block, block],
+    );
+    let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());
+    for (state, [x, y, z]) in SHAPED_BLOCKS {
+        chunk.set(x, y, z, state);
+    }
+    let region = [
+        [None, None, None],
+        [None, Some(&chunk), None],
+        [None, None, None],
+    ];
+    let mut mesher = Mesher {
+        hidden_states: &[],
+        part_tables: Default::default(),
+        nether_shading: false,
+        shader_pack_lighting: false,
+        separate_ao: false,
+        shader_pack: true,
+        assets: &assets,
+        render: &render,
+        tables: &tables,
+        biomes: &biomes,
+        visibility: FaceVisibility::empty(),
+        zoom: BiomeZoom::new(0),
+        blend_radius: 0,
+        smooth_lighting: false,
+        cutout_leaves: true,
+        opaque_ice: false,
+        translucent_layers: &[],
+        leaf_culling: LeafCullingMode::Off,
+    };
+    let mut mesh = mesher.mesh(&region, 0);
+    mesh.sort_solid_as(compact);
+    mesh
+}
+
+/// A fixture of the blocks `registry` lists, their models already written under `scratch`,
+/// all of them with the sprite `fixture:block/shared`.
+fn assemble(
+    scratch: Scratch,
+    registry: serde_json::Value,
+    facts: &BTreeMap<String, serde_json::Value>,
+    properties: &[(bool, bool, bool, bool)],
+    info: Vec<Info>,
+) -> Fixture {
+    let path = scratch.0.clone();
+    let write = |name: &str, value: serde_json::Value| write(&path, name, value);
+    let registry = Box::leak(Box::new(
+        BlockRegistry::from_facts_json(registry.to_string().as_bytes()).unwrap(),
+    ));
+    // The same authored sprite is used by every part of every state.
     let png_path = path.join("assets/fixture/textures/block/shared.png");
     std::fs::create_dir_all(png_path.parent().unwrap()).unwrap();
     let encode = |file: PathBuf| {
@@ -67,20 +219,14 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
             .unwrap();
     };
     encode(png_path);
-    let facts = BTreeMap::from([(
-        "fixture:signal".into(),
-        json!({
-            "schema":{"active":{"named":["false","true"]},"waterlogged":{"named":["false","true"]}},
-            "states":[{"active":"false","waterlogged":"false"},{"active":"true","waterlogged":"true"}]
-        }),
-    )]);
+    let blocks: Vec<&str> = facts.keys().map(String::as_str).collect();
     let mut sprites = crate::sprites::Sprites::default();
     let catalog = crate::models::StateModels::from_facts(
         &sunrise_assets::resource_source::ResourceSource::directory(path.clone()),
         registry,
-        &["fixture:signal"],
+        &blocks,
         &mut sprites,
-        &facts,
+        facts,
     )
     .unwrap();
     let render = RenderAssets {
@@ -94,8 +240,9 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
         model_gallery: vec![],
         animations: vec![],
         sprite_layers: BTreeMap::new(),
+        sprite_names: vec![None],
         file_layers: BTreeMap::new(),
-        emissive: vec![],
+        emissive_layers: vec![],
         translucent_layers: vec![false],
         sprite_mips: vec![],
         pbr_normals: vec![],
@@ -109,55 +256,15 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
     };
     let assets = Assets {
         registry,
-        properties: Properties::for_tests(&[
-            (true, false, false, false),
-            (false, false, false, false),
-            (false, true, false, false),
-        ]),
+        properties: Properties::for_tests(properties),
         material_states: [BlockStateId(0); 6],
         blocks_fluid_flow: Default::default(),
     };
-    let air = Info {
-        solid: false,
-        full: false,
-        permeable: true,
-        shade: 1.0,
-        emission: 0,
-        tier: 0,
-        emissive: false,
-        fluid: FluidState::EMPTY,
-        model: false,
-        block_entity: false,
-        tints: [Tint::None; 2],
-        tint_count: 0,
-        colormap: None,
-        offset: None,
-        legacy_solid: false,
-        overlay: false,
-        leaves: false,
-        pane: false,
-        opaque_cube: false,
-        blocks_flow: false,
-        ice: false,
-        opaque_ice: false,
-        sturdy: 0,
-        face: [0; 6],
-        cover: [0.0; 6],
-    };
-    let info = vec![
-        air,
-        Info { model: true, ..air },
-        Info {
-            model: true,
-            emission: 13,
-            fluid: FluidState::WATER,
-            ..air
-        },
-    ];
+    let states = info.len();
     let tables = MeshTables {
         info,
-        solid: vec![false; 3],
-        full_faces: vec![0; 3],
+        solid: vec![false; states],
+        full_faces: vec![0; states],
         visibility: FaceVisibility::empty(),
         water_still: 0,
         water_flow: 0,
@@ -184,7 +291,73 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
         path.clone(),
     ))
     .unwrap();
-    (Scratch(path), assets, render, tables, biomes)
+    (scratch, assets, render, tables, biomes)
+}
+
+/// The render facts of air, which the others start from.
+fn air_info() -> Info {
+    Info {
+        air: true,
+        solid: false,
+        full: false,
+        permeable: true,
+        shade: 1.0,
+        emission: 0,
+        tier: 0,
+        emissive: false,
+        fluid: FluidState::EMPTY,
+        model: false,
+        block_entity: false,
+        tints: [Tint::None; 2],
+        tint_count: 0,
+        colormap: None,
+        offset: None,
+        legacy_solid: false,
+        overlay: false,
+        leaves: false,
+        pane: false,
+        opaque_cube: false,
+        blocks_flow: false,
+        ice: false,
+        opaque_ice: false,
+        sturdy: 0,
+        face: [0; 6],
+        cover: [0.0; 6],
+    }
+}
+
+#[test]
+fn baked_model_particle_uses_the_published_sprite_name_at_its_layer() {
+    let (_scratch, _, mut render, _, _) = fixture();
+    let key = render
+        .block_state_models(BlockStateId(1))
+        .iter()
+        .next()
+        .unwrap();
+    // Not the quad's texture, the model slot, or the first name in the atlas.
+    render.sprite_names = vec![
+        Some("fixture:block/other".into()),
+        None,
+        Some("fixture:block/particle".into()),
+    ];
+    for (_, model) in render.model_catalog.models_mut() {
+        model.particle = Some(2);
+    }
+    let name = render.baked_model(key).unwrap().particle.unwrap();
+    assert_eq!(name, "fixture:block/particle");
+    assert!(std::ptr::eq(
+        name,
+        render.sprite_names[2].as_deref().unwrap()
+    ));
+
+    render.sprite_names[2] = None;
+    assert_eq!(render.baked_model(key).unwrap().particle, None);
+    render.sprite_names.truncate(2);
+    assert_eq!(render.baked_model(key).unwrap().particle, None);
+    for (_, model) in render.model_catalog.models_mut() {
+        model.particle = None;
+    }
+    assert_eq!(render.baked_model(key).unwrap().particle, None);
 }
 
 #[test]
@@ -273,6 +446,83 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
             "source tracking altered native vertices"
         );
     }
+}
+
+#[test]
+fn a_folder_without_connected_texture_rules_meshes_exactly_as_before() {
+    let (scratch, assets, mut render, tables, biomes) = fixture();
+    let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());
+    chunk.set(2, 3, 4, 1);
+    chunk.set(3, 3, 4, 1);
+    chunk.set(6, 3, 4, 2);
+    let region = [
+        [None, None, None],
+        [None, Some(&chunk), None],
+        [None, None, None],
+    ];
+    let bytes = |render: &RenderAssets| {
+        let mut mesher = Mesher {
+            hidden_states: &[],
+            part_tables: Default::default(),
+            nether_shading: false,
+            shader_pack_lighting: false,
+            separate_ao: false,
+            shader_pack: false,
+            assets: &assets,
+            render,
+            tables: &tables,
+            biomes: &biomes,
+            visibility: FaceVisibility::empty(),
+            zoom: BiomeZoom::new(0),
+            blend_radius: 0,
+            smooth_lighting: false,
+            cutout_leaves: true,
+            opaque_ice: false,
+            translucent_layers: &[],
+            leaf_culling: LeafCullingMode::Off,
+        };
+        let mesh = mesher.mesh(&region, 0);
+        let both = [&mesh.solid, &mesh.translucent];
+        both.map(|v| bytemuck::cast_slice::<_, u8>(v).to_vec())
+    };
+    let before = bytes(&render);
+    assert!(!before[0].is_empty());
+    let source = sunrise_assets::resource_source::ResourceSource::directory(scratch.0.clone());
+    render.connected = crate::connected::ConnectedTextures::load(
+        &source,
+        crate::connected::read_rules(&source),
+        assets.registry,
+        &mut crate::sprites::Sprites::default(),
+        |_, _| None,
+        |_| false,
+    );
+    assert!(render.connected.is_empty(), "nothing declares a rule here");
+    assert_eq!(bytes(&render), before);
+    // A rule that matches another block leaves the mesh the same.
+    let sheet = sunrise_connected::TableSheet {
+        sprite: "fixture:block/low".into(),
+        table: std::sync::Arc::new(
+            sunrise_connected::Table::new(Vec::new(), false, (1, 1), vec![0]).unwrap(),
+        ),
+    };
+    let mut other = sunrise_connected::Rule::table("other.json".into(), sheet);
+    other.method = sunrise_connected::Method::Fixed;
+    other.table = None;
+    other.tiles = vec![sunrise_connected::Tile::Default];
+    other.match_blocks = vec![sunrise_connected::BlockSel {
+        id: "fixture:other".into(),
+        states: Vec::new(),
+    }];
+    render.connected = crate::connected::ConnectedTextures::load(
+        &source,
+        vec![other],
+        assets.registry,
+        &mut crate::sprites::Sprites::default(),
+        |_, _| None,
+        |_| false,
+    );
+    assert!(!render.connected.is_empty());
+    assert_eq!(bytes(&render), before);
 }
 
 #[test]

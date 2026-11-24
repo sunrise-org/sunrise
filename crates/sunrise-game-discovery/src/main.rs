@@ -22,22 +22,19 @@ fn literal(attribute: &Attribute) -> Option<String> {
 }
 
 fn parse(
-    root: &Path,
     manifest: &Path,
     exports: Option<&BTreeMap<String, String>>,
     path: &Path,
     source: &str,
 ) -> Result<syn::File, String> {
     let mut parsed = syn::parse_file(source).map_err(|e| format!("{}: {e}", path.display()))?;
-    parsed.items = expand_items(root, manifest, exports, path, parsed.items)?;
+    parsed.items = expand_items(manifest, exports, parsed.items)?;
     Ok(parsed)
 }
 
 fn expand_items(
-    root: &Path,
     manifest: &Path,
     exports: Option<&BTreeMap<String, String>>,
-    path: &Path,
     original: Vec<Item>,
 ) -> Result<Vec<Item>, String> {
     let mut items = Vec::new();
@@ -45,7 +42,7 @@ fn expand_items(
         if let Item::Mod(child) = &mut item
             && let Some((_, inner)) = &mut child.content
         {
-            *inner = expand_items(root, manifest, exports, path, std::mem::take(inner))?;
+            *inner = expand_items(manifest, exports, std::mem::take(inner))?;
         }
         if let Item::Macro(included) = &mut item
             && included.mac.path.is_ident("include")
@@ -59,38 +56,6 @@ fn expand_items(
                     .find(|(name, _)| tokens.contains(name.as_str()))
                     .ok_or_else(|| format!("unknown vocabulary export include: {tokens}"))?;
                 items.extend(syn::parse_file(source).map_err(|e| e.to_string())?.items);
-                continue;
-            }
-            let generated = if tokens.contains("game_modules.rs")
-                && path.ends_with("crates/sunrise-client/src/game.rs")
-            {
-                Some(sunrise_game_discovery::declarations(
-                    &root.join("crates/sunrise-client/src/game"),
-                    &["native_hooks", "host", "creatures"],
-                )?)
-            } else if tokens.contains("builtin_ingredient_test_modules.rs") {
-                Some(sunrise_game_discovery::folder_modules(&root.join(
-                    "crates/sunrise-client/src/crafting/ingredient/builtin_kinds_tests/families",
-                ))?)
-            } else if tokens.contains("native_hook_modules.rs") {
-                Some(sunrise_game_discovery::native_hook_modules(root)?)
-            } else if tokens.contains("game_host_modules.rs") {
-                Some(sunrise_game_discovery::host_modules(root)?)
-            } else if tokens.contains("lan_action_modules.rs") {
-                let directory = path.parent().ok_or("LAN actions source has no parent")?;
-                Some(sunrise_game_discovery::lan_action_modules(
-                    directory,
-                    sunrise_game_discovery::module_files(directory)?,
-                )?)
-            } else {
-                None
-            };
-            if let Some(generated) = generated {
-                items.extend(
-                    syn::parse_file(&generated)
-                        .map_err(|e| e.to_string())?
-                        .items,
-                );
                 continue;
             }
             if let Some(path) = manifest_include(included.mac.tokens.clone(), manifest)? {
@@ -201,7 +166,10 @@ fn emit(
 fn run() -> Result<(), String> {
     let root = std::env::args_os()
         .nth(1)
-        .ok_or("usage: sunrise-game-discovery ROOT < targets.tsv")?;
+        .ok_or("usage: sunrise-game-discovery ROOT [--files] < targets.tsv")?;
+    let list_files = std::env::args()
+        .nth(2)
+        .is_some_and(|flag| flag == "--files");
     let root = PathBuf::from(root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
@@ -243,13 +211,20 @@ fn run() -> Result<(), String> {
             directory,
             false,
             true,
-            |path, source| parse(&root, &manifest, exports.as_ref(), path, source),
+            |path, source| parse(&manifest, exports.as_ref(), path, source),
         )?;
         for file in files {
             let path = file
                 .path
                 .canonicalize()
                 .map_err(|e| format!("{}: {e}", file.path.display()))?;
+            if list_files {
+                let relative = path
+                    .strip_prefix(&root)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                println!("{}", relative.display());
+                continue;
+            }
             let source =
                 fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let parsed =

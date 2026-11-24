@@ -1171,13 +1171,40 @@ def crosshair_station_rows(args, name):
     return check.failures
 
 
+def open_graphics_from_extras(game):
+    """Sunrise's graphics screen, from the Extras page's Sunrise Graphics... row by the pad alone."""
+    game.ctl('options', 'extras')
+    time.sleep(SETTLE)
+    game.wait_targets()
+    game.pad('down')
+    check_label = game.focused_label() or ''
+    if 'Sunrise Graphics' not in check_label:
+        raise RuntimeError(f'down from the Extras search field is on {check_label}, not Sunrise Graphics...')
+    game.pad('south')
+    time.sleep(SETTLE)
+    game.wait_targets()
+
+
+def focus_extra(game, text):
+    """The D-pad down the Extras rows until the focus is on the one with this text."""
+    for _ in range(ROW_WALK):
+        if text in (game.focused_label() or ''):
+            return True
+        game.pad('down')
+    return text in (game.focused_label() or '')
+
+
 def options_case(button):
     def wrap(body):
         def case(args, name):
             game = Game(args, name)
             check = Check()
             try:
-                game.press_through('west', click=button)
+                if button:
+                    game.press_through('west', click=button)
+                else:
+                    game.press_through('west')
+                    open_graphics_from_extras(game)
                 body(game, check)
             finally:
                 game.quit()
@@ -1204,9 +1231,9 @@ def stick_under_keyboard(game, check):
     check(game.widgets() == before, 'the list scrolled under the keyboard')
 
 
-@options_case('video-settings')
+@options_case(None)
 def stick_leaves_sidebar(game, check):
-    # Video Settings... is the graphics screen.
+    # Sunrise's graphics screen, from Extras: Video Settings... is vanilla's page.
     game.pad('down')
     game.wait_targets()
     game.focus_on('advanced')
@@ -1334,7 +1361,7 @@ def stick_steps_once(args, name):
     return check.failures
 
 
-@options_case('video-settings')
+@options_case(None)
 def gui_scale_keeps_focus(game, check):
     # The graphics screen's General page.
     game.focus_on('gui-scale')
@@ -1639,7 +1666,8 @@ def extras_shell(args, name):
 
         # From the search field across to the first row, then down: a greyed row is stepped over, hidden rows scroll in.
         game.pad('right')
-        check(FIRST_EXTRA in (game.focused_label() or ''), f'the D-pad never reached {FIRST_EXTRA}: {game.focused_label()}')
+        check('Sunrise Graphics' in (game.focused_label() or ''), f'right from the search field is on {game.focused_label()}')
+        check(focus_extra(game, FIRST_EXTRA), f'the D-pad never reached {FIRST_EXTRA}: {game.focused_label()}')
         # A presses with a click: the row it pressed doesn't stay lit once the focus moves on.
         game.pad('south')
         pressed = game.focus()
@@ -1798,8 +1826,8 @@ def shell_choice_step(args, name):
     return check.failures
 
 
-ZOOM_INSTALL = 'Zoom: install from Mods'
-# How far a group's name sits over its first row (`graphics_style::GROUP_ROW`): the list's top from the Mods note.
+# How far a group's name sits over its first row (`graphics_style::GROUP_ROW`): the list's top from the
+# first group's first row, Sunrise Graphics..., before anything scrolls.
 GROUP_NAME_H = 14
 STICK_NOTCHES = 8
 
@@ -1814,15 +1842,15 @@ def extras_shell_edges(args, name):
         game.wait_targets()
         check((game.menu()['focus'] or {}).get('kind') == 'field', f"Extras opened on {game.menu()['focus']}")
         game.pad('down')
-        check(FIRST_EXTRA in (game.focused_label() or ''),
-              f'down from the search field went to {game.focused_label()}, not {FIRST_EXTRA}')
+        check('Sunrise Graphics' in (game.focused_label() or ''),
+              f'down from the search field went to {game.focused_label()}, not Sunrise Graphics...')
+        graphics_row = game.focus()
+        check(focus_extra(game, FIRST_EXTRA), f'the D-pad never reached {FIRST_EXTRA}: {game.focused_label()}')
 
         # The right stick moves the list until the focused row's middle is above the list's top.
-        note = label_of(game, ZOOM_INSTALL)
-        check(note is not None, f'no Mods note to find the list by: {labels(game)}')
-        if not note or FIRST_EXTRA not in (game.focused_label() or ''):
+        if not graphics_row or FIRST_EXTRA not in (game.focused_label() or ''):
             return check.failures
-        top = note['bounds'][1] - GROUP_NAME_H
+        top = graphics_row[1] - GROUP_NAME_H
         before = game.focused_label()
         for _ in range(STICK_NOTCHES):
             focus = game.focus()

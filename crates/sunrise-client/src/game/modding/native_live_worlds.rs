@@ -1554,7 +1554,7 @@ impl Game<'_> {
             sunrise_java_properties::Properties::load_file(&bytes).ok()
         };
         let properties = read();
-        self.read_runtime_level_cap(|key| properties.as_ref().and_then(|p| p.get(key)));
+        self.read_live_world_quotas(|key| properties.as_ref().and_then(|p| p.get(key)));
     }
 }
 

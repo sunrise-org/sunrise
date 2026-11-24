@@ -5,6 +5,12 @@ use crate::*;
 #[path = "__private/registry_installation.rs"]
 mod registry_installation;
 
+/// The argument of a handler trait's hidden marks method. Its field is private, so no mod can
+/// make one: nothing outside this crate can call the method.
+// exhaustive: its field is private; nothing builds one
+// no wire: it never crosses; the method is not in the game's table and neither side calls it.
+pub struct Sealed(());
+
 /// Native libraries' launcher-to-game registration contract, not a mod-facing API.
 /// The launcher generates manifest rows independently of hook factories. The game checks
 /// them against the packages beside its executable (`sunrise_mod_package::runtime`).
@@ -14,29 +20,10 @@ pub mod native {
     pub struct NativeMod {
         /// Hook factories owned by this library.
         pub entries: fn() -> Vec<crate::ModEntry>,
-        /// Compiled API point listeners owned by this library.
-        pub slots: fn() -> Vec<super::points::SlotListener>,
         /// Manifest identities (empty for the patch library).
         pub built: &'static [BuiltMod],
         /// Install patch copies and return their verification rows.
         pub installs: fn() -> Vec<(&'static str, &'static [&'static str], bool)>,
-    }
-
-    impl NativeMod {
-        /// The library's registration, as its generated entry module builds it.
-        pub fn new(
-            entries: fn() -> Vec<crate::ModEntry>,
-            slots: fn() -> Vec<super::points::SlotListener>,
-            built: &'static [BuiltMod],
-            installs: fn() -> Vec<(&'static str, &'static [&'static str], bool)>,
-        ) -> Self {
-            Self {
-                entries,
-                slots,
-                built,
-                installs,
-            }
-        }
     }
 
     /// One native mod supplied by a library, with its manifest's `side`.
@@ -53,9 +40,24 @@ pub fn set_mod_enabled(id: &str, on: bool) -> bool {
     crate::set_mod_enabled(id, on)
 }
 
-/// Index the `(namespace, mod ID)` pairs admitted to the startup registries.
-pub fn install_content_owners<'a>(owners: impl IntoIterator<Item = (&'a str, &'a str)>) {
-    crate::runtime::install_content_owners(owners);
+/// Index the `(registry key, mod ID)` pairs admitted to each startup registry.
+pub fn install_content_owners<'a>(
+    blocks: impl IntoIterator<Item = (&'a str, &'a str)>,
+    items: impl IntoIterator<Item = &'a str>,
+    block_entities: impl IntoIterator<Item = (&'a str, &'a str)>,
+    menus: impl IntoIterator<Item = (&'a str, &'a str)>,
+) {
+    crate::runtime::install_content_owners(blocks, items, block_entities, menus);
+}
+
+/// Whether this block came from the admitted content declarations.
+pub fn is_content_block(id: &str) -> bool {
+    crate::runtime::content_block(id).is_some()
+}
+
+/// Whether this item came from the admitted content declarations.
+pub fn is_content_item(id: &str) -> bool {
+    crate::runtime::is_content_item(id)
 }
 
 /// Whether the engine has bound content ownership for the installed dispatch.
@@ -63,9 +65,9 @@ pub fn content_owners_published() -> bool {
     crate::runtime::content_owners_published()
 }
 
-/// Whether the declaring package of this content is switched off.
-pub fn content_owner_disabled(id: &str) -> bool {
-    crate::runtime::content_owner_disabled(id)
+/// Whether the declaring package of this block entity type is switched off.
+pub fn block_entity_owner_disabled(id: &str) -> bool {
+    crate::runtime::block_entity_owner_disabled(id)
 }
 
 /// Whether any installed mod is off; computed only at load/toggle time.
@@ -84,9 +86,9 @@ pub fn block_hook_inert(hook: HookId, state: BlockState) -> bool {
         .is_some()
 }
 
-/// Resolve a listener's owner once at load, for dispatch through [`mod_index_on`].
+/// Resolve a listener's owner by id, for dispatch through [`mod_index_on`].
 pub fn mod_index(id: &str) -> Option<usize> {
-    crate::mods().iter().position(|entry| entry.id == id)
+    crate::runtime::installed()?.by_id.get(id).copied()
 }
 
 /// Whether a resolved listener's owner is currently enabled.
@@ -105,9 +107,51 @@ pub fn install(mods: Mods) {
     crate::install(mods);
 }
 
+// no wire: process-local diagnostic report, never crosses the wire.
+// exhaustive: internal two-field report for the game client's toast queue.
+/// One mod callback panic queued for the game client's error toast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookPanicReport {
+    /// The `[mod] id` of the panicking mod.
+    pub mod_id: &'static str,
+    /// The hook or retained callback operation that panicked.
+    pub hook: &'static str,
+}
+
+/// Drain queued mod callback panic reports for the game client's error toast.
+pub fn take_hook_panics() -> Vec<HookPanicReport> {
+    crate::runtime::take_hook_panics()
+}
+
+/// Active hook-dispatch panic-containment nesting depth on this thread.
+pub fn hook_dispatch_depth() -> u32 {
+    crate::runtime::hook_dispatch_depth()
+}
+
+/// Run one mod's startup `Hooks::register` callback under the unified hook-dispatch failure rule.
+pub fn invoke_registration(mod_id: &'static str, call: impl FnOnce()) -> bool {
+    crate::runtime::invoke_registration(mod_id, call)
+}
+
+/// Discard one startup batch's values independently under the owning `register` callback's policy.
+pub fn discard_startup_registrations<T>(mod_id: &'static str, values: impl IntoIterator<Item = T>) {
+    crate::runtime::discard_startup_registrations(mod_id, values);
+}
+
+/// Revision of the enabled mod set, for engine caches of hook answers.
+pub fn mods_switched() -> u64 {
+    crate::runtime::mods_switched()
+}
+
 /// Whether an installed mod subscribes to `hook`.
 pub fn listened(hook: HookId) -> bool {
     crate::listened(hook)
+}
+
+/// How many listeners of `hook` are switched off for the session by an isolated dispatch after
+/// they unwound.
+pub fn poisoned_listeners(hook: HookId) -> usize {
+    crate::runtime::poisoned_count(hook)
 }
 
 /// Whether at least one enabled mod subscribes to `hook`, visiting only its subscribers.
@@ -115,18 +159,35 @@ pub fn enabled_listened(hook: HookId) -> bool {
     crate::runtime::enabled_listened(hook)
 }
 
+/// A live listener query bound to the creating thread's installed dispatch table.
+// no wire: a process-local view of the installed dispatch table, never sent.
+pub struct EnabledListeners {
+    installed: Option<&'static crate::runtime::Installed>,
+    hook: HookId,
+}
+
+impl EnabledListeners {
+    pub fn capture(hook: HookId) -> Self {
+        Self {
+            installed: crate::runtime::installed(),
+            hook,
+        }
+    }
+
+    pub fn any(&self) -> bool {
+        self.installed
+            .is_some_and(|installed| crate::runtime::has_enabled_listener(installed, self.hook))
+    }
+}
+
 /// Whether any part subscribed to the scoped entity hook `hook` is attached to
 /// entity type `kind`, so a family's walk can resolve its rows' slots once per
 /// pass instead of naming each row's type.
 pub fn entity_part_hooked(hook: HookId, name: &'static str, kind: &str) -> bool {
-    crate::parts::parts(hook, name)
-        .for_hook(hook)
-        .is_some_and(|table| !table.entity(|| Some(kind)).is_empty())
-}
-
-/// Identity for one scoped creative tab event, constructed by the game.
-pub fn creative_tab_edit(id: u64) -> crate::CreativeTabEdit {
-    crate::CreativeTabEdit::of(id)
+    crate::parts::has_part_hook(hook)
+        && crate::parts::parts(hook, name)
+            .for_hook(hook)
+            .is_some_and(|table| !table.entity(|| Some(kind)).is_empty())
 }
 
 /// A read backend wrapper for a host the game builds narrowed: the mob tick's
@@ -157,30 +218,59 @@ pub fn installed_code_ids() -> impl Iterator<Item = &'static str> {
 
 /// What the installed code mod `id` carries that a joining client must have, as the end of a
 /// sentence about the mod: its first subscription to a client-side hook, its first part that
-/// subscribes to one, a synced attachment, or a required payload channel sent to clients. The engine refuses
-/// a `side = "server"` mod that has one. Read once the parts are installed.
+/// subscribes to one, a required client menu screen, a synced attachment, a required datapack
+/// registry, or a required payload channel sent to clients. The engine refuses a
+/// `side = "server"` mod that has one. Read once the parts are installed.
 pub fn client_requirement(id: &str) -> Option<String> {
     let mine = || crate::mods().iter().filter(|entry| entry.id == id);
     if let Some(hook) = mine().find_map(|entry| entry.client_hook()) {
         return Some(format!("listens to the client hook {hook}"));
     }
     let installed = crate::parts::installed()?;
+    if let Some(index) = mod_index(id)
+        && installed
+            .menu_screen_factories
+            .values()
+            .any(|reg| reg.index == index)
+    {
+        return Some("registers a client menu screen factory".into());
+    }
+    if installed
+        .menu_recipe_books
+        .values()
+        .any(|book| book.owner == id)
+    {
+        return Some("binds a recipe book that requires a client menu screen".into());
+    }
     if let Some((part, hook)) = installed.client_part(id) {
         return Some(format!(
             "attaches the part {part}, which listens to the client hook {hook}"
         ));
     }
-    if let Some(types) = installed.attachment_types.get(id)
-        && let Some(name) = types
-            .iter()
-            .filter(|(_, sync)| **sync)
-            .map(|(name, _)| name)
-            .min()
+    if let Some(attachment) = installed.first_synced_attachment(id) {
+        return Some(format!("declares the synced attachment {attachment}"));
+    }
+    if let Some(registry) = installed
+        .datapack_registries
+        .iter()
+        .find(|registry| registry.mod_id == id && registry.sync == DatapackRegistrySync::Required)
     {
-        return Some(format!("declares the synced attachment {id}:{name}"));
+        return Some(format!(
+            "declares the required datapack registry {}",
+            registry.key
+        ));
     }
     let channel = installed.keys.payloads.as_ref()?.client_bound(id)?;
     Some(format!("sends the required payload {channel} to clients"))
+}
+
+/// Every client-required declaration registered by `id` during `Hooks::register`
+/// (general entity types, attributes and bounds widenings, custom stats, synced
+/// attachments, datapack registries, and required client-bound payloads).
+pub fn client_required_declarations(id: &str) -> Vec<(&'static str, String)> {
+    crate::parts::installed()
+        .map(|installed| installed.client_required_declarations(id))
+        .unwrap_or_default()
 }
 
 /// The command argument types mods registered at startup, by namespaced id, for the game's
@@ -194,20 +284,33 @@ pub fn command_argument_types() -> Vec<(String, std::sync::Arc<dyn crate::Comman
 
 /// The selector tokens mods registered at startup, by name, for the game's command
 /// registries. Not part of the mod surface.
-pub fn entity_selector_types() -> impl Iterator<Item = (&'static str, &'static crate::SelectorBase)>
-{
+pub fn entity_selector_types() -> impl Iterator<
+    Item = (
+        &'static str,
+        &'static crate::callback_owner::CallbackOwner,
+        &'static dyn crate::EntitySelectorType,
+    ),
+> {
     crate::parts::installed_entity_selectors()
         .iter()
-        .map(|info| (info.name.as_ref(), &info.base))
+        .map(|info| (info.name.as_ref(), &info.owner, info.selector.as_ref()))
 }
 
-/// Resolve an installed selector's handler by reference, without allocating or cloning a resource.
-pub fn entity_selector_type(name: &str) -> Option<&'static dyn crate::EntitySelectorType> {
+/// Resolve an installed selector's owner and handler by reference, without allocating or cloning a resource.
+pub fn entity_selector_type(
+    name: &str,
+) -> Option<(
+    &'static crate::callback_owner::CallbackOwner,
+    &'static dyn crate::EntitySelectorType,
+)> {
     let selectors = crate::parts::installed_entity_selectors();
     selectors
         .binary_search_by(|info| info.name.as_ref().cmp(name))
         .ok()
-        .map(|index| selectors[index].selector.as_ref())
+        .map(|index| {
+            let info = &selectors[index];
+            (&info.owner, info.selector.as_ref())
+        })
 }
 
 /// The startup package inventory at an owning engine load boundary.
@@ -237,21 +340,9 @@ pub mod built {
     pub fn model_ref(generation: u64, slot: u32) -> crate::ModelRef {
         crate::ModelRef(generation, slot)
     }
-    /// An empty baked model copy the game fills field by field.
-    pub fn baked_model_view() -> crate::BakedModelView {
-        crate::BakedModelView {
-            ambient_occlusion: true,
-            particle: None,
-            quads: Vec::new(),
-        }
-    }
     /// What a mod may still create of its dynamic textures: `images` and `bytes` of pixels left.
     pub fn dynamic_texture_budget(images: u32, bytes: u64) -> crate::DynamicTextureBudget {
         crate::DynamicTextureBudget { images, bytes }
-    }
-    /// Wrap a slot of the baked model store's published generation.
-    pub fn baked_model_key(generation: u64, slot: u32) -> crate::BakedModelKey {
-        crate::BakedModelKey(generation, slot)
     }
     /// Wrap a slot in the pipeline set's published generation.
     pub fn render_pipeline_ref(generation: u64, slot: u32) -> crate::RenderPipelineRef {
@@ -262,6 +353,18 @@ pub mod built {
 
 /// What the game reads of handles and calls on the API's own types.
 pub mod game {
+    /// Engine-side slot queries use the same handler as `ItemPlace::MenuSlot` transfers.
+    pub fn menu_slot_place_handler(
+        place: crate::MenuSlotPlace,
+        host: &mut dyn crate::ServerHost,
+        player: crate::PlayerRef,
+    ) -> Option<(
+        crate::Capability<dyn crate::ResourceHandler<crate::ItemResource>>,
+        usize,
+    )> {
+        place.handler(host, player)
+    }
+
     include!(concat!(env!("OUT_DIR"), "/mod_api_exports_private_game.rs"));
     use crate::*;
     use std::fmt::Debug;
@@ -272,6 +375,13 @@ pub mod game {
         where
             Self: 'a;
         fn fields(&self) -> Self::Fields<'_>;
+    }
+
+    /// Borrow the attachment frame tracker exposed by a game-owned host or level.
+    pub fn attachment_read_scope(
+        scopes: &sunrise_mod_runtime::attachments::AttachmentQueryScopes,
+    ) -> AttachmentReadScope<'_> {
+        AttachmentReadScope(Some(scopes))
     }
 
     /// A block entity handle the game names.
@@ -306,6 +416,59 @@ pub mod game {
     pub fn chunk_ref(level: LevelRef, pos: [i32; 2]) -> ChunkRef {
         ChunkRef { level, pos }
     }
+    /// A live watered-area handle issued by the level's runtime ticket index.
+    pub fn water_ticket(
+        level: LevelRef,
+        id: sunrise_mod_runtime::water_tickets::WaterTicketId,
+    ) -> WaterTicket {
+        WaterTicket { level, id }
+    }
+    /// The runtime-issued identity of a live watered-area handle.
+    pub fn water_ticket_id(
+        ticket: WaterTicket,
+    ) -> sunrise_mod_runtime::water_tickets::WaterTicketId {
+        ticket.id
+    }
+    /// Resolve an issued ticket controller handle against the active controller table.
+    pub fn ticket_controller_slot(controller: TicketController) -> Option<u32> {
+        controller.active_slot()
+    }
+    /// The namespaced id of a controller slot for world-save serialization.
+    pub fn ticket_controller_id(slot: u32) -> Option<&'static str> {
+        crate::world::ticket_controller::id_for_slot(slot)
+    }
+    /// The installed controller slot for a saved namespaced id during world-load deserialization.
+    pub fn ticket_controller_slot_by_id(id: &str) -> Option<u32> {
+        crate::world::ticket_controller::slot_for_id(id)
+    }
+    /// Borrowed modifier view constructed at the living-entity read boundary.
+    pub fn attribute_modifier_view<'a>(
+        id: &'a str,
+        amount: f64,
+        operation: AttributeOperation,
+    ) -> AttributeModifierView<'a> {
+        AttributeModifierView {
+            id,
+            amount,
+            operation,
+        }
+    }
+    /// A non-blocking chunk request handle the game names.
+    pub fn chunk_request_ref(level: LevelRef, id: u64) -> ChunkRequestRef {
+        ChunkRequestRef { level, id }
+    }
+    /// One finished or failed non-blocking chunk request constructed by the game.
+    pub fn completed_chunk_request(
+        request: ChunkRequestRef,
+        pos: [i32; 2],
+        result: Result<ChunkSnapshot, ChunkLoadError>,
+    ) -> CompletedChunkRequest {
+        CompletedChunkRequest {
+            request,
+            pos,
+            result,
+        }
+    }
     /// An open menu's handle the game names.
     pub fn menu_ref(player: PlayerRef, window: i32, generation: u64) -> MenuRef {
         MenuRef {
@@ -339,6 +502,11 @@ pub mod game {
         modifiers: ItemAttributeModifiers,
     ) -> Option<Vec<ItemAttributeModifier>> {
         modifiers.changed.then_some(modifiers.entries)
+    }
+
+    /// Move a validated sound key into the engine's sound event queue.
+    pub fn sound_event_name(event: SoundEventKey) -> Arc<str> {
+        event.0
     }
 
     /// A stack's enchantments for `get_enchantment_level`, as its
@@ -490,14 +658,9 @@ pub mod game {
         }
     }
 
-    pub fn original_player_ref(token: u64) -> OriginalPlayerRef {
-        OriginalPlayerRef { token }
-    }
-    impl Fields for OriginalPlayerRef {
-        type Fields<'a> = u64;
-        fn fields(&self) -> u64 {
-            self.token
-        }
+    /// Allocate a fresh delayed task id for `schedule_task`, without exposing its raw value.
+    pub fn allocate_task_id() -> Option<TaskId> {
+        TaskId::allocate()
     }
 
     pub struct ModEntryFields<'a> {
@@ -554,6 +717,19 @@ pub mod game {
         }
     }
 
+    /// Engine-only per-listener checked declaration staging.
+    // no wire: lends one registration sink for the duration of a callback.
+    pub type DeclarationListener<'a, D> = dyn FnMut(&mut dyn FnMut(crate::Answered<D>) -> Result<(), crate::DeclarationError>) -> bool
+        + 'a;
+
+    /// Lend a registration snapshot to the named listener, including on scoped workers.
+    pub fn bind_registration_context(
+        context: &RegistrationContext,
+        mod_id: &'static str,
+    ) -> RegistrationContext {
+        context.for_mod(mod_id)
+    }
+
     pub trait ReloadContextNew {
         fn new(files: crate::world::reload::ReloadFiles) -> Self;
     }
@@ -588,16 +764,11 @@ pub mod game {
     }
     pub trait ServerReloadListenersOrder {
         fn new() -> Self;
-        /// The engine has registered this builtin and linked the preceding anchor.
-        fn set_last_vanilla_listener(&mut self, id: Identifier);
         fn finish(
             self,
         ) -> Result<crate::world::server_reload::OrderedServerReload, ReloadOrderError>;
     }
     impl ServerReloadListenersOrder for crate::world::server_reload::ServerListenerRegistry {
-        fn set_last_vanilla_listener(&mut self, id: Identifier) {
-            self.default_anchor = id;
-        }
         fn new() -> Self {
             crate::world::server_reload::ServerListenerRegistry::new()
         }
@@ -633,11 +804,19 @@ pub mod game {
     }
 
     pub trait ServerReloadResourcesInstall {
-        fn install(&mut self, retained: Vec<crate::world::server_reload::RetainedEntry>);
+        fn install(
+            &mut self,
+            retained: Vec<crate::world::server_reload::RetainedEntry>,
+            skipped: &std::collections::BTreeSet<Identifier>,
+        );
     }
     impl ServerReloadResourcesInstall for crate::world::server_reload::RetainedListeners {
-        fn install(&mut self, retained: Vec<crate::world::server_reload::RetainedEntry>) {
-            crate::world::server_reload::RetainedListeners::install(self, retained)
+        fn install(
+            &mut self,
+            retained: Vec<crate::world::server_reload::RetainedEntry>,
+            skipped: &std::collections::BTreeSet<Identifier>,
+        ) {
+            crate::world::server_reload::RetainedListeners::install(self, retained, skipped)
         }
     }
 
@@ -665,25 +844,6 @@ pub mod game {
     impl<'a> ClientBackendMutRefOf<'a> for ClientBackendMutRef<'a> {
         fn of(inner: &'a mut dyn ClientBackendMut) -> Self {
             ClientBackendMutRef::of(inner)
-        }
-    }
-
-    mod modblockentityviewnew {
-        #[allow(unused_imports)]
-        use crate::*;
-        #[allow(unused_imports)]
-        use serde_json::{Map, Value};
-        #[allow(unused_imports)]
-        use std::sync::{Arc, OnceLock};
-        #[allow(unused_imports)]
-        use std::time::Duration;
-        pub trait ModBlockEntityViewNew<'a>: Sized {
-            fn new(entity: &'a mut ModBlockEntity) -> Self;
-        }
-        impl<'a> ModBlockEntityViewNew<'a> for ModBlockEntityView<'a> {
-            fn new(entity: &'a mut ModBlockEntity) -> Self {
-                ModBlockEntityView::new(entity)
-            }
         }
     }
 
@@ -727,13 +887,40 @@ pub fn fluid_state(
 
 #[path = "__private/ingredient_parser.rs"]
 pub mod ingredient_parser;
-#[path = "__private/points.rs"]
-pub mod points;
+#[path = "__private/platform.rs"]
+pub mod platform;
+
+/// Side- and override-filtered ordinary dependency rows, in their original direction.
+/// Host-only: this is not the author-facing package inventory.
+// no wire: the host keeps this resolved graph for package and Part admission; it never crosses.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct EffectiveDependencies(
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, crate::DependencyKind>>,
+);
+
+impl EffectiveDependencies {
+    /// Record a required or optional row from the resolver.
+    pub fn insert(&mut self, dependent: &str, target: &str, optional: bool) {
+        self.0.entry(dependent.into()).or_default().insert(
+            target.into(),
+            if optional {
+                crate::DependencyKind::Optional
+            } else {
+                crate::DependencyKind::Required
+            },
+        );
+    }
+
+    /// The surviving direct dependency, including an absent optional target.
+    pub fn kind(&self, dependent: &str, target: &str) -> Option<crate::DependencyKind> {
+        self.0.get(dependent)?.get(target).copied()
+    }
+
+    /// A Part's own package or a surviving direct dependency may own its key.
+    pub fn permits(&self, dependent: &str, owner: &str) -> bool {
+        dependent == owner || self.kind(dependent, owner).is_some()
+    }
+}
 
 include!(concat!(env!("OUT_DIR"), "/mod_api_exports_private.rs"));
-
-/// How many listeners this thread has entered, wasm and native alike. A scoped
-/// resource that must not outlive one listener compares it between operations.
-pub fn listener_serial() -> u64 {
-    crate::runtime::listener_serial()
-}

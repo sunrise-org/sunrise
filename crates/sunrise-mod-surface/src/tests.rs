@@ -7,8 +7,8 @@ fn function(id: &str, refs: &[&str]) -> Function {
         FunctionContract {
             signature: format!("fn {}()", leaf(id)),
             impl_generics: String::new(),
-            wasm: true,
             refs: refs.iter().map(|r| r.to_string()).collect(),
+            behaviour_versions: BTreeMap::new(),
         },
     )
 }
@@ -144,11 +144,11 @@ fn leaves_are_what_a_mod_writes() {
 #[test]
 fn the_reader_refuses_with_a_typed_error() {
     let text = sample().to_json();
-    let older = text.replacen("\"schema\": 2", "\"schema\": 1", 1);
+    let older = text.replacen("\"schema\": 3", "\"schema\": 1", 1);
     assert_eq!(Surface::read(older.as_bytes()), Err(ReadError::Schema(1)));
     assert_eq!(
         ReadError::Schema(1).to_string(),
-        "surface schema 1, this tool reads 2"
+        "surface schema 1, this tool reads 2 and 3"
     );
     assert!(matches!(
         Surface::read(&text.as_bytes()[..text.len() / 2]),
@@ -159,7 +159,7 @@ fn the_reader_refuses_with_a_typed_error() {
         Err(ReadError::Json(_))
     ));
     assert!(matches!(Surface::read(b"{}"), Err(ReadError::Json(_))));
-    let wrong_type = text.replacen("\"wasm\": true", "\"wasm\": \"yes\"", 1);
+    let wrong_type = text.replacen("\"signature\":", "\"signature\": false, \"other\":", 1);
     assert!(matches!(
         Surface::read(wrong_type.as_bytes()),
         Err(ReadError::Json(_))
@@ -169,6 +169,42 @@ fn the_reader_refuses_with_a_typed_error() {
         Surface::read(doubled.as_bytes()),
         Err(ReadError::DuplicateId("fn:world::ground".into()))
     );
+}
+
+#[test]
+fn a_schema_2_document_reads_with_schema_3_hashes() {
+    let mut current = sample();
+    current.traits = vec![api_trait("trait:Host", Role::Call, &[], &["player"])];
+    current.hash = current.document_hash();
+    // Independent of the code: schema 2 hashed each method and function with a `wasm` bit.
+    use sha2::{Digest, Sha256};
+    let old = |json: &str| -> String {
+        Sha256::digest(json.as_bytes())[..16]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let mut published = current.clone();
+    published.schema = 2;
+    published.traits[0].methods[0].hash = old(
+        r#"{"signature":"fn player(&self)","required":false,"wasm":true,"refs":["trait:Host"]}"#,
+    );
+    for function in &mut published.functions {
+        function.hash = old(match function.id.as_str() {
+            "fn:spawn" => r#"{"signature":"fn spawn()","wasm":true}"#,
+            _ => r#"{"signature":"fn ground()","wasm":false,"refs":["type:Block"]}"#,
+        });
+    }
+    published.hash = published.document_hash();
+    let (read, unsealed) = Surface::read_sealed(published.to_json().as_bytes()).unwrap();
+    assert_eq!((read, unsealed), (current, vec![]));
+    // A stored hash the old recipe does not give its contract is not made good.
+    let mut forged = published;
+    let spawn = forged.functions.iter_mut().find(|f| f.id == "fn:spawn");
+    spawn.unwrap().hash = "0".repeat(32);
+    forged.hash = forged.document_hash();
+    let (_, unsealed) = Surface::read_sealed(forged.to_json().as_bytes()).unwrap();
+    assert_eq!(unsealed, ["fn:spawn"]);
 }
 
 #[test]
@@ -190,15 +226,15 @@ fn the_contract_hash_leaves_out_doc_and_info_fields() {
     let contract = FunctionContract {
         signature: "fn f(x: u8)".into(),
         impl_generics: String::new(),
-        wasm: false,
         refs: vec![],
+        behaviour_versions: BTreeMap::new(),
     };
     let documented = Function::new("fn:f", "Does f.", contract.clone());
     let bare = Function::new("fn:g", "", contract);
     assert_eq!(documented.hash, bare.hash);
     // Independent of the code: SHA-256 of the compact JSON, first 16 bytes.
     use sha2::{Digest, Sha256};
-    let expected: String = Sha256::digest(br#"{"signature":"fn f(x: u8)","wasm":false}"#)[..16]
+    let expected: String = Sha256::digest(br#"{"signature":"fn f(x: u8)"}"#)[..16]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
@@ -244,7 +280,6 @@ fn api_trait(id: &str, role: Role, bounds: &[&str], methods: &[&str]) -> Trait {
                     MethodContract {
                         signature: format!("fn {name}(&self)"),
                         required: false,
-                        wasm: true,
                         refs: vec![id.to_owned()],
                     },
                 )
@@ -594,4 +629,110 @@ fn an_argument_references_only_the_items_its_own_type_names_by_path() {
             &["hook:joined".to_owned(), "type:b::Item".to_owned()][..],
         ]
     );
+}
+
+#[test]
+fn a_stored_hash_its_contract_does_not_give_is_unsealed() {
+    let mut surface = sample();
+    surface.hooks = vec![hook_with(1, &[("player", "PlayerRef")])];
+    surface.traits = vec![api_trait("trait:Api", Role::Call, &["trait:Host"], &["a"])];
+    surface.hash = surface.document_hash();
+    assert!(surface.unsealed().is_empty(), "{:?}", surface.unsealed());
+    // A contract changed under its old hash, at every level, and a document hash its entries don't give. (A
+    // called trait's `refs` are outside its hash: the release gate compares them field by field.)
+    let mut changed = surface.clone();
+    changed.functions[0].contract.signature = "fn ground(other: u8)".into();
+    changed.types[0].fields[0].contract.ty = "u8".into();
+    changed.traits[0].contract.side = Side::Server;
+    changed.traits[0].methods[0].contract.signature = "fn a(&mut self)".into();
+    changed.hooks[0].contract.arguments[0].ty = "u8".into();
+    assert_eq!(
+        changed.unsealed(),
+        [
+            "hook:joined (its argument records)",
+            "trait:Api",
+            &changed.traits[0].methods[0].id,
+            &changed.functions[0].id,
+            "type:Block.state",
+        ]
+    );
+}
+
+const LATER_HASH: &str = "0123456789abcdef0123456789abcdef";
+
+#[test]
+fn a_newer_writers_lists_join_the_document_hash() {
+    let mut surface = sample();
+    surface.hash = surface.document_hash();
+    let read = |value: &serde_json::Value| Surface::read_sealed(value.to_string().as_bytes());
+    let mut value = serde_json::to_value(&surface).unwrap();
+    assert_eq!(read(&value).unwrap().1, Vec::<String>::new());
+    value["hash"] = "0".repeat(32).into();
+    assert_eq!(read(&value).unwrap().1, ["surface"]);
+    // A list this reader doesn't know: its records' ids and hashes count toward the hash, their
+    // other fields (however deep) are skipped.
+    let mut lines: Vec<String> = surface
+        .entries_with_engine()
+        .map(|(id, hash)| format!("{id} {hash}\n"))
+        .chain([format!("later:x {LATER_HASH}\n")])
+        .collect();
+    lines.sort();
+    value["later"] = serde_json::json!([{"id": "later:x", "hash": LATER_HASH, "contract": "deep"}]);
+    value["hash"] = digest(&lines.concat()).into();
+    let deep = format!("{}{}", "[".repeat(100_000), "]".repeat(100_000));
+    let text = value.to_string().replace(r#""deep""#, &deep);
+    assert_eq!(
+        Surface::read_sealed(text.as_bytes()).unwrap().1,
+        Vec::<String>::new()
+    );
+    // The same list with a hash that doesn't count it, or an empty one beside a bad hash: refused.
+    for (list, hash) in [
+        (value["later"].clone(), surface.hash.clone()),
+        (serde_json::json!([]), "0".repeat(32)),
+    ] {
+        value["later"] = list;
+        value["hash"] = hash.into();
+        assert_eq!(read(&value).unwrap().1, ["surface"]);
+    }
+    // An unknown list of anything but objects with a plain id and a hash in the writer's form is
+    // no surface: positional pairs, a missing hash, an id or hash that could frame other entries.
+    for list in [
+        serde_json::json!([1]),
+        serde_json::json!([["later:x", LATER_HASH]]),
+        serde_json::json!([{"id": "later:x"}]),
+        serde_json::json!([{"id": "later:x y", "hash": LATER_HASH}]),
+        serde_json::json!([{"id": "later:x\nfn:spawn", "hash": LATER_HASH}]),
+        serde_json::json!([{"id": "", "hash": LATER_HASH}]),
+        serde_json::json!([{"id": "later:x", "hash": "h"}]),
+        serde_json::json!([{"id": "later:x", "hash": LATER_HASH.to_uppercase()}]),
+    ] {
+        value["later"] = list;
+        assert!(
+            matches!(read(&value), Err(ReadError::Json(_))),
+            "{}",
+            value["later"]
+        );
+    }
+    // Every id once in the whole document: an unknown record may not reuse a known id, or one of
+    // another unknown list.
+    for (key, id) in [("later", "fn:spawn"), ("other", "later:x")] {
+        value["later"] = serde_json::json!([{"id": "later:x", "hash": LATER_HASH}]);
+        value[key] = serde_json::json!([{"id": id, "hash": LATER_HASH}]);
+        assert_eq!(read(&value).unwrap_err(), ReadError::DuplicateId(id.into()));
+        value.as_object_mut().unwrap().remove("other");
+    }
+    // A key listed twice: the list would be hidden by the value after it.
+    let mut text = serde_json::to_string(&surface).unwrap();
+    text.pop();
+    text.push_str(&format!(
+        r#","later":[{{"id":"later:x","hash":"{LATER_HASH}"}}],"later":"note"}}"#
+    ));
+    assert!(matches!(
+        Surface::read_sealed(text.as_bytes()),
+        Err(ReadError::Json(_))
+    ));
+    // An unknown value that is no list is outside the hash.
+    value["later"] = serde_json::json!({"note": [1]});
+    value["hash"] = surface.hash.clone().into();
+    assert_eq!(read(&value).unwrap().1, Vec::<String>::new());
 }

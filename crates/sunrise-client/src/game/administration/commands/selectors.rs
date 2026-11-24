@@ -20,19 +20,29 @@ impl Game<'_> {
                 s.pos[2].unwrap_or(p[2]),
             ]
         };
+        // EntitySelectorParser: `@e` and `@n` keep only `Entity::isAlive`. A
+        // registered selector type decides for itself (`native_selector_kept`).
+        let alive_only = matches!(s.kind, 'e' | 'n') && s.token.is_none();
         let mut source_candidates: Vec<Target> = Vec::new();
-        match (s.kind, self.command_source) {
+        match (s.kind, self.command_source.as_ref()) {
             // @s: the executing entity (none for a server source).
             ('s', Some(source)) => source_candidates.extend(source.entity),
             ('s', None) => source_candidates.extend(self.source_entity()),
             // A guest in place is among the players, in join order.
-            _ if self.player.is_some() && self.lan_acting.is_none() => {
+            _ if self.player.is_some()
+                && self.lan_acting.is_none()
+                && (!alive_only
+                    || self
+                        .player
+                        .as_ref()
+                        .is_some_and(|p| p.health.health() > 0.0)) =>
+            {
                 source_candidates.push(Target::Player);
             }
             _ => {}
         }
         if s.kind != 's' {
-            source_candidates.extend(self.player_candidates(s));
+            source_candidates.extend(self.player_candidates(s, alive_only));
         }
         let source_dim = self.dim;
         // A selector with a spatial constraint reaches the level the command
@@ -41,7 +51,7 @@ impl Game<'_> {
         let dims = if s.world_limited() {
             vec![source_dim]
         } else {
-            self.loaded_dims()
+            self.loaded_level_order()
         };
         let mut out: Vec<(Target, f64)> = Vec::new();
         for dim in dims {
@@ -52,9 +62,9 @@ impl Game<'_> {
             }
             if s.kind != 's' {
                 if s.kind == 'e' && matches!(s.sort, Sort::Arbitrary) && !s.world_limited() {
-                    candidates.extend(self.global_selector_candidates());
+                    candidates.extend(self.global_selector_candidates(alive_only));
                 } else {
-                    candidates.extend(self.level_candidates());
+                    candidates.extend(self.level_candidates(alive_only));
                 }
             }
             out.extend(self.native_selector_kept(s, candidates, origin));

@@ -61,9 +61,9 @@ const BAR: f32 = 33.0;
 pub const BOX: f32 = 17.0;
 /// `DialogScreen.WARNING_BUTTON_SPRITES`: normal, disabled, highlighted.
 pub const WARNING_SPRITES: [&str; 3] = [
-    "gui/sprites/dialog/warning_button",
-    "gui/sprites/dialog/warning_button_disabled",
-    "gui/sprites/dialog/warning_button_highlighted",
+    "dialog/warning_button",
+    "dialog/warning_button_disabled",
+    "dialog/warning_button_highlighted",
 ];
 
 /// One drawn piece; `y` is from the top of the body (before it scrolls) for
@@ -211,9 +211,10 @@ fn item(
 pub fn text_height(multiline: Option<(Option<i32>, Option<i32>)>) -> f32 {
     match multiline {
         None => 20.0,
-        Some((max_lines, height)) => {
-            height.unwrap_or_else(|| (9 * max_lines.unwrap_or(4) + 8).min(512)) as f32
-        }
+        Some((max_lines, height)) => height.map_or_else(
+            || (9 * i64::from(max_lines.unwrap_or(4)) + 8).min(512) as f32,
+            |height| height as f32,
+        ),
     }
 }
 
@@ -642,10 +643,15 @@ mod tests {
                 ("columns", Tag::Int(n)),
             ])
         };
+        let parse = |n| {
+            Dialog::parse(&packet_dialog(n), &Default::default(), &|_| false, &|_| {
+                false
+            })
+        };
         for invalid in [-1, 0] {
-            assert!(Dialog::parse(&packet_dialog(invalid)).is_none());
+            assert!(parse(invalid).is_none());
         }
-        let dialog = Dialog::parse(&packet_dialog(i32::MAX)).unwrap();
+        let dialog = parse(i32::MAX).unwrap();
         let font = Font::load(
             &sunrise_assets::resource_source::ResourceSource::default(),
             &std::collections::HashMap::new(),
@@ -684,7 +690,8 @@ mod tests {
         assert_eq!(text_height(Some((Some(10), None))), 98.0);
         // Never over 512; a height wins over the lines.
         assert_eq!(text_height(Some((Some(100), None))), 512.0);
-        assert_eq!(text_height(Some((Some(2), Some(70)))), 70.0);
+        assert_eq!(text_height(Some((Some(i32::MAX), None))), 512.0);
+        assert_eq!(text_height(Some((Some(i32::MAX), Some(70)))), 70.0);
     }
 
     #[test]

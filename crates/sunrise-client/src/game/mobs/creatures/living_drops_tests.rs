@@ -78,7 +78,7 @@ fn the_golems_preserved_equipment_and_a_broken_stand_reach_living_drops() {
             };
             let golem = spawn_golem(game);
             game.mobs.push(golem.clone());
-            game.mob_died(&golem);
+            game.mob_die(&golem);
             // The preserved stack comes last in the list the mods hear.
             assert!(
                 seen.lock().unwrap()[0].starts_with("minecraft:copper_golem [")
@@ -90,7 +90,7 @@ fn the_golems_preserved_equipment_and_a_broken_stand_reach_living_drops() {
             // A canceled list drops nothing, the preserved stack included.
             cancel.store(true, Ordering::SeqCst);
             let golem = spawn_golem(game);
-            game.mob_died(&golem);
+            game.mob_die(&golem);
             assert_eq!(game.dropped.len(), dropped);
             // An armor stand that breaks fires it with nothing in the list.
             game.armor_stands

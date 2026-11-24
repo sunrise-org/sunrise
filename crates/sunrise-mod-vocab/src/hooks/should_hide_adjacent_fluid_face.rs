@@ -12,6 +12,8 @@ pub trait Hooks {
     /// meshing workers read the table. The level and position are not arguments. With no part answering, nothing
     /// is asked and meshes are unchanged. Diverges from upstream: new hook.
     #[hook(
+        receiver = "read",
+        dispatch = "flat",
         side = "client",
         contract = "collect",
         out = "hidden",
@@ -19,5 +21,10 @@ pub trait Hooks {
         key = "state",
         neoforge = "IBlockExtension.shouldHideAdjacentFluidFace"
     )]
-    fn should_hide_adjacent_fluid_face();
+    fn should_hide_adjacent_fluid_face(
+        state: BlockState,
+        direction: Direction,
+        fluid: mod_api::FluidState,
+        hidden: &mut bool,
+    );
 }

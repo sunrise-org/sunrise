@@ -1,14 +1,178 @@
 //! ContainerOpenersCounter timing, including lost openers.
 #[cfg(test)]
 mod tests {
-    use super::super::Game;
-    use mod_api::{Hooks, ModContainerViewersEvent, ModEntry, ServerHost, VanillaGameEventEvent};
+    use super::super::{Game, lan_actions::MenuOpen, native_entity_refs::tests::run_fresh_cases};
+    use mod_api::{
+        BlockState, BlockUpdateFlags, Flow, Hooks, HostBlockStates, MenuReplace,
+        ModContainerViewersEvent, ModEntry, PlayerContainerOpenEvent, ServerHost, Text,
+        VanillaGameEventEvent,
+    };
     use std::sync::{Arc, Mutex};
     use sunrise_client::containers::{
         BlockEntity, ModBlockEntity, ModBlockEntityFields, ModContainer,
     };
     use sunrise_client::lan::menu::Slots;
     use sunrise_core::nbt::Tag;
+
+    const POS: (i32, i32, i32) = (3, 64, 4);
+    const AT: [i32; 3] = [POS.0, POS.1, POS.2];
+
+    fn with_container(block: &str, test: impl FnOnce(&mut Game<'_>)) {
+        super::super::native_guest_turn_tests::with_guests(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+            let state = game.pack.assets.registry.default_state(block).unwrap();
+            let level = game.level("minecraft:overworld").unwrap();
+            assert_eq!(
+                game.level_set_block(level, AT, state, BlockUpdateFlags::NEIGHBORS),
+                Ok(true)
+            );
+            test(game);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_replacement_reusing_the_block_menu_window_is_not_announced_twice() {
+        if run_fresh_cases(
+            "game::mod_container_openers_tests::tests::a_replacement_reusing_the_block_menu_window_is_not_announced_twice",
+            "SUNRISE_GUEST_MENU_REENTRY_CASE",
+            &["window_wrap"],
+        ) {
+            return;
+        }
+        struct Replace(Arc<Mutex<Vec<String>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Replace {
+            fn vanilla_game_event(
+                &self,
+                host: &mut dyn ServerHost,
+                event: &mut VanillaGameEventEvent<'_>,
+            ) -> Flow {
+                if event.event == "minecraft:container_open" {
+                    let player = host.players().acting_player().unwrap();
+                    // ServerPlayer.nextContainerCounter wraps 100 back to 1. Reuse the
+                    // outer opening's window ID without reusing its menu identity.
+                    for window in (2..=100).chain([1]) {
+                        assert_eq!(
+                            player
+                                .open_chest_menu(
+                                    host,
+                                    1,
+                                    Text::literal("replacement"),
+                                    Vec::new(),
+                                    MenuReplace::InPlace
+                                )
+                                .unwrap()
+                                .container_id(host),
+                            Some(window)
+                        );
+                    }
+                }
+                Flow::Continue
+            }
+
+            fn player_container_open(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut PlayerContainerOpenEvent<'_>,
+            ) {
+                self.0.lock().unwrap().push(event.menu_type.into());
+            }
+        }
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        with_container("minecraft:chest", |game| {
+            let result = mod_platform::testing::with_mods(
+                vec![ModEntry::new(
+                    "replace_menu",
+                    Box::new(Replace(heard.clone())),
+                )]
+                .into(),
+                || game.open_block_menu(12, POS),
+            );
+            assert_eq!(result, MenuOpen::Opened);
+            let guest = game.lan.as_ref().unwrap().hub.guest(12).unwrap();
+            let menu = guest.menu.as_ref().unwrap();
+            assert_eq!(menu.window, 1);
+            assert_eq!(&*menu.registry_id, "minecraft:generic_9x1");
+            let heard = heard.lock().unwrap();
+            assert_eq!(heard.len(), 100);
+            assert!(heard.iter().all(|kind| kind == "minecraft:generic_9x1"));
+            assert!(!game.lid_openers.contains_key(&POS));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_shulker_close_sounds_at_its_centre_when_the_listener_replaces_it() {
+        if run_fresh_cases(
+            "game::mod_container_openers_tests::tests::a_shulker_close_sounds_at_its_centre_when_the_listener_replaces_it",
+            "SUNRISE_GUEST_MENU_REENTRY_CASE",
+            &["shulker_close"],
+        ) {
+            return;
+        }
+        struct Replace;
+        #[mod_api::__subscriptions]
+        impl Hooks for Replace {
+            fn vanilla_game_event(
+                &self,
+                host: &mut dyn ServerHost,
+                event: &mut VanillaGameEventEvent<'_>,
+            ) -> Flow {
+                if event.event == "minecraft:container_close" {
+                    let level = host.level(event.dimension).unwrap();
+                    let barrel = BlockState::of(
+                        &host.block_states(),
+                        mod_api::__private::block_key("minecraft:barrel").unwrap(),
+                        &[],
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        level.set_block(host, AT, barrel, BlockUpdateFlags::NEIGHBORS),
+                        Ok(true)
+                    );
+                }
+                Flow::Continue
+            }
+        }
+        with_container("minecraft:shulker_box", |game| {
+            game.open_block_menu(12, POS);
+            assert!(
+                game.lan
+                    .as_ref()
+                    .unwrap()
+                    .hub
+                    .guest(12)
+                    .unwrap()
+                    .menu
+                    .is_some()
+            );
+            let barrel = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:barrel")
+                .unwrap();
+            game.audio.capture = Some(Vec::new());
+            mod_platform::testing::with_mods(
+                vec![ModEntry::new("replace_shulker", Box::new(Replace))].into(),
+                || game.guest_close_all(12),
+            );
+            assert_eq!(game.world.block(POS.0, POS.1, POS.2), barrel);
+            let captured = game.audio.capture.as_ref().unwrap();
+            let sounds = captured
+                .iter()
+                .map(|s| (s.event.as_str(), s.position))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sounds,
+                [("minecraft:block.shulker_box.close", [3.5, 64.5, 4.5])]
+            );
+        });
+    }
 
     #[test]
     #[ignore = "daily"]
@@ -133,7 +297,7 @@ mod tests {
                 }
                 game.world.game_time = start + 10;
                 game.tick_mod_container_viewers();
-                game.player_menu_closing(12);
+                game.guest_close_all(12);
                 assert_eq!(&notices.lock().unwrap()[before..], [(0, 1), (1, 1)]);
 
                 // A recheck for the old cabinet must not report on its same-type replacement.
@@ -143,7 +307,7 @@ mod tests {
                 game.world.block_entities.replace(pos, entity).unwrap();
                 game.world.game_time = start + 15;
                 game.tick_mod_container_viewers();
-                game.player_menu_closing(13);
+                game.guest_close_all(13);
                 assert_eq!(notices.lock().unwrap().len(), before_notices);
                 assert_eq!(events.lock().unwrap().len(), before_events);
                 assert!(game.mod_container_viewers.is_empty());
@@ -215,7 +379,7 @@ mod tests {
                 );
                 game.player_menu_opening(13);
                 assert_eq!(&notices.lock().unwrap()[before..], [(0, 1), (0, 1)]);
-                game.player_menu_closing(13);
+                game.guest_close_all(13);
                 assert_eq!(&notices.lock().unwrap()[before + 2..], [(1, 0), (1, 0)]);
                 assert_eq!(notices.lock().unwrap().last(), Some(&(1, 0)));
                 assert_eq!(

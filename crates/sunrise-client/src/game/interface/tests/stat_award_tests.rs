@@ -5,6 +5,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use sunrise_gameplay::stats::StatScoreOp;
 
 struct Rewrite(Arc<AtomicUsize>);
 #[mod_api::__subscriptions]
@@ -79,7 +80,11 @@ fn rewritten_awards_update_counts_criteria_and_dirty_values_atomically() {
             assert_eq!(game.stats.get("mined", "minecraft:stone"), 2);
             assert_eq!(
                 game.stats.events.pop(),
-                Some(("minecraft:mined".into(), "minecraft:stone".into(), Some(2)))
+                Some((
+                    "minecraft:mined".into(),
+                    "minecraft:stone".into(),
+                    StatScoreOp::Add(2)
+                ))
             );
             assert_eq!(
                 game.stats.take_dirty(),
@@ -91,7 +96,11 @@ fn rewritten_awards_update_counts_criteria_and_dirty_values_atomically() {
             assert_eq!(game.stats.get("custom", "minecraft:jump"), 0);
             assert_eq!(
                 game.stats.events.pop(),
-                Some(("minecraft:custom".into(), "rewrite:steps".into(), Some(3)))
+                Some((
+                    "minecraft:custom".into(),
+                    "rewrite:steps".into(),
+                    StatScoreOp::Add(3)
+                ))
             );
             assert_eq!(
                 game.stats.take_dirty(),
@@ -107,7 +116,11 @@ fn rewritten_awards_update_counts_criteria_and_dirty_values_atomically() {
                 assert_eq!(game.stats.get("custom", "rewrite:steps"), 3);
                 assert_eq!(
                     game.stats.events.pop(),
-                    Some(("minecraft:custom".into(), "minecraft:jump".into(), Some(1)))
+                    Some((
+                        "minecraft:custom".into(),
+                        "minecraft:jump".into(),
+                        StatScoreOp::Add(1)
+                    ))
                 );
             }
             mode.store(5, Ordering::Relaxed);
@@ -169,23 +182,25 @@ fn deferred_award_rewrites_only_after_outer_commit_and_abort_emits_nothing() {
                 .unwrap()
                 .play
                 .insert(12, Default::default());
-            let outer = game.transaction_open();
-            let inner = game.transaction_open();
-            game.defer_effect(DeferredEffect::CustomStat {
-                player: 12,
-                key: "jump",
-                amount: 1,
+            game.storage_scope(|game, _| {
+                game.storage_scope(|game, _| {
+                    game.defer_effect(DeferredEffect::CustomStat {
+                        player: 12,
+                        key: "jump",
+                        amount: 1,
+                    });
+                    ((), true)
+                });
+                assert_eq!(
+                    game.lan.as_ref().unwrap().play[&12]
+                        .stats
+                        .get("custom", "minecraft:jump"),
+                    0
+                );
+                // The listener's decision is taken at root commit, not at queue time.
+                mode.store(5, Ordering::Relaxed);
+                ((), true)
             });
-            game.transaction_close(&inner, true);
-            assert_eq!(
-                game.lan.as_ref().unwrap().play[&12]
-                    .stats
-                    .get("custom", "minecraft:jump"),
-                0
-            );
-            // The listener's decision is taken at root commit, not at queue time.
-            mode.store(5, Ordering::Relaxed);
-            game.transaction_close(&outer, true);
             assert_eq!(
                 game.lan.as_ref().unwrap().play[&12]
                     .stats
@@ -193,28 +208,31 @@ fn deferred_award_rewrites_only_after_outer_commit_and_abort_emits_nothing() {
                 0
             );
             mode.store(0, Ordering::Relaxed);
-            let outer = game.transaction_open();
-            let inner = game.transaction_open();
-            game.defer_effect(DeferredEffect::CustomStat {
-                player: 12,
-                key: "jump",
-                amount: 1,
+            game.storage_scope(|game, _| {
+                game.storage_scope(|game, _| {
+                    game.defer_effect(DeferredEffect::CustomStat {
+                        player: 12,
+                        key: "jump",
+                        amount: 1,
+                    });
+                    ((), true)
+                });
+                ((), false)
             });
-            game.transaction_close(&inner, true);
-            game.transaction_close(&outer, false);
             assert_eq!(
                 game.lan.as_ref().unwrap().play[&12]
                     .stats
                     .get("custom", "minecraft:jump"),
                 0
             );
-            let outer = game.transaction_open();
-            game.defer_effect(DeferredEffect::CustomStat {
-                player: 12,
-                key: "jump",
-                amount: 1,
+            game.storage_scope(|game, _| {
+                game.defer_effect(DeferredEffect::CustomStat {
+                    player: 12,
+                    key: "jump",
+                    amount: 1,
+                });
+                ((), true)
             });
-            game.transaction_close(&outer, true);
             assert_eq!(
                 game.lan.as_ref().unwrap().play[&12]
                     .stats
@@ -246,7 +264,7 @@ fn break_stone(game: &mut Game<'_>) {
         .default_state("minecraft:stone")
         .unwrap();
     game.world.set(6, 64, 4, stone).unwrap();
-    assert!(game.player_break_block([6, 64, 4]).unwrap());
+    assert!(game.player_break_block([6, 64, 4], None).unwrap());
     assert_eq!(
         game.res
             .facts()
@@ -298,7 +316,9 @@ fn real_integrated_stone_break_updates_counter_score_and_dirty_award() {
             {
                 let player = game.player.as_mut().unwrap();
                 player.ground.on_ground = true;
+                let side = game_side!(game);
                 let mut world = sunrise_client::motion::MotionWorld {
+                    side: &side,
                     entities: &[],
                     player,
                     scene: &mut game.world,
@@ -488,7 +508,11 @@ fn lan_noncanonical_rewrite_keeps_the_entire_original_award() {
                     assert_eq!(game.stats.get("mined", "minecraft:stone"), 0);
                     assert_eq!(
                         game.stats.events.pop(),
-                        Some(("minecraft:mined".into(), "minecraft:dirt".into(), Some(4)))
+                        Some((
+                            "minecraft:mined".into(),
+                            "minecraft:dirt".into(),
+                            StatScoreOp::Add(4)
+                        ))
                     );
                     assert_eq!(
                         game.stats.take_dirty(),
@@ -502,36 +526,6 @@ fn lan_noncanonical_rewrite_keeps_the_entire_original_award() {
                 .unwrap();
             }
         });
-    });
-}
-
-#[test]
-#[ignore = "needs SUNRISE_TEST_RESOURCES, SUNRISE_WASM_FIXTURE and SUNRISE_WASM_STD; build with sunrise-mod-wasm/listener-fixture"]
-fn wasm_real_break_and_jump_rewrite_awards() {
-    sunrise_guest_stack::run_on_guest_stack(|| {
-        use sunrise_mod_package::manifest::Package;
-        use sunrise_mod_wasm::{WasmPackage, load};
-        let path = std::path::PathBuf::from(std::env::var_os("SUNRISE_WASM_FIXTURE").unwrap());
-        let manifest = Package::read(&path).unwrap().manifest;
-        let info = mod_api::PackageInfo::new(
-            manifest.id.clone(),
-            manifest.version.to_string(),
-            mod_api::PackageKind::Code,
-            mod_api::Side::Both,
-            vec![manifest.id.clone()],
-            vec![],
-        );
-        let loaded = load(
-            &std::fs::read(std::env::var_os("SUNRISE_WASM_STD").unwrap()).unwrap(),
-            vec![WasmPackage {
-                manifest,
-                module: Package::read_wasm(&path).unwrap(),
-            }],
-        );
-        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-        assert_eq!(loaded.mods.len(), 1);
-        loaded.initialize(&[info]).unwrap();
-        lan_real_break_and_jump(loaded.mods.into(), "wasm_fixture:steps", None);
     });
 }
 

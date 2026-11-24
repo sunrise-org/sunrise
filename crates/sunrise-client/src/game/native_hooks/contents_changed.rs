@@ -6,10 +6,12 @@ impl Game<'_> {
     /// The block's storage calls `setChanged` (`Container.setChanged` and
     /// `BlockEntity.setChanged`), after its contents were written and before
     /// dirty/comparator updates. A native transaction tells it once per backing
-    /// block at the root commit, never for an abort or a simulation. Explicit
-    /// `set_changed` also tells it, even if the contents compare equal. Writes
-    /// inside this notice still apply, but do not re-enter it for the same block;
-    /// a write to another backing block has its own notice.
+    /// block at the root commit, never for an abort or a simulation. If that commit
+    /// happens inside `menu_quick_move`, the notice waits for source settlement and
+    /// is delivered only if the same backing container remains in place.
+    /// Explicit `set_changed` still tells it immediately, even if contents compare equal. Writes
+    /// inside this notice still apply, but do not re-enter it for the same block, even during
+    /// a quick move; a write to another backing block has its own notice.
     ///
     /// A server-only, non-cancellable BlockPart notice, not a global bus event.
     /// `level` and `pos` name the backing block, not an automation entity or its
@@ -24,7 +26,7 @@ impl Game<'_> {
         state: BlockStateId,
         observer: Option<BlockEntityRef>,
     ) {
-        if self.contents_changing.contains(&(level, pos)) {
+        if self.contents_notice_active(level, pos) {
             return;
         }
         let observers = self
@@ -47,5 +49,9 @@ impl Game<'_> {
                     .fire_contents_changed(level, pos, state, Some(entity));
             }
         }
+    }
+
+    pub(in crate::game) fn contents_notice_active(&self, level: LevelRef, pos: BlockPos) -> bool {
+        self.contents_changing.contains(&(level, pos))
     }
 }

@@ -1,14 +1,14 @@
 use super::*;
 use crate::game::{native_entity_refs::tests::with_game, world_loading::WorldRequest};
 use mod_api::{
-    self, AddServerReloadListenersEvent, Hooks, Host, ListenerKey, ModEntry, ReloadApply,
-    ReloadResourceError, ServerReloadListener,
+    self, AddServerReloadListenersEvent, Hooks, ListenerKey, ModEntry, ReloadResourceError,
+    ServerReloadListener,
 };
 use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -20,7 +20,7 @@ impl ServerReloadListener for DataListener {
     fn prepare(
         &self,
         context: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
         let id = Identifier::parse("reload_test:value").unwrap();
         assert!(context.list().any(|entry| entry == &id));
         // Arbitrary IDs only perform map lookups, never filesystem reads.
@@ -35,9 +35,7 @@ impl ServerReloadListener for DataListener {
                 .map_err(|error| ReloadResourceError::new(id.clone(), error))?;
         }
         let live = self.live.clone();
-        Ok(<dyn ReloadApply>::new(move || {
-            *live.lock().unwrap() = value
-        }))
+        Ok(Box::new(move || *live.lock().unwrap() = value))
     }
 }
 struct CheckListener(Arc<AtomicBool>);
@@ -45,21 +43,36 @@ impl ServerReloadListener for CheckListener {
     fn prepare(
         &self,
         _: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
         if self.0.load(Ordering::Relaxed) {
+            #[derive(Debug)]
+            struct Rejected(AtomicUsize);
+
+            impl std::fmt::Display for Rejected {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str("rejected new machine data")
+                }
+            }
+            impl std::error::Error for Rejected {
+                fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                    // Fail the test promptly if formatting keeps calling back into the cycle.
+                    assert!(self.0.fetch_add(1, Ordering::Relaxed) < 3);
+                    Some(self)
+                }
+            }
             return Err(ReloadResourceError::new(
                 Identifier::parse("reload_test:value").unwrap(),
-                std::io::Error::other("rejected new machine data"),
+                Rejected(AtomicUsize::new(0)),
             ));
         }
-        Ok(<dyn ReloadApply>::new(|| {}))
+        Ok(Box::new(|| {}))
     }
 }
 #[mod_api::__subscriptions]
 impl Hooks for DataListener {
     fn add_server_reload_listeners(
         &self,
-        _host: &dyn Host,
+        _context: &dyn mod_api::ReloadContext,
         event: &mut AddServerReloadListenersEvent<'_>,
     ) {
         let id = |text| Identifier::parse(text).unwrap();
@@ -147,9 +160,9 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
         fn prepare(
             &self,
             _: &ServerReloadContext,
-        ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
             let state = self.0.clone();
-            Ok(<dyn ReloadApply>::new(move || {
+            Ok(Box::new(move || {
                 state.fetch_add(1, Ordering::SeqCst);
             }))
         }
@@ -158,7 +171,7 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
     impl Hooks for Listener {
         fn add_server_reload_listeners(
             &self,
-            _: &dyn Host,
+            _: &dyn mod_api::ReloadContext,
             event: &mut AddServerReloadListenersEvent<'_>,
         ) {
             event
@@ -171,14 +184,14 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                 .unwrap();
         }
         fn data_pack_files(&self, _: &mut dyn ServerHost, event: &mut DataPackFilesEvent<'_>) {
-            let item = if self.0.load(Ordering::SeqCst) == 1 {
+            let block = if self.0.load(Ordering::SeqCst) == 1 {
                 "minecraft:stone"
             } else {
-                "minecraft:diamond"
+                "minecraft:diamond_block"
             };
             event.files.push((
                 "tags/reload_order:block/derived".into(),
-                format!(r#"{{"values":["{item}"]}}"#).into_bytes(),
+                format!(r#"{{"values":["{block}"]}}"#).into_bytes(),
             ));
         }
     }
@@ -205,21 +218,23 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                     mod_api::__private::tag_key(&Identifier::parse("sunrise:class/fence").unwrap())
                         .unwrap();
                 let fence = mod_api::__private::block_key("minecraft:oak_fence").unwrap();
-                assert!(mod_api::Tags::blocks(game, class).unwrap().contains(&fence));
+                assert!(matches!(mod_api::Tags::blocks(game, class),
+                    mod_api::TagMembers::Members(blocks) if blocks.contains(&fence)));
                 assert!(
                     game.items()
                         .block_in_tag("sunrise:class/fence", "minecraft:oak_fence")
                 );
-                assert_eq!(game.block_in_tag(fence, "sunrise:class/fence"), Some(true));
+                assert_eq!(fence.is_in_tag(&*game, class), Some(true));
                 state.store(0, Ordering::SeqCst);
                 assert!(game.run_command("reload"));
                 assert_eq!(state.load(Ordering::SeqCst), 1);
                 // World preparation sees the previous listener generation.
                 assert!(
-                    game.items().block_tags["reload_order:derived"].contains("minecraft:diamond")
+                    game.items().block_tags["reload_order:derived"]
+                        .contains("minecraft:diamond_block")
                 );
-                assert!(mod_api::Tags::blocks(game, class).unwrap().contains(&fence));
-                let old_bound = crate::game::native_world_read::installed_block_tag_snapshot();
+                assert!(matches!(mod_api::Tags::blocks(game, class),
+                    mod_api::TagMembers::Members(blocks) if blocks.contains(&fence)));
                 let old_order = game.items().block_tag_order.clone();
                 let old_sets = game.items().block_tags.clone();
                 let old = game.world_tables.as_ref().map(|tables| tables as *const _);
@@ -235,15 +250,163 @@ fn reload_command_prepares_world_before_applying_listeners_and_preserves_tables_
                     game.world_tables.as_ref().map(|tables| tables as *const _)
                 );
                 assert!(
-                    game.items().block_tags["reload_order:derived"].contains("minecraft:diamond")
+                    game.items().block_tags["reload_order:derived"]
+                        .contains("minecraft:diamond_block")
                 );
-                assert_eq!(
-                    crate::game::native_world_read::installed_block_tag_snapshot(),
-                    old_bound
+                // The second install replaced the installed parts and their keys, so ask by name:
+                // the world's tags are the ones the refused reload left in place.
+                assert!(
+                    game.items()
+                        .block_in_tag("sunrise:class/fence", "minecraft:oak_fence")
                 );
-                assert_eq!(game.items().block_tag_order, old_order);
-                assert_eq!(game.items().block_tags, old_sets);
+                let selected = game
+                    .native_tag_items()
+                    .expect("selected world tag snapshot");
+                assert_eq!(selected.block_tag_order, old_order);
+                assert_eq!(selected.block_tags, old_sets);
                 let _ = std::fs::remove_dir_all(root);
+            });
+        },
+    );
+}
+
+/// Reads the function file at prepare and parses the command at apply. The
+/// published function must use the version written just before its prepare.
+#[test]
+#[ignore = "daily"]
+fn reload_command_runs_listeners_on_both_sides_of_function_library() {
+    crate::game::in_own_process(
+        "game::server_reload::tests::reload_command_runs_listeners_on_both_sides_of_function_library",
+        || {
+            use mod_api::{
+                Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType,
+                RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost, Suggestion,
+                SuggestionRequest, VanillaServerListeners,
+            };
+
+            struct Listener {
+                trace: Arc<Mutex<Vec<String>>>,
+                path: std::path::PathBuf,
+                argument: &'static str,
+                apply: &'static str,
+            }
+            impl ServerReloadListener for Listener {
+                fn prepare(
+                    &self,
+                    _: &ServerReloadContext,
+                ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError>
+                {
+                    write(&self.path, format!("reload_probe {}", self.argument));
+                    let trace = self.trace.clone();
+                    let apply = self.apply;
+                    Ok(Box::new(move || trace.lock().unwrap().push(apply.into())))
+                }
+            }
+            struct Argument(Arc<Mutex<Vec<String>>>);
+            impl CommandArgumentType for Argument {
+                fn kind(&self) -> CommandArgumentKind {
+                    CommandArgumentKind::Word
+                }
+                fn parse(&self, input: &str) -> Result<String, CommandArgumentError> {
+                    self.0.lock().unwrap().push(format!("parse {input}"));
+                    Ok(input.into())
+                }
+                fn suggest(&self, _: &SuggestionRequest) -> Vec<Suggestion> {
+                    Vec::new()
+                }
+            }
+            struct Probe {
+                trace: Arc<Mutex<Vec<String>>>,
+                path: std::path::PathBuf,
+            }
+            #[mod_api::__subscriptions]
+            impl Hooks for Probe {
+                fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
+                    registrar.register_command_argument("argument", Argument(self.trace.clone()));
+                }
+                fn register_commands(
+                    &self,
+                    _: &mut dyn ServerHost,
+                    event: &mut RegisterCommandsEvent<'_>,
+                ) {
+                    event.commands.push(
+                        Command::new("reload_probe <value:reload_probe:argument>")
+                            .executes(|_, _, _| Ok(1)),
+                    );
+                }
+                fn add_server_reload_listeners(
+                    &self,
+                    _: &dyn mod_api::ReloadContext,
+                    event: &mut AddServerReloadListenersEvent<'_>,
+                ) {
+                    let id = |name| Identifier::parse(name).unwrap();
+                    for (name, argument, apply) in [
+                        ("reload_probe:before", "chosen", "apply before"),
+                        ("reload_probe:after", "too_late", "apply after"),
+                    ] {
+                        event
+                            .listeners
+                            .add_listener(
+                                id(name),
+                                FileToIdConverter::json("probe").unwrap(),
+                                Arc::new(Listener {
+                                    trace: self.trace.clone(),
+                                    path: self.path.clone(),
+                                    argument,
+                                    apply,
+                                }),
+                            )
+                            .unwrap();
+                    }
+                    event
+                        .listeners
+                        .add_dependency(
+                            id("reload_probe:before"),
+                            VanillaServerListeners::functions(),
+                        )
+                        .unwrap();
+                    event
+                        .listeners
+                        .add_dependency(
+                            VanillaServerListeners::functions(),
+                            id("reload_probe:after"),
+                        )
+                        .unwrap();
+                }
+            }
+            let scratch = tempfile::tempdir().unwrap();
+            let path = scratch
+                .path()
+                .join("datapacks/anchor/data/reload_probe/function/probe.mcfunction");
+            write(
+                &scratch.path().join("datapacks/anchor/pack.mcmeta"),
+                r#"{"pack":{"description":"anchor"}}"#,
+            );
+            write(
+                &scratch.path().join("datapacks.json"),
+                r#"{"enabled":["file/anchor"],"disabled":[]}"#,
+            );
+            write(&path, "reload_probe too_early");
+            let trace = Arc::new(Mutex::new(Vec::new()));
+            let mods = vec![ModEntry::new(
+                "reload_probe",
+                Box::new(Probe {
+                    trace: trace.clone(),
+                    path,
+                }),
+            )]
+            .into();
+            mod_platform::testing::with_mods(mods, || {
+                with_game(|game| {
+                    game.load_world(request(scratch.path())).unwrap();
+                    trace.lock().unwrap().clear();
+                    assert!(game.run_command("reload"));
+                    assert_eq!(
+                        *trace.lock().unwrap(),
+                        ["apply before", "parse chosen", "apply after"]
+                    );
+                    assert!(game.fns.store.functions.contains_key("reload_probe:probe"));
+                });
             });
         },
     );
@@ -297,9 +460,7 @@ fn dedicated_world_open_publishes_crafting_item_tags() {
             let view = reader.context();
             assert_eq!(view.is_in_tag(stick, tag), Some(true));
             assert_eq!(view.is_in_tag(dirt, tag), Some(false));
-            assert_eq!(view.item_count(tag), Some(1));
-            assert_eq!(view.item_at(tag, 0), Some(stick));
-            assert_eq!(view.item_at(tag, 1), None);
+            assert_eq!(view.items_in_tag(tag), Some(&[stick][..]));
         });
     });
 }
@@ -514,22 +675,23 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
             write(&data, "4");
             write(&function, "say new");
             reject.store(true, Ordering::Relaxed);
+            game.chat_capture = Some(Vec::new());
             assert!(!game.run_command("reload"));
+            let replies = game.chat_capture.take().unwrap();
+            let replies: Vec<_> = replies.iter().map(|reply| reply.plain()).collect();
+            assert!(
+                replies.iter().any(|reply| {
+                    reply.contains("reload listener reload_test:check: reload_test:value: rejected new machine data")
+                        && reply.contains("[circular error source]")
+                }),
+                "expected circular source diagnostic in command replies: {replies:?}"
+            );
             assert_eq!(
                 *live.lock().unwrap(),
                 8,
                 "earlier successful prepare must not publish"
             );
             assert_eq!(game.fns.store.functions["reload_test:keep"], old_function);
-            let error = game
-                .reload_datapacks(true, &game.level.enabled_features.clone())
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(
-                error.contains("reload listener reload_test:check: reload_test:value"),
-                "{error}"
-            );
             assert!(!game.run_command("datapack disable \"file/test\""));
             assert_eq!(
                 std::fs::read(world.join("datapacks.json")).unwrap(),
@@ -574,7 +736,7 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
         fn prepare(
             &self,
             context: &ServerReloadContext,
-        ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
             let mut parsed = Vec::new();
             for id in context.list() {
                 match serde_json::from_slice::<String>(context.read(id).unwrap()) {
@@ -583,9 +745,7 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
                 }
             }
             let live = self.0.clone();
-            Ok(<dyn ReloadApply>::new(move || {
-                *live.lock().unwrap() = parsed
-            }))
+            Ok(Box::new(move || *live.lock().unwrap() = parsed))
         }
     }
     struct SkipHooks(Arc<Mutex<Vec<(String, String)>>>);
@@ -593,7 +753,7 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
     impl Hooks for SkipHooks {
         fn add_server_reload_listeners(
             &self,
-            _host: &dyn Host,
+            _context: &dyn mod_api::ReloadContext,
             event: &mut AddServerReloadListenersEvent<'_>,
         ) {
             event
@@ -706,18 +866,46 @@ fn server_reload_registration_failure_stops_world_open_and_quiet_mods_never_list
     struct Quiet;
     #[mod_api::__subscriptions]
     impl Hooks for Quiet {}
+    struct NoopListener;
+    impl ServerReloadListener for NoopListener {
+        fn prepare(
+            &self,
+            _: &ServerReloadContext,
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
+            Ok(Box::new(|| {}))
+        }
+    }
     struct Broken;
     #[mod_api::__subscriptions]
     impl Hooks for Broken {
         fn add_server_reload_listeners(
             &self,
-            _host: &dyn Host,
+            _context: &dyn mod_api::ReloadContext,
             event: &mut AddServerReloadListenersEvent<'_>,
         ) {
-            let _ = event.listeners.add_dependency(
-                Identifier::parse("mistyped:listener").unwrap(),
-                VanillaServerListeners::functions(),
-            );
+            let a = Identifier::parse("broken:a").unwrap();
+            let b = Identifier::parse("broken:b").unwrap();
+            event
+                .listeners
+                .add_listener(
+                    a.clone(),
+                    FileToIdConverter::json("broken_a").unwrap(),
+                    Arc::new(NoopListener),
+                )
+                .unwrap();
+            event
+                .listeners
+                .add_listener(
+                    b.clone(),
+                    FileToIdConverter::json("broken_b").unwrap(),
+                    Arc::new(NoopListener),
+                )
+                .unwrap();
+            event
+                .listeners
+                .add_dependency(a.clone(), b.clone())
+                .unwrap();
+            event.listeners.add_dependency(b, a).unwrap();
         }
     }
     let root = std::env::current_dir()
@@ -749,7 +937,7 @@ fn server_reload_registration_failure_stops_world_open_and_quiet_mods_never_list
             with_game(|game| {
                 let error = game.load_world(request(&root)).unwrap_err().to_string();
                 assert!(
-                    error.contains("unknown reload listener mistyped:listener"),
+                    error.contains("reload listener dependency cycle:"),
                     "{error}"
                 );
                 assert!(game.fns.store.functions.is_empty());
@@ -757,6 +945,57 @@ fn server_reload_registration_failure_stops_world_open_and_quiet_mods_never_list
         },
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "daily"]
+fn world_open_reports_nested_reload_causes() {
+    struct Refusing;
+    impl ServerReloadListener for Refusing {
+        fn prepare(
+            &self,
+            _: &ServerReloadContext,
+        ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
+            Err(ReloadResourceError::new(
+                Identifier::parse("open_refusal:table").unwrap(),
+                ReloadResourceError::new(
+                    Identifier::parse("open_refusal:row").unwrap(),
+                    std::io::Error::other("invalid world-open fixture row"),
+                ),
+            ))
+        }
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Refusing {
+        fn add_server_reload_listeners(
+            &self,
+            _: &dyn mod_api::ReloadContext,
+            event: &mut AddServerReloadListenersEvent<'_>,
+        ) {
+            event
+                .listeners
+                .add_listener(
+                    Identifier::parse("open_refusal:listener").unwrap(),
+                    FileToIdConverter::json("machines").unwrap(),
+                    Arc::new(Self),
+                )
+                .unwrap();
+        }
+    }
+    let world = tempfile::tempdir().unwrap();
+    mod_platform::testing::with_mods(
+        vec![ModEntry::new("open_refusal", Box::new(Refusing))].into(),
+        || {
+            with_game(|game| {
+                let error = game
+                    .load_world(request(&world.path().join("refused")))
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("reload listener open_refusal:listener: open_refusal:table: open_refusal:row: invalid world-open fixture row"), "{error}");
+                assert!(game.fns.store.functions.is_empty());
+            })
+        },
+    );
 }
 
 struct RetainedData {
@@ -767,7 +1006,7 @@ impl ServerReloadListener for RetainedData {
     fn prepare(
         &self,
         context: &ServerReloadContext,
-    ) -> Result<Box<dyn ReloadApply>, ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, ReloadResourceError> {
         let mut value = 0;
         for id in context.list() {
             value += serde_json::from_slice::<u64>(context.read(id).unwrap())
@@ -780,16 +1019,14 @@ impl ServerReloadListener for RetainedData {
             ));
         }
         let live = self.live.clone();
-        Ok(<dyn ReloadApply>::new(move || {
-            *live.lock().unwrap() = value
-        }))
+        Ok(Box::new(move || *live.lock().unwrap() = value))
     }
 }
 #[mod_api::__subscriptions]
 impl Hooks for RetainedData {
     fn add_server_reload_listeners(
         &self,
-        _host: &dyn Host,
+        _context: &dyn mod_api::ReloadContext,
         event: &mut AddServerReloadListenersEvent<'_>,
     ) {
         let key = ListenerKey::<Self>::new(Identifier::parse("reload_test:kept").unwrap());
@@ -910,26 +1147,13 @@ fn server_reload_retains_listeners_for_other_hooks() {
 #[test]
 #[ignore = "daily"]
 fn server_completion_reads_published_data_without_world_access_on_first_open() {
-    use mod_api::__private::{ModPhase, PhaseOwner};
-    use mod_api::{HostSide, TagsUpdateCause, TagsUpdatedEvent};
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use mod_api::{ReloadContext, TagsUpdateCause, TagsUpdatedEvent};
 
     struct Probe(Arc<Mutex<Vec<TagsUpdateCause>>>);
     #[mod_api::__subscriptions]
     impl Hooks for Probe {
-        fn tags_updated(&self, host: HostSide<'_>, event: &mut TagsUpdatedEvent) {
-            let HostSide::Server(host) = host else {
-                panic!("a data load is the server's");
-            };
-            assert!(!host.recipes_of_type("minecraft:smelting").is_empty());
-            let refused =
-                catch_unwind(AssertUnwindSafe(|| host.level("minecraft:overworld"))).unwrap_err();
-            let text = refused
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| refused.downcast_ref::<&str>().copied())
-                .unwrap();
-            assert!(text.contains("Reloading"), "{text}");
+        fn tags_updated(&self, context: &dyn ReloadContext, event: &mut TagsUpdatedEvent) {
+            assert!(!context.recipes_of_type("minecraft:smelting").is_empty());
             self.0.lock().unwrap().push(event.cause);
         }
     }
@@ -941,13 +1165,9 @@ fn server_completion_reads_published_data_without_world_access_on_first_open() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
-            game.mod_phase = PhaseOwner::new(ModPhase::Setup);
             let root = std::env::current_dir().unwrap().join("published-world");
             game.load_world(request(&root)).unwrap();
-            assert_eq!(mod_api::__private::current_phase(), ModPhase::Setup);
-            game.mod_phase = PhaseOwner::new(ModPhase::World);
             game.native_tags_updated(TagsUpdateCause::ServerDataLoad { reload: true });
-            assert_eq!(mod_api::__private::current_phase(), ModPhase::World);
             assert_eq!(
                 *seen.lock().unwrap(),
                 [
@@ -968,7 +1188,7 @@ fn server_completion_reads_published_data_without_world_access_on_first_open() {
 fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
     use mod_api::{
         BlockKey, DataMap, DataMapError, DataMapTypesEvent, DataMapsUpdateCause,
-        DataMapsUpdatedEvent, DataPackFilesEvent, HostSide, ItemKey, ServerHost, Tag,
+        DataMapsUpdatedEvent, DataPackFilesEvent, ItemKey, ReloadContext, ServerHost, Tag,
     };
     use std::sync::atomic::AtomicUsize;
 
@@ -1039,10 +1259,12 @@ fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
                 );
             }
         }
-        fn data_maps_updated(&self, host: HostSide<'_>, event: &mut DataMapsUpdatedEvent<'_>) {
-            let HostSide::Server(host) = host else {
-                panic!("the server's reload");
-            };
+        fn data_maps_updated(
+            &self,
+            context: &dyn ReloadContext,
+            event: &mut DataMapsUpdatedEvent<'_>,
+        ) {
+            assert_eq!(event.cause, DataMapsUpdateCause::ServerReload);
             self.seen
                 .lock()
                 .unwrap()
@@ -1050,15 +1272,14 @@ fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
             if event.registry != "minecraft:item" {
                 return;
             }
-            let host: &dyn Host = &*host;
-            let item = |id: &str| host.item_key(&Identifier::parse(id).unwrap()).unwrap();
+            let item = |id: &str| context.item_key(&Identifier::parse(id).unwrap()).unwrap();
             let stone = mod_api::__private::block_key("minecraft:stone").unwrap();
             self.reads.lock().unwrap().push([
-                item("minecraft:coal").data(host, &FUEL),
-                item("minecraft:oak_log").data(host, &FUEL),
-                item("minecraft:stone").data(host, &FUEL),
-                item("minecraft:coal").data(host, &Fuel("probe:unregistered")),
-                stone.data(host, &Hardness),
+                context.data_map(&item("minecraft:coal"), &FUEL),
+                context.data_map(&item("minecraft:oak_log"), &FUEL),
+                context.data_map(&item("minecraft:stone"), &FUEL),
+                context.data_map(&item("minecraft:coal"), &Fuel("probe:unregistered")),
+                context.data_map(&stone, &Hardness),
             ]);
         }
     }

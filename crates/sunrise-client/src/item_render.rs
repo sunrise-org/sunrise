@@ -14,6 +14,8 @@ mod glint_atlas;
 #[cfg(test)]
 mod glint_tests;
 pub mod gui;
+mod registered_providers;
+mod registered_special;
 mod special;
 #[cfg(test)]
 mod special_parts_tests;
@@ -26,17 +28,37 @@ use crate::{
     mesher::{CULL_BACK, Vertex},
 };
 use glam::{Mat3, Mat4, Vec3};
+use mod_api::{ClientHost, ItemDisplayContext, ItemKey, SpecialModelContext, SpecialModelTints};
+pub use registered_providers::{
+    BoundItemModel, BoundRangeProperty, BoundSelectProperty, BoundTintSource, ItemModelFactories,
+    ItemProviderEntry, ItemProviderTables, ItemTintFactories, RangePropertyFactories,
+    SelectPropertyFactories, bind_item_model_factories, bind_item_tint_factories,
+    bind_range_property_factories, bind_select_property_factories, decode_item_model,
+    decode_range_property, decode_select_property, decode_tint_source,
+    install_item_model_factories, install_item_tint_factories, install_range_property_factories,
+    install_select_property_factories,
+};
+pub use registered_special::{
+    BakedSpecialGeometry, OwnedSpecialModelFactory, SpecialModelFactories,
+    install_special_model_factories,
+};
+use registered_special::{FACTORIES, StackAncestor};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
+    num::NonZeroU32,
+    ops::ControlFlow,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 use sunrise_assets::{
     item_bake::{BakedItemModel, SpriteLookup, SpriteMask, bake_item_model, bake_sprite_layer},
     item_model::{
-        ClientItem, Context, DisplayContext, FoilType, ItemEnv, ItemModels, LayerContent,
-        LayerTransform, LevelState, OwnerState, PreparedParts, SpecialContent, SpecialModel,
-        StackView,
+        ClientItem, Context, DisplayContext, FoilType, ItemEnv, ItemModels, Layer, LayerContent,
+        LayerTransform, LevelState, OwnerState, SpecialModel, StackView,
     },
     model::Direction,
     resolve::{MISSING_MODEL, ModelLibrary},
@@ -52,11 +74,14 @@ pub struct ItemQuad {
     /// The model UVs `GLINT_TEXTURING` scrolls for the glint (vanilla's UV0,
     /// or UV3 for a special model).
     pub foil_uv: [[f32; 2]; 4],
-    /// Standard GUI glint uses the vanilla items atlas; CIT keeps sprite-local UVs.
+    /// Glint UV override (vanilla atlas UV for standard/shield foil, decal UV3 for special foil);
+    /// CIT and raw entity models keep sprite-local `foil_uv`.
     pub gui_glint_uv: Option<[[f32; 2]; 4]>,
     pub normal: Vec3,
     pub color: u32,
     pub foil: Foil,
+    /// True for entity-model special items (`Trident`, `Shield`) using `ENTITY_GLINT_TEXTURING`.
+    pub entity_glint: bool,
     /// `MaterialInfo.lightEmission` (block light floor).
     pub light_emission: u8,
     /// The render type culls back faces (`entitySolid`): world drawing discards them.
@@ -67,30 +92,47 @@ pub struct ItemQuad {
     /// The quad's render type has an `OitPipelineSet` (`entityTranslucent`: a
     /// player head's skin): improved transparency draws it in its stages.
     pub oit: bool,
+    /// `RenderTypes.bannerPattern`: translucent blend without depth writes or alpha cutout.
+    pub banner_pattern: bool,
 }
 /// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
 pub struct Glint {
     /// `options.glintSpeed` (vanilla default 0.5).
-    pub speed: f32,
+    pub speed: f64,
     /// `options.glintStrength` / shader `GlintAlpha` (vanilla default 0.75).
     pub alpha: f32,
     /// `Util.getMillis()`.
-    pub millis: f32,
-    /// The transform's scale: `GLINT_TEXTURING`'s 8.0 for GUI items,
-    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for items in the world and
+    pub millis: i64,
+    /// The transform's scale: `GLINT_TEXTURING`'s 8.0 for cuboid items (GUI and world),
+    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for entity-model special items (`Trident`, `Shield`), and
     /// `ARMOR_ENTITY_GLINT_TEXTURING`'s 0.16 for armour (entity.wgsl).
     pub scale: f32,
 }
 impl Glint {
+    pub const ITEM_SCALE: f32 = 8.0;
+    pub const ENTITY_SCALE: f32 = 0.5;
+    pub const ARMOR_SCALE: f32 = 0.16;
+
+    /// Select vanilla's item (`8.0`) or entity (`0.5`) texturing scale for a quad.
+    pub fn for_quad(self, entity_glint: bool) -> Self {
+        Self {
+            scale: if entity_glint {
+                Self::ENTITY_SCALE
+            } else {
+                Self::ITEM_SCALE
+            },
+            ..self
+        }
+    }
     /// `Util.getMillis() * glintSpeed * 8.0` as vanilla's long.
-    fn ticks(millis: f32, speed: f32) -> i64 {
-        (f64::from(millis) * f64::from(speed) * 8.0) as i64
+    fn ticks(millis: i64, speed: f64) -> i64 {
+        (millis as f64 * speed * 8.0) as i64
     }
     /// The scroll clock modulo the common period of both offsets (110000 and
     /// 30000 divide 330000), for `globals.time.w`: the entity shader derives
     /// `ARMOR_ENTITY_GLINT_TEXTURING` from it.
-    pub fn scroll_ticks(millis: f32, speed: f32) -> f32 {
+    pub fn scroll_ticks(millis: i64, speed: f64) -> f32 {
         (Self::ticks(millis, speed) % 330_000) as f32
     }
     /// `TextureTransform.setupGlintTexturing(scale)` applied to the model UV:
@@ -101,11 +143,16 @@ impl Glint {
         let ticks = Self::ticks(self.millis, self.speed);
         let offset0 = (ticks % 110_000) as f32 / 110_000.0;
         let offset1 = (ticks % 30_000) as f32 / 30_000.0;
-        let angle = std::f32::consts::PI / 18.0;
-        let (sin, cos) = angle.sin_cos();
+        // Compile-time `(float)(Math.PI / 18.0)` in `TextureTransform.setupGlintTexturing`.
+        const ANGLE: f32 = f32::from_bits(0x3e32_b8c2);
+        let sin = crate::camera::joml::sin(ANGLE);
+        let cos = crate::camera::joml::cos_from_sin(sin, ANGLE);
+        let (m00, m01) = (cos * self.scale, sin * self.scale);
+        let (m10, m11) = (-sin * self.scale, cos * self.scale);
+        // JOML `Vector4f.mulAffine`: right-associated unfused sums; `0.0 + -offset0` drops -0.0.
         [
-            model[0] * self.scale * cos - model[1] * self.scale * sin - offset0,
-            model[0] * self.scale * sin + model[1] * self.scale * cos + offset1,
+            m00 * model[0] + (m10 * model[1] + (0.0 + -offset0)),
+            m01 * model[0] + (m11 * model[1] + (0.0 + offset1)),
         ]
     }
 }
@@ -116,9 +163,9 @@ impl Glint {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlintFrame {
     /// `Util.getMillis()` this frame.
-    pub millis: f32,
+    pub millis: i64,
     /// `OptionsRenderState.glintSpeed`.
-    pub speed: f32,
+    pub speed: f64,
     /// `OptionsRenderState.glintStrength`.
     pub alpha: f32,
     /// The atlas has `misc/enchanted_glint_item`.
@@ -148,6 +195,8 @@ pub enum Foil {
     Standard,
     /// `itemGlintSpecialRenderType`: compasses and clocks, a sheeted decal.
     Special,
+    /// `RenderTypes.patternedShieldGlint`: equal-depth glint-only pass drawn once after patterns.
+    GlintOnly,
 }
 /// Where submitted quads go.
 pub trait ItemSink {
@@ -158,6 +207,38 @@ impl ItemSink for Vec<ItemQuad> {
         self.push(quad);
     }
 }
+
+/// Client drawing services in addition to the asset resolver's host services.
+pub trait ItemDrawEnv: ItemEnv {
+    /// The host and validated input for a registered special draw. The resolver reports
+    /// unavailable input and refuses this layer only, not the renderer.
+    fn special_model_input(
+        &self,
+        _stack: &StackView,
+        _context: &Context<'_>,
+    ) -> Option<SpecialModelInput<'_>> {
+        None
+    }
+
+    /// Resolve a mod-submitted stack and its display context at the engine boundary.
+    fn special_model_stack(
+        &self,
+        _stack: &mod_api::ItemStack,
+        _display: ItemDisplayContext,
+    ) -> Option<(StackView, DisplayContext)> {
+        None
+    }
+}
+
+/// The game services and stack identity the special renderer reads during this draw.
+pub struct SpecialModelInput<'a> {
+    pub host: &'a dyn ClientHost,
+    pub item: ItemKey,
+    pub count: NonZeroU32,
+    pub context: SpecialModelContext,
+}
+
+impl ItemDrawEnv for sunrise_assets::item_model::NoEnv {}
 
 /// Data special renderers read from the game (registries, skins).
 pub trait SpecialHost {
@@ -190,16 +271,37 @@ pub enum LayerGeometry {
         argument: Value,
     },
 }
+/// Tints computed for an ordinary layer, or the palette supplied by a special renderer.
+#[derive(Clone, Debug)]
+pub enum LayerTints {
+    Owned(Vec<i32>),
+    Special(SpecialModelTints),
+}
+impl LayerTints {
+    fn at(&self, index: i32) -> u32 {
+        match self {
+            // `getLayerColorSafe`: an untinted quad or a missing palette entry draws white.
+            Self::Owned(tints) => tints
+                .get(index as usize)
+                .map_or(u32::MAX, |&tint| argb(tint)),
+            Self::Special(SpecialModelTints::Uniform(tint)) => *tint,
+            Self::Special(SpecialModelTints::Indexed(tints)) => {
+                tints.get(index as usize).copied().unwrap_or(u32::MAX)
+            }
+            Self::Special(_) => u32::MAX,
+        }
+    }
+}
 /// `ItemStackRenderState.LayerRenderState`.
 #[derive(Clone, Debug)]
 pub struct LayerRender {
     pub geometry: LayerGeometry,
-    pub tints: Vec<i32>,
+    pub tints: LayerTints,
     pub foil: FoilType,
     /// `applyTransform`: the display transform, then the local transform.
     pub matrix: Mat4,
     /// `particleMaterial` (atlas sprite name).
-    pub particle: String,
+    pub particle: Arc<str>,
     pub uses_block_light: bool,
     /// Untransformed extents (quad corners or the special model's parts).
     pub extents: Arc<Vec<Vec3>>,
@@ -221,8 +323,21 @@ pub struct ItemRenderState {
     /// In HDR output, the block light of an item that glows: its block's, as a placed one has
     /// it, so a torch doesn't go dark in the shade while it shines. 0 for the rest.
     pub hdr_light: u8,
+    /// A third-person held-item submission's opaque ARGB multiplier, never cached with the model.
+    held_tint: Option<u32>,
 }
+
+#[derive(Default)]
+struct RenderLayerFlags {
+    oversized_in_gui: bool,
+    animated: bool,
+}
+
 impl ItemRenderState {
+    /// Apply a held-item Part's RGB answer to this draw only, preserving model alpha.
+    pub fn set_held_tint(&mut self, rgb: u32) {
+        self.held_tint = Some(rgb | 0xFF00_0000);
+    }
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
@@ -231,13 +346,17 @@ impl ItemRenderState {
         self.layers.first().is_some_and(|l| l.uses_block_light)
     }
     /// `getModelBoundingBox`: the transformed extents of every layer, as
-    /// (min, max); a zero box at the origin when there are none.
+    /// (min, max); a zero box at the origin when there are none. Each extent is
+    /// `Vector3f.mulPosition`'s (JOML's `Math.fma` unfused, summed from the right).
     pub fn bounding_box(&self) -> (Vec3, Vec3) {
         let mut lo = Vec3::splat(f32::INFINITY);
         let mut hi = Vec3::splat(f32::NEG_INFINITY);
         for layer in &self.layers {
+            let [c0, c1, c2, c3] = layer.matrix.to_cols_array_2d();
             for p in layer.extents.iter() {
-                let q = layer.matrix.transform_point3(*p);
+                let q = Vec3::from_array(std::array::from_fn(|row| {
+                    c0[row] * p.x + (c1[row] * p.y + (c2[row] * p.z + c3[row]))
+                }));
                 lo = lo.min(q);
                 hi = hi.max(q);
             }
@@ -278,6 +397,13 @@ impl ItemRenderState {
         pose: Mat4,
         sink: &mut dyn ItemSink,
     ) {
+        let mut tinted;
+        let sink: &mut dyn ItemSink = if let Some(tint) = self.held_tint {
+            tinted = TintedItemSink { sink, tint };
+            &mut tinted
+        } else {
+            sink
+        };
         for layer in &self.layers {
             let m = pose * layer.matrix;
             match &layer.geometry {
@@ -290,6 +416,42 @@ impl ItemRenderState {
                     argument,
                     layer.foil != FoilType::None,
                     m,
+                    sprites,
+                    host,
+                    sink,
+                ),
+            }
+        }
+    }
+    /// [`Self::submit`] preserving JOML `Matrix4f.mulAffine` and `Vector3f.mulPosition`
+    /// rounding through baked quad submission (`DisplayRenderer.ItemDisplayRenderer.submitInner`).
+    pub fn submit_joml(
+        &self,
+        renderer: &ItemRenderer,
+        sprites: &HashMap<String, Rect>,
+        host: &dyn SpecialHost,
+        pose: crate::camera::joml::Mat4,
+        sink: &mut dyn ItemSink,
+    ) {
+        let mut tinted;
+        let sink: &mut dyn ItemSink = if let Some(tint) = self.held_tint {
+            tinted = TintedItemSink { sink, tint };
+            &mut tinted
+        } else {
+            sink
+        };
+        for layer in &self.layers {
+            let m_joml = pose.mul_affine(&crate::camera::joml::Mat4::affine(layer.matrix));
+            match &layer.geometry {
+                LayerGeometry::Quads(baked) => {
+                    submit_quads_joml(renderer, baked, layer, m_joml, sprites, sink);
+                }
+                LayerGeometry::Special { model, argument } => special::submit(
+                    renderer,
+                    model,
+                    argument,
+                    layer.foil != FoilType::None,
+                    m_joml.to_glam(),
                     sprites,
                     host,
                     sink,
@@ -324,15 +486,15 @@ impl ItemRenderState {
             let LayerGeometry::Quads(baked) = &layer.geometry else {
                 return false;
             };
-            if layer.foil != FoilType::None {
+            if layer.foil != FoilType::None || matches!(&layer.tints, LayerTints::Special(_)) {
                 return false;
             }
             let Some(stored) = skin.models.item(baked, skin.frame) else {
                 return false;
             };
             let translucent = |run: &crate::mobs::skin::ItemRun| {
-                let sprite = &baked.quads[run.quad].material.sprite;
-                renderer.sprites.translucent(sprite_name(sprite))
+                let material = &baked.quads[run.quad].material;
+                material.force_translucent || renderer.sprites.translucent(&material.sprite)
             };
             if stored.runs.iter().any(translucent) {
                 return false;
@@ -357,16 +519,11 @@ impl ItemRenderState {
                 else {
                     continue;
                 };
-                let color = if run.tint_index >= 0 {
-                    layer
-                        .tints
-                        .get(run.tint_index as usize)
-                        .copied()
-                        .unwrap_or(-1)
-                } else {
-                    -1
-                };
-                let colors = AXES.map(|d| shaded(argb(color), normals.face(d), lights));
+                let color = layer.tints.at(run.tint_index);
+                let color = self
+                    .held_tint
+                    .map_or(color, |tint| crate::hud_layout::multiply(color, tint));
+                let colors = AXES.map(|d| shaded(color, normals.face(d), lights));
                 let frame = &mut *skin.frame;
                 frame.jobs.push(SkinJob {
                     first: run.first,
@@ -386,6 +543,20 @@ impl ItemRenderState {
             skin.grow_bounds(m, bounds);
         }
         true
+    }
+}
+
+/// Multiplies every submitted quad's RGB, including special models, before the world sink lights it.
+struct TintedItemSink<'a> {
+    sink: &'a mut dyn ItemSink,
+    tint: u32,
+}
+impl ItemSink for TintedItemSink<'_> {
+    fn quad(&mut self, mut quad: ItemQuad) {
+        if quad.foil != Foil::GlintOnly {
+            quad.color = crate::hud_layout::multiply(quad.color, self.tint);
+        }
+        self.sink.quad(quad);
     }
 }
 
@@ -440,6 +611,306 @@ pub fn argb(color: i32) -> u32 {
     color as u32
 }
 
+fn joml_transform_pos(m: &[f32; 16], p: [f32; 3]) -> [f32; 3] {
+    [
+        m[0] * p[0] + (m[4] * p[1] + (m[8] * p[2] + m[12])),
+        m[1] * p[0] + (m[5] * p[1] + (m[9] * p[2] + m[13])),
+        m[2] * p[0] + (m[6] * p[1] + (m[10] * p[2] + m[14])),
+    ]
+}
+
+/// JOML 1.10.9 `Matrix4f.invertAffine` when `MatrixUtil.mulComponentWise` was not called.
+fn joml_invert_affine(m: &[f32; 16]) -> [f32; 16] {
+    let [
+        m00,
+        m01,
+        m02,
+        _,
+        m10,
+        m11,
+        m12,
+        _,
+        m20,
+        m21,
+        m22,
+        _,
+        m30,
+        m31,
+        m32,
+        _,
+    ] = *m;
+    let t2 = m00 * m11;
+    let t3 = m01 * m10;
+    let t4 = m02 * m10;
+    let t5 = m00 * m12;
+    let t6 = m01 * m12;
+    let t7 = m02 * m11;
+    let det = (t2 - t3) * m22 + (t4 - t5) * m21 + (t6 - t7) * m20;
+    let inv = 1.0 / det;
+    let t10 = m10 * m22;
+    let t11 = m10 * m21;
+    let t12 = m11 * m22;
+    let t13 = m11 * m20;
+    let t14 = m12 * m21;
+    let t15 = m12 * m20;
+    let t16 = m20 * m02;
+    let t17 = m20 * m01;
+    let t18 = m21 * m02;
+    let t19 = m21 * m00;
+    let t20 = m22 * m01;
+    let t21 = m22 * m00;
+    let nm30 = (t10 * m31 - t11 * m32 + t13 * m32 - t12 * m30 + t14 * m30 - t15 * m31) * inv;
+    let nm31 = (t16 * m31 - t17 * m32 + t19 * m32 - t18 * m30 + t20 * m30 - t21 * m31) * inv;
+    let nm32 = (t7 * m30 - t6 * m30 + t5 * m31 - t4 * m31 + t3 * m32 - t2 * m32) * inv;
+    [
+        (t12 - t14) * inv,
+        (t18 - t20) * inv,
+        (t6 - t7) * inv,
+        0.0,
+        (t15 - t10) * inv,
+        (t21 - t16) * inv,
+        (t4 - t5) * inv,
+        0.0,
+        (t11 - t13) * inv,
+        (t17 - t19) * inv,
+        (t2 - t3) * inv,
+        0.0,
+        nm30,
+        nm31,
+        nm32,
+        1.0,
+    ]
+}
+
+/// JOML 1.10.9 `Matrix4f.invertGenericThis` after `MatrixUtil.mulComponentWise` clears properties.
+fn joml_invert_generic(m: &[f32; 16]) -> [f32; 16] {
+    let [
+        m00,
+        m01,
+        m02,
+        m03,
+        m10,
+        m11,
+        m12,
+        m13,
+        m20,
+        m21,
+        m22,
+        m23,
+        m30,
+        m31,
+        m32,
+        m33,
+    ] = *m;
+    let a = m00 * m11 - m01 * m10;
+    let b = m00 * m12 - m02 * m10;
+    let c = m00 * m13 - m03 * m10;
+    let d = m01 * m12 - m02 * m11;
+    let e = m01 * m13 - m03 * m11;
+    let f = m02 * m13 - m03 * m12;
+    let g = m20 * m31 - m21 * m30;
+    let h = m20 * m32 - m22 * m30;
+    let i = m20 * m33 - m23 * m30;
+    let j = m21 * m32 - m22 * m31;
+    let k = m21 * m33 - m23 * m31;
+    let l = m22 * m33 - m23 * m32;
+    let det = a * l - b * k + c * j + d * i - e * h + f * g;
+    let inv = 1.0 / det;
+    [
+        (m11 * l + (-m12 * k + m13 * j)) * inv,
+        (-m01 * l + (m02 * k + -m03 * j)) * inv,
+        (m31 * f + (-m32 * e + m33 * d)) * inv,
+        (-m21 * f + (m22 * e + -m23 * d)) * inv,
+        (-m10 * l + (m12 * i + -m13 * h)) * inv,
+        (m00 * l + (-m02 * i + m03 * h)) * inv,
+        (-m30 * f + (m32 * c + -m33 * b)) * inv,
+        (m20 * f + (-m22 * c + m23 * b)) * inv,
+        (m10 * k + (-m11 * i + m13 * g)) * inv,
+        (-m00 * k + (m01 * i + -m03 * g)) * inv,
+        (m30 * e + (-m31 * c + m33 * a)) * inv,
+        (-m20 * e + (m21 * c + -m23 * a)) * inv,
+        (-m10 * j + (m11 * h + -m12 * g)) * inv,
+        (m00 * j + (-m01 * h + m02 * g)) * inv,
+        (-m30 * d + (m31 * b + -m32 * a)) * inv,
+        (m20 * d + (-m21 * b + m22 * a)) * inv,
+    ]
+}
+
+/// JOML 1.10.9 `Matrix3f.invert` (column-major).
+fn joml_mat3_invert(m: &[f32; 9]) -> [f32; 9] {
+    let [m00, m01, m02, m10, m11, m12, m20, m21, m22] = *m;
+    let a = m00 * m11 + (-m01 * m10);
+    let b = m02 * m10 + (-m00 * m12);
+    let c = m01 * m12 + (-m02 * m11);
+    let d = a * m22 + (b * m21 + c * m20);
+    let s = 1.0 / d;
+    [
+        (m11 * m22 + (-m21 * m12)) * s,
+        (m21 * m02 + (-m01 * m22)) * s,
+        c * s,
+        (m20 * m12 + (-m10 * m22)) * s,
+        (m00 * m22 + (-m20 * m02)) * s,
+        b * s,
+        (m10 * m21 + (-m20 * m11)) * s,
+        (m20 * m01 + (-m00 * m21)) * s,
+        a * s,
+    ]
+}
+
+fn joml_mat3_transpose(m: &[f32; 9]) -> [f32; 9] {
+    [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]
+}
+
+fn joml_mat3_transform(m: &[f32; 9], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0] * v[0] + (m[3] * v[1] + m[6] * v[2]),
+        m[1] * v[0] + (m[4] * v[1] + m[7] * v[2]),
+        m[2] * v[0] + (m[5] * v[1] + m[8] * v[2]),
+    ]
+}
+
+/// JOML 1.10.9 `Vector3f.normalize`.
+fn joml_vec3_normalize(v: [f32; 3]) -> [f32; 3] {
+    let inv = 1.0 / (v[0] * v[0] + (v[1] * v[1] + v[2] * v[2])).sqrt();
+    [v[0] * inv, v[1] * inv, v[2] * inv]
+}
+
+/// `Direction.getApproximateNearest(float, float, float)`.
+fn direction_approximate_nearest(v: [f32; 3]) -> Direction {
+    const DIRECTIONS: [(Direction, [f32; 3]); 6] = [
+        (Direction::Down, [0.0, -1.0, 0.0]),
+        (Direction::Up, [0.0, 1.0, 0.0]),
+        (Direction::North, [0.0, 0.0, -1.0]),
+        (Direction::South, [0.0, 0.0, 1.0]),
+        (Direction::West, [-1.0, 0.0, 0.0]),
+        (Direction::East, [1.0, 0.0, 0.0]),
+    ];
+    let mut result = Direction::North;
+    // `Float.MIN_VALUE` (smallest positive subnormal f32).
+    let mut highest_dot = f32::from_bits(1);
+    for (dir, n) in DIRECTIONS {
+        let dot = v[0] * n[0] + v[1] * n[1] + v[2] * n[2];
+        if dot > highest_dot {
+            highest_dot = dot;
+            result = dir;
+        }
+    }
+    result
+}
+
+fn direction_unit_vec(d: Direction) -> [f32; 3] {
+    match d {
+        Direction::Down => [0.0, -1.0, 0.0],
+        Direction::Up => [0.0, 1.0, 0.0],
+        Direction::North => [0.0, 0.0, -1.0],
+        Direction::South => [0.0, 0.0, 1.0],
+        Direction::West => [-1.0, 0.0, 0.0],
+        Direction::East => [1.0, 0.0, 0.0],
+    }
+}
+
+fn joml_rotate_x(v: [f32; 3], angle: f32) -> [f32; 3] {
+    let sin = crate::camera::joml::sin(angle);
+    let cos = crate::camera::joml::cos_from_sin(sin, angle);
+    [v[0], v[1] * cos - v[2] * sin, v[1] * sin + v[2] * cos]
+}
+
+fn joml_rotate_y(v: [f32; 3], angle: f32) -> [f32; 3] {
+    let sin = crate::camera::joml::sin(angle);
+    let cos = crate::camera::joml::cos_from_sin(sin, angle);
+    [v[0] * cos + v[2] * sin, v[1], -v[0] * sin + v[2] * cos]
+}
+
+/// `Direction.getRotation()`.
+fn direction_rotation(d: Direction) -> crate::camera::joml::Quat {
+    use crate::camera::joml::Quat;
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let xyz = |ax: f32, ay: f32, az: f32| {
+        let [x, y, z, w] = sunrise_assets::math::quaternion_xyz(ax, ay, az);
+        Quat { x, y, z, w }
+    };
+    match d {
+        Direction::Down => Quat::rotation_x(PI),
+        Direction::Up => Quat::IDENTITY,
+        Direction::North => xyz(FRAC_PI_2, 0.0, PI),
+        Direction::South => Quat::rotation_x(FRAC_PI_2),
+        Direction::West => xyz(FRAC_PI_2, 0.0, FRAC_PI_2),
+        Direction::East => xyz(FRAC_PI_2, 0.0, -FRAC_PI_2),
+    }
+}
+
+/// Position and normal inverses for `VertexConsumer.putBakedQuadWithGlint` +
+/// `SheetedDecalTextureGenerator.setSheetedDecalUv`.
+struct DecalTransforms {
+    camera_inv: [f32; 16],
+    normal_mat: [f32; 9],
+    normal_inv: [f32; 9],
+}
+
+/// `ItemFeatureRenderer.computeFoilDecalPose` + `PoseStack.Pose.computeNormalMatrix` inverted.
+fn special_foil_transforms(m: &[f32; 16], display: DisplayContext) -> DecalTransforms {
+    let scale = match display {
+        DisplayContext::Gui => Some(0.5_f32),
+        DisplayContext::FirstPersonLeftHand | DisplayContext::FirstPersonRightHand => {
+            Some(0.75_f32)
+        }
+        _ => None,
+    };
+    let camera_inv = match scale {
+        Some(s) => joml_invert_generic(&m.map(|v| v * s)),
+        None => joml_invert_affine(m),
+    };
+    let upper = [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]];
+    let normal_mat = joml_mat3_transpose(&joml_mat3_invert(&upper));
+    let normal_inv = joml_mat3_invert(&normal_mat);
+    DecalTransforms {
+        camera_inv,
+        normal_mat,
+        normal_inv,
+    }
+}
+
+/// `VertexConsumer.putBakedQuadWithGlint` + `SheetedDecalTextureGenerator.setSheetedDecalUv`.
+fn special_foil_uv(
+    m_cols: &[f32; 16],
+    decal: &DecalTransforms,
+    positions: [[f32; 3]; 4],
+    facing: Direction,
+) -> [[f32; 2]; 4] {
+    let normal = joml_vec3_normalize(joml_mat3_transform(
+        &decal.normal_mat,
+        direction_unit_vec(facing),
+    ));
+    let recovered = joml_mat3_transform(&decal.normal_inv, normal);
+    let rot = direction_rotation(direction_approximate_nearest(recovered));
+    positions.map(|p| {
+        let pos = joml_transform_pos(m_cols, p);
+        let wp = joml_transform_pos(&decal.camera_inv, pos);
+        let wp = joml_rotate_y(wp, std::f32::consts::PI);
+        let wp = joml_rotate_x(wp, -std::f32::consts::FRAC_PI_2);
+        let wp = rot.transform(wp);
+        [-wp[0] * 0.0078125, -wp[1] * 0.0078125]
+    })
+}
+
+/// `MaterialBaker.get`: explicit `missingno` resolves on blocks; otherwise stitched items, then
+/// stitched blocks, then the blocks missing sprite.
+fn resolve_cuboid_glint(
+    name: &str,
+    items: &glint_atlas::GlintAtlas,
+    blocks: &glint_atlas::GlintAtlas,
+) -> Option<Rect> {
+    if name == "missingno" {
+        blocks.missing().or_else(|| items.missing())
+    } else {
+        items
+            .get_stitched(name)
+            .or_else(|| blocks.get_stitched(name))
+            .or_else(|| blocks.missing())
+            .or_else(|| items.missing())
+    }
+}
+
 /// `ItemFeatureRenderer.prepareMainSubmit` for one cuboid layer.
 fn submit_quads(
     renderer: &ItemRenderer,
@@ -449,22 +920,86 @@ fn submit_quads(
     sprites: &HashMap<String, Rect>,
     sink: &mut dyn ItemSink,
 ) {
+    // Non-foil quads keep glam `transform_point3` to match `entity_skin::expand` on the GPU.
+    let foil_cols = (layer.foil != FoilType::None).then(|| m.to_cols_array());
+    submit_quads_with(
+        renderer,
+        baked,
+        layer,
+        m,
+        |p| match &foil_cols {
+            Some(cols) => Vec3::from_array(joml_transform_pos(cols, p)),
+            None => m.transform_point3(Vec3::from(p)),
+        },
+        sprites,
+        sink,
+    );
+}
+
+fn submit_quads_joml(
+    renderer: &ItemRenderer,
+    baked: &BakedItemModel,
+    layer: &LayerRender,
+    m: crate::camera::joml::Mat4,
+    sprites: &HashMap<String, Rect>,
+    sink: &mut dyn ItemSink,
+) {
+    submit_quads_with(
+        renderer,
+        baked,
+        layer,
+        m.to_glam(),
+        |p| Vec3::from_array(m.transform_position(p)),
+        sprites,
+        sink,
+    );
+}
+
+fn submit_quads_with(
+    renderer: &ItemRenderer,
+    baked: &BakedItemModel,
+    layer: &LayerRender,
+    m: Mat4,
+    transform_pos: impl Fn([f32; 3]) -> Vec3,
+    sprites: &HashMap<String, Rect>,
+    sink: &mut dyn ItemSink,
+) {
     let foil = match layer.foil {
         FoilType::None => Foil::None,
         FoilType::Standard => Foil::Standard,
         FoilType::Special => Foil::Special,
     };
-    let atlas = renderer
-        .glint_atlas
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (item_atlas, block_atlas) = if foil == Foil::Standard {
+        (
+            Some(
+                renderer
+                    .glint_atlas
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            ),
+            Some(
+                renderer
+                    .block_glint_atlas
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            ),
+        )
+    } else {
+        (None, None)
+    };
+    let m_cols = (foil != Foil::None).then(|| m.to_cols_array());
+    let decal = (foil == Foil::Special)
+        .then(|| {
+            m_cols
+                .as_ref()
+                .map(|c| special_foil_transforms(c, layer.display))
+        })
+        .flatten();
     let mut normals = FaceNormals::new(m);
     // Quads of one layer mostly share a sprite: look its rect and its
     // translucency up once.
     let mut last: Option<(&str, bool)> = None;
     let mut last_rect: Option<(&str, Option<Rect>)> = None;
-    // A glint in the GUI follows the quad's sprite in the glint atlas: looked up once a sprite too.
-    let gui_glint = layer.display == DisplayContext::Gui && foil == Foil::Standard;
     let mut last_glint: Option<(&str, Option<Rect>)> = None;
     for q in &baked.quads {
         let rect = match last_rect {
@@ -482,26 +1017,14 @@ fn submit_quads(
         let Some(r) = rect else {
             continue;
         };
-        // `getLayerColorSafe`: an untinted quad, or a tint index past the
-        // tints, draws white.
-        let color = if q.tint_index >= 0 {
-            layer
-                .tints
-                .get(q.tint_index as usize)
-                .copied()
-                .unwrap_or(-1)
-        } else {
-            -1
-        };
-        let pos = q.positions.map(|p| m.transform_point3(Vec3::from(p)));
+        let color = layer.tints.at(q.tint_index);
+        let pos = q.positions.map(&transform_pos);
         let uv =
             q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v]);
         let translucent = match last {
             Some((sprite, translucent)) if sprite == q.material.sprite => translucent,
             _ => {
-                let translucent = renderer
-                    .sprites
-                    .translucent(sprite_name(&q.material.sprite));
+                let translucent = renderer.sprites.translucent(&q.material.sprite);
                 last = Some((&q.material.sprite, translucent));
                 translucent
             }
@@ -514,30 +1037,44 @@ fn submit_quads(
         // dripleaf, #4855; the inside of a held hay block, #4801) and stacks a
         // jelly shell's partial alpha until it looks opaque (#4508).
         let translucent = translucent || q.material.force_translucent;
+        let gui_glint_uv = match foil {
+            Foil::None | Foil::GlintOnly => None,
+            Foil::Standard => {
+                let rect = match last_glint {
+                    Some((sprite, rect)) if sprite == q.material.sprite => rect,
+                    _ => {
+                        let name = sprite_name(&q.material.sprite);
+                        let rect = item_atlas
+                            .as_deref()
+                            .zip(block_atlas.as_deref())
+                            .and_then(|(items, blocks)| resolve_cuboid_glint(name, items, blocks));
+                        last_glint = Some((&q.material.sprite, rect));
+                        rect
+                    }
+                };
+                rect.map(|r| {
+                    q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v])
+                })
+            }
+            Foil::Special => m_cols
+                .as_ref()
+                .zip(decal.as_ref())
+                .map(|(cols, d)| special_foil_uv(cols, d, q.positions, q.facing)),
+        };
         sink.quad(ItemQuad {
             pos,
             uv,
             foil_uv: q.uv,
-            gui_glint_uv: gui_glint
-                .then(|| match last_glint {
-                    Some((sprite, rect)) if sprite == q.material.sprite => rect,
-                    _ => {
-                        let rect = atlas.get(sprite_name(&q.material.sprite)).copied();
-                        last_glint = Some((&q.material.sprite, rect));
-                        rect
-                    }
-                })
-                .flatten()
-                .map(|r| {
-                    q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v])
-                }),
+            gui_glint_uv,
             normal: normals.face(q.facing),
-            color: argb(color),
+            color,
             foil,
+            entity_glint: false,
             light_emission: q.light_emission,
             cull_back: true,
             translucent,
             oit: false,
+            banner_pattern: false,
         });
     }
 }
@@ -556,16 +1093,25 @@ struct FileSprites {
     /// (`Transparency.hasTranslucent`), filled in as sprites load.
     translucent: Mutex<HashMap<String, bool>>,
 }
+/// `Identifier.parse` default namespace without allocating when already qualified.
+fn qualified_sprite(sprite: &str) -> std::borrow::Cow<'_, str> {
+    match sprite.split_once(':') {
+        Some(("", path)) => std::borrow::Cow::Owned(format!("minecraft:{path}")),
+        Some(_) => std::borrow::Cow::Borrowed(sprite),
+        None => std::borrow::Cow::Owned(format!("minecraft:{sprite}")),
+    }
+}
 impl SpriteLookup for FileSprites {
     fn mask(&self, sprite: &str) -> Option<SpriteMask> {
+        let id = qualified_sprite(sprite);
         if let Ok(cache) = self.cache.lock()
-            && let Some(hit) = cache.get(sprite)
+            && let Some(hit) = cache.get(id.as_ref())
         {
             return hit.clone();
         }
-        let mask = self.load(sprite);
+        let mask = self.load(&id);
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(sprite.to_owned(), mask.clone());
+            cache.insert(id.into_owned(), mask.clone());
         }
         mask
     }
@@ -587,9 +1133,10 @@ impl FileSprites {
         }
     }
     fn translucent(&self, sprite: &str) -> bool {
-        let known = |this: &Self| this.translucent.lock().ok()?.get(sprite).copied();
+        let id = qualified_sprite(sprite);
+        let known = |this: &Self| this.translucent.lock().ok()?.get(id.as_ref()).copied();
         known(self).unwrap_or_else(|| {
-            self.mask(sprite);
+            self.mask(&id);
             known(self).unwrap_or(false)
         })
     }
@@ -660,9 +1207,13 @@ pub struct ItemRenderer {
     sprites: FileSprites,
     baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
     extents: Mutex<HashMap<String, Arc<Vec<Vec3>>>>,
+    special_generation: Arc<()>,
     /// GUI items already drawn: the HUD vertices of a static item at a GUI position
     /// (`gui::draw`), which are the same every frame it stays there.
     pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<[crate::hud::HudVertex]>>>,
+    /// Vanilla 26.3's `GuiItemAtlas` / `DynamicAtlasAllocator` physical slot assignment.
+    pub(crate) gui_item_atlas: Mutex<gui::GuiItemAtlasSlots>,
+    max_texture_size: AtomicU32,
     /// Entity model layers of the special renderers, with the head of each skull type a native
     /// mod registered, under its kind.
     parts: HashMap<String, ModelPart>,
@@ -675,12 +1226,17 @@ pub struct ItemRenderer {
     /// The enabled packs' OptiFine CIT rules and their swapped bakes; `None`
     /// without rules.
     pub cit: Option<cit::CitModels>,
-    glint_atlas: Mutex<HashMap<String, Rect>>,
+    glint_atlas: Mutex<glint_atlas::GlintAtlas>,
+    block_glint_atlas: Mutex<glint_atlas::GlintAtlas>,
+    shield_glint_atlas: Mutex<glint_atlas::GlintAtlas>,
 }
 
-/// Every `items/**/*.json` client item definition, by identifier. Through
-/// Resolved resource names preserve nested item identifiers.
-fn load_definitions(root: &ResourceSource) -> BTreeMap<String, ClientItem> {
+/// Every winning `items/**/*.json` client item definition, by identifier. An error or panic
+/// while decoding or baking omits the definition rather than looking in a lower pack.
+fn load_definitions(
+    root: &ResourceSource,
+    decode: impl Fn(&str) -> Result<ClientItem, sunrise_assets::DecodeError>,
+) -> BTreeMap<String, ClientItem> {
     let mut out = BTreeMap::new();
     for namespace in root.namespaces("assets") {
         let prefix = format!("assets/{namespace}/items/");
@@ -694,12 +1250,28 @@ fn load_definitions(root: &ResourceSource) -> BTreeMap<String, ClientItem> {
             let Ok(text) = root.read_to_string(&name) else {
                 continue;
             };
-            match ClientItem::from_json(&text) {
-                Ok(item) => {
+            match catch_unwind(AssertUnwindSafe(|| decode(&text))) {
+                Ok(Ok(item)) => {
                     out.insert(format!("{namespace}:{id}"), item);
                 }
-                Err(error) => {
-                    log::warn!("Sunrise: item definition {namespace}:{id} not loaded: {error}")
+                Ok(Err(error)) => {
+                    log::warn!("Sunrise: item definition {namespace}:{id} not loaded: {error}");
+                }
+                Err(panic) => {
+                    // An arbitrary native panic payload can itself panic when dropped.
+                    let reason = match panic.downcast::<String>() {
+                        Ok(message) => std::borrow::Cow::Owned(*message),
+                        Err(panic) => match panic.downcast::<&'static str>() {
+                            Ok(message) => std::borrow::Cow::Borrowed(*message),
+                            Err(panic) => {
+                                std::mem::forget(panic);
+                                std::borrow::Cow::Borrowed("unknown panic payload")
+                            }
+                        },
+                    };
+                    log::warn!(
+                        "Sunrise: item definition {namespace}:{id} not loaded; decode or bake panicked: {reason}"
+                    );
                 }
             }
         }
@@ -716,14 +1288,65 @@ fn glint_padding(filtering: i32, bit: i32) -> usize {
 }
 
 impl ItemRenderer {
-    /// Prepare GUI glint after the device exists; propagate packing failures to pack rollback.
+    /// Prepare item/block/shield glint atlases after the device exists, defaulting `mipmapLevels`
+    /// to vanilla's `4`.
     pub fn prepare_glint_atlas(&self, maximum: u32, filtering: (i32, i32)) -> crate::Result<()> {
-        let padding = glint_padding(filtering.0, filtering.1);
-        let sprites = glint_atlas::load(&self.sprites.root, 1 << padding, maximum)?;
+        self.prepare_glint_atlas_with_mips(maximum, filtering, 4)
+    }
+
+    /// Prepare item/block/shield glint atlases with the configured `mipmapLevels` option.
+    pub fn prepare_glint_atlas_with_mips(
+        &self,
+        maximum: u32,
+        filtering: (i32, i32),
+        mipmap_levels: i32,
+    ) -> crate::Result<()> {
+        self.max_texture_size
+            .store(maximum.max(512), Ordering::Relaxed);
+        let aniso_shift = glint_padding(filtering.0, filtering.1) as u32;
+        let max_mip = mipmap_levels.clamp(0, 4) as u32;
+        let listing = crate::atlas_sources::listing(&self.sprites.root);
+        let items = glint_atlas::load_atlas(
+            &self.sprites.root,
+            "minecraft:items",
+            0,
+            aniso_shift,
+            maximum,
+        )?;
+        let blocks = if listing.defines("minecraft:blocks") {
+            glint_atlas::load_atlas(
+                &self.sprites.root,
+                "minecraft:blocks",
+                max_mip,
+                aniso_shift,
+                maximum,
+            )?
+        } else {
+            glint_atlas::GlintAtlas::default()
+        };
+        let shield = if listing.defines("minecraft:shield_patterns") {
+            glint_atlas::load_atlas(
+                &self.sprites.root,
+                "minecraft:shield_patterns",
+                0,
+                aniso_shift,
+                maximum,
+            )?
+        } else {
+            glint_atlas::GlintAtlas::default()
+        };
         *self
             .glint_atlas
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = sprites;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = items;
+        *self
+            .block_glint_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = blocks;
+        *self
+            .shield_glint_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = shield;
         Ok(())
     }
 
@@ -740,13 +1363,20 @@ impl ItemRenderer {
         )
     }
     /// Reuse the immutable models prepared with the block resources at `root`.
-    /// Defer item-only validation failures until after item definitions are loaded.
+    /// Decode special item definitions against this library and its pack sprites.
     pub fn load_with_library(
         root: &ResourceRoot,
         library: std::result::Result<Arc<ModelLibrary>, String>,
         item_data: &sunrise_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, true, item_data, None)
+        Self::load_tables(
+            root,
+            library,
+            true,
+            item_data,
+            None,
+            ItemProviderTables::installed(FACTORIES.get()),
+        )
     }
     /// What a dedicated server reads: the item prototypes (the stacks'
     /// default components) and ids, without the client item definitions,
@@ -757,7 +1387,14 @@ impl ItemRenderer {
         library: std::result::Result<Arc<ModelLibrary>, String>,
         item_data: &sunrise_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, false, item_data, None)
+        Self::load_tables(
+            root,
+            library,
+            false,
+            item_data,
+            None,
+            ItemProviderTables::default(),
+        )
     }
     pub fn load_with_library_and_entity_models(
         root: &sunrise_assets::resource_source::ResourceRoot,
@@ -765,7 +1402,14 @@ impl ItemRenderer {
         document: &crate::mobs::EntityModelDocument,
         item_data: &sunrise_world::item_defaults::ItemData,
     ) -> crate::Result<Self> {
-        Self::load_tables(root, library, true, item_data, Some(document))
+        Self::load_tables(
+            root,
+            library,
+            true,
+            item_data,
+            Some(document),
+            ItemProviderTables::installed(FACTORIES.get()),
+        )
     }
     fn load_tables(
         root: &ResourceRoot,
@@ -773,16 +1417,9 @@ impl ItemRenderer {
         drawn: bool,
         item_data: &sunrise_world::item_defaults::ItemData,
         entity_models: Option<&crate::mobs::EntityModelDocument>,
+        providers: ItemProviderTables<'_>,
     ) -> crate::Result<Self> {
         let prototypes = Arc::clone(item_data.prototypes()?);
-        let models = ItemModels {
-            definitions: if drawn {
-                load_definitions(root.source())
-            } else {
-                BTreeMap::new()
-            },
-            prototypes,
-        };
         // CIT models and glint textures only affect drawing. A server still
         // needs item prototypes and ids, but never these resource-pack assets.
         let (library, cit) = if drawn {
@@ -828,21 +1465,51 @@ impl ItemRenderer {
                 Some(out)
             })
             .unwrap_or_default();
-        Ok(Self {
+        let mut renderer = Self {
             glint_atlas: Mutex::default(),
+            block_glint_atlas: Mutex::default(),
+            shield_glint_atlas: Mutex::default(),
             item_ids,
-            models,
+            models: ItemModels {
+                definitions: BTreeMap::new(),
+                prototypes,
+            },
             library,
             sprites: FileSprites::new(root.source().clone()),
             baked: Mutex::default(),
             extents: Mutex::default(),
+            special_generation: Arc::new(()),
             gui_drawn: Mutex::default(),
+            gui_item_atlas: Mutex::default(),
+            max_texture_size: AtomicU32::new(16384),
             parts,
             skull_textures,
             grass,
             cit,
-        })
+        };
+        if drawn {
+            renderer.models.definitions = load_definitions(root.source(), |text| {
+                renderer.decode_definition(text, &providers)
+            });
+        }
+        Ok(renderer)
     }
+    /// `GuiItemAtlas.endFrame`: frees animated GUI item slots at frame end while retaining static ones.
+    pub fn end_gui_frame(&self) {
+        self.gui_item_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .end_frame();
+    }
+
+    pub(crate) fn gui_item_slot(&self, state: &ItemRenderState, gui_scale: f32) -> (u32, u32) {
+        let max_tex = self.max_texture_size.load(Ordering::Relaxed);
+        self.gui_item_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slot_for(state, gui_scale, max_tex)
+    }
+
     /// `ModelBakery` item baking, cached per model.
     pub fn bake(&self, model: &str) -> Arc<BakedItemModel> {
         self.baked_with(model, || {
@@ -906,168 +1573,6 @@ impl ItemRenderer {
         }
         out
     }
-    /// A special model renderer's answer `parts` for a model node of `base`, prepared to draw:
-    /// `base` and each part's model baked, once, when the answer is accepted, so a draw looks
-    /// nothing up by name. A part naming a model the packs don't have refuses them all, and the
-    /// layer draws the missing model.
-    pub fn prepare_parts(
-        &self,
-        base: &str,
-        parts: &[sunrise_assets::item_model::SpecialPart],
-    ) -> PreparedParts {
-        let part = |model: &str, tints, pose| {
-            let geometry = self.bake(model);
-            PreparedPart {
-                content: PreparedContent::Model {
-                    extents: self.quad_extents(model, &geometry),
-                    geometry,
-                    tints,
-                },
-                pose,
-            }
-        };
-        let unknown = parts.iter().find_map(|p| match &p.content {
-            SpecialContent::Model(model) if !self.library.resolves(model) => Some(model),
-            _ => None,
-        });
-        let parts = match unknown {
-            Some(unknown) => {
-                warn_unknown_part_once(unknown);
-                vec![part(
-                    MISSING_MODEL,
-                    Vec::new(),
-                    sunrise_assets::math::Mat4::IDENTITY,
-                )]
-            }
-            None => parts
-                .iter()
-                .map(|p| match &p.content {
-                    SpecialContent::Model(model) => part(model, p.tints.clone(), p.pose),
-                    SpecialContent::Stack { stack, display } => PreparedPart {
-                        content: PreparedContent::Stack {
-                            stack: stack.clone(),
-                            display: *display,
-                        },
-                        pose: p.pose,
-                    },
-                })
-                .collect(),
-        };
-        PreparedParts(Arc::new(PreparedSpecial {
-            base: self.bake(base),
-            parts,
-        }))
-    }
-    /// The layers of a prepared answer (`LayerContent::Parts`), one for each model part and the
-    /// layers of each stack part's own resolve: the part's own model's quads, posed under the
-    /// layer's transform, with the base model's display transform, particle and GUI light. A
-    /// stack part's layers keep their own foil, tints and display transform, and sit under the
-    /// part's pose. Returns the state's animation flag, or `None` (with `layers` as they were)
-    /// when a stack part is refused: it meets a stack that is already being expanded above it, or
-    /// the draw has expanded [`mod_api::MAX_NESTED_STACK_PARTS`].
-    fn push_parts(
-        &self,
-        layers: &mut Vec<LayerRender>,
-        display: DisplayContext,
-        (foil, transform, display_transform): (
-            FoilType,
-            sunrise_assets::math::Mat4,
-            LayerTransform,
-        ),
-        prepared: &PreparedParts,
-        (outer, owner, level, seed, env): (
-            &StackView,
-            Option<&OwnerState>,
-            Option<&LevelState>,
-            i32,
-            &dyn ItemEnv,
-        ),
-    ) -> Option<bool> {
-        let Some(prepared) = prepared.0.downcast_ref::<PreparedSpecial>() else {
-            // Only `prepare_parts` makes them.
-            return Some(false);
-        };
-        let base = &prepared.base;
-        let start = layers.len();
-        let mut animated = false;
-        for part in &prepared.parts {
-            // Under `applyTransform`'s half-block offset, so a part's pose is about the model's
-            // corner, as its elements are.
-            let matrix = glam_matrix(&base.layer_matrix(
-                display_transform,
-                display,
-                &transform.mul(&part.pose),
-            ));
-            match &part.content {
-                PreparedContent::Model {
-                    geometry,
-                    extents,
-                    tints,
-                } => layers.push(LayerRender {
-                    geometry: LayerGeometry::Quads(geometry.clone()),
-                    tints: tints.clone(),
-                    foil,
-                    matrix,
-                    uses_block_light: base.uses_block_light,
-                    particle: sprite_name(&base.particle.sprite).to_owned(),
-                    extents: extents.clone(),
-                    display,
-                }),
-                PreparedContent::Stack { stack, display } => {
-                    let Some(inner) =
-                        self.expand_stack(outer, stack, *display, (owner, level, seed, env))
-                    else {
-                        layers.truncate(start);
-                        return None;
-                    };
-                    animated |= inner.animated;
-                    layers.extend(inner.layers.into_iter().map(|mut layer| {
-                        layer.matrix = matrix * layer.matrix;
-                        layer
-                    }));
-                }
-            }
-        }
-        Some(animated)
-    }
-    /// The resolve of the stack part `stack` of an answer drawn for `outer`, or `None` when it is
-    /// refused (see [`Self::push_parts`]).
-    fn expand_stack(
-        &self,
-        outer: &StackView,
-        stack: &StackView,
-        display: DisplayContext,
-        (owner, level, seed, env): (Option<&OwnerState>, Option<&LevelState>, i32, &dyn ItemEnv),
-    ) -> Option<ItemRenderState> {
-        let pushed = NESTING.with_borrow_mut(|n| {
-            if n.expanded >= mod_api::MAX_NESTED_STACK_PARTS
-                || n.chain.contains(stack)
-                || (n.chain.is_empty() && outer == stack)
-            {
-                return None;
-            }
-            n.expanded += 1;
-            let root = n.chain.is_empty();
-            if root {
-                n.chain.push(outer.clone());
-            }
-            n.chain.push(stack.clone());
-            Some(root)
-        });
-        let Some(root) = pushed else {
-            warn_refused_nesting_once(&stack.item);
-            return None;
-        };
-        let state = self.resolve_with_rule(stack, display, owner, level, seed, env, None);
-        let refused = NESTING.with_borrow_mut(|n| {
-            n.chain.pop();
-            if root {
-                n.chain.pop();
-            }
-            n.refused
-        });
-        (!refused).then_some(state)
-    }
     /// `ItemModelResolver.updateForTopItem`.
     pub fn resolve(
         &self,
@@ -1076,7 +1581,7 @@ impl ItemRenderer {
         owner: Option<&OwnerState>,
         level: Option<&LevelState>,
         seed: i32,
-        env: &dyn ItemEnv,
+        env: &dyn ItemDrawEnv,
     ) -> ItemRenderState {
         self.resolve_with_rule(stack, display, owner, level, seed, env, None)
     }
@@ -1091,7 +1596,7 @@ impl ItemRenderer {
         owner: Option<&OwnerState>,
         level: Option<&LevelState>,
         seed: i32,
-        env: &dyn ItemEnv,
+        env: &dyn ItemDrawEnv,
         rule: Option<usize>,
     ) -> ItemRenderState {
         let ctx = Context {
@@ -1100,11 +1605,55 @@ impl ItemRenderer {
             level,
             seed,
         };
-        let _depth = ResolveDepth::enter();
-        let resolved = self.models.resolve(stack, &ctx, env);
-        let mut animated = false;
-        let mut layers = Vec::with_capacity(resolved.layers.len());
-        for layer in resolved.layers {
+        let mut layers = Vec::new();
+        let flags = self
+            .append_render_layers(
+                &mut layers,
+                &StackAncestor {
+                    stack,
+                    display,
+                    parent: None,
+                },
+                &ctx,
+                env,
+                rule,
+            )
+            .continue_value()
+            .unwrap_or_default();
+        ItemRenderState {
+            display,
+            layers,
+            oversized_in_gui: flags.oversized_in_gui,
+            animated: flags.animated,
+            cit_glint: None,
+            hdr_tier: 0,
+            hdr_light: 0,
+            held_tint: None,
+        }
+    }
+
+    /// Append into the top-level state even when resolving a nested stack. Nested refusals
+    /// unwind to the outer special layer's checkpoint; only that layer emits a missing model.
+    fn append_render_layers(
+        &self,
+        layers: &mut Vec<LayerRender>,
+        ancestor: &StackAncestor<'_>,
+        ctx: &Context<'_>,
+        env: &dyn ItemDrawEnv,
+        rule: Option<usize>,
+    ) -> ControlFlow<(), RenderLayerFlags> {
+        let stack = ancestor.stack;
+        let mut flags = RenderLayerFlags::default();
+        if stack.count <= 0 || stack.item == "minecraft:air" {
+            return ControlFlow::Continue(flags);
+        }
+        let display = ctx.display;
+        let missing = || {
+            let baked = self.bake(MISSING_MODEL);
+            let extents = self.quad_extents(MISSING_MODEL, &baked);
+            (LayerGeometry::Quads(baked.clone()), baked, extents)
+        };
+        let mut visit = |layer: Layer, layer_stack: &StackView| {
             let (geometry, baked, extents) = match layer.content {
                 LayerContent::Model { model } => {
                     let (baked, extents) = rule
@@ -1124,11 +1673,7 @@ impl ItemRenderer {
                     let extents = self.quad_extents(&key, &baked);
                     (LayerGeometry::Quads(baked.clone()), baked, extents)
                 }
-                LayerContent::Missing => {
-                    let baked = self.bake(MISSING_MODEL);
-                    let extents = self.quad_extents(MISSING_MODEL, &baked);
-                    (LayerGeometry::Quads(baked.clone()), baked, extents)
-                }
+                LayerContent::Missing => missing(),
                 LayerContent::Special {
                     base,
                     model,
@@ -1138,55 +1683,43 @@ impl ItemRenderer {
                     let extents = self.special_extents(&model);
                     (LayerGeometry::Special { model, argument }, baked, extents)
                 }
-                LayerContent::Parts(prepared) => {
-                    // What a mod drew may change with every draw, so no GUI item is kept.
-                    animated = true;
-                    let drawn = self.push_parts(
-                        &mut layers,
+                LayerContent::RegisteredSpecial { model } => {
+                    // Every draw can give a different result; never keep a static GUI image.
+                    flags.animated = true;
+                    // Vanilla's bundle model can produce a layer for its selected stack.
+                    let selected = StackAncestor {
+                        stack: layer_stack,
                         display,
-                        (layer.foil, layer.transform, layer.display_transform),
-                        &prepared,
-                        (stack, owner, level, seed, env),
-                    );
-                    if drawn.is_none() {
-                        // A refused stack part refuses the answer whole, and every answer that
-                        // nests it: only the outermost draws the missing model, in place of the
-                        // answer's parts.
-                        let nested = NESTING.with_borrow_mut(|n| {
-                            let nested = n.depth > 1;
-                            n.refused = nested;
-                            nested
-                        });
-                        if nested {
-                            break;
-                        }
-                        let baked = self.bake(MISSING_MODEL);
-                        layers.push(LayerRender {
-                            extents: self.quad_extents(MISSING_MODEL, &baked),
-                            geometry: LayerGeometry::Quads(baked.clone()),
-                            tints: Vec::new(),
-                            foil: layer.foil,
-                            matrix: glam_matrix(&baked.layer_matrix(
-                                layer.display_transform,
-                                display,
-                                &layer.transform,
-                            )),
-                            uses_block_light: baked.uses_block_light,
-                            particle: sprite_name(&baked.particle.sprite).to_owned(),
-                            display,
-                        });
-                    } else if drawn == Some(true) {
-                        animated = true;
+                        parent: Some(ancestor),
+                    };
+                    let source = if std::ptr::eq(stack, layer_stack) {
+                        ancestor
+                    } else {
+                        &selected
+                    };
+                    if self
+                        .append_registered_special(
+                            layers,
+                            &model,
+                            (layer.foil, layer.transform, layer.display_transform),
+                            ctx,
+                            env,
+                            source,
+                        )
+                        .is_continue()
+                    {
+                        return ControlFlow::Continue(());
                     }
-                    continue;
+                    if ancestor.parent.is_some() {
+                        return ControlFlow::Break(());
+                    }
+                    missing()
                 }
             };
-            if layer.foil != FoilType::None {
-                animated = true;
-            }
+            flags.animated |= layer.foil != FoilType::None;
             layers.push(LayerRender {
                 geometry,
-                tints: layer.tints,
+                tints: LayerTints::Owned(layer.tints),
                 foil: layer.foil,
                 matrix: glam_matrix(&baked.layer_matrix(
                     layer.display_transform,
@@ -1194,20 +1727,17 @@ impl ItemRenderer {
                     &layer.transform,
                 )),
                 uses_block_light: baked.uses_block_light,
-                particle: sprite_name(&baked.particle.sprite).to_owned(),
+                particle: Arc::from(sprite_name(&baked.particle.sprite)),
                 extents,
                 display,
             });
-        }
-        ItemRenderState {
-            display,
-            layers,
-            oversized_in_gui: resolved.oversized_in_gui,
-            animated,
-            cit_glint: None,
-            hdr_tier: 0,
-            hdr_light: 0,
-        }
+            ControlFlow::Continue(())
+        };
+        flags.oversized_in_gui = self
+            .models
+            .visit_layers(stack, ctx, env, LayerTransform::Model, &mut visit)?
+            .unwrap_or_default();
+        ControlFlow::Continue(flags)
     }
     /// `GrassColor.get` over the loaded colormap.
     pub fn grass_color(&self, temperature: f64, downfall: f64) -> i32 {
@@ -1259,92 +1789,6 @@ fn corners(baked: &BakedItemModel) -> Vec<Vec3> {
         }
     }
     out
-}
-/// A special model renderer's answer as [`ItemRenderer::prepare_parts`] baked it.
-struct PreparedSpecial {
-    /// The model node's `base`: its display transforms, particle and GUI light.
-    base: Arc<BakedItemModel>,
-    parts: Vec<PreparedPart>,
-}
-struct PreparedPart {
-    content: PreparedContent,
-    pose: sunrise_assets::math::Mat4,
-}
-enum PreparedContent {
-    /// A model, baked once.
-    Model {
-        geometry: Arc<BakedItemModel>,
-        extents: Arc<Vec<Vec3>>,
-        tints: Vec<i32>,
-    },
-    /// A stack, resolved when the item is drawn, so what it draws moves with its own models.
-    Stack {
-        stack: StackView,
-        display: DisplayContext,
-    },
-}
-/// The stacks being expanded by this thread's draw, outermost first, and how many stack parts
-/// the draw has expanded: a stack met again while it is expanding is a cycle, and a draw expands
-/// at most [`mod_api::MAX_NESTED_STACK_PARTS`], both refusing the whole answer.
-#[derive(Default)]
-struct Nesting {
-    chain: Vec<StackView>,
-    expanded: usize,
-    /// Resolves in progress on this thread; the budget starts again when the outermost ends.
-    depth: u32,
-    /// Set by a nested resolve that met a refused stack part, until the outermost answer
-    /// takes it: the refusal reaches every answer above it.
-    refused: bool,
-}
-thread_local! {
-    static NESTING: std::cell::RefCell<Nesting> = std::cell::RefCell::default();
-}
-/// Counts a resolve of this thread in progress; the budget resets when the last one ends.
-struct ResolveDepth;
-impl ResolveDepth {
-    fn enter() -> Self {
-        NESTING.with_borrow_mut(|n| n.depth += 1);
-        Self
-    }
-}
-impl Drop for ResolveDepth {
-    fn drop(&mut self) {
-        NESTING.with_borrow_mut(|n| {
-            n.depth -= 1;
-            if n.depth == 0 {
-                n.expanded = 0;
-            }
-        });
-    }
-}
-/// Says once per model id that a mod's special model renderer drew a model the packs don't have.
-fn warn_unknown_part_once(model: &str) {
-    static SEEN: Mutex<std::collections::BTreeSet<String>> =
-        Mutex::new(std::collections::BTreeSet::new());
-    if SEEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(model.to_owned())
-    {
-        log::warn!(
-            "Sunrise: a special model renderer drew the model {model}, which no pack has; the item draws the missing model"
-        );
-    }
-}
-/// Says once per item that a special model renderer's stack part was refused as a cycle or past
-/// the budget.
-fn warn_refused_nesting_once(item: &str) {
-    static SEEN: Mutex<std::collections::BTreeSet<String>> =
-        Mutex::new(std::collections::BTreeSet::new());
-    if SEEN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(item.to_owned())
-    {
-        log::warn!(
-            "Sunrise: a special model renderer's stack part of {item} is a cycle or past the nesting budget; the item draws the missing model"
-        );
-    }
 }
 /// A `sunrise-assets` (row-major, JOML-exact) matrix as glam's.
 pub fn glam_matrix(m: &sunrise_assets::math::Mat4) -> Mat4 {
@@ -1474,16 +1918,37 @@ impl ItemSink for WorldSink<'_> {
         } else {
             self.light
         };
-        let glint = if q.foil == Foil::None {
-            None
+        let glint = (q.foil != Foil::None)
+            .then_some(self.glint)
+            .flatten()
+            .map(|g| g.for_quad(q.entity_glint));
+        if q.foil == Foil::GlintOnly {
+            let Some(glint) = glint else {
+                return;
+            };
+            let src_uv = q.gui_glint_uv.unwrap_or(q.foil_uv);
+            for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
+                self.out.push(Vertex {
+                    normal: [0; 4],
+                    pos: p.to_array(),
+                    uv,
+                    layer: crate::gfx::GLINT_ONLY_OVERLAY | u32::from(self.tier) << 16,
+                    color: u32::MAX,
+                    light,
+                    glint_uv: glint.uv(src_uv[i]),
+                });
+            }
+            return;
+        }
+        let overlay = if q.banner_pattern {
+            crate::gfx::BANNER_PATTERN_OVERLAY
         } else {
-            self.glint
-        };
-        let overlay = match (glint.is_some(), q.translucent) {
-            (false, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
-            (false, false) => 0,
-            (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
-            (true, false) => 7,
+            match (glint.is_some(), q.translucent) {
+                (false, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
+                (false, false) => 0,
+                (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
+                (true, false) => 7,
+            }
         };
         // Only plain and foil quads: the translucent sheet's overlays are their own material.
         let oit = if q.oit && matches!(overlay, 0 | 7) {
@@ -1491,8 +1956,9 @@ impl ItemSink for WorldSink<'_> {
         } else {
             0
         };
+        let src_uv = q.gui_glint_uv.unwrap_or(q.foil_uv);
         for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
-            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
+            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(src_uv[i]));
             self.out.push(Vertex {
                 normal: if q.cull_back { CULL_BACK } else { [0; 4] },
                 pos: p.to_array(),
@@ -1509,6 +1975,15 @@ impl ItemSink for WorldSink<'_> {
 /// `ItemEntity.getSpin`.
 pub fn item_spin(age_in_ticks: f32, bob_offset: f32) -> f32 {
     age_in_ticks / 20.0 + bob_offset
+}
+/// `ItemEntityRenderer`'s bob: how far a dropped stack rises as it spins, or
+/// nothing when its item does not bob (NeoForge's `shouldBobAsEntity`).
+pub fn item_bob(age_in_ticks: f32, bob_offset: f32, bobs: bool) -> f32 {
+    if bobs {
+        sunrise_core::geometry::trig::sin(f64::from(age_in_ticks / 10.0 + bob_offset)) * 0.1 + 0.1
+    } else {
+        0.0
+    }
 }
 /// `ItemClusterRenderState.getRenderedAmount`.
 pub fn rendered_amount(count: u32) -> u32 {
@@ -1527,35 +2002,63 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
         return Vec::new();
     }
     let (lo, hi) = state.bounding_box();
-    cluster_poses_with_depth(pose, amount, seed, hi.z - lo.z)
+    // `AABB.getZsize`, in doubles, then narrowed.
+    let depth = (f64::from(hi.z) - f64::from(lo.z)) as f32;
+    cluster_poses_with_depth(pose, amount, seed, depth)
+}
+
+/// The poses of a dropped stack's copies: spread apart as [`cluster_poses_with_depth`]
+/// places them, or one pose for the whole stack when its item's copies do not spread
+/// (NeoForge's `shouldSpreadAsEntity`).
+pub fn dropped_copy_poses(
+    pose: Mat4,
+    amount: u32,
+    seed: i64,
+    depth: f32,
+    spreads: bool,
+) -> Vec<Mat4> {
+    if amount == 0 {
+        Vec::new()
+    } else if spreads {
+        cluster_poses_with_depth(pose, amount, seed, depth)
+    } else {
+        vec![pose]
+    }
 }
 
 /// [`cluster_poses`] with the depth of the resolved model's bounding box
-/// already computed for this draw (also used to place the stack's bob).
+/// already computed for this draw (also used to place the stack's bob). Each
+/// copy's `PoseStack.translate` is JOML's.
 pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) -> Vec<Mat4> {
+    use crate::camera::joml;
     use sunrise_core::random::{LegacyRandom, RandomSource};
     let mut out = Vec::new();
     if amount == 0 {
         return out;
     }
+    let pose = joml::Mat4::affine(pose);
+    let translated = |p: joml::Mat4, x: f32, y: f32, z: f32| {
+        let mut p = p;
+        p.translate(x, y, z);
+        p
+    };
     let mut random = LegacyRandom::new(seed);
     let mut next = || random.next_float() * 2.0 - 1.0;
     if depth > 0.0625 {
-        out.push(pose);
+        out.push(pose.to_glam());
         for _ in 1..amount {
             let (x, y, z) = (next() * 0.15, next() * 0.15, next() * 0.15);
-            out.push(pose * Mat4::from_translation(Vec3::new(x, y, z)));
+            out.push(translated(pose, x, y, z).to_glam());
         }
     } else {
         let offset = depth * 1.5;
-        let mut p = pose
-            * Mat4::from_translation(Vec3::new(0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0)));
-        out.push(p);
-        p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+        let mut p = translated(pose, 0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0));
+        out.push(p.to_glam());
+        p.translate(0.0, 0.0, offset);
         for _ in 1..amount {
             let (x, y) = (next() * 0.15 * 0.5, next() * 0.15 * 0.5);
-            out.push(p * Mat4::from_translation(Vec3::new(x, y, 0.0)));
-            p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+            out.push(translated(p, x, y, 0.0).to_glam());
+            p.translate(0.0, 0.0, offset);
         }
     }
     out
@@ -1678,32 +2181,81 @@ mod tests {
     }
     #[test]
     fn a_registered_item_model_type_is_read_again_on_each_load() {
+        use mod_api::{
+            __private::game::RegistrationContextNew, Hooks, Identifier, ModEntry,
+            RegisterItemModelsEvent, RegistrationContext,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use sunrise_assets::resource_source::Resource;
-        sunrise_assets::item_model::register_item_models(vec!["loadtest:cell".into()]);
-        let source = |full: &str| {
-            let cell = format!(
-                r#"{{"model":{{"type":"loadtest:cell","models":{{"full":{{"type":"minecraft:model","model":"{full}"}}}}}}}}"#
-            );
-            ResourceSource::indexed(BTreeMap::from([
-                (
-                    "assets/loadtest/items/cell.json".to_owned(),
-                    Resource::bytes(cell.into_bytes()),
-                ),
-                (
-                    "assets/loadtest/items/other.json".to_owned(),
-                    Resource::bytes(br#"{"model":{"type":"loadtest:unregistered"}}"#.to_vec()),
-                ),
-            ]))
-        };
-        let models = |full: &str| {
-            let loaded = load_definitions(&source(full));
-            assert!(!loaded.contains_key("loadtest:other"));
-            let mut models = Vec::new();
-            loaded["loadtest:cell"].model.dependencies(&mut models);
-            models
-        };
-        assert_eq!(models("loadtest:item/a"), ["loadtest:item/a"]);
-        assert_eq!(models("loadtest:item/b"), ["loadtest:item/b"]);
+
+        struct CellMod(Arc<AtomicUsize>);
+        #[mod_api::__subscriptions]
+        impl Hooks for CellMod {
+            fn register_item_models(
+                &self,
+                _: &RegistrationContext,
+                event: &mut RegisterItemModelsEvent<'_>,
+            ) {
+                let decodes = Arc::clone(&self.0);
+                event.register(
+                    Identifier::parse("loadtest:cell").unwrap(),
+                    move |_, children| {
+                        decodes.fetch_add(1, Ordering::Relaxed);
+                        children.add_named_models()?;
+                        Ok(
+                            |_: &dyn mod_api::ClientHost,
+                             _: &mod_api::ItemModelUpdateInput<'_>,
+                             _: &mut Vec<mod_api::ItemModelLayer>| {},
+                        )
+                    },
+                );
+            }
+        }
+
+        let decodes = Arc::new(AtomicUsize::new(0));
+        let mods: mod_api::Mods = vec![ModEntry::new(
+            "loadtest",
+            Box::new(CellMod(Arc::clone(&decodes))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            let mut registered = Vec::new();
+            mod_api::dispatch_register_item_models(&RegistrationContext::new(), &mut registered);
+            let (factories, kept) = bind_item_model_factories(registered);
+            let providers = ItemProviderTables {
+                item_model: Some(&factories),
+                ..Default::default()
+            };
+            assert_eq!(kept, ["loadtest:cell"]);
+
+            let source = |full: &str| {
+                let cell = format!(
+                    r#"{{"model":{{"type":"loadtest:cell","models":{{"full":{{"type":"minecraft:model","model":"{full}"}}}}}}}}"#
+                );
+                ResourceSource::indexed(BTreeMap::from([
+                    (
+                        "assets/loadtest/items/cell.json".to_owned(),
+                        Resource::bytes(cell.into_bytes()),
+                    ),
+                    (
+                        "assets/loadtest/items/other.json".to_owned(),
+                        Resource::bytes(br#"{"model":{"type":"loadtest:unregistered"}}"#.to_vec()),
+                    ),
+                ]))
+            };
+            let models = |full: &str| {
+                let loaded = load_definitions(&source(full), |text| {
+                    registered_providers::decode_definition_without_specials(text, &providers)
+                });
+                assert!(!loaded.contains_key("loadtest:other"));
+                let mut models = Vec::new();
+                loaded["loadtest:cell"].model.dependencies(&mut models);
+                models
+            };
+            assert_eq!(models("loadtest:item/a"), ["loadtest:item/a"]);
+            assert_eq!(models("loadtest:item/b"), ["loadtest:item/b"]);
+            assert_eq!(decodes.load(Ordering::Relaxed), 2);
+        });
     }
 
     #[test]
@@ -1839,14 +2391,16 @@ mod tests {
         writer.finish().unwrap();
         let source = ResourceSource::archive(&jar).unwrap();
         fs::remove_file(&jar).unwrap();
-        assert!(load_definitions(&source).contains_key("example:nested/mask"));
+        assert!(
+            load_definitions(&source, ClientItem::from_json).contains_key("example:nested/mask")
+        );
         let sprites = FileSprites::new(source.clone());
         let mask = sprites.mask("example:item/mask").unwrap();
         assert_eq!((mask.width, mask.height), (1, 1));
         assert_eq!(mask.frames, vec![vec![true], vec![false]]);
         assert!(sprites.translucent("example:item/mask"));
-        let atlas = glint_atlas::load(&source, 1, 1024).unwrap();
-        assert!(atlas.contains_key("example:item/mask"));
+        let atlas = glint_atlas::load_atlas(&source, "minecraft:items", 0, 0, 1024).unwrap();
+        assert!(atlas.get_stitched("example:item/mask").is_some());
         assert_eq!(fs::read_dir(&folder).unwrap().count(), 0);
         fs::remove_dir(&folder).unwrap();
     }
@@ -1921,10 +2475,10 @@ mod tests {
                     },
                     argument: Value::Null,
                 },
-                tints: Vec::new(),
+                tints: LayerTints::Owned(Vec::new()),
                 foil: FoilType::None,
                 matrix: Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)),
-                particle: String::new(),
+                particle: Arc::from(""),
                 uses_block_light: false,
                 display: DisplayContext::Ground,
                 extents: Arc::new(vec![
@@ -1937,6 +2491,7 @@ mod tests {
             cit_glint: None,
             hdr_tier: 0,
             hdr_light: 0,
+            held_tint: None,
         };
         let poses = [
             Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)),
@@ -1991,7 +2546,7 @@ mod tests {
     #[test]
     fn a_frame_glint_is_shared_by_every_item() {
         let frame = GlintFrame {
-            millis: 123_456.0,
+            millis: 123_456,
             speed: 0.5,
             alpha: 0.75,
             sprite: true,
@@ -1999,16 +2554,32 @@ mod tests {
         let world = frame.glint(0.5).expect("the atlas has the glint sprite");
         assert_eq!(
             (world.speed, world.alpha, world.millis),
-            (0.5, 0.75, 123_456.0)
+            (0.5, 0.75, 123_456)
         );
         assert_eq!(world.scale, 0.5);
         let uvs: Vec<_> = (0..1000)
             .map(|_| frame.glint(0.5).unwrap().uv([0.25, 0.75]))
             .collect();
         assert!(uvs.iter().all(|uv| *uv == uvs[0]));
-        assert_eq!(frame.scroll_ticks(), Glint::scroll_ticks(123_456.0, 0.5));
+        assert_eq!(frame.scroll_ticks(), Glint::scroll_ticks(123_456, 0.5));
         // 123456 ms * 0.5 * 8 = 493824 ticks, modulo 330000.
         assert_eq!(frame.scroll_ticks(), 163_824.0);
+        // Whole monotonic milliseconds truncate sub-millisecond elapsed time (`Util.getMillis`).
+        let sub_ms = std::time::Duration::from_micros(1_500).as_millis() as i64;
+        assert_eq!(sub_ms, 1);
+        assert_eq!(Glint::ticks(sub_ms, 0.5), 4);
+        assert_eq!(Glint::scroll_ticks(sub_ms, 0.5), 4.0);
+        // Double-precision speed avoids narrowing 0.7 to f32 before scaling.
+        assert_eq!(Glint::ticks(1_000, 0.7), 5_600);
+        assert_eq!(Glint::scroll_ticks(1_000, 0.7), 5_600.0);
+        // Whole milliseconds above 2^24 keep single-millisecond resolution.
+        let high_ms = (1_i64 << 24) + 1;
+        assert_eq!(Glint::ticks(high_ms, 0.5), high_ms * 4);
+        assert_eq!(Glint::scroll_ticks(high_ms, 0.5), 118_868.0);
+        assert_ne!(
+            Glint::scroll_ticks(high_ms, 0.5),
+            Glint::scroll_ticks(1_i64 << 24, 0.5)
+        );
         let missing = GlintFrame {
             sprite: false,
             ..frame
@@ -2080,7 +2651,10 @@ mod tests {
         let empty = r#"{"model":{"type":"minecraft:empty"}}"#;
         fs::write(definitions.join("top.json"), empty)?;
         fs::write(definitions.join("postman/head.json"), empty)?;
-        let loaded = load_definitions(&ResourceSource::directory(root.clone()));
+        let loaded = load_definitions(
+            &ResourceSource::directory(root.clone()),
+            ClientItem::from_json,
+        );
         let _ = fs::remove_dir_all(&root);
         assert!(loaded.contains_key("sunrise:top"));
         assert!(loaded.contains_key("sunrise:postman/head"));
@@ -2129,6 +2703,28 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn a_dropped_stack_that_does_not_bob_keeps_its_height() {
+        assert_eq!(item_bob(17.5, 0.3, false), 0.0);
+        // A quarter turn lands on `Mth.SIN`'s entry 16384, which is exactly 1.
+        assert_eq!(item_bob(15.0, 0.070_796_37, true), 0.2);
+        // Below one table step the sine is entry 0, exactly 0, where `f32::sin` is not.
+        assert_eq!(item_bob(0.0, 0.000_09, true), 0.1);
+    }
+    #[test]
+    fn a_stack_whose_copies_do_not_spread_draws_once_in_its_pose() {
+        let pose =
+            Mat4::from_translation(glam::Vec3::new(1.0, 2.0, 3.0)) * Mat4::from_rotation_y(0.7);
+        let amount = rendered_amount(8);
+        for depth in [0.0625, 0.5] {
+            assert_eq!(dropped_copy_poses(pose, amount, 42, depth, false), [pose]);
+            assert!(dropped_copy_poses(pose, 0, 42, depth, false).is_empty());
+            assert_eq!(
+                dropped_copy_poses(pose, amount, 42, depth, true),
+                cluster_poses_with_depth(pose, amount, 42, depth)
+            );
+        }
+    }
     #[test]
     fn rendered_amounts_follow_the_count_bands() {
         let bands: Vec<u32> = [0, 1, 2, 16, 17, 32, 33, 48, 49, 64]

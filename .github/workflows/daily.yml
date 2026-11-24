@@ -1,17 +1,17 @@
 name: daily
-run-name: daily ${{ inputs.commit || github.sha }}${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main') && ' (dry run)' || '' }}
+run-name: daily ${{ inputs.commit || github.sha }}${{ inputs.break_glass && ' (break-glass legs)' || '' }}${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || !contains(fromJSON('["refs/heads/main", "refs/heads/release/26.3"]'), github.ref)) && ' (dry run)' || '' }}
 # The daily tier (CI tiers, owner 2026-11-13; docs/release-flow.md "Daily run"): every in-game test, once a day on
-# main's head and by root's dispatch. Its legs include the ignored-tests data shards, the wasm fixture and guest
-# stacks, fn-replace-check, the game's Windows runtime-lease tests (windows-runtime-leases.yml), cargo-sunrise-mod's
-# archives for every platform (cargo-sunrise-mod-build.yml; a pull request builds only Linux x86_64), the wasm std
-# member's names built on Linux and on Windows (wasm-std-names.yml), the machine sample built against this API
-# (machine-sample.yml) and the prebuilt SDK of the commit (prebuilt-game-build.yml), which the nightly needs. The SDK's
+# main's head and by root's dispatch. Its legs include the ignored-tests data shards, fn-replace-check, the game's
+# Windows runtime-lease tests, cargo-sunrise-mod's platform archives, the machine sample and the prebuilt SDK. The SDK's
 # Linux and Windows client jobs run the native linkage probe before packing.
 # The summary then moves the tag `daily-green` to the commit when every leg passed, or files one issue per failing
 # test (tools/ci/daily_summary.py), and on all green the nightly is published from that commit (release.yml).
-# Only a run on main with dry_run false writes anything: tags, issues, the nightly.
+# Only a run on main with dry_run false writes anything: tags, issues, the nightly. A real run on release/26.3 files and
+# closes only its own issues, titled `Daily (release/26.3): …` (docs/release-flow.md "Release branches").
 #   gh workflow run daily.yml --ref main -f dry_run=false             # the real run, as the schedule starts it
 #   gh workflow run daily.yml --ref <branch> -f dry_run=true          # writes nothing; prints what it would do
+#   gh workflow run daily.yml --ref release/26.3 -f dry_run=false -f break_glass=true
+#       # only the legs a break-glass patch release of the head needs (docs/release-flow.md "Break-glass patch releases")
 on:
   schedule:
     - cron: '0 9 * * *'
@@ -29,13 +29,21 @@ on:
         description: Set by the schedule only; stop when this commit already has a completed real daily run
         type: boolean
         default: false
+      break_glass:
+        description: >-
+          Run only the legs a break-glass patch release of this commit needs, chosen from its changes since the
+          newest published stable release (nightly.py break-glass-legs, which refuses a change no leg covers). A real
+          run only on release/26.3. It is no full daily: no `green` job, so no full-daily check ever takes it
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
   # One daily run runs and at most one waits; a newer waiting dispatch replaces an older waiting one (GitHub keeps one
   # pending run per group), and a running one is never cancelled. The scheduled event only dispatches (below), so it
   # never waits in this group.
-  group: daily${{ github.event_name == 'schedule' && format('-schedule-{0}', github.run_id) || '' }}
+  # On release/26.3, one group per commit: a release's follow-up full daily is never replaced by another commit's.
+  group: daily${{ github.event_name == 'schedule' && format('-schedule-{0}', github.run_id) || '' }}${{ github.ref == 'refs/heads/release/26.3' && format('-release-{0}', inputs.commit || github.sha) || '' }}
   cancel-in-progress: false
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
@@ -69,6 +77,10 @@ jobs:
       skip: ${{ steps.commit.outputs.skip }}
       dry_run: ${{ steps.commit.outputs.dry_run }}
       parity_required: ${{ steps.commit.outputs.parity_required }}
+      # main or release/26.3 on a writing run (exact, from authorize), else empty: what the promotion jobs check.
+      branch: ${{ steps.commit.outputs.branch }}
+      # A break-glass run's legs (a JSON list, and their names in one line), else empty: every leg runs.
+      legs: ${{ steps.commit.outputs.legs }}
       self_hosted: ${{ steps.route.outputs.self_hosted }}
     steps:
       - uses: actions/checkout@v4
@@ -87,24 +99,31 @@ jobs:
           SAME_REPO: true
           EVENT: ${{ github.event_name }}
         run: bash tools/ci/dyna_ci_route.sh >> "$GITHUB_OUTPUT"
+      # Only main and release/26.3 write, decided exactly (release_train.py authorize): any other run is a dry run.
+      - id: auth
+        env:
+          DRY_INPUT: ${{ inputs.dry_run }}
+        run: python3 tools/release_train.py authorize --publish-kind daily --dry-run "$DRY_INPUT"
       - id: commit
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ inputs.commit || github.sha }}
-          # Only main writes: a run on any other ref is a dry run whatever its input says.
-          DRY_RUN: ${{ inputs.dry_run || github.ref != 'refs/heads/main' }}
+          DRY_RUN: ${{ steps.auth.outputs.dry_run }}
           SCHEDULED: ${{ inputs.scheduled }}
+          BREAK_GLASS: ${{ inputs.break_glass }}
         run: |
           # A branch, tag or short SHA becomes the full SHA here; every later job and the run's summary job name use it.
           sha=$(git rev-parse --verify --quiet "$COMMIT^{commit}") || { echo "::error::$COMMIT is not a commit of this repository"; exit 1; }
-          # A writing run tags, files issues and signs and publishes the SDK and the Nightly: only for main's commits.
-          if [ "$DRY_RUN" != true ]; then
-            git fetch -q --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            git merge-base --is-ancestor "$sha" refs/remotes/origin/main \
-              || { echo "::error::$sha is not on main: a writing daily run takes only main's commits"; exit 1; }
+          # A writing run tags, files issues and signs and publishes the SDK and the Nightly: only its branch's commits.
+          branch=
+          if [ "$DRY_RUN" = false ]; then
+            branch=${GITHUB_REF#refs/heads/}
+            git fetch -q --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+            git merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch" \
+              || { echo "::error::$sha is not on $branch: a writing daily run takes only its branch's commits"; exit 1; }
           fi
           skip=false
-          if [ "$SCHEDULED" = true ] && [ "$DRY_RUN" != true ]; then
+          if [ "$SCHEDULED" = true ] && [ "$DRY_RUN" = false ]; then
             # A completed real daily run of this commit: its summary job is named `summary <full sha>`.
             done=$(python3 tools/ci/daily_summary.py --seen "$sha")
             if [ -n "$done" ]; then
@@ -112,28 +131,30 @@ jobs:
               echo "### $sha already has a completed daily run: $done" >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
-          # Every writing run, whichever commit of main it takes, runs parity: a writing run can move daily-green and
-          # start the Nightly, so none may skip it. Only a dry run, which writes nothing, has no parity leg.
+          # Every writing run, whichever commit it takes, runs parity: a writing run can move daily-green and be a
+          # Nightly's or a stable release's evidence, so none may skip it. Only a dry run has no parity leg.
           parity_required=false
-          if [ "$GITHUB_REF" = refs/heads/main ] && [ "$DRY_RUN" = false ]; then
+          if [ "$DRY_RUN" = false ] && { [ "$GITHUB_REF" = refs/heads/main ] || [ "$GITHUB_REF" = refs/heads/release/26.3 ]; }; then
             parity_required=true
           fi
-          printf 'commit=%s\nskip=%s\ndry_run=%s\nparity_required=%s\n' \
-            "$sha" "$skip" "$DRY_RUN" "$parity_required" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\nskip=%s\ndry_run=%s\nparity_required=%s\nbranch=%s\n' \
+            "$sha" "$skip" "$DRY_RUN" "$parity_required" "$branch" >> "$GITHUB_OUTPUT"
+          # A break-glass run: only the legs its changes select (`legs`), as evidence for a release of
+          # release/26.3 only (release_train.legs_passed).
+          if [ "$BREAK_GLASS" = true ]; then
+            if [ "$DRY_RUN" = false ] && [ "$GITHUB_REF" != refs/heads/release/26.3 ]; then
+              echo "::error::a real break-glass daily runs only on release/26.3"; exit 1
+            fi
+            python3 tools/ci/nightly.py break-glass-legs "$sha"
+          fi
 
   shards:
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'shards'))
     permissions:
       contents: read
       actions: read  # its routing reads this attempt's creation or start time (tools/ci/dyna_ci_route.sh)
     uses: ./.github/workflows/ignored-tests.yml
-    with:
-      commit: ${{ needs.resolve.outputs.commit }}
-  wasm-mods:
-    needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
-    uses: ./.github/workflows/wasm-mods.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
   # Against this run's own SDK (the sdk job's legs, or sdk-<sha> when that is already released), signed with a
@@ -142,7 +163,9 @@ jobs:
   # 44065326913. It runs when that job failed too, and a missing Linux leg fails it by name.
   fn-replace-check:
     needs: [resolve, sdk]
-    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false' }}
+    if: >-
+      !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false' &&
+      (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'fn-replace-check'))
     permissions:
       contents: read
       actions: read  # its routing reads this attempt's creation or start time (tools/ci/dyna_ci_route.sh)
@@ -150,35 +173,44 @@ jobs:
     with:
       commit: ${{ needs.resolve.outputs.commit }}
       self_hosted: ${{ needs.resolve.outputs.self_hosted }}
+  # The modding book's start pages run as a reader would, with the mod tool alone on a runner with no launcher: the
+  # install page against the published release, then the mod pages with the tool built from this commit against this
+  # run's own SDK (as fn-replace-check; never the previous Nightly's, whose red could block the Nightly that clears it).
+  # An ordinary leg. Like fn-replace-check it waits for the Linux legs alone and runs when that job failed too.
+  book-quickstart:
+    needs: [resolve, sdk]
+    if: >-
+      !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false' &&
+      (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'book-quickstart'))
+    permissions:
+      contents: read
+      actions: read  # its routing reads this attempt's creation or start time (tools/ci/dyna_ci_route.sh)
+    uses: ./.github/workflows/book-quickstart.yml
+    with:
+      commit: ${{ needs.resolve.outputs.commit }}
+      self_hosted: ${{ needs.resolve.outputs.self_hosted }}
+      own_sdk: true
   # The game's Windows tests that start child processes: the runtime leases and the `windows` daily rows.
   windows-runtime-leases:
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'windows-runtime-leases'))
     uses: ./.github/workflows/windows-runtime-leases.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
   # cargo-sunrise-mod's binstall archives for every platform, publishing nothing: pull requests build only Linux x86_64.
   cargo-sunrise-mod:
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'cargo-sunrise-mod'))
     permissions:
       contents: read
     uses: ./.github/workflows/cargo-sunrise-mod-build.yml
-    with:
-      commit: ${{ needs.resolve.outputs.commit }}
-  # The wasm std member built on Linux and on Windows has exactly the same import and export name lists
-  # (wasm-std-names.yml).
-  wasm-std-names:
-    needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
-    uses: ./.github/workflows/wasm-std-names.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
   # sunrise-org/sunrise-machine-sample at its pin, compiled against this commit's mod API: a red means the sample must
   # follow an API change (its issue says so), never that the change was wrong.
   machine-sample:
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'machine-sample'))
     permissions:
       contents: read
       actions: read  # its routing reads this attempt's creation or start time (tools/ci/dyna_ci_route.sh)
@@ -191,7 +223,7 @@ jobs:
   # summary reads their jobs (`sdk / build windows`) as the one sdk leg.
   sdk:
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'sdk'))
     uses: ./.github/workflows/prebuilt-game-build.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
@@ -199,7 +231,7 @@ jobs:
   sdk-windows-macos:
     name: sdk
     needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
+    if: needs.resolve.outputs.skip == 'false' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'sdk'))
     uses: ./.github/workflows/prebuilt-game-build.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
@@ -212,7 +244,7 @@ jobs:
     needs: [resolve, shards]
     if: >-
       !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false' &&
-      needs.resolve.outputs.parity_required == 'true'
+      needs.resolve.outputs.parity_required == 'true' && (needs.resolve.outputs.legs == '' || contains(fromJSON(needs.resolve.outputs.legs), 'parity'))
     permissions:
       contents: read
     uses: ./.github/workflows/parity.yml
@@ -221,8 +253,9 @@ jobs:
   # Reads every leg's result and verdict file (never a log) and moves `daily-green` or files the issues.
   summary:
     # The resolved commit names the job: what a scheduled run's lookup (daily_summary.py --seen) matches.
-    name: summary ${{ needs.resolve.outputs.commit }}${{ needs.resolve.outputs.dry_run == 'true' && ' (dry run)' || '' }}
-    needs: [resolve, shards, wasm-mods, fn-replace-check, windows-runtime-leases, cargo-sunrise-mod, wasm-std-names,
+    # A break-glass run's is named apart: it is no completed daily run of the commit (daily_summary.py --seen).
+    name: summary ${{ needs.resolve.outputs.commit }}${{ needs.resolve.outputs.legs != '' && ' (break-glass legs)' || '' }}${{ needs.resolve.outputs.dry_run == 'true' && ' (dry run)' || '' }}
+    needs: [resolve, shards, fn-replace-check, book-quickstart, windows-runtime-leases, cargo-sunrise-mod,
             machine-sample, sdk, sdk-windows-macos, parity]
     # Not on a cancelled run: its legs did not fail, they were stopped, and a stopped leg says nothing about the commit.
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false' }}
@@ -293,17 +326,102 @@ jobs:
           COMMIT: ${{ needs.resolve.outputs.commit }}
           DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
           RESULT: ${{ needs.sdk-publish.result }}
+          # A break-glass run files and closes no issue.
+          PARTIAL: ${{ needs.resolve.outputs.legs != '' }}
         run: python3 tools/ci/daily_summary.py --after sdk-publish "$RESULT"
 
+  # The run's own evidence of a passed daily (release_train.daily_passed): a writing run, every leg green, the SDK out.
+  green:
+    name: green ${{ needs.resolve.outputs.commit }}
+    needs: [resolve, summary, parity, sdk, sdk-publish]
+    if: >-
+      !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.dry_run == 'false' &&
+      needs.resolve.outputs.legs == '' &&
+      needs.summary.result == 'success' && needs.summary.outputs.green == 'true' && needs.parity.result == 'success' &&
+      (needs.sdk-publish.result == 'success' ||
+      (needs.sdk-publish.result == 'skipped' && needs.sdk.result == 'success' && needs.sdk.outputs.needed == 'false'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: echo "### $COMMIT passed every leg of this real daily run, and its SDK is published" >> "$GITHUB_STEP_SUMMARY"
+
+  # A break-glass run's evidence (release_train.legs_passed): a writing run on release/26.3, every leg it ran green,
+  # the SDK out. Its name lists those legs; it is never a `green` job, which only a full daily run has.
+  legs:
+    # One job per leg it passed, `legs <sha> <leg>`, what release_train.legs_passed reads: a job name over 100
+    # characters is cut by the Jobs API.
+    name: legs ${{ needs.resolve.outputs.commit }} ${{ matrix.leg }}
+    needs: [resolve, summary, sdk, sdk-publish]
+    if: >-
+      !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.dry_run == 'false' &&
+      needs.resolve.outputs.legs != '' && needs.resolve.outputs.branch == 'release/26.3' &&
+      needs.summary.result == 'success' && needs.summary.outputs.green == 'true' &&
+      (needs.sdk-publish.result == 'success' ||
+      (needs.sdk-publish.result == 'skipped' && needs.sdk.result == 'success' && needs.sdk.outputs.needed == 'false'))
+    strategy:
+      matrix:
+        leg: ${{ fromJSON(needs.resolve.outputs.legs || '["none"]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+          LEG: ${{ matrix.leg }}
+        run: echo "### $COMMIT passed the break-glass leg $LEG of this real daily run, and its SDK is published" >> "$GITHUB_STEP_SUMMARY"
+
+  # nightly/26.3 fast-forwarded to the green commit with the sunrise-sunny App's token, which its ruleset lets update it.
+  nightly-branch:
+    needs: [resolve, green]
+    # Explicit status check: legs upstream of green are skipped on an ordinary green run (sdk-publish when sdk-<sha>
+    # exists, parity when not required), and GitHub's implicit success() would skip this job for that.
+    if: >-
+      !cancelled() && needs.green.result == 'success' && needs.resolve.outputs.branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - id: branch
+        run: |
+          refs=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/nightly/26.3) \
+            || { echo "::error::could not look nightly/26.3 up"; exit 1; }
+          # The returned name, exactly: a pattern also matches a longer ref ending in it.
+          if awk '$2 == "refs/heads/nightly/26.3" { found = 1 } END { exit !found }' <<< "$refs"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "### nightly/26.3 does not exist: the Nightly follows daily-green" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/create-github-app-token@v2
+        if: steps.branch.outputs.exists == 'true'
+        id: app
+        with:
+          app-id: ${{ vars.SUNNY_APP_ID }}
+          private-key: ${{ secrets.SUNNY_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - if: steps.branch.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          # force=false: GitHub refuses anything but a fast-forward, so the branch only ever moves along main.
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/nightly/26.3" -f sha="$COMMIT" -F force=false > /dev/null
+          echo "### nightly/26.3 fast-forwarded to ${COMMIT:0:9}" >> "$GITHUB_STEP_SUMMARY"
+
   # The nightly: the daily-green commit, published through the release train (release.yml, kind nightly), after its
-  # SDK.
+  # SDK and the nightly branch.
   nightly:
-    needs: [resolve, summary, sdk-publish]
-    # After the SDK, which a Nightly carries the index of: published now, or already (its leg skipped the build).
-    if: always() && needs.summary.outputs.green == 'true' && needs.resolve.outputs.dry_run == 'false' && (needs.sdk-publish.result == 'success' || needs.sdk-publish.result == 'skipped')
+    needs: [resolve, green, nightly-branch]
+    if: >-
+      !cancelled() && needs.green.result == 'success' && needs.resolve.outputs.branch == 'main' &&
+      needs.nightly-branch.result == 'success'
     # GitHub checks what every called job asks for at startup, skipped ones too (tests/test_ci_call_permissions.py).
     permissions:
-      # Only because release.yml holds the snapshot's SDK publish (sdk-publish.yml), which asks for it and never
+      # Only because release.yml holds the Dev build’s SDK publish (sdk-publish.yml), which asks for it and never
       # runs in this call (kind nightly). release.yml's nightly path writes nothing: its jobs declare read, and the
       # Nightly is written by `nightly build`, which this only starts.
       contents: write
@@ -315,3 +433,5 @@ jobs:
       commit: ${{ needs.resolve.outputs.commit }}
       dry_run: false
       daily: true
+      # This run is the evidence: its green job passed, though the run itself ends after this call.
+      daily_run: ${{ github.run_id }}/${{ github.run_attempt }}

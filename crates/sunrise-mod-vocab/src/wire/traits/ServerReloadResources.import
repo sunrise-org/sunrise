@@ -1,1 +1,0 @@
-The retained server reload listeners of the last successful reload, as NeoForge's `ReloadableServerResources`, reached from `ServerHost::reload_resources`.

@@ -6,8 +6,8 @@ use serde_json::json;
 fn walk(
     v: Value,
     tags: &std::collections::HashMap<String, Vec<String>>,
-) -> Option<WalkedIngredient> {
-    WalkedIngredient::walk(&v, tags, &|_| None, &|_| None, &|_| None)
+) -> Option<WalkedIngredient<()>> {
+    WalkedIngredient::walk(&v, tags, &|_| None, &|_, _| None, &|_| None)
 }
 
 #[test]

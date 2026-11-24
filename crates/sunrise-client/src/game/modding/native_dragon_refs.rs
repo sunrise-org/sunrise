@@ -138,9 +138,12 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::Dim;
-    use super::super::native_entity_refs::tests::with_game;
+    use super::super::native_entity_refs::tests::{
+        collect_entity_visit, fixture_resident_column, with_game,
+    };
     use super::*;
-    use mod_api::{MobRef, WorldEpoch};
+    use mod_api::{EntityReadError, MobRef, WorldEpoch};
+    use std::ops::ControlFlow;
     use sunrise_client::{entities::ArmorStand, mobs::Mob};
     use sunrise_core::geometry::Vec3;
     use sunrise_core::nbt::Tag;
@@ -356,6 +359,9 @@ mod tests {
                 id: 0,
                 at: [0.0; 3],
                 motion: [0.0; 3],
+                fall_distance: 0.0,
+                fire_ticks: 0,
+                first_tick: true,
                 radius: 5.0,
                 age: 0,
                 duration: 200,
@@ -436,7 +442,7 @@ mod tests {
     }
 
     fn assert_parts_are_the_dragons_own(game: &Game<'_>, dragon: EntityRef) {
-        let parts = game.entity_parts(dragon).unwrap();
+        let parts = collect_entity_visit(|visit| dragon.visit_parts(game, visit)).unwrap();
         let ids: Vec<u32> = parts.iter().map(|part| part.id()).collect();
         assert_eq!(ids, (dragon.id() + 1..=dragon.id() + 8).collect::<Vec<_>>());
         assert_eq!(game.entity_is_multipart(dragon), Some(true));
@@ -454,14 +460,19 @@ mod tests {
                 ])
             );
             assert_eq!(
-                game.entity_kind(*part).map(|kind| kind.id(game)).as_deref(),
+                game.entity_kind(*part)
+                    .and_then(|kind| kind.id(game))
+                    .as_deref(),
                 Some("minecraft:ender_dragon")
             );
             assert_eq!(game.entity_rotation(*part), Some([0.0, 0.0]));
             assert_eq!(game.entity_velocity(*part), Some([0.0; 3]));
             assert_eq!(game.entity_level(*part), game.entity_level(dragon));
             assert_eq!(game.entity_is_multipart(*part), Some(false));
-            assert_eq!(game.entity_parts(*part), Some(Vec::new()));
+            assert_eq!(
+                collect_entity_visit(|visit| game.entity_visit_parts(*part, visit)),
+                Ok(Vec::new())
+            );
             // Its rotation is none, so what is up for it is up.
             assert!(game.entity_up_vector(*part).unwrap()[1] > 0.999_999);
             // No living entity, mob or dragon behind it.
@@ -478,10 +489,28 @@ mod tests {
     #[ignore = "daily"]
     fn the_dragons_parts_resolve_as_entities_of_their_own() {
         with_game(|game| {
+            // The parts are visible with their parent, not by their own positions.
+            fixture_resident_column(&mut game.world, (0, 0));
             let (entity, _) = dragon_in(game);
             place_parts(game);
             assert_parts_are_the_dragons_own(game, entity);
-            let parts = game.entity_parts(entity).unwrap();
+            let parts = collect_entity_visit(|visit| entity.visit_parts(game, visit)).unwrap();
+            let mut visited = None;
+            assert_eq!(
+                entity.visit_parts(game, &mut |part| {
+                    assert!(visited.replace(part).is_none());
+                    ControlFlow::Break(())
+                }),
+                Ok(ControlFlow::Break(()))
+            );
+            assert_eq!(visited, Some(parts[0]));
+            // If one part is temporarily out of the readable view, do not visit an earlier part.
+            game.held_out.push(parts[7].id());
+            assert_eq!(
+                entity.visit_parts(game, &mut |_| panic!("partial dragon was visited")),
+                Err(EntityReadError::Unavailable)
+            );
+            assert_eq!(game.held_out.pop(), Some(parts[7].id()));
             // Only the eight ids after the dragon's are its parts.
             assert!(game.entity(entity.id() - 1).is_none());
             assert!(game.entity(entity.id() + 9).is_none());
@@ -497,7 +526,10 @@ mod tests {
             assert_eq!(game.entity_bounding_box(stale), None);
             assert_eq!(game.entity_is_multipart(stale), None);
             let stale_dragon = EntityRef::new(stale.epoch(), entity.id());
-            assert_eq!(game.entity_parts(stale_dragon), None);
+            assert_eq!(
+                collect_entity_visit(|visit| game.entity_visit_parts(stale_dragon, visit)),
+                Err(mod_api::EntityReadError::Stale)
+            );
             // Parts cannot move independently of their parent, even without rotation.
             let before = game.entity_position(parts[2]);
             assert!(!game.entity_teleport_to(parts[2], [10.0, 80.0, 10.0], None));
@@ -511,7 +543,10 @@ mod tests {
                 assert_eq!(game.entity_position(*part), None);
                 assert!(game.entity(part.id()).is_none());
             }
-            assert_eq!(game.entity_parts(entity), None);
+            assert_eq!(
+                collect_entity_visit(|visit| game.entity_visit_parts(entity, visit)),
+                Err(mod_api::EntityReadError::Stale)
+            );
             game.native_removals_flush();
             assert!(game.dragon.is_none());
             for part in &parts {
@@ -553,7 +588,17 @@ mod tests {
             // The server tells this client of the dragon alone; the parts are its copies of it.
             let dragon = game.entity(15).unwrap();
             assert_parts_are_the_dragons_own(game, dragon);
-            let parts = game.entity_parts(dragon).unwrap();
+            let parts = collect_entity_visit(|visit| dragon.visit_parts(game, visit)).unwrap();
+            for part in &parts {
+                assert_eq!(part.vehicle(game), None);
+                assert_eq!(part.root_vehicle(game), Some(*part));
+                assert_eq!(part.is_passenger(game), Some(false));
+                assert_eq!(part.is_vehicle(game), Some(false));
+                assert_eq!(
+                    collect_entity_visit(|visit| part.visit_passengers(game, visit)),
+                    Ok(Vec::new())
+                );
+            }
             // The window's own player is not one, and a stale handle is none.
             assert_eq!(game.entity(7).map(|e| e.id()), Some(7));
             let stale = EntityRef::new(WorldEpoch::new(dragon.epoch().get() + 1), parts[3].id());

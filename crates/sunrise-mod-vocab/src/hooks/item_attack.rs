@@ -11,15 +11,24 @@ pub trait Hooks {
     /// is not hurt, `hurt_enemy` does not fire and the stack takes no wear.
     /// Only the `ItemPart`s attached to `stack`'s item are asked. Server-side,
     /// for every player of the world (the helpers read the acting one).
+    /// Read the borrowed stack with `get`; call `project` only to keep an owned copy.
     #[hook(
+        dispatch = "flat",
         side = "server",
         contract = "cancel",
         out = "canceled",
         scope = "item",
         key = "stack",
+        version = 2,
         neoforge = "IItemExtension.onLeftClickEntity"
     )]
-    fn on_left_click_entity();
+    fn on_left_click_entity(
+        player: u128,
+        stack: mod_api::ItemStackView<'_>,
+        entity: i32,
+        kind: &str,
+        canceled: &mut bool,
+    );
     /// `IItemExtension.onEntitySwing`: the player in place (`entity`, its
     /// `Entity.getId` when known) is about to swing `stack` in `hand`:
     /// where `LivingEntity.swing` starts, for an attack, a use or a swing the
@@ -28,13 +37,21 @@ pub trait Hooks {
     /// asked. Both sides, as vanilla's: answer the same on both, and change
     /// the world only where this `Game` runs the world, not on a server's
     /// client.
+    /// Read the borrowed stack with `get`; call `project` only to keep an owned copy.
     #[hook(
+        dispatch = "flat",
         side = "both",
         contract = "cancel",
         out = "canceled",
         scope = "item",
         key = "stack",
+        version = 2,
         neoforge = "IItemExtension.onEntitySwing"
     )]
-    fn on_entity_swing();
+    fn on_entity_swing(
+        stack: mod_api::ItemStackView<'_>,
+        entity: Option<i32>,
+        hand: Hand,
+        canceled: &mut bool,
+    );
 }

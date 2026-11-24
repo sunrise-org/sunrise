@@ -131,9 +131,8 @@ class SourceMtimesTests(unittest.TestCase):
 
 
 
-# Steps that compile into the job's Cargo target: Cargo itself and the tools that run it (`prebuilt_game.py links` only
-# reads `cargo metadata`).
-BUILDS = re.compile(r"\bcargo (build|test|check|clippy|rustc|run|doc)\b|vanilla-data\.sh|prebuilt_game\.py(?! links\b)|"
+# Steps that compile into the job's Cargo target: Cargo itself and the tools that run it.
+BUILDS = re.compile(r"\bcargo (build|test|check|clippy|rustc|run|doc)\b|vanilla-data\.sh|prebuilt_game\.py|"
                     r"ignored_tests\.py|run_test_binaries\.py")
 
 

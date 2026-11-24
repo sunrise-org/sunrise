@@ -20,7 +20,10 @@ tools/parity.py runs it in PARITY_SHARDS parts, each upgrading its share of
 the worlds (PARITY_SHARD=i/n). The vanilla outputs stay in .local/datafix/run
 so that the oracle's results are reused while its inputs are unchanged.
 
-  test_datafix_parity.py [--keep] [--skip-build] [VERSION...]
+Also checks standalone saved compounds against the same vanilla fixer, in the first
+shard. Use `--single` to run only these cases, without preparing sample worlds.
+
+  test_datafix_parity.py [--keep] [--binary PROBE] [--single | VERSION...]
 """
 import argparse
 import json
@@ -29,6 +32,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -54,6 +58,24 @@ PARITY_RUST_SCOPE = [
 IGNORED = {
     r'^level\.dat\.Data\.LastPlayed$': 'wall-clock time of the upgrade',
 }
+
+SINGLE_COMPOUNDS = [
+    ('named_wool', 'item_stack', 1343, '{id:"minecraft:wool",Damage:14s,Count:3b,tag:{display:{Name:"Quest reward"}}}'),
+    ('numeric_wool', 'item_stack', 99, '{id:35s,Damage:14s,Count:3b}'),
+    ('numeric_wool_before_first_schema', 'item_stack', 98, '{id:35s,Damage:14s,Count:3b}'),
+    ('numeric_wool_unversioned', 'item_stack', -1, '{id:35s,Damage:14s,Count:3b}'),
+    ('mod_item', 'item_stack', 1343, '{id:"example:token",Count:3b,tag:{quest:"welcome"}}'),
+    ('legacy_granite', 'block_state', 1400, '{Name:"minecraft:stone",Properties:{variant:"granite"}}'),
+    ('post_flattening_state', 'block_state', 1519, '{Name:"minecraft:stone",Properties:{variant:"granite"}}'),
+    ('unknown_legacy_block', 'block_state', 1400, '{Name:"example:decorative_stone"}'),
+    ('block_state', 'block_state', 2586, '{Name:"minecraft:grass_path"}'),
+    ('renamed_state_fields', 'block_state', 5006, '{id:"minecraft:oak_stairs",properties:{facing:"north"}}'),
+    # The direct root write keeps Text1 alongside the new front_text; a chunk write does not.
+    ('block_entity_keeps_root_remainder', 'block_entity', 3400, '''{id:"minecraft:sign",Text1:'"Quest"'}'''),
+    ('entity', 'entity', 1900, '{id:"minecraft:villager",Profession:1,Career:2,CareerLevel:1,Passengers:[{id:"minecraft:villager",Profession:2,Career:1,CareerLevel:1}]}'),
+    ('riding', 'entity_tree', 100, '{id:"Pig",Riding:{id:"Pig"}}'),
+    ('passengers', 'entity_tree', 1900, '{id:"minecraft:villager",Profession:1,Career:2,CareerLevel:1,Passengers:[{id:"minecraft:villager",Profession:2,Career:1,CareerLevel:1}]}'),
+]
 
 
 def world_path(name):
@@ -83,11 +105,13 @@ def build_rust():
 
 def run_vanilla(classpath, world, out, target=None):
     # The oracle replaces OUT itself: left in place, an unchanged run's outputs can be reused.
+    # With a CI seed keep, only the input seeds are kept: always upgrade fresh on both engines.
+    env = {**os.environ, 'PARITY_JAVA_CACHE': '0'} if os.environ.get('SUNRISE_DATAFIX_SEED_KEEP') else None
     log = out.parent / (out.name + '.log')
     with log.open('w') as f:
         result = subprocess.run(['java', '-Xmx3g', '-Djava.awt.headless=true', '-cp', classpath,
                                  'dev.sunriselab.parity.VanillaDataFixOracle', str(world), str(out), *([str(target)] if target else [])],
-                                stdout=f, stderr=subprocess.STDOUT)
+                                env=env, stdout=f, stderr=subprocess.STDOUT)
     if result.returncode:
         # The traceback of a failed check names the command, not why the JVM stopped: show its exit and last output.
         how = f'exit {result.returncode}' + (' (killed by signal %d)' % -result.returncode if result.returncode < 0 else '')
@@ -101,6 +125,19 @@ def run_sunrise(binary, world, out, target=None):
     with log.open('w') as f:
         subprocess.run([str(binary), 'datafix_world', str(world), str(out), *([str(target)] if target else [])], check=True,
                        stdout=f, stderr=subprocess.STDOUT)
+
+
+def check_single_compounds(classpath, binary):
+    with tempfile.TemporaryDirectory(prefix='single-', dir=LOCAL) as work:
+        cases = Path(work) / 'cases.tsv'
+        oracle = Path(work) / 'vanilla.nbt'
+        cases.write_text(''.join(f'{name}\t{kind}\t{version}\t{snbt}\n'
+                                 for name, kind, version, snbt in SINGLE_COMPOUNDS), encoding='utf-8')
+        subprocess.run(['java', '-Xmx3g', '-Djava.awt.headless=true', '-cp', classpath,
+                        'dev.sunriselab.parity.VanillaDataFixOracle', '--single', str(cases), str(oracle)], check=True)
+        if binary is not None:
+            subprocess.run([str(binary), 'datafix_world', '--single', str(cases), str(oracle)], check=True)
+            print('standalone datafix parity ok', flush=True)
 
 
 # ---------------------------------------------------------------- comparison
@@ -212,16 +249,32 @@ def main():
     p.add_argument('--binary', help='a prebuilt sunrise-world probe binary')
     p.add_argument('--band', type=int, metavar='TARGET', help='check the data fixes up to this DataVersion only (not the '
                    'file fixes), on the sample worlds saved before it, for developing the fixes of a range of versions')
+    p.add_argument('--single', action='store_true', help='check standalone compounds only (no world seeds)')
     args = p.parse_args()
+    if args.single:
+        if args.band or args.versions:
+            p.error('--single cannot be combined with --band or a list of versions')
+        classpath = java_classpath()
+        binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
+        check_single_compounds(classpath, binary)
+        return
+    if os.environ.get('SUNRISE_DATAFIX_SEEDS_OUTCOME') == 'failure':
+        sys.exit('seed preparation failed, see datafix-seeds.log')
     import datafix_worlds
     import file_lock
     WORLDS.parent.mkdir(parents=True, exist_ok=True)
     with open(WORLDS.parent / 'generate.lock', 'w') as handle:
         file_lock.lock(handle)  # another process may be generating them
-        missing = [v for v in [*datafix_worlds.VERSIONS, *datafix_worlds.VARIANTS] if not (datafix_worlds.worlds_dir(v) / v / 'level.dat').exists()]
-        if missing:
-            print('generating sample worlds:', ' '.join(missing), flush=True)
-            subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
+        seed_keep = os.environ.get('SUNRISE_DATAFIX_SEED_KEEP')
+        if seed_keep:
+            import datafix_seeds
+            if not datafix_seeds.snapshot_complete(LOCAL):
+                datafix_seeds.prepare(LOCAL, seed_keep)
+        else:
+            missing = [v for v in [*datafix_worlds.VERSIONS, *datafix_worlds.VARIANTS] if not (datafix_worlds.worlds_dir(v) / v / 'level.dat').exists()]
+            if missing:
+                print('generating sample worlds:', ' '.join(missing), flush=True)
+                subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
     worlds = sorted(p.name for d in (WORLDS, LOCAL / 'worlds-pre-1.17') if d.is_dir() for p in d.iterdir() if p.is_dir())
     band = args.band
     if band and not args.versions:  # worlds in the layout of before 1.16, saved before the target
@@ -229,6 +282,8 @@ def main():
     versions = parity_shard.shard(args.versions or worlds)
     classpath = java_classpath()
     binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
+    if not band and not args.versions and parity_shard.shard([True]):
+        check_single_compounds(classpath, binary)
     total = 0
     for version in versions:
         world = world_path(version)

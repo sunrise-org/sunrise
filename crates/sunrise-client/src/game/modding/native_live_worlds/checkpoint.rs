@@ -117,16 +117,13 @@ impl Game<'_> {
         Ok(())
     }
     fn quiesce_live_world_save(&mut self) -> Result<(), Error> {
-        self.requeue_failed_chunk_saves();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match self.streaming.prepare_save(&mut self.world, true, deadline) {
                 sunrise_client::streaming::SaveStep::Full(chunk) => {
-                    self.native_late_full_chunk_snapshot(&chunk);
-                    self.streaming.save_finished(chunk);
+                    self.save_late_full_chunk(chunk);
                 }
                 sunrise_client::streaming::SaveStep::Protos(protos) => {
-                    self.native_proto_snapshots(&protos);
                     self.streaming.finish_save(protos, true);
                     break;
                 }
@@ -234,6 +231,7 @@ impl Game<'_> {
     pub(in crate::game) fn checkpoint_live_world_streaming(
         &mut self,
         plan: sunrise_client::streaming::StreamingUpdate,
+        idle_sweep: bool,
     ) -> Result<
         (
             sunrise_client::streaming::StreamingCommit,
@@ -241,7 +239,9 @@ impl Game<'_> {
         ),
         sunrise_client::streaming::StreamingUpdate,
     > {
-        if !self.live_world_durability.retiring_streams || !self.live_world_commit_frontier() {
+        if !(self.live_world_durability.retiring_streams || idle_sweep)
+            || !self.live_world_commit_frontier()
+        {
             return Err(plan);
         }
         let Some(level) = self.level(self.dim.id()) else {
@@ -301,7 +301,7 @@ impl Game<'_> {
                     .guests
                     .iter()
                     .filter(|g| {
-                        g.placed && g.participates_online() && !self.crash_save.excludes(g.conn)
+                        g.placed && g.participates_in_player_simulation() && !self.crash_save.excludes(g.conn)
                     })
                     .map(|g| {
                         (
@@ -490,7 +490,7 @@ impl Game<'_> {
     ) -> Result<mod_api::LiveWorldTransferReceipt, Error> {
         if !self.live_world_commit_frontier()
             || self.live_world_checkpoint_running()
-            || self.transaction_current().is_some()
+            || self.has_open_transaction()
             || !self.checkpoint_players_settled()
             || !sunrise_client::join_seq::visibility::passes_settled()
         {
@@ -578,7 +578,6 @@ impl Game<'_> {
                         .iter()
                         .filter(|chunk| terrain_columns.contains(&(chunk.x, chunk.z))),
                 );
-                self.native_full_chunk_snapshots(&selected);
                 let mut selected: BTreeMap<_, _> = selected
                     .into_iter()
                     .map(|chunk| ((chunk.x, chunk.z), chunk))

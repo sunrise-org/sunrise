@@ -28,7 +28,6 @@ pub trait RandomSource {
     /// where vanilla throws. The arithmetic wraps rather than panics.
     ///
     /// Computed in the mod: drawn through `next_int_bound`, never asked of the game by itself.
-    #[sunrise_mod_api_macros::computed_in_mod]
     fn next_int_between_inclusive(&mut self, min: i32, max: i32) -> i32 {
         if max < min {
             return min;
@@ -41,7 +40,6 @@ pub trait RandomSource {
     /// without drawing, where vanilla throws. The arithmetic wraps rather than panics.
     ///
     /// Computed in the mod: drawn through `next_int_bound`, never asked of the game by itself.
-    #[sunrise_mod_api_macros::computed_in_mod]
     fn next_int_range(&mut self, origin: i32, bound: i32) -> i32 {
         if origin >= bound {
             return origin;
@@ -51,10 +49,38 @@ pub trait RandomSource {
     }
 }
 
+/// A one-shot request from `with_random`, scoped to the call on the caller's stack.
+/// A level host can run it with the live stream or decline by returning without running it.
+// no wire: the callback is borrowed from the caller's stack.
+// exhaustive: only the scoped adapter can construct a request.
+pub struct RandomDraw<'a>(&'a mut dyn FnMut(&mut dyn RandomSource));
+
+impl RandomDraw<'_> {
+    /// Consume this request, lending `random` directly for the closure's duration. Draws
+    /// advance the live stream as vanilla `Level.getRandom()` does and are not rolled back
+    /// on panic/unwind or transaction abort.
+    pub fn run(self, random: &mut dyn RandomSource) {
+        (self.0)(random);
+    }
+}
+
+pub(crate) fn with_random_draw<T>(
+    draw: impl FnOnce(&mut dyn RandomSource) -> T,
+    lend: impl FnOnce(RandomDraw<'_>),
+) -> Option<T> {
+    let mut draw = Some(draw);
+    let mut result = None;
+    lend(RandomDraw(&mut |random| {
+        result = draw.take().map(|draw| draw(random));
+    }));
+    result
+}
+
 /// Vanilla's `LegacyRandomSource`: the generator Java's `Random` is, seeded by the mod.
 ///
-/// It crosses the API by value as the level's random (`level_random`, `level_set_random`) and is
-/// what a mod uses for its own seeded draws. Two sources with the same seed draw the same values.
+/// Own one of these if you choose the seed. It draws independently of the level's live
+/// stream. Two sources with the same seed draw the same values. Its Wire form carries its
+/// own 48-bit state and cached Gaussian.
 #[derive(Clone, Debug, sunrise_mod_api_macros::Wire)]
 #[wire(via = (u64, Option<f64>))]
 // exhaustive: its one field is private, so mods cannot build or destructure it
@@ -87,25 +113,53 @@ impl From<(u64, Option<f64>)> for LegacyRandomSource {
 
 impl RandomSource for LegacyRandomSource {
     fn next_int(&mut self) -> i32 {
-        EngineRandom::next_int(&mut self.0)
+        BorrowedRandom(&mut self.0).next_int()
     }
     fn next_int_bound(&mut self, bound: i32) -> i32 {
-        EngineRandom::next_int_bound(&mut self.0, bound).unwrap_or(0)
+        BorrowedRandom(&mut self.0).next_int_bound(bound)
     }
     fn next_long(&mut self) -> i64 {
-        EngineRandom::next_long(&mut self.0)
+        BorrowedRandom(&mut self.0).next_long()
     }
     fn next_boolean(&mut self) -> bool {
-        EngineRandom::next_boolean(&mut self.0)
+        BorrowedRandom(&mut self.0).next_boolean()
     }
     fn next_float(&mut self) -> f32 {
-        EngineRandom::next_float(&mut self.0)
+        BorrowedRandom(&mut self.0).next_float()
     }
     fn next_double(&mut self) -> f64 {
-        EngineRandom::next_double(&mut self.0)
+        BorrowedRandom(&mut self.0).next_double()
     }
     fn next_gaussian(&mut self) -> f64 {
-        EngineRandom::next_gaussian(&mut self.0)
+        BorrowedRandom(&mut self.0).next_gaussian()
+    }
+}
+// no wire: borrowed RNG adapter used only when crossing into a native callback.
+// hidden: the renderer lends its provider RNG through the native callback.
+#[doc(hidden)]
+// exhaustive: a game-only adapter around the precise engine RNG loan.
+pub struct BorrowedRandom<'a>(pub &'a mut LegacyRandom);
+impl RandomSource for BorrowedRandom<'_> {
+    fn next_int(&mut self) -> i32 {
+        EngineRandom::next_int(self.0)
+    }
+    fn next_int_bound(&mut self, bound: i32) -> i32 {
+        EngineRandom::next_int_bound(self.0, bound).unwrap_or(0)
+    }
+    fn next_long(&mut self) -> i64 {
+        EngineRandom::next_long(self.0)
+    }
+    fn next_boolean(&mut self) -> bool {
+        EngineRandom::next_boolean(self.0)
+    }
+    fn next_float(&mut self) -> f32 {
+        EngineRandom::next_float(self.0)
+    }
+    fn next_double(&mut self) -> f64 {
+        EngineRandom::next_double(self.0)
+    }
+    fn next_gaussian(&mut self) -> f64 {
+        EngineRandom::next_gaussian(self.0)
     }
 }
 
@@ -113,6 +167,23 @@ impl RandomSource for LegacyRandomSource {
 mod tests {
     use super::*;
     use crate::wire::{Reader, Writer};
+    use crate::{BlockEntityRef, Compound, LevelHost, LevelRandomHost};
+
+    #[test]
+    fn a_host_without_a_stream_declines_without_running_the_draw() {
+        struct Empty;
+        impl LevelHost for Empty {
+            fn block_entity_data(&self, _: BlockEntityRef) -> Option<Compound> {
+                None
+            }
+        }
+        impl LevelRandomHost for Empty {}
+
+        let host: &mut dyn LevelRandomHost = &mut Empty;
+        let mut called = false;
+        assert_eq!(host.with_random(|_| called = true), None);
+        assert!(!called);
+    }
 
     #[test]
     fn a_bound_below_one_answers_zero_and_draws_nothing() {

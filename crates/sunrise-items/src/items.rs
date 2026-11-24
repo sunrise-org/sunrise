@@ -1,11 +1,14 @@
 //! Items from vanilla's default-component reports, block<->item mapping,
 //! tool mining rules and block loot tables (`LootTable`/`LootPool` semantics
 //! for the condition, entry and modifier types used by block drops).
+mod entity_type_tags;
 #[path = "ingredient_defaults.rs"]
-mod ingredient_defaults;
+pub(crate) mod ingredient_defaults;
+pub use entity_type_tags::EntityTypeTags;
 #[path = "loot_query.rs"]
 mod loot_query;
 use crate::{Result, blocks::BlockFacts};
+pub use ingredient_defaults::LoadEntityTags;
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
@@ -13,13 +16,13 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use sunrise_core::random::RandomSource;
+use sunrise_core::{nbt::Tag, random::RandomSource};
 use sunrise_world::loot::number::int_value;
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
 use sunrise_world::{
     item_defaults::ItemDefaults,
-    loot::{MAX_LOOT_LEVEL, PackOverlay},
-    tag_layers::TagLayers,
+    loot::{ItemTagNames, MAX_LOOT_LEVEL, PackOverlay},
+    tag_layers,
 };
 
 #[cfg(test)]
@@ -80,13 +83,32 @@ pub enum ConsumeEffect {
     RemoveEffects(Vec<String>),
     /// `TeleportRandomlyConsumeEffect`.
     TeleportRandomly(sunrise_world::teleport_consume::TeleportConsume),
-    PlaySound(String),
-    /// A mod's own kind, kept as the file wrote it (the loader used to drop
-    /// it silently): the game hands it to `native_consume_effect`.
-    Native {
-        kind: String,
-        data: Arc<sunrise_core::nbt::Tag>,
-    },
+    PlaySound(ConsumeSound),
+    /// A mod's effect and its decode-time dispatch binding.
+    Native(NativeConsumeEffect),
+}
+
+/// `SoundEvent.CODEC`: a registry reference or an inline event with its own range.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConsumeSound {
+    Registered(String),
+    Direct { id: String, range: Option<f32> },
+}
+
+// no wire: the callback binding is local to the installed native mods.
+#[derive(Clone, Debug)]
+pub struct NativeConsumeEffect {
+    pub kind: Arc<str>,
+    pub data: Arc<sunrise_core::nbt::Tag>,
+    pub registered: Option<sunrise_world::component_value::consume_effects::Admitted>,
+    pub binding: Option<mod_vocab::__private::ConsumeEffectBinding>,
+}
+
+impl PartialEq for NativeConsumeEffect {
+    fn eq(&self, other: &Self) -> bool {
+        // Component equality is about the saved data, not the installed callable.
+        self.kind == other.kind && self.data == other.data && self.registered == other.registered
+    }
 }
 
 /// Typed consumable shared by item prototypes and stack component patches.
@@ -97,6 +119,26 @@ pub type ItemConsumable = sunrise_world::consumable::Consumable<String, ConsumeE
 pub fn parse_consumable(
     cons: &Value,
 ) -> std::result::Result<ItemConsumable, sunrise_core::json_nbt::JsonNbtError> {
+    let mut effects = Vec::new();
+    for effect in cons["on_consume_effects"].as_array().into_iter().flatten() {
+        let Some(kind) = effect["type"].as_str() else {
+            continue;
+        };
+        if let Some(builtin) = builtin_consume_effect_path(kind) {
+            if let Ok(tag) = sunrise_core::json_nbt::json_to_tag(effect)
+                && let Some(effect) = builtin_consume_effect(builtin, &tag)
+            {
+                effects.push(effect);
+            }
+        } else {
+            effects.push(ConsumeEffect::Native(NativeConsumeEffect {
+                kind: Arc::from(kind),
+                data: Arc::new(sunrise_core::json_nbt::json_to_tag(effect)?),
+                registered: None,
+                binding: mod_vocab::__private::ConsumeEffectBinding::resolve(kind),
+            }));
+        }
+    }
     Ok(ItemConsumable {
         seconds: cons["consume_seconds"].as_f64().map_or(1.6, |s| s as f32),
         animation: crate::use_animation::consumable_animation(cons),
@@ -106,96 +148,193 @@ pub fn parse_consumable(
             .unwrap_or("minecraft:entity.generic.eat")
             .to_owned(),
         particles: cons["has_consume_particles"].as_bool().unwrap_or(true),
-        effects: cons["on_consume_effects"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|effect| {
-                if let Some(kind) = effect["type"].as_str().filter(|k| {
-                    k.contains(':') && !k.starts_with("minecraft:") && !k.starts_with(':')
-                }) {
-                    return sunrise_core::json_nbt::json_to_tag(effect).map(|data| {
-                        Some(ConsumeEffect::Native {
-                            kind: kind.to_owned(),
-                            data: Arc::new(data),
-                        })
-                    });
-                }
-                Ok(parse_consume_effect(effect))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect(),
+        effects,
     })
 }
 
-/// One `on_consume_effects` entry. A bare type name is minecraft's own, as
-/// a bare item id is: `apply_effects` and `:apply_effects` are
-/// `minecraft:apply_effects`. A
-/// namespaced kind outside `minecraft:` is the mod's own, kept whole for
-/// the hook. An unknown `minecraft:` kind and a missing type are dropped.
-pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect> {
-    let kind = effect.get("type")?.as_str()?;
-    // `Identifier.bySeparator`: no namespace, or an empty one (`:clear_all_effects`), is minecraft's.
-    let kind = match kind.split_once(':') {
-        Some(("", path)) => format!("minecraft:{path}"),
-        Some(_) => kind.to_owned(),
-        None => format!("minecraft:{kind}"),
-    };
-    match kind.as_str() {
-        "minecraft:apply_effects" => {
-            let probability = effect
-                .get("probability")
-                .and_then(|p| p.as_f64())
-                .map_or(1.0, |p| p as f32);
-            let mut specs = Vec::new();
-            if let Some(list) = effect.get("effects").and_then(|l| l.as_array()) {
-                specs.extend(list.iter().filter_map(consume_effect_spec));
-            }
-            Some(ConsumeEffect::ApplyEffects {
-                effects: specs,
-                probability,
-            })
-        }
-        "minecraft:clear_all_effects" => Some(ConsumeEffect::ClearAllEffects),
-        "minecraft:remove_effects" => {
-            let mut targets = Vec::new();
-            if let Some(eff) = effect.get("effects") {
-                if let Some(s) = eff.as_str() {
-                    targets.push(s.to_string());
-                } else if let Some(arr) = eff.as_array() {
-                    for item in arr {
-                        if let Some(s) = item.as_str() {
-                            targets.push(s.to_string());
-                        }
-                    }
-                }
-            }
-            Some(ConsumeEffect::RemoveEffects(targets))
-        }
-        "minecraft:teleport_randomly" => Some(ConsumeEffect::TeleportRandomly(
+fn builtin_consume_effect_path(kind: &str) -> Option<&str> {
+    // `Identifier.bySeparator`: a bare or empty namespace is minecraft's.
+    match kind.split_once(':') {
+        Some(("minecraft" | "", path)) => Some(path),
+        None => Some(kind),
+        Some(_) => None,
+    }
+}
+
+/// Decode a built-in `ConsumeEffect.CODEC` entry from its tagged fields.
+fn builtin_consume_effect(builtin: &str, effect: &Tag) -> Option<ConsumeEffect> {
+    use crate::{item_data::component_bool, properties::component_float};
+
+    match builtin {
+        "apply_effects" => Some(ConsumeEffect::ApplyEffects {
+            effects: match effect.get("effects") {
+                Some(Tag::List(list)) => list.iter().filter_map(consume_effect_spec).collect(),
+                _ => Vec::new(),
+            },
+            // `ApplyStatusEffectsConsumeEffect.CODEC`: floatRange(0, 1).
+            probability: match effect.get("probability") {
+                Some(value) => component_float(value).filter(|p| (0.0..=1.0).contains(p))?,
+                None => 1.0,
+            },
+        }),
+        "clear_all_effects" => Some(ConsumeEffect::ClearAllEffects),
+        "remove_effects" => Some(ConsumeEffect::RemoveEffects(match effect.get("effects") {
+            Some(Tag::String(id)) => vec![id.to_string_lossy()],
+            Some(Tag::List(ids)) => ids
+                .iter()
+                .filter_map(|id| match id {
+                    Tag::String(id) => Some(id.to_string_lossy()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        })),
+        "teleport_randomly" => Some(ConsumeEffect::TeleportRandomly(
             sunrise_world::teleport_consume::TeleportConsume {
-                diameter: effect
-                    .get("diameter")
-                    .and_then(serde_json::Value::as_f64)
-                    .map_or(16.0, |d| d as f32),
+                // `TeleportRandomlyConsumeEffect.CODEC`: ExtraCodecs.POSITIVE_FLOAT.
+                diameter: match effect.get("diameter") {
+                    Some(value) => component_float(value).filter(|d| *d > 0.0 && d.is_finite())?,
+                    None => 16.0,
+                },
                 directional_particles: effect
                     .get("directional_particles")
-                    .and_then(serde_json::Value::as_bool)
+                    .and_then(component_bool)
                     .unwrap_or(true),
             },
         )),
-        "minecraft:play_sound" => effect
-            .get("sound")
-            .and_then(|s| s.as_str())
-            .map(|s| ConsumeEffect::PlaySound(s.to_string())),
-        k if !k.starts_with("minecraft:") => Some(ConsumeEffect::Native {
-            kind: k.to_owned(),
-            data: Arc::new(sunrise_core::json_nbt::json_to_tag(effect).ok()?),
-        }),
+        "play_sound" => {
+            use sunrise_core::identifier::Identifier;
+            let sound = effect.get("sound")?;
+            let holder = match sound {
+                Tag::String(id) => ConsumeSound::Registered(
+                    Identifier::parse(&id.to_string_lossy()).ok()?.to_string(),
+                ),
+                Tag::Compound(_) => {
+                    let Tag::String(id) = sound.get("sound_id")? else {
+                        return None;
+                    };
+                    ConsumeSound::Direct {
+                        id: Identifier::parse(&id.to_string_lossy()).ok()?.to_string(),
+                        // SoundEvent.DIRECT_CODEC uses lenientOptionalFieldOf("range").
+                        range: sound.get("range").and_then(component_float),
+                    }
+                }
+                _ => return None,
+            };
+            Some(ConsumeEffect::PlaySound(holder))
+        }
         _ => None,
     }
+}
+
+/// Admit custom effects from saved NBT, or install effects already decoded by
+/// the connection's Wire codecs. Decode built-ins directly from their tagged fields.
+pub(crate) fn stack_effects(
+    raw: &mut sunrise_core::nbt::Tag,
+    key: &str,
+    received: Option<&[sunrise_world::component_value::consume_effects::Admitted]>,
+    mut refused: Option<&mut bool>,
+) -> std::result::Result<Vec<ConsumeEffect>, String> {
+    use sunrise_world::component_value::consume_effects::admit;
+
+    let Tag::Compound(_) = raw else {
+        return Err("expected effect component map".into());
+    };
+    let list = match raw.get_mut(key) {
+        None => return Ok(Vec::new()),
+        Some(Tag::List(list)) => list,
+        Some(Tag::ByteArray(a)) if a.is_empty() => return Ok(Vec::new()),
+        Some(Tag::IntArray(a)) if a.is_empty() => return Ok(Vec::new()),
+        Some(Tag::LongArray(a)) if a.is_empty() => return Ok(Vec::new()),
+        _ => return Err("expected consume effect list".into()),
+    };
+    let mut effects = Vec::with_capacity(list.len());
+    for entry in list {
+        let Some(Tag::String(kind)) = entry.get("type") else {
+            continue;
+        };
+        let kind = kind.to_string_lossy();
+        if let Some(builtin) = builtin_consume_effect_path(&kind) {
+            effects.extend(builtin_consume_effect(builtin, entry));
+        } else {
+            let Tag::Compound(fields) = entry else {
+                return Err("expected consume effect map".into());
+            };
+            let registered = match received {
+                Some(received) => received
+                    .iter()
+                    .find(|effect| effect.saved.as_ref() == entry)
+                    .cloned(),
+                None => match admit(&kind, fields) {
+                    Ok(effect) => effect,
+                    Err(error) => {
+                        // The registered codec already reported the error. Preserve this
+                        // saved entry, but don't let it run or discard its siblings.
+                        let Some(refused) = refused.as_deref_mut() else {
+                            return Err(error);
+                        };
+                        *refused = true;
+                        continue;
+                    }
+                },
+            };
+            let data = if let Some(effect) = &registered {
+                *entry = (*effect.saved).clone();
+                effect.saved.clone()
+            } else {
+                // An unregistered kind keeps its saved NBT as written: bytes, floats and
+                // any UTF-16 string reach the hook unchanged, as a mod's own codec reads
+                // them. Only a non-finite number or a nested end tag (which the NBT
+                // writer refuses, so the stack could not be saved) is refused, like a
+                // codec error: the entry is kept in the saved tag but does not run, and
+                // its siblings do.
+                if !admissible_payload(entry) {
+                    let Some(refused) = refused.as_deref_mut() else {
+                        return Err(
+                            "non-finite number or nested end tag in consume effect payload".into(),
+                        );
+                    };
+                    *refused = true;
+                    continue;
+                }
+                Arc::new(entry.clone())
+            };
+            let binding = mod_vocab::__private::ConsumeEffectBinding::resolve(&kind);
+            effects.push(ConsumeEffect::Native(NativeConsumeEffect {
+                kind: Arc::from(kind),
+                data,
+                registered,
+                binding,
+            }));
+        }
+    }
+    Ok(effects)
+}
+
+/// Whether every float and double in `tag` is finite and no end tag is nested in
+/// it (the payload refusals left for an unregistered consume-effect kind; the NBT
+/// writer refuses a nested end tag).
+fn admissible_payload(tag: &sunrise_core::nbt::Tag) -> bool {
+    let mut work = vec![tag];
+    while let Some(tag) = work.pop() {
+        match tag {
+            Tag::End => return false,
+            Tag::Float(bits) => {
+                if !f32::from_bits(*bits).is_finite() {
+                    return false;
+                }
+            }
+            Tag::Double(bits) => {
+                if !f64::from_bits(*bits).is_finite() {
+                    return false;
+                }
+            }
+            Tag::List(values) => work.extend(values),
+            Tag::Compound(fields) => work.extend(fields.iter().map(|(_, value)| value)),
+            _ => {}
+        }
+    }
+    true
 }
 
 #[derive(Clone, Debug)]
@@ -218,13 +357,11 @@ pub struct ItemInfo {
     pub food: Option<(u32, f32)>,
     pub can_always_eat: bool,
     /// `consumable`: its timing, sound, particles and `on_consume_effects`.
-    pub consumable: Option<sunrise_world::consumable::Consumable<String, ConsumeEffect>>,
+    pub consumable: Option<Arc<ItemConsumable>>,
     /// Death protection effects decoded at definition load.
     pub death_protection: Option<Vec<ConsumeEffect>>,
     /// Kinetic pose timing decoded once from the shared item prototype.
     pub kinetic_timing: Option<crate::kinetic_weapon::UseTiming>,
-    /// `use_remainder`: what a finished use leaves (`UseRemainder`).
-    pub use_remainder: Option<String>,
     /// `use_cooldown`: the cooldown a use starts (`UseCooldown`).
     pub use_cooldown: Option<crate::cooldowns::UseCooldown>,
     pub model: String,
@@ -273,8 +410,6 @@ pub struct ItemInfo {
     /// `equippable.damage_on_hurt`: the item wears when its wearer is hurt
     /// (false for the elytra).
     pub equip_damage_on_hurt: bool,
-    /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
-    pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
     /// `jukebox_playable`: the jukebox song it plays.
     pub jukebox_song: Option<String>,
@@ -286,7 +421,8 @@ pub struct ItemInfo {
     pub cushion_color: Option<String>,
     /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
     pub block_transformer: Option<String>,
-    /// Has a default `bundle_contents` (the bundles, `BundleItem`).
+    /// Registered as a `BundleItem` (`Items.BUNDLE`, `Items.DYED_BUNDLE`, or a
+    /// content mod item templated on one).
     pub bundle: bool,
     /// The ids of the item's default components (its prototype's keys).
     pub components: Vec<String>,
@@ -297,6 +433,27 @@ pub struct ItemInfo {
     /// None for vanilla's items.
     pub template: Option<Arc<str>>,
 }
+/// Vanilla 26.3 `BundleItem` item ids (`Items.BUNDLE` and all 16 `Items.DYED_BUNDLE`).
+pub const VANILLA_BUNDLE_ITEMS: [&str; 17] = [
+    "minecraft:bundle",
+    "minecraft:black_bundle",
+    "minecraft:blue_bundle",
+    "minecraft:brown_bundle",
+    "minecraft:cyan_bundle",
+    "minecraft:gray_bundle",
+    "minecraft:green_bundle",
+    "minecraft:light_blue_bundle",
+    "minecraft:light_gray_bundle",
+    "minecraft:lime_bundle",
+    "minecraft:magenta_bundle",
+    "minecraft:orange_bundle",
+    "minecraft:pink_bundle",
+    "minecraft:purple_bundle",
+    "minecraft:red_bundle",
+    "minecraft:white_bundle",
+    "minecraft:yellow_bundle",
+];
+
 impl ItemInfo {
     /// Whether this item is the vanilla item `vanilla`, or a content mod's item
     /// copied from it: what vanilla's `instanceof` on the item's class asks
@@ -305,6 +462,39 @@ impl ItemInfo {
     pub fn is(&self, vanilla: &str) -> bool {
         &*self.id == vanilla || self.template.as_deref() == Some(vanilla)
     }
+
+    /// Whether this item has vanilla's `BundleItem` class: `minecraft:bundle`, any of the 16 dyed
+    /// bundles, or a content mod's item copied from one via `template` (`ItemInfo::is`).
+    ///
+    /// Unlike [`ItemInfo::bundle`], which checks only for a default `minecraft:bundle_contents`
+    /// component, this matches vanilla 26.3's item-class dispatch for
+    /// `BundleItem.overrideStackedOnOther` / `BundleItem.overrideOtherStackedOnMe`.
+    pub fn is_bundle_item(&self) -> bool {
+        VANILLA_BUNDLE_ITEMS.iter().any(|&v| self.is(v))
+    }
+}
+/// Vanilla items registered as `BundleItem` (`Items.BUNDLE` and `Items.DYED_BUNDLE`).
+fn is_vanilla_bundle(id: &str) -> bool {
+    matches!(
+        id,
+        "minecraft:bundle"
+            | "minecraft:white_bundle"
+            | "minecraft:orange_bundle"
+            | "minecraft:magenta_bundle"
+            | "minecraft:light_blue_bundle"
+            | "minecraft:yellow_bundle"
+            | "minecraft:lime_bundle"
+            | "minecraft:pink_bundle"
+            | "minecraft:gray_bundle"
+            | "minecraft:light_gray_bundle"
+            | "minecraft:cyan_bundle"
+            | "minecraft:purple_bundle"
+            | "minecraft:blue_bundle"
+            | "minecraft:brown_bundle"
+            | "minecraft:green_bundle"
+            | "minecraft:red_bundle"
+            | "minecraft:black_bundle"
+    )
 }
 /// `Item.Properties.craftRemainder` (not a data component, so not in the
 /// default-component report): what an item leaves in the grid when crafted with.
@@ -453,7 +643,7 @@ fn registry_order(root: &Path, order: &[Arc<str>]) -> Vec<Arc<str>> {
         .collect()
 }
 /// Item ids standing for a loot table's `minecraft:dynamic` entries.
-const DYNAMIC: &str = "#dynamic:";
+pub(crate) const DYNAMIC: &str = "#dynamic:";
 /// The item id standing for a chosen `minecraft:loot_table` entry, whose
 /// table then rolls in full (`NestedLootTable`).
 const NESTED: &str = "#loot_table";
@@ -577,6 +767,75 @@ pub fn block_tag_state_names(facts: &BlockFacts) -> Arc<[Arc<str>]> {
         .collect()
 }
 
+type StewEffects = Arc<[(Arc<str>, i32)]>;
+
+#[derive(Default, serde::Deserialize)]
+struct BlockBindings {
+    #[serde(default)]
+    items: HashMap<String, BlockItemBinding>,
+    #[serde(default)]
+    blocks: Vec<BlockBinding>,
+}
+
+#[derive(serde::Deserialize)]
+struct BlockItemBinding {
+    #[serde(default)]
+    class: Vec<String>,
+    #[serde(default)]
+    fields: BlockItemFields,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct BlockItemFields {
+    block: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct BlockBinding {
+    name: String,
+    suspicious_stew_effects: Option<Vec<sunrise_mod_package::content::StewEffect>>,
+}
+
+impl BlockBindings {
+    fn load(root: &Path) -> Result<Self> {
+        match fs::read(root.join("block-behaviours.json")) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn item_blocks(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.items.iter().filter_map(|(item, binding)| {
+            let block = binding.fields.block.as_deref()?;
+            binding
+                .class
+                .iter()
+                .any(|name| name == "BlockItem")
+                .then_some((item.as_str(), block))
+        })
+    }
+
+    fn stew_effects_by_item(&self) -> HashMap<String, StewEffects> {
+        let mut holders: HashMap<&str, StewEffects> = crate::flowers::FLOWER_STEW_EFFECTS
+            .iter()
+            .map(|&(block, id, ticks)| (block, Arc::from([(Arc::from(id), ticks)])))
+            .collect();
+        holders.extend(self.blocks.iter().filter_map(|block| {
+            let effects = block
+                .suspicious_stew_effects
+                .as_ref()?
+                .iter()
+                .map(|effect| (Arc::from(effect.id.as_str()), effect.duration))
+                .collect();
+            Some((block.name.as_str(), effects))
+        }));
+        self.item_blocks()
+            .filter_map(|(item, block)| Some((item.to_owned(), holders.get(block)?.clone())))
+            .collect()
+    }
+}
+
 /// An empty catalog is useful for synthetic worlds without registered items;
 /// normal worlds load their catalog from the resource snapshot.
 #[derive(Clone, Default)]
@@ -584,6 +843,8 @@ pub struct Items {
     pub items: HashMap<Arc<str>, ItemInfo>,
     /// Shared Block.getItem snapshot, including blocks sharing another block's item.
     pub block_items: Arc<HashMap<String, String>>,
+    // The item -> its BlockItem block -> effect holder lookup, resolved once at load.
+    suspicious_stew_effects: Arc<HashMap<String, StewEffects>>,
     /// Registry snapshot used to validate ingredient component payloads.
     pub component_registry: Arc<sunrise_client_core::registries::Registries>,
     /// Loaded component prototypes for concrete ingredient predicates.
@@ -608,13 +869,16 @@ pub struct Items {
     /// Item tags in vanilla's order (`TagLoader`: file order, nested tags in
     /// place, first occurrence kept), the order `TagSlotDisplay` resolves.
     pub item_tag_order: HashMap<String, Vec<String>>,
+    pub(crate) item_tag_names: Option<ItemTagNames>,
+    tags_loaded: [bool; 3],
     /// Block tags in the same order.
     pub block_tag_order: HashMap<String, Vec<String>>,
     /// Fluid tags in the same order.
     pub fluid_tag_order: HashMap<String, Vec<String>>,
+    pub entity_type_tags: Arc<EntityTypeTags>,
     loot: Arc<sunrise_world::loot::LootTables>,
-    loot_types: sunrise_world::loot::types::Types,
-    loot_modifiers: HashMap<String, Value>,
+    loot_bindings: sunrise_world::loot::types::Bindings,
+    loot_modifiers: Arc<HashMap<String, Value>>,
     global_modifiers: Arc<sunrise_world::loot::global_modifiers::GlobalLootModifiers>,
     /// `Registries.PREDICATE`: what a table's string condition names, which a
     /// pack replaces or adds to (`LootItemCondition.CODEC`).
@@ -639,23 +903,26 @@ impl Items {
     ) -> Self {
         let mut items = self.clone();
         if let Some(tags) = block_tags {
-            items.block_tag_order = tags.clone();
-            items.block_tags = tags
-                .into_iter()
-                .map(|(name, members)| (name, members.into_iter().collect()))
-                .collect();
-            let names = items.block_state_names();
-            items.rebuild_block_tag_flags(names);
+            items.set_tags(TagRegistry::Block, tags);
         }
         if let Some(tags) = item_tags {
-            items.item_tags = tags
-                .iter()
-                .map(|(name, members)| (name.clone(), members.iter().cloned().collect()))
-                .collect();
-            items.item_tag_order = tags;
+            items.set_tags(TagRegistry::Item, tags);
         }
         items
     }
+
+    /// Replace the generation seen by both entity queries and enchantment effects.
+    pub fn set_entity_type_tags(&mut self, tags: EntityTypeTags) {
+        let ids = Arc::make_mut(&mut self.component_registry)
+            .by_registry
+            .entry(EntityTypeTags::REGISTRY.into())
+            .or_default();
+        ids.tags = tags.ordered().keys().cloned().collect();
+        ids.tags.sort();
+        Arc::make_mut(&mut self.enchantments).entity_tags = tags.members().clone();
+        self.entity_type_tags = Arc::new(tags);
+    }
+
     /// The states' names [`Self::block_tag_flags`] was built against.
     pub fn block_state_names(&self) -> Arc<[Arc<str>]> {
         Arc::clone(&self.block_tag_flags.names)
@@ -812,16 +1079,25 @@ pub fn load_tags(
     kind: &str,
     overlay: &PackOverlay,
 ) -> Result<HashMap<String, HashSet<String>>> {
-    Ok(load_tag_lists(root, kind, overlay)?
-        .into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect())
+    let registries = tag_layers::builtin_ids(root)?;
+    let ids = registries.get(kind);
+    Ok(tag_layers::load(root, kind, overlay, |id| {
+        ids.is_none_or(|ids| ids.contains(id))
+    })?
+    .into_iter()
+    .map(|(k, v)| (k, v.into_iter().collect()))
+    .collect())
 }
-/// The fluid tags of `root` and `overlay` (`data/<ns>/tags/fluid`): each tag
-/// id to the fluids it names, in the sources' order. What a recipe load puts
-/// into its context, for the fluid ingredients' `#tags`.
+/// The ordered fluid tags used by recipe ingredients.
 pub fn fluid_tag_list(root: &Path, overlay: &PackOverlay) -> Result<HashMap<String, Vec<String>>> {
-    load_tag_lists(root, "fluid", overlay)
+    let registries = tag_layers::builtin_ids(root)?;
+    let ids = registries.get("fluid");
+    Ok(tag_layers::load(root, "fluid", overlay, |id| {
+        ids.map_or_else(
+            || sunrise_world::fluid::FluidKind::from_name(id).is_some(),
+            |ids| ids.contains(id),
+        )
+    })?)
 }
 /// The registries whose tags a mod can list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -829,58 +1105,6 @@ pub enum TagRegistry {
     Block,
     Item,
     Fluid,
-}
-/// Every tag's contents in `TagLoader.tryBuildTag` order (a `LinkedHashSet`).
-/// `overlay` adds a world's data packs over the game's own tag files.
-pub(crate) fn load_tag_lists(
-    root: &Path,
-    kind: &str,
-    overlay: &PackOverlay,
-) -> Result<HashMap<String, Vec<String>>> {
-    let mut raw: HashMap<String, TagLayers> = HashMap::new();
-    /// Through `json_folder`: from the prepared data file, and read once for
-    /// the tables a load builds from the same tags.
-    fn walk(dir: &Path, namespace: &str, raw: &mut HashMap<String, TagLayers>) -> Result<()> {
-        for file in &sunrise_world::json_folder::read(dir)?.files {
-            let v: Value = serde_json::from_slice(file.bytes()?)?;
-            raw.insert(
-                format!("{namespace}:{}", file.name),
-                TagLayers::from_file(&v),
-            );
-        }
-        Ok(())
-    }
-    // Vanilla's tags; with content mods also the convention (`c`) tags and the mods' own.
-    for namespace in crate::content_namespaces::tag_namespaces(root) {
-        let dir = root.join(format!("data/{namespace}/tags/{kind}"));
-        if dir.exists() {
-            walk(&dir, &namespace, &mut raw)?;
-        }
-    }
-    // The packs' entries join the game's own, in pack order; a `replace`
-    // file drops what the lower sources put in and `remove` takes entries
-    // out (`TagLoader.load` walks the resource stack the same way).
-    // `tag_kind` reads the packs' keys
-    // (`tags/<ns>:<registry>/<path>`) and yields the `ns:path` ids the raw
-    // map is keyed by.
-    for (id, files) in overlay.tag_kind(kind) {
-        for bytes in files {
-            let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                continue;
-            };
-            raw.entry(id.to_owned()).or_default().push(&v);
-        }
-    }
-    fn resolve(name: &str, raw: &HashMap<String, TagLayers>, depth: u32) -> Vec<String> {
-        match raw.get(name) {
-            Some(layers) if depth <= 32 => layers.build(|tag| resolve(tag, raw, depth + 1)),
-            _ => Vec::new(),
-        }
-    }
-    Ok(raw
-        .keys()
-        .map(|k| (k.clone(), resolve(k, &raw, 0)))
-        .collect())
 }
 /// An entity type id or `#tag` as the set of entity type ids it names.
 fn entity_spec(tags: &HashMap<String, HashSet<String>>, spec: &str) -> HashSet<String> {
@@ -949,20 +1173,30 @@ impl Items {
         overlay: &PackOverlay,
         defaults: &ItemDefaults,
     ) -> Result<Self> {
-        let mut items = Self::load_registry(root, registry, facts, overlay, defaults)?;
+        let mut items = Self::load_registry(
+            root,
+            registry,
+            facts,
+            overlay,
+            defaults,
+            LoadEntityTags::Prepared,
+        )?;
+        items.load_songs(root, overlay);
         items.load_resource_registries(root, overlay, defaults)?;
         items.load_table_loot(root, overlay, defaults)?;
         Ok(items)
     }
 
     /// Load the item registry and tags before admitting dependent registries.
-    /// The owning load must then install instruments, enchantments and loot.
+    /// The owning load must then install songs, instruments, enchantments and loot.
+    /// When the game already owns mob types, use their frozen registry order.
     pub fn load_registry(
         root: &Path,
         registry: &BlockRegistry,
         facts: &BlockFacts,
         overlay: &PackOverlay,
         defaults: &ItemDefaults,
+        entity_tags: LoadEntityTags<'_>,
     ) -> Result<Self> {
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
@@ -975,39 +1209,21 @@ impl Items {
         }
         // Block.getItem is not an inverse of BlockItem.getBlock: several items
         // may place the same block. Read their normal compiled bindings too.
-        #[derive(Default, serde::Deserialize)]
-        struct Bindings {
-            #[serde(default)]
-            items: HashMap<String, Binding>,
-        }
-        #[derive(serde::Deserialize)]
-        struct Binding {
-            #[serde(default)]
-            class: Vec<String>,
-            #[serde(default)]
-            fields: Fields,
-        }
-        #[derive(Default, serde::Deserialize)]
-        struct Fields {
-            block: Option<String>,
-        }
-        let bindings = match fs::read(root.join("block-behaviours.json")) {
-            Ok(bytes) => serde_json::from_slice::<Bindings>(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Bindings::default(),
-            Err(error) => return Err(error.into()),
-        };
-        for (item, binding) in &bindings.items {
-            if binding.class.iter().any(|name| name == "BlockItem")
-                && let Some(state) = binding
-                    .fields
-                    .block
-                    .as_deref()
-                    .and_then(|block| registry.default_state(block))
-            {
+        let bindings = BlockBindings::load(root)?;
+        for (item, block) in bindings.item_blocks() {
+            if let Some(state) = registry.default_state(block) {
                 block_for_item.entry(item).or_insert(state);
             }
         }
-        let mut items = Self::load_with(root, &block_for_item, overlay, defaults)?;
+        let mut items = Self::load_with(
+            root,
+            &block_for_item,
+            &bindings,
+            overlay,
+            defaults,
+            entity_tags,
+            |id| registry.default_state(id).is_some(),
+        )?;
         items.block_items = Arc::new(
             facts
                 .states
@@ -1038,17 +1254,24 @@ impl Items {
         items.rebuild_block_tag_flags(block_tag_state_names(facts));
         Ok(items)
     }
+    /// `SuspiciousEffectHolder.tryGet`: the effects supplied by the block this item places.
+    pub fn suspicious_stew_effects(&self, item: &str) -> Option<&[(Arc<str>, i32)]> {
+        self.suspicious_stew_effects.get(item).map(AsRef::as_ref)
+    }
+
     /// Every item's defaults, tags and block-to-item identities, without
     /// placement state ids (for headless tools that never place blocks).
     pub fn catalog(root: &Path, overlay: &PackOverlay, defaults: &ItemDefaults) -> Result<Self> {
         let mut items = Self::catalog_items(root, overlay, defaults, |items| {
             items.load_resource_registries(root, overlay, defaults)
         })?;
+        items.load_table_loot(root, overlay, defaults)?;
         ingredient_defaults::load_component_damage_registry(root, overlay, &mut items)?;
         Ok(items)
     }
-    /// Build a standalone catalog against the owning world's already loaded
-    /// damage registry. Reloading recipes must not decode new damage definitions.
+    /// Build the item catalog for recipe sync against the world's loaded damage
+    /// registry. The world loads loot separately; loading it here would reopen
+    /// damage definitions instead of respecting the frozen registry on reload.
     pub fn catalog_with_damage_registry(
         root: &Path,
         overlay: &PackOverlay,
@@ -1057,6 +1280,7 @@ impl Items {
         load_registries: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<Self> {
         let mut items = Self::catalog_items(root, overlay, defaults, load_registries)?;
+        items.component_defaults = ingredient_defaults::component_defaults(defaults)?;
         Arc::make_mut(&mut items.component_registry)
             .by_registry
             .insert("minecraft:damage_type".into(), damage);
@@ -1068,20 +1292,35 @@ impl Items {
         defaults: &ItemDefaults,
         load_registries: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<Self> {
-        let mut items = Self::load_with(root, &HashMap::new(), overlay, defaults)?;
+        let block_items = ingredient_defaults::block_items(root)?;
+        let bindings = BlockBindings::load(root)?;
+        let mut items = Self::load_with(
+            root,
+            &HashMap::new(),
+            &bindings,
+            overlay,
+            defaults,
+            LoadEntityTags::Prepared,
+            |id| block_items.contains_key(id),
+        )?;
+        items.load_songs(root, overlay);
         load_registries(&mut items)?;
-        items.block_items = Arc::new(ingredient_defaults::block_items(root)?);
-        items.load_table_loot(root, overlay, defaults)?;
+        items.block_items = Arc::new(block_items);
         Ok(items)
     }
 
     fn load_with(
         root: &Path,
         block_for_item: &HashMap<&str, BlockStateId>,
+        bindings: &BlockBindings,
         overlay: &PackOverlay,
         defaults: &ItemDefaults,
+        entity_tags: LoadEntityTags<'_>,
+        contains_block: impl Fn(&str) -> bool,
     ) -> Result<Self> {
-        let entity_tags = load_tags(root, "entity_type", overlay)?;
+        let (component_registry, entity_type_tags) =
+            ingredient_defaults::component_tables(root, overlay, entity_tags)?;
+        let entity_tags = entity_type_tags.members();
         let by_item = |name: &str| -> Result<HashMap<String, String>> {
             let path = root.join(name);
             match fs::read(&path) {
@@ -1155,6 +1394,18 @@ impl Items {
                 extra,
             };
             let villager_food = component_prototype.villager_food(None);
+            let consumable = component_prototype.consumable(None).cloned();
+            let death_protection = component_prototype
+                .death_protection(None)
+                .map(<[_]>::to_vec);
+            if (c.get("minecraft:consumable").is_some() && consumable.is_none())
+                || (c.get("minecraft:death_protection").is_some() && death_protection.is_none())
+            {
+                return Err(format!("{name}: invalid consume effect component").into());
+            }
+            let template: Option<Arc<str>> = mod_templates.get(name).map(|t| Arc::from(t.as_str()));
+            let bundle =
+                is_vanilla_bundle(name) || template.as_deref().is_some_and(is_vanilla_bundle);
             items.insert(
                 id.clone(),
                 ItemInfo {
@@ -1180,20 +1431,8 @@ impl Items {
                     kinetic_timing: c
                         .get("minecraft:kinetic_weapon")
                         .and_then(crate::kinetic_weapon::UseTiming::from_json),
-                    // Consumable.CODEC's defaults.
-                    death_protection: c
-                        .get("minecraft:death_protection")
-                        .map(parse_death_effects)
-                        .transpose()
-                        .map_err(|e| format!("{name}: {e}"))?,
-                    consumable: c
-                        .get("minecraft:consumable")
-                        .map(parse_consumable)
-                        .transpose()
-                        .map_err(|e| format!("{name}: {e}"))?,
-                    use_remainder: c["minecraft:use_remainder"]["id"]
-                        .as_str()
-                        .map(str::to_owned),
+                    death_protection,
+                    consumable,
                     use_cooldown: c
                         .get("minecraft:use_cooldown")
                         .and_then(crate::cooldowns::UseCooldown::from_json),
@@ -1211,16 +1450,6 @@ impl Items {
                     equip_damage_on_hurt: c["minecraft:equippable"]["damage_on_hurt"]
                         .as_bool()
                         .unwrap_or(true),
-                    equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {
-                        Value::String(spec) => Some(entity_spec(&entity_tags, spec)),
-                        Value::Array(list) => Some(
-                            list.iter()
-                                .filter_map(Value::as_str)
-                                .flat_map(|spec| entity_spec(&entity_tags, spec))
-                                .collect(),
-                        ),
-                        _ => None,
-                    },
                     equip_sound: c["minecraft:equippable"]["equip_sound"]
                         .as_str()
                         .map(str::to_owned),
@@ -1228,7 +1457,7 @@ impl Items {
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
                     cushion_color: c["minecraft:cushion/color"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
-                    bundle: c.get("minecraft:bundle_contents").is_some(),
+                    bundle,
                     components: c
                         .as_object()
                         .map(|c| c.keys().cloned().collect())
@@ -1250,7 +1479,7 @@ impl Items {
                         .find(|(item, _)| *item == name)
                         .map(|(_, rest)| (*rest).to_owned())
                         .or_else(|| mod_remainders.get(name).cloned()),
-                    template: mod_templates.get(name).map(|t| Arc::from(t.as_str())),
+                    template,
                     villager_food,
                     use_speed: c["minecraft:use_effects"]["speed_multiplier"]
                         .as_f64()
@@ -1310,29 +1539,51 @@ impl Items {
                     attack_speed: modifier("minecraft:attack_speed"),
                 },
             );
-            if let Some(parsed) = worn_mob_visibility(c, &entity_tags) {
+            if let Some(parsed) = worn_mob_visibility(c, entity_tags) {
                 mob_visibility.insert(id.clone(), parsed);
             }
             order.push(id);
         }
         let registry_order = registry_order(root, &order);
-        Ok(Self {
+        let mut table = Self {
             items,
             block_items: Default::default(),
-            component_registry: ingredient_defaults::component_registry(root, &entity_tags)?,
+            suspicious_stew_effects: Arc::new(bindings.stew_effects_by_item()),
+            component_registry,
+            entity_type_tags,
             mob_visibility,
             order,
             registry_order,
-            block_tags: load_tags(root, "block", overlay)?,
-            block_tag_flags: Default::default(),
-            item_tags: load_tags(root, "item", overlay)?,
-            fluid_tags: load_tags(root, "fluid", overlay)?,
-            item_tag_order: load_tag_lists(root, "item", overlay)?,
-            block_tag_order: load_tag_lists(root, "block", overlay)?,
-            fluid_tag_order: load_tag_lists(root, "fluid", overlay)?,
-            songs: load_songs(root, overlay),
             ..Self::default()
-        })
+        };
+        table.bind_tags(root, overlay, defaults, contains_block)?;
+        Ok(table)
+    }
+
+    fn bind_tags(
+        &mut self,
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &ItemDefaults,
+        contains_block: impl Fn(&str) -> bool,
+    ) -> Result<()> {
+        self.set_tags(
+            TagRegistry::Block,
+            tag_layers::load(root, "block", overlay, contains_block)?,
+        );
+        self.set_tags(
+            TagRegistry::Item,
+            tag_layers::load(root, "item", overlay, |id| {
+                defaults.entries().contains_key(id)
+            })?,
+        );
+        self.set_tags(TagRegistry::Fluid, fluid_tag_list(root, overlay)?);
+        Ok(())
+    }
+
+    /// Install jukebox definitions with the owning load's condition context.
+    pub fn load_songs(&mut self, root: &Path, overlay: &PackOverlay<'_>) {
+        self.songs = load_songs(root, overlay);
     }
 
     /// Load from resource files when there is no staged world registry snapshot.
@@ -1343,7 +1594,7 @@ impl Items {
         defaults: &ItemDefaults,
     ) -> Result<()> {
         self.install_registries(
-            crate::enchant::Enchantments::load_with(root, overlay, defaults)?,
+            crate::enchant::Enchantments::load_definitions(root, overlay, defaults)?,
             load_instruments(root, overlay),
         );
         Ok(())
@@ -1352,9 +1603,10 @@ impl Items {
     /// Install the dependent registries and the component decoder's matching ids.
     pub fn install_registries(
         &mut self,
-        enchantments: crate::enchant::Enchantments,
+        mut enchantments: crate::enchant::Enchantments,
         instruments: HashMap<String, Instrument>,
     ) {
+        enchantments.entity_tags = self.entity_type_tags.members().clone();
         Arc::make_mut(&mut self.component_registry).enchantments = enchantments
             .list
             .iter()
@@ -1376,11 +1628,11 @@ impl Items {
         Ok(())
     }
 
-    /// Bind tables, predicates and prepared instances from the same candidate.
+    /// Bind tables, predicates, modifiers and prepared instances from the same candidate.
     pub fn set_loot_data(&mut self, data: &sunrise_world::loot::LootData) {
         self.loot = data.tables().clone();
-        self.loot_types = data.types().clone();
-        self.loot_modifiers = data.modifiers().clone();
+        self.loot_bindings = data.bindings().clone();
+        self.loot_modifiers = Arc::clone(data.modifiers());
         self.predicates = data.predicates().clone();
         self.global_modifiers = data.global_modifiers().clone();
     }
@@ -1424,20 +1676,58 @@ impl Items {
     /// An item table with only tags, for unit tests of item rules.
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(item_tags: HashMap<String, HashSet<String>>) -> Self {
-        Self {
-            item_tag_order: item_tags
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+        let mut table = Self::empty();
+        table.set_tags(
+            TagRegistry::Item,
+            item_tags
+                .into_iter()
+                .map(|(tag, values)| (tag, values.into_iter().collect()))
                 .collect(),
-            item_tags,
-            ..Self::empty()
+        );
+        table
+    }
+    /// `TagLoader.loadPendingTags`: no successfully built tags means no update
+    /// for that registry. A built tag with no members still replaces the map.
+    pub fn retain_unbound_tags(&mut self, previous: &Self) {
+        use sunrise_world::level::classes::is_generated_tag;
+        if self.block_tag_order.is_empty() {
+            self.set_tags(
+                TagRegistry::Block,
+                previous
+                    .block_tag_order
+                    .iter()
+                    // These are installed from the current block facts, not the pack stack.
+                    .filter(|(tag, _)| !is_generated_tag(tag))
+                    .map(|(tag, members)| (tag.clone(), members.clone()))
+                    .collect(),
+            );
+        }
+        if self.item_tag_order.is_empty() {
+            self.set_tags(TagRegistry::Item, previous.item_tag_order.clone());
+        }
+        if self.fluid_tag_order.is_empty() {
+            self.set_tags(TagRegistry::Fluid, previous.fluid_tag_order.clone());
         }
     }
+
+    /// Ordered bindings for data loaders, keyed by the vanilla registry directory.
+    pub fn ordered_tags(&self) -> [(&'static str, &sunrise_world::loot::RegistryTags); 4] {
+        [
+            ("block", &self.block_tag_order),
+            ("item", &self.item_tag_order),
+            ("fluid", &self.fluid_tag_order),
+            ("entity_type", self.entity_type_tags.ordered()),
+        ]
+    }
+
     /// Replace one registry's tags with `tags`, each tag's members in order.
     pub fn set_tags(&mut self, registry: TagRegistry, tags: HashMap<String, Vec<String>>) {
         let (sets, order) = match registry {
             TagRegistry::Block => (&mut self.block_tags, &mut self.block_tag_order),
-            TagRegistry::Item => (&mut self.item_tags, &mut self.item_tag_order),
+            TagRegistry::Item => {
+                self.item_tag_names = Some(ItemTagNames::bind(&tags));
+                (&mut self.item_tags, &mut self.item_tag_order)
+            }
             TagRegistry::Fluid => (&mut self.fluid_tags, &mut self.fluid_tag_order),
         };
         *sets = tags
@@ -1445,6 +1735,7 @@ impl Items {
             .map(|(tag, members)| (tag.clone(), members.iter().cloned().collect()))
             .collect();
         *order = tags;
+        self.tags_loaded[registry as usize] = true;
         if registry == TagRegistry::Block {
             let names = self.block_state_names();
             self.rebuild_block_tag_flags(names);
@@ -1457,6 +1748,10 @@ impl Items {
     /// Whether `fluid` is in the fluid tag `tag` (`minecraft:water`, no `#`): `FluidState.is(TagKey)`.
     pub fn fluid_in_tag(&self, tag: &str, fluid: &str) -> bool {
         self.fluid_tags.get(tag).is_some_and(|s| s.contains(fluid))
+    }
+    /// Whether this registry's authoritative tag table has been installed, even if empty.
+    pub fn tags_loaded(&self, registry: TagRegistry) -> bool {
+        self.tags_loaded[registry as usize]
     }
     /// A loaded tag's members in `TagLoader` order, or `None` for a tag that isn't loaded.
     pub fn tag_members(&self, registry: TagRegistry, tag: &str) -> Option<&[String]> {
@@ -1681,7 +1976,7 @@ impl Items {
         self.loot.contains_key(id)
     }
     /// Every loot table's id: the root's (vanilla's and the content mods')
-    /// and the packs' over them, in no order.
+    /// and the packs' over them, in lexical order.
     pub fn loot_table_ids(&self) -> impl Iterator<Item = &str> {
         self.loot.ids()
     }
@@ -1702,10 +1997,17 @@ impl Items {
     ) -> Vec<ItemStack> {
         self.inline_loot_table_for_command(table, held, random, false)
     }
-    /// `LootCommand.dropFishingLoot`: output-list adapter; replacement keeps emitted empties.
-    pub fn inline_loot_table_for_command<R: RandomSource>(
+    /// Prepare an inline loot table at the argument boundary before drawing.
+    pub fn prepare_inline_loot_table(
         &self,
         table: &Value,
+    ) -> std::io::Result<sunrise_world::loot::types::PreparedInlineTable> {
+        self.loot_bindings.prepare_inline_table(table)
+    }
+    /// Roll an already-prepared inline loot table; replacement keeps emitted empties.
+    pub fn roll_prepared_inline_loot_table_for_command<R: RandomSource>(
+        &self,
+        table: &sunrise_world::loot::types::PreparedInlineTable,
         held: Option<&ItemStack>,
         random: &mut R,
         keep_empty: bool,
@@ -1713,7 +2015,9 @@ impl Items {
         let empty = sunrise_world::chunk::BlockProperties::new();
         let ctx = LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items: self,
+            local_bindings: Some(table.rules()),
             block: "",
             properties: &empty,
             held,
@@ -1723,10 +2027,29 @@ impl Items {
             entity_levels: None,
             block_levels: None,
             target: None,
+            target_entity: None,
+            interacting_entity: None,
             location: None,
             keep_empty,
         };
-        ctx.roll_root(None, table, random)
+        ctx.roll_root(None, table.value(), random)
+    }
+    /// `LootCommand.dropFishingLoot`: output-list adapter; replacement keeps emitted empties.
+    pub fn inline_loot_table_for_command<R: RandomSource>(
+        &self,
+        table: &Value,
+        held: Option<&ItemStack>,
+        random: &mut R,
+        keep_empty: bool,
+    ) -> Vec<ItemStack> {
+        let prepared = match self.prepare_inline_loot_table(table) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                log::warn!("inline loot table refused: {error}");
+                return Vec::new();
+            }
+        };
+        self.roll_prepared_inline_loot_table_for_command(&prepared, held, random, keep_empty)
     }
     /// The id of the block's loot table (`minecraft:blocks/stone`), when it
     /// has one. `Blocks.wallVariant`: wall signs, banners, heads, fans and
@@ -1811,7 +2134,9 @@ impl Items {
         let ask = |_: &mut R, id: &str, level: u32| roll.levels.map_or(level, |ask| ask(id, level));
         let ctx = LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items: self,
+            local_bindings: None,
             block,
             properties,
             held: roll.held,
@@ -1821,10 +2146,12 @@ impl Items {
             entity_levels: None,
             block_levels: roll.levels.map(|_| &ask as &LootLevels<'_, R>),
             target: None,
+            target_entity: None,
+            interacting_entity: None,
             location: roll.location,
             keep_empty: roll.keep_empty,
         };
-        let raw = ctx.evaluate(table, random);
+        let raw = ctx.evaluate_candidates(table, random);
         ctx.complete_root(Some(id), raw, random, Some(roll.dynamic))
     }
     /// Evaluate an entity's loot table (`minecraft:entities/<name>`).
@@ -1878,7 +2205,9 @@ impl Items {
         let empty = sunrise_world::chunk::BlockProperties::new();
         let ctx = LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items: self,
+            local_bindings: None,
             block: "",
             properties: &empty,
             held,
@@ -1888,13 +2217,15 @@ impl Items {
             entity_levels: None,
             block_levels: None,
             target,
+            target_entity: None,
+            interacting_entity: None,
             location: None,
             keep_empty,
         };
         // LootTable.getRandomItemsRaw visits the table itself first.
         let raw = {
             let _guard = NestedRoll::enter(id)?;
-            ctx.evaluate(table, random)
+            ctx.evaluate_candidates(table, random)
         };
         Some(ctx.complete_root(Some(id), raw, random, None))
     }
@@ -1905,27 +2236,35 @@ impl Items {
             .as_str()
             .map(str::to_owned)
     }
+    #[allow(clippy::too_many_arguments)]
     fn interact_roll<R: RandomSource>(
         &self,
         id: &str,
         table: &Value,
         block: &str,
         properties: &sunrise_world::chunk::BlockProperties,
+        interacting: Option<EntityTarget<'_>>,
+        held: Option<&ItemStack>,
+        location: Option<&dyn Fn(&Value) -> Option<bool>>,
         random: &mut R,
     ) -> Vec<ItemStack> {
         let ctx = LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items: self,
+            local_bindings: None,
             block,
             properties,
-            held: None,
+            held,
             killed_by_player: false,
             explosion_radius: None,
             this_entity: false,
             entity_levels: None,
             block_levels: None,
             target: None,
-            location: None,
+            target_entity: None,
+            interacting_entity: interacting,
+            location,
             keep_empty: false,
         };
         ctx.roll_root(Some(id), table, random)
@@ -1944,7 +2283,9 @@ impl Items {
         let empty = sunrise_world::chunk::BlockProperties::new();
         let ctx = LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items: self,
+            local_bindings: None,
             block: "",
             properties: &empty,
             held,
@@ -1954,6 +2295,8 @@ impl Items {
             entity_levels: None,
             block_levels: None,
             target: None,
+            target_entity: None,
+            interacting_entity: None,
             location: None,
             keep_empty: false,
         };
@@ -2081,7 +2424,9 @@ impl Items {
         let empty = sunrise_world::chunk::BlockProperties::new();
         let ctx = LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items: self,
+            local_bindings: None,
             block: "",
             properties: &empty,
             held,
@@ -2091,6 +2436,8 @@ impl Items {
             entity_levels: levels,
             block_levels: None,
             target,
+            target_entity: None,
+            interacting_entity: None,
             location: None,
             keep_empty,
         };
@@ -2100,9 +2447,30 @@ impl Items {
 /// `DataComponents.BLOCK_STATE`.
 const BLOCK_STATE: &str = "minecraft:block_state";
 impl<R: RandomSource> LootContext<'_, R> {
+    /// The entity a condition's `entity` field (a `LootContext.EntityTarget`)
+    /// names, when the roll carries it.
+    fn named_entity(&self, name: &str) -> Option<&EntityTarget<'_>> {
+        match name {
+            "this" => self.target.as_ref(),
+            "target_entity" => self.target_entity.as_ref(),
+            "interacting_entity" => self.interacting_entity.as_ref(),
+            _ => None,
+        }
+    }
     /// Raw evaluation: nested tables share this context, without splitting
     /// output or completing the queried table id.
+    #[cfg(test)]
     fn evaluate(&self, table: &Value, random: &mut R) -> Vec<ItemStack> {
+        self.evaluate_candidates(table, random)
+            .into_iter()
+            .map(|candidate| candidate.into_item_stack(self.items))
+            .collect()
+    }
+    fn evaluate_candidates(
+        &self,
+        table: &Value,
+        random: &mut R,
+    ) -> Vec<crate::loot_candidate::LootCandidate> {
         let ctx = self;
         let mut out = Vec::new();
         for pool in table["pools"].as_array().into_iter().flatten() {
@@ -2121,7 +2489,7 @@ impl<R: RandomSource> LootContext<'_, R> {
                 for (mut stack, emitted) in produced {
                     ctx.modifiers(&pool["modifier"], &mut stack, random);
                     ctx.modifiers(&table["modifier"], &mut stack, random);
-                    if stack.count > 0 || (ctx.keep_empty && emitted) {
+                    if stack.count() > 0 || (ctx.keep_empty && emitted) {
                         out.push(stack);
                     }
                 }
@@ -2167,7 +2535,9 @@ pub type EntityTarget<'a> = (
 );
 struct LootContext<'a, R> {
     query: std::rc::Rc<sunrise_world::loot::query::LootQuery>,
+    place: Option<Arc<sunrise_world::loot::LootPlace>>,
     items: &'a Items,
+    local_bindings: Option<&'a sunrise_world::loot::types::RuleMap>,
     block: &'a str,
     properties: &'a sunrise_world::chunk::BlockProperties,
     held: Option<&'a ItemStack>,
@@ -2181,6 +2551,10 @@ struct LootContext<'a, R> {
     /// Asked only at block enchantment readers; None keeps vanilla's level.
     block_levels: Option<&'a LootLevels<'a, R>>,
     target: Option<EntityTarget<'a>>,
+    /// `LootContextParams.TARGET_ENTITY`.
+    target_entity: Option<EntityTarget<'a>>,
+    /// `LootContextParams.INTERACTING_ENTITY`.
+    interacting_entity: Option<EntityTarget<'a>>,
     /// Bound only for the actual loot-mine location subset.
     location: Option<&'a dyn Fn(&Value) -> Option<bool>>,
     /// Command replacement consumes the emitted list positions, including empty stacks.
@@ -2272,12 +2646,24 @@ impl<R: RandomSource> LootContext<'_, R> {
         Self::number(v, random).round() as i32
     }
     fn condition(&self, c: &Value, random: &mut R) -> bool {
+        self.condition_with_bindings(c, random, self.local_bindings)
+    }
+    fn condition_with_bindings(
+        &self,
+        c: &Value,
+        random: &mut R,
+        bindings: Option<&sunrise_world::loot::types::RuleMap>,
+    ) -> bool {
         if let Some(holds) = self.stock_condition(c) {
             return holds;
         }
         let (kind, c) = match c {
             Value::Null => return true,
-            Value::Array(list) => return list.iter().all(|c| self.condition(c, random)),
+            Value::Array(list) => {
+                return list
+                    .iter()
+                    .all(|c| self.condition_with_bindings(c, random, bindings));
+            }
             // A string names a `Registries.PREDICATE` id (`LootItemCondition.CODEC`).
             Value::String(id) => return self.named_condition(id, random),
             Value::Object(o) => (o.get("type").and_then(Value::as_str).unwrap_or(""), c),
@@ -2288,17 +2674,17 @@ impl<R: RandomSource> LootContext<'_, R> {
             "minecraft:survives_explosion" => self
                 .explosion_radius
                 .is_none_or(|r| random.next_float() <= 1.0 / r),
-            "minecraft:inverted" => !self.condition(&c["term"], random),
+            "minecraft:inverted" => !self.condition_with_bindings(&c["term"], random, bindings),
             "minecraft:any_of" => c["terms"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|t| self.condition(t, random)),
+                .any(|t| self.condition_with_bindings(t, random, bindings)),
             "minecraft:all_of" => c["terms"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .all(|t| self.condition(t, random)),
+                .all(|t| self.condition_with_bindings(t, random, bindings)),
             "minecraft:random_chance" => random.next_float() < Self::number(&c["chance"], random),
             "minecraft:table_bonus" => {
                 // BonusLevelTableCondition: chances[min(level, len - 1)].
@@ -2354,6 +2740,22 @@ impl<R: RandomSource> LootContext<'_, R> {
                 items_ok && enchants_ok && custom_ok
             }
             "minecraft:killed_by_player" => self.killed_by_player,
+            // TimeCheck: the level's clock, in the range (bounds as written; none is open).
+            "minecraft:time_check" => sunrise_world::loot::time_check_ticks(
+                self.place.as_deref(),
+                c,
+            )
+            .is_some_and(|time| {
+                let range = &c["value"];
+                let bound = |key: &str| range.get(key).and_then(Value::as_number).map(int_value);
+                match range {
+                    Value::Number(n) => int_value(n) == time,
+                    _ => {
+                        bound("min").is_none_or(|min| time >= min)
+                            && bound("max").is_none_or(|max| time <= max)
+                    }
+                }
+            }),
             "minecraft:random_chance_with_enchanted_bonus" => {
                 let level = self.attacker_level(c["enchantment"].as_str().unwrap_or(""), random);
                 let chance = if level > 0 {
@@ -2363,24 +2765,22 @@ impl<R: RandomSource> LootContext<'_, R> {
                 };
                 random.next_float() < chance
             }
-            "minecraft:entity_properties"
-                if c["entity"].as_str() == Some("this") && self.target.is_some() =>
-            {
-                let (target, matcher) = self.target.unwrap();
-                matcher(&c["predicate"], target)
-            }
             // `this` with no checks (snow, chorus flower) holds when an entity
             // broke the block (LootItemEntityPropertyCondition needs the entity).
-            "minecraft:entity_properties"
-                if self.this_entity
-                    && c["entity"].as_str() == Some("this")
-                    && c["predicate"].as_object().is_none_or(|p| p.is_empty()) =>
-            {
-                true
+            "minecraft:entity_properties" => {
+                let name = c["entity"].as_str().unwrap_or("");
+                match self.named_entity(name) {
+                    Some((target, matcher)) => matcher(&c["predicate"], target),
+                    None => {
+                        self.this_entity
+                            && name == "this"
+                            && c["predicate"].as_object().is_none_or(|p| p.is_empty())
+                    }
+                }
             }
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
-            "minecraft:entity_properties" | "minecraft:damage_source_properties" => false,
+            "minecraft:damage_source_properties" => false,
             // LocationCheck reads the world at its offset, which this engine
             // does not have: held true (a double plant's other half is taken
             // as there). Unknown types fail, as in loot.rs.
@@ -2389,30 +2789,22 @@ impl<R: RandomSource> LootContext<'_, R> {
                 .and_then(|location| location(c))
                 .unwrap_or(true),
             // A registered condition answers using the current roll context.
-            k if !c.is_null() && k.contains(':') && !k.starts_with("minecraft:") => {
-                if !self.items.loot_types.contains(k, false) {
-                    return false;
-                }
-                let ctx = self.roll_facts(0);
-                match self.items.loot_types.test(k, c, &ctx, random, self.items) {
-                    Ok(holds) => holds,
-                    Err(reason) => {
-                        self.items.loot_types.warn_once(k, false, &reason);
-                        false
-                    }
-                }
-            }
+            k if k.contains(':') && !k.starts_with("minecraft:") => self
+                .items
+                .loot_bindings
+                .condition(bindings, k, c)
+                .is_some_and(|bound| bound.test(&self.roll_facts(), random, self.items)),
             _ => false,
         }
     }
     /// Expand entries; returns whether an entry succeeded (for alternatives).
     /// The last candidate field distinguishes emitted items from empty/deferred
     /// placeholders, without changing existing selection/modifier draws.
-    fn expand(
+    fn expand<'v>(
         &self,
-        e: &Value,
+        e: &'v Value,
         random: &mut R,
-        out: &mut Vec<(i32, ItemStack, Value, bool)>,
+        out: &mut Vec<(i32, crate::loot_candidate::LootCandidate, &'v Value, bool)>,
     ) -> bool {
         if !self.conditions(e, random) {
             return false;
@@ -2421,13 +2813,11 @@ impl<R: RandomSource> LootContext<'_, R> {
             "minecraft:item" => {
                 out.push((
                     e["weight"].as_number().map(int_value).unwrap_or(1) as i32,
-                    ItemStack {
-                        item: Arc::from(e["name"].as_str().unwrap_or("minecraft:air")),
-                        count: 1,
-                        damage: 0,
-                        extra: None,
-                    },
-                    e["modifier"].clone(),
+                    crate::loot_candidate::LootCandidate::from_item(
+                        e["name"].as_str().unwrap_or("minecraft:air"),
+                        1,
+                    ),
+                    &e["modifier"],
                     true,
                 ));
                 true
@@ -2459,13 +2849,11 @@ impl<R: RandomSource> LootContext<'_, R> {
             "minecraft:dynamic" => {
                 out.push((
                     e["weight"].as_number().map(int_value).unwrap_or(1) as i32,
-                    ItemStack {
-                        item: Arc::from(format!("{DYNAMIC}{}", e["name"].as_str().unwrap_or(""))),
-                        count: 1,
-                        damage: 0,
-                        extra: None,
-                    },
-                    Value::Null,
+                    crate::loot_candidate::LootCandidate::from_item(
+                        format!("{DYNAMIC}{}", e["name"].as_str().unwrap_or("")),
+                        1,
+                    ),
+                    &Value::Null,
                     false,
                 ));
                 true
@@ -2475,13 +2863,8 @@ impl<R: RandomSource> LootContext<'_, R> {
             "minecraft:loot_table" => {
                 out.push((
                     e["weight"].as_number().map(int_value).unwrap_or(1) as i32,
-                    ItemStack {
-                        item: Arc::from(NESTED),
-                        count: 1,
-                        damage: 0,
-                        extra: None,
-                    },
-                    e.clone(),
+                    crate::loot_candidate::LootCandidate::from_item(NESTED, 1),
+                    e,
                     true,
                 ));
                 true
@@ -2489,13 +2872,8 @@ impl<R: RandomSource> LootContext<'_, R> {
             "minecraft:empty" => {
                 out.push((
                     e["weight"].as_number().map(int_value).unwrap_or(1) as i32,
-                    ItemStack {
-                        item: Arc::from("minecraft:air"),
-                        count: 0,
-                        damage: 0,
-                        extra: None,
-                    },
-                    Value::Null,
+                    crate::loot_candidate::LootCandidate::from_item("minecraft:air", 0),
+                    &Value::Null,
                     false,
                 ));
                 true
@@ -2503,7 +2881,12 @@ impl<R: RandomSource> LootContext<'_, R> {
             _ => false,
         }
     }
-    fn choose(&self, entries: &[Value], random: &mut R, produced: &mut Vec<(ItemStack, bool)>) {
+    fn choose(
+        &self,
+        entries: &[Value],
+        random: &mut R,
+        produced: &mut Vec<(crate::loot_candidate::LootCandidate, bool)>,
+    ) {
         let mut candidates = Vec::new();
         for e in entries {
             self.expand(e, random, &mut candidates);
@@ -2526,18 +2909,23 @@ impl<R: RandomSource> LootContext<'_, R> {
             }
             chosen
         };
-        let (_, mut stack, modifiers, emitted) = candidates.swap_remove(pick);
-        if &*stack.item == NESTED {
-            self.nested(&modifiers, random, produced);
+        let (_, mut stack, entry_or_modifier, emitted) = candidates.swap_remove(pick);
+        if stack.item() == NESTED {
+            self.nested(entry_or_modifier, random, produced);
             return;
         }
-        self.modifiers(&modifiers, &mut stack, random);
+        self.modifiers(entry_or_modifier, &mut stack, random);
         produced.push((stack, emitted));
     }
     /// `NestedLootTable.createItemStack`: the entry's table rolls in full
     /// (its pools and its own functions), then the entry's functions apply to
     /// each stack. A table already rolling further out adds nothing.
-    fn nested(&self, entry: &Value, random: &mut R, produced: &mut Vec<(ItemStack, bool)>) {
+    fn nested(
+        &self,
+        entry: &Value,
+        random: &mut R,
+        produced: &mut Vec<(crate::loot_candidate::LootCandidate, bool)>,
+    ) {
         let (name, table) = match &entry["value"] {
             Value::String(name) => (name.as_str(), self.items.loot.get(name.as_str())),
             inline @ Value::Object(_) => ("<inline>", Some(inline)),
@@ -2548,7 +2936,7 @@ impl<R: RandomSource> LootContext<'_, R> {
             let Some(_guard) = NestedRoll::enter(name) else {
                 return;
             };
-            self.evaluate(table, random)
+            self.evaluate_candidates(table, random)
         };
         for mut stack in stacks {
             self.modifiers(&entry["modifier"], &mut stack, random);
@@ -2584,22 +2972,31 @@ impl<R: RandomSource> LootContext<'_, R> {
         }
     }
 
-    fn modifiers(&self, m: &Value, stack: &mut ItemStack, random: &mut R) {
-        let list: Vec<&Value> = match m {
-            Value::Array(a) => a.iter().collect(),
-            Value::Object(_) => vec![m],
-            Value::String(id) => {
-                if let Some(modifier) = self.items.loot_modifiers.get(id) {
-                    self.modifiers(modifier, stack, random);
-                }
-                return;
-            }
-            _ => return,
+    fn modifiers(
+        &self,
+        m: &Value,
+        stack: &mut crate::loot_candidate::LootCandidate,
+        random: &mut R,
+    ) {
+        let list = match m {
+            Value::Array(a) => a.as_slice(),
+            value => std::slice::from_ref(value),
         };
         for f in list {
+            match f {
+                // SequenceFunction composes each holder, including named modifiers.
+                Value::String(id) => {
+                    if let Some(modifier) = self.items.loot_modifiers.get(id) {
+                        self.modifiers(modifier, stack, random);
+                    }
+                    continue;
+                }
+                Value::Object(_) => {}
+                _ => continue,
+            }
             if self
                 .items
-                .loot_types
+                .loot_bindings
                 .conditional(f["type"].as_str().unwrap_or(""))
                 && !self.conditions(f, random)
             {
@@ -2612,33 +3009,31 @@ impl<R: RandomSource> LootContext<'_, R> {
                     }
                 }
                 "minecraft:copy_custom_data" => {
-                    let original = self.effective_custom_data(stack);
-                    let place = sunrise_world::loot::current_native_loot_place();
-                    if let Some(data) = sunrise_world::loot::copy::copy_custom_data(
-                        f,
-                        original.as_deref(),
-                        |source| {
-                            sunrise_world::loot::copy::nbt_source(
-                                source,
-                                place.as_deref(),
-                                |target| {
-                                    (target == "this")
-                                        .then(|| self.target.map(|(entity, _)| entity))
-                                        .flatten()
-                                },
-                            )
-                        },
-                    ) {
-                        apply_component_patch(
-                            stack,
-                            [(
-                                "minecraft:custom_data".into(),
-                                sunrise_core::nbt::Tag::Compound(data),
-                            )]
-                            .into_iter()
-                            .collect(),
-                        );
-                    }
+                    stack.with_resident_mut(self.items, |stack| {
+                        let original = self.effective_custom_data(stack);
+                        let place = sunrise_world::loot::current_native_loot_place();
+                        if let Some(data) = sunrise_world::loot::copy::copy_custom_data(
+                            f,
+                            original.as_deref(),
+                            |source| {
+                                sunrise_world::loot::copy::nbt_source(
+                                    source,
+                                    place.as_deref(),
+                                    |target| self.named_entity(target).map(|(entity, _)| *entity),
+                                )
+                            },
+                        ) {
+                            apply_component_patch(
+                                stack,
+                                [(
+                                    "minecraft:custom_data".into(),
+                                    sunrise_core::nbt::Tag::Compound(data),
+                                )]
+                                .into_iter()
+                                .collect(),
+                            );
+                        }
+                    });
                 }
                 "minecraft:set_custom_data" => {
                     // Keep flattened SNBT for the shared custom-data codec;
@@ -2655,22 +3050,24 @@ impl<R: RandomSource> LootContext<'_, R> {
                     let Ok(tag) = sunrise_world::custom_data::borrow(&encoded) else {
                         continue;
                     };
-                    let mut data = self
-                        .effective_custom_data(stack)
-                        .map(std::borrow::Cow::into_owned)
-                        .unwrap_or_default();
-                    sunrise_world::nbt_path::merge_compound(&mut data, &tag);
-                    let id = if data.is_empty() {
-                        "!minecraft:custom_data"
-                    } else {
-                        "minecraft:custom_data"
-                    };
-                    apply_component_patch(
-                        stack,
-                        [(id.into(), sunrise_core::nbt::Tag::Compound(data))]
-                            .into_iter()
-                            .collect(),
-                    );
+                    stack.with_resident_mut(self.items, |stack| {
+                        let mut data = self
+                            .effective_custom_data(stack)
+                            .map(std::borrow::Cow::into_owned)
+                            .unwrap_or_default();
+                        sunrise_world::nbt_path::merge_compound(&mut data, &tag);
+                        let id = if data.is_empty() {
+                            "!minecraft:custom_data"
+                        } else {
+                            "minecraft:custom_data"
+                        };
+                        apply_component_patch(
+                            stack,
+                            [(id.into(), sunrise_core::nbt::Tag::Compound(data))]
+                                .into_iter()
+                                .collect(),
+                        );
+                    });
                 }
                 "minecraft:copy_components" => {
                     let place = sunrise_world::loot::current_native_loot_place();
@@ -2691,24 +3088,24 @@ impl<R: RandomSource> LootContext<'_, R> {
                                     ),
                                 )
                             }),
-                            "this" => self.target.map(|(entity, _)| {
+                            target => self.named_entity(target).map(|(entity, _)| {
                                 sunrise_world::loot::copy::entity_components(entity)
                             }),
-                            _ => None,
                         },
                         |id, value| {
                             patch.insert(id.as_str().into(), value.clone());
                         },
                     );
                     if !patch.is_empty() {
-                        apply_component_patch(stack, patch);
+                        stack.with_resident_mut(self.items, |stack| {
+                            apply_component_patch(stack, patch);
+                        });
                     }
                 }
                 "minecraft:filtered" => {
-                    let candidate = loot_of(stack);
                     let pass = sunrise_world::loot::item_predicates::matches(
                         &f["item_filter"],
-                        &candidate,
+                        stack,
                         |registry, tag, id| match registry {
                             "item" => self.items.item_in_tag(tag, id),
                             "enchantment" => self.items.enchantments.in_tag(tag, id),
@@ -2724,49 +3121,51 @@ impl<R: RandomSource> LootContext<'_, R> {
                 "minecraft:set_count" => {
                     let n = Self::int_number(&f["count"], random);
                     let base = if f["add"].as_bool() == Some(true) {
-                        stack.count as i32
+                        stack.count()
                     } else {
                         0
                     };
                     let total = base.saturating_add(n).max(0);
-                    stack.count = total as u32;
+                    stack.set_signed_count(total);
                 }
                 // SetItemDamageFunction.run: check damageability before the
                 // float provider, so ineligible stacks do not draw randomness.
                 "minecraft:set_damage" => {
-                    let component = |id| stack.data().and_then(|data| data.other(id));
-                    if stack.count == 0
-                        || component("minecraft:unbreakable").is_some()
-                        || component("!minecraft:max_damage").is_some()
-                        || component("!minecraft:damage").is_some()
-                    {
-                        continue;
-                    }
-                    let max = match component("minecraft:max_damage") {
-                        Some(sunrise_core::nbt::Tag::Int(value)) => {
-                            u32::try_from(*value).unwrap_or(0)
+                    stack.with_resident_mut(self.items, |stack| {
+                        let component = |id| stack.data().and_then(|data| data.other(id));
+                        if stack.count == 0
+                            || component("minecraft:unbreakable").is_some()
+                            || component("!minecraft:max_damage").is_some()
+                            || component("!minecraft:damage").is_some()
+                        {
+                            return;
                         }
-                        _ => self
-                            .items
-                            .get(&stack.item)
-                            .map_or(0, |info| info.max_damage),
-                    };
-                    if max == 0 {
-                        continue;
-                    }
-                    let base = if f["add"].as_bool() == Some(true) {
-                        1.0 - stack.damage as f32 / max as f32
-                    } else {
-                        0.0
-                    };
-                    let remaining = (Self::number(&f["damage"], random) + base).clamp(0.0, 1.0);
-                    stack.damage = ((1.0 - remaining) * max as f32).floor() as u32;
+                        let max = match component("minecraft:max_damage") {
+                            Some(sunrise_core::nbt::Tag::Int(value)) => {
+                                u32::try_from(*value).unwrap_or(0)
+                            }
+                            _ => self
+                                .items
+                                .get(&stack.item)
+                                .map_or(0, |info| info.max_damage),
+                        };
+                        if max == 0 {
+                            return;
+                        }
+                        let base = if f["add"].as_bool() == Some(true) {
+                            1.0 - stack.damage as f32 / max as f32
+                        } else {
+                            0.0
+                        };
+                        let remaining = (Self::number(&f["damage"], random) + base).clamp(0.0, 1.0);
+                        stack.damage = ((1.0 - remaining) * max as f32).floor() as u32;
+                    });
                 }
                 "minecraft:apply_bonus" => {
                     let level = self.bonus_level(f["enchantment"].as_str().unwrap_or(""), random);
-                    let count = stack.count as i32;
+                    let count = stack.count();
                     let params = &f["parameters"];
-                    stack.count = match f["formula"].as_str().unwrap_or("") {
+                    let next = match f["formula"].as_str().unwrap_or("") {
                         "minecraft:ore_drops" if level > 0 => {
                             let bound = level.saturating_add(2);
                             let bonus = (random.next_int_bound(bound).unwrap_or(0) - 1).max(0);
@@ -2795,7 +3194,8 @@ impl<R: RandomSource> LootContext<'_, R> {
                         }
                         _ => count,
                     }
-                    .max(0) as u32;
+                    .max(0);
+                    stack.set_signed_count(next);
                 }
                 "minecraft:enchanted_count_increase" => {
                     // Attacker's level x count, rounded (looting).
@@ -2804,53 +3204,58 @@ impl<R: RandomSource> LootContext<'_, R> {
                     if level > 0 {
                         let add = level as f32 * Self::number(&f["count"], random);
                         // ItemStack.grow: an int sum, which wraps as in Java.
-                        let count = (stack.count as i32).wrapping_add(add.round() as i32);
-                        stack.count = count.max(0) as u32;
+                        let mut count = stack.count().wrapping_add(add.round() as i32).max(0);
                         if let Some(limit) =
                             f["limit"].as_number().map(int_value).filter(|l| *l > 0)
                         {
-                            stack.count = stack.count.min(limit as u32);
+                            count = count.min(limit.min(i64::from(i32::MAX)) as i32);
                         }
+                        stack.set_signed_count(count);
                     }
                 }
                 // CopyBlockState: the listed properties of the broken block
                 // become the item's `block_state` component.
                 "minecraft:copy_state" => {
-                    use sunrise_core::nbt::Tag;
-                    let mut copied = match stack.data().and_then(|d| d.other(BLOCK_STATE)) {
-                        Some(Tag::Compound(c)) => c.clone(),
-                        _ => Default::default(),
-                    };
-                    for name in f["properties"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                    {
-                        if let Some(value) = self.properties.get(name) {
-                            copied.insert(name.into(), Tag::String(value.as_str().into()));
+                    stack.with_resident_mut(self.items, |stack| {
+                        use sunrise_core::nbt::Tag;
+                        let mut copied = match stack.data().and_then(|d| d.other(BLOCK_STATE)) {
+                            Some(Tag::Compound(c)) => c.clone(),
+                            _ => Default::default(),
+                        };
+                        for name in f["properties"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                        {
+                            if let Some(value) = self.properties.get(name) {
+                                copied.insert(name.into(), Tag::String(value.as_str().into()));
+                            }
                         }
-                    }
-                    if !copied.is_empty() {
-                        stack
-                            .data_mut()
-                            .set_other(BLOCK_STATE, Some(Tag::Compound(copied)));
-                    }
+                        if !copied.is_empty() {
+                            stack
+                                .data_mut()
+                                .set_other(BLOCK_STATE, Some(Tag::Compound(copied)));
+                        }
+                    });
                 }
                 // ApplyExplosionDecay: each item survives with 1 / radius.
                 "minecraft:explosion_decay" => {
                     if let Some(radius) = self.explosion_radius {
                         let probability = 1.0 / radius;
-                        stack.count = (0..stack.count)
+                        let kept = (0..stack.count().max(0))
                             .filter(|_| random.next_float() <= probability)
-                            .count() as u32;
+                            .count() as i32;
+                        stack.set_signed_count(kept);
                     }
                 }
                 // SetPotionFunction (the barter's fire resistance potions).
                 "minecraft:set_potion" => {
                     if let Some(id) = f["id"].as_str() {
-                        *stack = std::mem::replace(stack, ItemStack::new("minecraft:air", 0))
-                            .with_potion(id);
+                        stack.with_resident_mut(self.items, |stack| {
+                            *stack = std::mem::replace(stack, ItemStack::new("minecraft:air", 0))
+                                .with_potion(id);
+                        });
                     }
                 }
                 // EnchantWithLevelsFunction: EnchantmentHelper.enchantItem on
@@ -2859,58 +3264,63 @@ impl<R: RandomSource> LootContext<'_, R> {
                     let cost = Self::int_number(&f["levels"], random);
                     let e = &self.items.enchantments;
                     let pool = Self::enchant_pool(e, &f["options"]);
-                    let chosen = e.select(self.items, random, stack, cost, &pool);
-                    // EnchantmentHelper.enchantItem: a book becomes one
-                    // enchanted book (the fresh stack's count).
-                    if &*stack.item == "minecraft:book" {
-                        *stack = ItemStack::new("minecraft:enchanted_book", 1);
-                    }
-                    for (id, level) in chosen {
-                        stack.enchant(&id, level);
-                    }
+                    stack.with_resident_mut(self.items, |stack| {
+                        let chosen = e.select(self.items, random, stack, cost, &pool);
+                        // EnchantmentHelper.enchantItem: a book becomes one
+                        // enchanted book (the fresh stack's count).
+                        if &*stack.item == "minecraft:book" {
+                            *stack = ItemStack::new("minecraft:enchanted_book", 1);
+                        }
+                        for (id, level) in chosen {
+                            stack.enchant(&id, level);
+                        }
+                    });
                 }
                 // EnchantRandomlyFunction: one enchantment the item accepts,
                 // at a level between its min and max.
                 "minecraft:enchant_randomly" => {
-                    let e = &self.items.enchantments;
-                    let book = &*stack.item == "minecraft:book";
-                    let only_compatible = f["only_compatible"].as_bool().unwrap_or(true);
-                    let options: Vec<Arc<str>> = Self::enchant_pool(e, &f["options"])
-                        .into_iter()
-                        .filter(|id| {
-                            book || !only_compatible || e.can_enchant(self.items, id, &stack.item)
-                        })
-                        .collect();
-                    if options.is_empty() {
-                        continue;
-                    }
-                    let id = options
-                        [random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
-                        .clone();
-                    let max = e.get(&id).map_or(1, |d| d.max_level).max(1);
-                    // `Mth.nextInt(random, 1, max)`: a single-level
-                    // enchantment (Mending) returns 1 without drawing, so the
-                    // rolls after this one keep vanilla's sequence.
-                    let level = if max <= 1 {
-                        1
-                    } else {
-                        1 + random.next_int_bound(max as i32).unwrap_or(0) as u32
-                    };
-                    if book {
-                        *stack = ItemStack::new("minecraft:enchanted_book", 1);
-                    }
-                    stack.enchant(&id, level);
+                    stack.with_resident_mut(self.items, |stack| {
+                        let e = &self.items.enchantments;
+                        let book = &*stack.item == "minecraft:book";
+                        let only_compatible = f["only_compatible"].as_bool().unwrap_or(true);
+                        let options: Vec<Arc<str>> = Self::enchant_pool(e, &f["options"])
+                            .into_iter()
+                            .filter(|id| {
+                                book || !only_compatible
+                                    || e.can_enchant(self.items, id, &stack.item)
+                            })
+                            .collect();
+                        if options.is_empty() {
+                            return;
+                        }
+                        let id = options
+                            [random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
+                            .clone();
+                        let max = e.get(&id).map_or(1, |d| d.max_level).max(1);
+                        // `Mth.nextInt(random, 1, max)`: a single-level
+                        // enchantment (Mending) returns 1 without drawing, so the
+                        // rolls after this one keep vanilla's sequence.
+                        let level = if max <= 1 {
+                            1
+                        } else {
+                            1 + random.next_int_bound(max as i32).unwrap_or(0) as u32
+                        };
+                        if book {
+                            *stack = ItemStack::new("minecraft:enchanted_book", 1);
+                        }
+                        stack.enchant(&id, level);
+                    });
                 }
                 "minecraft:limit_count" => {
                     let limit = &f["limit"];
-                    let mut count = stack.count as i32;
+                    let mut count = stack.count();
                     if let Some(min) = limit.get("min").filter(|value| !value.is_null()) {
                         count = count.max(Self::int_number(min, random));
                     }
                     if let Some(max) = limit.get("max").filter(|value| !value.is_null()) {
                         count = count.min(Self::int_number(max, random));
                     }
-                    stack.count = count.max(0) as u32;
+                    stack.set_signed_count(count.max(0));
                 }
                 // SetNameFunction.run: the component the target names
                 // (custom_name by default), set as a chest's roll sets it. As in
@@ -2918,32 +3328,23 @@ impl<R: RandomSource> LootContext<'_, R> {
                 "minecraft:set_name" if !f["name"].is_null() => {
                     let target = f["target"].as_str().unwrap_or("custom_name");
                     let id = format!("minecraft:{target}");
-                    stack.data_mut().set_loot_name(&id, &f["name"]);
-                    stack.tidy();
+                    stack.with_resident_mut(self.items, |stack| {
+                        stack.data_mut().set_loot_name(&id, &f["name"]);
+                        stack.tidy();
+                    });
                 }
-                "minecraft:set_components" => apply_components(stack, &f["components"]),
-                // A mod's own kind: the function hook changes the stack, as it
-                // does in the main loot engine.
+                "minecraft:set_components" => {
+                    stack.with_resident_mut(self.items, |stack| {
+                        apply_components(stack, &f["components"]);
+                    });
+                }
                 k if k.contains(':') && !k.starts_with("minecraft:") => {
-                    if !self.items.loot_types.contains(k, true) {
-                        continue;
+                    if let Some(bound) =
+                        self.items.loot_bindings.function(self.local_bindings, k, f)
+                    {
+                        let facts = self.roll_facts();
+                        bound.apply(&facts, random, self.items, stack);
                     }
-                    let ctx = self.roll_facts(0);
-                    mod_function(
-                        k,
-                        f,
-                        &ctx,
-                        self.items,
-                        stack,
-                        |kind, data, ctx, stack| match self
-                            .items
-                            .loot_types
-                            .apply(kind, data, ctx, random, self.items, stack)
-                        {
-                            Ok(candidate) => *stack = candidate,
-                            Err(reason) => self.items.loot_types.warn_once(kind, true, &reason),
-                        },
-                    );
                 }
                 _ => {}
             }
@@ -3011,210 +3412,14 @@ fn apply_component_patch(stack: &mut ItemStack, patch: sunrise_core::nbt::Compou
     stack.tidy();
 }
 
-/// The items engine's stack as the loot engine's (`LootStack`), for a mod's
-/// function hook: the parts of it the hook can change and the engine takes
-/// back. Saved components retain their exact NBT types.
-fn loot_of(stack: &ItemStack) -> sunrise_world::loot::LootStack {
-    let mut components: Vec<(String, Option<sunrise_core::nbt::Tag>)> = Vec::new();
-    if let Some(data) = stack.data() {
-        for (id, value) in data.preserved_components() {
-            components.push((id.clone(), Some(value.clone())));
-        }
-        if let Some(name) = &data.custom_name {
-            components.push(("minecraft:custom_name".to_owned(), Some(name.clone())));
-        }
-        if let Some(trim) = &data.trim {
-            components.push((
-                "minecraft:trim".to_owned(),
-                Some(crate::item_data::trim::to_nbt(trim)),
-            ));
-        }
-    }
-    sunrise_world::loot::LootStack {
-        item: stack.item.to_string(),
-        count: stack.count as i32,
-        damage: stack.damage as i32,
-        enchantments: stack
-            .crafting_enchantments()
-            .iter()
-            .map(|(id, level)| (id.to_string(), *level as i32))
-            .collect(),
-        potion: stack.potion().map(str::to_owned),
-        map: false,
-        exploration: None,
-        ominous_amplifier: stack
-            .data()
-            .and_then(|d| d.ominous_amplifier)
-            .map(i32::from),
-        stew_effects: stack
-            .data()
-            .map(|d| {
-                d.stew_effects
-                    .iter()
-                    .map(|(effect, ticks)| (effect.to_string(), *ticks))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        names: Vec::new(),
-        components,
-    }
-}
-
-/// One entry of a loot component patch, written as `PatchedDataComponentMap`
-/// does. A value replaces the stack's own one and any `!id` removal. A removal
-/// (`id` with `None`, or the `!id` form with a value) drops the stack's own
-/// value (a damage removal zeroes the scalar too) and records the `!id`
-/// marker when the item's prototype carries `id`, so the prototype's value
-/// doesn't come back; when the prototype lacks it the marker goes too. When
-/// `prototype_has` can't tell (`None`: no prototypes at hand), an explicit
-/// `!id` is written and an existing one is kept. `id` with `None` in the `!id`
-/// form drops the marker, giving the prototype's value back.
-fn patch_loot_component(
-    stack: &mut ItemStack,
-    id: &str,
-    value: &Option<sunrise_core::nbt::Tag>,
-    prototype_has: &impl Fn(&str, &str) -> Option<bool>,
-) {
-    let (base, removal) = match id.strip_prefix('!') {
-        Some(base) if value.is_some() => (base, true),
-        Some(_) => {
-            stack.data_mut().set_other(id, None);
-            return;
-        }
-        None => (id, value.is_none()),
-    };
-    let marker = format!("!{base}");
-    if !removal {
-        // The owning setter validates the value; only one it took replaces
-        // the removal, so a refused value leaves the `!id` as it was.
-        let data = stack.data_mut();
-        data.set_loot_component(base, value);
-        if data.sets_component(base) {
-            data.set_other(&marker, None);
-        }
-        return;
-    }
-    stack.data_mut().set_loot_component(base, &None);
-    if base == "minecraft:damage" {
-        stack.damage = 0;
-    }
-    let keep = match prototype_has(&stack.item, base) {
-        Some(has) => has,
-        None => id.starts_with('!') || stack.data().is_some_and(|d| d.other(&marker).is_some()),
-    };
-    stack.data_mut().set_other(
-        &marker,
-        keep.then(|| sunrise_core::nbt::Tag::Compound(Default::default())),
-    );
-}
-
 /// `prototype_has` over `items`: whether an item's prototype carries a
 /// component, or `None` for an item `items` doesn't know.
-fn prototypes_of(items: &Items) -> impl Fn(&str, &str) -> Option<bool> + '_ {
+pub(crate) fn prototypes_of(items: &Items) -> impl Fn(&str, &str) -> Option<bool> + '_ {
     |item, id| {
         items
             .get(item)
             .map(|info| info.components.iter().any(|c| c == id))
     }
-}
-
-/// What a mod's loot function left in its stack, applied to the engine's.
-/// Only what changed is written, so a field the hook did not touch keeps the
-/// engine's own form of it. `prototype_has(item, id)` says whether `item`'s
-/// prototype carries component `id` (`None`: unknown), so a removal of it
-/// stays a removal; it is asked about the stack's final item, after the hook
-/// changed it if it did.
-fn apply_loot(
-    before: &sunrise_world::loot::LootStack,
-    after: &sunrise_world::loot::LootStack,
-    stack: &mut ItemStack,
-    prototype_has: impl Fn(&str, &str) -> Option<bool>,
-) {
-    if after.item != before.item {
-        stack.item = Arc::from(after.item.as_str());
-    }
-    if after.count != before.count {
-        stack.count = after.count.max(0) as u32;
-    }
-    if after.damage != before.damage {
-        stack.damage = after.damage.max(0) as u32;
-    }
-    if after.enchantments != before.enchantments {
-        let levels = after
-            .enchantments
-            .iter()
-            .filter(|(_, level)| *level > 0)
-            .map(|(id, level)| (Arc::from(id.as_str()), *level as u32))
-            .collect();
-        stack.set_crafting_enchantments(levels);
-    }
-    if after.potion != before.potion {
-        stack.data_mut().potion = after.potion.as_deref().map(Arc::from);
-    }
-    if after.ominous_amplifier != before.ominous_amplifier {
-        stack.data_mut().ominous_amplifier = after.ominous_amplifier.map(|a| a.clamp(0, 255) as u8);
-    }
-    if after.stew_effects != before.stew_effects {
-        stack.data_mut().stew_effects = after
-            .stew_effects
-            .iter()
-            .map(|(effect, ticks)| (Arc::from(effect.as_str()), *ticks))
-            .collect();
-    }
-    // `SetNameFunction`'s components: the names the hook set.
-    for (id, text) in &after.names {
-        if !before.names.iter().any(|(i, t)| i == id && t == text) {
-            stack.data_mut().set_loot_name(id, text);
-        }
-    }
-    // `SetComponentsFunction`'s patch: the components the hook changed or
-    // added are set, and the ones it dropped (gone from the stack) removed.
-    for (id, value) in &after.components {
-        // Replay changed per-ID sequences in order, not unchanged captured values:
-        // an unrelated patch must not undo a separately edited loot name.
-        let unchanged = before
-            .components
-            .iter()
-            .filter(|(key, _)| key == id)
-            .map(|(_, value)| value)
-            .eq(after
-                .components
-                .iter()
-                .filter(|(key, _)| key == id)
-                .map(|(_, value)| value));
-        if !unchanged {
-            patch_loot_component(stack, id, value, &prototype_has);
-        }
-    }
-    for (id, _) in &before.components {
-        if !after.components.iter().any(|(i, _)| i == id) {
-            patch_loot_component(stack, id, &None, &prototype_has);
-        }
-    }
-    stack.tidy();
-}
-
-/// Apply a registered function using the items engine's existing component write path.
-/// Convert the input once and apply only the callback's accepted candidate; tests can
-/// supply the transformation without installing a process-wide registry.
-/// `items` holds the prototypes a removal is checked against.
-fn mod_function(
-    kind: &str,
-    data: &Value,
-    ctx: &sunrise_world::loot::LootContext<'_>,
-    items: &Items,
-    stack: &mut ItemStack,
-    hook: impl FnOnce(
-        &str,
-        &Value,
-        &sunrise_world::loot::LootContext<'_>,
-        &mut sunrise_world::loot::LootStack,
-    ),
-) {
-    let before = loot_of(stack);
-    let mut after = before.clone();
-    hook(kind, data, ctx, &mut after);
-    apply_loot(&before, &after, stack, prototypes_of(items));
 }
 
 /// `DispensibleContainerItem`: shared contents for hand use and dispensers.
@@ -3331,15 +3536,29 @@ mod death_effects_tests {
     }
 }
 
-fn consume_effect_spec(e: &Value) -> Option<ConsumeEffectSpec> {
-    let flag = |key: &str, default: bool| e.get(key).and_then(|v| v.as_bool()).unwrap_or(default);
+fn consume_effect_spec(e: &Tag) -> Option<ConsumeEffectSpec> {
+    let Tag::String(id) = e.get("id")? else {
+        return None;
+    };
+    let flag = |key, default| {
+        e.get(key)
+            .and_then(crate::item_data::component_bool)
+            .unwrap_or(default)
+    };
+    let number = |key| {
+        e.get(key)
+            .and_then(crate::properties::component_int)
+            .unwrap_or(0)
+    };
+    let show_particles = flag("show_particles", true);
     Some(ConsumeEffectSpec {
-        id: e.get("id")?.as_str()?.to_string(),
-        duration: e.get("duration").and_then(|d| d.as_i64()).unwrap_or(0) as i32,
-        amplifier: e.get("amplifier").and_then(|a| a.as_i64()).unwrap_or(0) as i32,
+        id: id.to_string_lossy(),
+        duration: number("duration"),
+        // `MobEffectInstance.Details.MAP_CODEC` reads `ExtraCodecs.UNSIGNED_BYTE`.
+        amplifier: i32::from(number("amplifier") as u8),
         ambient: flag("ambient", false),
-        show_particles: flag("show_particles", true),
-        show_icon: flag("show_icon", flag("show_particles", true)),
+        show_particles,
+        show_icon: flag("show_icon", show_particles),
     })
 }
 
@@ -3381,8 +3600,13 @@ mod bucket_use_tests {
 /// tests: the block registry and facts as the client's `Assets::load` reads them.
 #[cfg(test)]
 pub(crate) fn prepared_items() -> Option<Items> {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client/26.3");
+    let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.local/sunrise-client")
+                .join(sunrise_core::VANILLA_VERSION)
+        });
     if !root.join("items.json").exists() {
         return None;
     }
@@ -3399,18 +3623,42 @@ mod consume_effect_tests {
     use super::*;
 
     #[test]
-    fn effects_keep_their_ambient_and_particle_flags() {
-        let quiet =
-            serde_json::json!({"id": "minecraft:haste", "duration": 3600, "show_particles": false});
+    fn effect_details_decode_byte_numbers_and_boolean_defaults() {
+        let quiet = Tag::compound([
+            ("id", Tag::String("minecraft:haste".into())),
+            ("duration", Tag::Byte(100)),
+            ("amplifier", Tag::Byte(-56)),
+            ("show_particles", Tag::Byte(0)),
+        ]);
         let s = consume_effect_spec(&quiet).unwrap();
         assert_eq!(
             (s.id.as_str(), s.duration, s.amplifier),
-            ("minecraft:haste", 3600, 0)
+            ("minecraft:haste", 100, 200)
         );
-        assert!(!s.ambient && !s.show_particles);
-        let plain =
-            consume_effect_spec(&serde_json::json!({"id": "minecraft:regeneration"})).unwrap();
-        assert!(!plain.ambient && plain.show_particles);
+        assert!(!s.ambient && !s.show_particles && !s.show_icon);
+        let plain = Tag::compound([("id", Tag::String("minecraft:regeneration".into()))]);
+        let plain = consume_effect_spec(&plain).unwrap();
+        assert!(!plain.ambient && plain.show_particles && plain.show_icon);
+    }
+
+    #[test]
+    fn saved_consume_effects_reject_out_of_range_parameters() {
+        for (kind, field, invalid) in [
+            ("apply_effects", "probability", 1.5_f32),
+            ("teleport_randomly", "diameter", 0.0),
+            ("teleport_randomly", "diameter", f32::NAN),
+        ] {
+            let tag = Tag::compound([
+                ("type", Tag::String(kind.into())),
+                (field, Tag::Float(invalid.to_bits())),
+            ]);
+            let mut raw = Tag::compound([("on_consume_effects", Tag::List(vec![tag]))]);
+            assert!(
+                stack_effects(&mut raw, "on_consume_effects", None, None)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
@@ -3422,38 +3670,164 @@ mod consume_effect_tests {
             serde_json::json!({"on_consume_effects": [{"type": "mymod:charge", "amount": 42}]});
         let value = parse_consumable(&good).unwrap();
         let copy = value.clone();
-        let (ConsumeEffect::Native { data: a, .. }, ConsumeEffect::Native { data: b, .. }) =
+        let (ConsumeEffect::Native(a), ConsumeEffect::Native(b)) =
             (&value.effects[0], &copy.effects[0])
         else {
             panic!("native payload")
         };
-        assert!(Arc::ptr_eq(a, b));
+        assert!(Arc::ptr_eq(&a.data, &b.data));
     }
 
     #[test]
     fn a_mods_own_consume_effect_kind_is_kept() {
-        let v = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
-        // A mod's own kind: Native with its JSON.
-        let native =
-            parse_consume_effect(&v(r#"{"type":"mymod:energy_boost","amount":42}"#)).unwrap();
-        assert!(matches!(&native, ConsumeEffect::Native { kind, data }
-            if kind == "mymod:energy_boost" && data.get("amount") == Some(&sunrise_core::nbt::Tag::Byte(42))));
-        // A bare vanilla name and its namespaced form are the same kind.
-        let bare = parse_consume_effect(&v(
-            r#"{"type":"apply_effects","effects":[{"id":"minecraft:speed","duration":100}]}"#,
-        ))
-        .unwrap();
-        assert!(matches!(bare, ConsumeEffect::ApplyEffects { .. }));
-        let named = parse_consume_effect(
-            &v(r#"{"type":"minecraft:apply_effects","effects":[{"id":"minecraft:speed","duration":100}]}"#),
-        ).unwrap();
-        assert!(matches!(named, ConsumeEffect::ApplyEffects { .. }));
-        // An empty namespace is minecraft's too (`Identifier.bySeparator`).
-        let empty = parse_consume_effect(&v(r#"{"type":":clear_all_effects"}"#)).unwrap();
-        assert!(matches!(empty, ConsumeEffect::ClearAllEffects));
-        // An unknown minecraft: kind and a missing type are dropped.
-        assert!(parse_consume_effect(&v(r#"{"type":"minecraft:future"}"#)).is_none());
-        assert!(parse_consume_effect(&v(r#"{"amount":42}"#)).is_none());
+        let effect = |value: Value| {
+            parse_consumable(&serde_json::json!({"on_consume_effects": [value]}))
+                .unwrap()
+                .effects
+                .pop()
+        };
+        let native = effect(serde_json::json!({"type": "mymod:energy_boost", "amount": 42}));
+        assert!(matches!(&native, Some(ConsumeEffect::Native(effect))
+            if effect.kind.as_ref() == "mymod:energy_boost" && effect.data.get("amount") == Some(&Tag::Byte(42))));
+        // A bare or empty namespace resolves to minecraft's own type.
+        for kind in ["apply_effects", "minecraft:apply_effects", ":apply_effects"] {
+            assert!(matches!(
+                effect(serde_json::json!({
+                    "type": kind,
+                    "effects": [{"id": "minecraft:speed", "duration": 100}],
+                })),
+                Some(ConsumeEffect::ApplyEffects { .. })
+            ));
+        }
+        assert!(effect(serde_json::json!({"type": "minecraft:future"})).is_none());
+        assert!(effect(serde_json::json!({"amount": 42})).is_none());
+    }
+
+    #[test]
+    fn play_sound_consume_effect_uses_lenient_optional_range() {
+        let sound_effect = |s: &str| {
+            let tag = sunrise_core::json_nbt::parse_json_tag(s).unwrap();
+            builtin_consume_effect("play_sound", &tag)
+        };
+        assert_eq!(
+            sound_effect(r#"{"type":"minecraft:play_sound","sound":"minecraft:entity.fox.eat"}"#),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Registered(
+                "minecraft:entity.fox.eat".into(),
+            )))
+        );
+        assert_eq!(
+            sound_effect(
+                r#"{"type":"minecraft:play_sound","sound":{"sound_id":"demo:chime","range":24.5}}"#,
+            ),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Direct {
+                id: "demo:chime".into(),
+                range: Some(24.5),
+            }))
+        );
+        assert_eq!(
+            sound_effect(r#"{"type":"minecraft:play_sound","sound":{"sound_id":"demo:chime"}}"#),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Direct {
+                id: "demo:chime".into(),
+                range: None,
+            }))
+        );
+        assert_eq!(
+            sound_effect(
+                r#"{"type":"minecraft:play_sound","sound":{"sound_id":"demo:chime","range":"oops"}}"#,
+            ),
+            Some(ConsumeEffect::PlaySound(ConsumeSound::Direct {
+                id: "demo:chime".into(),
+                range: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn unregistered_native_effect_keeps_small_numbers_in_item_prototype() {
+        // The item loader's path: JSON components -> NBT -> decoded stack data.
+        let components = serde_json::json!({"minecraft:consumable": {"on_consume_effects": [
+            {"type": "mymod:set_fire", "seconds": 15},
+            {"type": "mymod:give_item", "item": "mymod:cheese_ingot", "count": 3},
+            {"type": "mymod:wide", "short": 300, "flag": false},
+        ]}});
+        let prototype = sunrise_core::json_nbt::json_to_tag(&components).unwrap();
+        let (damage, extra) = crate::item_data::decode_components(Some(&prototype));
+        let stack = ItemStack {
+            item: "mymod:magma_bottle".into(),
+            count: 1,
+            damage,
+            extra,
+        };
+        let consumable = stack.consumable(None).expect("consumable");
+        let field = |i: usize, key: &str| match &consumable.effects[i] {
+            ConsumeEffect::Native(effect) => effect.data.get(key).cloned(),
+            other => panic!("expected a native effect, got {other:?}"),
+        };
+        assert_eq!(field(0, "seconds"), Some(Tag::Byte(15)));
+        assert_eq!(field(1, "count"), Some(Tag::Byte(3)));
+        assert_eq!(
+            field(1, "item"),
+            Some(Tag::String("mymod:cheese_ingot".into()))
+        );
+        assert_eq!(field(2, "short"), Some(Tag::Short(300)));
+        assert_eq!(field(2, "flag"), Some(Tag::Byte(0)));
+    }
+
+    fn saved_stack(effects: Vec<Tag>) -> ItemStack {
+        let saved = Tag::compound([(
+            "minecraft:consumable",
+            Tag::compound([("on_consume_effects", Tag::List(effects))]),
+        )]);
+        let (damage, extra) = crate::item_data::decode_components(Some(&saved));
+        ItemStack {
+            item: "mymod:snack".into(),
+            count: 1,
+            damage,
+            extra,
+        }
+    }
+
+    #[test]
+    fn unregistered_native_effect_keeps_a_saved_float_exactly() {
+        let stack = saved_stack(vec![Tag::compound([
+            ("type", Tag::String("mymod:chill".into())),
+            ("strength", Tag::Float(0.1f32.to_bits())),
+        ])]);
+        let consumable = stack.consumable(None).expect("consumable");
+        let [ConsumeEffect::Native(effect)] = consumable.effects.as_slice() else {
+            panic!("expected one native effect, got {:?}", consumable.effects)
+        };
+        assert_eq!(
+            effect.data.get("strength"),
+            Some(&Tag::Float(0.1f32.to_bits()))
+        );
+    }
+
+    #[test]
+    fn unregistered_native_effect_with_a_lone_surrogate_keeps_its_siblings() {
+        let lone = sunrise_core::nbt::JavaString(vec![0x61, 0xD800, 0x62]);
+        let stack = saved_stack(vec![
+            Tag::compound([
+                ("type", Tag::String("mymod:named".into())),
+                ("name", Tag::String(lone.clone())),
+            ]),
+            Tag::compound([("type", Tag::String("minecraft:clear_all_effects".into()))]),
+        ]);
+        let data = stack.data().expect("saved data");
+        assert!(!data.refused_consume_effect_component("minecraft:consumable"));
+        let consumable = stack.consumable(None).expect("consumable");
+        let [
+            ConsumeEffect::Native(effect),
+            ConsumeEffect::ClearAllEffects,
+        ] = consumable.effects.as_slice()
+        else {
+            panic!(
+                "expected the custom and built-in effects, got {:?}",
+                consumable.effects
+            )
+        };
+        assert_eq!(effect.kind.as_ref(), "mymod:named");
+        assert_eq!(effect.data.get("name"), Some(&Tag::String(lone)));
     }
 }
 
@@ -3644,6 +4018,139 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// One effective component for every reader: a bundle that only inherits its prototype's
+    /// contents spills them on destruction, selects and extracts a non-first entry, and clearing
+    /// the last slot of a command edit leaves an effective empty component.
+    #[test]
+    fn inherited_bundle_contents_are_the_effective_component_everywhere() {
+        use crate::bundle::{Contents, contents_of, destroyed, set_contents, toggle_selected};
+
+        let root =
+            std::env::temp_dir().join(format!("sunrise-bundle-inherited-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{
+                "minecraft:blue_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:stone", "count": 8}, {"id": "minecraft:dirt", "count": 4}]},
+                "minecraft:stone": {"minecraft:max_stack_size": 64},
+                "minecraft:dirt": {"minecraft:max_stack_size": 64}
+            }"#,
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        let counts = |bundle: &ItemStack| -> Vec<(String, u32)> {
+            contents_of(&items, bundle)
+                .unwrap()
+                .iter()
+                .map(|s| (s.item.to_string(), s.count))
+                .collect()
+        };
+
+        // Selecting a non-first inherited entry needs no override, and removal takes it.
+        let mut bundle = ItemStack::new("minecraft:blue_bundle", 1);
+        toggle_selected(&items, &mut bundle, 1);
+        let mut contents = Contents::of(&items, &bundle).unwrap();
+        assert_eq!(contents.selected(), 1);
+        let taken = contents.remove_one(&items).unwrap();
+        assert_eq!((&*taken.item, taken.count), ("minecraft:dirt", 4));
+        // An index outside the effective contents selects nothing.
+        toggle_selected(&items, &mut bundle, 2);
+        assert_eq!(bundle.data().unwrap().bundle_selected.0, -1);
+
+        // A command edit of the middle of the list keeps the inherited entries it never touched,
+        // and clearing the final slot does not show the prototype again.
+        let mut edited = ItemStack::new("minecraft:blue_bundle", 1);
+        let mut inside: Vec<_> = contents_of(&items, &edited).unwrap().to_vec();
+        inside[1].count = 2;
+        set_contents(&items, &mut edited, inside);
+        assert_eq!(
+            counts(&edited),
+            [("minecraft:stone".into(), 8), ("minecraft:dirt".into(), 2)]
+        );
+        set_contents(&items, &mut edited, Vec::new());
+        assert!(counts(&edited).is_empty());
+
+        // Destruction spills inherited contents and writes an effective empty component.
+        let mut dropped = ItemStack::new("minecraft:blue_bundle", 1);
+        let spilled = destroyed(&items, &mut dropped);
+        assert_eq!(spilled.iter().map(|s| s.count).collect::<Vec<_>>(), [8, 4]);
+        assert!(counts(&dropped).is_empty());
+        assert!(destroyed(&items, &mut dropped).is_empty());
+        // Explicitly empty and removed contents spill nothing.
+        let mut removed = ItemStack::new("minecraft:blue_bundle", 1);
+        removed.data_mut().set_other(
+            "!minecraft:bundle_contents",
+            Some(sunrise_core::nbt::Tag::compound(Vec::<(
+                &str,
+                sunrise_core::nbt::Tag,
+            )>::new())),
+        );
+        assert!(destroyed(&items, &mut removed).is_empty());
+    }
+
+    #[test]
+    fn bundle_weight_refuses_prototype_cycles_without_masking_stack_patches() {
+        use crate::bundle::{Contents, stack_bar, tooltip_layout};
+        use sunrise_core::nbt::Tag;
+
+        let root =
+            std::env::temp_dir().join(format!("sunrise-bundle-cycles-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{
+                "minecraft:black_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:black_bundle"}]},
+                "minecraft:white_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:orange_bundle"}]},
+                "minecraft:orange_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:white_bundle"}]},
+                "minecraft:blue_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:stone", "count": 16}]},
+                "minecraft:stone": {"minecraft:max_stack_size": 64}
+            }"#,
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        let stone = ItemStack::new("minecraft:stone", 1);
+        let mut empty = Contents::from_items(&items, Vec::new()).unwrap();
+        for id in ["minecraft:black_bundle", "minecraft:white_bundle"] {
+            let mut cyclic = ItemStack::new(id, 1);
+            assert!(Contents::of(&items, &cyclic).is_none());
+            assert_eq!(Contents::room_in_stack(&items, &cyclic, &stone), None);
+            assert!(tooltip_layout(&items, &cyclic, 0.0, 0.0, 96.0, 2).is_none());
+            let bar = stack_bar(&items, &cyclic).unwrap();
+            assert_eq!((bar.width, bar.color), (13, 0xFF5454));
+            assert_eq!(empty.try_insert(&items, &mut cyclic, true), 0);
+            assert_eq!(cyclic.count, 1);
+        }
+        assert!(empty.items().is_empty());
+
+        let mut child = ItemStack::new("minecraft:white_bundle", 1);
+        child
+            .data_mut()
+            .set_other("minecraft:bundle_contents", Some(Tag::List(Vec::new())));
+        let mut parent = ItemStack::new("minecraft:red_bundle", 1);
+        parent.data_mut().bundle_contents = vec![child.clone()];
+        assert_eq!(Contents::room_in_stack(&items, &parent, &stone), Some(60));
+
+        child
+            .data_mut()
+            .set_other("minecraft:bundle_contents", None);
+        child.data_mut().set_other(
+            "!minecraft:bundle_contents",
+            Some(Tag::Compound(Default::default())),
+        );
+        assert_eq!(Contents::room_in_stack(&items, &child, &stone), None);
+        parent.data_mut().bundle_contents = vec![child];
+        assert_eq!(Contents::room_in_stack(&items, &parent, &stone), Some(0));
+
+        // Both siblings can independently inherit the same nonempty prototype.
+        parent.data_mut().bundle_contents = vec![ItemStack::new("minecraft:blue_bundle", 1); 2];
+        assert_eq!(Contents::room_in_stack(&items, &parent, &stone), Some(24));
+    }
+
     #[test]
     fn loot_table_ids_list_the_roots_and_the_packs_tables() {
         let root = std::env::temp_dir().join(format!("sunrise-loot-ids-{}", std::process::id()));
@@ -3726,12 +4233,13 @@ mod tests {
         }
         let off = PackOverlay {
             files: &files,
-            ..PackOverlay::NONE
+            ..PackOverlay::default()
         };
         let enabled = sunrise_world::conditions::LoadConditions::new(["provider"]);
         let on = PackOverlay {
             files: &files,
             conditions: &enabled,
+            ..PackOverlay::default()
         };
         for kind in ["jukebox_song", "instrument", "enchantment"] {
             assert!(data_files(&root, kind, &off).is_empty());
@@ -3774,8 +4282,8 @@ mod tests {
         fs::write(dir.join("horn.json"), file.to_string()).unwrap();
         let conditions = sunrise_world::conditions::LoadConditions::new([]);
         let overlay = PackOverlay {
-            files: &[],
             conditions: &conditions,
+            ..PackOverlay::default()
         };
         let loaded = data_files(&root, "instrument", &overlay);
         fs::remove_dir_all(&root).unwrap();
@@ -3850,7 +4358,7 @@ mod tests {
                 serde_json::to_vec(&inventory).unwrap(),
             )
             .unwrap();
-            let loaded = load_tag_lists(&root, "block", &overlay).unwrap();
+            let loaded = tag_layers::load(&root, "block", &overlay, |_| true).unwrap();
             assert_eq!(
                 loaded["visuals:layers"],
                 ["minecraft:iron_block", "minecraft:gold_block"]
@@ -3888,7 +4396,7 @@ mod tests {
                 vec![bytes(json!({"values": ["minecraft:sand"]}))],
             ),
         ];
-        let loaded = load_tag_lists(&root, "item", &PackOverlay::new(&files)).unwrap();
+        let loaded = tag_layers::load(&root, "item", &PackOverlay::new(&files), |_| true).unwrap();
         assert!(loaded["test:things"].is_empty());
         assert_eq!(loaded["test:other"], ["minecraft:sand"]);
         fs::remove_dir_all(root).unwrap();
@@ -4527,7 +5035,9 @@ mod tests {
     ) -> LootContext<'a, LegacyRandom> {
         LootContext {
             query: sunrise_world::loot::query::current_query(),
+            place: sunrise_world::loot::current_native_loot_place(),
             items,
+            local_bindings: None,
             block,
             properties: props,
             held,
@@ -4537,6 +5047,8 @@ mod tests {
             entity_levels: None,
             block_levels: None,
             target: None,
+            target_entity: None,
+            interacting_entity: None,
             location: None,
             keep_empty: false,
         }
@@ -4569,30 +5081,26 @@ mod tests {
     /// through the conversion the block-drop path uses.
     #[test]
     fn a_mod_function_changes_the_stack_the_items_engine_drops() {
+        use sunrise_world::loot::LootStackEditAccess;
         let items = Items::for_tests(HashMap::new());
         let props = sunrise_world::chunk::BlockProperties::new();
-        let mut random = LegacyRandom::new(7);
-        let block = ctx(&items, None, &props, "minecraft:stone");
-        let native = block.native_loot_context(&mut random);
-        let mut stack = ItemStack::new("minecraft:stone", 1);
-        mod_function(
-            "mymod:seven",
-            &json!({"type": "mymod:seven"}),
-            &native,
-            &items,
-            &mut stack,
-            |_, _, _, loot| {
-                loot.item = "minecraft:diamond".to_owned();
-                loot.count = 7;
-                loot.components.push((
-                    "minecraft:custom_data".to_owned(),
-                    Some(
-                        sunrise_core::json_nbt::json_to_tag(&json!({"machine": "furnace"}))
-                            .unwrap(),
-                    ),
-                ));
-            },
+        let mut held = ItemStack::new("minecraft:diamond_pickaxe", 1);
+        held.enchant("minecraft:fortune", 3);
+        let block = ctx(&items, Some(&held), &props, "minecraft:stone");
+        let native = block.roll_facts();
+        let mut candidate =
+            crate::loot_candidate::LootCandidate::from_stack(ItemStack::new("minecraft:stone", 1));
+        let tool = native.tool.unwrap();
+        assert_eq!(tool.item_id(), "minecraft:diamond_pickaxe");
+        assert_eq!(tool.enchantment_at(0), Some(("minecraft:fortune", 3)));
+        assert!(tool.enchantment_at(1).is_none());
+        candidate.set_item_id("minecraft:diamond");
+        candidate.set_count(7);
+        candidate.push_component(
+            "minecraft:custom_data".to_owned(),
+            Some(sunrise_core::json_nbt::json_to_tag(&json!({"machine": "furnace"})).unwrap()),
         );
+        let stack = candidate.into_item_stack(&items);
         assert_eq!(&*stack.item, "minecraft:diamond");
         assert_eq!(stack.count, 7);
         assert_eq!(
@@ -4604,32 +5112,188 @@ mod tests {
     }
 
     #[test]
+    fn two_ordered_custom_functions_share_live_signed_count_map_exploration_and_components() {
+        use std::sync::{Arc, Mutex};
+        use sunrise_core::nbt::Tag;
+        use sunrise_world::loot::{
+            ApiExplorationMap, LootStackEditAccess,
+            types::{
+                BoundCondition, BoundFunction, DecodedCondition, DecodedFunction, Registry,
+                RollRandom, Types,
+            },
+        };
+        struct First;
+        impl BoundFunction for First {
+            fn apply(
+                &self,
+                _: &sunrise_world::loot::LootContext<'_>,
+                _: &mut dyn RollRandom,
+                _: &dyn sunrise_world::loot::LootTags,
+                stack: &mut dyn LootStackEditAccess,
+            ) -> std::result::Result<(), String> {
+                stack.set_count(-2);
+                stack.set_map(true);
+                stack.set_exploration(Some(ApiExplorationMap::new(
+                    "minecraft:on_woodland_explorer_maps".into(),
+                    "minecraft:mansion".into(),
+                    3,
+                    75,
+                    false,
+                )));
+                stack.push_component(
+                    "minecraft:potion_contents".into(),
+                    Some(Tag::compound([
+                        ("potion", Tag::String("minecraft:healing".into())),
+                        ("custom_color", Tag::Int(0x186cb8)),
+                    ])),
+                );
+                stack.push_component(
+                    "minecraft:written_book_content".into(),
+                    Some(Tag::compound([
+                        (
+                            "title",
+                            Tag::compound([("raw", Tag::String("Notes".into()))]),
+                        ),
+                        ("author", Tag::String("Alice".into())),
+                        ("generation", Tag::Int(1)),
+                        (
+                            "pages",
+                            Tag::List(vec![Tag::compound([("raw", Tag::String("Hello".into()))])]),
+                        ),
+                    ])),
+                );
+                Ok(())
+            }
+        }
+        struct Second(Arc<Mutex<Option<(i32, bool, Option<String>)>>>);
+        impl BoundFunction for Second {
+            fn apply(
+                &self,
+                _: &sunrise_world::loot::LootContext<'_>,
+                _: &mut dyn RollRandom,
+                _: &dyn sunrise_world::loot::LootTags,
+                stack: &mut dyn LootStackEditAccess,
+            ) -> std::result::Result<(), String> {
+                let view = stack.as_view();
+                *self.0.lock().unwrap() = Some((
+                    view.count(),
+                    view.map(),
+                    view.exploration().map(|m| m.destination().to_owned()),
+                ));
+                assert!(
+                    view.components().iter().any(|(id, value)| id
+                        == "minecraft:written_book_content"
+                        && value.is_some())
+                );
+                assert_eq!(view.potion(), Some("minecraft:healing"));
+                let next = view.count() + 5;
+                stack.set_count(next);
+                stack.set_potion_id(Some("minecraft:swiftness".into()));
+                assert_eq!(stack.as_view().potion(), Some("minecraft:swiftness"));
+                Ok(())
+            }
+        }
+        struct TestRegistry(Arc<Mutex<Option<(i32, bool, Option<String>)>>>);
+        impl Registry for TestRegistry {
+            fn contains(&self, kind: &str, function: bool) -> bool {
+                function && matches!(kind, "test:first" | "test:second")
+            }
+            fn conditional(&self, _: &str) -> bool {
+                false
+            }
+            fn decode_function(
+                &self,
+                kind: &str,
+                _: &Value,
+            ) -> std::result::Result<DecodedFunction, String> {
+                let rule: Arc<dyn BoundFunction> = match kind {
+                    "test:first" => Arc::new(First),
+                    "test:second" => Arc::new(Second(self.0.clone())),
+                    _ => return Err(format!("unknown {kind}")),
+                };
+                Ok(DecodedFunction {
+                    rule,
+                    referenced_params: Vec::new(),
+                })
+            }
+            fn decode_condition(
+                &self,
+                kind: &str,
+                _: &Value,
+            ) -> std::result::Result<DecodedCondition, String> {
+                let _: Option<Arc<dyn BoundCondition>> = None;
+                Err(format!("unknown {kind}"))
+            }
+        }
+        let observed = Arc::new(Mutex::new(None));
+        let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:written_book","modifier":[{"type":"test:first"},{"type":"test:second"}]}]}]});
+        let tables = Arc::new(sunrise_world::loot::LootTables::from_iter([(
+            "test:live".to_owned(),
+            table,
+        )]));
+        let bindings = Types::new(Arc::new(TestRegistry(observed.clone())))
+            .bind_generation(
+                tables.clone(),
+                Arc::default(),
+                Arc::default(),
+                Vec::new(),
+                Default::default(),
+            )
+            .unwrap();
+        let mut items = Items::for_tests(HashMap::new());
+        items.loot = tables;
+        items.loot_bindings = bindings;
+        let drops = items.loot_table("test:live", false, None, &mut LegacyRandom::new(1));
+        assert_eq!(
+            *observed.lock().unwrap(),
+            Some((
+                -2,
+                true,
+                Some("minecraft:on_woodland_explorer_maps".to_owned())
+            ))
+        );
+        assert_eq!(drops.len(), 3);
+        for book in &drops {
+            assert_eq!(book.count, 1);
+            assert_eq!(book.potion(), Some("minecraft:swiftness"));
+            let data = book.data().expect("book and potion components");
+            assert_eq!(
+                data.potion_extra,
+                vec![("custom_color".into(), Tag::Int(0x186cb8))]
+            );
+            let written = data.written.as_ref().expect("decoded book contents");
+            assert_eq!(written.title, "Notes");
+            assert_eq!(written.author, "Alice");
+            assert_eq!(written.generation, 1);
+            assert_eq!(written.pages, ["Hello"]);
+        }
+    }
+
+    #[test]
     fn loot_patches_keep_nbt_types_removals_and_order() {
         use sunrise_core::nbt::Tag;
+        use sunrise_world::loot::{LootStackAccess, LootStackEditAccess};
         let mut stack = ItemStack::new("minecraft:stone", 1);
         stack
             .data_mut()
             .set_other("test:array", Some(Tag::ByteArray(vec![7])));
         stack.data_mut().set_other("test:byte", Some(Tag::Byte(7)));
-        let before = loot_of(&stack);
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
         assert!(
-            before
-                .components
+            candidate
+                .components()
                 .contains(&("test:array".into(), Some(Tag::ByteArray(vec![7]))))
         );
         assert!(
-            before
-                .components
+            candidate
+                .components()
                 .contains(&("test:byte".into(), Some(Tag::Byte(7))))
         );
-        let mut after = before.clone();
-        after.components.extend([
-            ("test:array".into(), Some(Tag::List(vec![Tag::Int(7)]))),
-            ("test:array".into(), None),
-            ("test:array".into(), Some(Tag::ByteArray(vec![7]))),
-            ("test:byte".into(), None),
-        ]);
-        apply_loot(&before, &after, &mut stack, |_, _| Some(false));
+        candidate.push_component("test:array".into(), Some(Tag::List(vec![Tag::Int(7)])));
+        candidate.push_component("test:array".into(), None);
+        candidate.push_component("test:array".into(), Some(Tag::ByteArray(vec![7])));
+        candidate.push_component("test:byte".into(), None);
+        let stack = candidate.into_item_stack_with(&|_, _| Some(false));
         assert_eq!(
             stack.data().unwrap().other("test:array"),
             Some(&Tag::ByteArray(vec![7]))
@@ -4640,15 +5304,17 @@ mod tests {
     #[test]
     fn loot_trim_patch_decodes_materializes_captures_and_removes() {
         use sunrise_core::nbt::Tag;
-        let mut stack = ItemStack::new("minecraft:iron_chestplate", 1);
-        let before = loot_of(&stack);
-        let mut after = before.clone();
+        use sunrise_world::loot::{LootStackAccess, LootStackEditAccess};
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(ItemStack::new(
+            "minecraft:iron_chestplate",
+            1,
+        ));
         let trim = sunrise_core::json_nbt::json_to_tag(
             &json!({"material": "minecraft:gold", "pattern": "minecraft:sentry"}),
         )
         .unwrap();
-        after.components.push(("minecraft:trim".into(), Some(trim)));
-        apply_loot(&before, &after, &mut stack, |_, _| Some(false));
+        candidate.push_component("minecraft:trim".into(), Some(trim));
+        let stack = candidate.into_item_stack_with(&|_, _| Some(false));
         assert_eq!(
             stack.data().unwrap().trim.as_ref().cloned(),
             Some((
@@ -4656,10 +5322,10 @@ mod tests {
                 crate::item_data::trim::Holder::Named("minecraft:sentry".into())
             ))
         );
-        let captured = loot_of(&stack);
+        let mut captured = crate::loot_candidate::LootCandidate::from_stack(stack);
         assert_eq!(
-            captured.components,
-            vec![(
+            captured.components(),
+            &[(
                 "minecraft:trim".into(),
                 Some(Tag::Compound(
                     [
@@ -4670,27 +5336,22 @@ mod tests {
                 ))
             )]
         );
-        let mut removed = captured.clone();
-        removed.components.push(("minecraft:trim".into(), None));
-        apply_loot(&captured, &removed, &mut stack, |_, _| Some(false));
+        captured.push_component("minecraft:trim".into(), None);
+        let stack = captured.into_item_stack_with(&|_, _| Some(false));
         assert!(stack.data().is_none_or(|data| data.trim.is_none()));
     }
 
     #[test]
     fn an_unrelated_loot_patch_does_not_restore_a_captured_name() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:stick", 1);
         stack
             .data_mut()
             .set_loot_name("minecraft:custom_name", &json!("Old"));
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after
-            .names
-            .push(("minecraft:custom_name".into(), json!("New")));
-        after
-            .components
-            .push(("test:byte".into(), Some(sunrise_core::nbt::Tag::Byte(7))));
-        apply_loot(&before, &after, &mut stack, |_, _| Some(false));
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.push_name_value("minecraft:custom_name".into(), json!("New"));
+        candidate.push_component("test:byte".into(), Some(sunrise_core::nbt::Tag::Byte(7)));
+        let stack = candidate.into_item_stack_with(&|_, _| Some(false));
         assert_eq!(
             stack.data().unwrap().custom_name,
             Some(sunrise_core::nbt::Tag::String("New".into()))
@@ -4720,11 +5381,10 @@ mod tests {
     /// prototype's value doesn't come back.
     #[test]
     fn a_hook_removing_a_prototype_component_keeps_it_removed() {
-        let mut stack = epic_stick();
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.retain(|(id, _)| id != "minecraft:rarity");
-        apply_loot(&before, &after, &mut stack, stick_has_rarity);
+        use sunrise_world::loot::LootStackEditAccess;
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(epic_stick());
+        candidate.retain_components(&mut |id, _| id != "minecraft:rarity");
+        let stack = candidate.into_item_stack_with(&stick_has_rarity);
         let data = stack.data().expect("the marker is stack data");
         assert_eq!(data.other("minecraft:rarity"), None);
         assert_eq!(data.other("!minecraft:rarity").cloned(), removal_marker());
@@ -4733,11 +5393,10 @@ mod tests {
     /// The same removal written as an explicit `None` entry of the patch.
     #[test]
     fn an_explicit_none_entry_for_a_prototype_component_keeps_it_removed() {
-        let mut stack = epic_stick();
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.push(("minecraft:rarity".into(), None));
-        apply_loot(&before, &after, &mut stack, stick_has_rarity);
+        use sunrise_world::loot::LootStackEditAccess;
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(epic_stick());
+        candidate.push_component("minecraft:rarity".into(), None);
+        let stack = candidate.into_item_stack_with(&stick_has_rarity);
         let data = stack.data().expect("the marker is stack data");
         assert_eq!(data.other("minecraft:rarity"), None);
         assert_eq!(data.other("!minecraft:rarity").cloned(), removal_marker());
@@ -4747,14 +5406,14 @@ mod tests {
     /// `PatchedDataComponentMap.remove` leaves the patch without the type.
     #[test]
     fn a_hook_removing_a_component_the_prototype_lacks_leaves_no_marker() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:stick", 1);
         stack
             .data_mut()
             .set_other("test:byte", Some(sunrise_core::nbt::Tag::Byte(7)));
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.retain(|(id, _)| id != "test:byte");
-        apply_loot(&before, &after, &mut stack, stick_has_rarity);
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.retain_components(&mut |id, _| id != "test:byte");
+        let stack = candidate.into_item_stack_with(&stick_has_rarity);
         assert!(stack.data().is_none_or(
             |data| data.other("test:byte").is_none() && data.other("!test:byte").is_none()
         ));
@@ -4763,17 +5422,17 @@ mod tests {
     /// A value the hook sets replaces an earlier removal of the same component.
     #[test]
     fn a_hook_setting_a_removed_component_drops_the_marker() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:stick", 1);
         stack
             .data_mut()
             .set_other("!minecraft:rarity", removal_marker());
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.push((
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.push_component(
             "minecraft:rarity".into(),
             Some(sunrise_core::nbt::Tag::String("rare".into())),
-        ));
-        apply_loot(&before, &after, &mut stack, stick_has_rarity);
+        );
+        let stack = candidate.into_item_stack_with(&stick_has_rarity);
         let data = stack.data().expect("the value is stack data");
         assert_eq!(
             data.other("minecraft:rarity"),
@@ -4786,13 +5445,10 @@ mod tests {
     /// removal: the stack's own value goes and the marker stays.
     #[test]
     fn a_hook_writing_the_removal_form_removes_the_component() {
-        let mut stack = epic_stick();
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after
-            .components
-            .push(("!minecraft:rarity".into(), removal_marker()));
-        apply_loot(&before, &after, &mut stack, stick_has_rarity);
+        use sunrise_world::loot::LootStackEditAccess;
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(epic_stick());
+        candidate.push_component("!minecraft:rarity".into(), removal_marker());
+        let stack = candidate.into_item_stack_with(&stick_has_rarity);
         let data = stack.data().expect("the marker is stack data");
         assert_eq!(data.other("minecraft:rarity"), None);
         assert_eq!(data.other("!minecraft:rarity").cloned(), removal_marker());
@@ -4802,19 +5458,18 @@ mod tests {
     /// marker and a value without one.
     #[test]
     fn ordered_entries_for_one_component_end_on_the_last() {
+        use sunrise_world::loot::LootStackEditAccess;
         let rare = Some(sunrise_core::nbt::Tag::String("rare".into()));
         for (entries, value, marker) in [
             (vec![rare.clone(), None], None, removal_marker()),
             (vec![None, rare.clone()], rare.clone(), None),
         ] {
-            let mut stack = epic_stick();
-            let before = loot_of(&stack);
-            let mut after = before.clone();
-            after.components.retain(|(id, _)| id != "minecraft:rarity");
+            let mut candidate = crate::loot_candidate::LootCandidate::from_stack(epic_stick());
+            candidate.retain_components(&mut |id, _| id != "minecraft:rarity");
             for entry in entries {
-                after.components.push(("minecraft:rarity".into(), entry));
+                candidate.push_component("minecraft:rarity".into(), entry);
             }
-            apply_loot(&before, &after, &mut stack, stick_has_rarity);
+            let stack = candidate.into_item_stack_with(&stick_has_rarity);
             let data = stack.data();
             assert_eq!(
                 data.and_then(|d| d.other("minecraft:rarity")).cloned(),
@@ -4831,17 +5486,17 @@ mod tests {
     /// compound) changes nothing: an earlier removal and its marker survive.
     #[test]
     fn a_refused_replacement_keeps_the_removal() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:stick", 1);
         stack
             .data_mut()
             .set_other("!minecraft:custom_data", removal_marker());
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.push((
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.push_component(
             "minecraft:custom_data".into(),
             Some(sunrise_core::nbt::Tag::Int(7)),
-        ));
-        apply_loot(&before, &after, &mut stack, |_, _| Some(true));
+        );
+        let stack = candidate.into_item_stack_with(&|_, _| Some(true));
         let data = stack.data().expect("the marker is stack data");
         assert_eq!(data.other("minecraft:custom_data"), None);
         assert_eq!(
@@ -4854,17 +5509,17 @@ mod tests {
     /// an earlier removal, and the stack saves and reloads the empty list.
     #[test]
     fn an_empty_banner_pattern_list_replaces_a_removal() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:white_banner", 1);
         stack
             .data_mut()
             .set_other("!minecraft:banner_patterns", removal_marker());
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.push((
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.push_component(
             "minecraft:banner_patterns".into(),
             Some(sunrise_core::nbt::Tag::List(Vec::new())),
-        ));
-        apply_loot(&before, &after, &mut stack, |_, _| Some(true));
+        );
+        let stack = candidate.into_item_stack_with(&|_, _| Some(true));
         let saved = crate::item_data::encode_components(&stack, &Items::default());
         let Some(sunrise_core::nbt::Tag::Compound(saved)) = saved else {
             panic!("the empty list is saved");
@@ -4883,16 +5538,16 @@ mod tests {
     /// stack into a stick and removes its rarity leaves the stick's marker.
     #[test]
     fn the_final_items_prototype_decides_a_removal() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:stone", 1);
         stack.data_mut().set_other(
             "minecraft:rarity",
             Some(sunrise_core::nbt::Tag::String("epic".into())),
         );
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.item = "minecraft:stick".into();
-        after.components.retain(|(id, _)| id != "minecraft:rarity");
-        apply_loot(&before, &after, &mut stack, stick_has_rarity);
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.set_item_id("minecraft:stick");
+        candidate.retain_components(&mut |id, _| id != "minecraft:rarity");
+        let stack = candidate.into_item_stack_with(&stick_has_rarity);
         assert_eq!(&*stack.item, "minecraft:stick");
         let data = stack.data().expect("the marker is stack data");
         assert_eq!(data.other("!minecraft:rarity").cloned(), removal_marker());
@@ -4901,12 +5556,12 @@ mod tests {
     /// A damage removal zeroes the scalar: no saved damage beside its `!id`.
     #[test]
     fn a_damage_removal_zeroes_the_stacks_damage() {
+        use sunrise_world::loot::LootStackEditAccess;
         let mut stack = ItemStack::new("minecraft:iron_sword", 1);
         stack.damage = 5;
-        let before = loot_of(&stack);
-        let mut after = before.clone();
-        after.components.push(("minecraft:damage".into(), None));
-        apply_loot(&before, &after, &mut stack, |item, id| {
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        candidate.push_component("minecraft:damage".into(), None);
+        let stack = candidate.into_item_stack_with(&|item, id| {
             Some(item == "minecraft:iron_sword" && id == "minecraft:damage")
         });
         assert_eq!(stack.damage, 0);
@@ -4925,11 +5580,22 @@ mod tests {
     /// stack's explicit marker rather than dropping it.
     #[test]
     fn from_loot_keeps_an_explicit_removal() {
-        let mut loot = loot_of(&ItemStack::new("minecraft:stick", 1));
-        loot.components = vec![
-            ("!minecraft:rarity".into(), removal_marker()),
-            ("minecraft:rarity".into(), None),
-        ];
+        let loot = sunrise_world::loot::LootStack {
+            item: "minecraft:stick".into(),
+            count: 1,
+            damage: 0,
+            enchantments: Vec::new(),
+            potion: None,
+            map: false,
+            exploration: None,
+            ominous_amplifier: None,
+            stew_effects: Vec::new(),
+            names: Vec::new(),
+            components: vec![
+                ("!minecraft:rarity".into(), removal_marker()),
+                ("minecraft:rarity".into(), None),
+            ],
+        };
         let stack = ItemStack::from_loot(&loot);
         assert_eq!(
             stack
@@ -4945,48 +5611,29 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_mod_function_removing_a_prototype_component_leaves_the_stack_without_it() {
+        use sunrise_world::loot::LootStackEditAccess;
         let items = prepared_items().expect("prepared item resources");
         let info = items.get("minecraft:stick").expect("stick");
         assert!(info.components.iter().any(|c| c == "minecraft:rarity"));
-        let props = sunrise_world::chunk::BlockProperties::new();
-        let mut random = LegacyRandom::new(7);
-        let block = ctx(&items, None, &props, "minecraft:stone");
-        let native = block.native_loot_context(&mut random);
-        let mut stack = epic_stick();
-        mod_function(
-            "mymod:plain",
-            &json!({"type": "mymod:plain"}),
-            &native,
-            &items,
-            &mut stack,
-            |_, _, _, loot| loot.components.retain(|(id, _)| id != "minecraft:rarity"),
-        );
+        let mut candidate = crate::loot_candidate::LootCandidate::from_stack(epic_stick());
+        candidate.retain_components(&mut |id, _| id != "minecraft:rarity");
+        let stack = candidate.into_item_stack(&items);
         assert!(!stack.carries_component(Some(info), "minecraft:rarity"));
     }
 
-    /// A function that leaves the stack alone keeps its own form: the round
-    /// trip through the loot engine's stack changes nothing.
+    /// A function that leaves the stack alone keeps its own form: lending the
+    /// live candidate without edits changes nothing.
     #[test]
     fn a_mod_function_that_changes_nothing_keeps_the_stacks_form() {
         let items = Items::for_tests(HashMap::new());
-        let props = sunrise_world::chunk::BlockProperties::new();
-        let mut random = LegacyRandom::new(7);
-        let block = ctx(&items, None, &props, "minecraft:stone");
-        let native = block.native_loot_context(&mut random);
         let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
         stack.enchant("minecraft:sharpness", 3);
         stack
             .data_mut()
             .set_loot_name("minecraft:custom_name", &json!("Excalibur"));
         let before = stack.clone();
-        mod_function(
-            "mymod:nothing",
-            &json!({"type": "mymod:nothing"}),
-            &native,
-            &items,
-            &mut stack,
-            |_, _, _, _| {},
-        );
+        let candidate = crate::loot_candidate::LootCandidate::from_stack(stack);
+        let stack = candidate.into_item_stack(&items);
         assert_eq!(stack, before);
     }
 
@@ -5254,6 +5901,8 @@ mod tests {
         let answered = |pick| LootContext {
             block_levels: Some(&levels),
             target: None,
+            target_entity: None,
+            interacting_entity: None,
             ..ctx(&items, pick, &props, "minecraft:stone")
         };
         let count = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond","modifier":[{"type":"minecraft:apply_bonus","enchantment":"minecraft:fortune","formula":"minecraft:uniform_bonus_count","parameters":{"bonusMultiplier":2}}]}]}]});
@@ -5288,6 +5937,8 @@ mod tests {
         let context = LootContext {
             block_levels: Some(&levels),
             target: None,
+            target_entity: None,
+            interacting_entity: None,
             ..ctx(&items, None, &props, "minecraft:stone")
         };
         for bonus in [
@@ -5505,6 +6156,54 @@ mod tests {
         assert!(modded.items["minecraft:fishing_rod"].is("minecraft:fishing_rod"));
         assert!(!modded.items["minecraft:stick"].is("minecraft:fishing_rod"));
         assert_eq!(modded.items["minecraft:fishing_rod"].template, None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `ItemInfo::is_bundle_item` checks vanilla's `BundleItem` class (including templated content
+    /// items), not merely carrying a default `minecraft:bundle_contents` component.
+    #[test]
+    fn is_bundle_item_checks_bundle_item_class_not_bundle_contents_default() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-bundle-item-class-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
+        let items = r#"{
+            "minecraft:bundle": {"minecraft:bundle_contents": []},
+            "minecraft:red_bundle": {"minecraft:bundle_contents": []},
+            "minecraft:stick": {},
+            "ruby:pouch": {"minecraft:bundle_contents": []},
+            "ruby:dyed_pouch": {"minecraft:bundle_contents": []}
+        }"#;
+        fs::write(root.join("items.json"), items).unwrap();
+        fs::write(
+            root.join(MOD_ITEM_TEMPLATES),
+            r#"{"ruby:dyed_pouch": "minecraft:red_bundle"}"#,
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+        let catalog = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
+        assert!(catalog.items["minecraft:bundle"].is_bundle_item());
+        assert!(catalog.items["minecraft:red_bundle"].is_bundle_item());
+        assert!(catalog.items["ruby:dyed_pouch"].is_bundle_item());
+        assert!(
+            catalog.items["ruby:pouch"]
+                .components
+                .iter()
+                .any(|component| component == "minecraft:bundle_contents")
+        );
+        assert!(
+            !catalog.items["ruby:pouch"].is_bundle_item(),
+            "a default bundle_contents component alone does not make an item a BundleItem"
+        );
+        assert!(!catalog.items["minecraft:stick"].is_bundle_item());
+        if let Some(prepared) = prepared_items() {
+            for id in VANILLA_BUNDLE_ITEMS {
+                assert!(
+                    prepared.get(id).is_some_and(ItemInfo::is_bundle_item),
+                    "prepared catalog must recognize vanilla BundleItem {id}"
+                );
+            }
+        }
         fs::remove_dir_all(&root).unwrap();
     }
 }

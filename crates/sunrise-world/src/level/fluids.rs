@@ -4,7 +4,7 @@ use super::{
     Behaviours, LevelAccess, Sim, Spread,
     buckets::{Douse, Drain, PlacedLiquid},
     classes::{Class, Interface},
-    fluid_interactions::{Cell, first_match},
+    fluid_interactions::{Cell, Matched, first_match},
     update::{HORIZONTAL, above, below, rel},
 };
 use crate::{
@@ -810,22 +810,39 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if neighbour > 0 {
             for (direction, new_fluid, tested, container) in self.spread_targets(kind, pos, state) {
                 let neighbour_pos = rel(pos, direction);
-                // An earlier placement part or neighbour update can invalidate a
-                // later target. Apply the saved arrival only to the tested states;
-                // don't ask a replacement block for a new container decision.
-                if self.state(pos) != state
-                    || self.state(neighbour_pos) != tested
-                    || !self.can_pass_through_wall(direction, pos, state, tested)
-                    || !self.can_be_replaced_with(
-                        self.b.fluid(tested),
-                        neighbour_pos,
-                        new_fluid.kind(),
-                        direction,
-                    )
-                {
-                    continue;
-                }
-                self.spread_to(kind, neighbour_pos, tested, direction, new_fluid, container);
+                // `spreadToSides` hands each direction's live block to `spreadTo`,
+                // which asks `instanceof LiquidBlockContainer` — this `container`
+                // — of that block and nothing else. One case keeps the skip
+                // vanilla cannot express: a target a container's fill or a part
+                // rewrote mid-spread to a block that is no container and cannot
+                // be washed away (`lateral_flow_does_not_destroy_a_target_
+                // changed_by_an_earlier_container`). The rewrite is the part's
+                // own state; destroying it for the fluid would corrupt it, and
+                // a part's replacement cannot be told from a vanilla-style
+                // rewrite here.
+                let neighbour_state = self.state(neighbour_pos);
+                let container = if neighbour_state == tested {
+                    container
+                } else {
+                    match self.spread_container(neighbour_pos, neighbour_state, new_fluid.kind()) {
+                        Some(_) => true,
+                        None if self
+                            .b
+                            .in_set(neighbour_state, &self.b.tags.washed_away_by_fluids) =>
+                        {
+                            false
+                        }
+                        _ => continue,
+                    }
+                };
+                self.spread_to(
+                    kind,
+                    neighbour_pos,
+                    neighbour_state,
+                    direction,
+                    new_fluid,
+                    container,
+                );
             }
         }
     }
@@ -949,15 +966,38 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         });
         let below = b.block(self.below_state(pos));
-        let source_cell = self.fluid_at(pos).is_source();
-        let Some(result) = first_match(&interactions, neighbours, below, source_cell) else {
-            return true;
-        };
-        if let Some(state) = self.level.fluid_place_block(pos, pos, result) {
-            self.set_block_and_update(pos, state);
+        let fluid = self.fluid_at(pos);
+        let relative = |neighbour: usize| rel(pos, POSSIBLE_FLOW_DIRECTIONS[neighbour].opposite());
+        let level = &*self.level;
+        let matched = first_match(
+            &interactions,
+            neighbours,
+            below,
+            fluid.is_source(),
+            |handler, neighbour| {
+                level.fluid_interaction_test(handler, pos, relative(neighbour), fluid)
+            },
+        );
+        match matched {
+            None => true,
+            Some(Matched::Becomes(result)) => {
+                if let Some(state) = self.level.fluid_place_block(pos, pos, result) {
+                    self.set_block_and_update(pos, state);
+                }
+                self.level_event(1501, pos, 0);
+                false
+            }
+            Some(Matched::Handler { handler, neighbour }) => {
+                self.level.fluid_interaction_interact(
+                    self.ticks,
+                    handler,
+                    pos,
+                    relative(neighbour),
+                    fluid,
+                );
+                false
+            }
         }
-        self.level_event(1501, pos, 0);
-        false
     }
     /// `LiquidBlock.onPlace` / `neighborChanged`.
     pub(crate) fn liquid_block_changed(&mut self, pos: BlockPos, state: BlockStateId) {

@@ -10,14 +10,18 @@ pub trait Hooks {
     /// the opposite of `client_resources_reloaded`, which never runs at initial
     /// startup and runs after every later reload. The listener runs on the main thread;
     /// work a mod wants done in parallel is its own. The dedicated server has no client and never fires it
-    /// (see `server_about_to_start` for its `FMLDedicatedServerSetupEvent`). A
-    /// Setup permits client resource reads, not world handles or transactions.
-    /// The listener is a pure function of its `ClientHost` reads and its own state.
+    /// (see `server_about_to_start` for its `FMLDedicatedServerSetupEvent`). Receives a
+    /// [`ClientSetupContext`] for client setup and published resource queries without
+    /// world handles or transactions.
     #[hook(
+        receiver = "associated",
+        context = "client_setup",
+        dispatch = "flat",
         side = "client",
         contract = "listen",
         neoforge = "FMLClientSetupEvent",
-        cancellable = false
+        cancellable = false,
+        version = 2
     )]
     fn client_setup();
 }

@@ -1,0 +1,20 @@
+ids = [
+    "method:ItemsRegistrar::register_tooltip_appender",
+    "type:TooltipPlacement",
+    "type:TooltipPlacement.Before",
+    "type:TooltipPlacement.After",
+    "type:TooltipPlacement.AfterAll",
+    "const:VANILLA_TOOLTIP_COMPONENTS",
+]
+why = """Order tooltip appenders as NeoForge's `ItemTooltipHandler.init` does: the vanilla components from `VanillaDataComponentTooltips.collectVanillaAppenders`, chained in that order, and each appender's `Before`/`After` edge are sorted together by `CommonHooks.sortGraphChecked`, a topological sort that breaks ties by registration order. Appenders used to be placed one at a time against a hand-kept list of 23 vanilla details, so one mod could not anchor to another mod's component, and two appenders for one component, or anchors forming a cycle, were never caught.
+
+- As in that sort, `Before` puts the lines just before their anchor, but `After` only keeps them after it: unless something holds them back, they follow the last vanilla component.
+- An anchor may now be any of the vanilla tooltip components, listed in `VANILLA_TOOLTIP_COMPONENTS`, or a component another appender is registered for.
+- As `RegisterTooltipAppendersEvent.registerComponentAppender` throws, a second appender for one component refuses the mods at startup. That includes an appender for a vanilla component.
+- An anchor that nothing adds lines for, and anchors that form a cycle, also refuse the mods.
+- `AfterAll` now follows `minecraft:damage`, NeoForge's last vanilla node, so the lines go after the durability line instead of before it."""
+migrate = """
+- Register at most one appender per component, and none for a component in `VANILLA_TOOLTIP_COMPONENTS`. To change a vanilla component's lines, edit them in `Hooks::item_tooltip`.
+- `Before`/`After` may now name another mod's component, as long as that mod registers an appender for it.
+- If your `AfterAll` lines must come before the durability line, use `Before("minecraft:damage")`.
+"""

@@ -9,15 +9,61 @@
 //! it is, journaled: an abort puts it back, at every level of an item inside an item. A handler
 //! answering more than it was asked is a mod bug, named once, and the write aborts.
 use crate::HostTransaction;
+use crate::item::item_stack::{component_edits::edit_item_components, read_stack_view};
 use crate::{
-    BundleItems, Capability, Direction, ENTITY_ITEMS, EquipmentSlot, Hand, ITEMS, ItemResource,
-    ItemStack, LevelRef, MenuRef, MenuSlotBacking, ResourceHandler, ServerHost, StackWriteError,
-    Transaction, backend_mut_of, backend_of,
+    BundleItems, Capability, Direction, ENTITY_ITEMS, EquipmentSlot, Hand, ITEMS,
+    ItemComponentEditor, ItemKey, ItemResource, ItemStack, ItemStackView, LevelRef, MenuRef,
+    MenuSlotBacking, Overanswered, ResourceHandler, ServerHost, StackWriteError,
+    TransactionContext, TransactionError, backend_mut_of, backend_of,
 };
-use std::{fmt::Debug, marker::PhantomData};
+use std::{
+    fmt::Debug,
+    marker::PhantomData,
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+// no wire: process-local token for a transaction-scoped lent scratch slot.
+// exhaustive: its fields are private, so mods cannot build or destructure it.
+/// An opaque handle to a scratch item place lent for one
+/// [`HostTransaction::scratch_stack`] or [`HostTransaction::scratch_slots`] scope.
+///
+/// Each loan mints a process-unique id, and the token cannot cross Wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScratchSlot {
+    id: u64,
+}
+
+impl ScratchSlot {
+    /// Mints a process-unique scratch slot token.
+    // hidden: a game-side helper, not part of the mod surface.
+    #[doc(hidden)]
+    pub fn fresh() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .expect("scratch slot sequence exhausted");
+        Self { id }
+    }
+
+    /// The scratch slot's process-unique id.
+    // hidden: a game-side helper, not part of the mod surface.
+    #[doc(hidden)]
+    pub fn id(self) -> u64 {
+        self.id
+    }
+}
 
 /// Where a stack lives.
-// no wire: preserves stable explicit variant tags (Equipment is 9) and interns Mod.provider into a bounded static string.
+///
+/// This is a local item address: encode your own `Wire` schema or an [`ItemStack`] at
+/// serialization or network boundaries.
+///
+/// ```compile_fail,E0277
+/// fn requires_wire<T: mod_api::wire::Wire>() {}
+/// requires_wire::<mod_api::ItemPlace>();
+/// ```
+// no wire: process-local item address carrying handles, scratch slot IDs and static provider names.
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
 pub enum ItemPlace {
@@ -62,7 +108,11 @@ pub enum ItemPlace {
     },
     /// Slot `slot` of the inventory of entity `entity` in the level in place: a chest or hopper
     /// minecart's, a chest boat's, or a chested donkey's, mule's or llama's
-    /// (`Capabilities.Item.ENTITY` through `forHandlerIndex`).
+    /// (`Capabilities.Item.ENTITY` through `forHandlerIndex`). Reading or writing a chest
+    /// vehicle's slot unpacks its pending loot table without a player
+    /// (`ContainerEntity.getChestVehicleItem` / `setChestVehicleItem`). The fill uses empty
+    /// slots without replacing occupied ones, and reads and writes use the live vehicle
+    /// menu's slots while it is open.
     EntitySlot {
         /// The entity's network id.
         entity: u32,
@@ -71,9 +121,10 @@ pub enum ItemPlace {
     },
     /// Slot `slot` of living entity `entity`'s equipment (NeoForge's
     /// `LivingEntityEquipmentWrapper` through `Capabilities.Item.ENTITY`), reached through
-    /// [`ENTITY_ITEMS`](crate::ENTITY_ITEMS). Its write is the equipment write
-    /// `LivingRef::set_equipment` makes, so the equip and unequip game event, sound and
-    /// attribute updates are the same, and a transaction that aborts puts it back.
+    /// [`ENTITY_ITEMS`](crate::ENTITY_ITEMS). A slot replacement uses the equipment write
+    /// `LivingRef::set_equipment` makes, with the same game events, sounds and attribute
+    /// updates. [`edit`](Self::edit) changes only the components without those equip effects.
+    /// A transaction that aborts restores the previous slot.
     Equipment {
         /// The entity's network id.
         entity: u32,
@@ -107,22 +158,25 @@ pub enum ItemPlace {
         /// The provider's own key for the place.
         key: u64,
     },
-    /// A stack outside the world (`ItemAccess.forStack`): a crafting result, a preview, a stack
-    /// about to be given. [`ItemsServerHost::scratch_stack`](crate::prelude::ItemsServerHost::scratch_stack)
-    /// makes one in a transaction and
-    /// [`scratch_take`](crate::prelude::ItemsServerHost::scratch_take) takes it back out. It
-    /// lives until the outermost transaction closes; an abort puts it back as it was, or drops
-    /// it if the aborted transaction made it. A write never changes its item, only its count and
-    /// components, as `StackItemAccess`: what doesn't fit, or is another item, is refused.
-    Scratch(u64),
+    /// A stack outside the world (`ItemAccess.forStack`), or a two-slot copy whose item may
+    /// change (`DispenseFluidContainer`): a crafting result, a preview, a stack about to be
+    /// given, or a dispensed fluid container. [`HostTransaction::scratch_stack`] lends a
+    /// single-slot place (whose writes keep the same item and refuse what doesn't fit or is
+    /// another item, as `StackItemAccess`), and [`HostTransaction::scratch_slots`] lends a
+    /// two-slot place whose first slot holds the stack and whose second slot catches what
+    /// doesn't fit (`forHandlerIndex`, as a changed item split off a stack does).
+    ///
+    /// The place lives only for the scope of that callback; its final stack or slots are
+    /// returned on commit, and an abort restores or drops it. It cannot cross Wire.
+    Scratch(ScratchSlot),
     /// The place inside, where an insert goes into that slot only
     /// (`ItemAccess.forHandlerIndexStrict`): around a [`BlockEntity`](Self::BlockEntity),
     /// [`EntitySlot`](Self::EntitySlot) or [`Nested`](Self::Nested) slot, what doesn't fit is
     /// refused instead of spread to the other slots. Around any other place it is that place.
     Strict(Box<ItemPlace>),
-    /// One item at a time of the place inside (`ItemAccess.oneByOne`): its count reads at most
-    /// 1 and an extract takes at most 1, so a handler acting on the whole stack acts on one.
-    /// Inserts go to the place inside as they would.
+    /// One item at a time of the place inside (`ItemAccess.oneByOne`, `OneByOneItemAccess`): the
+    /// view and its projection show one item without changing the stored count, and both inserts
+    /// and extracts move at most one item.
     OneByOne(Box<ItemPlace>),
     /// The place inside, as a player with infinite materials reaches it
     /// (`ItemAccess.forInfiniteMaterials`): while `player` has them (creative's `instabuild`),
@@ -130,25 +184,13 @@ pub enum ItemPlace {
     /// player only if they have none: into their inventory, or dropped at the root commit when
     /// it is full. Inserting nothing gives nothing. Otherwise it is the place inside.
     ///
-    /// Wrappers may nest to any depth in a mod's own code: reading and writing undo them in a
-    /// loop. One crossing the wasm boundary nests at most 15 wrappers deep (the wire's 32
-    /// levels, two for each); a deeper one is refused there.
+    /// Wrappers may nest to any depth: reading and writing undo them in a loop.
     InfiniteMaterials {
         /// The player's UUID.
         player: u128,
         /// The place the player reaches.
         inner: Box<ItemPlace>,
     },
-    /// A stack outside the world whose item may change: a private two-slot copy, as
-    /// `DispenseFluidContainer` runs a dispensed container, so an empty bucket can become a
-    /// full one. [`ItemsServerHost::scratch_slots`](crate::prelude::ItemsServerHost::scratch_slots)
-    /// makes one in a transaction with the stack in its first slot, and
-    /// [`scratch_take_slots`](crate::prelude::ItemsServerHost::scratch_take_slots) takes both
-    /// slots back out. Reads and extracts are the first slot's; an insert fills the first slot
-    /// where it is empty or holds the same item and components, and what doesn't fit goes to
-    /// the second (`forHandlerIndex`), as a changed item split off a stack does. It lives and
-    /// aborts as a [`Scratch`](Self::Scratch) stack does.
-    ScratchSlots(u64),
 }
 
 impl Clone for ItemPlace {
@@ -230,8 +272,7 @@ impl Clone for ItemPlace {
                         key: *key,
                     };
                 }
-                Self::Scratch(id) => break Self::Scratch(*id),
-                Self::ScratchSlots(id) => break Self::ScratchSlots(*id),
+                Self::Scratch(slot) => break Self::Scratch(*slot),
             }
         };
         for link in links.into_iter().rev() {
@@ -259,7 +300,7 @@ impl Drop for ItemPlace {
             | Self::OneByOne(inner)
             | Self::InfiniteMaterials { inner, .. }
             | Self::Nested { parent: inner, .. } => {
-                std::mem::replace(inner, Box::new(Self::Scratch(0)))
+                std::mem::replace(inner, Box::new(Self::ItemEntity { id: 0 }))
             }
             _ => return,
         };
@@ -268,27 +309,35 @@ impl Drop for ItemPlace {
         | Self::InfiniteMaterials { inner, .. }
         | Self::Nested { parent: inner, .. } = &mut *current
         {
-            let next = std::mem::replace(inner, Box::new(Self::Scratch(0)));
+            let next = std::mem::replace(inner, Box::new(Self::ItemEntity { id: 0 }));
             current = next;
         }
     }
 }
 
 /// Why [`ItemPlace::edit`] could not update a stack's components.
-#[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+///
+/// This is a local refusal returned by [`ItemPlace::edit`], not a `Wire` type.
+///
+/// ```compile_fail,E0277
+/// fn requires_wire<T: mod_api::wire::Wire>() {}
+/// requires_wire::<mod_api::ItemPlaceEditError>();
+/// ```
+// no wire: local refusal returned by ItemPlace::edit.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ItemPlaceEditError {
+    /// The supplied context does not identify this host's innermost open transaction.
+    InvalidContext,
     /// The place is empty or cannot be reached.
     NotHeld,
-    /// The editor changed the item. Use a slot write to replace it.
-    ItemChanged,
-    /// The editor changed the count. Use a slot write to change it.
-    CountChanged,
-    /// The place has no whole-stack edit (a cursor or a virtual transfer wrapper).
+    /// The place has no whole-stack edit (a virtual transfer wrapper such as `OneByOne` or
+    /// `InfiniteMaterials`).
     UnsupportedPlace,
-    /// The backend, transaction or storage refused the write.
+    /// The backend or storage refused the write. For native player slots, hands, cursors
+    /// and equipment, a missing backend refuses before the editor runs.
     Unavailable,
-    /// The updated stack did not pass the game's write validation.
+    /// The component edits did not pass the game's write validation; none were applied.
     Stack(StackWriteError),
 }
 
@@ -309,29 +358,32 @@ impl crate::NoBackend for ItemPlaceEditError {
 /// Like a handler, it holds no borrow: its stacks live where the mod keeps them (a player's
 /// attachments). While its mod is disabled, lookups refuse both reads and writes through its
 /// places; re-enabling the mod makes the same registrations available again.
+/// Write methods receive the innermost transaction context; pass it to delegated writes.
 pub trait PlaceProvider: Send + Sync + 'static {
     /// The stack at `key`, if any.
     fn stack(&self, host: &mut dyn ServerHost, key: u64) -> Option<ItemStack>;
     /// Puts up to `amount` of `resource` at `key`, in transaction `tx`: how much went. What
     /// doesn't stack with what is there may go where the mod puts it, such as the player's
-    /// inventory (`ItemAccess.insert`); none where `key` is no longer a place.
+    /// inventory (`ItemAccess.insert`); none where `key` is no longer a place. A mismatched `tx`
+    /// returns `Err(TransactionError::InvalidContext)`.
     fn insert(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         key: u64,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32;
-    /// Takes up to `amount` of `resource` from `key`, in transaction `tx`: how much came.
+    ) -> Result<u32, TransactionError<Overanswered>>;
+    /// Takes up to `amount` of `resource` from `key`, in transaction `tx`: how much came. A
+    /// mismatched `tx` returns `Err(TransactionError::InvalidContext)`.
     fn extract(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         key: u64,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32;
+    ) -> Result<u32, TransactionError<Overanswered>>;
 }
 
 // no wire: process-local capability declaration carries a provider function pointer and type identity.
@@ -341,8 +393,14 @@ pub trait PlaceProvider: Send + Sync + 'static {
 pub struct ItemCapabilityKey<T: ?Sized + 'static> {
     /// The capability's name.
     pub name: &'static str,
-    pub(crate) default: Option<fn(&mut dyn ServerHost, &ItemPlace, &ItemStack) -> Option<Box<T>>>,
+    pub(crate) default: Option<ItemCapabilityDefault<T>>,
     pub(crate) handler: PhantomData<fn() -> Box<T>>,
+}
+
+/// What the game's answering provider needs from the place's read.
+pub(crate) enum ItemCapabilityDefault<T: ?Sized> {
+    Item(fn(&mut dyn ServerHost, &ItemPlace, ItemKey) -> Option<Box<T>>),
+    Stack(fn(&mut dyn ServerHost, &ItemPlace, &ItemStack) -> Option<Box<T>>),
 }
 
 impl<T: ?Sized + 'static> ItemCapabilityKey<T> {
@@ -362,14 +420,17 @@ impl<T: ?Sized + 'static> ItemCapabilityKey<T> {
 /// slots, kept in its `minecraft:container`, or `minecraft:bundle_contents`.
 pub const ITEM_ITEMS: ItemCapabilityKey<dyn ResourceHandler<ItemResource>> = ItemCapabilityKey {
     name: "sunrise:item_items",
-    default: Some(|host, place, stack| {
-        if backend_of(host)?.item_container_slots(stack).is_some() {
+    default: Some(ItemCapabilityDefault::Stack(|host, place, stack| {
+        let backend = backend_of(host)?;
+        if backend.item_container_slots(stack).is_some() {
             Some(Box::new(GameItemItems(place.clone())))
         } else {
-            backend_of(host)?.item_bundle_slots(stack)?;
+            backend
+                .bundle_slots(stack, &crate::BundleConfig::vanilla())
+                .ok()??;
             Some(Box::new(BundleItems::new(place.clone())))
         }
-    }),
+    })),
     handler: PhantomData,
 };
 
@@ -377,33 +438,35 @@ pub const ITEM_ITEMS: ItemCapabilityKey<dyn ResourceHandler<ItemResource>> = Ite
 struct GameItemItems(ItemPlace);
 impl GameItemItems {
     fn slot(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemStack> {
-        let held = self.0.stack(host)?;
-        backend_of(&*host)?
+        let held = self.0.with_stack(host, |stack| stack.project()).flatten()?;
+        backend_of(host)?
             .item_container_slots(&held)?
-            .get(index)?
-            .clone()
+            .into_iter()
+            .nth(index)
+            .flatten()
     }
     /// Rewrites one item at `.0` as `changed`: `moved` when that goes through, else 0.
     fn rewrite(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         changed: &ItemStack,
         moved: u32,
-    ) -> u32 {
-        match self.0.exchange(host, tx, &ItemResource::of(changed), 1) {
-            1 => moved,
-            _ => 0,
-        }
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        Ok(
+            match self.0.exchange(host, tx, &ItemResource::of(changed), 1)? {
+                1 => moved,
+                _ => 0,
+            },
+        )
     }
 }
 impl ResourceHandler<ItemResource> for GameItemItems {
     fn size(&self, host: &mut dyn ServerHost) -> usize {
         self.0
-            .stack(host)
-            .and_then(|held| {
-                backend_of(&*host).and_then(|backend| backend.item_container_slots(&held))
-            })
+            .with_stack(host, |stack| stack.project())
+            .flatten()
+            .and_then(|held| backend_of(host)?.item_container_slots(&held))
             .map_or(0, |slots| slots.len())
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
@@ -412,54 +475,78 @@ impl ResourceHandler<ItemResource> for GameItemItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         self.slot(host, index).map_or(0, |stack| stack.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
-        self.0.stack(host).map_or(0, |held| {
-            backend_of(&*host).map_or(0, |backend| {
-                backend.item_container_capacity(&held, index, resource.as_stack())
-            })
-        })
-    }
-    fn insert(
+    fn capacity(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        let Some(resource) = resource else {
+            return if index < self.size(host) { 99 } else { 0 };
+        };
+        self.0
+            .with_stack(host, |stack| stack.project())
+            .flatten()
+            .and_then(|held| {
+                Some(backend_of(host)?.item_container_capacity(&held, index, resource.as_stack()))
+            })
+            .unwrap_or(0)
+    }
+    fn insert_at(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         let Some(offer) = resource.to_stack(amount) else {
-            return 0;
+            return Ok(0);
         };
-        let Some((went, changed)) = self.0.stack(host).and_then(|held| {
-            backend_of(&*host)
-                .and_then(|backend| backend.item_container_insert_slot(&held, index, &offer))
-        }) else {
-            return 0;
+        let Some((went, changed)) = self
+            .0
+            .with_stack(host, |stack| stack.project())
+            .flatten()
+            .and_then(|held| backend_of(host)?.item_container_insert_slot(&held, index, &offer))
+        else {
+            return Ok(0);
         };
         match went {
-            0 => 0,
+            0 => Ok(0),
             went => self.rewrite(host, tx, &changed, went.min(amount)),
         }
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
-        if !self
-            .slot(host, index)
-            .is_some_and(|held| resource.matches(&held))
-        {
-            return 0;
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
         }
-        let Some((Some(out), changed)) = self.0.stack(host).and_then(|held| {
-            backend_of(&*host)
-                .and_then(|backend| backend.item_container_extract(&held, index, amount))
-        }) else {
-            return 0;
+        let Some((Some(out), changed)) = self
+            .0
+            .with_stack(host, |stack| stack.project())
+            .flatten()
+            .and_then(|held| {
+                let backend = backend_of(host)?;
+                let slot = backend
+                    .item_container_slots(&held)?
+                    .into_iter()
+                    .nth(index)??;
+                if !resource.matches(&slot) {
+                    return None;
+                }
+                backend.item_container_extract(&held, index, amount)
+            })
+        else {
+            return Ok(0);
         };
         self.rewrite(host, tx, &changed, out.count().min(amount))
     }
@@ -479,70 +566,84 @@ pub(crate) fn warn_broken(owner: Option<&'static str>, at: &dyn Debug) {
 }
 
 impl ItemPlace {
-    /// The stack here, if any (`getResource` and `getAmount`).
-    pub fn stack(&self, host: &mut dyn ServerHost) -> Option<ItemStack> {
-        // The wrappers are undone in a loop, not by recursion: a mod may nest them as deep as
-        // it likes without the stack growing.
+    /// Lend the stack here to `read` and return its result, or return `None` without calling it
+    /// if the place is empty or unavailable. Use [`ItemStackView::project`] to inspect components
+    /// or retain an owned stack. Native reads never load chunks or initialize a player; reading a
+    /// chest vehicle's [`EntitySlot`](Self::EntitySlot) unpacks its pending loot table without a
+    /// player and fills only empty slots (`ContainerEntity.getChestVehicleItem`, `LootTable.fill`).
+    /// An item entity read sees live state, including earlier writes in the same transaction.
+    /// Handler-backed and decoded places lend a view of their provider's or decoder's value.
+    /// An occupied place can still refuse projection. To check occupancy without projection,
+    /// use [`Self::amount`] and compare it with zero.
+    pub fn with_stack<R>(
+        &self,
+        host: &mut dyn ServerHost,
+        read: impl for<'a> FnOnce(ItemStackView<'a>) -> R,
+    ) -> Option<R> {
+        // A mod may nest these wrappers as deeply as it likes without growing the call stack.
         let mut place = self;
         let mut one = false;
-        while let ItemPlace::Strict(inner)
-        | ItemPlace::OneByOne(inner)
-        | ItemPlace::InfiniteMaterials { inner, .. } = place
+        while let Self::Strict(inner)
+        | Self::OneByOne(inner)
+        | Self::InfiniteMaterials { inner, .. } = place
         {
-            one |= matches!(place, ItemPlace::OneByOne(_));
+            one |= matches!(place, Self::OneByOne(_));
             place = inner;
         }
-        let mut stack = place.stack_at(host)?;
-        if one {
-            stack.set_count(1).ok()?;
-        }
-        Some(stack)
-    }
-
-    /// The stack at a place that wraps none.
-    fn stack_at(&self, host: &mut dyn ServerHost) -> Option<ItemStack> {
-        match self {
-            ItemPlace::BlockEntity {
-                level,
-                pos,
-                side,
-                slot,
-            } => {
-                let handler = level.capability(host, &ITEMS, *pos, *side)?;
-                let resource = handler.resource(host, *slot)?;
-                resource.to_stack(handler.amount(host, *slot))
-            }
-            ItemPlace::Nested { parent, slot } => {
-                let handler = parent.capability(host, &ITEM_ITEMS)?;
-                let resource = handler.resource(host, *slot)?;
-                resource.to_stack(handler.amount(host, *slot))
-            }
-            ItemPlace::Mod { provider, key } => {
-                let (provider, _) = host.capability_providers().place_provider(provider)?;
-                provider.stack(host, *key)
-            }
-            // A slot backed by a mod's storage reads it through its handler; every other slot
-            // reads as before.
-            ItemPlace::MenuSlot { menu, slot } => match menu.slot_backing(host, *slot) {
-                Some(MenuSlotBacking::Place(place)) => {
-                    let (handler, index) = place.handler(host, menu.player)?;
-                    let resource = handler.resource(host, index)?;
-                    resource.to_stack(handler.amount(host, index))
-                }
-                _ => menu.slot(host, *slot)?,
+        read_stack_view(
+            |stack| {
+                read(if one {
+                    stack.with_count(NonZeroU32::MIN)
+                } else {
+                    stack
+                })
             },
-            _ => backend_mut_of(host).and_then(|backend| backend.game_stack(self)),
-        }
+            |lend| {
+                let (handler, slot) = match place {
+                    Self::BlockEntity {
+                        level,
+                        pos,
+                        side,
+                        slot,
+                    } => (level.capability(host, &ITEMS, *pos, *side)?, *slot),
+                    Self::Nested { parent, slot } => (parent.capability(host, &ITEM_ITEMS)?, *slot),
+                    Self::Mod { provider, key } => {
+                        let (provider, _) = host.capability_providers().place_provider(provider)?;
+                        let stack = provider.stack(host, *key)?;
+                        lend(ItemStackView::from_stack(&stack));
+                        return Some(());
+                    }
+                    Self::MenuSlot { menu, slot } => match menu.slot_backing(host, *slot) {
+                        // Only the handler owns this stack. Its refusal must not read the mirror.
+                        Some(MenuSlotBacking::Place(place)) => place.handler(host, menu.player)?,
+                        _ => {
+                            let stack = menu.slot(host, *slot)??;
+                            lend(ItemStackView::from_stack(&stack));
+                            return Some(());
+                        }
+                    },
+                    _ => return backend_mut_of(host)?.game_stack(place, lend),
+                };
+                let resource = handler.resource(host, slot)?;
+                let count = NonZeroU32::new(handler.amount(host, slot))?;
+                lend(ItemStackView::from_stack(resource.as_stack()).with_count(count));
+                Some(())
+            },
+        )
     }
 
-    /// What is here, without its count (`ItemAccess.getResource`).
+    /// What is here, with its components but without its count (`ItemAccess.getResource`).
     pub fn resource(&self, host: &mut dyn ServerHost) -> Option<ItemResource> {
-        self.stack(host).map(|stack| ItemResource::of(&stack))
+        self.with_stack(host, |stack| {
+            stack.project().map(|stack| ItemResource::of(&stack))
+        })
+        .flatten()
     }
 
-    /// How many are here (`ItemAccess.getAmount`).
+    /// How many are here (`ItemAccess.getAmount`), or zero if the place is empty or unavailable.
+    /// Does not project the view to a complete stack.
     pub fn amount(&self, host: &mut dyn ServerHost) -> u32 {
-        self.stack(host).map_or(0, |stack| stack.count())
+        self.with_stack(host, |stack| stack.count()).unwrap_or(0)
     }
 
     /// Puts up to `amount` of `resource` here, in transaction `tx`: how much went
@@ -552,71 +653,93 @@ impl ItemPlace {
     /// none, as `forInfiniteMaterials`); an item entity's dropped beside it at the root commit; a
     /// block entity's, an entity's or an item's slot's into that container's other slots
     /// (`forHandlerIndex`, refused instead around [`Strict`](Self::Strict)); a mod's place's
-    /// where its [`PlaceProvider`] puts it; a [`Scratch`](Self::Scratch) stack's nowhere; a
-    /// [`ScratchSlots`](Self::ScratchSlots) stack's into its second slot. A player-backed place whose
+    /// where its [`PlaceProvider`] puts it; a [`Scratch`](Self::Scratch) stack's nowhere when lent
+    /// by [`HostTransaction::scratch_stack`] and into its second slot when lent by
+    /// [`HostTransaction::scratch_slots`]. A player-backed place whose
     /// player is in another level than the hook's (not a creative one) takes only what fits their
     /// inventory, and nothing is dropped: the rest stays the caller's, and [`exchange`](Self::exchange)
     /// rolls back when it cannot insert the whole replacement.
+    /// A mismatched `tx` returns `Err(TransactionError::InvalidContext)`.
     pub fn insert(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         self.moved(host, tx, resource, amount, true)
     }
 
-    /// Takes up to `amount` of `resource` from here, in transaction `tx`: how much came
-    /// (`ItemAccess.extract`). A creative player's hand gives without losing any.
+    /// Takes up to `amount` from here, in transaction `tx`, when the item and components
+    /// match `resource` (`ItemAccess.extract`). In places the game handles directly, an
+    /// override equal to the item's default does not change the match, and the resource
+    /// need not be valid for insertion. A creative player's hand gives without losing any.
+    /// A mismatched `tx` returns `Err(TransactionError::InvalidContext)`.
     pub fn extract(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         self.moved(host, tx, resource, amount, false)
     }
 
     /// Takes `amount` of what is here and puts as many of `resource` in their place
     /// (`ItemAccess.exchange`): from a bigger stack, they go where [`insert`](Self::insert) puts
     /// what doesn't stack, as vanilla's `ItemUtils.createFilledResult` puts a filled bucket. In a
-    /// transaction of its own, nested in `tx`: all of it, or nothing and 0. Inside an item that
-    /// shares its place with others like it, it's done in one of them: that one splits off,
-    /// changed, and the others stay as they were.
+    /// transaction of its own, nested in `tx`: all of it, or nothing and `Ok(0)`. Inside an item
+    /// that shares its place with others like it, it's done in one of them: that one splits off,
+    /// changed, and the others stay as they were. A mismatched `tx` returns
+    /// `Err(TransactionError::InvalidContext)`.
     pub fn exchange(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
-        let _ = tx;
-        let swap = |host: &mut dyn ServerHost, tx: &Transaction| {
-            let old = self.resource(host).ok_or(())?;
-            let out = self.extract(host, tx, &old, amount);
-            match out == amount && self.insert(host, tx, resource, out) == out {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
+        let swap = |host: &mut dyn ServerHost, tx: &TransactionContext| {
+            let old = self.resource(host).ok_or(None)?;
+            let out = self.extract(host, tx, &old, amount).map_err(Some)?;
+            if out != amount {
+                return Err(None);
+            }
+            let put = self.insert(host, tx, resource, out).map_err(Some)?;
+            match put == out {
                 true => Ok(out),
-                false => Err(()),
+                false => Err(None),
             }
         };
-        let done =
-            host.transaction(|host, tx| alone(self, host, tx, &mut |host, tx| swap(host, tx)));
-        done.unwrap_or(0)
+        match host.transaction(|host, tx| alone(self, host, tx, &mut |host, tx| swap(host, tx))) {
+            Ok(done) => Ok(done),
+            Err(TransactionError::Aborted(None)) => Ok(0),
+            Err(TransactionError::Aborted(Some(error))) => Err(error),
+            Err(TransactionError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(TransactionError::Unavailable) => Err(TransactionError::Unavailable),
+            Err(TransactionError::CommitRefused) => Err(TransactionError::CommitRefused),
+        }
     }
 
     /// Runs the item's `ItemStack.onCraftedBy` processing for a stack this place holds, as a
     /// server-side menu take does. This awards the player's `crafted` statistic, applies item
     /// post-processing such as a filled map's pending scale or lock, and runs the normal stat
     /// hook. Only a [`MenuSlot`](Self::MenuSlot) or [`PlayerCursor`](Self::PlayerCursor) is
-    /// accepted; the changed stack and statistic are part of `tx`.
+    /// accepted; the changed stack and statistic are part of `tx`. Returns
+    /// [`CraftedByError::CommitRefused`] without queueing the crafted statistic if the host rolls
+    /// back the inner replacement commit.
     pub fn on_crafted_by(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         amount: i32,
     ) -> Result<(), crate::CraftedByError> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(crate::CraftedByError::InvalidContext);
+        }
         if !matches!(self, Self::MenuSlot { .. } | Self::PlayerCursor { .. }) {
             return Err(crate::CraftedByError::NotHeld);
         }
@@ -625,71 +748,73 @@ impl ItemPlace {
             .game_on_crafted_by(self, tx, amount)
     }
 
-    /// Edit the components of the whole stack here, keeping its item and count. Player
-    /// slots (including armour and the off hand), hands, and a mob's or armour stand's equipment
-    /// update only the changed components in place, like `ItemStack.set`: no equip effects or
-    /// attribute reapplication. The usual slot sync sends the new stack. `Strict` preserves this
-    /// contract. Cursors, `OneByOne` and `InfiniteMaterials` refuse the edit because they do not
-    /// provide a synced whole-stack write. Other places use their usual exchange rules. A refusal
-    /// leaves the place unchanged; aborting `tx` restores a successful write.
+    /// Edit only the components of the whole stack, without replacing the item, changing its
+    /// count or splitting off one item. [`ItemComponentEditor::get`] reads pending overrides;
+    /// [`ItemComponentEditor::original`] shows the stack before edits. The callback does not
+    /// receive the host and cannot use the host borrowed by this call.
+    ///
+    /// For a player slot (including armour and off hand), hand, open menu cursor, or a mob's or
+    /// armour stand's equipment, the game resolves the occupied slot before lending the editor.
+    /// An unavailable backend, a mismatched `tx`, or an empty or unreadable slot refuses before
+    /// the callback runs. The game validates the changed overrides together against the stack's
+    /// effective limits before writing any of them. Only those changes are applied, in place
+    /// like `ItemStack.set`; an unchanged batch needs no write. The result reaches clients
+    /// through the usual menu, cursor, inventory or equipment sync, including synchronized
+    /// component overrides, without replaying equip sounds, events or attribute effects.
+    ///
+    /// `Strict` preserves this contract. `OneByOne` and `InfiniteMaterials` refuse before
+    /// calling the editor: they do not provide a synced whole-stack write. Other places use
+    /// their ordinary exchange rules. A refusal leaves the place unchanged; aborting `tx` or an
+    /// enclosing transaction restores a successful write.
     pub fn edit(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
-        edit: impl FnOnce(&mut ItemStack),
+        tx: &TransactionContext,
+        edit: impl FnOnce(&mut ItemComponentEditor<'_>),
     ) -> Result<(), ItemPlaceEditError> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(ItemPlaceEditError::InvalidContext);
+        }
         let mut place = self;
         while let Self::Strict(inner) = place {
             place = inner;
         }
-        if matches!(
-            place,
-            Self::PlayerCursor { .. } | Self::OneByOne(_) | Self::InfiniteMaterials { .. }
-        ) {
+        if matches!(place, Self::OneByOne(_) | Self::InfiniteMaterials { .. }) {
             return Err(ItemPlaceEditError::UnsupportedPlace);
         }
-        let before = place.stack(host).ok_or(ItemPlaceEditError::NotHeld)?;
+        if matches!(
+            place,
+            Self::PlayerSlot { .. }
+                | Self::PlayerHand { .. }
+                | Self::PlayerCursor { .. }
+                | Self::Equipment { .. }
+        ) {
+            let mut edit = Some(edit);
+            return backend_mut_of(host)
+                .ok_or(ItemPlaceEditError::Unavailable)?
+                .game_edit_stack(place, tx, &mut |editor| {
+                    if let Some(edit) = edit.take() {
+                        edit(editor);
+                    }
+                });
+        }
+        let before = place
+            .with_stack(host, |stack| stack.project())
+            .flatten()
+            .ok_or(ItemPlaceEditError::NotHeld)?;
+        let read_override = |id: &str| before.component_value(id).cloned();
+        let edits = edit_item_components(ItemStackView::from_stack(&before), &read_override, edit);
         let mut stack = before.clone();
-        edit(&mut stack);
-        if stack.item() != before.item() {
-            return Err(ItemPlaceEditError::ItemChanged);
-        }
-        if stack.count() != before.count() {
-            return Err(ItemPlaceEditError::CountChanged);
-        }
+        edits.apply_to(&mut stack);
         if stack == before {
             return Ok(());
         }
-        if matches!(
-            place,
-            Self::PlayerSlot { .. } | Self::PlayerHand { .. } | Self::Equipment { .. }
-        ) {
-            let old = before.components().map(crate::Components::as_nbt);
-            let new = stack.components().map(crate::Components::as_nbt);
-            let mut changed: Vec<_> = old
-                .into_iter()
-                .flat_map(|patch| patch.keys())
-                .chain(new.into_iter().flat_map(|patch| patch.keys()))
-                .filter(|&key| old.and_then(|p| p.get(key)) != new.and_then(|p| p.get(key)))
-                .map(|key| {
-                    let key = key.to_string_lossy();
-                    key.strip_prefix('!').map(str::to_owned).unwrap_or(key)
-                })
-                .collect();
-            if before.damage_component() != stack.damage_component() {
-                changed.push("minecraft:damage".into());
-            }
-            changed.sort_unstable();
-            changed.dedup();
-            return backend_mut_of(host)
-                .ok_or(ItemPlaceEditError::Unavailable)?
-                .game_edit_stack(place, stack, &changed, tx);
-        }
         let count = stack.count();
-        if self.exchange(host, tx, &ItemResource::of(&stack), count) == count {
-            Ok(())
-        } else {
-            Err(ItemPlaceEditError::Unavailable)
+        match self.exchange(host, tx, &ItemResource::of(&stack), count) {
+            Ok(moved) if moved == count => Ok(()),
+            Ok(_) => Err(ItemPlaceEditError::Unavailable),
+            Err(TransactionError::InvalidContext) => Err(ItemPlaceEditError::InvalidContext),
+            Err(_) => Err(ItemPlaceEditError::Unavailable),
         }
     }
 
@@ -700,13 +825,16 @@ impl ItemPlace {
     fn moved(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
         insert: bool,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         if amount == 0 {
-            return 0;
+            return Ok(0);
         }
         let (mut place, mut amount, mut spills) = (self, amount, true);
         loop {
@@ -716,9 +844,7 @@ impl ItemPlace {
                     inner
                 }
                 ItemPlace::OneByOne(inner) => {
-                    if !insert {
-                        amount = amount.min(1);
-                    }
+                    amount = amount.min(1);
                     inner
                 }
                 ItemPlace::InfiniteMaterials { player, inner } => {
@@ -742,26 +868,46 @@ impl ItemPlace {
     fn moved_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
         insert: bool,
         spills: bool,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let _ = tx;
-        // A menu slot's own rules come before its storage's: `Slot.mayPlace` and
-        // `getMaxStackSize` for what goes in, `Slot.mayPickup` for what comes out.
-        let amount = match self {
-            ItemPlace::MenuSlot { menu, slot } if insert => {
-                let holds = menu.slot_holds(host, *slot, resource.as_stack());
-                let room = holds.unwrap_or(0).saturating_sub(self.amount(host));
-                amount.min(room)
-            }
-            ItemPlace::MenuSlot { menu, slot } if menu.slot_gives(host, *slot) != Some(true) => 0,
-            _ => amount,
+        // Resolve the menu's backing once. Transfers to a handler-owned stack ask pickup
+        // against the current handler contents, not the packet mirror.
+        let (amount, backing) = if let ItemPlace::MenuSlot { menu, slot } = self {
+            let Some(backing) = menu.slot_backing(host, *slot) else {
+                return Ok(0);
+            };
+            let allowed = if insert {
+                let holds = if matches!(backing, MenuSlotBacking::Place(_)) {
+                    backend_of(host).and_then(|backend| {
+                        backend.menu_slot_holds_with_stack(*menu, *slot, resource.as_stack())
+                    })
+                } else {
+                    menu.slot_holds(host, *slot, resource.as_stack())
+                };
+                amount.min(holds.unwrap_or(0).saturating_sub(self.amount(host)))
+            } else {
+                let gives = if matches!(backing, MenuSlotBacking::Place(_)) {
+                    self.with_stack(host, |view| view.project())
+                        .flatten()
+                        .and_then(|stack| {
+                            backend_of(host)?.menu_slot_gives_with_stack(*menu, *slot, &stack)
+                        })
+                } else {
+                    menu.slot_gives(host, *slot)
+                };
+                if gives == Some(true) { amount } else { 0 }
+            };
+            (allowed, Some(backing))
+        } else {
+            (amount, None)
         };
         if amount == 0 {
-            return 0;
+            return Ok(0);
         }
         // Through index `slot` of `handler`, then for an insert that `spills` the whole handler,
         // each in passes while one moves something (`Inventory.add`'s loop: a
@@ -769,7 +915,7 @@ impl ItemPlace {
         // other indices (`forHandlerIndex`).
         let through = |handler: Capability<dyn ResourceHandler<ItemResource>>,
                        host: &mut dyn ServerHost,
-                       tx: &Transaction,
+                       tx: &TransactionContext,
                        slot: usize,
                        spills: bool| {
             let mut left = amount;
@@ -781,13 +927,19 @@ impl ItemPlace {
             for &anywhere in passes {
                 while left > 0 {
                     let moved = match (insert, anywhere) {
-                        (true, false) => handler.insert(host, tx, slot, resource, left),
-                        (true, true) => handler.insert_any(host, tx, resource, left),
-                        (false, _) => handler.extract(host, tx, slot, resource, left),
-                    };
-                    match handler.checked(moved, left, self).ok_or(())? {
-                        0 => break,
-                        moved => left -= moved,
+                        (true, false) => handler.insert_at(host, tx, slot, resource, left),
+                        (true, true) => handler.insert(host, tx, resource, left),
+                        (false, _) => handler.extract_at(host, tx, slot, resource, left),
+                    }
+                    .map_err(Some)?;
+                    match handler.checked(moved, left, self) {
+                        Some(0) => break,
+                        Some(moved) => left -= moved,
+                        None => {
+                            return Err(Some(TransactionError::Aborted(Overanswered {
+                                owner: Some(handler.owner()),
+                            })));
+                        }
                     }
                 }
             }
@@ -800,21 +952,21 @@ impl ItemPlace {
                 side,
                 slot,
             } => {
-                let handler = level.capability(host, &ITEMS, *pos, *side).ok_or(())?;
+                let handler = level.capability(host, &ITEMS, *pos, *side).ok_or(None)?;
                 through(handler, host, tx, *slot, spills)
             }
             ItemPlace::Nested { parent, slot } => {
-                let handler = parent.capability(host, &ITEM_ITEMS).ok_or(())?;
+                let handler = parent.capability(host, &ITEM_ITEMS).ok_or(None)?;
                 through(handler, host, tx, *slot, spills)
             }
             // The game's own write spreads; a strict one goes through the entity's handler.
             ItemPlace::EntitySlot { entity, slot } if !spills => {
-                let entity = host.entity(*entity).ok_or(())?;
-                let handler = entity.capability(host, &ENTITY_ITEMS, ()).ok_or(())?;
+                let entity = host.entity(*entity).ok_or(None)?;
+                let handler = entity.capability(host, &ENTITY_ITEMS, ()).ok_or(None)?;
                 through(handler, host, tx, *slot, false)
             }
-            ItemPlace::MenuSlot { menu, slot } => {
-                let (handler, index) = match menu.slot_backing(host, *slot).ok_or(())? {
+            ItemPlace::MenuSlot { menu, .. } => {
+                let (handler, index) = match backing.ok_or(None)? {
                     MenuSlotBacking::Player(index) => {
                         let player = menu.player.entity();
                         (player.capability(host, &ENTITY_ITEMS, ()), index)
@@ -826,7 +978,7 @@ impl ItemPlace {
                         (entity.capability(host, &ENTITY_ITEMS, ()), slot)
                     }
                     MenuSlotBacking::Place(place) => {
-                        let (handler, index) = place.handler(host, menu.player).ok_or(())?;
+                        let (handler, index) = place.handler(host, menu.player).ok_or(None)?;
                         (Some(handler), index)
                     }
                     MenuSlotBacking::CraftResult => return Ok(0),
@@ -843,20 +995,31 @@ impl ItemPlace {
                         });
                     }
                 };
-                through(handler.ok_or(())?, host, tx, index, false)
+                through(handler.ok_or(None)?, host, tx, index, false)
             }
             ItemPlace::Mod { provider, key } => {
                 let (provider, owner) = host
                     .capability_providers()
                     .place_provider(provider)
-                    .ok_or(())?;
+                    .ok_or(None)?;
                 let moved = match insert {
                     true => provider.insert(host, tx, *key, resource, amount),
                     false => provider.extract(host, tx, *key, resource, amount),
-                };
+                }
+                .map_err(|mut error| {
+                    if let TransactionError::Aborted(over) = &mut error
+                        && over.owner.is_none()
+                    {
+                        warn_broken(Some(owner), self);
+                        over.owner = Some(owner.to_owned());
+                    }
+                    Some(error)
+                })?;
                 if moved > amount {
                     warn_broken(Some(owner), self);
-                    return Err(());
+                    return Err(Some(TransactionError::Aborted(Overanswered {
+                        owner: Some(owner.to_owned()),
+                    })));
                 }
                 Ok(moved)
             }
@@ -871,7 +1034,14 @@ impl ItemPlace {
                 }),
             }),
         });
-        moved.unwrap_or(0)
+        match moved {
+            Ok(moved) => Ok(moved),
+            Err(TransactionError::Aborted(None)) => Ok(0),
+            Err(TransactionError::Aborted(Some(error))) => Err(error),
+            Err(TransactionError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(TransactionError::Unavailable) => Err(TransactionError::Unavailable),
+            Err(TransactionError::CommitRefused) => Err(TransactionError::CommitRefused),
+        }
     }
 }
 
@@ -882,27 +1052,38 @@ impl ItemPlace {
 /// have: the first empty slot, else dropped at the root commit.
 fn infinite_moved(
     host: &mut dyn ServerHost,
-    tx: &Transaction,
+    tx: &TransactionContext,
     player: u128,
     inner: &ItemPlace,
     resource: &ItemResource,
     amount: u32,
     insert: bool,
-) -> u32 {
+) -> Result<u32, TransactionError<Overanswered>> {
     if !insert {
-        return inner
-            .stack(host)
-            .filter(|held| resource.matches(held))
-            .map_or(0, |held| amount.min(held.count()));
+        return Ok(inner
+            .with_stack(host, |held| {
+                if resource.matches_view(&held) {
+                    amount.min(held.count())
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0));
     }
     let had = host
         .player(player)
-        .and_then(|player| player.inventory(host))
-        .is_some_and(|items| items.iter().any(|held| resource.matches(held)));
+        .and_then(|player| {
+            player.with_inventory(host, |inventory| {
+                (0..36)
+                    .filter_map(|slot| inventory.get(slot))
+                    .any(|held| resource.matches_view(&held))
+            })
+        })
+        .unwrap_or(false);
     if !had {
-        ItemPlace::PlayerSlot { player, slot: 0 }.insert(host, tx, resource, 1);
+        ItemPlace::PlayerSlot { player, slot: 0 }.insert(host, tx, resource, 1)?;
     }
-    amount
+    Ok(amount)
 }
 
 /// Runs `f` with each item `place` is inside alone in its place, the outermost first
@@ -911,9 +1092,12 @@ fn infinite_moved(
 fn alone(
     place: &ItemPlace,
     host: &mut dyn ServerHost,
-    tx: &Transaction,
-    f: &mut dyn FnMut(&mut dyn ServerHost, &Transaction) -> Result<u32, ()>,
-) -> Result<u32, ()> {
+    tx: &TransactionContext,
+    f: &mut dyn FnMut(
+        &mut dyn ServerHost,
+        &TransactionContext,
+    ) -> Result<u32, Option<TransactionError<Overanswered>>>,
+) -> Result<u32, Option<TransactionError<Overanswered>>> {
     match place {
         ItemPlace::Nested { parent, .. } => alone(parent, host, tx, &mut |host, tx| {
             one_of(parent, host, tx, &mut *f)
@@ -928,25 +1112,42 @@ fn alone(
 fn one_of(
     parent: &ItemPlace,
     host: &mut dyn ServerHost,
-    tx: &Transaction,
-    f: impl FnOnce(&mut dyn ServerHost, &Transaction) -> Result<u32, ()>,
-) -> Result<u32, ()> {
-    let held = parent.stack(host).ok_or(())?;
-    let others = held.count() - 1;
-    if others == 0 {
+    tx: &TransactionContext,
+    f: impl FnOnce(
+        &mut dyn ServerHost,
+        &TransactionContext,
+    ) -> Result<u32, Option<TransactionError<Overanswered>>>,
+) -> Result<u32, Option<TransactionError<Overanswered>>> {
+    let split = parent
+        .with_stack(host, |held| {
+            let others = held.count() - 1;
+            if others == 0 {
+                Ok::<_, Option<TransactionError<Overanswered>>>(None)
+            } else {
+                let stack = held.project().ok_or(None)?;
+                Ok(Some((others, ItemResource::of(&stack))))
+            }
+        })
+        .ok_or(None)??;
+    let Some((others, resource)) = split else {
         return f(host, tx);
-    }
-    let resource = ItemResource::of(&held);
-    let all = |moved: u32, asked: u32| (moved == asked).then_some(()).ok_or(());
-    all(parent.extract(host, tx, &resource, others), others)?;
+    };
+    let all = |moved: u32, asked: u32| (moved == asked).then_some(()).ok_or(None);
+    all(
+        parent.extract(host, tx, &resource, others).map_err(Some)?,
+        others,
+    )?;
     let moved = f(host, tx)?;
     let changed = parent.resource(host).filter(|now| *now != resource);
     if let Some(changed) = &changed {
-        all(parent.extract(host, tx, changed, 1), 1)?;
+        all(parent.extract(host, tx, changed, 1).map_err(Some)?, 1)?;
     }
-    all(parent.insert(host, tx, &resource, others), others)?;
+    all(
+        parent.insert(host, tx, &resource, others).map_err(Some)?,
+        others,
+    )?;
     if let Some(changed) = &changed {
-        all(parent.insert(host, tx, changed, 1), 1)?;
+        all(parent.insert(host, tx, changed, 1).map_err(Some)?, 1)?;
     }
     Ok(moved)
 }
@@ -961,22 +1162,43 @@ impl ItemPlace {
         host: &mut dyn ServerHost,
         key: &ItemCapabilityKey<T>,
     ) -> Option<Capability<T>> {
-        let stack = self.stack(host)?;
+        // Capture the item before dispatch. Only a stack-sensitive game default needs an
+        // owned value across the mutable provider calls; don't read the place again on fallback.
+        let (item, projected) = self
+            .with_stack(host, |stack| {
+                let projected = match &key.default {
+                    Some(ItemCapabilityDefault::Stack(_)) => Some(stack.project()?),
+                    _ => None,
+                };
+                Some((stack.item(), projected))
+            })
+            .flatten()?;
+        let providers = crate::parts::installed()
+            .and_then(|installed| installed.keys.item_capabilities.get(key.name))
+            .and_then(|by_item| {
+                let id = crate::content::registry_keys::item_id(item)?;
+                by_item.get(id).map(Vec::as_slice)
+            })
+            .unwrap_or(&[]);
         let mut game = None;
-        let table = host.capability_providers();
-        let provided = table.provided(crate::ProvidedBy::Item, key.name);
         crate::answered(
             crate::ask_providers(
                 host,
-                |index| {
-                    provided
-                        .then(|| table.item_provider(key.name, stack.item(), index))
-                        .flatten()
+                providers.iter(),
+                ("capability provider", "capability_provider"),
+                |provider, host| {
+                    provider
+                        .get::<std::sync::Arc<crate::ItemProvider<T>>>()?
+                        .provide(host, self)
                 },
-                crate::ItemProviderOf::get::<T>,
-                |provider, host| provider.provide(host, self),
                 |host| {
-                    game = key.default.and_then(|default| default(host, self, &stack));
+                    game = match &key.default {
+                        Some(ItemCapabilityDefault::Item(default)) => default(host, self, item),
+                        Some(ItemCapabilityDefault::Stack(default)) => projected
+                            .as_ref()
+                            .and_then(|stack| default(host, self, stack)),
+                        None => None,
+                    };
                     game.is_some()
                 },
             ),
@@ -988,3 +1210,7 @@ impl ItemPlace {
 #[cfg(test)]
 #[path = "item_place_wrapper_tests.rs"]
 mod wrapper_tests;
+
+#[cfg(test)]
+#[path = "item_place_scratch_tests.rs"]
+mod scratch_tests;

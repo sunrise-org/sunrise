@@ -88,7 +88,7 @@ pub fn float(m: &mut Mob, w: &MobWorld) {
     // the column is half a block tall.
     let above = m.position.y > f64::from(y) + 0.5 - f64::from(1.0e-5_f32);
     if above && w.fluid(x, y + 1, z) != Fluid::Lava {
-        m.on_ground = true;
+        m.ground.on_ground = true;
     } else {
         let v = m.velocity;
         m.velocity = sunrise_core::geometry::Vec3::new(v.x * 0.5, v.y * 0.5 + 0.05, v.z * 0.5);

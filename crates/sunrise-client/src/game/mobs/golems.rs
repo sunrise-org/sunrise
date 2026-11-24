@@ -160,7 +160,7 @@ impl Game<'_> {
         mob.previous_head_yaw = yaw;
         let id = mob.id;
         self.mobs.push(mob);
-        self.native_mobs_joined(self.mobs.len() - 1, false);
+        self.admit_new_mobs(self.mobs.len() - 1);
         Some(id)
     }
     /// `CarvedPumpkinBlock.clearPatternBlocks`: every cell of the match
@@ -252,8 +252,7 @@ impl Game<'_> {
         if let Some(m) = id.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
             m.extra.variant = weather;
             let p = [m.position.x, m.position.y, m.position.z];
-            self.audio
-                .play("minecraft:entity.copper_golem.spawn", Some(p), 1.0, 1.0);
+            self.play_audio("minecraft:entity.copper_golem.spawn", Some(p), 1.0, 1.0);
         }
         self.process_level_events()
     }

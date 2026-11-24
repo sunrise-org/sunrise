@@ -164,12 +164,12 @@ fn format(f: Format, v: i32) -> String {
 }
 /// The item columns: (stat type, header sprite).
 const COLUMNS: [(&str, &str); 6] = [
-    ("mined", "gui/sprites/statistics/block_mined"),
-    ("broken", "gui/sprites/statistics/item_broken"),
-    ("crafted", "gui/sprites/statistics/item_crafted"),
-    ("used", "gui/sprites/statistics/item_used"),
-    ("picked_up", "gui/sprites/statistics/item_picked_up"),
-    ("dropped", "gui/sprites/statistics/item_dropped"),
+    ("mined", "statistics/block_mined"),
+    ("broken", "statistics/item_broken"),
+    ("crafted", "statistics/item_crafted"),
+    ("used", "statistics/item_used"),
+    ("picked_up", "statistics/item_picked_up"),
+    ("dropped", "statistics/item_dropped"),
 ];
 /// `ItemStatisticsList`'s rows: items with a positive item column, plus
 /// `Block.asItem` (`block_item`) of blocks with a positive `mined` count,
@@ -494,10 +494,10 @@ impl Game<'_> {
                 tab_tip = true;
             }
             let sprite = match (selected, hover) {
-                (true, true) => "gui/sprites/widget/tab_selected_highlighted",
-                (true, false) => "gui/sprites/widget/tab_selected",
-                (false, true) => "gui/sprites/widget/tab_highlighted",
-                (false, false) => "gui/sprites/widget/tab",
+                (true, true) => "widget/tab_selected_highlighted",
+                (true, false) => "widget/tab_selected",
+                (false, true) => "widget/tab_highlighted",
+                (false, false) => "widget/tab",
             };
             ui::nine_slice(batch, atlas, sprite, x, 0.0, tw, TAB_H, u32::MAX);
             ui::menu_tab_label(
@@ -616,9 +616,9 @@ impl Game<'_> {
                             .child_of(list_key, 0)
                         });
                         let bg = if hover {
-                            "gui/sprites/statistics/header"
+                            "statistics/header"
                         } else {
-                            "gui/sprites/container/slot"
+                            "container/slot"
                         };
                         batch.sprite(atlas, bg, x, y + 1.0);
                         batch.sprite(atlas, sprite, x, y + 1.0);
@@ -626,9 +626,9 @@ impl Game<'_> {
                             && sc == c
                         {
                             let s = if order < 0 {
-                                "gui/sprites/statistics/sort_down"
+                                "statistics/sort_down"
                             } else {
-                                "gui/sprites/statistics/sort_up"
+                                "statistics/sort_up"
                             };
                             batch.sprite(atlas, s, x, y + 1.0);
                         }
@@ -642,7 +642,7 @@ impl Game<'_> {
                     let stack = ItemStack::new(item, 1);
                     // ItemRowWidget, an ItemDisplayWidget: "Item: <name>".
                     sunrise_client::widgets::narratable(|| {
-                        let name = sunrise_client::stations::hover_name(&self.pack.names, &stack);
+                        let name = self.stack_hover_name_text(&stack).plain();
                         sunrise_client::widgets::Narratable::text(
                             tr("narration.item", &[&name]),
                             [left + 1.0, y + 1.0, 18.0, 18.0],
@@ -651,12 +651,7 @@ impl Game<'_> {
                         .child_of(list_key, i + 1)
                         .without_tooltip()
                     });
-                    batch.sprite(
-                        &self.gui.atlas,
-                        "gui/sprites/container/slot",
-                        left + 1.0,
-                        y + 1.0,
-                    );
+                    batch.sprite(&self.gui.atlas, "container/slot", left + 1.0, y + 1.0);
                     self.draw_item(batch, &stack, left + 2.0, y + 2.0);
                     // `ItemRowWidget.extractTooltip`: the item's tooltip at the slot's corner.
                     if ui::hovered(self.cursor, left + 1.0, y + 1.0, 18.0, 18.0) {
@@ -751,14 +746,13 @@ impl Game<'_> {
         let before = self.stats_ui.tab;
         if self.stats_ui.key(key, ctrl, shift, active) && self.stats_ui.tab != before {
             // TabManager.setCurrentTab(.., true): the click of a tab press.
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
         }
     }
-    pub(super) fn stats_click(&mut self, size: [u32; 2]) {
+    pub(super) fn stats_click(&mut self, size: [u32; 2]) -> bool {
         // A press on the scrollbar holds it and clicks nothing else.
         if self.stats_press_scrollbar(size) {
-            return;
+            return true;
         }
         let b = HudBatch::new(size, self.settings.gui_scale_inputs());
         let (w, h) = (b.width, b.height);
@@ -770,9 +764,8 @@ impl Game<'_> {
             {
                 self.stats_ui.tab = i;
                 self.stats_ui.scroll.amount = 0.0;
-                self.audio
-                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
-                return;
+                self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
+                return true;
             }
         }
         if ui::hovered(
@@ -782,36 +775,41 @@ impl Game<'_> {
             200.0,
             20.0,
         ) {
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
             self.set_screen(Screen::Paused);
-            return;
+            return true;
         }
+        let mut handled = false;
         if self.stats_ui.tab == 1 {
             let left = ((w - 280.0) / 2.0).floor();
             let y = TAB_H + 4.0 - self.stats_ui.scroll.amount;
             for c in 0..COLUMNS.len() {
                 let x = left + 75.0 + 40.0 * c as f32 - 18.0;
                 if ui::hovered(self.cursor, x, y + 1.0, 18.0, 18.0) {
+                    handled = true;
                     // sortByColumn: descending, ascending, off.
                     self.stats_ui.sort = match self.stats_ui.sort {
                         Some((sc, -1)) if sc == c => Some((c, 1)),
                         Some((sc, _)) if sc == c => None,
                         _ => Some((c, -1)),
                     };
-                    self.audio
-                        .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                    self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
                 }
             }
         }
+        handled
     }
-    pub(super) fn stats_scroll(&mut self, amount: f32) {
+    pub(super) fn stats_scroll(&mut self, amount: f32) -> bool {
         let (row_h, _) = self.stats_rows();
         let h = self.gui_size().1;
+        if !(TAB_H..h - FOOTER).contains(&self.cursor.1) {
+            return false;
+        }
         let content = self.stats_content();
         self.stats_ui
             .scroll
             .wheel(amount, row_h / 2.0, TAB_H, h - FOOTER, content);
+        true
     }
     /// A press on the statistics list's scrollbar holds it
     /// (`AbstractSelectionList.updateScrolling`).
@@ -824,19 +822,22 @@ impl Game<'_> {
             .press(self.cursor, Self::stats_bar(w), TAB_H, h - FOOTER, content)
     }
     /// The pointer moved while the scrollbar is held.
-    pub(super) fn stats_drag(&mut self) {
+    pub(super) fn stats_drag(&mut self) -> bool {
         if !self.stats_ui.scroll.held() {
-            return;
+            return false;
         }
         let h = self.gui_size().1;
         let content = self.stats_content();
         self.stats_ui
             .scroll
             .drag(self.cursor.1, TAB_H, h - FOOTER, content);
+        true
     }
     /// The button came up: the scrollbar lets go.
-    pub(super) fn stats_release(&mut self) {
+    pub(super) fn stats_release(&mut self) -> bool {
+        let handled = self.stats_ui.scroll.held();
         self.stats_ui.scroll.release();
+        handled
     }
 }
 

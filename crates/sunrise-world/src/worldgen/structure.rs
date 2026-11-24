@@ -3,24 +3,23 @@
 pub mod end_city;
 pub mod enhanced_terrain;
 pub mod features;
-pub mod formations;
 pub mod fortress;
 pub mod jigsaw;
 pub mod legacy;
 pub mod mansion;
 pub mod mineshaft;
+pub mod mod_elements;
+pub mod mod_processors;
 pub mod mod_types;
 pub mod monument;
 pub mod nether_fossil;
 pub mod ocean_ruin;
-pub mod piece_limited;
 pub mod processor;
 pub mod ruined_portal;
 pub(crate) mod saved_legacy;
 pub(crate) mod saved_templates;
 pub mod simple;
 pub mod start;
-pub mod start_checks;
 pub mod stronghold;
 pub mod template;
 pub mod temple;
@@ -297,6 +296,14 @@ impl LazyTemplate {
             id: String::new(),
             store: None,
             cell: OnceLock::from(template),
+        }
+    }
+    /// The template's id, without reading its file
+    /// (`SinglePoolElement.getTemplateLocation`).
+    pub fn location(&self) -> &str {
+        match self.store {
+            Some(_) => &self.id,
+            None => &self.arc().location,
         }
     }
     /// The template (the resources' shared one: comparable by pointer).

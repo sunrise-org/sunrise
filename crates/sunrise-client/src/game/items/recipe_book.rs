@@ -20,7 +20,7 @@ use sunrise_client::{
     items::ItemStack,
     menu::place::{PostPlace, Stacked},
     random_source,
-    recipe_book::{Book, BookType, ClientBook, Collection, Entry, GhostTarget, Tab},
+    recipe_book::{Book, BookType, ClientBook, Collection, Entry, GhostSlot, GhostTarget, Tab},
     recipe_book_screen::{
         self as screen, ButtonView, Call, Drawn, GhostView, ItemCall, OverlayRecipe, OverlayView,
         Screen as Layout, Search, TabView,
@@ -82,6 +82,9 @@ pub(super) struct RecipeUi {
     custom: mod_screen::ModRecipeUi,
     /// The last authoritative property-set and stonecutter generation.
     pub(super) server_properties: crate::recipe_book::ServerRecipeProperties,
+    /// The station tables of a client of a server: the window's own, their stonecutter list the
+    /// one the server sent, in its order (`station_recipes`). None on a server and until one sent.
+    pub(super) server_stations: Option<sunrise_client::stations::StationRecipes>,
     book: Option<Book>,
     tab: Option<Tab>,
     pub(super) search: Option<EditBox>,
@@ -89,7 +92,6 @@ pub(super) struct RecipeUi {
     /// Ticks, for the ghost and button cycling (`RecipeBookComponent.time`).
     time: f32,
     ghost: Vec<Ghost>,
-    last_placed: Option<String>,
     overlay: Option<Overlay>,
     /// A press landed in the search box, so a drag selects text in it.
     search_drag: bool,
@@ -134,6 +136,17 @@ struct TransferChecks {
 }
 
 impl TransferChecks {
+    /// The last answer remains usable while a refresh is pending.
+    fn lookup(&self, recipe: &str, now: Instant) -> (Option<&RecipeTransferCheck>, bool) {
+        let answer = self.answers.iter().find(|a| a.recipe == recipe);
+        let refresh_due = answer.is_none_or(|a| now >= a.refreshes);
+        let waiting = self
+            .asked
+            .as_ref()
+            .is_some_and(|(_, _, at)| now.duration_since(*at) < CHECK_WAIT);
+        (answer.map(|a| &a.check), refresh_due && !waiting)
+    }
+
     fn ask(&mut self, recipe: &str, now: Instant) -> Option<i32> {
         static NEXT_TAG: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
         let tag = NEXT_TAG
@@ -146,33 +159,74 @@ impl TransferChecks {
         self.asked = Some((tag, recipe.to_owned(), now));
         Some(tag)
     }
+
+    /// Make room for a new answer and return its refresh deadline.
+    fn prepare_answer(&mut self, recipe: &str, now: Instant) -> Instant {
+        self.answers.retain(|a| a.recipe != recipe);
+        if self.answers.len() >= CHECK_KEPT {
+            self.answers.remove(0);
+        }
+        now + CHECK_REFRESH
+    }
 }
 
 /// One answer of `TransferChecks`.
 struct CheckAnswer {
     recipe: String,
-    /// When it came.
-    at: Instant,
-    /// How many times it was asked again for this view of the menu.
-    refreshes: u32,
+    /// When this answer becomes eligible to refresh.
+    refreshes: Instant,
     check: RecipeTransferCheck,
 }
 
-/// How old an answer is asked again while it is wanted (chests beside a
-/// station change without the client seeing it), and how many times for one
-/// view of the menu.
-const CHECK_REFRESH: Duration = Duration::from_secs(2);
-const CHECK_REFRESHES: u32 = 15;
+/// How long an answer stays fresh (chests beside a station change without
+/// the client seeing it).
+const CHECK_REFRESH: Duration = Duration::from_secs(1);
 /// A request with no answer this long is given up, and another may go.
 const CHECK_WAIT: Duration = Duration::from_millis(500);
 /// The answers kept for one view of the menu.
 const CHECK_KEPT: usize = 64;
 
+#[cfg(test)]
+mod transfer_check_cache_tests {
+    use super::*;
+
+    #[test]
+    fn a_wanted_answer_refreshes_every_second_without_a_view_change() {
+        let start = Instant::now();
+        let recipe = "minecraft:stick";
+        let check = RecipeTransferCheck {
+            result: RecipeTransferResult::Missing,
+            missing_cells: vec![1],
+            craftable_cells: Vec::new(),
+        };
+        let mut checks = TransferChecks {
+            seen: Some((1, 0, Vec::new())),
+            ..Default::default()
+        };
+        for second in 0..20 {
+            // An immediate reply resets the deadline, without a new menu view.
+            let received = start + Duration::from_secs(second);
+            checks.asked = None;
+            let refreshes = checks.prepare_answer(recipe, received);
+            checks.answers.push(CheckAnswer {
+                recipe: recipe.into(),
+                refreshes,
+                check: check.clone(),
+            });
+            let early = received + Duration::from_millis(999);
+            let stale = received + Duration::from_secs(1);
+            assert_eq!(checks.lookup(recipe, early), (Some(&check), false));
+            assert_eq!(checks.lookup(recipe, stale), (Some(&check), true));
+            assert!(checks.ask(recipe, stale).is_some());
+            assert_eq!(checks.lookup(recipe, stale), (Some(&check), false));
+        }
+    }
+}
+
 impl RecipeUi {
     /// A new screen starts without a ghost recipe, overlay or search focus.
     pub(super) fn reset_screen(&mut self) {
         self.ghost.clear();
-        self.last_placed = None;
         self.overlay = None;
         self.tab = None;
         self.page = 0;
@@ -190,7 +244,24 @@ fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
 }
 fn sprite(name: &str) -> String {
-    format!("gui/sprites/recipe_book/{name}")
+    format!("recipe_book/{name}")
+}
+
+fn map_ghost_slots(book_type: BookType, slots: Vec<GhostSlot>) -> Vec<Ghost> {
+    slots
+        .into_iter()
+        .map(|g| Ghost {
+            slot: match (g.target, book_type) {
+                (GhostTarget::Result, BookType::Crafting) => 200,
+                (GhostTarget::Result, _) => 302,
+                (GhostTarget::Grid(i), _) => 100 + i,
+                (GhostTarget::Input, _) => 300,
+                (GhostTarget::Fuel, _) => 301,
+            },
+            result: g.target == GhostTarget::Result,
+            items: g.items,
+        })
+        .collect()
 }
 
 impl Game<'_> {
@@ -256,13 +327,15 @@ impl Game<'_> {
             && self.recipe_ui.search.as_ref().is_some_and(|s| s.focused)
     }
     /// `keyChat` focuses the search box.
-    pub(super) fn recipe_focus_search(&mut self) {
+    pub(super) fn recipe_focus_search(&mut self) -> bool {
         if (self.mod_book_open() || self.active_book().is_some_and(|b| self.book_open(b)))
             && let Some(s) = self.recipe_ui.search.as_mut()
         {
             s.focused = true;
             s.reset_blink();
+            return true;
         }
+        false
     }
     /// Text typed (or one backspace) into the search box.
     pub(super) fn recipe_text(&mut self, text: Option<&str>, backspace: bool) {
@@ -282,30 +355,22 @@ impl Game<'_> {
         }
     }
     /// A key press while the search box has focus.
-    pub(super) fn recipe_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::PhysicalKey;
-        if let Some(shortcut) = self.edit_shortcut(event) {
+    pub(super) fn recipe_key(
+        &mut self,
+        key: winit::keyboard::KeyCode,
+        shortcut: Option<sunrise_client::clipboard::EditShortcut>,
+    ) -> bool {
+        if let Some(shortcut) = shortcut {
             self.recipe_shortcut(shortcut);
-            return;
+            return true;
         }
-        let ctrl = self.has_control_down();
-        let shift = self.has_shift_down();
-        let types_text = self.types_text();
+        let (ctrl, shift) = (self.has_control_down(), self.has_shift_down());
         let Some(search) = self.recipe_ui.search.as_mut() else {
-            return;
+            return false;
         };
-        let handled = match event.physical_key {
-            PhysicalKey::Code(code) => search.key(code, ctrl, shift),
-            _ => false,
-        };
-        if !handled
-            && types_text
-            && let Some(text) = &event.text
-        {
-            let text: String = text.chars().filter(|c| !c.is_control()).collect();
-            search.insert_text(&text);
-        }
+        let handled = search.key(key, ctrl, shift);
         search.reset_blink();
+        handled
     }
 
     /// `RecipeToast.addOrUpdate` for each display of the recipes just
@@ -355,7 +420,10 @@ impl Game<'_> {
         if items.is_empty() {
             return;
         }
-        match self.adv.toasts.iter_mut().find(|t| t.is_recipe()) {
+        match self.toast_manager.find_mut(|entry| match entry {
+            super::toast_manager::Toast::Advancement(t) if t.is_recipe() => Some(t),
+            _ => None,
+        }) {
             Some(toast) => toast.add_recipes(items),
             None => self.add_advancement_toast(super::advancements::Toast::recipe(items)),
         }
@@ -391,7 +459,7 @@ impl Game<'_> {
                 recipes: self.recipes(),
                 brewing: &self.stations().brewing,
                 banners: &self.stations().banners,
-                station_recipes: &self.stations().recipes,
+                station_recipes: self.station_recipes(),
                 enchantments: &self.stations().enchantments,
                 names: &self.pack.names,
                 trade: None,
@@ -455,7 +523,8 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
-    /// Every entry of the book, in its order (`native_recipes`).
+    /// Every entry of the book, in its order.
+    #[cfg(test)]
     pub(super) fn recipe_book_entries(&mut self) -> Vec<Entry> {
         self.ensure_book();
         self.recipe_ui
@@ -480,25 +549,21 @@ impl Game<'_> {
         self.recipe_tables.books = None;
         self.invalidate_mod_book_placement_catalogues();
     }
-    /// Puts a server's entries over `book` (`Book::use_server_entries`). The
-    /// names come from the connection's registries; a tag's items are the ones
-    /// the client knows for it (the server's tags are not read).
-    fn server_entries_over<'a>(
+    /// Resolves server recipe-display names from the connection's registries; a
+    /// tag's items are the ones the client knows for it (the server's tags are
+    /// not read).
+    fn with_packet_names<R>(
         &self,
-        book: &mut Book,
-        entries: impl IntoIterator<Item = &'a sunrise_protocol::packets::recipes::RecipeBookEntry>,
-    ) {
-        let Some(r) = self.remote.as_ref() else {
-            return;
-        };
+        f: impl FnOnce(&sunrise_client::recipe_book::PacketNames<'_>) -> R,
+    ) -> Option<R> {
+        let r = self.remote.as_ref()?;
         let items = self.items();
-        let name_of = |registry: &str, id: i32| {
-            r.builtin
-                .get(registry)
-                .and_then(|ids| ids.name(id))
-                .or_else(|| r.registries.name(registry, id))
-                .map(str::to_owned)
+        use sunrise_protocol::{item::Names, registry::SyncedNames};
+        let names = SyncedNames {
+            builtin: &r.builtin,
+            dynamic: &r.registries,
         };
+        let name_of = |registry: &str, id: i32| names.name(registry, id);
         let item = |id: i32| name_of("minecraft:item", id);
         let category = |id: i32| {
             name_of("minecraft:recipe_book_category", id).or_else(|| {
@@ -506,14 +571,20 @@ impl Game<'_> {
             })
         };
         let tag = |name: &str| items.item_tag_order.get(name).cloned().unwrap_or_default();
-        book.use_server_entries(
-            entries,
-            &sunrise_client::recipe_book::PacketNames {
-                item: &item,
-                category: &category,
-                tag: &tag,
-            },
-        );
+        Some(f(&sunrise_client::recipe_book::PacketNames {
+            item: &item,
+            category: &category,
+            component: &|id| name_of("minecraft:data_component_type", id),
+            tag: &tag,
+        }))
+    }
+    /// Puts a server's entries over `book` (`Book::use_server_entries`).
+    fn server_entries_over<'a>(
+        &self,
+        book: &mut Book,
+        entries: impl IntoIterator<Item = &'a sunrise_protocol::packets::recipes::RecipeBookEntry>,
+    ) {
+        self.with_packet_names(|names| book.use_server_entries(entries, names));
     }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
@@ -682,7 +753,7 @@ impl Game<'_> {
             }
             if !query.is_empty()
                 && !book.collection_matches(&c.entries, &query, &|stack| {
-                    sunrise_client::item_tooltip::lines(
+                    let mut lines = sunrise_client::item_tooltip::lines(
                         stack,
                         self.items().get(&stack.item),
                         &crate::game::native_hooks::HookedAttributeTooltips::new(self, None),
@@ -692,7 +763,12 @@ impl Game<'_> {
                         false,
                         &|k| self.pack.names.display_get(k),
                         &|attribute| self.attribute_style(attribute, false),
-                    )
+                    );
+                    // The resolved name (a mod item's Part included) is the name line.
+                    if let Some(first) = lines.first_mut() {
+                        *first = self.stack_hover_name_text(stack).plain();
+                    }
+                    lines
                 })
             {
                 continue;
@@ -811,7 +887,6 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(&batch, cursor.0, cursor.1)
             && self.is_book_slot(book_type, slot)
         {
-            self.recipe_ui.last_placed = None;
             self.recipe_ui.ghost.clear();
         }
         let (bx, by) = self.book_button_pos(book_type, ox, &batch);
@@ -825,8 +900,7 @@ impl Game<'_> {
             if !open {
                 self.recipe_ui.overlay = None;
             }
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
         if !self.book_open(book_type) {
@@ -863,14 +937,12 @@ impl Game<'_> {
             if self.recipe_ui.page + 1 < pages && inside(cursor, xo + 93.0, yo + 137.0, 12.0, 17.0)
             {
                 self.recipe_ui.page += 1;
-                self.audio
-                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
                 return true;
             }
             if self.recipe_ui.page > 0 && inside(cursor, xo + 38.0, yo + 137.0, 12.0, 17.0) {
                 self.recipe_ui.page -= 1;
-                self.audio
-                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
                 return true;
             }
         }
@@ -924,8 +996,7 @@ impl Game<'_> {
             self.level.recipe_book.filtering[book_type.index()] = filtering;
             self.send_book_settings(book_type);
             self.recipe_ui.page = 0;
-            self.audio
-                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
         // Tabs.
@@ -936,8 +1007,7 @@ impl Game<'_> {
                     self.recipe_ui.tab = Some(tab);
                     self.recipe_ui.page = 0;
                 }
-                self.audio
-                    .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
                 return true;
             }
         }
@@ -980,29 +1050,30 @@ impl Game<'_> {
         else {
             return false;
         };
-        self.audio
-            .play("minecraft:ui.button.click", None, 0.25, 1.0);
+        self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
         let shift = self.shift_down();
         self.try_place(entry, shift)
     }
     /// `RecipeBookComponent.mouseDragged`: while the search box is focused a
     /// drag moves its selection end to the pointer (`EditBox.onDrag`).
-    pub(super) fn recipe_book_drag(&mut self) {
+    pub(super) fn recipe_book_drag(&mut self) -> bool {
         if !self.recipe_ui.search_drag
             || !(self.mod_book_open() || self.active_book().is_some_and(|b| self.book_open(b)))
         {
-            return;
+            return false;
         }
         let x = self.cursor.0;
         if let Some(search) = self.recipe_ui.search.as_mut()
             && search.focused
         {
             search.drag_to(&self.gui.atlas, x);
+            return true;
         }
+        false
     }
     /// A mouse button let go: a drag no longer selects in the search box.
-    pub(super) fn recipe_book_release(&mut self) {
-        self.recipe_ui.search_drag = false;
+    pub(super) fn recipe_book_release(&mut self) -> bool {
+        std::mem::take(&mut self.recipe_ui.search_drag)
     }
     /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
     fn send_book_settings(&self, book_type: BookType) {
@@ -1049,8 +1120,7 @@ impl Game<'_> {
             return;
         };
         self.recipe_ui.page = to;
-        self.audio
-            .play("minecraft:ui.button.click", None, 0.25, 1.0);
+        self.play_audio("minecraft:ui.button.click", None, 0.25, 1.0);
     }
     /// The crafting book's entry of the recipe button under the pointer, in its overlay if open.
     pub(super) fn recipe_under_pointer(&self) -> Option<usize> {
@@ -1144,12 +1214,6 @@ impl Game<'_> {
     }
     /// Places one set of the crafting book's entry, as a click on its button places it.
     pub(super) fn recipe_place_once(&mut self, entry_index: usize) {
-        self.recipe_ui.last_placed = self
-            .recipe_ui
-            .book
-            .as_ref()
-            .and_then(|b| b.entries.get(entry_index))
-            .map(|e| e.id.clone());
         self.recipe_ui.ghost.clear();
         self.recipe_ui.overlay = None;
         self.place_book_recipe(BookType::Crafting, entry_index, false);
@@ -1299,16 +1363,15 @@ impl Game<'_> {
         let Some(book_type) = self.active_book() else {
             return false;
         };
-        let Some(id) = self
+        if self
             .recipe_ui
             .book
             .as_ref()
             .and_then(|b| b.entries.get(entry_index))
-            .map(|e| e.id.clone())
-        else {
+            .is_none()
+        {
             return false;
-        };
-        self.recipe_ui.last_placed = Some(id);
+        }
         self.recipe_ui.ghost.clear();
         self.place_book_recipe(book_type, entry_index, use_max);
         true
@@ -1373,7 +1436,7 @@ impl Game<'_> {
         recipe: &str,
         max: bool,
         dry_run: bool,
-    ) -> Option<RecipeTransferResult> {
+    ) -> Option<RecipeTransferCheck> {
         if !mod_api::__private::has_part_hook(mod_api::HookId::MenuTransfer) {
             return None;
         }
@@ -1381,17 +1444,56 @@ impl Game<'_> {
         if !mod_api::__private::menu_listens(mod_api::HookId::MenuTransfer, menu) {
             return None;
         }
-        let mut result = None;
+        let player = self.own_uuid();
+        self.menu_transfer_answer(player, menu, Some(pos), recipe, max, dry_run)
+    }
+    /// Asks `menu_transfer` of the part of mod menu type `menu` (the caller checked that one
+    /// listens): its answer, and with `dry_run` the cells it named, both lists kept to the
+    /// recipe's known layout (`clamp_cells` to `recipe_cells`: one input for stonecutting, the
+    /// placement's slots, or `MAX_CHECK_CELLS` for a recipe the game can't inspect). Cells a
+    /// part names outside a dry run are dropped. None when no part answers.
+    pub(in crate::game) fn menu_transfer_answer(
+        &mut self,
+        player: u128,
+        menu: &str,
+        pos: Option<[i32; 3]>,
+        recipe: &str,
+        max: bool,
+        dry_run: bool,
+    ) -> Option<RecipeTransferCheck> {
+        use sunrise_client::lan::recipes::{clamp_cells, recipe_cells};
+        let (mut result, mut missing, mut craftable) = (None, Vec::new(), Vec::new());
         self.native_menu_transfer(mod_api::__private::MenuTransferCall {
-            player: self.own_uuid(),
+            player,
             menu,
-            pos: Some(pos),
+            pos,
             recipe,
             max,
             dry_run,
             result: &mut result,
+            missing_cells: &mut missing,
+            craftable_cells: &mut craftable,
         });
-        result
+        let result = result?;
+        let cells = if dry_run {
+            let recipes = self.recipes();
+            let id = if recipe.contains(':') {
+                std::borrow::Cow::Borrowed(recipe)
+            } else {
+                std::borrow::Cow::Owned(format!("minecraft:{recipe}"))
+            };
+            let kind = (recipes.by_type.iter())
+                .find(|(_, list)| list.iter().any(|r| r.id == *id))
+                .map(|(kind, _)| kind.as_str());
+            recipe_cells(kind, recipes.placement(recipe).map(|p| p.slots.len()))
+        } else {
+            0
+        };
+        Some(RecipeTransferCheck {
+            result,
+            missing_cells: clamp_cells(&missing, cells),
+            craftable_cells: clamp_cells(&craftable, cells),
+        })
     }
     /// A viewer's transfer of a recipe by id (`transfer_recipe_id`): sent to the server, whose
     /// `menu_transfer` parts on a mod menu answer first, then its grid transfer. Only a server
@@ -1409,7 +1511,7 @@ impl Game<'_> {
             // The game is its own server: the mod menu's part answers first, as on a server,
             // then the grid transfer.
             if let Some(answer) = self.local_menu_transfer(recipe, max, false) {
-                self.show_transfer_result(answer);
+                self.show_transfer_result(answer.result);
                 return;
             }
             self.local_grid_transfer(recipe, max);
@@ -1423,7 +1525,7 @@ impl Game<'_> {
             self.show_transfer_result(RecipeTransferResult::NotIntoMenu);
             return;
         }
-        let mut request = sunrise_protocol::buf::Writer::new();
+        let mut request = ::sunrise_core::vanilla_bytes::Writer::new();
         request.varint(self.remote_menu_id());
         request.string(recipe);
         request.u8(u8::from(max));
@@ -1484,7 +1586,7 @@ impl Game<'_> {
             return;
         };
         if self.remote.is_some() {
-            let mut request = sunrise_protocol::buf::Writer::new();
+            let mut request = ::sunrise_core::vanilla_bytes::Writer::new();
             request.varint(self.remote_menu_id());
             request.string(&id);
             self.send(sunrise_protocol::packets::play::Serverbound::CustomPayload(
@@ -1497,7 +1599,7 @@ impl Game<'_> {
         }
         // The game is its own server: a mod menu's part answers first, as on a server.
         if let Some(answer) = self.local_menu_transfer(&id, false, false) {
-            self.show_transfer_result(answer);
+            self.show_transfer_result(answer.result);
             return;
         }
         self.local_grid_transfer(&id, false);
@@ -1574,23 +1676,20 @@ impl Game<'_> {
     /// `RecipesClientHost::transfer_recipe_check`: the server's latest check of a viewer
     /// transfer of `recipe` (its id) into the open menu. Asked for when
     /// there is no answer for what the client sees now (the window, its state
-    /// id, the inventory and the grid), and again every `CHECK_REFRESH` while
-    /// it is wanted, at most `CHECK_REFRESHES` times for that view: chests a
-    /// station takes from change where the client can't see them. One request
-    /// out at a time. None until the answer comes, outside a screen that takes
-    /// recipes, and on a server that doesn't advertise `sunrise:recipe_check`.
+    /// id, the inventory and the grid), and again when the answer is one second
+    /// old while it is wanted: chests a station takes from change where the client
+    /// can't see them. One request out at a time. None until the answer comes,
+    /// outside a screen that takes recipes, and on a server that doesn't advertise
+    /// `sunrise:recipe_check`.
     pub(in crate::game) fn transfer_recipe_check(
         &mut self,
         recipe: &str,
     ) -> Option<RecipeTransferCheck> {
-        // The game is its own server: a mod menu's part answers the dry run, as
-        // `sunrise:recipe_check` asks it on a server; with none the check is as before.
+        // The game is its own server: a mod menu's part answers the dry run, with the
+        // cells it names, as `sunrise:recipe_check` asks it on a server; with none the
+        // check is as before.
         if self.remote.is_none() && self.mod_menu_open() {
-            let result = self.local_menu_transfer(recipe, false, true)?;
-            return Some(RecipeTransferCheck {
-                result,
-                missing_cells: Vec::new(),
-            });
+            return self.local_menu_transfer(recipe, false, true);
         }
         let eligible_menu = self.mod_recipe_screen()
             || (self.screen == Screen::Inventory && !self.spectator() && self.mod_menu_open());
@@ -1613,16 +1712,10 @@ impl Game<'_> {
                 ..Default::default()
             };
         }
-        let answer = (checks.answers.iter()).find(|a| a.recipe == recipe);
-        let ask = match answer {
-            None => true,
-            Some(a) => a.refreshes < CHECK_REFRESHES && now.duration_since(a.at) >= CHECK_REFRESH,
-        };
-        let answer = answer.map(|a| a.check.clone());
-        let waiting =
-            (checks.asked.as_ref()).is_some_and(|(_, _, at)| now.duration_since(*at) < CHECK_WAIT);
-        if ask && !waiting {
-            let mut request = sunrise_protocol::buf::Writer::new();
+        let (answer, request_due) = checks.lookup(recipe, now);
+        let answer = answer.cloned();
+        if request_due {
+            let mut request = ::sunrise_core::vanilla_bytes::Writer::new();
             request.varint(self.remote_menu_id());
             let Some(tag) = self.recipe_ui.checks.ask(recipe, now) else {
                 return answer;
@@ -1642,49 +1735,22 @@ impl Game<'_> {
     /// The server's answer to `sunrise:recipe_check`. Kept only as the answer
     /// to the request out, for the view of the menu it was asked for.
     fn remote_recipe_check(&mut self, data: &[u8]) {
-        let mut reader = sunrise_protocol::buf::Reader::new(data);
-        let (Ok(container), Ok(tag), Ok(byte)) = (reader.varint(), reader.varint(), reader.u8())
+        let Some((container, tag, check)) = sunrise_client::lan::recipes::decode_check_reply(data)
         else {
             return;
         };
-        let Some(result) = sunrise_client::lan::recipes::byte_result(byte) else {
-            return;
-        };
-        let mut missing_cells = Vec::new();
-        if result == RecipeTransferResult::Missing {
-            let Ok(n) = reader.varint() else {
-                return;
-            };
-            for _ in 0..n.clamp(0, 256) {
-                let Ok(cell) = reader.u8() else {
-                    return;
-                };
-                missing_cells.push(u32::from(cell));
-            }
-        }
         let checks = &mut self.recipe_ui.checks;
-        if reader.remaining() != 0
-            || checks.asked.as_ref().map(|(id, _, _)| *id) != Some(tag)
+        if checks.asked.as_ref().map(|(id, _, _)| *id) != Some(tag)
             || checks.seen.as_ref().map(|s| s.0) != Some(container)
         {
             return;
         }
         let (_, recipe, _) = checks.asked.take().unwrap();
-        let refreshes = match checks.answers.iter().position(|a| a.recipe == recipe) {
-            Some(i) => checks.answers.remove(i).refreshes + 1,
-            None => 0,
-        };
-        if checks.answers.len() >= CHECK_KEPT {
-            checks.answers.remove(0);
-        }
+        let refreshes = checks.prepare_answer(&recipe, Instant::now());
         checks.answers.push(CheckAnswer {
             recipe,
-            at: Instant::now(),
             refreshes,
-            check: RecipeTransferCheck {
-                result,
-                missing_cells,
-            },
+            check,
         });
     }
 
@@ -1812,8 +1878,9 @@ impl Game<'_> {
         }
         self.build_screen();
     }
-    /// ClientboundPlaceGhostRecipePacket: the recipe last placed, faded into
-    /// the open menu's grid.
+    /// ClientboundPlaceGhostRecipePacket (`ClientPacketListener.handlePlaceRecipe`
+    /// -> `RecipeBookComponent.showGhostRecipe`): fill directly from the server's
+    /// display for the open menu.
     pub(super) fn remote_ghost_recipe(
         &mut self,
         p: sunrise_protocol::packets::recipes::PlaceGhostRecipe,
@@ -1825,13 +1892,20 @@ impl Game<'_> {
         if p.container != open {
             return;
         }
-        let entry = self.recipe_ui.last_placed.as_ref().and_then(|id| {
-            let book = self.recipe_ui.book.as_ref()?;
-            book.entry(id).cloned()
-        });
-        if let Some(entry) = entry {
-            self.recipe_ui.ghost.clear();
-            self.fill_ghost(book_type, &entry);
+        let grid = self.craft_size;
+        let fuel_empty = self.slot_mut(301).is_none();
+        if let Some(slots) = self.with_packet_names(|names| {
+            sunrise_client::recipe_book::ghost_from_display(
+                &p.display,
+                names,
+                book_type,
+                grid,
+                fuel_empty,
+                self.items(),
+                |stack| self.decode_remote_stack(stack),
+            )
+        }) {
+            self.recipe_ui.ghost = map_ghost_slots(book_type, slots);
         }
         // The server is missing an item the client counted: nothing was placed.
         self.direct_craft_refused();
@@ -1839,6 +1913,18 @@ impl Game<'_> {
 
     // ---- ghost recipe ----
 
+    #[cfg(test)]
+    pub(in crate::game) fn ghost_slots(&self) -> Vec<(usize, String, bool)> {
+        self.recipe_ui
+            .ghost
+            .iter()
+            .filter_map(|g| {
+                g.items
+                    .first()
+                    .map(|stack| (g.slot, stack.item.to_string(), g.result))
+            })
+            .collect()
+    }
     /// `fillGhostRecipe`: the recipe's ingredients faded into the slots.
     fn fill_ghost(&mut self, book_type: BookType, entry: &Entry) {
         let grid = self.craft_size;
@@ -1846,28 +1932,16 @@ impl Game<'_> {
         let Some(book) = self.recipe_ui.book.as_ref() else {
             return;
         };
-        let ghost = book
-            .ghost(entry, book_type, grid, fuel_empty, self.items())
-            .into_iter()
-            .map(|g| Ghost {
-                slot: match (g.target, book_type) {
-                    (GhostTarget::Result, BookType::Crafting) => 200,
-                    (GhostTarget::Result, _) => 302,
-                    (GhostTarget::Grid(i), _) => 100 + i,
-                    (GhostTarget::Input, _) => 300,
-                    (GhostTarget::Fuel, _) => 301,
-                },
-                result: g.target == GhostTarget::Result,
-                items: g.items,
-            })
-            .collect();
-        self.recipe_ui.ghost = ghost;
+        let slots = book.ghost(entry, book_type, grid, fuel_empty, self.items());
+        self.recipe_ui.ghost = map_ghost_slots(book_type, slots);
     }
 
     // ---- drawing ----
 
     /// The book button, ghost recipe and open book, returning its deferred tooltip.
     pub(super) fn draw_recipe_book(&mut self, batch: &mut HudBatch) -> Option<Vec<(Text, u32)>> {
+        // No column until this frame draws one: a closed book draws none.
+        self.screen_state.drawn_book_tabs.set(None);
         if self.native_screen_shown() {
             return self.draw_mod_book(batch);
         }
@@ -1933,7 +2007,7 @@ impl Game<'_> {
                         .map(|e| vec![book.entries[e.0].result.clone()])
                         .collect();
                     let stack = screen::display_stack(&results, self.swap_index());
-                    let item = sunrise_client::stations::hover_name(&self.pack.names, &stack);
+                    let item = self.stack_hover_name(&stack);
                     let (x, y) = Self::button_pos(xo, yo, n);
                     in_book(
                         Narratable::recipe(item, b.entries.len() > 1, [x, y, 25.0, 25.0]),
@@ -2029,7 +2103,7 @@ impl Game<'_> {
             if !self.mod_book_open() {
                 return None;
             }
-            self.native_screen_slot(slot.checked_sub(300)?)?;
+            self.native_screen_slot(crate::game::inventory_slots::container_slot_index(slot)?)?;
         } else if !self.book_open(self.active_book()?) {
             return None;
         }
@@ -2150,6 +2224,14 @@ impl Game<'_> {
             text_width: &text_width,
         };
         let calls = screen::draw(&layout);
+        // The tabs as painted are the region `ScreenView::regions` reports (with a subscriber).
+        if self.screen_view_listened() {
+            self.screen_state
+                .drawn_book_tabs
+                .set(screen::sprite_bounds(&calls, |_, id| {
+                    screen::is_tab_sprite(id)
+                }));
+        }
         let tooltip = self.paint_book(batch, &calls);
         // The squeeze animations run down with the frames.
         let frame = self.frame_ticks;
@@ -2191,18 +2273,17 @@ impl Game<'_> {
                     }
                 }
                 Call::Sprite { id, x, y, w, h } => {
-                    let name = sunrise_client::hud::atlas_key_of_gui_sprite(id);
+                    let name = id.as_str();
                     let native = atlas
-                        .sprites
-                        .get(&name)
+                        .gui_rect(name)
                         .is_some_and(|r| r.w as i32 == *w && r.h as i32 == *h);
                     if native {
-                        batch.sprite(atlas, &name, *x as f32, *y as f32);
+                        batch.sprite(atlas, name, *x as f32, *y as f32);
                     } else {
                         sunrise_client::ui::nine_slice(
                             batch,
                             atlas,
-                            &name,
+                            name,
                             *x as f32,
                             *y as f32,
                             *w as f32,
@@ -2254,7 +2335,7 @@ impl Game<'_> {
                 }
                 Call::Item { call, stack, x, y } => match call {
                     ItemCall::Item | ItemCall::Fake => {
-                        self.draw_item_model(batch, stack, *x as f32, *y as f32)
+                        self.draw_item_model(batch, stack, *x as f32, *y as f32, 0)
                     }
                     ItemCall::Decorations => {
                         self.draw_item_decorations(batch, stack, *x as f32, *y as f32, None)

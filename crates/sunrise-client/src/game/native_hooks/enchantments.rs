@@ -5,7 +5,7 @@ use super::*;
 impl Game<'_> {
     /// Registered enchantments, in registry order.
     pub(in crate::game) fn enchantments(&self) -> Vec<EnchantmentInfo> {
-        let enchantments = &self.stations().enchantments;
+        let enchantments = self.item_enchantments();
         enchantments
             .list
             .iter()
@@ -13,6 +13,8 @@ impl Game<'_> {
                 mod_api::EnchantmentInfo::new(
                     e.id.to_string(),
                     e.max_level,
+                    e.weight,
+                    e.anvil_cost,
                     enchantments.is_curse(&e.id),
                 )
             })
@@ -20,21 +22,20 @@ impl Game<'_> {
     }
     /// `Enchantment.getMinCost(level)`: the enchanting power needed, or None for an unknown id.
     pub(in crate::game) fn enchantment_min_cost(&self, id: &str, level: u32) -> Option<i32> {
-        self.stations()
-            .enchantments
+        self.item_enchantments()
             .get(id)
             .map(|e| e.min_cost.calculate(level))
     }
-    /// `ItemStack.getHoverName()` as plain text, in the client's language.
-    pub(in crate::game) fn hover_name(&self, stack: &ItemStack) -> String {
-        sunrise_client::stations::hover_name(&self.pack.names, stack)
+    /// `ItemStack.getHoverName()` as a component: each viewer renders it in their language.
+    pub(in crate::game) fn hover_name(&self, stack: &ItemStack) -> sunrise_client::text::Text {
+        self.stack_hover_name_text(stack)
     }
     /// Whether enchantment `id` can go on `item` (`Enchantment.isSupportedItem`).
     pub(in crate::game) fn enchantment_supports(&self, id: &str, item: mod_api::ItemKey) -> bool {
         let Some(item) = mod_api::__private::item_key_id(item) else {
             return false;
         };
-        self.stations().enchantments.get(id).is_some_and(|e| {
+        self.item_enchantments().get(id).is_some_and(|e| {
             sunrise_items::enchant::Enchantments::item_in(self.items(), &e.supported, item)
         })
     }

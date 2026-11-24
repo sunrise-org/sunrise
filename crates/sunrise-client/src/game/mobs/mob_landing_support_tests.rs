@@ -45,6 +45,9 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
         None,
     )
     .unwrap();
+    game.reset_entity_residency();
+    game.native_lifecycle
+        .begin_open(Some(mod_api::Authority::IntegratedServer));
     game.build_registries();
     game.set_allow_commands(true);
     game.world
@@ -86,8 +89,17 @@ fn drop_pig(x: f64) -> (f32, Option<[i32; 3]>, f64) {
         .iter()
         .find(|m| m.species() == sunrise_client::mobs::Species::Pig)
         .expect("the pig");
-    assert!(pig.on_ground, "the pig has landed");
-    (pig.health, pig.supporting, pig.position.y)
+    assert!(pig.ground.on_ground, "the pig has landed");
+    let support = pig.ground.supporting_block.map(|p| [p.x, p.y, p.z]);
+    let (health, y) = (pig.health, pig.position.y);
+    let handle = game.entity(pig.id).expect("the landed pig's live handle");
+    assert!(game.run_command("fill 8 99 8 9 99 8 air"));
+    assert_eq!(
+        game.entity_on_block(handle),
+        support,
+        "the read does not rescan between moves"
+    );
+    (health, support, y)
 }
 
 #[test]

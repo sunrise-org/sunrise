@@ -35,7 +35,7 @@ FUNCTIONS = ["sin", "cos", "tan", "exp", "log", "log10", "pow", "cbrt", "atan2",
              "mthtable"]
 # Vanilla's own game functions (tools/jmath_fuzz/VanillaMathFuzz.java against
 # crates/sunrise-world/examples/probe/vanilla_math_fuzz.rs); they need the prepared 26.3 jars.
-GAME = ["view_vector", "vec3_yrot", "projectile_rot", "input_vector", "blocking_angle"]
+GAME = ["view_vector", "vec3_yrot", "projectile_rot", "input_vector", "blocking_angle", "mth_rounding"]
 WORK = lab.LOCAL / "jmath-fuzz"
 
 

@@ -25,6 +25,12 @@ impl Game<'_> {
             self.creative_display_click(slot, button, input);
             return true;
         }
+        if self.screen == Screen::Creative
+            && input == sunrise_client::menu::Input::Throw
+            && !self.drop_spam_throttler.is_under_threshold()
+        {
+            return true;
+        }
         if let Some(slot) = slot
             && input == sunrise_client::menu::Input::Throw
             && self.carried.is_some()
@@ -44,7 +50,12 @@ impl Game<'_> {
     /// `handleCreativeModeItemAdd`); the carried stack stays. Only the server drops it: this is
     /// the client of a server (`remote`).
     pub(super) fn creative_throw_carrying(&mut self, slot: usize, button: i32) {
-        let Some(old) = self.slot_mut(slot).clone() else {
+        let Some(old) = self
+            .slot_mut(slot)
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned()
+        else {
             return;
         };
         let count = if button == 0 {
@@ -65,7 +76,7 @@ impl Game<'_> {
         });
         self.player_equipment_changed(&before);
         self.apply_equipment();
-        self.remote_creative_throw(ItemStack { count, ..old });
+        self.creative_screen_drop(ItemStack { count, ..old });
         self.send_creative_slots();
     }
     /// A click on an item tab's display slot: the screen's own handling
@@ -84,10 +95,12 @@ impl Game<'_> {
             search.move_cursor_to_end(false);
             search.highlight = 0;
         }
-        let first = self.creative_screen.first_row(&self.pack.names);
-        let shown = self
-            .creative_screen
-            .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY);
+        if input == sunrise_client::menu::Input::Throw
+            && !self.drop_spam_throttler.is_under_threshold()
+        {
+            return;
+        }
+        let shown = self.creative_display_stack(slot);
         let catalog = world_items!(self);
         let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
         match click_display(&mut self.carried, shown.as_ref(), max, button, input) {
@@ -97,7 +110,7 @@ impl Game<'_> {
             DisplayClick::Offhand(stack) => self.offhand = Some(stack),
             // handleCreativeModeItemDrop: on a server the stack goes to it (SetCreativeModeSlot
             // to slot -1), which drops it; a local drop here would never reach the server.
-            DisplayClick::Drop(stack) if self.remote.is_some() => self.remote_creative_throw(stack),
+            DisplayClick::Drop(stack) if self.remote.is_some() => self.creative_screen_drop(stack),
             DisplayClick::Drop(stack) => {
                 self.player_drop(stack);
             }
@@ -128,10 +141,15 @@ impl Game<'_> {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
         if let Some(done) = self.stacked_menu_ops(ops) {
+            // CreativeModeInventoryScreen.slotClicked: the changed slots go out with the click.
+            if done && self.remote.is_some() && self.screen == Screen::Creative {
+                self.send_creative_slots();
+            }
             return done;
         }
         let ops = ops.to_vec();
-        let done = self.menu_session(move |menu, env, to_menu| {
+        let creative_remote = self.remote.is_some() && self.screen == Screen::Creative;
+        let done = self.menu_session_with_game(move |game, menu, env, to_menu| {
             let mut clicks = Vec::new();
             for &(slot, button, input) in &ops {
                 let menu_slot = match slot {
@@ -149,7 +167,14 @@ impl Game<'_> {
                 clicks.push((menu_slot, button, input));
             }
             for (menu_slot, button, input) in clicks {
-                if menu.click(env, menu_slot, button, input).is_err() {
+                let result = if creative_remote {
+                    menu.click_with_creative_drop(env, menu_slot, button, input, |stack| {
+                        game.try_send_creative_drop_packet(stack)
+                    })
+                } else {
+                    menu.click(env, menu_slot, button, input)
+                };
+                if result.is_err() {
                     // Vanilla's server throws: nothing of this click is kept.
                     return Some(false);
                 }
@@ -175,10 +200,25 @@ impl Game<'_> {
             &dyn Fn(usize) -> Option<usize>,
         ) -> Option<bool>,
     ) -> bool {
+        self.menu_session_with_game(|_, menu, env, to_menu| run(menu, env, to_menu))
+    }
+
+    /// Like `menu_session`, with read-only access to connection state before
+    /// deciding whether to keep the prediction.
+    pub(super) fn menu_session_with_game(
+        &mut self,
+        run: impl FnOnce(
+            &Self,
+            &mut sunrise_client::menu::Menu,
+            &sunrise_client::menu::Env,
+            &dyn Fn(usize) -> Option<usize>,
+        ) -> Option<bool>,
+    ) -> bool {
         use sunrise_client::menu::{Env, Kind, Menu};
         #[derive(Clone, Copy)]
         struct Map {
             container: usize,
+            base: usize,
             table: bool,
             cells: usize,
             plain: bool,
@@ -205,7 +245,9 @@ impl Game<'_> {
                     }
                 } else {
                     match g {
-                        300.. if g < 300 + self.container => Some(g - 300),
+                        g if g >= self.base && g < self.base + self.container => {
+                            Some(g - self.base)
+                        }
                         9..36 => Some(main + g - 9),
                         0..9 => Some(main + 27 + g),
                         _ => None,
@@ -225,7 +267,7 @@ impl Game<'_> {
                         _ => None,
                     }
                 } else if i < self.container {
-                    Some(300 + i)
+                    Some(self.base + i)
                 } else if i < self.container + 27 {
                     Some(9 + i - self.container)
                 } else {
@@ -377,6 +419,11 @@ impl Game<'_> {
                 };
                 let map = Map {
                     container: count,
+                    base: if matches!(kind, Kind::Mod(_)) {
+                        crate::game::inventory_slots::MOD_MENU_SLOT_BASE
+                    } else {
+                        300
+                    },
                     table: false,
                     cells: 0,
                     plain: false,
@@ -386,6 +433,7 @@ impl Game<'_> {
                 let table = self.craft_size == 3;
                 let map = Map {
                     container: 0,
+                    base: 300,
                     table,
                     cells: self.craft_size * self.craft_size,
                     plain: true,
@@ -411,6 +459,9 @@ impl Game<'_> {
             None => game_of.iter().position(|x| *x == Some(g)),
         };
         let mut menu = Menu::new(kind);
+        if self.remote.is_some() {
+            menu.set_drop_spam_throttler(self.drop_spam_throttler);
+        }
         let menu_id = if matches!(kind, Kind::Mount(_)) {
             Some("sunrise:mount_inventory")
         } else if matches!(kind, Kind::Inventory | Kind::ItemPicker) {
@@ -421,6 +472,7 @@ impl Game<'_> {
         menu.set_registry_id(menu_id);
         menu.set_block_pos(self.container.map(|(x, y, z)| [x, y, z]));
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
+        menu.item_smelted_hook = mod_api::__private::listened(mod_api::HookId::ItemSmelted);
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();
         }
@@ -455,7 +507,7 @@ impl Game<'_> {
             .and_then(|s| s.merchant.as_ref())
             .map(|m| (m.session.clone(), m.mob));
         if let Some((s, mob)) = session.as_mut() {
-            self.merchant_sync_in(s, *mob);
+            Self::merchant_sync_in(s, mob.and_then(|id| self.mobs.iter().find(|m| m.id == id)));
         }
         // Crafting and cartography read and derive the level's maps; a
         // server's (the client menu's ContainerLevelAccess.NULL) doesn't.
@@ -516,12 +568,31 @@ impl Game<'_> {
         for (i, stack) in before.iter().enumerate() {
             menu.set_slot(&env, i, stack.clone());
         }
-        // The off hand is part of the inventory even when the menu has no slot for it.
+        // A number-key swap uses the backing inventory, not the displayed slots.
+        // Keep all 36 slots available, including room for a swap's overflow.
+        let inventory_omitted = matches!(kind, Kind::Mod(layout) if !layout.player_inventory);
+        if inventory_omitted {
+            for (slot, stack) in self.inventory.iter().take(36).enumerate() {
+                menu.set_player_item(slot, stack.clone());
+            }
+        }
+        // Armor and off hand are part of the inventory even when the menu has no slots for them.
+        if !game_of.contains(&Some(500)) {
+            for (i, stack) in self.armor.iter().enumerate() {
+                menu.set_player_item(39 - i, stack.clone());
+            }
+        }
         let offhand_mapped = game_of.contains(&Some(504));
         if !offhand_mapped {
             menu.set_player_item(40, self.offhand.clone());
         }
         menu.settle(&env);
+        // A server's client menu never works out its crafting result (`on_client`): the crafting
+        // menus' result slot (InventoryMenu's and CraftingMenu's slot 0, which `game_of` doesn't
+        // map) holds what the server's ContainerSetSlot put there. Another menu's slot 0 is its own.
+        if matches!(kind, Kind::Inventory | Kind::Crafting) && self.remote.is_some() {
+            menu.set_slot(&env, 0, self.craft_result());
+        }
         if kind == Kind::Loom
             && let Some((selected, patterns)) = station_menu
         {
@@ -569,19 +640,24 @@ impl Game<'_> {
             // Attached after the slots were set: setting them is not a click.
             menu.merchant = session.map(|(s, _)| s);
         }
-        // `FurnaceResultSlot.checkTakeAchievements` pays out on what left the output slot.
-        let furnace_before = if matches!(kind, Kind::Furnace(_)) {
-            menu.slot(2).cloned().map_or(0, |s| s.count)
-        } else {
-            0
-        };
         if anvil_open && self.remote.is_some() {
             // The AnvilScreen listens while the click is predicted (its slotChanged).
             menu.anvil.seen_input = before[0].clone();
             menu.anvil.screen = true;
+            menu.anvil_hook = true;
         }
-        let outcome = run(&mut menu, &env, &to_menu);
+        // Clear any createResult flag raised while populating the menu before the click.
+        let _ = menu.anvil_created();
+        let outcome = run(self, &mut menu, &env, &to_menu);
         let made = maps.made.take();
+        // Any creative-screen drop sent live inside `run` already updated `menu`'s
+        // throttler; keep `self.drop_spam_throttler` in step even if a later click failed.
+        if self.remote.is_some()
+            && self.screen == Screen::Creative
+            && let Some(throttle) = menu.drop_spam_throttler()
+        {
+            self.drop_spam_throttler = throttle;
+        }
         match outcome {
             None => return false,
             Some(false) => return true,
@@ -600,12 +676,9 @@ impl Game<'_> {
             self.merchant_sync_out(s);
         }
         let after: Vec<Option<ItemStack>> = (0..total).map(|i| menu.slot(i).cloned()).collect();
-        // Only a furnace has a result slot to compare: an enchanting table has two slots.
-        let furnace_after = if matches!(kind, Kind::Furnace(_)) {
-            after[2].as_ref().map_or(0, |s| s.count)
-        } else {
-            0
-        };
+        // `FurnaceResultSlot.checkTakeAchievements` pays out only on actual takes (`onTake` /
+        // `onQuickCraft`), never on direct `Slot.set` edits.
+        let furnace_awarded = menu.furnace_awarded;
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
@@ -619,6 +692,7 @@ impl Game<'_> {
         let brewed_potion_takes = std::mem::take(&mut menu.brewed_potion_takes);
         let equipped = std::mem::take(&mut menu.equipped);
         let item_crafted = std::mem::take(&mut menu.item_crafted);
+        let item_smelted = std::mem::take(&mut menu.item_smelted);
         for (_, stack, _) in &item_crafted {
             if !predicting {
                 self.award_stat("crafted", &stack.item, stack.count as i32);
@@ -628,6 +702,11 @@ impl Game<'_> {
         for (i, stack) in after.into_iter().enumerate() {
             if let Some(g) = game_of[i] {
                 *self.slot_mut(g) = stack;
+            }
+        }
+        if inventory_omitted {
+            for (slot, stack) in self.inventory.iter_mut().take(36).enumerate() {
+                *stack = menu.player_item(slot).cloned();
             }
         }
         self.carried = carried;
@@ -648,21 +727,20 @@ impl Game<'_> {
             for stack in &brewed {
                 self.trigger_brewed_potion(stack);
             }
-            if furnace_before > furnace_after
+            if furnace_awarded
                 && self.remote.is_none()
                 && let (Some(pos), Some(p)) = (self.container, self.player.as_ref())
             {
                 let at = [p.position.x, p.position.y, p.position.z];
-                self.award_furnace_recipes(pos, at);
+                let recipes = self.award_furnace_recipes(pos, at);
+                self.award_recipes(&recipes);
             }
         } else if self.screen == Screen::Creative {
-            // A THROW in the creative screen with an empty hand: on an item tab's hotbar
-            // `AbstractContainerMenu.doClick` calls `Player.handleCreativeModeItemDrop`, on the
-            // Survival Inventory tab the screen does. The stack goes to the server, the slot
-            // follows with the others (SetCreativeModeSlot). Only the server can drop it; the
-            // slot has already given it up.
-            for stack in dropped {
-                self.remote_creative_throw(stack);
+            // `Player.drop` swings even when the creative packet is suppressed. Creative-screen
+            // THROW packets already went out live inside `click_with_creative_drop`, before the
+            // changed-slot sync.
+            for _ in dropped {
+                self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
             }
         }
         if kind == Kind::Loom {
@@ -709,7 +787,8 @@ impl Game<'_> {
             }
         }
         if kind == Kind::Anvil || kind == Kind::Smithing {
-            self.combiner_session_end(&menu, predicting);
+            let anvil_created = menu.anvil_created();
+            self.combiner_session_end(&menu, anvil_created, predicting);
         }
         if kind == Kind::Enchanting && (menu.enchant_changed || before[0] != menu.slot(0).cloned())
         {
@@ -739,6 +818,189 @@ impl Game<'_> {
         if let Some(maps) = level_maps {
             self.register_made_maps(maps);
         }
+        if !item_smelted.is_empty()
+            && mod_api::__private::listened(mod_api::HookId::ItemSmelted)
+            && let Some(player) = if predicting {
+                self.local_player()
+            } else {
+                let uuid = self.native_acting_id();
+                self.player(uuid)
+            }
+        {
+            self.dispatch_item_smelted(player, &item_smelted);
+        }
+        true
+    }
+    /// Deliver `anvil_update` for a client anvil menu whenever `AnvilMenu.createResult` ran
+    /// with a left input (matching NeoForge `CommonHooks.onAnvilUpdate` on the client side).
+    pub(in crate::game) fn deliver_client_anvil_update(
+        &mut self,
+        menu: &mut sunrise_client::menu::Menu,
+    ) -> bool {
+        if !menu.anvil_created() || self.remote.is_none() {
+            return false;
+        }
+        if !mod_api::__private::listened(mod_api::HookId::AnvilUpdate) {
+            return false;
+        }
+        let Some(pos) = self.station.as_ref().map(|s| s.pos) else {
+            return false;
+        };
+        let Some((inputs, mut result)) = menu.anvil_update() else {
+            return false;
+        };
+        let (player, entity_id) = (self.native_acting_id(), self.own_entity_id());
+        self.api_anvil_update(player, entity_id, pos, inputs, &mut result);
+        menu.anvil_updated(result);
+        true
+    }
+    /// Run one client anvil click with live `anvil_update` dispatch at every `createResult`.
+    pub(in crate::game) fn run_client_anvil_click(
+        &mut self,
+        menu: &mut sunrise_client::menu::Menu,
+        slot: i32,
+        button: i32,
+        input: sunrise_client::menu::Input,
+    ) -> std::result::Result<(), &'static str> {
+        use sunrise_client::menu::Env;
+        menu.track_results(true);
+        let mut rest = {
+            let env = Env {
+                enchantments: self.item_enchantments(),
+                ..self.menu_env()
+            };
+            menu.start_click(&env, slot, button, input)
+        }?;
+        loop {
+            self.deliver_client_anvil_update(menu);
+            if menu.anvil_craft.take().is_some() {
+                menu.record_anvil_charge();
+                menu.anvil_take_material(&Env {
+                    enchantments: self.item_enchantments(),
+                    ..self.menu_env()
+                });
+                self.deliver_client_anvil_update(menu);
+                menu.anvil_take_input(&Env {
+                    enchantments: self.item_enchantments(),
+                    ..self.menu_env()
+                });
+                self.deliver_client_anvil_update(menu);
+            }
+            let Some(step) = rest else {
+                break;
+            };
+            let env = Env {
+                enchantments: self.item_enchantments(),
+                ..self.menu_env()
+            };
+            rest = menu.resume_click(&env, step);
+        }
+        menu.track_results(false);
+        Ok(())
+    }
+    /// Like `menu_session_with_game` for a server's open anvil menu, releasing `Env` between
+    /// steps so `run` can dispatch live `anvil_update` hooks at every `AnvilMenu.createResult`
+    /// without re-running `station_changed` once at the end.
+    pub(in crate::game) fn anvil_menu_session(
+        &mut self,
+        run: impl FnOnce(
+            &mut Self,
+            &mut sunrise_client::menu::Menu,
+            &dyn Fn(usize) -> Option<usize>,
+        ) -> Option<bool>,
+    ) -> bool {
+        use sunrise_client::menu::{Env, Kind, Menu};
+        if !self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == stations::Kind::Anvil)
+            || self.remote.is_none()
+        {
+            return false;
+        }
+        let mut game_of: Vec<Option<usize>> = vec![
+            Some(stations::INPUT),
+            Some(stations::INPUT + 1),
+            Some(stations::RESULT),
+        ];
+        game_of.extend((9..36).chain(0..9).map(Some));
+        let to_menu = |g: usize| game_of.iter().position(|x| *x == Some(g));
+        let mut menu = Menu::new(Kind::Anvil);
+        if self.remote.is_some() {
+            menu.set_drop_spam_throttler(self.drop_spam_throttler);
+        }
+        // Prediction must dispatch the result update between the two input writes in onTake.
+        menu.anvil_hook = true;
+        menu.set_registry_id(self.remote_menu_type());
+        let before: Vec<Option<ItemStack>> = game_of
+            .iter()
+            .map(|g| g.and_then(|g| self.slot_mut(g).clone()))
+            .collect();
+        menu.creative = self.creative;
+        menu.on_client = true;
+        menu.selected = self.selected;
+        menu.levels = self.experience.level;
+        menu.anvil.name = self.station.as_ref().and_then(|s| s.anvil_sent.clone());
+        {
+            let env = Env {
+                enchantments: self.item_enchantments(),
+                ..self.menu_env()
+            };
+            for (i, stack) in before.iter().enumerate() {
+                menu.set_slot(&env, i, stack.clone());
+            }
+            for (i, stack) in self.armor.iter().enumerate() {
+                menu.set_player_item(39 - i, stack.clone());
+            }
+            menu.set_player_item(40, self.offhand.clone());
+            menu.settle(&env);
+        }
+        if let Some(s) = self.station.as_ref() {
+            menu.data[0] = s.anvil.cost;
+            menu.anvil.repair_count = s.anvil.repair_item_count_cost;
+            menu.anvil.only_renaming = s.anvil.only_renaming;
+        }
+        menu.carried = self.carried.clone();
+        menu.drops.clear();
+        // The AnvilScreen listens while the click is predicted (its slotChanged).
+        menu.anvil.seen_input = before[0].clone();
+        menu.anvil.screen = true;
+        // Clear any createResult flag raised while populating the scratch menu.
+        let _ = menu.anvil_created();
+        match run(self, &mut menu, &to_menu) {
+            None => return false,
+            Some(false) => return true,
+            Some(true) => {}
+        }
+        let _ = self.deliver_client_anvil_update(&mut menu);
+        let after: Vec<Option<ItemStack>> = (0..menu.slot_count())
+            .map(|i| menu.slot(i).cloned())
+            .collect();
+        let carried = menu.carried.take();
+        for sound in std::mem::take(&mut menu.player_sounds) {
+            self.player_menu_sound(sound);
+        }
+        for (_, stack, _) in std::mem::take(&mut menu.item_crafted) {
+            self.tutorial_get_item(Some(&stack));
+        }
+        for (i, stack) in after.into_iter().enumerate() {
+            if let Some(g) = game_of[i] {
+                *self.slot_mut(g) = stack;
+            }
+        }
+        self.carried = carried;
+        self.offhand = menu.player_item(40).cloned();
+        // The names AnvilScreen.onNameChanged sent while the click ran go out before it.
+        for name in std::mem::take(&mut menu.anvil.renamed) {
+            if let Some(s) = self.station.as_mut() {
+                s.anvil_sent = Some(name.clone());
+            }
+            self.send(sunrise_protocol::packets::play::Serverbound::RenameItem(
+                sunrise_protocol::packets::play::RenameItem { name },
+            ));
+        }
+        self.anvil_session_end(&menu);
+        self.apply_equipment();
         true
     }
     /// `CrafterBlockEntity.setSlotState`: the menu's slot states land on the
@@ -760,15 +1022,15 @@ impl Game<'_> {
             self.container_changed(key);
         }
     }
-    pub(super) fn click_inventory(&mut self, right: bool) {
+    pub(super) fn click_inventory(&mut self, right: bool) -> bool {
         if self.mod_browser_press(right) || self.mount_click(right) {
-            return;
+            return true;
         }
         if self.recipe_book_click(right) {
-            return;
+            return true;
         }
         if self.station_click(right) {
-            return;
+            return true;
         }
         if self.remote.is_some() {
             return self.remote_click(right);
@@ -778,26 +1040,26 @@ impl Game<'_> {
             .as_ref()
             .map(|r| [r.config.width, r.config.height])
         else {
-            return;
+            return false;
         };
         let batch = HudBatch::new(size, self.settings.gui_scale_inputs());
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
-            return;
+            return false;
         };
         let held_shift = self.has_shift_down();
         if self.crafter_click(slot, held_shift, right) {
-            return;
+            return true;
         }
         if held_shift && self.container.is_some() && self.container_quick_move(slot) {
             if let Some(key) = self.container {
                 self.world.modified.insert((key.0 >> 4, key.2 >> 4));
             }
-            return;
+            return true;
         }
         if let Some(c) = &self.carried
             && self.refuses(slot, c)
         {
-            return;
+            return true;
         }
         let max = |items: &Items, s: &ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
         let shift = held_shift;
@@ -810,7 +1072,7 @@ impl Game<'_> {
         if is_furnace && slot == 302 {
             // FurnaceResultSlot: take only.
             let Some(result) = self.slot_mut(302).take() else {
-                return;
+                return true;
             };
             match &mut self.carried {
                 None => self.carried = Some(result),
@@ -822,7 +1084,7 @@ impl Game<'_> {
                 }
                 _ => *self.slot_mut(302) = Some(result),
             }
-            return;
+            return true;
         }
         // Changing the input restarts cooking (AbstractFurnaceBlockEntity.setItem).
         let furnace_input = (is_furnace && slot == 300).then(|| self.slot_mut(300).clone());
@@ -847,7 +1109,7 @@ impl Game<'_> {
                         {
                             c.count += result.count
                         }
-                        _ => return,
+                        _ => return true,
                     }
                 }
                 let remainders = self.craft_grid_remainders(&recipe);
@@ -879,13 +1141,13 @@ impl Game<'_> {
                     break;
                 }
             }
-            return;
+            return true;
         }
         if shift
             && (slot < 36 || (500..504).contains(&slot) || (100..109).contains(&slot))
             && self.inventory_quick_move(slot)
         {
-            return;
+            return true;
         }
         if (500..504).contains(&slot) {
             let wanted = ["head", "chest", "legs", "feet"][slot - 500];
@@ -897,11 +1159,11 @@ impl Game<'_> {
                     == Some(wanted)
             });
             if !fits {
-                return;
+                return true;
             }
             std::mem::swap(&mut self.carried, &mut self.armor[slot - 500]);
             self.apply_equipment();
-            return;
+            return true;
         }
         let carried = self.carried.take();
         let current = self.slot_mut(slot).take();
@@ -948,6 +1210,7 @@ impl Game<'_> {
         {
             f.input_clicked(&self.loop_context, world_recipes!(self), before);
         }
+        true
     }
 
     /// A screen closed or lost its pointer: discard the unfinished click gesture.
@@ -970,7 +1233,7 @@ impl Game<'_> {
             (0.8, 0.8 + self.world.random.next_float() * 0.4)
         };
         if self.is_logical_server() {
-            self.audio.play(sound, Some(at), volume, pitch);
+            self.play_audio(sound, Some(at), volume, pitch);
         } else {
             self.play_client_player_sound(sound, volume, pitch);
         }

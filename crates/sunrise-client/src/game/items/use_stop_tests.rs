@@ -37,9 +37,12 @@ fn guest_action(item: &str, action: u8) -> Vec<String> {
     with_game(item, |game| {
         game.reset_entity_residency();
         game.native_lifecycle
-            .begin_open(super::native_lifecycle::Authority::IntegratedServer);
+            .begin_open(Some(mod_api::Authority::IntegratedServer));
         open_to_lan(game);
         let mut player = guest(1);
+        // `with_game` binds the local player to UUID 123; the guest is another profile.
+        let guest_uuid = 124;
+        player.uuid = guest_uuid;
         player.permission = 4;
         player.position = [21.5, 70.0, -8.25];
         player.inventory[0] = Some(ItemStack::new(item, 1));
@@ -60,7 +63,7 @@ fn guest_action(item: &str, action: u8) -> Vec<String> {
                 Serverbound::SetCarriedItem(play::SetCarriedItem { slot: 1 }),
             ),
             2 => {
-                let player = game.player(123).unwrap();
+                let player = game.player(guest_uuid).unwrap();
                 assert!(game.player_set_selected_slot(player, 1));
             }
             3 => {
@@ -264,7 +267,7 @@ fn nether_portal_stops_use_in_target_level() {
                 game.world_root = scratch.path().to_path_buf();
                 game.reset_entity_residency();
                 game.native_lifecycle
-                    .begin_open(mod_api::Authority::IntegratedServer);
+                    .begin_open(Some(mod_api::Authority::IntegratedServer));
                 open_to_lan(game);
                 // Reuse enter_level's normal second-level preparation before the trip.
                 game.enter_level(super::Dim::Nether).unwrap();
@@ -291,7 +294,7 @@ fn nether_portal_stops_use_in_target_level() {
                     1.8,
                     false,
                 );
-                game.start_server_trip(1, super::Dim::Nether, Some(plan), false);
+                game.start_server_trip(1, super::Dim::Nether, Some(plan));
                 let player = &game.lan.as_ref().unwrap().hub.guests[0];
                 assert_eq!(player.dimension, "minecraft:the_nether");
                 assert_eq!(player.position, [1.5, 70.0, 1.5]);

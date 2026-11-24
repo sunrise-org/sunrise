@@ -1,1 +1,0 @@
-The server reload's listener registry, as `add_server_reload_listeners` hands it out: its registration methods and a read-only view of names and edges, rebuilt on each server reload.

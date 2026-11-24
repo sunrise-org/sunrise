@@ -1,1 +1,0 @@
-The particle provider registry `register_particle_providers` hands out: NeoForge's `RegisterParticleProvidersEvent`.

@@ -14,9 +14,20 @@ const FSH: &str = "#version 330\nlayout(std140) uniform Tint {\n    float value;
     layout(location = 0) out vec4 fragColor;\n\
     void main() {\n    fragColor = vec4(value, 0.0, 0.0, 1.0);\n}\n";
 
-/// One pass of the disc or the stars (`stars`) after `CoreSky::prepare` uploaded the blocks:
-/// the red of the target's middle.
-fn red(device: &wgpu::Device, queue: &wgpu::Queue, sky: &CoreSky, stars: bool) -> u8 {
+/// One pass of the disc or the stars (`stars`) after `CoreSky::prepare` uploaded the blocks
+/// (and `poly_globals`): the red of the target's middle.
+fn red(device: &wgpu::Device, queue: &wgpu::Queue, sky: &mut CoreSky, stars: bool) -> u8 {
+    pixel(device, queue, sky, stars, None)[0]
+}
+
+/// [`red`]'s whole pixel, with `poly_globals` uploaded.
+fn pixel(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    sky: &mut CoreSky,
+    stars: bool,
+    poly_globals: Option<&super::super::expression_blocks::PolyGlobalsBytes>,
+) -> [u8; 4] {
     const SIZE: u32 = 16;
     let target = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -58,6 +69,9 @@ fn red(device: &wgpu::Device, queue: &wgpu::Queue, sky: &CoreSky, stars: bool) -
         [0.0; 4],
         [1e6; 6],
     );
+    for extra in sky.expression_blocks() {
+        extra.set_globals(poly_globals);
+    }
     sky.prepare(&mut uploads, &mut encoder, &blocks, Some(&blocks));
     {
         let color_view = color.create_view(&Default::default());
@@ -107,7 +121,8 @@ fn red(device: &wgpu::Device, queue: &wgpu::Queue, sky: &CoreSky, stars: bool) -
         .map_async(wgpu::MapMode::Read, |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let pixels = read.slice(..).get_mapped_range().unwrap().to_vec();
-    pixels[8 * 256 + 8 * 4]
+    let at = 8 * 256 + 8 * 4;
+    pixels[at..at + 4].try_into().unwrap()
 }
 
 /// The disc and the stars each read their own `Tint`, from their own shader's file (the same
@@ -162,6 +177,74 @@ fn a_pack_sky_and_stars_read_their_expression_uniforms() {
     for blocks in sky.expression_blocks() {
         blocks.evaluate(&Default::default());
     }
-    assert_eq!(red(&device, &queue, &sky, false), 51);
-    assert_eq!(red(&device, &queue, &sky, true), 153);
+    assert_eq!(red(&device, &queue, &mut sky, false), 51);
+    assert_eq!(red(&device, &queue, &mut sky, true), 153);
+}
+
+/// Polytone's `PolyGlobals`, imported from the built-in `polytone_globals.glsl` beside an
+/// expression uniform: the disc and the stars each read the block's bytes as the game gives
+/// them (the player's block at x 153, y 64), and their own `Tint` in its block after it.
+#[test]
+#[ignore = "daily"]
+fn a_pack_sky_reads_poly_globals() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some((_, device, queue)) = crate::gfx::test_gpu::optional_device() else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    let globals_fsh = "#version 330\n#moj_import <polytone_globals.glsl>\n\
+        layout(std140) uniform Tint {\n    float value;\n};\n\
+        layout(location = 0) out vec4 fragColor;\n\
+        void main() {\n    fragColor = vec4(float(PolyPlayerBlockPos.y) / 255.0, value, \
+        float(PolyPlayerBlockPos.x) / 255.0, 1.0);\n}\n";
+    let include = |id: &str| {
+        sunrise_polytone::globals::is_include(id)
+            .then(|| sunrise_polytone::globals::GLSL.to_owned())
+    };
+    let provided = |block: &str| block == "Tint" || block == sunrise_polytone::globals::BLOCK;
+    let disc_program =
+        crate::core_shader::translate_core_with(VSH, globals_fsh, &[], &include, &GLUE, &provided)
+            .expect("the shaders translate");
+    let pack = sunrise_assets::resource_source::ResourceSource::indexed(
+        [
+            (
+                "assets/minecraft/polytone/shader_modifiers/core/sky.json".to_owned(),
+                sunrise_assets::resource_source::Resource::bytes(b"{\"Tint\": \"0.2\"}".to_vec()),
+            ),
+            (
+                "assets/minecraft/polytone/shader_modifiers/core/stars.json".to_owned(),
+                sunrise_assets::resource_source::Resource::bytes(b"{\"Tint\": \"0.6\"}".to_vec()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let modifiers = crate::polytone_post::ShaderModifiers::read(&pack, Default::default());
+    let own = [sunrise_polytone::globals::BLOCK];
+    let resolve = |id: &str, program| modifiers.resolve((id, id), program, &own).unwrap();
+    let disc = resolve(super::super::expression_blocks::SKY[0], &disc_program);
+    let stars = resolve(super::super::expression_blocks::STARS[0], &disc_program);
+    let mut sky = CoreSky::new(
+        &device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        Some((&disc_program, &disc)),
+        Some((&disc_program, &stars)),
+    )
+    .expect("the pipelines");
+    let reads: Vec<bool> = sky.expression_blocks().map(|b| b.reads_globals()).collect();
+    assert_eq!(reads, [true, true]);
+    for blocks in sky.expression_blocks() {
+        blocks.evaluate(&Default::default());
+    }
+    let globals = sunrise_polytone::globals::Globals {
+        player: [153.5, 64.0, -2.5],
+        ..Default::default()
+    }
+    .std140();
+    let mut drawn = |stars, given| pixel(&device, &queue, &mut sky, stars, given);
+    assert_eq!(drawn(false, Some(&globals)), [64, 51, 153, 255]);
+    assert_eq!(drawn(true, Some(&globals)), [64, 153, 153, 255]);
+    // No globals given: the block reads zeros.
+    assert_eq!(drawn(false, None), [0, 51, 0, 255]);
+    assert_eq!(drawn(true, None), [0, 153, 0, 255]);
 }

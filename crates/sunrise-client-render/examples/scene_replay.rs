@@ -221,12 +221,13 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
         &render.sprite_mips,
         &render.animations,
         (&one[..], 1, 1),
+        None,
         (&zero[..], 1, 1),
         (&zero[..], 1, 1),
         (&zero[..], 1),
         Arc::new(Faces::colour([0, 0, 0, 255])),
         Some(prepared),
-        None,
+        sunrise_client_render::gfx::RendererDevice::New,
         settings.graphics_api(),
         settings.translucent_batching,
         (false, false),
@@ -361,11 +362,9 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
             frame.detail_distance = frame.distance;
         }
         let draw = |renderer: &mut Renderer| -> sunrise_client_render::Result<Duration> {
-            if frame.cave_culling {
-                renderer.start_occlusion(frame.camera, frame.distance);
-            }
+            renderer.start_occlusion(frame.camera, frame.detail_distance, frame.cave_culling);
             let started = Instant::now();
-            renderer.render(&frame)?;
+            renderer.render(&frame, None)?;
             Ok(started.elapsed())
         };
         for _ in 0..o.warmup {
@@ -764,7 +763,7 @@ fn world_seed(save: &Path) -> Option<i64> {
 }
 
 /// A saved full chunk's blocks, biomes and light, as the client's own save
-/// loader reads them (`save::decode_lit`, in sunrise-client).
+/// loader reads them (`save::decode_with`, then `save::load_light`, in sunrise-client).
 fn decode(root: &NamedTag, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
     let tag = &root.tag;
     let text = |t: Option<&Tag>| match t {

@@ -2,13 +2,7 @@
 //! live in `hud_overlays` (`Titles`, `ToolHighlight`); this feeds and draws them.
 use super::Game;
 pub(super) use sunrise_client::hud_overlays::Titles;
-use sunrise_client::{
-    hud::HudBatch,
-    hud_layout,
-    hud_overlays::HeldName,
-    item_tooltip,
-    text::{self, Text},
-};
+use sunrise_client::{hud::HudBatch, hud_layout, hud_overlays::HeldName, text::Text};
 
 impl Game<'_> {
     /// `ServerPlayer.sendOverlayMessage`: the steady player sees it on this
@@ -26,6 +20,14 @@ impl Game<'_> {
             self.titles.set_overlay(message, false);
         }
     }
+    /// `Hud.setOverlayMessage(line, animate_color)` on this window's HUD, outside a borrowed
+    /// server guest's turn: no chat, narration or packet, as the direct setter does none.
+    pub(in crate::game) fn set_overlay_message(&mut self, line: Text, animate_color: bool) {
+        if self.native_window() && self.lan_acting.is_none() {
+            self.titles.set_overlay(line, animate_color);
+        }
+    }
+
     /// `Hud.extractOverlayMessage`: the action bar.
     pub(super) fn draw_overlay_message(&self, batch: &mut HudBatch) {
         let (w, h) = (batch.width as i32, batch.height as i32);
@@ -64,19 +66,20 @@ impl Game<'_> {
     fn held_name(&self) -> Option<HeldName> {
         let stack = self.inventory.get(self.selected)?.as_ref()?;
         let custom = stack.data().is_some_and(|data| data.custom_name.is_some());
-        let default_rarity = self.item_rarity(&stack.item);
-        let rarity = item_tooltip::rarity(stack, &default_rarity);
+        let previous = self
+            .tool_highlight
+            .last
+            .as_ref()
+            .map(|last| &last.hover_name);
         Some(HeldName {
             item: stack.item.to_string(),
-            hover_name: item_tooltip::styled_name(stack, || {
-                item_tooltip::name_line(stack, &|key| self.pack.names.display_get(key))
-            }),
-            rarity_color: match rarity {
-                "uncommon" => text::YELLOW,
-                "rare" => text::AQUA,
-                "epic" => text::LIGHT_PURPLE,
-                _ => text::WHITE,
-            },
+            hover_name: sunrise_client::stations::hover_name_in_reusing(
+                &self.loop_context,
+                &self.pack.names,
+                stack,
+                previous,
+            ),
+            rarity_color: self.stack_rarity_color(stack),
             custom_name: custom,
         })
     }
@@ -123,5 +126,63 @@ impl Game<'_> {
             self.settings.text_background(0.0),
         );
         hud_layout::paint(batch, &self.gui.atlas, &draws);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Game;
+    use mod_api::{ClientHost, Text, TextFormError};
+
+    /// What the action bar holds: its plain line, ticks left and whether its colour cycles.
+    fn shown(game: &Game<'_>) -> Option<(String, i32, bool)> {
+        let titles = &game.titles;
+        let line = titles.overlay.as_ref()?.plain();
+        Some((line, titles.overlay_time, titles.overlay_animated))
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_mods_overlay_line_replaces_the_action_bar_and_restarts_its_timer() {
+        crate::game::in_own_process(
+            "game::titles::tests::a_mods_overlay_line_replaces_the_action_bar_and_restarts_its_timer",
+            || {
+                crate::game::native_entity_refs::tests::with_client_game(|game| {
+                    let chat = game.ui.chat.recent_lines(usize::MAX);
+                    let host: &mut dyn ClientHost = game;
+                    assert_eq!(
+                        host.set_overlay_message(Text::literal("Now Playing"), true),
+                        Ok(())
+                    );
+                    assert_eq!(shown(game), Some(("Now Playing".into(), 60, true)));
+                    for _ in 0..25 {
+                        game.titles.tick();
+                    }
+                    assert_eq!(shown(game), Some(("Now Playing".into(), 35, true)));
+
+                    let host: &mut dyn ClientHost = game;
+                    assert_eq!(
+                        host.set_overlay_message(Text::literal("Saved"), false),
+                        Ok(())
+                    );
+                    assert_eq!(shown(game), Some(("Saved".into(), 60, false)));
+                    game.titles.tick();
+
+                    let mut refused = Text::literal("lost");
+                    refused.metadata = sunrise_core::nbt::Tag::Int(7);
+                    let host: &mut dyn ClientHost = game;
+                    assert_eq!(
+                        host.set_overlay_message(refused, true),
+                        Err(TextFormError::Malformed)
+                    );
+                    assert_eq!(shown(game), Some(("Saved".into(), 59, false)));
+
+                    let host: &mut dyn ClientHost = game;
+                    assert_eq!(host.set_overlay_message(Text::literal(""), false), Ok(()));
+                    assert_eq!(shown(game), Some((String::new(), 60, false)));
+                    assert_eq!(game.ui.chat.recent_lines(usize::MAX), chat);
+                });
+            },
+        );
     }
 }

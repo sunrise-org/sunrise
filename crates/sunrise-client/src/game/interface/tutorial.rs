@@ -1,183 +1,13 @@
 //! Client tutorial progression (`net.minecraft.client.tutorial`).
 
-/// The numeric values are the order in `options_file::TUTORIAL_STEPS`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Step {
-    Movement = 0,
-    FindTree = 1,
-    PunchTree = 2,
-    OpenInventory = 3,
-    CraftPlanks = 4,
-    None = 5,
-}
+#[cfg(test)]
+#[path = "tutorial/toast_tests.rs"]
+mod toast_tests;
 
-impl Step {
-    pub(super) fn from_option(value: i32) -> Self {
-        match value {
-            0 => Self::Movement,
-            1 => Self::FindTree,
-            2 => Self::PunchTree,
-            3 => Self::OpenInventory,
-            4 => Self::CraftPlanks,
-            _ => Self::None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Hint {
-    Move,
-    Look,
-    FindTree,
-    PunchTree,
-    OpenInventory,
-    CraftPlanks,
-    SocialInteractions,
-}
-
-/// The observations needed on the first tick of each step.
-#[derive(Default)]
-pub(super) struct Previous {
-    pub(super) tree_item: bool,
-    pub(super) log: bool,
-    pub(super) plank: bool,
-    pub(super) mined_tree: bool,
-    pub(super) crafted_plank: bool,
-}
-
-pub(super) struct Tutorial {
-    pub(super) step: Step,
-    pub(super) waiting: u32,
-    moved: bool,
-    turned: bool,
-    move_ticks: u32,
-    look_ticks: u32,
-    move_finished: Option<u32>,
-    look_finished: bool,
-    reset_count: u32,
-    pub(super) break_progress: f32,
-    cancelled_hint: Option<Hint>,
-}
-
-impl Tutorial {
-    pub(super) fn new(step: Step) -> Self {
-        Self {
-            step,
-            waiting: 0,
-            moved: false,
-            turned: false,
-            move_ticks: 0,
-            look_ticks: 0,
-            move_finished: None,
-            look_finished: false,
-            reset_count: 0,
-            break_progress: 0.0,
-            cancelled_hint: None,
-        }
-    }
-
-    /// Returns whether the persisted step changed.
-    fn set_step(&mut self, step: Step) -> bool {
-        if self.step == step {
-            return false;
-        }
-        *self = Self::new(step);
-        true
-    }
-
-    pub(super) fn input(&mut self) {
-        self.moved = true;
-    }
-    pub(super) fn mouse(&mut self, x: f64, y: f64) {
-        self.turned |= x.abs() > 0.01 || y.abs() > 0.01;
-    }
-
-    pub(super) fn tick(&mut self, survival: bool, previous: &Previous) -> bool {
-        self.waiting = self.waiting.saturating_add(1);
-        if self.step == Step::Movement {
-            self.move_ticks += u32::from(std::mem::take(&mut self.moved));
-            self.look_ticks += u32::from(std::mem::take(&mut self.turned));
-            if self.move_ticks > 40 && self.move_finished.is_none() {
-                self.move_finished = Some(self.waiting);
-            }
-            self.look_finished |= self.look_ticks > 40;
-            if self.move_finished.is_some() && self.look_finished {
-                return self.set_step(if survival { Step::FindTree } else { Step::None });
-            }
-        } else if self.step != Step::None && !survival {
-            return self.set_step(Step::None);
-        } else if self.waiting == 1 {
-            match self.step {
-                Step::FindTree if previous.tree_item || previous.mined_tree => {
-                    return self.set_step(Step::CraftPlanks);
-                }
-                Step::PunchTree if previous.log || previous.mined_tree => {
-                    return self.set_step(Step::CraftPlanks);
-                }
-                Step::CraftPlanks if previous.plank || previous.crafted_plank => {
-                    return self.set_step(Step::None);
-                }
-                _ => {}
-            }
-        }
-        false
-    }
-
-    pub(super) fn look_at_tree(&mut self) -> bool {
-        self.step == Step::FindTree && self.set_step(Step::PunchTree)
-    }
-    pub(super) fn destroy(&mut self, is_log: bool, progress: f32) -> bool {
-        if self.step != Step::PunchTree {
-            return false;
-        }
-        if is_log && progress > 0.0 {
-            self.break_progress = progress;
-            if progress >= 1.0 {
-                return self.set_step(Step::OpenInventory);
-            }
-        } else {
-            self.break_progress = 0.0;
-            if is_log {
-                self.reset_count = self.reset_count.saturating_add(1);
-            }
-        }
-        false
-    }
-    pub(super) fn open_inventory(&mut self) -> bool {
-        self.step == Step::OpenInventory && self.set_step(Step::CraftPlanks)
-    }
-    pub(super) fn get_item(&mut self, tree: bool, log: bool, plank: bool) -> bool {
-        match self.step {
-            Step::FindTree if tree => self.set_step(Step::CraftPlanks),
-            Step::PunchTree if log => self.set_step(Step::CraftPlanks),
-            Step::CraftPlanks if plank => self.set_step(Step::None),
-            _ => false,
-        }
-    }
-    pub(super) fn hint(&self) -> Option<(Hint, Option<f32>)> {
-        match self.step {
-            Step::Movement if self.waiting >= 100 && self.move_finished.is_none() => {
-                Some((Hint::Move, Some(self.move_ticks as f32 / 40.0)))
-            }
-            Step::Movement
-                if !self.look_finished
-                    && self
-                        .move_finished
-                        .is_some_and(|t| self.waiting.saturating_sub(t) >= 20)
-                    && self.waiting >= 100 =>
-            {
-                Some((Hint::Look, Some(self.look_ticks as f32 / 40.0)))
-            }
-            Step::FindTree if self.waiting >= 6000 => Some((Hint::FindTree, None)),
-            Step::PunchTree if self.waiting >= 600 || self.reset_count > 3 => {
-                Some((Hint::PunchTree, Some(self.break_progress)))
-            }
-            Step::OpenInventory if self.waiting >= 600 => Some((Hint::OpenInventory, None)),
-            Step::CraftPlanks if self.waiting >= 1200 => Some((Hint::CraftPlanks, None)),
-            _ => None,
-        }
-    }
-}
+use super::toast_manager::Toast;
+use sunrise_client::hud::{HudAtlas, HudBatch};
+use sunrise_client_gameplay::tutorial::social_hint_progress;
+pub(super) use sunrise_client_gameplay::tutorial::{Hint, Previous, Step, Tutorial};
 
 impl super::Game<'_> {
     /// `Tutorial.setStep` persists immediately so it survives leaving a world.
@@ -193,7 +23,12 @@ impl super::Game<'_> {
 impl super::Game<'_> {
     pub(super) fn reset_tutorial(&mut self) {
         self.tutorial = Tutorial::new(Step::from_option(self.settings.file.int("tutorialStep")));
-        self.tutorial_toasts.clear();
+        self.toast_manager
+            .queued
+            .retain(|entry| !matches!(entry, Toast::Tutorial(_)));
+        self.toast_manager
+            .visible
+            .retain(|entry| !matches!(entry.toast, Toast::Tutorial(_)));
     }
 
     fn tutorial_tagged(&self, item: bool, tag: &str, id: &str) -> bool {
@@ -249,6 +84,7 @@ impl super::Game<'_> {
         }
     }
 
+    /// Tick the current step and queue `Gui.addSocialInteractionsToast` on the first server.
     pub(super) fn tick_tutorial(&mut self) {
         use sunrise_client::actions::Action;
         if self.title.is_some()
@@ -264,7 +100,7 @@ impl super::Game<'_> {
             && (!self.has_singleplayer_server() || self.is_published())
         {
             if let Some(toast) = self.tutorial_toast(Hint::SocialInteractions, Some(0.0)) {
-                self.tutorial_toasts.push(toast);
+                self.toast_manager.queued.push_back(Toast::Tutorial(toast));
             }
             self.settings.file.set(
                 "joinedFirstServer",
@@ -281,7 +117,7 @@ impl super::Game<'_> {
                 Action::Jump,
             ]
             .into_iter()
-            .any(|action| self.keys.held(action))
+            .any(|action| self.held_mapping(action))
                 || self
                     .input_move()
                     .is_some_and(|[left, forward]| left.abs() > 0.3 || forward.abs() > 0.3))
@@ -352,31 +188,25 @@ pub(super) struct HintToast {
     smooth: f32,
     last_smooth: i64,
     wanted: bool,
-    slot: Option<usize>,
     slots: usize,
     slide: sunrise_client::toasts::Slide,
 }
 
 impl super::Game<'_> {
     pub(super) fn hide_social_tutorial(&mut self) {
-        for toast in &mut self.tutorial_toasts {
-            if toast.hint == Hint::SocialInteractions {
-                toast.wanted = false;
-            }
+        if let Some(toast) = self.toast_manager.find_mut(|entry| match entry {
+            Toast::Tutorial(t) if t.hint == Hint::SocialInteractions => Some(t),
+            _ => None,
+        }) {
+            toast.wanted = false;
         }
     }
 
-    pub(super) fn tutorial_toast_slots(&self) -> u32 {
-        self.tutorial_toasts
-            .iter()
-            .filter_map(|t| t.slot.map(|s| ((1u32 << t.slots) - 1) << s))
-            .fold(0, |a, b| a | b)
-    }
-
+    /// `Tutorial.key`: bold belongs to the bound key, not the translation using it.
     fn tutorial_toast(&self, hint: Hint, progress: Option<f32>) -> Option<HintToast> {
         use sunrise_client::{keybinds, text::Text};
-        let key = |mapping: &str| keybinds::display_name(self.settings.keys.get(mapping)).plain();
-        let (title_key, fallback, description_key, description, icon_args) = match hint {
+        let key = |mapping: &str| keybinds::display_name(self.settings.keys.get(mapping)).bold();
+        let (title_key, fallback, description_key, description, title_args) = match hint {
             Hint::Move => (
                 "tutorial.move.title",
                 "Move with %1$s, %2$s, %3$s, %4$s",
@@ -432,17 +262,7 @@ impl super::Game<'_> {
                 vec![],
             ),
         };
-        let substitute = |mut text: String, values: &[String]| {
-            for (i, value) in values.iter().enumerate() {
-                text = text.replace(&format!("%{}$s", i + 1), value);
-                text = text.replacen("%s", value, 1);
-            }
-            text
-        };
-        let mut title = Text::literal(substitute(
-            self.translate_with_fallback(title_key, fallback),
-            &icon_args,
-        ));
+        let mut title = Text::translate_with_fallback(title_key, fallback, &title_args);
         let desc_args = match hint {
             Hint::Move => vec![key("key.jump")],
             Hint::PunchTree => vec![key("key.attack")],
@@ -450,11 +270,12 @@ impl super::Game<'_> {
             Hint::SocialInteractions => vec![key("key.socialInteractions")],
             _ => vec![],
         };
-        let mut description = Some(Text::literal(substitute(
-            self.translate_with_fallback(description_key, description),
+        let mut description = Some(Text::translate_with_fallback(
+            description_key,
+            description,
             &desc_args,
-        )));
-        if !self.add_toast(mod_api::ToastKind::Tutorial, &mut title, &mut description) {
+        ));
+        if !self.admit_toast(mod_api::ToastKind::Tutorial, &mut title, &mut description) {
             return None;
         }
         let font = &self.gui.atlas.font;
@@ -473,220 +294,125 @@ impl super::Game<'_> {
             smooth: 0.0,
             last_smooth: 0,
             wanted: true,
-            slot: None,
             slots,
             slide: Default::default(),
         })
     }
 
-    pub(super) fn draw_tutorial_toasts(
-        &mut self,
-        batch: &mut sunrise_client::hud::HudBatch,
-        hidden: bool,
-    ) {
+    pub(super) fn update_tutorial_toasts(&mut self) {
         let wanted = self.tutorial.hint();
-        if wanted.map(|(hint, _)| hint) != self.tutorial.cancelled_hint {
-            self.tutorial.cancelled_hint = None;
+        if wanted.map(|(hint, _)| hint) != self.tutorial.cancelled_hint() {
+            self.tutorial.set_cancelled_hint(None);
         }
-        for t in &mut self.tutorial_toasts {
+        let mut has_current_hint = false;
+        for entry in self.toast_manager.all_mut() {
+            let Toast::Tutorial(t) = entry else { continue };
             if t.hint == Hint::SocialInteractions {
                 continue;
             }
             t.wanted = wanted.is_some_and(|(hint, _)| hint == t.hint);
             if t.wanted {
                 t.progress = wanted.and_then(|(_, progress)| progress);
+                has_current_hint = true;
             }
         }
         if let Some((hint, progress)) = wanted
-            && self.tutorial.cancelled_hint != Some(hint)
-            && !self
-                .tutorial_toasts
-                .iter()
-                .any(|t| t.wanted && t.hint == hint)
+            && self.tutorial.cancelled_hint() != Some(hint)
+            && !has_current_hint
         {
             if let Some(toast) = self.tutorial_toast(hint, progress) {
-                self.tutorial_toasts.push(toast);
+                self.toast_manager.queued.push_back(Toast::Tutorial(toast));
             } else {
-                self.tutorial.cancelled_hint = Some(hint);
+                self.tutorial.set_cancelled_hint(Some(hint));
             }
         }
-        let mut used = self.toast_slots_used();
-        for t in &mut self.tutorial_toasts {
-            if t.slot.is_none() && t.wanted && t.slots <= Self::TOAST_SLOTS {
-                let mask = (1u32 << t.slots) - 1;
-                if let Some(slot) =
-                    (0..=Self::TOAST_SLOTS - t.slots).find(|s| used & (mask << s) == 0)
-                {
-                    t.slot = Some(slot);
-                    used |= mask << slot;
-                }
-            }
-        }
-        let atlas = &self.gui.atlas;
-        let mut i = 0;
-        while i < self.tutorial_toasts.len() {
-            let t = &mut self.tutorial_toasts[i];
-            if t.slot.is_none() {
-                if !t.wanted {
-                    self.tutorial_toasts.remove(i);
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-            let (sound, finished) = t.slide.update_now(|fully| {
-                t.wanted && (t.hint != Hint::SocialInteractions || social_hint_progress(fully).0)
-            });
-            if let Some(show) = sound {
-                let event = if show { "ui.toast.in" } else { "ui.toast.out" };
-                self.audio
-                    .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
-            }
-            if finished {
-                self.tutorial_toasts.remove(i);
-                continue;
-            }
-            if t.hint == Hint::SocialInteractions {
-                let (_, progress) = social_hint_progress(t.slide.fully_for);
-                t.progress = Some(progress);
-                t.smooth = progress;
-            } else if let Some(progress) = t.progress {
-                let delta = ((t.slide.fully_for - t.last_smooth) as f32 / 100.0).clamp(0.0, 1.0);
-                t.smooth += (progress - t.smooth) * delta;
-                t.last_smooth = t.slide.fully_for;
-            }
-            if !hidden {
-                let height = (10 + 11 * t.lines.len().max(2)) as f32;
-                let x = batch.width - 160.0 * t.slide.portion;
-                let y = 32.0 * t.slot.unwrap_or_default() as f32;
-                sunrise_client::ui::nine_slice(
-                    batch,
-                    atlas,
-                    "gui/sprites/toast/tutorial",
-                    x,
-                    y,
-                    160.0,
-                    height,
-                    u32::MAX,
-                );
-                let icon = match t.hint {
-                    Hint::Move => "movement_keys",
-                    Hint::Look => "mouse",
-                    Hint::FindTree | Hint::PunchTree => "tree",
-                    Hint::OpenInventory => "recipe_book",
-                    Hint::CraftPlanks => "wooden_planks",
-                    Hint::SocialInteractions => "social_interactions",
-                };
-                batch.sprite_scaled(
-                    atlas,
-                    &format!("gui/sprites/toast/{icon}"),
-                    x + 6.0,
-                    y + 6.0,
-                    20.0,
-                    20.0,
-                    u32::MAX,
-                );
-                let text_y = y + 7.0 + ((t.lines.len().max(2) - t.lines.len()) * 11) as f32 / 2.0;
-                for (n, (line, _)) in t.lines.iter().enumerate() {
-                    batch.text_styled(
-                        atlas,
-                        line,
-                        x + 30.0,
-                        text_y + 11.0 * n as f32,
-                        if n < t.title_lines {
-                            0xFF50_0050
-                        } else {
-                            0xFF00_0000
-                        },
-                        false,
-                    );
-                }
-                if let Some(progress) = t.progress {
-                    batch.fill(atlas, x + 3.0, y + height - 4.0, 154.0, 1.0, u32::MAX);
-                    let color = if progress >= t.smooth {
-                        0xFF00_5500
-                    } else {
-                        0xFF55_0000
-                    };
-                    batch.fill(
-                        atlas,
-                        x + 3.0,
-                        y + height - 4.0,
-                        154.0 * t.smooth.clamp(0.0, 1.0),
-                        1.0,
-                        color,
-                    );
-                }
-            }
-            i += 1;
-        }
+        self.toast_manager
+            .queued
+            .retain(|entry| !matches!(entry, Toast::Tutorial(t) if !t.wanted));
     }
 }
 
-/// TutorialToast.update uses the time fully visible (not the slide-in time),
-/// and hides only after 8000 ms. Its timed bar does not use progress smoothing.
-fn social_hint_progress(fully_visible_ms: i64) -> (bool, f32) {
-    (
-        fully_visible_ms <= 8000,
-        (fully_visible_ms as f32 / 8000.0).min(1.0),
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn social_hint_fills_for_eight_seconds_before_hiding() {
-        assert_eq!(social_hint_progress(0), (true, 0.0));
-        assert_eq!(social_hint_progress(4000), (true, 0.5));
-        assert_eq!(social_hint_progress(8000), (true, 1.0));
-        assert_eq!(social_hint_progress(8001), (false, 1.0));
+impl HintToast {
+    pub(super) fn slots(&self) -> usize {
+        self.slots
     }
 
-    #[test]
-    fn social_hint_counts_from_full_visibility_and_finishes_sliding_out() {
-        let mut slide = sunrise_client::toasts::Slide::default();
-        for (now, visible) in [(0, true), (600, true), (8600, true), (8601, false)] {
-            let (_, finished) = slide.update(now, |fully| social_hint_progress(fully).0);
-            assert!(!finished);
-            assert_eq!(social_hint_progress(slide.fully_for).0, visible);
+    pub(super) fn update(&mut self) -> (Option<bool>, bool) {
+        let (sound, finished) = self.slide.update_now(|fully| {
+            self.wanted && (self.hint != Hint::SocialInteractions || social_hint_progress(fully).0)
+        });
+        if self.hint == Hint::SocialInteractions {
+            let (_, progress) = social_hint_progress(self.slide.fully_for);
+            self.progress = Some(progress);
+            self.smooth = progress;
+        } else if let Some(progress) = self.progress {
+            let delta = ((self.slide.fully_for - self.last_smooth) as f32 / 100.0).clamp(0.0, 1.0);
+            self.smooth += (progress - self.smooth) * delta;
+            self.last_smooth = self.slide.fully_for;
         }
-        let (_, finished) = slide.update(9202, |fully| social_hint_progress(fully).0);
-        assert!(finished);
+        (sound, finished)
     }
 
-    #[test]
-    fn craft_planks_hint_toast_appears_after_delay_and_clears_on_planks() {
-        let mut tutorial = Tutorial::new(Step::CraftPlanks);
-        tutorial.waiting = 1199;
-        assert_eq!(tutorial.hint(), None);
-
-        tutorial.waiting = 1200;
-        assert_eq!(tutorial.hint(), Some((Hint::CraftPlanks, None)));
-
-        // Receiving an unrelated item (e.g. log or stick) does not complete the step
-        let changed = tutorial.get_item(false, true, false);
-        assert!(!changed);
-        assert_eq!(tutorial.step, Step::CraftPlanks);
-        assert_eq!(tutorial.hint(), Some((Hint::CraftPlanks, None)));
-
-        // Receiving planks completes the tutorial step and dismisses the hint toast
-        let changed = tutorial.get_item(false, false, true);
-        assert!(changed);
-        assert_eq!(tutorial.step, Step::None);
-        assert_eq!(tutorial.hint(), None);
-    }
-
-    #[test]
-    fn initial_tick_with_planks_clears_craft_planks_step() {
-        let mut tutorial = Tutorial::new(Step::CraftPlanks);
-        let previous = Previous {
-            plank: true,
-            ..Default::default()
+    pub(super) fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, y: f32) {
+        let height = (10 + 11 * self.lines.len().max(2)) as f32;
+        let x = batch.width - 160.0 * self.slide.portion;
+        sunrise_client::ui::nine_slice(
+            batch,
+            atlas,
+            "toast/tutorial",
+            x,
+            y,
+            160.0,
+            height,
+            u32::MAX,
+        );
+        let icon = match self.hint {
+            Hint::Move => "movement_keys",
+            Hint::Look => "mouse",
+            Hint::FindTree | Hint::PunchTree => "tree",
+            Hint::OpenInventory => "recipe_book",
+            Hint::CraftPlanks => "wooden_planks",
+            Hint::SocialInteractions => "social_interactions",
         };
-        assert!(tutorial.tick(true, &previous));
-        assert_eq!(tutorial.step, Step::None);
-        assert_eq!(tutorial.hint(), None);
+        batch.sprite_scaled(
+            atlas,
+            &format!("toast/{icon}"),
+            x + 6.0,
+            y + 6.0,
+            20.0,
+            20.0,
+            u32::MAX,
+        );
+        let text_y = y + 7.0 + ((self.lines.len().max(2) - self.lines.len()) * 11) as f32 / 2.0;
+        for (n, (line, _)) in self.lines.iter().enumerate() {
+            batch.text_styled(
+                atlas,
+                line,
+                x + 30.0,
+                text_y + 11.0 * n as f32,
+                if n < self.title_lines {
+                    0xFF50_0050
+                } else {
+                    0xFF00_0000
+                },
+                false,
+            );
+        }
+        if let Some(progress) = self.progress {
+            batch.fill(atlas, x + 3.0, y + height - 4.0, 154.0, 1.0, u32::MAX);
+            let color = if progress >= self.smooth {
+                0xFF00_5500
+            } else {
+                0xFF55_0000
+            };
+            batch.fill(
+                atlas,
+                x + 3.0,
+                y + height - 4.0,
+                154.0 * self.smooth.clamp(0.0, 1.0),
+                1.0,
+                color,
+            );
+        }
     }
 }

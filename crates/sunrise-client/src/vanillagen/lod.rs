@@ -24,13 +24,7 @@ use sunrise_world::{
     },
 };
 
-mod islands;
-mod vegetation;
-use islands::EndIslands;
-use vegetation::Vegetation;
 const CACHE: usize = 1024;
-/// Chunks waiting for decoration: enough batches to keep every thread busy.
-const REQUESTS: usize = 1024;
 /// Chunks a side a decoration batch emits. Each needs a two-chunk border of
 /// proto chunks, which the batch shares: 4 built four protos per chunk, 8
 /// builds 2.25, and the protos (noise, surface) are most of far decoration.
@@ -40,11 +34,34 @@ fn batch_origin((x, z): (i32, i32)) -> (i32, i32) {
 }
 #[derive(Default)]
 struct Requests {
-    chunks: FxHashSet<(i32, i32)>,
-    center: [i32; 2],
+    /// What the far terrain wants decorated now (`Builder::request`), nearest
+    /// first, short of what is built or being built: the threads take their
+    /// batches from the front.
+    wanted: VecDeque<(i32, i32)>,
     /// The batches the decoration threads are working on.
     current: FxHashSet<(i32, i32)>,
     finished: FxHashSet<(i32, i32)>,
+}
+impl Requests {
+    /// `wanted` becomes `chunks` nearest `center` first, short of the
+    /// chunks built and the batches being built.
+    fn replace_wanted(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
+        let Self {
+            wanted,
+            current,
+            finished,
+        } = self;
+        wanted.clear();
+        wanted.extend(
+            chunks
+                .iter()
+                .copied()
+                .filter(|&key| !finished.contains(&key) && !current.contains(&batch_origin(key))),
+        );
+        wanted
+            .make_contiguous()
+            .sort_unstable_by_key(|&key| (distance(key, center), key));
+    }
 }
 struct Shared {
     requests: Mutex<Requests>,
@@ -87,7 +104,8 @@ impl Builder {
         tx: mpsc::Sender<LodDetail>,
         background: bool,
     ) -> thread::JoinHandle<()> {
-        sunrise_guest_stack::builder()
+        std::thread::Builder::new()
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
             .name("Far decoration".into())
             .spawn(move || {
                 if background {
@@ -118,19 +136,17 @@ impl Builder {
                 loop {
                     let key = {
                         let mut requests = worker.requests.lock().unwrap();
-                        while requests.chunks.is_empty() && !worker.stop.load(Ordering::Relaxed) {
+                        let origin = loop {
+                            if worker.stop.load(Ordering::Relaxed) {
+                                break None;
+                            }
+                            if let Some(&key) = requests.wanted.front() {
+                                break Some(batch_origin(key));
+                            }
                             requests = worker.wake.wait(requests).unwrap();
-                        }
-                        if worker.stop.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        let key = *requests
-                            .chunks
-                            .iter()
-                            .min_by_key(|&&key| (distance(key, requests.center), key))
-                            .unwrap();
-                        let origin = batch_origin(key);
-                        requests.chunks.retain(|&key| batch_origin(key) != origin);
+                        };
+                        let Some(origin) = origin else { break };
+                        requests.wanted.retain(|&key| batch_origin(key) != origin);
                         requests.current.insert(origin);
                         origin
                     };
@@ -160,22 +176,18 @@ impl Builder {
             })
             .expect("far decoration worker")
     }
+    /// The chunks the far terrain draws without their detail now. `Lod`
+    /// asks again for all it still misses every few hundred milliseconds, so
+    /// a request stands for the whole of what the view wants: chunks earlier
+    /// ones asked for and this one leaves out (flown past, out of view, under
+    /// the near chunks) are not built.
     fn request(&self, chunks: &[(i32, i32)], center: [i32; 2]) {
         if self.shared.stop.load(Ordering::Relaxed) {
             return;
         }
         let mut requests = self.shared.requests.lock().unwrap();
-        requests.center = center;
-        for &key in chunks {
-            if !requests.current.contains(&batch_origin(key)) && !requests.finished.contains(&key) {
-                requests.chunks.insert(key);
-            }
-        }
-        if requests.chunks.len() > REQUESTS {
-            let mut sorted: Vec<_> = requests.chunks.iter().copied().collect();
-            sorted.sort_unstable_by_key(|&key| (distance(key, center), key));
-            requests.chunks = sorted.into_iter().take(REQUESTS).collect();
-        }
+        requests.replace_wanted(chunks, center);
+        drop(requests);
         self.shared.wake.notify_all();
     }
 }
@@ -500,8 +512,6 @@ pub(super) struct VanillaLodSampler {
     generator: Arc<VanillaTerrain>,
     worker: GeneratorWorker,
     builder: Option<Builder>,
-    vegetation: Arc<Vegetation>,
-    islands: EndIslands,
     cache: FxHashMap<(i32, i32), Arc<[Column; 256]>>,
     order: VecDeque<(i32, i32)>,
     details: Vec<LodDetail>,
@@ -512,18 +522,10 @@ impl VanillaLodSampler {
     pub(super) fn new(generator: Arc<VanillaTerrain>) -> Self {
         let worker = generator.generator.worker();
         let builder = Some(Builder::new(generator.clone(), true));
-        let vegetation = Arc::new(Vegetation::new(
-            generator.generator.data(),
-            &generator.biome_map,
-            generator.seed,
-        ));
-        let islands = EndIslands::new(generator.clone());
         Self {
             generator,
             worker,
             builder,
-            vegetation,
-            islands,
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
@@ -537,8 +539,6 @@ impl LodSampler for VanillaLodSampler {
             generator: self.generator.clone(),
             worker: self.generator.generator.worker(),
             builder: None,
-            vegetation: self.vegetation.clone(),
-            islands: self.islands.fork(),
             cache: FxHashMap::default(),
             order: VecDeque::new(),
             details: Vec::new(),
@@ -638,16 +638,14 @@ impl LodSampler for VanillaLodSampler {
                         width as usize,
                     );
                 }
-                self.preview_column(wx + width / 2, wz + width / 2, width, surface, spans)
+                self.preview_column(width, surface, spans)
             })
             .collect()
     }
 }
 impl VanillaLodSampler {
     fn preview_column(
-        &mut self,
-        x: i32,
-        z: i32,
+        &self,
         width: i32,
         surface: Option<SurfaceSample>,
         spans: Vec<(i32, i32, BlockStateId)>,
@@ -680,13 +678,10 @@ impl VanillaLodSampler {
             });
         }
         let nether = self.generator.dimension == "minecraft:the_nether";
-        let light = if nether { 0 } else { 240 };
         if width > 1 && self.generator.dimension == "minecraft:overworld" {
             let states = self.generator.generator.data().block_states();
             fill_under_surface(&mut column, |state| states.get(state).has_fluid());
         }
-        self.vegetation.apply(&mut column, x, z, width, light);
-        self.islands.apply(&mut column, x, z, width, light);
         if !nether {
             shade_sky(
                 &mut column,
@@ -735,6 +730,35 @@ mod tests {
     }
 
     use super::*;
+    /// Flying on, the decoration threads build what the view wants now, nearest
+    /// first: what an earlier request asked for is not kept. The builder has no
+    /// threads here: the test reads the queue they take from.
+    #[test]
+    fn decoration_takes_the_latest_request_nearest_first() {
+        let builder = Builder {
+            shared: Arc::new(Shared {
+                requests: Mutex::new(Requests::default()),
+                wake: Condvar::new(),
+                stop: AtomicBool::new(false),
+            }),
+            results: mpsc::channel().1,
+            threads: Vec::new(),
+        };
+        let wanted = || Vec::from(builder.shared.requests.lock().unwrap().wanted.clone());
+        builder.request(&[(-3, 0), (-2, 1), (20, 0)], [0, 0]);
+        {
+            // A thread builds the batch at 24..32 and has emitted (17, 2) already.
+            let mut requests = builder.shared.requests.lock().unwrap();
+            requests.current.insert((24, 0));
+            requests.finished.insert((17, 2));
+        }
+        // The player flew east: the request leaves the chunks behind out.
+        builder.request(&[(40, 5), (25, 3), (17, 2), (20, 0), (30, 1)], [320, 0]);
+        assert_eq!(wanted(), [(20, 0), (40, 5)]);
+        // The view wants nothing: nothing is left to build.
+        builder.request(&[], [0, 0]);
+        assert!(wanted().is_empty());
+    }
     #[test]
     #[ignore = "daily"]
     fn decorated_lod_refines_real_seed_canopies_and_all_dimensions() -> crate::Result<()> {
@@ -763,124 +787,8 @@ mod tests {
         assert_eq!(
             direct,
             fork.grid(-1024, 0, 32, 16),
-            "sampling workers must agree on seed/biome vegetation"
+            "sampling workers agree"
         );
-        let grass = assets
-            .registry
-            .default_state("minecraft:grass_block")
-            .unwrap();
-        let planted = |ground, biome, width, x, z| {
-            let mut column = Column::from_surface(Some(Surface {
-                height: 80,
-                state: ground,
-                water: None,
-                biome,
-            }));
-            sampler.vegetation.apply(&mut column, x, z, width, 240);
-            column
-        };
-        let forest = biomes.id("minecraft:forest");
-        let plains = biomes.id("minecraft:plains");
-        let leaves = |column: &Column| {
-            column.spans.iter().any(|span| {
-                assets
-                    .registry
-                    .state(span.state)
-                    .unwrap()
-                    .name
-                    .ends_with("_leaves")
-            })
-        };
-        let mut forest_count = 0;
-        let mut plains_count = 0;
-        for z in 0..64 {
-            for x in 0..64 {
-                forest_count += usize::from(leaves(&planted(grass, forest, 1, x, z)));
-                plains_count += usize::from(leaves(&planted(grass, plains, 1, x, z)));
-            }
-        }
-        assert!(
-            forest_count > 1000 && forest_count > plains_count * 4,
-            "feature-derived vegetation density: forest={forest_count}, plains={plains_count}"
-        );
-        for width in [16, 32, 128, 512, 1024] {
-            assert!(
-                leaves(&planted(grass, forest, width, 0, 0)),
-                "forest canopy missing at scale {width}"
-            );
-        }
-        // The End's chorus plants come from the biome's own feature data: only
-        // end highlands carry it, and only end stone is a valid ground.
-        let end_stone = assets
-            .registry
-            .default_state("minecraft:end_stone")
-            .unwrap();
-        let chorus_name = |state| {
-            matches!(
-                assets.registry.state(state).unwrap().name.as_str(),
-                "minecraft:chorus_plant" | "minecraft:chorus_flower"
-            )
-        };
-        let chorus = |column: &Column| column.spans.iter().any(|span| chorus_name(span.state));
-        let highlands = biomes.id("minecraft:end_highlands");
-        assert!(
-            sampler.vegetation.chorus_count(highlands).unwrap_or(0.) > 0.,
-            "end highlands keep the chorus feature"
-        );
-        assert_eq!(
-            sampler.vegetation.chorus_count(forest),
-            None,
-            "a biome without the feature estimates none"
-        );
-        let mut highlands_count = 0;
-        let mut control_count = 0;
-        for z in 0..64 {
-            for x in 0..64 {
-                highlands_count += usize::from(chorus(&planted(end_stone, highlands, 1, x, z)));
-                control_count += usize::from(chorus(&planted(end_stone, forest, 1, x, z)));
-            }
-        }
-        assert!(
-            highlands_count > 0 && control_count == 0,
-            "feature-derived chorus density: highlands={highlands_count}, forest={control_count}"
-        );
-        let stem = (0..64)
-            .flat_map(|z| (0..64).map(move |x| (x, z)))
-            .map(|(x, z)| planted(end_stone, highlands, 1, x, z))
-            .find(|column| chorus(column))
-            .expect("a chorus column");
-        let plant = stem
-            .spans
-            .iter()
-            .find(|span| chorus_name(span.state))
-            .unwrap();
-        assert!(
-            (2..=5).contains(&(i32::from(plant.max - plant.min))),
-            "stem height follows the feature's 2..=5"
-        );
-        let top = stem.spans.last().unwrap();
-        assert_eq!(
-            assets.registry.state(top.state).unwrap().name,
-            "minecraft:chorus_flower"
-        );
-        assert_eq!(stem.surface.unwrap().height, i32::from(top.max));
-        let mut wide = 0;
-        for width in [2, 4] {
-            for z in (0..64).step_by(2) {
-                for x in (0..64).step_by(2) {
-                    wide += usize::from(chorus(&planted(end_stone, highlands, width, x, z)));
-                }
-            }
-        }
-        assert!(wide > 0, "nearby LOD cells still draw chorus");
-        for z in (0..64).step_by(16) {
-            for x in (0..64).step_by(16) {
-                assert!(
-                    !chorus(&planted(end_stone, highlands, 16, x, z)),
-                    "a 16-block cell is too wide to read as one plant"
-                );
-            }
-        }
         let key = (-64, 0);
         sampler.request_detail(&[key], [-1024, 0]);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -1054,90 +962,6 @@ mod tests {
         }
         Ok(())
     }
-    /// Small End islands are decoration over the void, so the direct sampler
-    /// has to estimate them from `end_island_decorated`.
-    #[test]
-    #[ignore = "daily"]
-    fn end_small_islands_are_estimated_over_the_void() -> crate::Result<()> {
-        let root = std::path::PathBuf::from(
-            std::env::var_os("SUNRISE_TEST_RESOURCES").expect("resources"),
-        );
-        let assets = crate::assets::Assets::load(&root)?;
-        let biomes = crate::biome::Biomes::load(
-            &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
-        )?;
-        let item_data = crate::test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad)?;
-        let terrain_resources = crate::vanillagen::TerrainResources {
-            data: None,
-            dir: &root.join("worldgen"),
-            registry: assets.registry,
-            biomes: &biomes,
-            item_data: &item_data,
-        };
-        let terrain = Arc::new(VanillaTerrain::for_dimension(
-            terrain_resources,
-            1234,
-            "minecraft:the_end",
-        )?);
-        let mut sampler = VanillaLodSampler::new(terrain.clone());
-        let mut search = terrain.generator.worker();
-        let mut center = None;
-        'search: for x in (1024..=8192).step_by(512) {
-            for z in (-8192..=8192).step_by(512) {
-                let biome = search.noise_biomes(&[[x >> 2, 16, z >> 2]]);
-                if biome.first().and_then(|name| name.as_deref())
-                    != Some("minecraft:small_end_islands")
-                {
-                    continue;
-                }
-                if search.surface_sample(x, z).is_some() {
-                    continue;
-                }
-                center = Some((x, z));
-                break 'search;
-            }
-        }
-        let (cx, cz) = center.expect("a small end islands region");
-        let end_stone = assets
-            .registry
-            .default_state("minecraft:end_stone")
-            .unwrap();
-        // The estimator itself, a wide void at one block per cell.
-        let mut islands = 0;
-        for z in cz - 128..cz + 128 {
-            for x in cx - 128..cx + 128 {
-                let mut column = Column::default();
-                sampler.islands.apply(&mut column, x, z, 1, 240);
-                let Some(surface) = column.surface else {
-                    continue;
-                };
-                assert!(
-                    (56..=71).contains(&surface.height),
-                    "island top at {}",
-                    surface.height
-                );
-                assert_eq!(surface.state, end_stone);
-                assert!(column.spans.iter().any(|span| {
-                    span.state == end_stone && i32::from(span.max) == surface.height
-                }));
-                assert!(
-                    column.spans.iter().all(|span| i32::from(span.min) >= 45),
-                    "an estimated island floats above the void"
-                );
-                islands += 1;
-            }
-        }
-        assert!(islands > 0, "no estimated small islands in a 256² void");
-        // And through the whole direct-sampling path with the real biome map.
-        let sampled = sampler.grid(cx - 32, cz - 32, 1, 64);
-        assert!(
-            sampled.iter().any(|column| column
-                .surface
-                .is_some_and(|surface| surface.state == end_stone)),
-            "direct sampling shows an island in the real small end islands biome"
-        );
-        Ok(())
-    }
     /// The refined path must keep the real feature's end stone in its columns.
     #[test]
     #[ignore = "daily"]
@@ -1162,7 +986,6 @@ mod tests {
             1234,
             "minecraft:the_end",
         )?);
-        let sampler = VanillaLodSampler::new(terrain.clone());
         let mut worker = terrain.generator.worker();
         let stop = AtomicBool::new(false);
         let mut centers = Vec::new();
@@ -1184,49 +1007,56 @@ mod tests {
                 }
             }
         }
+        let end_stone = "minecraft:end_stone";
         for &(cx, cz) in &centers {
-            // The replay is cheap; only decorate chunks it actually places in.
-            let origins = sampler.islands.origins(cx, cz);
-            if origins.is_empty() {
-                continue;
-            }
+            let base = worker.generate_proto(sunrise_core::position::ChunkPos::new(cx, cz))?;
             let Some(chunk) = decorated_region(&mut worker, (cx, cz), &stop)? else {
                 continue;
             };
-            for [x, y, z] in &origins {
-                assert!((55..=70).contains(y), "island origin at y {y} in {cx} {cz}");
-                assert_eq!(
-                    chunk.block_name(*x, *y, *z),
-                    "minecraft:end_stone",
-                    "exact origin {x} {y} {z} is the real island's top centre"
-                );
-            }
             let min = chunk.terrain.min_y();
             let max = min + chunk.terrain.height();
+            // The end stone decoration added: the island, not the terrain under it.
+            let mut added = Vec::new();
             let mut raw = 0;
             for y in min..max {
                 for z in 0..16 {
                     for x in 0..16 {
-                        raw += usize::from(chunk.block_name(x, y, z) == "minecraft:end_stone");
+                        if chunk.block_name(x, y, z) == end_stone {
+                            raw += 1;
+                            if base.block_name(x, y, z) != end_stone {
+                                added.push((x, y, z));
+                            }
+                        }
                     }
                 }
             }
-            let kept: usize = columns(&chunk, &terrain.biome_map, "minecraft:the_end")
+            if added.is_empty() {
+                continue;
+            }
+            let far = columns(&chunk, &terrain.biome_map, "minecraft:the_end");
+            let is_stone = |state| assets.registry.state(state).unwrap().name == end_stone;
+            let kept: usize = far
                 .iter()
                 .flat_map(|column| &column.spans)
-                .filter(|span| {
-                    assets.registry.state(span.state).unwrap().name == "minecraft:end_stone"
-                })
+                .filter(|span| is_stone(span.state))
                 .map(|span| (span.max - span.min) as usize)
                 .sum();
             assert_eq!(
                 raw, kept,
                 "far columns keep the real small island in {cx} {cz}"
             );
+            for &(x, y, z) in &added {
+                assert!(
+                    far[(z * 16 + x) as usize].spans.iter().any(|span| {
+                        is_stone(span.state) && i32::from(span.min) <= y && y < i32::from(span.max)
+                    }),
+                    "decorated end stone at {x} {y} {z} in {cx} {cz} is in its far column"
+                );
+            }
             return Ok(());
         }
         panic!(
-            "no exact small end island among {} candidates",
+            "no decorated small end island among {} candidates",
             centers.len()
         );
     }

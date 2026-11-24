@@ -17,15 +17,13 @@ use sunrise_client::{
     mobs::{NamedDamage, Who},
 };
 
-/// Whether `native_explode` takes this centre and radius. Vanilla bounds
-/// neither: any finite radius goes, one of 0 or below finding no blocks. A
-/// blast's 1352 rays are fixed; its cost is in the blocks they find (their
-/// steps grow with the radius, the distinct positions roughly with its cube).
+/// Whether `native_explode` takes this centre and radius. Vanilla `ServerLevel.explode`
+/// bounds neither: any finite centre and radius go, one of 0 or below finding no blocks. A
+/// blast's 1352 rays are fixed; its cost is in the blocks they find (their steps grow with
+/// the radius, the distinct positions roughly with its cube), and ray steps check world
+/// bounds per cell without loading chunks.
 fn blast_ok(center: [f64; 3], radius: f32) -> bool {
-    center
-        .into_iter()
-        .all(|v| v.is_finite() && v.abs() <= 30_000_000.0)
-        && radius.is_finite()
+    center.into_iter().all(f64::is_finite) && radius.is_finite()
 }
 
 /// A particle type a blast takes by id: one vanilla has that needs no options
@@ -33,7 +31,7 @@ fn blast_ok(center: [f64; 3], radius: f32) -> bool {
 fn blast_particle(id: &str) -> Result<ParticleOptions, ExplodeError> {
     let options =
         ParticleOptions::simple(ParticleType::from_name(id).ok_or(ExplodeError::InvalidParticle)?);
-    if !mod_particles_ok(&options, None, |_| false, [0.0; 3], [0.0; 3], 0.0) {
+    if !mod_particles_ok(&options, None, |_| false, &[[0.0; 3]], [0.0; 3], 0.0) {
         return Err(ExplodeError::InvalidParticle);
     }
     Ok(options)
@@ -58,9 +56,9 @@ impl Game<'_> {
     /// above solid blocks, and everyone near hears and sees it. `source` is
     /// the exploding entity, already resolved; `settings` the damage type,
     /// calculator, particles and sound. Refused, with nothing done, on a
-    /// client's copy of the world, for a chunk that isn't loaded, a centre or
-    /// radius that isn't finite, or settings `native_blast_settings` refuses.
-    /// A blast inside `native_explosion_detonate` starts that hook again.
+    /// client's copy of the world, for a centre or radius that isn't finite,
+    /// or settings `native_blast_settings` refuses. A blast inside
+    /// `native_explosion_detonate` starts that hook again.
     pub(super) fn native_explode(
         &mut self,
         source: Option<(u32, Target)>,
@@ -70,18 +68,11 @@ impl Game<'_> {
         interaction: ExplosionInteraction,
         settings: ExplosionSettings,
     ) -> Result<(), ExplodeError> {
-        if self.serving.is_none() && self.options.dedicated.is_none() {
+        if !self.is_logical_server() {
             return Err(ExplodeError::Unavailable);
         }
         if !blast_ok(center, radius) {
             return Err(ExplodeError::InvalidBlast);
-        }
-        let chunk = (
-            (center[0].floor() as i32) >> 4,
-            (center[2].floor() as i32) >> 4,
-        );
-        if !self.world.chunks.contains_key(&chunk) {
-            return Err(ExplodeError::Unavailable);
         }
         let settings = self.native_blast_settings(settings)?;
         let id = source.map(|(id, _)| id);
@@ -101,8 +92,14 @@ impl Game<'_> {
             }
         }
         // Only the source's `isSilent` keeps the blast quiet.
-        let blast =
+        let mut blast =
             ExplosionSource::default().with_silence(id.is_some_and(|id| self.entity_silent(id)));
+        if let Some((id, target)) = source {
+            blast = blast.with_damage_direct(
+                id,
+                Self::target_direct_entity(Some(target), &self.creatures.projectiles),
+            );
+        }
         let done = self.server_explode_from(center, radius, interaction, fire, blast);
         self.restore_blast_state(outer);
         done.map_err(|_| ExplodeError::Unavailable)
@@ -188,7 +185,7 @@ impl Game<'_> {
                     .collect::<Result<_, _>>()?;
             }
             if let Some(sound) = settings.sound {
-                if !sound_id(&sound) || !self.native_sound_known(&sound) {
+                if !sound_id(&sound) {
                     return Err(ExplodeError::UnknownSound);
                 }
                 effects.sound = sound;
@@ -411,7 +408,7 @@ mod tests {
         assert!(!blast_ok([0.5, 64.0, 0.5], f32::NAN));
         assert!(!blast_ok([0.5, 64.0, 0.5], f32::INFINITY));
         assert!(!blast_ok([f64::INFINITY, 64.0, 0.5], 4.0));
-        assert!(!blast_ok([0.5, 64.0, 4.0e7], 4.0));
+        assert!(blast_ok([0.5, 64.0, 4.0e7], 4.0));
     }
 
     #[test]

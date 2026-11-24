@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 pub use sunrise_mod_package::manifest::MAX_MANIFEST;
-// points.json is already about 9 MiB; leave ample growth room.
+// Bound the decoded internals catalog before parsing it.
 pub const MAX_CATALOG: u64 = 256 << 20;
 // The largest checked-in slot list is sunrise.txt (2,839 bytes). Lists contain
 // declarations, not source; 4 MiB leaves substantial room for mod declarations.
@@ -80,7 +80,11 @@ pub fn read_bytes(path: &Path, limit: u64, symlinks: Symlinks) -> Result<Vec<u8>
     read_limited(file, limit, path)
 }
 /// Reads at most `limit + 1` bytes, so an endless or huge input is refused without being buffered.
-fn read_limited(reader: impl Read, limit: u64, path: &Path) -> Result<Vec<u8>, ReadError> {
+pub(crate) fn read_limited(
+    reader: impl Read,
+    limit: u64,
+    path: &Path,
+) -> Result<Vec<u8>, ReadError> {
     let io_error = |e| ReadError::Io(path.to_owned(), e);
     let mut bytes = Vec::new();
     reader

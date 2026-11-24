@@ -319,6 +319,7 @@ const SENSOR_RATES: [i64; 9] = [20, 20, 20, 20, 20, 20, 20, 40, 200];
 /// A villager's brain.
 #[derive(Clone, Debug)]
 pub struct Brain {
+    pub(super) generation: u64,
     pub mem: Memories,
     sensors: [i64; 9],
     /// The active non-core activity (`CORE` is always active).
@@ -346,8 +347,9 @@ fn brain(m: &Mob) -> Option<&Brain> {
 fn brain_mut(m: &mut Mob) -> &mut Brain {
     let (baby, farmer) = (m.is_baby(), super::villager::is_farmer(m));
     if brain(m).is_none() {
-        let id = m.kind.id.clone();
-        super::villager::ext_mut(m).brain = Some(Box::new(Brain::new(&id, baby, 0, farmer)));
+        let generation = m.next_brain_generation();
+        super::villager::ext_mut(m).brain = Some(Box::new(Brain::new(generation, baby, 0, farmer)));
+        m.stage_brain_behaviors(super::mod_behaviors::BehaviorTarget::Villager(generation));
     }
     super::villager::ext_mut(m).brain.as_deref_mut().unwrap()
 }
@@ -363,8 +365,9 @@ pub(super) fn mem_ref(m: &Mob) -> Option<&Memories> {
 }
 
 impl Brain {
-    fn new(mob_id: &str, baby: bool, shuffle_seed: i64, farmer: bool) -> Self {
+    fn new(generation: u64, baby: bool, shuffle_seed: i64, farmer: bool) -> Self {
         let mut b = Brain {
+            generation,
             mem: Memories::default(),
             sensors: [0; 9],
             activity: Act::Idle,
@@ -377,14 +380,6 @@ impl Brain {
             scan_items: false,
         };
         b.list = packages(baby, shuffle_seed, farmer);
-        // The parts' behaviors join before the sort, so each lands after
-        // vanilla's of its priority and activity (#824). Nothing joins a
-        // type no part attached to, and nothing is asked or built then.
-        let before = b.list.len();
-        attach_behaviors(mob_id, &mut b.list);
-        if b.list.len() > before {
-            b.list.sort_by_key(|e| (e.prio, e.act.slot()));
-        }
         b
     }
     fn requirements_met(&self, a: Act) -> bool {
@@ -438,8 +433,9 @@ fn schedule(baby: bool, day_time: i64) -> Act {
 /// from the packed memories (the sensors' first scans are delayed by draws
 /// from the mob's random), on the timeline's activity.
 fn make_brain(m: &mut Mob, packed: Memories, shuffle_seed: i64, w_times: (i64, i64)) -> Brain {
+    let generation = m.next_brain_generation();
     let mut b = Brain::new(
-        &m.kind.id,
+        generation,
         m.is_baby(),
         shuffle_seed,
         super::villager::is_farmer(m),
@@ -449,22 +445,26 @@ fn make_brain(m: &mut Mob, packed: Memories, shuffle_seed: i64, w_times: (i64, i
     }
     b.mem = packed;
     b.update_from_schedule(w_times.0, w_times.1);
+    m.stage_brain_behaviors(super::mod_behaviors::BehaviorTarget::Villager(generation));
     b
+}
+
+fn initial_memories(m: &Mob) -> Memories {
+    let mut memories = Memories::default();
+    memories.job_site.set_opt(m.extra.home);
+    memories.home.set_opt(m.extra.bed);
+    memories.meeting_point.set_opt(m.extra.meeting);
+    memories
+        .last_slept
+        .set_opt(super::villager::ext(m).and_then(|e| e.last_slept));
+    memories
 }
 
 /// Builds the villager's brain as its constructor does, at this game time:
 /// the memories it remembers (job site, bed, bell) come from the mob.
 pub fn init(m: &mut Mob, game_time: i64, day_time: i64, shuffle_seed: i64) {
     let saved = super::villager::ext_mut(m).saved_memories.take();
-    let mut packed = saved.as_deref().cloned().unwrap_or_default();
-    if saved.is_none() {
-        packed.job_site.set_opt(m.extra.home);
-        packed.home.set_opt(m.extra.bed);
-        packed.meeting_point.set_opt(m.extra.meeting);
-        if let Some(t) = super::villager::ext(m).and_then(|e| e.last_slept) {
-            packed.last_slept.set(t);
-        }
-    }
+    let packed = saved.map_or_else(|| initial_memories(m), |saved| *saved);
     let b = make_brain(m, packed, shuffle_seed, (game_time, day_time));
     super::villager::ext_mut(m).brain = Some(Box::new(b));
 }
@@ -479,12 +479,18 @@ pub struct Bx<'a, 'w, 'l> {
     refresh: bool,
 }
 
-/// `Brain.tick` (from `Villager.customServerAiStep`).
-pub fn tick(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut Vec<MobEvent>) {
+/// Ensure the villager's brain is initialized before a brain tick so any staged
+/// `register_behaviors` dispatch can run on the owning `Game` first.
+pub fn ensure_brain(m: &mut Mob, game_time: i64, day_time: i64) {
     if brain(m).is_none() {
         let seed = i64::from(m.id);
-        init(m, w.game_time, w.day_time, seed);
+        init(m, game_time, day_time, seed);
     }
+}
+
+/// `Brain.tick` (from `Villager.customServerAiStep`).
+pub fn tick(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut Vec<MobEvent>) {
+    ensure_brain(m, w.game_time, w.day_time);
     // forgetOutdatedMemories
     mem(m).tick();
     tick_sensors(m, w, level.random());
@@ -1679,7 +1685,7 @@ impl B {
                         pos: site,
                     });
                 }
-                restock_if_due(m, cx.w);
+                restock_if_due(m, cx.w, cx.events);
                 true
             }
             B::HarvestFarmland {
@@ -1777,7 +1783,6 @@ impl B {
                 || {
                     if !brain_mut(m).is_active(Act::Rest) && super::villager::sleeping(m) {
                         super::villager::stop_sleeping(m, cx.w, cx.events);
-                        mem(m).last_woken.set(now);
                         true
                     } else {
                         false
@@ -3101,7 +3106,6 @@ impl B {
                 t.running = false;
                 if super::villager::sleeping(m) {
                     super::villager::stop_sleeping(m, cx.w, cx.events);
-                    mem(m).last_woken.set(now);
                     *next_ok = now + 40;
                 }
             }
@@ -3341,16 +3345,71 @@ fn play_work_sound(m: &mut Mob, cx: &mut Bx) {
         }
     }
 }
+/// The live inputs to `Villager.updateSpecialPrices` belonging to the trading player.
+pub struct TradingPlayer {
+    pub uuid: Option<[i32; 4]>,
+    pub hero: Option<i32>,
+    /// `MerchantContainer.updateSellItem` plays feedback only with a payment.
+    pub paying: bool,
+}
+
+pub trait TradingPlayers {
+    fn trading_player(&self, villager: u32) -> Option<TradingPlayer>;
+}
+
+/// What a work-step restock changes in the trading screen, with the player's prices and
+/// the trade sound's pitch as chosen at the work step.
+#[derive(Clone, Debug)]
+pub struct RestockNotice {
+    pub mob: u32,
+    pub step: crate::merchant::RestockStep,
+    pub reputation: i32,
+    pub hero: Option<i32>,
+    pub pitch: Option<f32>,
+}
+
 /// `WorkAtPoi.start`'s restock.
-fn restock_if_due(m: &mut Mob, w: &MobWorld) {
+fn restock_if_due(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if w.professions.state_index(&m.extra.profession).is_none() {
         return;
     }
     let day = w.day_time.div_euclid(24000);
-    if let Some(t) = m.extra.trade.as_mut()
-        && t.should_restock(w.game_time, day)
-    {
+    let Some(t) = m.extra.trade.as_mut() else {
+        return;
+    };
+    // Each step with a trading player runs `updateSpecialPrices`, which
+    // updates and resends its screen (a new day can send two); the trade
+    // sound's pitch is drawn here, in work-step order.
+    let catch_up = t.catch_up(w.game_time, day);
+    let restock = t.restock_due(w.game_time).then(|| {
         t.restock(w.game_time);
+        crate::merchant::RestockStep::Restock
+    });
+    if (catch_up.is_none() && restock.is_none()) || !m.extra.flag2 || t.offers.is_empty() {
+        return;
+    }
+    let Some(player) = w
+        .trading_players
+        .and_then(|players| players.trading_player(m.id))
+    else {
+        return;
+    };
+    let reputation = player
+        .uuid
+        .zip(super::villager::ext(m))
+        .map_or(0, |(uuid, ext)| ext.gossips.reputation(uuid));
+    let interval = m.ambient_interval();
+    for step in catch_up.into_iter().chain(restock) {
+        let pitch = (player.paying
+            && crate::merchant::reset_trade_update_clock(&mut m.ambient_timer, interval))
+        .then(|| m.voice_pitch());
+        events.push(MobEvent::VillagerRestockStep(RestockNotice {
+            mob: m.id,
+            step,
+            reputation,
+            hero: player.hero,
+            pitch,
+        }));
     }
 }
 #[cfg(test)]
@@ -4276,32 +4335,41 @@ fn packages(baby: bool, seed: i64, farmer: bool) -> Vec<Entry> {
 
 // ---- Mod behaviors ------------------------------------------------------
 
-/// The parts' behaviors for this villager's brain (#824): each joins the
-/// list with its activity and priority, refused where the villager brain has
-/// no such activity.
-fn attach_behaviors(mob_id: &str, list: &mut Vec<Entry>) {
-    struct Reg<'a> {
-        list: &'a mut Vec<Entry>,
-        mob_id: &'a str,
+/// Validate that this brain keeps a slot for `activity`.
+pub(super) fn validate_activity(
+    activity: mod_api::Activity,
+) -> Result<(), mod_api::BehaviorRefusal> {
+    act_of(activity).map(|_| ())
+}
+
+/// Apply staged mod behaviors to the villager brain if it is still the same
+/// `generation` instance; otherwise discard them safely and return `false`.
+pub(super) fn apply_staged(
+    m: &mut Mob,
+    generation: u64,
+    staged: Vec<mod_api::RegisteredBehavior>,
+) -> bool {
+    let Some(b) = super::villager::ext_mut(m).brain.as_deref_mut() else {
+        super::mod_behaviors::discard_registrations(staged);
+        return false;
+    };
+    if b.generation != generation {
+        super::mod_behaviors::discard_registrations(staged);
+        return false;
     }
-    impl mod_api::BehaviorRegistrarBackend for Reg<'_> {
-        fn add_behavior(
-            &mut self,
-            r: mod_api::RegisteredBehavior,
-        ) -> Result<(), mod_api::BehaviorRefusal> {
-            let act = act_of(r.activity)?;
-            self.list.push(Entry {
-                prio: r.priority,
-                act,
-                b: B::Mod(super::mod_behaviors::ModBehavior::new(r)),
-            });
-            Ok(())
-        }
-        fn mob_id(&self) -> &str {
-            self.mob_id
-        }
+    let before = b.list.len();
+    for r in staged {
+        let act = act_of(r.activity).expect("staged activity was validated on add");
+        b.list.push(Entry {
+            prio: r.priority,
+            act,
+            b: B::Mod(super::mod_behaviors::ModBehavior::new(r)),
+        });
     }
-    super::mod_behaviors::attach(mob_id, &mut Reg { list, mob_id });
+    if b.list.len() > before {
+        b.list.sort_by_key(|e| (e.prio, e.act.slot()));
+    }
+    true
 }
 
 /// The villager brain's slot for a mod-api activity.
@@ -4462,9 +4530,20 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     Some((acts.join("|"), out.join(" ")))
 }
 /// `Villager.stopSleeping`: remember waking.
-pub fn woken(m: &mut Mob, now: i64) {
-    if brain(m).is_some() {
-        mem(m).last_woken.set(now);
+pub(super) fn woken(m: &mut Mob, now: i64) {
+    if m.species() != Species::Villager {
+        return;
+    }
+    let extra = super::villager::ext_mut(m);
+    if let Some(brain) = extra.brain.as_deref_mut() {
+        brain.mem.last_woken.set(now);
+    } else {
+        // A villager can sleep and wake before it has ever ticked. Seed the same
+        // memories initialization would have used, without initializing its sensors.
+        let saved = extra.saved_memories.take();
+        let mut memories = saved.unwrap_or_else(|| Box::new(initial_memories(m)));
+        memories.last_woken.set(now);
+        super::villager::ext_mut(m).saved_memories = Some(memories);
     }
 }
 /// `BellBlockEntity.updateEntities`: a bell rung within 32 blocks sets

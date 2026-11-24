@@ -1,5 +1,5 @@
 //! Declared internals, shared by both native build routes.
-use super::{api, inject};
+use super::api;
 use crate::host::trf;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,13 +8,12 @@ use std::{
 };
 use sunrise_mod_package::internals::{self, ListedInternal};
 
-pub const INTERNALS: &str = "internals.json";
+pub use sunrise_mod_package::build_data::INTERNALS;
 
 #[derive(Default)]
 pub struct Catalog {
     pub internals: Vec<ListedInternal>,
     pub discovery: bool,
-    pub points: Vec<inject::ListedPoint>,
 }
 
 pub struct Facade {
@@ -24,7 +23,6 @@ pub struct Facade {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
-    Inject(String),
     Missing {
         mod_id: String,
         path: String,
@@ -51,7 +49,6 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
-            Self::Inject(error) => error.clone(),
             Self::Missing { mod_id, path } => trf(
                 "E_INTERNAL_MISSING: {mod} uses {path}, which this game doesn't have; run cargo sunrise-mod internals sync to discover this pin's used internals.",
                 &[("mod", mod_id), ("path", path)],
@@ -61,7 +58,7 @@ impl std::fmt::Display for Error {
                 path,
                 signature,
             } => trf(
-                "E_INTERNAL_CHANGED: {mod} uses {path}, whose signature is now {signature}; run cargo sunrise-mod update to see what changed.",
+                "E_INTERNAL_CHANGED: {mod} uses {path}, whose signature is now {signature}; run cargo sunrise-mod pin to see what changed.",
                 &[("mod", mod_id), ("path", path), ("signature", signature)],
             ),
             Self::Gated { mod_id, path } => trf(
@@ -118,24 +115,11 @@ impl From<internals::Error> for Error {
 }
 
 impl Catalog {
-    pub fn target(&self, at: &str) -> Option<&ListedInternal> {
-        self.internals.iter().find(|item| {
-            !item.shape_only
-                && plain_path(&item.path) == plain_path(at)
-                && matches!(item.kind.as_str(), "fn" | "method" | "struct")
-        })
-    }
-
-    /// `manifest` with each absent `hash` taken from this catalog, the pinned game's as the build
-    /// checks it (`[native] sunrise` fixes it exactly). The build records this form in
-    /// `native-mods.json`; a declaration that doesn't resolve keeps no hash and is refused by
-    /// [`Self::check`].
-    pub fn read(dir: &Path) -> Result<Self, String> {
-        let path = dir.join(INTERNALS);
-        let listed = inject::catalog(&dir.join(inject::POINTS))?;
+    /// Read a published SDK's internals catalog, requiring the requested build in its header.
+    pub fn read(dir: &Path, build: &str) -> Result<Self, String> {
         Ok(Self {
-            points: listed.points,
-            internals: internals::read(&path)?,
+            internals: super::game_uses::published_internals(dir, build)
+                .map_err(|error| error.to_string())?,
             discovery: false,
         })
     }
@@ -149,13 +133,6 @@ impl Catalog {
         manifest: &sunrise_mod_package::Manifest,
     ) -> sunrise_mod_package::Manifest {
         let mut pinned = manifest.clone();
-        for inject in pinned
-            .inject
-            .iter_mut()
-            .filter(|inject| inject.hash.is_none())
-        {
-            inject.hash = self.target(&inject.at).map(|item| item.hash.clone());
-        }
         for declared in pinned
             .internals
             .iter_mut()
@@ -174,7 +151,6 @@ impl Catalog {
     }
 
     pub fn check(&self, manifest: &sunrise_mod_package::Manifest) -> Result<(), Error> {
-        super::slots::check(self, manifest).map_err(Error::Inject)?;
         for declared in &manifest.internals {
             internals::check(&self.internals, &manifest.id, declared)?;
         }
@@ -405,7 +381,6 @@ mod tests {
         fs::write(path, text).unwrap();
         let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
         let catalog = Catalog {
-            points: Vec::new(),
             discovery: false,
             internals: serde_json::from_value(serde_json::json!([
                 { "path": "sunrise_client::game::Game", "kind": "struct", "signature": "struct Game<'a> { world: World }", "hash": "1234" },
@@ -420,19 +395,14 @@ mod tests {
     #[test]
     fn reads_and_pins_only_declared_internals() {
         let (dir, bundle, catalog) = fixture("pins");
-        let build = serde_json::json!({"commit": "c".repeat(40)});
+        let build = "c".repeat(40);
         fs::write(
             dir.join(INTERNALS),
-            serde_json::json!({"schema": 1, "build": build, "internals": catalog.internals})
+            serde_json::json!({"schema": 1, "build": {"commit": build}, "internals": catalog.internals})
                 .to_string(),
         )
         .unwrap();
-        fs::write(
-            dir.join(inject::POINTS),
-            serde_json::json!({"schema": 1, "build": build, "points": [], "wire": []}).to_string(),
-        )
-        .unwrap();
-        let read = Catalog::read(&dir).unwrap();
+        let read = Catalog::read(&dir, &build).unwrap();
         let mut manifest = bundle.manifest.clone();
         manifest.internals[0].hash = None;
         manifest.internals[1].hash = Some("explicit".into());

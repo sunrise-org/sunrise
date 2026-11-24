@@ -15,7 +15,9 @@ use sunrise_client::{
 };
 use sunrise_core::geometry::{Axis, Vec3};
 use sunrise_core::nbt::Tag;
-use sunrise_protocol::packets::play::{BlockEntityTagQuery, EntityTagQuery, Serverbound};
+use sunrise_protocol::packets::play::{
+    BlockEntityTagQuery, DebugSubscriptionRequest, EntityTagQuery, Serverbound,
+};
 use winit::keyboard::KeyCode;
 
 /// `ChatFormatting.YELLOW` and `RED`.
@@ -228,8 +230,8 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// The network charts' samples each tick: `PingDebugMonitor.tick` while
-    /// they show, `BandwidthDebugMonitor.tick` always.
+    /// The network charts' samples each tick: `BandwidthDebugMonitor.tick` always, and the
+    /// integrated server's instant ping (a remote one is `tick_debug_connection`).
     pub(super) fn tick_debug_charts(&mut self) {
         let shown = self.debug && self.debug_charts.network;
         let Some(r) = &self.remote else {
@@ -251,10 +253,27 @@ impl Game<'_> {
             self.debug_charts.log_bandwidth(bytes);
             self.debug_charts.log_packets([sent, received]);
         }
-        if shown {
+        r.session
+            .drain_debug_pings(|delay| self.debug_charts.ping.log(delay));
+    }
+    /// `ClientPacketListener.tick` after the carried slot and the chat session: the ping while the
+    /// network charts show, then, with a level, `ClientDebugSubscriber.tick`'s request.
+    pub(in crate::game) fn tick_debug_connection(&mut self) {
+        let Some(r) = &self.remote else {
+            return;
+        };
+        let has_level = r.has_level();
+        if self.debug && self.debug_charts.network {
             use sunrise_protocol::packets::status::Ping;
-            let time = self.debug_millis();
+            let time = sunrise_client::net::ping_millis();
             self.send(Serverbound::PingRequest(Ping { time }));
+        }
+        if has_level && let Some(wanted) = self.debug_charts.subscription_request(self.debug) {
+            // `dedicated_server_tick_time` is registry id 0.
+            let subscriptions = if wanted { vec![0] } else { vec![] };
+            self.send(Serverbound::DebugSubscriptionRequest(
+                DebugSubscriptionRequest { subscriptions },
+            ));
         }
     }
     /// The overlay's chart lines (`DebugScreenOverlay`'s "Debug charts").
@@ -314,9 +333,11 @@ impl Game<'_> {
     /// Whether this client's debug overlay passes the draw gate this frame.
     pub(in crate::game) fn debug_overlay_visible(&self) -> bool {
         let screen_open = self.title.is_some() || self.screen != Screen::Playing;
-        self.debug_entries
-            .any_enabled(self.debug, self.reduced_debug_info())
-            && (!self.ui.hide_gui || screen_open)
+        self.debug_entries.any_enabled(
+            &self.registered_debug_entries,
+            self.debug,
+            self.reduced_debug_info(),
+        ) && (!self.ui.hide_gui || screen_open)
     }
 
     /// `DebugScreenOverlay.extractRenderState`: the enabled entries' lines
@@ -376,7 +397,7 @@ impl Game<'_> {
                 width,
                 height,
                 self.settings.max_fps,
-                1000.0 / self.clock.rate(),
+                &self.clock,
                 !self.has_singleplayer_server(),
             );
             draws.push(hud_layout::GuiDraw::Push(vec![hud_layout::PoseOp::Scale(
@@ -650,8 +671,12 @@ impl Game<'_> {
     }
     /// `DebugScreenEntryList.isCurrentlyEnabled` for an entry's path.
     pub(super) fn debug_entry(&self, path: &str) -> bool {
-        self.debug_entries
-            .enabled(path, self.debug, self.reduced_debug_info())
+        self.debug_entries.enabled(
+            &self.registered_debug_entries,
+            path,
+            self.debug,
+            self.reduced_debug_info(),
+        )
     }
     /// The `3d_crosshair` entry.
     pub(super) fn debug_crosshair(&self) -> bool {
@@ -725,7 +750,7 @@ impl Game<'_> {
             DebugAction::Spectate => {
                 if self.player.is_none() || !self.gamemaster() {
                     self.debug_translated("debug.creative_spectator.error");
-                } else if self.mode != GameMode::Spectator {
+                } else if !self.own_player_is_spectator() {
                     self.change_game_mode(GameMode::Spectator);
                 } else {
                     let back = self.previous_mode.unwrap_or(GameMode::Creative);
@@ -1049,12 +1074,12 @@ impl Game<'_> {
         self.bounding_box_gizmos(camera, &mut g);
         self.debug_renderer_gizmos(&mut g);
         if self.debug_entry("chunk_borders")
-            && let Some(p) = &self.player
+            && let Some(pos) = self.camera_entity_position()
         {
             let block = [
-                p.position.x.floor() as i32,
-                p.position.y.floor() as i32,
-                p.position.z.floor() as i32,
+                pos[0].floor() as i32,
+                pos[1].floor() as i32,
+                pos[2].floor() as i32,
             ];
             let min_y = self.world.bottom_y();
             g.chunk_borders(block, min_y, min_y + self.world.layout().height() - 1);
@@ -1062,10 +1087,21 @@ impl Game<'_> {
         if !self.debug_entry("entity_hitboxes") {
             return g;
         }
+        let hide_camera = self
+            .camera_type
+            .is_first_person()
+            .then(|| {
+                self.remote
+                    .as_ref()
+                    .filter(|r| r.detached_camera.is_none())
+                    .and_then(|r| r.camera)
+                    .map(|id| id as u32)
+            })
+            .flatten();
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
         for m in self.mobs.iter() {
-            if m.removed || m.is_invisible() {
+            if m.removed || m.is_invisible() || hide_camera == Some(m.id) {
                 continue;
             }
             let pos = [
@@ -1085,14 +1121,24 @@ impl Game<'_> {
                 view,
             );
         }
+        // A client's copy of the server's entity: the size its `entity_size` answer gave it
+        // (`refreshDimensions`), else its kind's.
+        let sized = |id: u32, size: (f32, f32), eye: f32| match self.client_copy_answer(id) {
+            Some([width, height, eye]) => ((width, height), eye),
+            None => (size, eye),
+        };
         for item in &self.dropped {
+            if hide_camera == Some(item.id) {
+                continue;
+            }
             let pos = [
                 lerp(item.previous.x, item.position.x),
                 lerp(item.previous.y, item.position.y),
                 lerp(item.previous.z, item.position.z),
             ];
             // EntityType.ITEM: 0.25 by 0.25, eyes at 0.2125.
-            g.hitbox(pos, (0.25, 0.25), 0.2125, false, (0.0, 0.0));
+            let (size, eye) = sized(item.id, (0.25, 0.25), 0.2125);
+            g.hitbox(pos, size, eye, false, (0.0, 0.0));
         }
         // The other entities (EntityTypes sizes; eyes at 0.85 of the height
         // unless the type sets one). `at` is the interpolated position.
@@ -1104,35 +1150,61 @@ impl Game<'_> {
             ]
         };
         for p in &self.paintings {
+            if hide_camera == Some(p.id) {
+                continue;
+            }
             let (min, max) = p.bounds();
             let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
             g.entity_box(min, max, centre, 0.425, false, step_view(p.step()));
         }
-        for f in self.item_frames.iter().filter(|f| !f.invisible) {
+        for f in self
+            .item_frames
+            .iter()
+            .filter(|f| !f.invisible && hide_camera != Some(f.id))
+        {
             let (min, max) = f.bounds();
             let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
             g.entity_box(min, max, centre, 0.0, false, step_view(f.step()));
         }
         for c in &self.cushions {
+            if hide_camera == Some(c.id) {
+                continue;
+            }
             let (min, max) = c.bounds();
             let p = c.position;
             g.entity_box(min, max, [p.x, p.y, p.z], 0.2125, false, (0.0, c.yaw));
         }
-        // Interaction: EntityDimensions.scalable(width, height), so its eyes
-        // are at 0.85 of the height. Its rotation is not kept here.
-        for i in self.interactions.values() {
-            let b = i.bounds();
-            let p = i.position;
+        for (&id, i) in &self.interactions {
+            if hide_camera == Some(id as u32) {
+                continue;
+            }
+            let pos = at(i.previous, i.position);
+            // Its `entity_size` answer's size on a client's copy, else its synched one.
+            let (width, height, eye) = self
+                .client_copy_answer(id as u32)
+                .map_or((i.width, i.height, i.eye_height()), |[w, h, e]| (w, h, e));
+            let half = f64::from(width) / 2.0;
+            let b = sunrise_core::geometry::Aabb::new(
+                Vec3::new(pos[0] - half, pos[1], pos[2] - half),
+                Vec3::new(pos[0] + half, pos[1] + f64::from(height), pos[2] + half),
+            );
             g.entity_box(
                 [b.min(Axis::X), b.min(Axis::Y), b.min(Axis::Z)],
                 [b.max(Axis::X), b.max(Axis::Y), b.max(Axis::Z)],
-                [p.x, p.y, p.z],
-                i.height.max(0.0) * 0.85,
+                pos,
+                eye,
                 false,
-                (0.0, 0.0),
+                (
+                    lerpf(i.previous_pitch, i.pitch),
+                    lerpf(i.previous_yaw, i.yaw),
+                ),
             );
         }
-        for a in self.armor_stands.iter().filter(|a| !a.invisible) {
+        for a in self
+            .armor_stands
+            .iter()
+            .filter(|a| !a.invisible && hide_camera != Some(a.id))
+        {
             // ArmorStand.getDimensions: a marker has none, a small one is
             // half scale with its eyes at 0.9875.
             let (size, eye) = match (a.marker, a.small) {
@@ -1140,6 +1212,7 @@ impl Game<'_> {
                 (_, true) => ((0.25, 0.9875), 0.9875),
                 _ => ((0.5, 1.975), 1.7775),
             };
+            let (size, eye) = sized(a.id, size, eye);
             g.hitbox(
                 at(a.previous, a.position),
                 size,
@@ -1149,60 +1222,57 @@ impl Game<'_> {
             );
         }
         for b in &self.boats {
+            if hide_camera == Some(b.id) {
+                continue;
+            }
             let h = super::boats::HEIGHT as f32;
-            g.hitbox(
-                at(b.previous, b.position),
-                (super::boats::WIDTH as f32, h),
-                h,
-                false,
-                (0.0, b.yaw),
-            );
+            let (size, eye) = sized(b.id, (super::boats::WIDTH as f32, h), h);
+            g.hitbox(at(b.previous, b.position), size, eye, false, (0.0, b.yaw));
         }
         for c in &self.carts {
+            if hide_camera == Some(c.id) {
+                continue;
+            }
             let (w, h) = (
                 super::minecarts::WIDTH as f32,
                 super::minecarts::HEIGHT as f32,
             );
-            g.hitbox(
-                at(c.previous, c.position),
-                (w, h),
-                h * 0.85,
-                false,
-                (0.0, c.yaw),
-            );
+            let (size, eye) = sized(c.id, (w, h), h * 0.85);
+            g.hitbox(at(c.previous, c.position), size, eye, false, (0.0, c.yaw));
         }
         for o in &self.orbs {
-            g.hitbox(
-                at(o.previous, o.position),
-                (0.5, 0.5),
-                0.425,
-                false,
-                (0.0, 0.0),
-            );
+            if hide_camera == Some(o.id) {
+                continue;
+            }
+            let (size, eye) = sized(o.id, (0.5, 0.5), 0.425);
+            g.hitbox(at(o.previous, o.position), size, eye, false, (0.0, 0.0));
         }
         for f in &self.falling {
-            g.hitbox(
-                at(f.previous, f.position),
-                (0.98, 0.98),
-                0.833,
-                false,
-                (0.0, 0.0),
-            );
+            if hide_camera == Some(f.id) {
+                continue;
+            }
+            let (size, eye) = sized(f.id, (0.98, 0.98), 0.833);
+            g.hitbox(at(f.previous, f.position), size, eye, false, (0.0, 0.0));
         }
         for t in &self.tnts {
-            g.hitbox(
-                at(t.previous, t.position),
-                (0.98, 0.98),
-                0.15,
-                false,
-                (0.0, 0.0),
-            );
+            if hide_camera == Some(t.id) {
+                continue;
+            }
+            let (size, eye) = sized(t.id, (0.98, 0.98), 0.15);
+            g.hitbox(at(t.previous, t.position), size, eye, false, (0.0, 0.0));
         }
         for c in &self.crystals {
+            if hide_camera == Some(c.id) {
+                continue;
+            }
             let p = c.position;
-            g.hitbox([p.x, p.y, p.z], (2.0, 2.0), 1.7, false, (0.0, 0.0));
+            let (size, eye) = sized(c.id, (2.0, 2.0), 1.7);
+            g.hitbox([p.x, p.y, p.z], size, eye, false, (0.0, 0.0));
         }
         for p in &self.creatures.projectiles {
+            if hide_camera == Some(p.id) {
+                continue;
+            }
             use sunrise_client::projectiles::ProjectileKind as K;
             let (size, eye) = match p.kind {
                 K::Arrow { .. } | K::Trident => (0.5, 0.13),
@@ -1219,19 +1289,24 @@ impl Game<'_> {
                 K::WindCharge | K::BreezeWindCharge => (0.3125, 0.0),
                 K::LargeFireball { .. } | K::DragonFireball => (1.0, 0.85),
             };
+            let (size, eye) = sized(p.id, (size, size), eye);
             g.hitbox(
                 at(p.previous, p.position),
-                (size, size),
+                size,
                 eye,
                 false,
                 (p.pitch, p.yaw),
             );
         }
         for t in &self.tridents {
+            if hide_camera == Some(t.id) {
+                continue;
+            }
+            let (size, eye) = sized(t.id, (0.5, 0.5), 0.13);
             g.hitbox(
                 at(t.previous, t.position),
-                (0.5, 0.5),
-                0.13,
+                size,
+                eye,
                 false,
                 (t.pitch, t.yaw),
             );
@@ -1248,17 +1323,15 @@ impl Game<'_> {
             );
         }
         for r in &self.rockets {
+            if hide_camera == Some(r.id) {
+                continue;
+            }
             // Projectile.updateRotation: the look follows the motion.
             let v = r.velocity;
             let yaw = v.x.atan2(v.z).to_degrees() as f32;
             let pitch = v.y.atan2(v.x.hypot(v.z)).to_degrees() as f32;
-            g.hitbox(
-                at(r.previous, r.position),
-                (0.25, 0.25),
-                0.2125,
-                false,
-                (pitch, yaw),
-            );
+            let (size, eye) = sized(r.id, (0.25, 0.25), 0.2125);
+            g.hitbox(at(r.previous, r.position), size, eye, false, (pitch, yaw));
         }
         for h in self
             .hook
@@ -1274,10 +1347,11 @@ impl Game<'_> {
         // AreaEffectCloud.getDimensions: diameter follows synced radius,
         // height is 0.5; EntityDimensions.scalable gives eyes at 85% height.
         for c in &self.potions.clouds {
-            g.hitbox(c.at, (c.radius * 2.0, 0.5), 0.425, false, (0.0, 0.0));
+            let (size, eye) = sized(c.id, (c.radius * 2.0, 0.5), 0.425);
+            g.hitbox(c.at, size, eye, false, (0.0, 0.0));
         }
         // The dragon: 16 by 8, a living entity; its parts follow.
-        if let Some(d) = self.dragon.as_ref() {
+        if let Some(d) = self.dragon.as_ref().filter(|d| hide_camera != Some(d.id)) {
             g.hitbox(
                 at(d.previous, d.position),
                 (16.0, 8.0),
@@ -1298,7 +1372,7 @@ impl Game<'_> {
             }
         }
         // The player's own, unless the camera is in its head.
-        if !self.camera_type.is_first_person()
+        if (!self.camera_type.is_first_person() || !self.controls_camera())
             && let Some(p) = &self.player
         {
             let d = p.dimensions;

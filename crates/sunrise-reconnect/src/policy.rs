@@ -4,9 +4,144 @@
 use std::time::{Duration, Instant};
 
 /// Seconds before each attempt; there are no more after the last.
-pub const DELAYS: [u64; 5] = [5, 10, 20, 40, 60];
+pub(crate) const DELAYS: [u64; 5] = [5, 10, 20, 40, 60];
 /// Staying connected this long counts the next drop as a fresh one.
-pub const STABLE: Duration = Duration::from_secs(60);
+pub(crate) const STABLE: Duration = Duration::from_secs(60);
+
+/// One classification rule: a translation key's prefix, an English keyword
+/// in a plain reason, or both, and whether that reason may be retried.
+struct Rule {
+    key: Option<&'static str>,
+    keyword: Option<&'static str>,
+    retry: bool,
+}
+
+/// The one table behind both decisions. The never rules stay before the
+/// retry ones: a reason that matches both is never retried.
+const RULES: &[Rule] = &[
+    // Never: kicks, bans, whitelists, version refusals, the account's session
+    // refusals (`disconnect.loginFailedInfo.*` but the unreachable session
+    // servers, the server's failed username check, joining an online-mode
+    // server without an account) and Sunrise's own refusals.
+    Rule {
+        key: Some("multiplayer.disconnect.banned"),
+        keyword: Some("ban"),
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.ip_banned"),
+        keyword: None,
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.kicked"),
+        keyword: Some("kick"),
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.not_whitelisted"),
+        keyword: Some("white-list"),
+        retry: false,
+    },
+    Rule {
+        key: None,
+        keyword: Some("whitelist"),
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.incompatible"),
+        keyword: Some("incompatible"),
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.outdated_client"),
+        keyword: Some("outdated"),
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.outdated_server"),
+        keyword: None,
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.duplicate_login"),
+        keyword: Some("another location"),
+        retry: false,
+    },
+    Rule {
+        key: Some("sunrise.multiplayer.not_signed_in"),
+        keyword: Some("online mode"),
+        retry: false,
+    },
+    Rule {
+        key: None,
+        keyword: Some("microsoft account"),
+        retry: false,
+    },
+    Rule {
+        key: Some("sunrise.multiplayer.invalid_address"),
+        keyword: Some("invalid server address"),
+        retry: false,
+    },
+    Rule {
+        key: Some("disconnect.loginFailedInfo.invalidSession"),
+        keyword: Some("invalid session"),
+        retry: false,
+    },
+    Rule {
+        key: Some("disconnect.loginFailedInfo.insufficientPrivileges"),
+        keyword: Some("multiplayer is disabled"),
+        retry: false,
+    },
+    Rule {
+        key: Some("disconnect.loginFailedInfo.userBanned"),
+        keyword: None,
+        retry: false,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.unverified_username"),
+        keyword: Some("failed to verify username"),
+        retry: false,
+    },
+    // Retry: the server going away for a while — vanilla's shutdown and
+    // time-out reasons, a full server, a slow login, the server's own session
+    // servers being down, and restart messages.
+    Rule {
+        key: Some("multiplayer.disconnect.server_shutdown"),
+        keyword: Some("server closed"),
+        retry: true,
+    },
+    Rule {
+        key: None,
+        keyword: Some("restart"),
+        retry: true,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.server_full"),
+        keyword: Some("the server is full"),
+        retry: true,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.slow_login"),
+        keyword: Some("took too long to log in"),
+        retry: true,
+    },
+    Rule {
+        key: Some("multiplayer.disconnect.authservers_down"),
+        keyword: Some("authentication servers"),
+        retry: true,
+    },
+    Rule {
+        key: Some("disconnect.loginFailedInfo.serversUnavailable"),
+        keyword: None,
+        retry: true,
+    },
+    Rule {
+        key: Some("disconnect.timeout"),
+        keyword: Some("timed out"),
+        retry: true,
+    },
+];
 
 /// Whether a disconnect may be retried. `from_server`: the server (or a
 /// permanent refusal) gave `reason`, rather than the connection failing.
@@ -16,92 +151,41 @@ pub const STABLE: Duration = Duration::from_secs(60);
 /// decides; the English keyword scan of the text is only the fallback for
 /// plain reasons (OS errors, servers' literal kicks), whose language is
 /// the server's own.
-pub fn allowed(reason: &str, key: Option<&str>, from_server: bool) -> bool {
+pub(crate) fn allowed(reason: &str, key: Option<&str>, from_server: bool) -> bool {
     if let Some(decision) = key.and_then(classified_key) {
         return decision;
     }
     let r = reason.to_lowercase();
-    // Kicks, bans, whitelists, version refusals and the account's session
-    // refusals (`disconnect.loginFailedInfo.*` but the unreachable session
-    // servers, the server's failed username check, joining an online-mode
-    // server without an account): never.
-    const NEVER: [&str; 13] = [
-        "ban",
-        "kick",
-        "white-list",
-        "whitelist",
-        "incompatible",
-        "outdated",
-        "another location",
-        "online mode",
-        "invalid server address",
-        "invalid session",
-        "multiplayer is disabled",
-        "failed to verify username",
-        "microsoft account",
-    ];
-    if NEVER.iter().any(|w| r.contains(w)) {
-        return false;
+    for rule in RULES {
+        let Some(keyword) = rule.keyword else {
+            continue;
+        };
+        if !r.contains(keyword) {
+            continue;
+        }
+        if !rule.retry {
+            return false;
+        }
+        if from_server {
+            return true;
+        }
     }
-    if !from_server {
-        return true;
-    }
-    // The server going away for a while: vanilla's shutdown and time-out
-    // reasons, a full server, a slow login, the server's own session
-    // servers being down, and restart messages.
-    const RETRY: [&str; 6] = [
-        "server closed",
-        "timed out",
-        "the server is full",
-        "took too long to log in",
-        "authentication servers",
-        "restart",
-    ];
-    RETRY.iter().any(|w| r.contains(w))
+    !from_server
 }
 
-/// The key lists' key-based counterpart: `Some` when the key alone
-/// decides. Prefix match, so a key's arguments' variants
+/// The table's key-based side: `Some` when the key alone decides. Prefix
+/// match, so a key's arguments' variants
 /// (`multiplayer.disconnect.banned.expiration`) share the base's verdict.
 fn classified_key(key: &str) -> Option<bool> {
-    // The keyword lists above, as the keys those texts carry: bans, kicks,
-    // whitelists, version refusals, the account's session refusals and
-    // Sunrise's own refusals: never. Shutdowns, timeouts, a full server, a
-    // slow login and the session servers being down: retry.
-    const NEVER: [&str; 14] = [
-        "multiplayer.disconnect.banned",
-        "multiplayer.disconnect.ip_banned",
-        "multiplayer.disconnect.kicked",
-        "multiplayer.disconnect.not_whitelisted",
-        "multiplayer.disconnect.incompatible",
-        "multiplayer.disconnect.outdated_client",
-        "multiplayer.disconnect.outdated_server",
-        "multiplayer.disconnect.duplicate_login",
-        "multiplayer.disconnect.unverified_username",
-        "disconnect.loginFailedInfo.invalidSession",
-        "disconnect.loginFailedInfo.insufficientPrivileges",
-        "disconnect.loginFailedInfo.userBanned",
-        "sunrise.multiplayer.not_signed_in",
-        "sunrise.multiplayer.invalid_address",
-    ];
-    const RETRY: [&str; 6] = [
-        "multiplayer.disconnect.server_shutdown",
-        "multiplayer.disconnect.server_full",
-        "multiplayer.disconnect.slow_login",
-        "multiplayer.disconnect.authservers_down",
-        "disconnect.loginFailedInfo.serversUnavailable",
-        "disconnect.timeout",
-    ];
-    NEVER
-        .iter()
-        .any(|k| key.starts_with(k))
-        .then_some(false)
-        .or_else(|| RETRY.iter().any(|k| key.starts_with(k)).then_some(true))
+    RULES.iter().find_map(|rule| {
+        let prefix = rule.key?;
+        key.starts_with(prefix).then_some(rule.retry)
+    })
 }
 
 /// Attempts at one address.
 #[derive(Debug, Default)]
-pub struct Tracker {
+pub(crate) struct Tracker {
     address: Option<String>,
     /// The player name the connection used.
     name: String,
@@ -112,24 +196,24 @@ pub struct Tracker {
 }
 /// A planned attempt.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Retry {
-    pub address: String,
-    pub name: String,
-    pub lan: bool,
-    pub at: Instant,
+pub(crate) struct Retry {
+    pub(crate) address: String,
+    pub(crate) name: String,
+    pub(crate) lan: bool,
+    at: Instant,
     /// 1-based, of `DELAYS.len()`.
-    pub attempt: usize,
+    attempt: usize,
 }
 impl Retry {
     /// Whole seconds left, rounded up.
-    pub fn seconds_left(&self, now: Instant) -> u64 {
+    pub(crate) fn seconds_left(&self, now: Instant) -> u64 {
         let left = self.at.saturating_duration_since(now);
         left.as_secs() + u64::from(left.subsec_nanos() > 0)
     }
-    pub fn due(&self, now: Instant) -> bool {
+    pub(crate) fn due(&self, now: Instant) -> bool {
         now >= self.at
     }
-    pub fn text(&self, now: Instant) -> String {
+    pub(crate) fn text(&self, now: Instant) -> String {
         format!(
             "Reconnecting in {} s (attempt {} of {})",
             self.seconds_left(now),
@@ -141,7 +225,7 @@ impl Retry {
 impl Tracker {
     /// A connection to `address` as `name` starts: a new address starts
     /// counting anew.
-    pub fn connecting(&mut self, address: &str, name: &str, lan: bool) {
+    pub(crate) fn connecting(&mut self, address: &str, name: &str, lan: bool) {
         if self.address.as_deref() != Some(address) {
             self.address = Some(address.to_owned());
             self.attempts = 0;
@@ -151,16 +235,16 @@ impl Tracker {
         self.joined = None;
     }
     /// The server let the player in.
-    pub fn joined(&mut self, now: Instant) {
+    pub(crate) fn joined(&mut self, now: Instant) {
         self.joined = Some(now);
     }
     /// The player left on purpose, or cancelled: nothing to retry.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }
     /// The connection ended: the next attempt, or None (not allowed, or
     /// out of attempts).
-    pub fn ended(
+    pub(crate) fn ended(
         &mut self,
         reason: &str,
         key: Option<&str>,
@@ -241,6 +325,18 @@ mod tests {
             true
         ));
         assert!(!allowed("Kicked for spamming", None, false));
+    }
+
+    #[test]
+    fn known_keys_decide_before_text_and_refusals_beat_retry_keywords() {
+        let reason = "Banned during a server restart";
+        assert!(allowed(
+            reason,
+            Some("multiplayer.disconnect.server_shutdown"),
+            true,
+        ));
+        assert!(!allowed(reason, None, true));
+        assert!(allowed("Server closed", Some("unknown.disconnect"), true));
     }
 
     #[test]

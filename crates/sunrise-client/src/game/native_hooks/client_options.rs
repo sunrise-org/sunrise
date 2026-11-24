@@ -35,13 +35,18 @@ impl Game<'_> {
         let framebuffer = self
             .window
             .as_ref()
-            .and(self.renderer.as_ref())
-            .map(|r| [r.config.width, r.config.height]);
+            .and_then(|_| self.renderer_framebuffer());
         resolved_gui_scale(
             framebuffer,
             self.settings.gui_scale,
             self.settings.force_unicode,
         )
+    }
+    /// `Window.getWidth` and `getHeight`: the window's framebuffer pixels, the size
+    /// `window_resize` reports; none on a server or when no window exists.
+    pub(in crate::game) fn window_size(&self) -> Option<[u32; 2]> {
+        let size = self.window.as_ref()?.inner_size();
+        Some([size.width, size.height])
     }
     /// A snapshot of the current chat preferences.
     pub(in crate::game) fn chat_options(&self) -> ClientChatOptions {
@@ -65,6 +70,23 @@ impl Game<'_> {
             master_volume: self.settings.master_volume as f32,
         }
     }
+    /// Whether a shader pack is currently loaded and active (`IrisApi.isShaderPackInUse()`).
+    /// Returns `false` while the panorama shows (the title screen, waiting on a server, or a
+    /// screen that asks for it) even if a loaded pack remains cached, matching the renderer,
+    /// which suppresses the pack whenever `frame.title` is set.
+    pub(in crate::game) fn shader_pack_active(&self) -> bool {
+        shader_pack_in_use(
+            self.shows_panorama(),
+            self.renderer.as_ref().and_then(|r| r.shader_pack_kind()),
+        )
+    }
+}
+
+/// Pure lifecycle rule for [`Game::shader_pack_active`]: a loaded pack is inactive while the
+/// panorama shows (the renderer suppresses it via `!frame.title` rather than dropping it when
+/// leaving a world).
+fn shader_pack_in_use(on_title_screen: bool, loaded_pack: Option<&str>) -> bool {
+    !on_title_screen && loaded_pack.is_some()
 }
 
 /// Convert live client settings into the API-owned GUI snapshot.
@@ -80,6 +102,9 @@ fn gui_options_snapshot(s: &sunrise_client::settings::Settings) -> ClientGuiOpti
         notification_display_time: s.notification_display_time as f32,
         text_background_opacity: s.text_background_opacity as f32,
         menu_blur: s.menu_blur,
+        screen_effect_scale: s.file.double("screenEffectScale") as f32,
+        // The factor the engine's own hurt tilt reads (`fov.rs`, `bob_hurt`).
+        damage_tilt_strength: s.file.double("damageTiltStrength"),
     }
 }
 
@@ -104,6 +129,28 @@ mod tests {
             assert_eq!(
                 gui_options_snapshot(&settings).advanced_item_tooltips,
                 enabled
+            );
+        }
+        settings.file.set(
+            "screenEffectScale",
+            sunrise_client::options_file::V::Double(0.25),
+        );
+        assert_eq!(gui_options_snapshot(&settings).screen_effect_scale, 0.25);
+    }
+
+    /// The snapshot carries the Damage Tilt option as the player sets it, off and full included.
+    #[test]
+    fn gui_snapshot_follows_the_damage_tilt_option() {
+        let mut settings = sunrise_client::settings::Settings::default();
+        assert_eq!(gui_options_snapshot(&settings).damage_tilt_strength, 1.0);
+        for strength in [0.0, 0.35, 1.0] {
+            settings.file.set(
+                "damageTiltStrength",
+                sunrise_client::options_file::V::Double(strength),
+            );
+            assert_eq!(
+                gui_options_snapshot(&settings).damage_tilt_strength,
+                strength
             );
         }
     }
@@ -134,5 +181,13 @@ mod tests {
     fn gui_scale_needs_a_window() {
         assert_eq!(resolved_gui_scale(None, 0, false), None);
         assert_eq!(resolved_gui_scale(None, 4, true), None);
+    }
+
+    #[test]
+    fn shader_pack_active_is_false_on_title_screen_even_when_pack_remains_loaded() {
+        assert!(!shader_pack_in_use(false, None));
+        assert!(!shader_pack_in_use(true, None));
+        assert!(!shader_pack_in_use(true, Some("iris")));
+        assert!(shader_pack_in_use(false, Some("iris")));
     }
 }

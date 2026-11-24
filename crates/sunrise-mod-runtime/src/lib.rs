@@ -1,20 +1,11 @@
 //! Engine-independent storage and registration machinery shared by the game and mod API.
 
-/// Longest production guest-call budget, in milliseconds (one epoch tick is about 1 ms).
-/// Payload ingress deadlines must exceed this so a load call cannot exhaust a queued payload.
-pub const MAX_GUEST_CALL_BUDGET_MILLIS: u64 = 30_000;
-
-/// Longest general entity type key (`mod:name`), in bytes: what registration accepts is what the
-/// spawn that introduces a row to a client (`sunrise:general_entity`) can carry.
-pub const MAX_GENERAL_ENTITY_KEY: usize = 256;
-
 pub mod attachments;
 pub mod byte_channel;
 /// A level's capability generations, which kept capabilities compare (#3446).
 pub mod capability_generations;
-pub mod dispatch_failures;
-/// Action-local ownership and ordered consumption of pending spawn outputs.
-pub mod pending_children;
+/// Authoritative list of engine-owned `sunrise:` custom-payload channels.
+pub mod engine_channels;
 /// Load-owned registry names and numeric slots, without game or API key types.
 pub mod registry_keys;
 

@@ -18,7 +18,7 @@ again restores vanilla's behaviour completely.
 | Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs`, `game/interface/extras/sorting.rs` |
 | Sort order and its clicks | `crates/sunrise-client/src/inv_sort.rs` (pure, unit tested) |
 | The music page's rows, and the pools it filters | `options_ui.rs` (`Page::Music`), `crates/sunrise-client/src/music.rs` (`track_groups`, `MusicManager::set_off`), `sound_events.rs` (`sound_except`) |
-| The settings page | `options_ui.rs` (`Page::Extras`): **Options → Sunrise Settings... → Extras...**; fullbright, dynamic lights and hiding block-break particles are on the graphics screen's Quality page instead (`graphics_ui.rs`, **Options → Video Settings...**) |
+| The settings page | `options_ui.rs` (`Page::Extras`): **Options → Sunrise Settings... → Extras...**; fullbright, dynamic lights and hiding block-break particles are on the graphics screen's Quality page instead (`graphics_ui.rs`, **Options → Sunrise Settings... → Extras... → Sunrise Graphics...**) |
 
 The settings are grouped by extra, under a header each, one to a row, and the strip
 under the list says what the row in focus or under the pointer does. An
@@ -71,6 +71,13 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
   lightmap as usual. The light doesn't stop at walls.
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
   nothing measurable (numbers in the pull request, #814).
+
+### Mod audio streams (`modAudioStreams`, default on)
+- Mods can play audio by supplying a native source to `ClientHost::open_audio_stream`
+  ([the how-to](modding/src/how-to/client/audio-streams.md)).
+  Off, the mixer still consumes each stream's audio at its own pace, but none of it is heard.
+- The one extra that is on by default; its line is written to `sunrise-extras.txt` only while it is off. It lives in
+  `crates/sunrise-official/src/mod_audio.rs` and sets the engine's mod-stream gain (`sunrise_platform::sound`).
 
 ### Moved to native mods
 
@@ -172,6 +179,15 @@ and the container screen tests are unchanged).
 - Done with ordinary left clicks planned by `inv_sort::plan`, so a vanilla
   server accepts it; a unit test replays the planned clicks through the menu
   engine on random chests.
+
+### Shader pack key (`shaderPackKey`, `K` by default; `lastShaderPack`, none picked)
+
+- The Extras page's key for the Shader Packs pick: press it and the running pack turns off, press it again and
+  the same pack runs again. Click the row, then press a key to rebind it (Escape unbinds); it is not a vanilla
+  key binding, so it never collides with one (Replay Studio keeps physical `K` for its camera keyframe).
+- Turning off writes the pick to `lastShaderPack`, so the pack stays off across restarts until the key is
+  pressed again. The menu's second click on the picked pack does the same through the same pick.
+- A pack whose owning mod is off can't run: the key reports that instead of claiming it turned on.
 
 ### Smooth chat (`chatAnimation`, default off; `chatIndicator`, default on)
 - A new chat line slides in from the left while it fades in over a quarter of

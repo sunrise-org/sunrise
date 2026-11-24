@@ -55,7 +55,10 @@ fn lowering_cauldron_by_bottle_posts_block_change_without_source() {
         game.world.set(2, 4, 3, water).unwrap();
         *game.held_mut() = Some(ItemStack::new("minecraft:glass_bottle", 1));
         super::sculk::TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
-        assert!(game.use_on_cauldron([2, 4, 3]).unwrap());
+        assert_eq!(
+            game.use_on_cauldron([2, 4, 3]).unwrap(),
+            sunrise_client::cauldron::Outcome::Success
+        );
         super::sculk::TEST_POSTED_EVENTS.with(|events| {
             assert!(events.borrow().as_ref().unwrap().contains(&(
                 "minecraft:block_change",
@@ -202,7 +205,9 @@ fn a_landing_posts_the_block_game_event_its_rule_posts() {
     let land = |game: &mut Game<'_>, state| {
         let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 5.0, 3.5)).unwrap();
         {
+            let side = game_side!(game);
             let mut world = MotionWorld {
+                side: &side,
                 entities: &[],
                 player: &mut player,
                 scene: &mut game.world,
@@ -292,7 +297,11 @@ fn a_cauldron_use_posts_its_fluid_event_after_the_sound() {
         game.world.set(2, 4, 3, cauldron).unwrap();
         *game.held_mut() = Some(held);
         super::sculk::TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
-        assert!(game.use_on_cauldron([2, 4, 3]).unwrap(), "the use acts");
+        assert_eq!(
+            game.use_on_cauldron([2, 4, 3]).unwrap(),
+            sunrise_client::cauldron::Outcome::Success,
+            "the use acts"
+        );
         super::sculk::TEST_POSTED_EVENTS.with(|events| events.borrow_mut().take().unwrap())
     }
     let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());

@@ -51,6 +51,66 @@ impl Installed {
             .min_by_key(|(order, ..)| *order)
             .map(|(_, kind, hook)| (kind, hook))
     }
+
+    /// The first synced attachment declared by `owner` (in sorted `namespace:name` order).
+    pub(crate) fn first_synced_attachment(&self, owner: &str) -> Option<String> {
+        self.synced_attachments(owner).into_iter().next()
+    }
+
+    /// All synced attachments declared by `owner`, in sorted `namespace:name` order.
+    pub(crate) fn synced_attachments(&self, owner: &str) -> Vec<String> {
+        let mut attachments: Vec<_> = self
+            .attachment_types
+            .values()
+            .flat_map(|types| types.values())
+            .filter(|record| record.owner() == owner && record.is_synced())
+            .map(|record| record.id().to_owned())
+            .collect();
+        attachments.sort_unstable();
+        attachments
+    }
+
+    /// Every client-required declaration registered by `owner` during `Hooks::register`,
+    /// paired with its display kind. Both `side = "server"` declarers and `side = "both"`
+    /// hosts declaring into a `side = "server"` served package's namespace are checked
+    /// against this single list.
+    pub(crate) fn client_required_declarations(&self, owner: &str) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        for declaration in &self.general_entity_types {
+            if declaration.mod_id == owner {
+                out.push(("entity type", declaration.id.clone()));
+            }
+        }
+        for declaration in &self.attributes {
+            if declaration.mod_id == owner {
+                out.push(("attribute", declaration.id.clone()));
+            }
+        }
+        for widening in &self.attribute_widenings {
+            if widening.mod_id == owner {
+                out.push(("attribute", widening.id.clone()));
+            }
+        }
+        for (id, declarer) in self.custom_stats.iter().zip(&self.custom_stat_owners) {
+            if *declarer == owner {
+                out.push(("custom stat", id.clone()));
+            }
+        }
+        for attachment in self.synced_attachments(owner) {
+            out.push(("synced attachment", attachment));
+        }
+        for declaration in &self.datapack_registries {
+            if declaration.mod_id == owner {
+                out.push(("datapack registry", declaration.key.clone()));
+            }
+        }
+        if let Some(payloads) = self.keys.payloads.as_ref() {
+            for channel in payloads.client_bound_channels(owner) {
+                out.push(("payload", channel.to_owned()));
+            }
+        }
+        out
+    }
 }
 
 impl Payloads {
@@ -68,5 +128,23 @@ impl Payloads {
             })
             .map(|(channel, _)| channel.as_str())
             .min()
+    }
+
+    /// All required channels `owner` declared that the server sends to clients, in channel order.
+    pub(crate) fn client_bound_channels(&self, owner: &str) -> Vec<&str> {
+        let mut channels: Vec<&str> = self
+            .phases
+            .iter()
+            .flat_map(|phase| phase.iter())
+            .filter(|(_, entry)| {
+                let declaration = &entry.declaration;
+                entry.owner == owner
+                    && !declaration.optional
+                    && declaration.direction != PayloadDirection::ToServer
+            })
+            .map(|(channel, _)| channel.as_str())
+            .collect();
+        channels.sort_unstable();
+        channels
     }
 }

@@ -5,7 +5,7 @@ name: modding-book-pages
 on:
   push:
     branches: [main]
-    paths: ["docs/modding/**", "crates/sunrise-mod-api/**", "crates/sunrise-mod-api-gen/**", "xtask/**", "tools/*modding*", "tests/test_modding_*.py"]
+    paths: ["docs/modding/**", "crates/sunrise-mod-api/**", "crates/sunrise-mod-api-gen/**", "crates/sunrise-stage/**", "xtask/**", "tools/*modding*", "tests/test_modding_*.py"]
   workflow_dispatch:
 permissions:
   contents: read

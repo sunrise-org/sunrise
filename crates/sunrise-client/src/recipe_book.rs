@@ -22,12 +22,11 @@ mod mod_index;
 pub mod mod_presentation;
 mod placement_codec;
 pub mod placement_sync;
-mod resource_id;
 pub mod settings_codec;
 pub mod settings_connection;
 pub mod settings_sync;
 pub mod slot_layout;
-pub use custom_books::{BookError, BookFlags, CustomBooks, read_saved};
+pub use custom_books::{BookFlags, CustomBooks};
 pub use mod_index::{DisplayLoadError, DisplayResources, ModBookIndex, ModBookPanel};
 
 /// `RecipeBookType`: the menus with a recipe book and their own settings.
@@ -510,74 +509,7 @@ impl Book {
         fuel_empty: bool,
         items: &crate::items::Items,
     ) -> Vec<GhostSlot> {
-        let stacks = |ingredient: &Ingredient| -> Vec<ItemStack> {
-            ingredient.shown.clone().unwrap_or_else(|| {
-                self.items_of(ingredient)
-                    .iter()
-                    .map(|i| ItemStack::new(i, 1))
-                    .collect()
-            })
-        };
-        let mut out = Vec::new();
-        match book_type {
-            BookType::Crafting => {
-                out.push(GhostSlot {
-                    target: GhostTarget::Result,
-                    items: entry.results().to_vec(),
-                });
-                let requirements = entry.requirements();
-                for (ingredient, index) in entry.grid_cells(grid, grid) {
-                    let Some(i) = ingredient else { continue };
-                    let list = match entry.stacks.iter().find(|s| s.0 == i) {
-                        Some(shown) => shown.1.clone(),
-                        None => stacks(requirements[i]),
-                    };
-                    if !list.is_empty() {
-                        out.push(GhostSlot {
-                            target: GhostTarget::Grid(index),
-                            items: list,
-                        });
-                    }
-                }
-            }
-            _ => {
-                out.push(GhostSlot {
-                    target: GhostTarget::Result,
-                    items: entry.results().to_vec(),
-                });
-                if let Display::Furnace(ingredient) = &entry.display {
-                    out.push(GhostSlot {
-                        target: GhostTarget::Input,
-                        items: stacks(ingredient),
-                    });
-                    if fuel_empty {
-                        // `SlotDisplay.AnyFuel`: every item with a cooking fuel
-                        // component, the registry's component lookup listing the
-                        // items of one component value together, the values in
-                        // the order of their first item.
-                        let mut groups: Vec<(String, Vec<ItemStack>)> = Vec::new();
-                        for item in &items.registry_order {
-                            let Some(fuel) = items.get(item).and_then(|i| i.fuel.as_ref()) else {
-                                continue;
-                            };
-                            let key = format!("{fuel:?}");
-                            match groups.iter_mut().find(|g| g.0 == key) {
-                                Some(group) => group.1.push(ItemStack::new(item, 1)),
-                                None => groups.push((key, vec![ItemStack::new(item, 1)])),
-                            }
-                        }
-                        let fuels = groups.into_iter().flat_map(|g| g.1).collect();
-                        out.push(GhostSlot {
-                            target: GhostTarget::Fuel,
-                            items: fuels,
-                        });
-                    }
-                }
-            }
-        }
-        // `GhostSlots.setSlot` keeps only slots with something to show.
-        out.retain(|g| !g.items.is_empty());
-        out
+        ghost_of_entry(entry, book_type, grid, fuel_empty, items)
     }
     /// The recipe-book search tree (`SessionSearchTrees.updateRecipes`, a
     /// `FullTextSearchTree`): without a colon the text must occur in a
@@ -712,11 +644,12 @@ impl ClientBook {
     }
 }
 
-/// How a server's packet names things: an item by its registry id, a recipe
-/// book category by its id, and the items of a tag.
+/// How a server's packet names items, recipe book categories, data components,
+/// and the items of a tag.
 pub struct PacketNames<'a> {
     pub item: &'a dyn Fn(i32) -> Option<String>,
     pub category: &'a dyn Fn(i32) -> Option<String>,
+    pub component: &'a dyn Fn(i32) -> Option<String>,
     pub tag: &'a dyn Fn(&str) -> Vec<String>,
 }
 impl PacketNames<'_> {
@@ -726,32 +659,87 @@ impl PacketNames<'_> {
             HolderSet::Items(ids) => ids.iter().filter_map(|&id| (self.item)(id)).collect(),
         }
     }
-    /// The stacks a slot display shows, in order (`SlotDisplay.resolveForStacks`):
-    /// what a display builds from a component or a dye is not reproduced, it
-    /// shows its source.
-    fn stacks(&self, display: &SlotDisplay, out: &mut Vec<ItemStack>) {
+    /// The stacks a slot display shows, in order. Packet ghosts have item definitions
+    /// for `SlotDisplay.OnlyWithComponent.resolve`; ID-only previews keep the source.
+    fn stacks(
+        &self,
+        display: &SlotDisplay,
+        out: &mut Vec<ItemStack>,
+        decode_stack: &impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
+        ghost_items: Option<&Items>,
+    ) {
         match display {
-            SlotDisplay::Empty | SlotDisplay::AnyFuel => {}
+            SlotDisplay::Empty => {}
+            SlotDisplay::AnyFuel => {
+                if let Some(items) = ghost_items {
+                    out.extend(fuel_ghost_stacks(items));
+                }
+            }
             SlotDisplay::Item(id) => out.extend((self.item)(*id).map(|n| ItemStack::new(&n, 1))),
-            SlotDisplay::ItemStack(stack) => out.extend(
-                (self.item)(stack.item).map(|n| ItemStack::new(&n, stack.count.max(1) as u32)),
-            ),
+            SlotDisplay::ItemStack(stack) => out.extend(decode_stack(stack)),
             SlotDisplay::Tag(set) => {
                 out.extend(self.holder_set(set).iter().map(|n| ItemStack::new(n, 1)))
             }
-            SlotDisplay::WithAnyPotion(source) | SlotDisplay::OnlyWithComponent(source, _) => {
-                self.stacks(source, out)
+            SlotDisplay::OnlyWithComponent(source, component) if let Some(items) = ghost_items => {
+                let Some(component) = (self.component)(*component) else {
+                    return;
+                };
+                let start = out.len();
+                self.stacks(source, out, decode_stack, ghost_items);
+                // Filter this source, not any earlier child of an enclosing composite.
+                out.extract_if(start.., |stack| {
+                    !stack.carries_component(items.get(&stack.item), &component)
+                })
+                .for_each(drop);
             }
-            SlotDisplay::Dyed { target, .. } => self.stacks(target, out),
-            SlotDisplay::SmithingTrim { base, .. } => self.stacks(base, out),
-            SlotDisplay::WithRemainder { input, .. } => self.stacks(input, out),
-            SlotDisplay::Composite(list) => list.iter().for_each(|d| self.stacks(d, out)),
+            SlotDisplay::WithAnyPotion(source) | SlotDisplay::OnlyWithComponent(source, _) => {
+                self.stacks(source, out, decode_stack, ghost_items)
+            }
+            SlotDisplay::Dyed { target, .. } => self.stacks(target, out, decode_stack, ghost_items),
+            SlotDisplay::SmithingTrim { base, .. } => {
+                self.stacks(base, out, decode_stack, ghost_items)
+            }
+            SlotDisplay::WithRemainder { input, .. } => {
+                self.stacks(input, out, decode_stack, ghost_items)
+            }
+            SlotDisplay::Composite(list) => list
+                .iter()
+                .for_each(|d| self.stacks(d, out, decode_stack, ghost_items)),
         }
     }
+    /// The stonecutter list a server sent (`SelectableRecipe.SingleInputSet`s), as recipes in its
+    /// order: the menu lists and numbers its buttons by it. An item this client's registry
+    /// lacks keeps its entry's place, so the numbers stay the server's.
+    pub fn stonecutting(
+        &self,
+        sent: &[(HolderSet, SlotDisplay)],
+        decode_stack: impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
+    ) -> Vec<crate::stations::Stonecutting> {
+        sent.iter()
+            .enumerate()
+            .map(|(index, (input, result))| {
+                let mut shown = Vec::new();
+                self.stacks(result, &mut shown, &decode_stack, None);
+                crate::stations::Stonecutting {
+                    id: format!("server:{index}"),
+                    input: Ingredient::of(self.holder_set(input)),
+                    result: shown
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| ItemStack::new("minecraft:air", 1)),
+                }
+            })
+            .collect()
+    }
+    /// A recipe-book preview without item contents (the book filters by item ID).
+    fn bare_stack(&self, stack: &sunrise_protocol::item::Stack) -> Option<ItemStack> {
+        (self.item)(stack.item).map(|name| ItemStack::new(&name, stack.count.max(1) as u32))
+    }
+
     /// A slot display as an ingredient: the items it shows, without repeats.
     fn ingredient(&self, display: &SlotDisplay) -> Ingredient {
         let mut stacks = Vec::new();
-        self.stacks(display, &mut stacks);
+        self.stacks(display, &mut stacks, &|stack| self.bare_stack(stack), None);
         let mut items: Vec<String> = Vec::new();
         for stack in stacks {
             if !items.iter().any(|i| **i == *stack.item) {
@@ -759,6 +747,267 @@ impl PacketNames<'_> {
             }
         }
         Ingredient::of(items)
+    }
+
+    /// Project a wire `RecipeDisplay` into the recipe book's own display and
+    /// result stacks for `ClientboundRecipeBookAddPacket`.
+    fn display_entry(
+        &self,
+        display: &RecipeDisplay,
+    ) -> Option<(Display, ItemStack, Vec<ItemStack>)> {
+        let (display, result) = match display {
+            RecipeDisplay::Shapeless {
+                ingredients,
+                result,
+                ..
+            } => (
+                Display::Shapeless(ingredients.iter().map(|d| self.ingredient(d)).collect()),
+                result,
+            ),
+            RecipeDisplay::Shaped {
+                width,
+                height,
+                ingredients,
+                result,
+                ..
+            } => (
+                Display::Shaped {
+                    width: usize::try_from(*width).ok()?,
+                    height: usize::try_from(*height).ok()?,
+                    cells: ingredients
+                        .iter()
+                        .map(|d| (!matches!(d, SlotDisplay::Empty)).then(|| self.ingredient(d)))
+                        .collect(),
+                },
+                result,
+            ),
+            RecipeDisplay::Furnace {
+                ingredient, result, ..
+            } => (Display::Furnace(self.ingredient(ingredient)), result),
+            RecipeDisplay::Stonecutter { .. } | RecipeDisplay::Smithing { .. } => return None,
+        };
+        let mut results = Vec::new();
+        self.stacks(result, &mut results, &|stack| self.bare_stack(stack), None);
+        let first = results.first()?.clone();
+        let variants = if results.len() > 1 {
+            results
+        } else {
+            Vec::new()
+        };
+        Some((display, first, variants))
+    }
+}
+
+fn ghost_of_entry(
+    entry: &Entry,
+    book_type: BookType,
+    grid: usize,
+    fuel_empty: bool,
+    items: &crate::items::Items,
+) -> Vec<GhostSlot> {
+    let stacks = |ingredient: &Ingredient| -> Vec<ItemStack> {
+        ingredient.shown.clone().unwrap_or_else(|| {
+            ingredient
+                .order
+                .iter()
+                .map(|i| ItemStack::new(i, 1))
+                .collect()
+        })
+    };
+    let mut out = Vec::new();
+    match book_type {
+        BookType::Crafting => {
+            out.push(GhostSlot {
+                target: GhostTarget::Result,
+                items: entry.results().to_vec(),
+            });
+            if matches!(
+                entry.display,
+                Display::Shaped { .. } | Display::Shapeless(_)
+            ) {
+                let requirements = entry.requirements();
+                for (ingredient, index) in entry.grid_cells(grid, grid) {
+                    let Some(i) = ingredient else { continue };
+                    let list = match entry.stacks.iter().find(|s| s.0 == i) {
+                        Some(shown) => shown.1.clone(),
+                        None => stacks(requirements[i]),
+                    };
+                    if !list.is_empty() {
+                        out.push(GhostSlot {
+                            target: GhostTarget::Grid(index),
+                            items: list,
+                        });
+                    }
+                }
+            }
+        }
+        _ => {
+            out.push(GhostSlot {
+                target: GhostTarget::Result,
+                items: entry.results().to_vec(),
+            });
+            if let Display::Furnace(ingredient) = &entry.display {
+                out.push(GhostSlot {
+                    target: GhostTarget::Input,
+                    items: stacks(ingredient),
+                });
+                if fuel_empty {
+                    out.push(GhostSlot {
+                        target: GhostTarget::Fuel,
+                        items: fuel_ghost_stacks(items),
+                    });
+                }
+            }
+        }
+    }
+    // `GhostSlots.setSlot` keeps only slots with something to show.
+    out.retain(|g| !g.items.is_empty());
+    out
+}
+
+/// `SlotDisplay.AnyFuel`: the component lookup groups items of the same cooking fuel value
+/// together, in the order of the first item for each value.
+fn fuel_ghost_stacks(items: &Items) -> Vec<ItemStack> {
+    let mut groups: Vec<(String, Vec<ItemStack>)> = Vec::new();
+    for item in &items.registry_order {
+        let Some(fuel) = items.get(item).and_then(|i| i.fuel.as_ref()) else {
+            continue;
+        };
+        let key = format!("{fuel:?}");
+        match groups.iter_mut().find(|g| g.0 == key) {
+            Some(group) => group.1.push(ItemStack::new(item, 1)),
+            None => groups.push((key, vec![ItemStack::new(item, 1)])),
+        }
+    }
+    groups.into_iter().flat_map(|g| g.1).collect()
+}
+
+/// `CraftingRecipeBookComponent` / `FurnaceRecipeBookComponent.fillGhostRecipe`:
+/// each slot resolves independently from the selected server display.
+pub fn ghost_from_display(
+    display: &RecipeDisplay,
+    names: &PacketNames,
+    book_type: BookType,
+    grid: usize,
+    fuel_empty: bool,
+    items: &Items,
+    decode_stack: impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
+) -> Vec<GhostSlot> {
+    let mut out = Vec::new();
+    let mut show = |target, display: &SlotDisplay| {
+        let mut stacks = Vec::new();
+        names.stacks(display, &mut stacks, &decode_stack, Some(items));
+        stacks.retain(|stack| stack.count != 0 && stack.item.as_ref() != "minecraft:air");
+        if !stacks.is_empty() {
+            out.push(GhostSlot {
+                target,
+                items: stacks,
+            });
+        }
+    };
+    show(GhostTarget::Result, display.result());
+    match (book_type, display) {
+        (
+            BookType::Crafting,
+            RecipeDisplay::Shaped {
+                width,
+                height,
+                ingredients,
+                ..
+            },
+        ) => {
+            if let (Ok(width), Ok(height)) = (usize::try_from(*width), usize::try_from(*height))
+                && width <= grid
+                && height <= grid
+            {
+                let cells: Vec<_> = ingredients.iter().collect();
+                for (slot, index) in place_cells(grid, grid, width, height, &cells) {
+                    show(GhostTarget::Grid(index), slot);
+                }
+            }
+        }
+        (BookType::Crafting, RecipeDisplay::Shapeless { ingredients, .. }) => {
+            for (index, slot) in ingredients.iter().take(grid * grid).enumerate() {
+                show(GhostTarget::Grid(index), slot);
+            }
+        }
+        (
+            BookType::Furnace | BookType::BlastFurnace | BookType::Smoker,
+            RecipeDisplay::Furnace {
+                ingredient, fuel, ..
+            },
+        ) => {
+            show(GhostTarget::Input, ingredient);
+            if fuel_empty {
+                show(GhostTarget::Fuel, fuel);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+#[cfg(test)]
+#[test]
+fn furnace_ghost_uses_independent_packet_slots_and_the_specific_fuel() {
+    use sunrise_protocol::item::{Stack, persistent::builtin_component_id};
+
+    let fuel_component = "minecraft:cooking_fuel";
+    let fuel_id = builtin_component_id(fuel_component).unwrap();
+    let display = RecipeDisplay::Furnace {
+        ingredient: SlotDisplay::Item(1),
+        fuel: SlotDisplay::OnlyWithComponent(
+            Box::new(SlotDisplay::Composite(vec![
+                SlotDisplay::ItemStack(Stack::new(2, 1)),
+                SlotDisplay::Item(4),
+            ])),
+            fuel_id,
+        ),
+        result: SlotDisplay::Item(3), // Not resolvable by this client's registry.
+        station: SlotDisplay::Empty,
+        duration: 200,
+        experience: 0.0,
+    };
+    let names = PacketNames {
+        item: &|id| match id {
+            1 => Some("minecraft:iron_ore".into()),
+            2 => Some("minecraft:charcoal".into()),
+            4 => Some("minecraft:iron_ingot".into()),
+            _ => None,
+        },
+        category: &|_| None,
+        component: &|id| (id == fuel_id).then(|| fuel_component.into()),
+        tag: &|_| Vec::new(),
+    };
+    let mut charcoal = ItemStack::new("minecraft:charcoal", 1);
+    charcoal.data_mut().set_loot_component(
+        fuel_component,
+        &Some(Tag::compound([
+            ("burn_time", Tag::Int(1)),
+            ("speed_multiplier", Tag::Float(1.0_f32.to_bits())),
+        ])),
+    );
+    for fuel_empty in [false, true] {
+        let ghosts = ghost_from_display(
+            &display,
+            &names,
+            BookType::Furnace,
+            1,
+            fuel_empty,
+            &Items::empty(),
+            |stack| (stack.item == 2).then(|| charcoal.clone()),
+        );
+        let shown: Vec<_> = ghosts
+            .iter()
+            .map(|ghost| (ghost.target, ghost.items.as_slice()))
+            .collect();
+        let input = [ItemStack::new("minecraft:iron_ore", 1)];
+        let fuel = [charcoal.clone()];
+        let mut expected = vec![(GhostTarget::Input, input.as_slice())];
+        if fuel_empty {
+            expected.push((GhostTarget::Fuel, fuel.as_slice()));
+        }
+        assert_eq!(shown, expected);
     }
 }
 
@@ -784,45 +1033,7 @@ pub fn entry_from_packet(e: &RecipeBookEntry, names: &PacketNames) -> FromPacket
 }
 fn shown(e: &RecipeBookEntry, names: &PacketNames, category_name: &str) -> Option<FromPacket> {
     let category = Category::from_name(category_name)?;
-    let (display, result) = match &e.display {
-        RecipeDisplay::Shapeless {
-            ingredients,
-            result,
-            ..
-        } => (
-            Display::Shapeless(ingredients.iter().map(|d| names.ingredient(d)).collect()),
-            result,
-        ),
-        RecipeDisplay::Shaped {
-            width,
-            height,
-            ingredients,
-            result,
-            ..
-        } => (
-            Display::Shaped {
-                width: usize::try_from(*width).ok()?,
-                height: usize::try_from(*height).ok()?,
-                cells: ingredients
-                    .iter()
-                    .map(|d| (!matches!(d, SlotDisplay::Empty)).then(|| names.ingredient(d)))
-                    .collect(),
-            },
-            result,
-        ),
-        RecipeDisplay::Furnace {
-            ingredient, result, ..
-        } => (Display::Furnace(names.ingredient(ingredient)), result),
-        RecipeDisplay::Stonecutter { .. } | RecipeDisplay::Smithing { .. } => return None,
-    };
-    let mut results = Vec::new();
-    names.stacks(result, &mut results);
-    let first = results.first()?.clone();
-    let variants = if results.len() > 1 {
-        results
-    } else {
-        Vec::new()
-    };
+    let (display, first, variants) = names.display_entry(&e.display)?;
     let requirements = e.requirements.as_ref().map(|sets| {
         sets.iter()
             .map(|set| Ingredient::of(names.holder_set(set)))
@@ -1013,6 +1224,17 @@ pub struct RecipeIndex {
     recipes: std::collections::BTreeMap<String, Known>,
 }
 #[derive(Clone, Debug)]
+pub(crate) struct KnownEntry {
+    pub(crate) special: bool,
+    pub(crate) displays: usize,
+    /// `RecipeDisplay.craftingStation`: the workstation item of its displays.
+    pub(crate) station: &'static str,
+    /// `Recipe.showNotification`: unlocking it shows the `RecipeToast`.
+    pub(crate) notify: bool,
+    /// `result.id`, for the recipes the book doesn't list.
+    pub(crate) result: Option<String>,
+}
+#[derive(Clone, Debug)]
 struct Known {
     special: bool,
     displays: usize,
@@ -1059,31 +1281,71 @@ impl RecipeIndex {
         )
     }
 
-    /// Build book displays only from retained recipes with placement candidates.
+    /// Build book displays only from retained recipes with placement candidates,
+    /// using the metadata derived once during source decoding.
     pub(crate) fn from_recipes(recipes: &Recipes) -> Self {
-        Self::from_source_refs(recipes.by_type.values().flat_map(|entries| {
+        Self::from_known_entries(recipes.by_type.values().flat_map(|entries| {
             entries
                 .iter()
-                .filter(|entry| entry.has_placement_candidates())
-                .map(|entry| (entry.id.clone(), &*entry.json))
+                .filter_map(|entry| Some((entry.id.clone(), entry.book.clone()?)))
         }))
     }
 
-    pub(crate) fn from_serialized(recipes: &std::collections::BTreeMap<String, Box<str>>) -> Self {
-        let values: Vec<_> = recipes
-            .iter()
-            .filter_map(|(id, text)| serde_json::from_str(text).ok().map(|value| (id, value)))
+    /// Build book displays directly from the already-decoded resolved cohort,
+    /// sharing the exact same placement decision and display counts as `from_recipes`.
+    pub(crate) fn from_resolved(sources: &crate::crafting::ResolvedSources) -> Self {
+        Self::from_known_entries(sources.recipes.iter().filter_map(|recipe| {
+            Some((
+                crate::crafting::qualified(&recipe.name),
+                recipe.book_known()?,
+            ))
+        }))
+    }
+
+    pub(crate) fn from_known_entries(
+        entries: impl IntoIterator<Item = (String, KnownEntry)>,
+    ) -> Self {
+        let mut recipes: std::collections::BTreeMap<String, Known> = entries
+            .into_iter()
+            .map(|(id, entry)| {
+                (
+                    id,
+                    Known {
+                        special: entry.special,
+                        displays: entry.displays,
+                        first_display: 0,
+                        station: entry.station,
+                        notify: entry.notify,
+                        result: entry.result,
+                    },
+                )
+            })
             .collect();
-        Self::from_source_refs(values.iter().map(|(id, value)| ((*id).clone(), value)))
+        // RecipeManager.unpackRecipeInfo numbers the displays in registration
+        // order (path, then namespace), not in the order of the ids' text.
+        let mut order: Vec<_> = recipes
+            .iter_mut()
+            .map(|(id, r)| (crate::crafting::registration_key(id), r))
+            .collect();
+        order.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut next = 0;
+        for (_, r) in order {
+            r.first_display = next;
+            next += r.displays as i32;
+        }
+        Self { recipes }
     }
 
     fn from_source_refs<'a>(
         sources: impl IntoIterator<Item = (String, &'a serde_json::Value)>,
     ) -> Self {
-        let mut recipes = std::collections::BTreeMap::new();
-        let mut insert = |id: String, v: &serde_json::Value| {
+        Self::from_known_entries(sources.into_iter().filter_map(|(id, v)| {
+            if !Ingredient::validate_persistence(v, &id) {
+                return None;
+            }
             let kind = v["type"].as_str().unwrap_or_default();
-            let special = mod_api::__private::parts_installation::crafting_recipe(kind).is_some()
+            let special = mod_api::__private::parts_installation::recipe_serializer(kind)
+                .is_some_and(|(recipe_type, _)| recipe_type == "minecraft:crafting")
                 || kind.starts_with("minecraft:crafting_special_")
                 || kind == "minecraft:crafting_decorated_pot"
                 // A brewing recipe has no recipe book display of its own
@@ -1099,34 +1361,17 @@ impl RecipeIndex {
             } else {
                 1
             };
-            recipes.insert(
+            Some((
                 id,
-                Known {
+                KnownEntry {
                     special,
                     displays,
-                    first_display: 0,
                     station: crafting_station(kind),
                     notify: v["show_notification"].as_bool().unwrap_or(true),
                     result: sunrise_world::loot::recipe_result_id(&v["result"]).map(str::to_owned),
                 },
-            );
-        };
-        for (id, value) in sources {
-            insert(id, value);
-        }
-        // RecipeManager.unpackRecipeInfo numbers the displays in registration
-        // order (path, then namespace), not in the order of the ids' text.
-        let mut order: Vec<_> = recipes
-            .iter_mut()
-            .map(|(id, r)| (crate::crafting::registration_key(id), r))
-            .collect();
-        order.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        let mut next = 0;
-        for (_, r) in order {
-            r.first_display = next;
-            next += r.displays as i32;
-        }
-        Self { recipes }
+            ))
+        }))
     }
     pub fn contains(&self, id: &str) -> bool {
         self.recipes.contains_key(id)
@@ -1968,6 +2213,7 @@ mod tests {
             &PacketNames {
                 item: &item_name,
                 category: &category_name,
+                component: &|_| None,
                 tag: &tags,
             },
         );
@@ -2013,6 +2259,7 @@ mod tests {
         PacketNames {
             item: &item_name,
             category: &category_name,
+            component: &|_| None,
             tag: tags,
         }
     }
@@ -2255,6 +2502,7 @@ mod tests {
             &PacketNames {
                 item: &item_name,
                 category: &no_category,
+                component: &|_| None,
                 tag: &tags,
             },
         );

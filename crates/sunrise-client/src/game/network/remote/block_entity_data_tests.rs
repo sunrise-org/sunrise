@@ -19,17 +19,15 @@ struct Observer(Seen);
 impl BlockPart for Observer {}
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Observer {
-    fn block_entity_data_received(
-        &self,
-        host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::BlockEntityDataReceivedEvent<'_>,
-    ) {
-        self.0.lock().unwrap().push((
-            event.source,
-            event.entity.position(host).unwrap(),
-            event.tag.clone(),
-            event.entity.data(host).unwrap(),
-        ));
+    fn block_entity_data_received(&self, event: &mut mod_api::BlockEntityDataReceivedEvent<'_>) {
+        let (pos, nbt) = event
+            .subject
+            .with_view(|view| (view.position(), view.nbt().clone()))
+            .expect("live resident client block entity");
+        self.0
+            .lock()
+            .unwrap()
+            .push((event.source, pos, event.tag.clone(), nbt));
     }
 }
 struct TestMod(Seen);
@@ -68,6 +66,7 @@ fn block_entity_data_received_after_merge() {
                 ]
                 .into(),
                 vec!["notice:counter".into(), "notice:silent".into()],
+                ["notice:counter".into(), "notice:silent".into()],
             ),
         )
         .unwrap();

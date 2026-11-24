@@ -7,6 +7,7 @@ use crate::{
     hud_layout::{GuiDraw, PoseOp, fill},
     text::Text,
 };
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 use sunrise_client_render::gfx::pack_timing::{Counters, DetailSupport, PartsMode, PassCounters};
 use sunrise_core::java_number;
@@ -59,7 +60,7 @@ pub struct Displayer {
     left: Vec<String>,
     right: Vec<String>,
     lines: Vec<String>,
-    groups: Vec<(&'static str, Vec<String>)>,
+    groups: Vec<(Cow<'static, str>, Vec<String>)>,
 }
 
 impl Displayer {
@@ -76,7 +77,12 @@ impl Displayer {
         self.lines.push(line.into());
     }
     /// `addToGroup`: lines kept together, groups in the order first added.
-    pub fn group(&mut self, group: &'static str, lines: impl IntoIterator<Item = String>) {
+    pub fn group(
+        &mut self,
+        group: impl Into<Cow<'static, str>>,
+        lines: impl IntoIterator<Item = String>,
+    ) {
+        let group = group.into();
         let index = match self.groups.iter().position(|(g, _)| *g == group) {
             Some(i) => i,
             None => {

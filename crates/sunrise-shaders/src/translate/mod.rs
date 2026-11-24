@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use naga::ShaderStage;
-use naga::front::glsl::{Frontend, Options};
+use naga::front::glsl::{Frontend, InterfaceLimits, Options};
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 use crate::Preprocessed;
@@ -161,13 +161,24 @@ pub struct GbuffersInputs {
     /// GLSL declarations: the vertex inputs and any bindings of set 1.
     pub declarations: String,
     /// GLSL statements that set `hz_Vertex`, `hz_Color`, `hz_MultiTexCoord0`,
-    /// `hz_MultiTexCoord1` and `hz_Normal` (the compatibility inputs), run first in `main`.
+    /// `hz_MultiTexCoord1` and `hz_Normal` (the compatibility inputs) for the vertex
+    /// `gl_VertexIndex` names, run before the pack's `main`. That one is `hz_vertex_index`
+    /// (a `uint`), as in the pack's code (its `gl_VertexID` and `gl_VertexIndex`).
     pub body: String,
     /// The value of each attribute a pack may declare (`mc_Entity`, `vaPosition`...), as a GLSL
-    /// expression of the declared type's size; an attribute not listed reads zero. Terrain
-    /// also supplies `mc_chunkFade`, an implicit float input rather than a declared attribute.
+    /// expression of the declared type's size; an attribute not listed reads zero. A listed
+    /// name the vertex stage reads without declaring it is given to the stage too (an implicit
+    /// input), when it is one of the game inputs a pack may read undeclared: terrain's
+    /// `mc_chunkFade`, and the core-profile vertex attributes (`vaPosition`, `vaColor`,
+    /// `vaUV0`, `vaUV1`, `vaUV2`, `vaNormal`).
     pub attributes: Vec<(String, String)>,
-    /// GLSL statements run last in `main`, with `gl_Position` in wgpu's clip space.
+    /// GLSL statements run last in `main`, with `gl_Position` in wgpu's clip space. They may
+    /// run the pack's vertex stage for another vertex: set `hz_vertex_index` and call
+    /// `hz_vertex()`, which runs `body`, the pack's `main` and leaves that vertex's
+    /// `gl_Position` in wgpu's clip space, and its outputs; so they call it for this vertex
+    /// last. Each run starts with the pack's globals as the first did. Only where
+    /// `hz_vertex_reruns` (a constant): a stage that writes an image or a buffer would write
+    /// again, and isn't run twice; one that only reads them is.
     pub after: String,
     /// The alpha test applied to output 0 (`gl_FragData[0]`, `gl_FragColor`), the loader's
     /// (3.2 `alphaTest.<program>`): `None` keeps every fragment. With `parts`, solid terrain's.
@@ -244,35 +255,46 @@ impl AlphaTest {
     }
 }
 
-/// Translates a composite-style program (`composite`, `deferred`, `final`...).
+/// Translates a composite-style program (`composite`, `deferred`, `final`...), for a device with
+/// `limits` (the stage interface's, [`InterfaceLimits`]).
 pub fn translate_composite(
     vertex: &Preprocessed,
     fragment: &Preprocessed,
     target: Target,
+    limits: InterfaceLimits,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, target, None, false)
+    translate(vertex, fragment, target, None, false, limits)
 }
 
 /// Translates a gbuffers-style program (`gbuffers_terrain`...) drawing the game's geometry
-/// described by `inputs`, into `target` (the pack's buffers).
+/// described by `inputs`, into `target` (the pack's buffers), for a device with `limits`.
 pub fn translate_gbuffers(
     vertex: &Preprocessed,
     fragment: &Preprocessed,
     target: Target,
     inputs: &GbuffersInputs,
+    limits: InterfaceLimits,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, target, Some(inputs), false)
+    translate(vertex, fragment, target, Some(inputs), false, limits)
 }
 
 /// Translates a shadow program (`shadow`, `shadow_water`...) drawing the game's geometry
 /// described by `inputs` from the shadow light: its model-view and projection matrices are the
-/// shadow camera's (5.2).
+/// shadow camera's (5.2), for a device with `limits`.
 pub fn translate_shadow(
     vertex: &Preprocessed,
     fragment: &Preprocessed,
     inputs: &GbuffersInputs,
+    limits: InterfaceLimits,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, Target::Buffers, Some(inputs), true)
+    translate(
+        vertex,
+        fragment,
+        Target::Buffers,
+        Some(inputs),
+        true,
+        limits,
+    )
 }
 
 /// The matrices of the compatibility profile in a gbuffers-style program, from the frame's.
@@ -299,6 +321,44 @@ fn with_declaration(pp: &Preprocessed, declaration: &str) -> Preprocessed {
     Preprocessed { code, ..pp.clone() }
 }
 
+/// The type of a game input a vertex stage may read without declaring it: terrain's
+/// `mc_chunkFade`, and the core-profile vertex attributes (`vaPosition`...) that a
+/// `#version 130` line program reads as it would in a core-profile one (Complementary
+/// Reimagined r5.9.3's `gbuffers_line`).
+fn implicit_input_type(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "mc_chunkFade" => "float",
+        "vaPosition" | "vaNormal" => "vec3",
+        "vaColor" => "vec4",
+        "vaUV0" => "vec2",
+        "vaUV1" | "vaUV2" => "ivec2",
+        _ => return None,
+    })
+}
+
+/// The game inputs `vertex` reads without declaring them, as (name, value, type): each of
+/// `given` (`GbuffersInputs::attributes`) with an `implicit_input_type` that the stage names and
+/// doesn't declare (`scanned`, the stage's scan): an attribute (`in`, `attribute`), a uniform,
+/// a constant, a variable, a struct, a block, its instance or, without one, its member of that
+/// name keeps its own.
+fn implicit_inputs<'a>(
+    given: &'a [(String, String)],
+    vertex: &Preprocessed,
+    scanned: &Stage,
+) -> Vec<(&'a str, &'a str, &'static str)> {
+    given
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str(), value.as_str(), implicit_input_type(name)?))
+        })
+        .filter(|(name, _, _)| {
+            uses_name(&vertex.code, name)
+                && !scanned.globals.contains(*name)
+                && !scanned.declared.contains(*name)
+        })
+        .collect()
+}
+
 /// Whether `code` names `name` (a whole identifier).
 fn uses_name(code: &str, name: &str) -> bool {
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -312,6 +372,7 @@ fn translate(
     target: Target,
     gbuffers: Option<&GbuffersInputs>,
     shadow: bool,
+    limits: InterfaceLimits,
 ) -> Result<Program, Vec<Error>> {
     let matrices = if shadow {
         GBUFFERS_MATRICES.replace("gbuffer", "shadow")
@@ -365,6 +426,21 @@ fn translate(
     f.gbuffers = gbuffers.is_some();
     v.paged_maps = gbuffers.is_some_and(|g| g.paged_maps);
     f.paged_maps = v.paged_maps;
+    // A vertex stage the game's `after` runs again starts each run with the pack's globals as
+    // the first run does: an uninitialized one from `hz_zero_<name>`, of its type and never
+    // written, declared after it; one with an initializer from `hz_init_*`, as always. The
+    // zeros follow what the initializers write at the statement's `;` (`T a, b = 1.0;`).
+    let run_again = gbuffers.is_some_and(|g| g.after.contains("hz_vertex()"));
+    if run_again {
+        let mut zeros: BTreeMap<usize, String> = BTreeMap::new();
+        for (end, name, ty) in &v.uninitialized {
+            let text = zeros
+                .entry(*end)
+                .or_insert_with(|| v.replaced.get(end).cloned().unwrap_or_else(|| ";".into()));
+            write!(text, " {ty} hz_zero_{name};").unwrap();
+        }
+        v.replaced.extend(zeros);
+    }
     let mut errors: Vec<Error> = v
         .errors
         .drain(..)
@@ -501,14 +577,18 @@ fn translate(
         locations,
         split,
         private,
-    } = varyings::assign(&v, &f, &mut errors);
+    } = varyings::assign(&v, &f, &mut errors, limits.inter_stage_variables as usize);
 
-    // Terrain's fade input is supplied without a pack declaration. Inject it only when
-    // the renderer provides the actual value; other geometry and authored globals keep
-    // their existing behavior.
-    let chunk_fade = gbuffers
-        .and_then(|g| g.attributes.iter().find(|(n, _)| n == "mc_chunkFade"))
-        .filter(|_| uses_name(&vertex.code, "mc_chunkFade") && !v.globals.contains("mc_chunkFade"));
+    // Inputs the game gives that the vertex stage reads without declaring them (terrain's
+    // fade, a line program's `vaPosition`...): injected only when the renderer provides the
+    // value; a declared attribute and an authored global of that name keep their own.
+    let implicit = implicit_inputs(
+        gbuffers
+            .map(|g| g.attributes.as_slice())
+            .unwrap_or_default(),
+        vertex,
+        &v,
+    );
     let header = |stage: &Stage| {
         let mut h = resources(&uniforms, &samplers, &images);
         match (alpha_test_ref, &part_ref) {
@@ -559,9 +639,10 @@ fn translate(
         }
         if let (Some(inputs), ShaderStage::Vertex) = (gbuffers, stage.kind) {
             h.push_str(&inputs.declarations);
-            h.push('\n');
-            if chunk_fade.is_some() {
-                h.push_str("float mc_chunkFade;\n");
+            // False in a stage that writes an image or a buffer, translated again for it.
+            writeln!(h, "\nuint hz_vertex_index;\n{RUNS_AGAIN}").unwrap();
+            for (name, _, ty) in &implicit {
+                writeln!(h, "{ty} {name};").unwrap();
             }
         }
         h.push_str(&stage.prelude());
@@ -570,19 +651,19 @@ fn translate(
     let flip = if target == Target::Buffers { "-" } else { "" };
     let fog =
         "    hz_Fog = hz_FogParameters(hz_fog_color, hz_fog.x, hz_fog.y, hz_fog.z, hz_fog.w);\n";
-    let mut vertex_main = String::from("\nvoid main() {\n");
+    // The pack's vertex stage for one vertex: its inputs, its `main`, `gl_Position` in wgpu's
+    // clip space. Ours runs it once, for `hz_vertex_index` in a gbuffers program; the game's
+    // `after` may run it again (`GbuffersInputs::after`).
+    let mut vertex_main = String::from("\nvoid hz_vertex() {\n");
     match gbuffers {
         None => vertex_main.push_str(
             "    vec2 hz_p = hz_quad[gl_VertexIndex];\n    hz_Vertex = vec4(hz_p, 0.0, 1.0);\n    \
              hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
         ),
-        Some(inputs) => {
-            vertex_main.push_str(&matrices);
-            vertex_main.push_str(&inputs.body);
-        }
+        Some(inputs) => vertex_main.push_str(&inputs.body.replace("gl_VertexIndex", "hz_vertex_index")),
     }
-    if let Some((_, value)) = chunk_fade {
-        writeln!(vertex_main, "    mc_chunkFade = {value};").unwrap();
+    for (name, given, ty) in &implicit {
+        writeln!(vertex_main, "    {name} = {ty}({given});").unwrap();
     }
     if let Some((solid, _)) = parts {
         writeln!(vertex_main, "    hz_cutout = ({solid}) ? 0u : 1u;").unwrap();
@@ -601,10 +682,30 @@ fn translate(
         writeln!(vertex_main, "    {name} = {value};").unwrap();
     }
     vertex_main.push_str(fog);
+    if run_again {
+        for (_, name, _) in &v.uninitialized {
+            let global = v.written_name(name);
+            writeln!(vertex_main, "    {global} = hz_zero_{name};").unwrap();
+        }
+    }
     for name in &v.inits {
         writeln!(vertex_main, "    {name} = hz_init_{name}();").unwrap();
     }
-    vertex_main.push_str("    hz_main();\n");
+    write!(
+        vertex_main,
+        "    hz_main();\n    gl_Position = vec4(gl_Position.x, {flip}gl_Position.y, (gl_Position.z + gl_Position.w) * 0.5, gl_Position.w);\n}}\n\nvoid main() {{\n"
+    )
+    .unwrap();
+    if gbuffers.is_some() {
+        vertex_main.push_str(&matrices);
+        vertex_main.push_str("    hz_vertex_index = gl_VertexIndex;\n");
+    }
+    writeln!(
+        vertex_main,
+        "    hz_vertex();\n{}",
+        gbuffers.map_or("", |g| &g.after)
+    )
+    .unwrap();
     if patches {
         vertex_main.push_str("    sunrisePatchPos = hz_Vertex.xyz;\n");
     }
@@ -620,12 +721,7 @@ fn translate(
             writeln!(vertex_main, "    {part} = {name}{access};").unwrap();
         }
     }
-    write!(
-        vertex_main,
-        "    gl_Position = vec4(gl_Position.x, {flip}gl_Position.y, (gl_Position.z + gl_Position.w) * 0.5, gl_Position.w);\n{}}}\n",
-        gbuffers.map_or("", |g| &g.after)
-    )
-    .unwrap();
+    vertex_main.push_str("}\n");
     let mut fragment_main = String::from("\nvoid main() {\n");
     if gbuffers.is_some() {
         fragment_main.push_str(&matrices);
@@ -723,8 +819,14 @@ fn translate(
     if !errors.is_empty() {
         return Err(errors);
     }
-    let vertex_module = compile(&v, &v_text, header(&v).lines().count());
-    let fragment_module = compile(&f, &f_text, header(&f).lines().count());
+    let mut vertex_module = compile(&v, &v_text, header(&v).lines().count(), limits);
+    // A stage that writes an image or a buffer runs once per vertex: run again by the game's
+    // `after`, it would write twice. One that only reads them is run again like any other.
+    if run_again && vertex_module.as_ref().is_ok_and(writes_storage) {
+        let once = v_text.replacen(RUNS_AGAIN, RUNS_ONCE, 1);
+        vertex_module = compile(&v, &once, header(&v).lines().count(), limits);
+    }
+    let fragment_module = compile(&f, &f_text, header(&f).lines().count(), limits);
     let (vertex, fragment) = match (vertex_module, fragment_module) {
         (Ok(v), Ok(f)) => (v, f),
         (a, b) => return Err(a.err().into_iter().chain(b.err()).flatten().collect()),
@@ -776,6 +878,48 @@ fn alpha_test(test: Option<AlphaTest>) -> String {
             format!("    if (!(hz_out0.a {op} {reference:?})) {{ discard; }}\n")
         }
     }
+}
+
+/// `hz_vertex_reruns` as a gbuffers vertex stage's header declares it, and as it is for a
+/// stage that writes an image or a buffer (`GbuffersInputs::after`).
+const RUNS_AGAIN: &str = "const bool hz_vertex_reruns = true;";
+const RUNS_ONCE: &str = "const bool hz_vertex_reruns = false;";
+
+/// Whether `module` writes an image or a buffer anywhere: an image store or atomic, an atomic,
+/// or a store into a global of the storage address space (through any member or index).
+fn writes_storage(module: &naga::Module) -> bool {
+    use naga::{Expression as E, Statement as S};
+    fn storage(module: &naga::Module, f: &naga::Function, mut e: naga::Handle<E>) -> bool {
+        loop {
+            match f.expressions[e] {
+                E::Access { base, .. } | E::AccessIndex { base, .. } => e = base,
+                E::GlobalVariable(g) => {
+                    return matches!(
+                        module.global_variables[g].space,
+                        naga::AddressSpace::Storage { .. }
+                    );
+                }
+                _ => return false,
+            }
+        }
+    }
+    fn block(module: &naga::Module, f: &naga::Function, b: &naga::Block) -> bool {
+        b.iter().any(|s| match s {
+            S::ImageStore { .. } | S::ImageAtomic { .. } | S::Atomic { .. } => true,
+            S::Store { pointer, .. } => storage(module, f, *pointer),
+            S::CooperativeStore { target, .. } => storage(module, f, *target),
+            S::Block(b) => block(module, f, b),
+            S::If { accept, reject, .. } => block(module, f, accept) || block(module, f, reject),
+            S::Switch { cases, .. } => cases.iter().any(|c| block(module, f, &c.body)),
+            S::Loop {
+                body, continuing, ..
+            } => block(module, f, body) || block(module, f, continuing),
+            _ => false,
+        })
+    }
+    (module.functions.iter().map(|(_, f)| f))
+        .chain(module.entry_points.iter().map(|e| &e.function))
+        .any(|f| block(module, f, &f.body))
 }
 
 /// Images an atomic function uses (naga gave them atomic access) are bound for atomics.
@@ -974,7 +1118,9 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
     if !errors.is_empty() {
         return Err(errors);
     }
-    let module = compile(&c, &text, header.lines().count()).map_err(|e| {
+    // A compute stage has no location-bound interface, so no device limit of it applies.
+    let limits = crate::DEVICELESS_INTERFACE_LIMITS;
+    let module = compile(&c, &text, header.lines().count(), limits).map_err(|e| {
         errors.extend(e);
         std::mem::take(&mut errors)
     })?;
@@ -1149,9 +1295,11 @@ fn work_group_size(code: &str) -> Result<String, String> {
     Ok(tokens.concat())
 }
 
-/// A work group size given as an integer constant expression (GLSL 4.60, 4.4 and 4.4.1):
-/// numbers, `+ - * / %`, brackets, `min`, `max` and `gl_MaxComputeWorkGroupSize`, the minimum
-/// GLSL requires (`ivec3(1024, 1024, 64)`, 7.3); the translation knows no device.
+/// A layout qualifier's value (a work group size, an output's location or component) given as
+/// an integer constant expression (GLSL 4.60, 4.4 and 4.4.1): integer literals (decimal, hex or
+/// octal, `u` or not, 4.1.3), `+ - * / %`, brackets, `min`, `max` and
+/// `gl_MaxComputeWorkGroupSize`, the minimum GLSL requires (`ivec3(1024, 1024, 64)`, 7.3); the
+/// translation knows no device.
 struct ConstantSize<'w> {
     words: &'w [&'w str],
     at: usize,
@@ -1159,11 +1307,14 @@ struct ConstantSize<'w> {
 
 impl<'w> ConstantSize<'w> {
     fn eval(words: &'w [&'w str]) -> Option<u32> {
+        Self::value(words).and_then(|v| u32::try_from(v).ok())
+    }
+
+    /// The expression's value, whatever its range.
+    fn value(words: &'w [&'w str]) -> Option<i64> {
         let mut p = Self { words, at: 0 };
         let v = p.sum()?;
-        (p.at == words.len())
-            .then_some(v)
-            .and_then(|v| u32::try_from(v).ok())
+        (p.at == words.len()).then_some(v)
     }
 
     fn peek(&self) -> Option<&'w str> {
@@ -1245,7 +1396,11 @@ impl<'w> ConstantSize<'w> {
                     _ => None,
                 }
             }
-            number => number.trim_end_matches(['u', 'U']).parse().ok(),
+            // GLSL's literal (hex, octal); one whose digits don't fit its radix (`08`, `018u`)
+            // is read as decimal, as before octal was read.
+            number => crate::condition::int_literal(number)
+                .ok()
+                .or_else(|| number.trim_end_matches(['u', 'U']).parse().ok()),
         }
     }
 }
@@ -1290,7 +1445,16 @@ pub(super) fn split_sampler(ty: &str) -> (String, &'static str) {
 }
 
 /// Parses and validates one stage; errors at the pack's files and lines.
-fn compile(stage: &Stage, text: &str, header_lines: usize) -> Result<naga::Module, Vec<Error>> {
+fn compile(
+    stage: &Stage,
+    text: &str,
+    header_lines: usize,
+    limits: InterfaceLimits,
+) -> Result<naga::Module, Vec<Error>> {
+    let options = Options {
+        interface_limits: limits,
+        ..Options::from(stage.kind)
+    };
     let specialized = image_parameters::rewrite(text).map_err(|message| {
         vec![Error {
             file: stage.pp.files.first().cloned().unwrap_or_default(),
@@ -1325,14 +1489,12 @@ fn compile(stage: &Stage, text: &str, header_lines: usize) -> Result<naga::Modul
         }
     };
     let parse = |text: &str| {
-        Frontend::default()
-            .parse(&Options::from(stage.kind), text)
-            .map_err(|e| {
-                e.errors
-                    .into_iter()
-                    .map(|e| at(text, e.meta, e.kind.to_string()))
-                    .collect::<Vec<_>>()
-            })
+        Frontend::default().parse(&options, text).map_err(|e| {
+            e.errors
+                .into_iter()
+                .map(|e| at(text, e.meta, e.kind.to_string()))
+                .collect::<Vec<_>>()
+        })
     };
     // naga's frontend refuses a few things GL takes: a scalar's swizzle (`f.x`, GLSL 4.20), a
     // matrix column's component written to (`m[1].y =`) and `min`/`max`/`clamp` of a `uint` and
@@ -1342,7 +1504,7 @@ fn compile(stage: &Stage, text: &str, header_lines: usize) -> Result<naga::Modul
     let mut tries = 0;
     let mut module = loop {
         tries += 1;
-        match Frontend::default().parse(&Options::from(stage.kind), &text) {
+        match Frontend::default().parse(&options, &text) {
             Ok(m) => break m,
             Err(e) => match e.errors.iter().find_map(|e| {
                 scalar_swizzle(&text, e)
@@ -1629,6 +1791,7 @@ mod tests {
             &preprocess(&pack, &f, &m),
             Target::Buffers,
             game,
+            InterfaceLimits::WGPU_DEFAULT,
         )
     }
 
@@ -1730,6 +1893,458 @@ mod tests {
         }
     }
 
+    /// A gbuffers vertex stage, and the game's `body`, read the vertex they run for from
+    /// `hz_vertex_index`, which the game's `after` may set to another vertex: only our `main`
+    /// reads the invocation's own index.
+    #[test]
+    fn a_vertex_stage_and_the_body_read_the_vertex_index_ours_sets() {
+        let files = [
+            (
+                "shaders/gbuffers_line.vsh",
+                "#version 430\nout float side;\nvoid main() {\n    \
+                 side = float(gl_VertexID % 2) + float(gl_VertexIndex);\n    \
+                 gl_Position = ftransform();\n}\n",
+            ),
+            (
+                "shaders/gbuffers_line.fsh",
+                "#version 430\nin float side;\nvoid main() { gl_FragData[0] = vec4(side); }",
+            ),
+        ];
+        let pack = Pack::from_zip_bytes("line-index.zip", zip(&files)).unwrap();
+        let macros = Macros::standard();
+        let vertex = preprocess(&pack, "gbuffers_line.vsh", &macros);
+        let fragment = preprocess(&pack, "gbuffers_line.fsh", &macros);
+        let inputs = GbuffersInputs {
+            body: "hz_Vertex = vec4(0.25, 0.5, -2.0, float(gl_VertexIndex));".into(),
+            ..Default::default()
+        };
+        let program = translate_gbuffers(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            &inputs,
+            InterfaceLimits::WGPU_DEFAULT,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let module = &program.vertex;
+        let reads = |f: &naga::Function, name: &str| {
+            f.expressions.iter().any(|(_, e)| match *e {
+                naga::Expression::GlobalVariable(g) => {
+                    module.global_variables[g].name.as_deref() == Some(name)
+                }
+                _ => false,
+            })
+        };
+        let named = |name: &str| {
+            let (_, f) = (module.functions.iter())
+                .find(|(_, f)| f.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("{name}"));
+            f
+        };
+        for name in ["hz_vertex", "hz_main"] {
+            assert!(reads(named(name), "hz_vertex_index"), "{name}");
+            assert!(!reads(named(name), "gl_VertexIndex"), "{name}");
+        }
+    }
+
+    /// A gbuffers vertex stage that writes an image or a buffer isn't run again for another
+    /// vertex (`hz_vertex_reruns` is false where the game's `after` runs it again): its writes
+    /// would be repeated. One that declares them and only reads them is, as is a plain one.
+    /// A write counts wherever it is: through a member and an index, in a branch, a loop or a
+    /// function, through an `inout` parameter, an atomic.
+    #[test]
+    fn a_vertex_stage_writing_images_or_buffers_is_not_run_again() {
+        let reruns = |declarations: &str, write: &str| {
+            let vsh = format!(
+                "#version 430\n{declarations}\nvoid main() {{\n    {write}\n    \
+                 gl_Position = ftransform();\n}}\n"
+            );
+            let files = [
+                ("shaders/gbuffers_line.vsh", vsh.as_str()),
+                (
+                    "shaders/gbuffers_line.fsh",
+                    "#version 430\nvoid main() { gl_FragData[0] = vec4(1.0); }",
+                ),
+            ];
+            let pack = Pack::from_zip_bytes("line-reruns.zip", zip(&files)).unwrap();
+            let macros = Macros::standard();
+            let vertex = preprocess(&pack, "gbuffers_line.vsh", &macros);
+            let fragment = preprocess(&pack, "gbuffers_line.fsh", &macros);
+            let inputs = GbuffersInputs {
+                body: "hz_Vertex = vec4(0.25, 0.5, -2.0, float(gl_VertexIndex));".into(),
+                after: "    hz_vertex_index = 1u;\n    hz_vertex();\n".into(),
+                ..Default::default()
+            };
+            let program = translate_gbuffers(
+                &vertex,
+                &fragment,
+                Target::Buffers,
+                &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
+            )
+            .unwrap_or_else(|e| panic!("{declarations} {write}: {e:?}"));
+            let module = &program.vertex;
+            let (_, constant) = (module.constants.iter())
+                .find(|(_, c)| c.name.as_deref() == Some("hz_vertex_reruns"))
+                .expect("hz_vertex_reruns");
+            match module.global_expressions[constant.init] {
+                naga::Expression::Literal(naga::Literal::Bool(b)) => b,
+                ref e => panic!("{e:?}"),
+            }
+        };
+        let image = "layout(rgba8) writeonly uniform image2D colorimg5;";
+        let read_image = "layout(rgba8) readonly uniform image2D colorimg5;";
+        let counter = "layout(r32ui) uniform uimage2D colorimg6;";
+        let buffer = "layout(std430, binding = 0) buffer Counts { uint n; vec4 v[4]; };";
+        let named = "layout(std430, binding = 0) buffer Counts { uint n; vec4 v[4]; } counts;";
+        let read_only =
+            "layout(std430, binding = 0) readonly buffer Counts { uint n; vec4 v[4]; };";
+        assert!(reruns("", ""));
+        // Declared, only read.
+        assert!(reruns(
+            read_image,
+            "vec4 c = imageLoad(colorimg5, ivec2(0));"
+        ));
+        assert!(reruns(buffer, "float f = float(n) + v[1].x;"));
+        assert!(reruns(read_only, "float f = float(n);"));
+        // Written.
+        let writes = [
+            (
+                image,
+                "imageStore(colorimg5, ivec2(gl_VertexID, 0), vec4(1.0));",
+            ),
+            (counter, "imageAtomicAdd(colorimg6, ivec2(0), 1u);"),
+            (buffer, "n = uint(gl_VertexID);"),
+            (buffer, "v[gl_VertexID].y = 1.0;"),
+            (named, "counts.v[1].y = 1.0;"),
+            (buffer, "if (gl_VertexID > 2) { n = 1u; }"),
+            (buffer, "for (int i = 0; i < 2; i++) { v[i] = vec4(0.0); }"),
+            (buffer, "atomicAdd(n, 1u);"),
+            (
+                &format!("{buffer}\nvoid bump(inout uint c) {{ c += 1u; }}"),
+                "bump(n);",
+            ),
+            (&format!("{buffer}\nvoid clear() {{ n = 0u; }}"), "clear();"),
+        ];
+        for (declarations, write) in writes {
+            assert!(!reruns(declarations, write), "{declarations} {write}");
+        }
+    }
+
+    /// A name the stage declares otherwise than as a variable is its own, and the game gives no
+    /// input of that name (a second declaration would reject the stage): a buffer block's field
+    /// without an instance (the stage reads it as `vaNormal`), an `out` block's member without
+    /// one, a block's instance, a block's name, a struct's name. A block's field with an
+    /// instance (`params.vaNormal`) doesn't declare `vaNormal`: the stage reads the game's too.
+    #[test]
+    fn names_a_stage_declares_are_not_given_by_the_game() {
+        let program = |source: &str| {
+            let files = [
+                ("shaders/gbuffers_line.vsh", source),
+                (
+                    "shaders/gbuffers_line.fsh",
+                    "#version 430\nvoid main() { gl_FragData[0] = vec4(1.0); }",
+                ),
+            ];
+            let pack = Pack::from_zip_bytes("line-declared.zip", zip(&files)).unwrap();
+            let macros = Macros::standard();
+            let vertex = preprocess(&pack, "gbuffers_line.vsh", &macros);
+            let fragment = preprocess(&pack, "gbuffers_line.fsh", &macros);
+            let inputs = GbuffersInputs {
+                body: "hz_Vertex = vec4(0.25, 0.5, -2.0, 1.0);\nhz_Normal = vec3(1.0, 0.0, 0.0);"
+                    .into(),
+                attributes: ["vaPosition", "vaNormal", "vaColor"]
+                    .map(|n| (n.to_owned(), "hz_Vertex".to_owned()))
+                    .to_vec(),
+                ..Default::default()
+            };
+            translate_gbuffers(
+                &vertex,
+                &fragment,
+                Target::Buffers,
+                &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
+            )
+        };
+        let cases = [
+            (
+                "layout(std430, binding = 0) buffer Params { float w; vec3 vaNormal; };",
+                "vec3 n = vaNormal;",
+            ),
+            ("out Extra { vec3 vaNormal; };", "vaNormal = vec3(1.0);"),
+            (
+                "layout(std430, binding = 0) buffer Params { vec4 c; } vaColor;",
+                "vec4 n = vaColor.c;",
+            ),
+            (
+                "layout(std430, binding = 0) buffer vaColor { vec4 c; } params;",
+                "vec4 n = params.c;",
+            ),
+            ("struct vaColor { float a; };", "vaColor n = vaColor(1.0);"),
+            (
+                "layout(std430, binding = 0) buffer Params { float w; vec3 vaNormal; } params;",
+                "vec3 n = params.vaNormal + vaNormal;",
+            ),
+        ];
+        for (declaration, read) in cases {
+            let source = format!(
+                "#version 430\n{declaration}\nvoid main() {{\n    {read}\n    \
+                 gl_Position = vec4(vaPosition, 1.0);\n}}\n"
+            );
+            if let Err(errors) = program(&source) {
+                panic!("{declaration}: {errors:?}");
+            }
+        }
+    }
+
+    /// A gbuffers vertex stage the game's `after` runs again starts each run with the pack's
+    /// globals as the first run does: `hz_vertex()` sets each one without an initializer back
+    /// to its first value, whatever its type, and each one with an initializer from it, before
+    /// the pack's `main` (which reads them before writing them here), so `b`'s initializer
+    /// reads `acc` at its first value. That holds for every form of declaration: beside
+    /// initialized declarators (either order), with its struct's definition, or named with a
+    /// later keyword (`filter`, `input`), and of an anonymous struct (named `hz_struct<n>`
+    /// before the scan). A stage the game runs once doesn't.
+    #[test]
+    fn a_vertex_stage_run_again_starts_from_its_globals_first_values() {
+        let vsh = "#version 130\nprecision highp float;\ninvariant gl_Position;\n\
+                   struct Pair { float x; };\nfloat t = 0.5;\nfloat acc;\nfloat b = acc + 1.0;\n\
+                   highp float u, w[2];\nfloat grid[2][3];\nfloat[2] row;\n\
+                   float[2][3] cells, sample;\nPair pair;\n\
+                   float lead, gain = 2.0;\nfloat bias = 2.0, tail;\n\
+                   float[2] pa, pb = float[2](1.0, 2.0);\n\
+                   struct Two { float x; } p, q;\nstruct Arr { float x; } ps[2], pt;\n\
+                   struct One { float x; } solo;\nstruct { float x; } an, bn;\n\
+                   struct Init { float x; } start = Init(0.5);\n\
+                   struct filter { float x; };\nfilter f;\nfilter fi = filter(1.0);\n\
+                   const int input = 2;\nfloat sized[input];\n\
+                   float sizes[input] = float[2](1.0, 2.0);\n\
+                   struct filter_x { float x; };\nfilter_x fx;\nconst int input2 = 2;\n\
+                   float sized2[input2];\n\
+                   void count() { acc += 1.0; }\nvoid main() {\n    t *= 2.0;\n    count();\n    \
+                   u += 1.0;\n    w[1] += 1.0;\n    grid[1][2] += 1.0;\n    row[1] += 1.0;\n    \
+                   cells[1][2] += 1.0;\n    sample[0][1] += 1.0;\n    \
+                   pair.x += 1.0;\n    lead += gain;\n    tail += bias;\n    pa[1] += pb[1];\n    \
+                   p.x += 1.0;\n    q.x += 1.0;\n    ps[1].x += 1.0;\n    pt.x += 1.0;\n    \
+                   solo.x += 1.0;\n    an.x += 1.0;\n    bn.x += 1.0;\n    f.x += 1.0;\n    \
+                   sized[1] += 1.0;\n    fx.x += 1.0;\n    sized2[1] += 1.0;\n    \
+                   gl_Position = vec4(t * acc * b * u * w[1], grid[1][2] * row[1] * cells[1][2], \
+                   sample[0][1] * lead * tail * pa[1] * an.x * bn.x, \
+                   pair.x * p.x * q.x * ps[1].x * pt.x * solo.x * f.x * sized[1] * start.x \
+                   * fi.x * sizes[1] * fx.x * sized2[1]);\n}\n";
+        let files = [
+            ("shaders/gbuffers_line.vsh", vsh),
+            (
+                "shaders/gbuffers_line.fsh",
+                "#version 430\nvoid main() { gl_FragData[0] = vec4(1.0); }",
+            ),
+        ];
+        let pack = Pack::from_zip_bytes("line-globals.zip", zip(&files)).unwrap();
+        let macros = Macros::standard();
+        let vertex = preprocess(&pack, "gbuffers_line.vsh", &macros);
+        let fragment = preprocess(&pack, "gbuffers_line.fsh", &macros);
+        // The globals `hz_vertex()` itself stores to, before it calls the pack's `main`.
+        let set = |after: &str| {
+            let inputs = GbuffersInputs {
+                body: "hz_Vertex = vec4(0.25, 0.5, -2.0, float(gl_VertexIndex));".into(),
+                after: after.into(),
+                ..Default::default()
+            };
+            let program = translate_gbuffers(
+                &vertex,
+                &fragment,
+                Target::Buffers,
+                &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
+            )
+            .unwrap_or_else(|e| panic!("{e:?}"));
+            let module = &program.vertex;
+            let (_, f) = (module.functions.iter())
+                .find(|(_, f)| f.name.as_deref() == Some("hz_vertex"))
+                .expect("hz_vertex");
+            let mut names = Vec::new();
+            for statement in f.body.iter() {
+                match *statement {
+                    naga::Statement::Call { function, .. }
+                        if module.functions[function].name.as_deref() == Some("hz_main") =>
+                    {
+                        break;
+                    }
+                    naga::Statement::Store { pointer, .. } => {
+                        if let naga::Expression::GlobalVariable(g) = f.expressions[pointer] {
+                            names.extend(module.global_variables[g].name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            names
+        };
+        let again = set("    hz_vertex_index = 1u;\n    hz_vertex();\n");
+        let reset = [
+            "acc",
+            "u",
+            "w",
+            "grid",
+            "row",
+            "cells",
+            "hz_kw_sample",
+            "pair",
+            "lead",
+            "tail",
+            "pa",
+            "p",
+            "q",
+            "ps",
+            "pt",
+            "solo",
+            "an",
+            "bn",
+            "f",
+            "sized",
+            "fx",
+            "sized2",
+        ];
+        let initialized = ["t", "b", "gain", "bias", "pb", "start", "fi", "sizes"];
+        for name in reset.iter().chain(&initialized) {
+            assert!(again.iter().any(|n| n == name), "{name}: {again:?}");
+        }
+        // `b`'s initializer reads `acc` set back.
+        let at = |name: &str| again.iter().position(|n| n == name);
+        assert!(at("acc") < at("b"), "{again:?}");
+        let once = set("");
+        for name in reset {
+            assert!(!once.iter().any(|n| n == name), "{name}: {once:?}");
+        }
+    }
+
+    /// A line program that reads the game's `vaPosition` and `vaNormal` without declaring them
+    /// (Complementary Reimagined r5.9.3's `gbuffers_line`, a `#version 130` stage) gets them,
+    /// as it does `projectionMatrix`; one that declares them, or a global of that name, keeps
+    /// its own.
+    #[test]
+    fn undeclared_game_attributes_are_given() {
+        let program = |source: &str| {
+            let files = [
+                ("shaders/gbuffers_line.vsh", source),
+                (
+                    "shaders/gbuffers_line.fsh",
+                    "#version 130\nvoid main() { gl_FragData[0] = vec4(1.0); }",
+                ),
+            ];
+            let pack = Pack::from_zip_bytes("line-attributes.zip", zip(&files)).unwrap();
+            let macros = Macros::standard();
+            let vertex = preprocess(&pack, "gbuffers_line.vsh", &macros);
+            let fragment = preprocess(&pack, "gbuffers_line.fsh", &macros);
+            let inputs = GbuffersInputs {
+                body: "hz_Vertex = vec4(0.25, 0.5, -2.0, 1.0);\nhz_Normal = vec3(1.0, 0.0, 0.0);"
+                    .into(),
+                attributes: vec![
+                    ("vaPosition".into(), "hz_Vertex.xyz".into()),
+                    ("vaNormal".into(), "hz_Normal".into()),
+                ],
+                ..Default::default()
+            };
+            translate_gbuffers(
+                &vertex,
+                &fragment,
+                Target::Buffers,
+                &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
+            )
+        };
+        let reads = "void main() {\n    vec4 a = projectionMatrix * modelViewMatrix * vec4(vaPosition, 1.0);\n    \
+                     vec4 b = projectionMatrix * modelViewMatrix * vec4(vaPosition + vaNormal, 1.0);\n    \
+                     gl_Position = gl_VertexID % 2 == 0 ? a : b;\n}\n";
+        for header in [
+            "#version 130\n",
+            "#version 330 core\nin vec3 vaPosition;\nin vec3 vaNormal;\n",
+            "#version 130\nvec3 vaPosition = vec3(1.0);\nvec3 vaNormal = vec3(0.0);\n",
+            // A struct member of the name doesn't declare it: the stage reads the game's.
+            "#version 130\nstruct Sample { vec3 vaNormal; };\nSample value = Sample(vec3(0.0));\n",
+        ] {
+            let source = format!("{header}{reads}");
+            if let Err(errors) = program(&source) {
+                panic!("{header}: {errors:?}");
+            }
+        }
+        // A declared attribute keeps its own type (here narrower than the game's), not the
+        // implicit input's.
+        let declared = "#version 330 core\nin vec2 vaPosition;\n\
+                        void main() { gl_Position = vec4(vaPosition, 0.0, 1.0); }\n";
+        if let Err(errors) = program(declared) {
+            panic!("{declared}: {errors:?}");
+        }
+        // A name the game doesn't give stays unknown.
+        let unknown = "#version 130\nvoid main() { gl_Position = vec4(vaUV0, 0.0, 1.0); }\n";
+        assert!(program(unknown).is_err());
+    }
+
+    /// Each implicit input gets the type of vanilla 26.3's core-shader attribute it stands for
+    /// (`in vec4 Color; in vec2 UV0; in ivec2 UV1; in ivec2 UV2; in vec3 Normal;`), as the
+    /// entities, sky, weather and terrain inputs give these names too.
+    #[test]
+    fn implicit_inputs_have_the_core_attribute_types() {
+        use naga::{ScalarKind as K, VectorSize as S};
+        let vsh = "#version 130\nvoid main() {\n    \
+                   gl_Position = vec4(vaPosition + vaNormal, 1.0) * vaColor.a + vec4(vaUV0, vec2(vaUV1 + vaUV2));\n\
+                   gl_Position.z += mc_chunkFade;\n}\n";
+        let files = [
+            ("shaders/gbuffers_terrain.vsh", vsh),
+            (
+                "shaders/gbuffers_terrain.fsh",
+                "#version 130\nvoid main() { gl_FragData[0] = vec4(1.0); }",
+            ),
+        ];
+        let pack = Pack::from_zip_bytes("implicit-types.zip", zip(&files)).unwrap();
+        let macros = Macros::standard();
+        let vertex = preprocess(&pack, "gbuffers_terrain.vsh", &macros);
+        let fragment = preprocess(&pack, "gbuffers_terrain.fsh", &macros);
+        let given = |name: &str| (name.to_owned(), "hz_MultiTexCoord0".to_owned());
+        let inputs = GbuffersInputs {
+            attributes: [
+                "vaPosition",
+                "vaNormal",
+                "vaColor",
+                "vaUV0",
+                "vaUV1",
+                "vaUV2",
+                "mc_chunkFade",
+            ]
+            .map(given)
+            .to_vec(),
+            ..Default::default()
+        };
+        let program = translate_gbuffers(
+            &vertex,
+            &fragment,
+            Target::Buffers,
+            &inputs,
+            InterfaceLimits::WGPU_DEFAULT,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let module = &program.vertex;
+        let ty = |name: &str| {
+            let (_, global) = module
+                .global_variables
+                .iter()
+                .find(|(_, g)| g.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("no global {name}"));
+            match module.types[global.ty].inner {
+                naga::TypeInner::Scalar(s) => (None, s.kind),
+                naga::TypeInner::Vector { size, scalar } => (Some(size), scalar.kind),
+                ref other => panic!("{name}: {other:?}"),
+            }
+        };
+        assert_eq!(ty("vaPosition"), (Some(S::Tri), K::Float));
+        assert_eq!(ty("vaNormal"), (Some(S::Tri), K::Float));
+        assert_eq!(ty("vaColor"), (Some(S::Quad), K::Float));
+        assert_eq!(ty("vaUV0"), (Some(S::Bi), K::Float));
+        assert_eq!(ty("vaUV1"), (Some(S::Bi), K::Sint));
+        assert_eq!(ty("vaUV2"), (Some(S::Bi), K::Sint));
+        assert_eq!(ty("mc_chunkFade"), (None, K::Float));
+    }
+
     /// Core matrix state and compatibility matrix state describe the same geometry transform.
     #[test]
     fn gbuffers_core_matrices_use_frame_state() {
@@ -1801,6 +2416,7 @@ mod tests {
             &preprocess(&pack, "gbuffers_terrain.fsh", &macros),
             Target::Buffers,
             &GbuffersInputs::default(),
+            InterfaceLimits::WGPU_DEFAULT,
         )
         .unwrap();
         assert!(
@@ -1890,9 +2506,15 @@ mod tests {
             ..Default::default()
         };
         if shadow {
-            translate_shadow(&vertex, &fragment, &inputs)
+            translate_shadow(&vertex, &fragment, &inputs, InterfaceLimits::WGPU_DEFAULT)
         } else {
-            translate_gbuffers(&vertex, &fragment, Target::Buffers, &inputs)
+            translate_gbuffers(
+                &vertex,
+                &fragment,
+                Target::Buffers,
+                &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
+            )
         }
     }
 
@@ -1931,6 +2553,7 @@ mod tests {
             &preprocess(&pack, "composite.vsh", &m),
             &preprocess(&pack, "composite.fsh", &m),
             target,
+            InterfaceLimits::WGPU_DEFAULT,
         )
     }
 
@@ -2419,6 +3042,7 @@ in VertexData {{ {member} }} vIn;
                 &preprocess(&pack, "gbuffers_clouds.fsh", &m),
                 Target::Buffers,
                 &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
             )
             .unwrap_or_else(|e| panic!("{fsh}: {e:?}"));
         }
@@ -2449,6 +3073,7 @@ in VertexData {{ {member} }} vIn;
                 &preprocess(&pack, "gbuffers_entities.fsh", &m),
                 Target::Buffers,
                 &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
             )
             .unwrap_or_else(|e| panic!("{e:?}"));
             // Calls of the functions named `name`, in every function's body.
@@ -2491,6 +3116,7 @@ in VertexData {{ {member} }} vIn;
                 &preprocess(&pack, "shadow.vsh", &m),
                 &preprocess(&pack, "shadow.fsh", &m),
                 &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
             )
             .unwrap_or_else(|e| panic!("{e:?}"));
             let boxes = (p.interface.uniforms.iter())
@@ -2530,6 +3156,7 @@ in VertexData {{ {member} }} vIn;
                 &preprocess(&pack, "gbuffers_water.fsh", &m),
                 Target::Buffers,
                 &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
             )
             .unwrap_or_else(|e| panic!("{e:?}"));
             let sampler = (p.interface.samplers.iter()).any(|s| s.name == WATER_MASK);
@@ -2574,6 +3201,7 @@ in VertexData {{ {member} }} vIn;
                 &preprocess(&pack, "gbuffers_entities.fsh", &m),
                 Target::Buffers,
                 &inputs,
+                InterfaceLimits::WGPU_DEFAULT,
             )
             .unwrap_or_else(|e| panic!("{e:?}"));
             let functions = p.fragment.functions.iter().map(|(_, f)| f);
@@ -2623,6 +3251,7 @@ in VertexData {{ {member} }} vIn;
                 &preprocess(&pack, "gbuffers_entities.fsh", &m),
                 Target::Buffers,
                 &game,
+                InterfaceLimits::WGPU_DEFAULT,
             )
             .unwrap_or_else(|e| panic!("{e:?}"));
             p.interface
@@ -2670,6 +3299,7 @@ in VertexData {{ {member} }} vIn;
             &preprocess(&pack, "gbuffers_terrain.fsh", &m),
             Target::Buffers,
             &game,
+            InterfaceLimits::WGPU_DEFAULT,
         )
         .unwrap_or_else(|e| panic!("{e:?}"));
         let names: Vec<&str> = p
@@ -2709,6 +3339,7 @@ in VertexData {{ {member} }} vIn;
             &preprocess(&pack, "gbuffers_terrain.vsh", &m),
             &preprocess(&pack, "gbuffers_terrain.fsh", &m),
             &game,
+            InterfaceLimits::WGPU_DEFAULT,
         )
         .unwrap_or_else(|e| panic!("{e:?}"));
         let names: Vec<&str> = (shadow.interface.uniforms.iter())
@@ -2775,15 +3406,89 @@ in VertexData {{ {member} }} vIn;
         // 3 columns + 2 elements + 2 x 2 columns, and the fragment position.
         assert!(inputs >= 9, "{inputs} inputs");
         assert_eq!(
-            varying_parts("flat ivec2 @[2];").unwrap().1,
+            varying_parts("flat ivec2 @[2];", 31).unwrap().unwrap().1,
             [
                 ("flat ivec2 @;".to_owned(), "[0]".to_owned()),
                 ("flat ivec2 @;".to_owned(), "[1]".to_owned())
             ]
         );
-        assert_eq!(varying_parts("mat2x3 @[2];").unwrap().1[3].1, "[1][1]");
-        assert!(varying_parts("vec4 @;").is_none());
-        assert!(varying_parts("vec4 @[N];").is_none());
+        assert_eq!(
+            varying_parts("mat2x3 @[2];", 31).unwrap().unwrap().1[3].1,
+            "[1][1]"
+        );
+        assert_eq!(varying_parts("vec4 @;", 31), Ok(None));
+        assert_eq!(varying_parts("vec4 @[N];", 31), Ok(None));
+    }
+
+    /// A varying splits within the locations the program has left (`room`: of the device's
+    /// `max_inter_stage_shader_variables`, 31 on RADV, D3D12 and Metal): at the room it splits,
+    /// one part past it is refused before any part is made (a size whose parts can't all be made,
+    /// `[99999999999]`, is refused the same way), and a struct's parts count four components each.
+    #[test]
+    fn the_split_of_a_varying_stops_at_the_room_left() {
+        let parts = varying_parts("float @[31];", 31).unwrap().unwrap().1;
+        assert_eq!(parts.len(), 31);
+        assert_eq!(parts[30].1, "[30]");
+        assert_eq!(
+            varying_parts("float @[32];", 31),
+            Err(varyings::TooManyParts)
+        );
+        assert_eq!(
+            varying_parts("float @[4][8];", 31),
+            Err(varyings::TooManyParts)
+        );
+        assert_eq!(varying_parts("mat4 @[8];", 31), Err(varyings::TooManyParts));
+        assert_eq!(
+            varying_parts("float @[99999999999];", 31),
+            Err(varyings::TooManyParts)
+        );
+        let structs = std::collections::HashMap::from([
+            (
+                "S".to_owned(),
+                vec![("float".to_owned(), "a[124]".to_owned())],
+            ),
+            (
+                "T".to_owned(),
+                vec![("float".to_owned(), "a[125]".to_owned())],
+            ),
+            (
+                "V".to_owned(),
+                vec![("vec4".to_owned(), "a[31]".to_owned())],
+            ),
+            // Structs inside themselves can't travel: refused once a path is longer than any
+            // without one, not by a stack overflow.
+            (
+                "R".to_owned(),
+                vec![
+                    ("float".to_owned(), "x".to_owned()),
+                    ("R".to_owned(), "r".to_owned()),
+                ],
+            ),
+            ("Q".to_owned(), vec![("Q".to_owned(), "q".to_owned())]),
+            // No leaves at all: its elements still take steps, which run out.
+            ("E".to_owned(), vec![]),
+        ]);
+        let parts = struct_parts("S @;", &structs, 31).unwrap().unwrap();
+        assert_eq!(parts.len(), 31);
+        assert_eq!(parts[30].1[3].1, ".a[123]");
+        assert_eq!(
+            struct_parts("T @;", &structs, 31),
+            Err(varyings::TooManyParts)
+        );
+        assert_eq!(
+            struct_parts("V @;", &structs, 31).unwrap().unwrap().len(),
+            31
+        );
+        assert_eq!(
+            struct_parts("V @;", &structs, 30),
+            Err(varyings::TooManyParts)
+        );
+        assert_eq!(struct_parts("R @;", &structs, 31), Ok(None));
+        assert_eq!(struct_parts("Q @;", &structs, 31), Ok(None));
+        assert_eq!(
+            struct_parts("E @[99999999999];", &structs, 31),
+            Err(varyings::TooManyParts)
+        );
     }
 
     #[test]
@@ -2825,7 +3530,7 @@ in VertexData {{ {member} }} vIn;
             ],
         )]);
         assert_eq!(
-            struct_parts("S @;", &structs).unwrap(),
+            struct_parts("S @;", &structs, 31).unwrap().unwrap(),
             [
                 (
                     "vec4 @;".to_owned(),
@@ -2848,7 +3553,7 @@ in VertexData {{ {member} }} vIn;
             "B".to_owned(),
             vec![("bool".to_owned(), "b".to_owned())],
         )]);
-        assert!(struct_parts("B @;", &bools).is_none());
+        assert_eq!(struct_parts("B @;", &bools, 31), Ok(None));
     }
 
     #[test]
@@ -3721,6 +4426,22 @@ in VertexData {{ {member} }} vIn;
         assert!(
             work_group_size("layout(local_size_x = 16) in;\nuvec3 s = gl_WorkGroupSize;")
                 .is_ok_and(|c| c.contains("uvec3(16u, 1u, 1u)"))
+        );
+        // Hex and octal literals are GLSL's integers too (4.1.3): `010` is 8.
+        assert_eq!(
+            work_group_size(
+                "layout(local_size_x = 0x10, local_size_y = 010u) in;\nuvec3 s = gl_WorkGroupSize;"
+            )
+            .as_deref(),
+            Ok("layout(local_size_x = 16, local_size_y = 8) in;\nuvec3 s = uvec3(16u, 8u, 1u);")
+        );
+        // Digits octal doesn't have after a leading `0` are decimal, as before octal was read.
+        assert_eq!(
+            work_group_size(
+                "layout(local_size_x = 08, local_size_y = 018u) in;\nuvec3 s = gl_WorkGroupSize;"
+            )
+            .as_deref(),
+            Ok("layout(local_size_x = 8, local_size_y = 18) in;\nuvec3 s = uvec3(8u, 18u, 1u);")
         );
     }
 

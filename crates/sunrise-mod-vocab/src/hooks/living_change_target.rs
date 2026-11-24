@@ -20,6 +20,8 @@ pub trait Hooks {
     /// piglin again by its entity id after the hook; a piglin that is removed is
     /// skipped.
     #[hook(
+        receiver = "read",
+        dispatch = "api_carrier",
         side = "server",
         contract = "cancel",
         out = "cancel",

@@ -252,11 +252,34 @@ impl Game<'_> {
                 .mobs
                 .iter()
                 .find(|mob| mob.id == id)
-                .map(|mob| sunrise_client::mobs::drops::loot_entity(mob, None))
+                .map(|mob| {
+                    // EntityPredicate's `vehicle`: the mob it rides, as at its death.
+                    let vehicle = mob
+                        .extra
+                        .mount
+                        .and_then(|mount| self.mobs.iter().find(|o| o.id == mount))
+                        .map(|o| sunrise_world::loot::LootEntity::new(&o.kind.id));
+                    sunrise_client::mobs::drops::loot_entity(mob, vehicle)
+                })
                 .unwrap_or_else(|| sunrise_world::loot::LootEntity::new(&self.target_type(target))),
-            Target::Player => self.killer_loot_entity(None),
-            Target::Guest(conn) => self.killer_loot_entity(Some(conn)),
-            _ => sunrise_world::loot::LootEntity::new(&self.target_type(target)),
+            _ => {
+                let mut entity = sunrise_world::loot::LootEntity {
+                    kind: self.target_type(target),
+                    living: target.is_living(),
+                    ..Default::default()
+                };
+                if entity.living {
+                    entity.equipment = mod_api::EquipmentSlot::ALL
+                        .into_iter()
+                        .zip(sunrise_world::loot::EQUIPMENT_SLOTS)
+                        .filter_map(|(slot, name)| {
+                            let stack = self.equipment_stack_for(target, slot)?;
+                            Some((name.to_owned(), super::creatures::to_loot(&stack.project())))
+                        })
+                        .collect();
+                }
+                entity
+            }
         };
         if entity.nbt.is_none()
             && self

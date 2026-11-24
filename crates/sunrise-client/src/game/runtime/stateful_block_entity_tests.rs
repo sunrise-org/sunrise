@@ -36,8 +36,8 @@ fn stateful_creation_uses_actual_state_and_preserves_existing_entity() {
         }
         fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut BlocksEvent<'_>) {
             event
-                .blocks
-                .push(mod_api::Block::new(BLOCK, "minecraft:white_banner"));
+                .register(mod_api::Block::new(BLOCK, "minecraft:white_banner"))
+                .unwrap();
         }
     }
     #[mod_api::sunrise_part]
@@ -176,5 +176,162 @@ fn stateful_creation_uses_actual_state_and_preserves_existing_entity() {
                 .expect("the view forwards a block entity's data");
             assert_eq!(data.get(&"progress".into()), Some(&Tag::Int(37)));
         });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn admitted_minecraft_and_custom_blocks_share_stateful_tables_capabilities_and_menu() {
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_at};
+    use mod_api::{self, *};
+    use std::sync::Arc;
+    use sunrise_client::{chunk::Chunk, containers::BlockEntity};
+
+    if run_fresh_cases(
+        "game::stateful_block_entity_tests::admitted_minecraft_and_custom_blocks_share_stateful_tables_capabilities_and_menu",
+        "SUNRISE_MINECRAFT_BLOCK_TABLES_CHILD",
+        &["valid"],
+    ) {
+        return;
+    }
+
+    const MC_BLOCK: &str = "minecraft:p3_04_machine";
+    const ALT_BLOCK: &str = "p3_04_tables:machine";
+
+    #[derive(Clone)]
+    struct MachineMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for MachineMod {
+        fn register(&self, registrar: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            let kind = registrar
+                .block_entity_type("machine")
+                .blocks(&[MC_BLOCK, ALT_BLOCK])
+                .build();
+            registrar.block_entity_part(&kind, self.clone()).unwrap();
+            for id in [MC_BLOCK, ALT_BLOCK] {
+                let key = registrar.block_key(id);
+                registrar.block_container(
+                    &key,
+                    ModContainer {
+                        slots: 9,
+                        faces: std::array::from_fn(|_| (0..9).collect()),
+                        inputs: (0..9).collect(),
+                        outputs: (0..9).collect(),
+                        menu: Some("minecraft:generic_9x1".into()),
+                        ..Default::default()
+                    },
+                );
+                let mut tanks = ModFluidTanks::default();
+                tanks.tanks = vec![4000];
+                tanks.faces = std::array::from_fn(|_| vec![0]);
+                tanks.inputs = vec![0];
+                tanks.outputs = vec![0];
+                registrar.block_fluids(&key, tanks);
+                registrar.block_energy(
+                    &key,
+                    ModEnergyBuffer {
+                        capacity: 1000,
+                        max_insert: 200,
+                        max_extract: 200,
+                        insert_faces: [true; 6],
+                        extract_faces: [true; 6],
+                    },
+                );
+            }
+        }
+        fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut BlocksEvent<'_>) {
+            for id in [MC_BLOCK, ALT_BLOCK] {
+                event
+                    .register(mod_api::Block::new(id, "minecraft:stone"))
+                    .unwrap();
+            }
+        }
+    }
+    #[mod_api::sunrise_part]
+    impl BlockPart for MachineMod {}
+    #[mod_api::sunrise_part]
+    impl BlockEntityPart for MachineMod {
+        fn stateful_block_entity(&self, _: &dyn Host, event: &mut StatefulBlockEntityEvent<'_>) {
+            if event.block == MC_BLOCK || event.block == ALT_BLOCK {
+                event.stateful = true;
+            }
+        }
+        fn block_entity(
+            &self,
+            _: LevelSide<'_>,
+            event: &mut BlockEntityEvent<'_>,
+        ) -> Option<Compound> {
+            (event.block == MC_BLOCK || event.block == ALT_BLOCK)
+                .then(|| Compound::from([("tier".into(), Tag::Int(2))]))
+        }
+    }
+
+    let mods: Mods = vec![ModEntry::new("p3_04_tables", Box::new(MachineMod))].into();
+    mod_platform::__private::install(mods.clone());
+    crate::game::api_values::install_parts(&mods).unwrap();
+    let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+    let root = crate::game::mods::content_root(&base, &Default::default()).unwrap();
+    with_game_at(root.prepared().to_path_buf(), |game| {
+        game.options.dedicated = Some(Vec::new());
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.ensure_stateful_entity_table();
+        let containers = game.native_containers();
+        game.world.block_entities.set_mod_containers(containers);
+        let fluids = game.native_fluid_tables();
+        game.world.block_entities.set_mod_fluids(fluids);
+        let energy = game.native_energy_tables();
+        game.world.block_entities.set_mod_energy(energy);
+        let level = game.level("minecraft:overworld").unwrap();
+        let registry = game.pack.assets.registry;
+        for (x, id) in [(1, MC_BLOCK), (2, ALT_BLOCK)] {
+            let pos = [x, 64, 0];
+            let state = registry.default_state(id).unwrap();
+            assert_eq!(
+                game.level_set_block(level, pos, state, BlockUpdateFlags::NONE),
+                Ok(true),
+                "{id}"
+            );
+            let entity = game.block_entity(level, pos).expect(id);
+            assert_eq!(
+                game.block_entity_data(entity).unwrap().get(&"tier".into()),
+                Some(&Tag::Int(2)),
+                "{id}"
+            );
+            assert!(
+                level.capability(game, &ITEMS, pos, None).is_some(),
+                "ITEMS missing for {id}"
+            );
+            assert!(
+                level.capability(game, &FLUIDS, pos, None).is_some(),
+                "FLUIDS missing for {id}"
+            );
+            assert!(
+                level.capability(game, &ENERGY, pos, None).is_some(),
+                "ENERGY missing for {id}"
+            );
+            assert_eq!(game.mod_menu_at((x, 64, 0)), Some("minecraft:generic_9x1"));
+            assert!(
+                game.open_mod_menu((x, 64, 0)),
+                "open_mod_menu failed for {id}"
+            );
+            let Some(BlockEntity::Mod(opened)) = game.world.block_entities.get(&(x, 64, 0)) else {
+                panic!("expected mod block entity for {id}");
+            };
+            assert_eq!(opened.items.len(), 9, "{id}");
+        }
+        // Built-in vanilla blocks preserve their own paths and never enter mod tables.
+        let chest_pos = [3, 64, 0];
+        let chest = registry.default_state("minecraft:chest").unwrap();
+        assert_eq!(
+            game.level_set_block(level, chest_pos, chest, BlockUpdateFlags::NONE),
+            Ok(true)
+        );
+        assert!(game.world.block_entities.mod_container(chest.0).is_none());
+        assert!(game.world.block_entities.mod_fluids(chest.0).is_none());
+        assert!(game.world.block_entities.mod_energy(chest.0).is_none());
+        assert_eq!(game.mod_menu_at((3, 64, 0)), None);
+        assert!(!game.open_mod_menu((3, 64, 0)));
     });
 }

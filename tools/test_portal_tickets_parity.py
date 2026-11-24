@@ -97,6 +97,8 @@ def main():
         'ChunkTickets through a real chunk_tickets.dat. Excludes level propagation, streaming '
         'readiness and other ticket types than FORCED beside PORTAL.',
         sources=[lab.ROOT / 'crates/sunrise-client/src/save.rs',
+                 lab.ROOT / 'crates/sunrise-client/src/save/dir.rs',
+                 lab.ROOT / 'crates/sunrise-client/src/save/tickets.rs',
                  lab.ROOT / 'crates/sunrise-client/src/ticket_levels.rs'],
         expected_lines=len(CASES))
 

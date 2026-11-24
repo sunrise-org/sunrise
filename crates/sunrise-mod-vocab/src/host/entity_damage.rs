@@ -14,7 +14,6 @@ pub trait EntityDamageBackend {
     /// keeps no such field), the other kinds in the saved `Invulnerable`
     /// tag of their entity data — the tag the item damage path
     /// already refuses by.
-    #[access(WorldOnly)]
     fn entity_permanently_invulnerable(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
     /// `Entity.invulnerableTime`: the entity-level invulnerability
@@ -22,13 +21,11 @@ pub trait EntityDamageBackend {
     /// cooldown — and the saved `invulnerable_time` tag for the other kinds.
     /// Counted down by the base tick; `isTemporarilyInvulnerable` is it above
     /// zero. None for a stale handle or a kind that keeps none.
-    #[access(WorldOnly)]
     fn entity_invulnerable_time(&self, entity: EntityRef) -> Option<i32>;
     /// Side: server.
     /// `LivingEntity.damageCooldownTime`: 20 after a hit, counting down;
     /// while it is above 10 a hit does only what it deals beyond the last
     /// one. Mobs and players.
-    #[access(WorldOnly)]
     fn entity_damage_cooldown_time(&self, entity: EntityRef) -> Option<i32>;
     /// Side: server.
     /// `Entity.isInvulnerableTo` for a source of `damage_type`: the entity's own
@@ -37,7 +34,6 @@ pub trait EntityDamageBackend {
     /// `#bypasses_invulnerability` gets past. None for a stale handle or a
     /// kind with no such decision (the player's paths answer their refusals
     /// at hurt time).
-    #[access(WorldOnly)]
     fn entity_invulnerable_to_damage(&self, entity: EntityRef, damage_type: &str) -> Option<bool>;
     /// Side: server.
     /// Whether `source`'s damage may hit `entity` through their teams
@@ -45,7 +41,6 @@ pub trait EntityDamageBackend {
     /// `DamageSource.doTeamsAllowDamage`): allies without friendly fire
     /// cannot. Entities without a team always can. None for a stale handle.
     ///
-    #[access(WorldOnly)]
     fn entity_entities_team_damage_allowed(
         &self,
         entity: EntityRef,
@@ -56,7 +51,6 @@ pub trait EntityDamageBackend {
     /// `Invulnerable` flag; the temporary window `Entity.invulnerableTime`
     /// opens is not represented, so no hit answers through it. None
     /// for a stale handle or a kind without the flag.
-    #[access(WorldOnly)]
     fn entity_invulnerable_to_piercing_weapon(&self, entity: EntityRef) -> Option<bool>;
 }
 /// The handles' writes of the `entity_damage` area, implemented by the game and reached through [`BackendMut`].
@@ -65,33 +59,56 @@ pub trait EntityDamageBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait EntityDamageBackendMut {
     /// Side: server.
+    /// Roll this live entity's death loot table as `LivingEntity.dropFromLootTable`, but
+    /// return the stacks without killing the entity, dropping items or experience, or
+    /// taking its equipment. Only the entity's loot table is rolled, not its custom death
+    /// drops. `None` uses its own table, including a mob's `DeathLootTable` override.
+    ///
+    /// The `ENTITY` context uses the entity's position as ORIGIN and `source`'s causing
+    /// and direct entities as ATTACKING_ENTITY and DIRECT_ATTACKING_ENTITY. The credited
+    /// player, if supplied, sets LAST_DAMAGE_PLAYER and luck; it need not be the attacker.
+    /// There is no TOOL. The living target must be in the server level in place; stale
+    /// references, unknown IDs and non-living targets are refused before drawing.
+    ///
+    /// This uses a mob's nonzero death-table seed if set, otherwise the named random
+    /// sequence or the level random. The latter draws advance the live streams.
+    ///
+    /// The roll asks `enchanted_entity_loot` for its enchantment levels, as a death does
+    /// (NeoForge's `EventHooks.getEntityLootEnchantmentLevel` fires for any entity loot
+    /// with a damage source). A listener of that hook that rolls from inside it rolls
+    /// again inside itself, so it must stop its own recursion.
+    fn entity_roll_death_loot(
+        &mut self,
+        entity: EntityRef,
+        table: Option<&Identifier>,
+        source: LootDamageSource<'_>,
+        last_damage_player: Option<PlayerRef>,
+    ) -> Result<Vec<ItemStack>, DeathLootError>;
+    /// Side: server.
     /// `Entity.setInvulnerable`: sets a mob's `Invulnerable` flag, saved
     /// with it. False for the other kinds.
-    #[access(WorldOnly)]
     fn entity_set_invulnerable(&mut self, entity: EntityRef, invulnerable: bool) -> bool;
     /// Side: server.
     /// Sets `LivingEntity.damageCooldownTime`, as mods do to let rapid hits
     /// through (0). Mobs and players.
-    #[access(WorldOnly)]
     fn entity_set_damage_cooldown_time(&mut self, entity: EntityRef, ticks: i32) -> bool;
     /// Side: server.
     /// `Entity.setInvulnerableTime`: the write side of
     /// `entity_invulnerable_time`. False where the entity is gone or keeps
     /// no such field.
-    #[access(WorldOnly)]
     fn entity_set_invulnerable_time(&mut self, entity: EntityRef, ticks: i32) -> bool;
-    /// `Entity.hurtServer(level, source, amount)` of `amount` from a source
-    /// of `damage_type` (`minecraft:generic`'s shape), `direct` the entity
-    /// that dealt it (a shot arrow) and `causing` the one responsible for it
-    /// (its shooter): the engine's own hurt paths take it — the damage type,
-    /// the attacker, armor, the damage cooldown and every existing hurt hook
-    /// kept, the damage event the hit already broadcasts is the broadcast —
-    /// by kind: the player's and mobs' for the living, the item, vehicle,
-    /// dragon and crystal branches for the damageable rest. True when the
-    /// damage was taken. None for a stale handle, false for a kind that
-    /// cannot be hurt or an unregistered damage type. Stale direct/causing
-    /// handles are treated as absent sources.
-    #[access(WorldOnly)]
+    /// Hurts the entity for `amount` through `Entity.hurtServer`. Pass the
+    /// exact registered `damage_type` id, vanilla or modded: the hurt source
+    /// keeps that id regardless of the entities supplied (for example,
+    /// `minecraft:explosion` does not become `minecraft:player_explosion`).
+    /// `direct` dealt the damage (such as an arrow); `causing` is responsible
+    /// (such as its shooter). The normal armor, cooldown, hooks and damage
+    /// broadcast still apply. True when the damage was accepted, false if
+    /// refused (including an unregistered type), and None for a stale target.
+    /// Accepted does not mean health was lost: `hurtServer` can report success
+    /// without any (a heart-bound creaking's reaction, a ghast's reflected
+    /// large fireball on hurt cooldown).
+    /// Stale direct or causing handles are treated as absent.
     fn entity_hurt(
         &mut self,
         entity: EntityRef,

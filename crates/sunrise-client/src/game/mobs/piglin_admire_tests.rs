@@ -51,7 +51,7 @@ fn piglin_admire_preserves_components_on_death_and_finish() {
                 assert!(held.same_item_same_components(&expected));
                 assert_eq!(held.count, 1);
                 let corpse = g.mobs[0].clone();
-                g.mob_died(&corpse);
+                g.mob_die(&corpse);
                 assert!(g.dropped.iter().any(|d| d.stack.count == 1 && d.stack.same_item_same_components(&expected)));
                 if sword {
                     let id = g.mobs[0].id;

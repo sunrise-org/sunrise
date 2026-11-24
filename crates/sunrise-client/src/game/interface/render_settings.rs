@@ -28,13 +28,22 @@ impl Game<'_> {
         window: Arc<Window>,
         pack: &PackResources,
         gui: &UiResources,
+        opened: Option<sunrise_client::gfx::Opened>,
     ) -> Result<Renderer> {
         build_renderer(
             window,
             self.options.offscreen,
             pack,
             gui,
-            self.renderer.as_ref(),
+            opened.map_or_else(
+                || {
+                    self.renderer.as_ref().map_or(
+                        sunrise_client::gfx::RendererDevice::New,
+                        sunrise_client::gfx::RendererDevice::Reuse,
+                    )
+                },
+                |device| sunrise_client::gfx::RendererDevice::Opened(Box::new(device)),
+            ),
             None,
             self.settings.sunrise.api,
             self.settings.sunrise.translucent_batching,
@@ -45,16 +54,17 @@ impl Game<'_> {
                 .as_ref()
                 .map(|r| r.display_reading())
                 .unwrap_or_default(),
-            (
-                self.settings.file.int("textureFiltering"),
-                self.settings.file.int("maxAnisotropyBit"),
-            ),
+            self.settings.texture_atlas_settings(),
         )
+        .and_then(|(renderer, clouds)| {
+            clouds?;
+            Ok(renderer)
+        })
     }
-    /// Under `SUNRISE_HDR_FRAME=float` the frame follows what draws the picture
-    /// (docs/design/hdr-linear-light.md, "When it changes"): when HDR, Smooth Gradients or the
-    /// pick (unless refused) call for another frame than the renderer's, it is made again before
-    /// this frame draws. Without the switch a frame stays until the next start, as before.
+    /// Under `SUNRISE_HDR_FRAME=float` the frame follows what draws the picture: when HDR,
+    /// Smooth Gradients or the pick (unless refused) call for another frame than the renderer's,
+    /// it is made again before this frame draws. Without the switch a frame stays until the next
+    /// start, as before.
     pub(super) fn follow_frame(&mut self) {
         if !native_shaders::linear_frame_switch() {
             return;
@@ -107,7 +117,7 @@ impl Game<'_> {
         if let Some(renderer) = &mut self.renderer {
             renderer.release_surface();
         }
-        let mut renderer = match self.renderer_for(window, &self.pack, &self.gui) {
+        let mut renderer = match self.renderer_for(window, &self.pack, &self.gui, None) {
             Ok(renderer) => renderer,
             Err(error) => {
                 if let Some(renderer) = &mut self.renderer {
@@ -136,8 +146,12 @@ impl Game<'_> {
         // LocalPlayer.refreshChatAbilities: the chat shows what the Chat option allows.
         let abilities = self.chat_abilities();
         self.ui.chat.set_abilities(&self.gui.atlas.font, abilities);
-        let render_distance_changed = self.streaming.radius != self.settings.render_distance;
-        self.streaming.radius = self.settings.render_distance;
+        let streaming_target = crate::game::entity_culling::streaming_radius_for(
+            self.settings.render_distance,
+            self.remote.as_ref().map(|r| r.view_distance),
+        );
+        let render_distance_changed = self.streaming.radius != streaming_target;
+        self.streaming.radius = streaming_target;
         // Options.renderDistance, biomeBlendRadius, ambientOcclusion,
         // cutoutLeaves, Opaque Ice and the leaf-culling mode:
         // LevelExtractor.allChanged when they change.
@@ -216,10 +230,11 @@ impl Game<'_> {
 
     /// Only enabled LOD worlds extend the renderer's range, never simulation.
     pub(super) fn terrain_distance(&self) -> i32 {
+        let distance = self.effective_render_distance();
         if self.lod.is_some() {
-            self.streaming.radius.max(self.lod_distance() as i32)
+            distance.max(self.lod_distance() as i32)
         } else {
-            self.streaming.radius
+            distance
         }
     }
 
@@ -240,7 +255,7 @@ impl Game<'_> {
     }
 
     pub(super) fn new_renderer(&self, window: Arc<Window>) -> Result<Renderer> {
-        self.renderer_for(window, &self.pack, &self.gui)
+        self.renderer_for(window, &self.pack, &self.gui, None)
     }
 
     /// A renderer made again from the resources loaded takes over: what named the old one's
@@ -257,8 +272,10 @@ impl Game<'_> {
             // A new renderer starts with the vanilla column.
             renderer.clear_sections(self.world.layout());
         }
-        // And has no wall for the world border.
+        // And has no wall for the world border. Its sections' sources are kept as the meshes
+        // on their way carry them.
         self.border_renderer.invalidate();
+        renderer.keep_pack_sources(self.streaming.shader_pack);
         self.renderer = Some(renderer);
         self.forget_atlas_slots();
         if !world_kept {

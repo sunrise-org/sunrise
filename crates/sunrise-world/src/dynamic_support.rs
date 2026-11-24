@@ -1,6 +1,8 @@
 //! Uncached support-shape selection. Block entities are queried through snapshots;
 //! their lifecycle and active moving-piston collision generation are separate.
-use crate::{block_support::SupportType, chunk::BlockState, compression::invalid};
+use crate::{
+    block_support::SupportType, chunk::BlockState, compression::invalid, registry::BlockStateId,
+};
 use std::{io, sync::OnceLock};
 use sunrise_core::{
     geometry::{Aabb, Direction, ShapeError, ShapeOp, Vec3, VoxelShape},
@@ -18,14 +20,13 @@ pub trait DynamicSupportWorld {
         &mut self,
         position: [i32; 3],
     ) -> Result<Option<VoxelShape>, Self::Error>;
-    /// The collision shape the block entity at `position` published for its block
-    /// (`shapes_from_block_entity`), by one lookup at the position. None when it holds none, or
-    /// for a world with no block entities, so the block's declared shape applies.
+    /// The collision shape published at `position` for `state`'s block. A missing publication
+    /// or one owned by a different block leaves the supplied state's declared shape in use.
     fn published_collision_shape(
         &mut self,
-        position: [i32; 3],
+        _position: [i32; 3],
+        _state: BlockStateId,
     ) -> Result<Option<VoxelShape>, Self::Error> {
-        let _ = position;
         Ok(None)
     }
 }

@@ -262,6 +262,13 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p sunrise-client --doc")
         self.assertIsNone(by_name["doc tests"].status)
 
+    def test_port_map_checks_the_merge_base_not_the_moving_tip(self):
+        steps = pr_ready.plan(args(quick=True), "origin/main", {"docs/port-ledger.md"},
+                              PACKAGES, LIBRARIES, DEPENDENCIES, merge_base="abc123")
+        by_name = {step.name: step for step in steps}
+        self.assertIn("--base abc123", by_name["Port map"].command)
+        self.assertIn("--base origin/main", by_name["Layers"].command)
+
     def test_content_root_tests_run_only_when_what_they_load_changes(self):
         def content_step(path):
             with mock.patch.object(pr_ready, "affected_here", return_value=[]):

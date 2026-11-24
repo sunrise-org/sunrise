@@ -79,7 +79,7 @@ pub fn register(m: &mut Mob) {
     g.add(10, LookAtPlayer::new(8.0));
     g.add(10, RandomLookAround::default());
     m.ai.targets.add(1, OwnerHurtBy { timestamp: 0 });
-    m.ai.targets.add(2, OwnerHurt { timestamp: 0 });
+    m.ai.targets.add(2, OwnerHurt { victim: None });
     m.ai.targets.add(3, HurtByTarget::new().alert());
     m.ai.targets
         .add(4, NearestTarget::player(true).when(angry_at_player));
@@ -241,11 +241,21 @@ pub fn wolf_health_base(tame: bool) -> f64 {
 /// `TamableAnimal.getOwner`: the player the saved owner UUID names, when it
 /// is the one this mob sees; anyone else nearby is not its owner.
 fn owner_view<'a>(m: &Mob, w: &'a MobWorld) -> Option<&'a PlayerView> {
+    owner_player(m, w).map(|(view, _)| view)
+}
+/// [`owner_view`] with the owner's entity id: the player the tick sees, or, when the
+/// tick holds every player of the level, the one the saved UUID names wherever
+/// they stand (`getPlayerByUUID`).
+fn owner_player<'a>(m: &Mob, w: &'a MobWorld) -> Option<(&'a PlayerView, Option<u32>)> {
     if !m.extra.tame {
         return None;
     }
-    let p = w.selected_player()?;
-    (m.extra.owner == Some(p.uuid)).then_some(p)
+    let owner = m.extra.owner?;
+    if let Some(p) = w.selected_player().filter(|p| p.uuid == owner) {
+        return Some((p, w.selected_player_identity().map(|(_, id)| id)));
+    }
+    let p = w.player_selection?.by_uuid(owner)?;
+    Some((&p.view, Some(p.entity_id)))
 }
 /// The owner's position, eye height and spectator flag when tame.
 fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
@@ -377,7 +387,7 @@ impl Goal for SitWhenOrdered {
         if !m.extra.sitting && !m.extra.tame {
             return false;
         }
-        if m.fluids.in_water || !m.on_ground {
+        if m.fluids.in_water || !m.ground.on_ground {
             return false;
         }
         match owner_distance_sqr(m, cx.w) {
@@ -558,10 +568,12 @@ impl Goal for OwnerHurtBy {
         m.set_ai_target(cx.w, None);
     }
 }
-/// `OwnerHurtTargetGoal`: attack what the owner attacks.
+/// `OwnerHurtTargetGoal`: attack what the owner attacks. Its `timestamp` is
+/// [`crate::mobs::ai::Ai::owner_hurt_timestamp`].
 #[derive(Clone, Debug)]
 struct OwnerHurt {
-    timestamp: i64,
+    /// `ownerLastHurt`: the victim `can_use` checked, which `start` targets.
+    victim: Option<u32>,
 }
 impl Goal for OwnerHurt {
     goal_clone!();
@@ -572,10 +584,20 @@ impl Goal for OwnerHurt {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) else {
+        let Some((owner, owner_id)) = owner_player(m, cx.w) else {
             return false;
         };
-        at != self.timestamp && wants_to_attack(m, cx.w, who)
+        let Some((id, at)) = owner.last_hurt else {
+            return false;
+        };
+        if at == m.ai.owner_hurt_timestamp {
+            return false;
+        }
+        self.victim = Some(id);
+        match cx.w.player_selection.filter(|s| s.get(id).is_some()) {
+            Some(players) => wants_to_attack_player(m, cx.w, players, owner_id, id),
+            None => wants_to_attack(m, cx.w, Who::Mob(id)),
+        }
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         m.ai.target
@@ -583,9 +605,21 @@ impl Goal for OwnerHurt {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) {
-            m.set_ai_target(cx.w, Some(who));
-            self.timestamp = at;
+        let Some(id) = self.victim else {
+            return;
+        };
+        // A player victim becomes the tick's selected player, so `Who::Player`, the
+        // events that act on it and the mob's binding after the tick all name them.
+        let target = match cx.w.player_selection {
+            Some(players) if players.select(id) => {
+                m.ai.seen_cache.retain(|(who, _)| *who != Who::Player);
+                Who::Player
+            }
+            _ => Who::Mob(id),
+        };
+        m.set_ai_target(cx.w, Some(target));
+        if let Some((_, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) {
+            m.ai.owner_hurt_timestamp = at;
         }
     }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
@@ -615,6 +649,73 @@ fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
         Species::Horse | Species::Donkey | Species::Mule | Species::Llama => !s.tame,
         _ => true,
     }
+}
+/// Whether a pet's owner goals need a player other than the one its tick sees, so the
+/// mob tick builds the level's player views for it (`TamableAnimal.getOwner` and
+/// `OwnerHurtTargetGoal` resolve players by identity): its owner is one of `others`,
+/// or it is a wolf whose owner, the player it sees, hurt a player (`is_player`) since
+/// the goal last started.
+pub fn reads_another_player<'v>(
+    m: &Mob,
+    seen: Option<&PlayerView>,
+    mut others: impl Iterator<Item = &'v PlayerView>,
+    is_player: impl Fn(u32) -> bool,
+) -> bool {
+    // The pets the mob tick binds to their owner: the ones with owner goals.
+    if !matches!(m.species(), Species::Wolf | Species::Cat | Species::Parrot) {
+        return false;
+    }
+    let Some(owner) = m.extra.owner.filter(|_| m.extra.tame) else {
+        return false;
+    };
+    match seen.filter(|p| p.uuid == owner) {
+        Some(p) => {
+            m.species() == Species::Wolf
+                && p.last_hurt
+                    .is_some_and(|(id, at)| at != m.ai.owner_hurt_timestamp && is_player(id))
+        }
+        None => others.any(|p| p.uuid == owner),
+    }
+}
+/// `OwnerHurtTargetGoal.canUse` for a player the owner hurt: `TargetGoal.canAttack`
+/// with `TargetingConditions.DEFAULT` (`forCombat()`, unranged, in sight), then
+/// `Wolf.wantsToAttack`'s player branch, `ServerPlayer.canHarmPlayer`: the `pvp` game
+/// rule, and the owner's team letting its players hurt the victim's
+/// (`Player.canHarmPlayer`). The victim is read through a peek, so the tick still sees
+/// the owner until the goal starts; the sight it measures leaves the cache with it,
+/// since the cache names the selected player only as `Who::Player`.
+fn wants_to_attack_player(
+    m: &mut Mob,
+    w: &MobWorld,
+    players: &crate::mobs::player_selection::PlayerSelection,
+    owner: Option<u32>,
+    victim: u32,
+) -> bool {
+    let teams = &w.teams;
+    let victim_team = teams.of_player(victim);
+    // `TargetingConditions.test` refuses an ally: `TamableAnimal.considersEntityAsAlly`
+    // asks the owner, and the victim's team is allied to the pet's `getTeam`, its own
+    // or else its owner's.
+    let owner_team = owner.and_then(|id| teams.of_player(id));
+    if Some(victim) == owner
+        || crate::scoreboard::teams_allied(owner_team, victim_team)
+        || crate::scoreboard::teams_allied(teams.of(Who::Mob(m.id)), victim_team)
+        || !w.pvp
+        || !crate::scoreboard::teams_allow_damage(owner_team, victim_team)
+    {
+        return false;
+    }
+    let cached =
+        m.ai.seen_cache
+            .iter()
+            .position(|(who, _)| *who == Who::Player);
+    let kept = cached.map(|i| m.ai.seen_cache.swap_remove(i));
+    let attackable = players
+        .peek(victim, || m.can_target_player(w, -1.0, true))
+        .unwrap_or(false);
+    m.ai.seen_cache.retain(|(who, _)| *who != Who::Player);
+    m.ai.seen_cache.extend(kept);
+    attackable
 }
 /// `BegGoal`: tilt the head at a player holding something interesting.
 #[derive(Clone, Debug)]
@@ -766,7 +867,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 /// then `Wolf.tick` runs the shake (`shake_tick`). `wet` is
 /// `isInWaterOrRain`.
 pub fn server_shake(m: &mut Mob, wet: bool, events: &mut Vec<MobEvent>) {
-    if m.extra.flag2 && m.extra.counter2 == 0 && m.ai.nav.is_done() && m.on_ground {
+    if m.extra.flag2 && m.extra.counter2 == 0 && m.ai.nav.is_done() && m.ground.on_ground {
         start_shaking(m);
         broadcast(m, events, 8);
     }
@@ -1865,6 +1966,7 @@ mod tests {
         assert!(
             with_test_world(&seen, |w, _| {
                 let indexed = MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others_grid: Some(&grid),
                     ..w.clone()
                 };
@@ -2018,7 +2120,7 @@ mod tests {
         k.width = 0.6;
         k.height = 0.85;
         let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
-        m.on_ground = true;
+        m.ground.on_ground = true;
         m
     }
     /// `Wolf.die`: the wet flag, the shake counter and both shake animations
@@ -2316,12 +2418,14 @@ mod tests {
                 }
                 let seen = [attacker.seen(None, &crate::items::Items::empty())];
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     others: &seen,
                     ..world
                 };
                 let mut p = p;
                 p.hurt_by = Some((Who::Mob(2), 5));
                 let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
                     player: Some(p),
                     ..world
                 };
@@ -2345,6 +2449,137 @@ mod tests {
             outcomes,
             vec![true, false],
             "an alive attacker is avenged; a dead one is not"
+        );
+    }
+    /// The mob tick builds the level's player views for a wolf only when its owner hurt a
+    /// player since the goal last started, not for a stale mob id or a consumed hit, and
+    /// for a pet whose owner is a player other than the one it sees.
+    #[test]
+    fn a_pet_reads_other_players_only_when_its_owner_goals_need_them() {
+        use crate::mobs::world::test_player;
+        const VICTIM: u32 = 11;
+        const DEAD_MOB: u32 = 40;
+        let mut wolf_kind = (*kind()).clone();
+        wolf_kind.species = Species::Wolf;
+        let mut wolf = Mob::new(1, Arc::new(wolf_kind), Vec3::new(0.5, 64.0, 0.5), 0.0);
+        wolf.extra.tame = true;
+        wolf.extra.owner = Some([0, 0, 0, 10]);
+        let mut owner = test_player(Vec3::new(1.5, 64.0, 0.5));
+        owner.uuid = [0, 0, 0, 10];
+        let mut bystander = test_player(Vec3::new(0.5, 64.0, 1.5));
+        bystander.uuid = [0, 0, 0, 12];
+        let is_player = |id| id == VICTIM;
+        let reads = |wolf: &Mob, seen: &PlayerView, others: &[&PlayerView]| {
+            reads_another_player(wolf, Some(seen), others.iter().copied(), is_player)
+        };
+        assert!(!reads(&wolf, &owner, &[]), "no hit");
+        owner.last_hurt = Some((DEAD_MOB, 7));
+        assert!(!reads(&wolf, &owner, &[]), "a mob id, stale or not");
+        owner.last_hurt = Some((VICTIM, 7));
+        assert!(reads(&wolf, &owner, &[]), "a player victim");
+        wolf.ai.owner_hurt_timestamp = 7;
+        assert!(!reads(&wolf, &owner, &[]), "a hit the goal consumed");
+        assert!(reads(&wolf, &bystander, &[&owner]), "the owner elsewhere");
+        assert!(!reads(&wolf, &bystander, &[]), "the owner absent");
+    }
+    /// `OwnerHurtTargetGoal` targets the owner's `getLastHurtMob` when that is another
+    /// player, as `Wolf.wantsToAttack` allows it through `ServerPlayer.canHarmPlayer`:
+    /// with the `pvp` game rule on, also while the tick sees a bystander rather than the
+    /// owner (`getOwner` by identity); not with `pvp` off, nor when the victim is on the
+    /// owner's team, with friendly fire off or on: the un-teamed pet's `getTeam` is its
+    /// owner's, and `TargetingConditions` refuses an ally.
+    #[test]
+    #[ignore = "daily"]
+    fn a_pet_targets_the_player_its_owner_hurt_when_pvp_allows_it() {
+        use crate::health::TestLevel;
+        use crate::mobs::goals::Cx;
+        use crate::mobs::player_selection::{PlayerSelection, TickPlayer};
+        use crate::mobs::world::{test_player, with_test_world};
+        use crate::scoreboard::Scoreboard;
+        const OWNER: u32 = 10;
+        const VICTIM: u32 = 11;
+        const BYSTANDER: u32 = 12;
+        let mut board = Scoreboard::default();
+        board.add_team("no_friendly_fire").allow_friendly_fire = false;
+        board.add_team("friendly_fire").allow_friendly_fire = true;
+        board.add_to_team("a", "no_friendly_fire");
+        board.add_to_team("b", "friendly_fire");
+        let (no_friendly_fire, friendly_fire) = (
+            board.players_team("a").unwrap(),
+            board.players_team("b").unwrap(),
+        );
+        let mut outcomes = Vec::new();
+        if !with_test_world(&[], |w, _| {
+            for (pvp, seen, team) in [
+                (true, OWNER, None),
+                (true, BYSTANDER, None),
+                (false, OWNER, None),
+                (true, OWNER, Some(no_friendly_fire)),
+                (true, OWNER, Some(friendly_fire)),
+            ] {
+                let player = |id: u32, x: f64| {
+                    let mut view = test_player(Vec3::new(x, 64.0, 0.5));
+                    view.uuid = [0, 0, 0, id as i32];
+                    TickPlayer {
+                        entity_id: id,
+                        connection: (id != OWNER).then_some(id),
+                        view,
+                    }
+                };
+                let mut owner = player(OWNER, 1.5);
+                owner.view.last_hurt = Some((VICTIM, 7));
+                let players = vec![owner, player(VICTIM, 6.5), player(BYSTANDER, 0.5)];
+                let seen_view = players.iter().find(|p| p.entity_id == seen).unwrap();
+                let (view, uuid) = (seen_view.view.clone(), seen_view.view.uuid);
+                let selection = PlayerSelection::new(players, Some(seen)).unwrap();
+                let mut teams = crate::mobs::Teams::default();
+                if let Some(team) = team {
+                    teams.players =
+                        std::collections::HashMap::from([(OWNER, team), (VICTIM, team)]);
+                }
+                let world = crate::mobs::MobWorld {
+                    side: sunrise_client::motion::dry_side(),
+                    player: Some(view),
+                    player_identity: Some((uuid, seen)),
+                    player_selection: Some(&selection),
+                    teams: Arc::new(teams),
+                    pvp,
+                    ..w.clone()
+                };
+                let mut wolf_kind = (*kind()).clone();
+                wolf_kind.species = Species::Wolf;
+                let mut wolf = Mob::new(1, Arc::new(wolf_kind), Vec3::new(0.5, 64.0, 2.5), 0.0);
+                wolf.extra.tame = true;
+                wolf.extra.owner = Some([0, 0, 0, OWNER as i32]);
+                wolf.ai.targets.add(2, OwnerHurt { victim: None });
+                let mut lr = TestLevel::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w: &world,
+                    level: &mut lr.level(),
+                    events: &mut events,
+                };
+                let mut goals = std::mem::take(&mut wolf.ai.targets);
+                goals.tick(&mut wolf, &mut cx);
+                outcomes.push((
+                    goals.is_running("OwnerHurt"),
+                    wolf.ai.target,
+                    selection.selected().map(|p| p.entity_id),
+                ));
+            }
+        }) {
+            return;
+        }
+        assert_eq!(
+            outcomes,
+            vec![
+                (true, Some(Who::Player), Some(VICTIM)),
+                (true, Some(Who::Player), Some(VICTIM)),
+                (false, None, Some(OWNER)),
+                (false, None, Some(OWNER)),
+                (false, None, Some(OWNER)),
+            ],
+            "pvp on: the victim, seen from the owner or a bystander; pvp off or allies: none"
         );
     }
     /// `Cat.CatAvoidEntityGoal.canContinueToUse` is `!cat.isTame()
@@ -2553,7 +2788,7 @@ mod tamable_panic_tests {
                 let kind = Arc::new(types.types[name].clone());
                 let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                 setup(&mut m);
-                m.on_ground = true;
+                m.ground.on_ground = true;
                 m.last_damage = Some((Damage::of(damage), i64::from(m.age)));
                 let mut events = Vec::new();
                 let mut test_level = crate::health::TestLevel::new(0);

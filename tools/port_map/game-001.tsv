@@ -41,7 +41,7 @@ ChunkMap.saveChunksEagerly	port	crates/sunrise-client/src/game.rs::Game::save_ch
 ChunkMap.scheduleUnload	inline	crates/sunrise-client/src/game/world_update.rs::Game::update_world	save if modified, unload entities and block entities
 ChunkMap.promoteChunkMap	skip:java		copy of the holder map for the main thread; Sunrise has one chunk map
 ChunkMap.scheduleChunkLoad	port	crates/sunrise-client-render/src/streaming.rs::ChunkGenerator::load	the Generate job loads a saved final chunk, else a proto is made
-ChunkMap.handleChunkLoadFailure	inline	crates/sunrise-client/src/save.rs::SaveDir::load	gap: minor: an unreadable record gives None and the column is generated again with no failure report
+ChunkMap.handleChunkLoadFailure	inline	crates/sunrise-client/src/save/dir.rs::SaveDir::load	gap: minor: an unreadable record gives None and the column is generated again with no failure report
 ChunkMap.createEmptyChunk	inline	crates/sunrise-client-render/src/streaming.rs::Streaming::schedule_generation	no saved data: the Generate job makes a fresh proto
 ChunkMap.markPosition	skip:java		chunk type cache for isExistingChunkFull
 ChunkMap.applyStep	inline	crates/sunrise-client-render/src/streaming.rs::Streaming::new	the worker loop runs the Generate, Decorate and Finish jobs
@@ -56,14 +56,14 @@ ChunkMap.markChunkPendingToSend	port	crates/sunrise-client/src/lan/hub.rs::reque
 ChunkMap.getChunkToSend	inline	crates/sunrise-client/src/lan/hub.rs::Hub::next_batch	only lit columns are taken
 ChunkMap.dumpChunks	skip:debug		CSV chunk dump
 ChunkMap.printFuture	skip:debug
-ChunkMap.readChunk	port	crates/sunrise-client/src/save.rs::SaveDir::read_record	reads the raw record (pending writes first); the upgrade is done when the world opens
+ChunkMap.readChunk	port	crates/sunrise-client/src/save/dir.rs::SaveDir::read_record	reads the raw record (pending writes first); the upgrade is done when the world opens
 ChunkMap.upgradeChunkTag	inline	crates/sunrise-world/src/datafix/files.rs::upgrade_world_data	chunks are upgraded all at once when an older world opens, not as each is read
 ChunkMap.getChunkDataFixContextTag	inline	crates/sunrise-world/src/datafix/files.rs::upgrade_world_data	dimension id and generator type passed to update_chunk per dimension folder
 ChunkMap.forEachBlockTickingChunk	port	crates/sunrise-client/src/ticket_levels.rs::Levels::random_ticking	simulation entity ticking and a ticking chunk
 ChunkMap.anyPlayerCloseEnoughForSpawningInternal	inline	crates/sunrise-client/src/game/mobs/natural_spawning.rs::Game::spawning_chunks	any non-spectator within 128 blocks of the chunk centre
 ChunkMap.playerIsCloseEnoughForSpawning	port	crates/sunrise-client/src/game/mobs/natural_spawning.rs::close_enough_for_spawning
 ChunkMap.playerIsCloseEnoughTo	inline	crates/sunrise-client/src/game/blocks/level_access.rs::GameLevel::can_spread_fire_around	the only caller (fire spread radius), spectators left out
-ChunkMap.skipPlayer	port	crates/sunrise-client/src/game/interface/game_mode.rs::loads_chunks	a skipped player holds no ticket and streams no chunks; sending chunks to a spectator is unchanged
+ChunkMap.skipPlayer	port	crates/sunrise-gameplay/src/game_modes.rs::loads_chunks	a skipped player holds no ticket and streams no chunks; sending chunks to a spectator is unchanged
 ChunkMap.updatePlayerStatus	inline	crates/sunrise-client/src/game.rs::Game::update_chunk_tickets	tickets follow every player in the level each tick; a leaving guest's view is dropped by the hub
 ChunkMap.updateChunkTracking	port	crates/sunrise-client/src/lan/hub.rs::Hub::update_view	a new centre or view distance (center reset) re-applies the view
 ChunkMap.applyChunkTrackingView	inline	crates/sunrise-client/src/lan/hub.rs::Hub::update_view	SetChunkCacheCenter, then forget and queue the difference
@@ -139,6 +139,6 @@ LoadingChunkTracker.getLevel	port	crates/sunrise-client/src/ticket_levels.rs::Le
 LoadingChunkTracker.setLevel	inline	crates/sunrise-client/src/ticket_levels.rs::ChunkTickets::update	levels are rebuilt when sources change
 PlayerSpawnFinder.scheduleNext	port	crates/sunrise-client/src/world_spawn.rs::PlayerSpawnFinder::next_candidate	coprime stride order, then the suggestion
 PlayerSpawnFinder.scheduleCandidate	port	crates/sunrise-client/src/game/world/initial_spawn.rs::Game::search_spawn	gap: minor: a server tick passes over candidates in unloaded chunks instead of waiting for the candidate's chunk, so a new player can stand on another spot of the radius
-SectionTracker.checkNeighborsAfterUpdate	inline	crates/sunrise-client/src/game/mobs/raids/mod.rs::sections_to_village	its only subclass is the POI village distance: Chebyshev distance in sections, 7 when farther than 6
-SectionTracker.getComputedLevel	inline	crates/sunrise-client/src/game/mobs/raids/mod.rs::sections_to_village
-SectionTracker.computeLevelFromNeighbor	inline	crates/sunrise-client/src/game/mobs/raids/mod.rs::sections_to_village
+SectionTracker.checkNeighborsAfterUpdate	inline	crates/sunrise-gameplay/src/custom_spawner.rs::sections_to_village	its only subclass is the POI village distance: Chebyshev distance in sections, 7 when farther than 6
+SectionTracker.getComputedLevel	inline	crates/sunrise-gameplay/src/custom_spawner.rs::sections_to_village
+SectionTracker.computeLevelFromNeighbor	inline	crates/sunrise-gameplay/src/custom_spawner.rs::sections_to_village

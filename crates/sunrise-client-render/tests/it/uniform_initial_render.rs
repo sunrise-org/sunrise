@@ -1,5 +1,5 @@
 //! Original synthetic rendering controls for ordinary uniform initial values.
-use sunrise_client_render::gfx::pack_uniforms::Value;
+use sunrise_render_shaderpack::pack_uniforms::Value;
 use sunrise_shaders::{Origin, Preprocessed, Target, translate_composite};
 use wgpu::util::DeviceExt;
 
@@ -26,7 +26,7 @@ fn authored_defaults_render_and_runtime_values_override_including_zero() {
     let program = translate_composite(
         &source("void main() { gl_Position = ftransform(); }"),
         &source("uniform float gain = 0.375; uniform mat3 basis = mat3(2.0); uniform mat4 transform = mat4(1.0); uniform vec3 tint = vec3(0.125,0.25,0.5); uniform float points[2] = float[](0.0625,0.125); uniform int mode = 3; uniform bool enabled = true; out vec4 color; void main() { color = vec4(gain * basis[0][0] * transform[2][2], tint.g + points[1], float(mode), enabled ? 1.0 : 0.0); }"),
-        Target::Buffers,
+        Target::Buffers, naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     ).unwrap();
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());

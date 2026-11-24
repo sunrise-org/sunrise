@@ -61,7 +61,7 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
     let mut wolf = Mob::new(WOLF, kind, Vec3::new(0.5, 64.0, 2.0), 0.0);
     sunrise_client::mobs::tame::set_tame(&mut wolf, true);
     wolf.extra.owner = Some(game.acting_player_uuid());
-    wolf.on_ground = true;
+    wolf.ground.on_ground = true;
     game.mobs.push(wolf);
     game
 }

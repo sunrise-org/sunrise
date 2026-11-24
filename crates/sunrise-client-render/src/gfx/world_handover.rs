@@ -45,6 +45,7 @@ impl Renderer {
             packed_on,
             packed_quads,
             lods,
+            lod_vertex_bytes,
             lod_cells,
             lod_cull_free,
             lod_cull_next,

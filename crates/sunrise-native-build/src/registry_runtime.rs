@@ -20,7 +20,7 @@ enum CargoEvent {
         target: Target,
     },
     CompilerMessage {
-        message: Diagnostic,
+        message: crate::present::Diagnostic,
     },
     #[serde(other)]
     Other,
@@ -29,15 +29,10 @@ enum CargoEvent {
 struct Target {
     kind: Vec<String>,
 }
-#[derive(Deserialize)]
-struct Diagnostic {
-    rendered: Option<String>,
-}
-
 pub struct Outputs {
     scripts: Vec<(String, Vec<String>)>,
     libraries: Vec<(String, Vec<PathBuf>)>,
-    pub errors: Vec<String>,
+    pub errors: Vec<crate::present::Diagnostic>,
 }
 
 fn dynamic(path: &Path) -> bool {
@@ -72,10 +67,8 @@ impl Outputs {
                 } if !target.kind.iter().any(|kind| kind == "proc-macro") => {
                     outputs.libraries.push((package_id, filenames))
                 }
-                CargoEvent::CompilerMessage { message } => {
-                    if let Some(rendered) = message.rendered {
-                        outputs.errors.push(rendered);
-                    }
+                CargoEvent::CompilerMessage { message } if message.rendered().is_some() => {
+                    outputs.errors.push(message)
                 }
                 _ => {}
             }

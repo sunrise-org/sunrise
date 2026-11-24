@@ -53,10 +53,10 @@ fn client_humanoid_setup_reaches_body_skinned_and_layer_routes() {
                 let mut skin = skin::Skin::new(&mut models, &mut frame);
                 for route in 0..3 {
                     heard.lock().unwrap().clear();
-                    let mut parts = None;
+                    let mut draw = render::FrameDraw::new(true);
                     let mut out = Vec::new();
                     match route {
-                        0 => render::render_with_hidden(
+                        0 => render::render_with_frame(
                             &mob,
                             0.5,
                             glam::DVec3::ZERO,
@@ -64,8 +64,7 @@ fn client_humanoid_setup_reaches_body_skinned_and_layer_routes() {
                             0xf0f0,
                             game,
                             &[],
-                            Default::default(),
-                            Some(&mut parts),
+                            &mut draw,
                             &mut out,
                         ),
                         1 => render::render_skinned(
@@ -75,8 +74,7 @@ fn client_humanoid_setup_reaches_body_skinned_and_layer_routes() {
                             &lookup,
                             0xf0f0,
                             game,
-                            Default::default(),
-                            Some(&mut parts),
+                            &mut draw,
                             &mut out,
                             &mut skin,
                         ),
@@ -88,7 +86,7 @@ fn client_humanoid_setup_reaches_body_skinned_and_layer_routes() {
                             0xf0f0,
                             game,
                             &[],
-                            Some(&mut parts),
+                            &mut draw,
                             &mut out,
                         ),
                     }
@@ -96,35 +94,27 @@ fn client_humanoid_setup_reaches_body_skinned_and_layer_routes() {
                     assert!(!events.is_empty(), "{kind} route {route}");
                     assert!(events.iter().all(|(id, ty)| *id == 73 && ty == kind));
                     drop(events);
-                    if let Some(parts) = parts {
-                        let body = parts.get(HumanoidPart::Body).unwrap();
-                        assert_eq!(body.pose.y_rot, 0.19, "{kind} route {route}");
-                    } else {
-                        // The existing post-render snapshot intentionally covers
-                        // HumanoidMobRenderer families, not EndermanRenderer.
-                        // Prove its edit through actual geometry instead of
-                        // broadening that separate hook's publication contract.
-                        assert_eq!(kind, "minecraft:enderman", "route {route}");
-                        if route == 0 {
-                            let mut baseline = Vec::new();
-                            render::render_with_hidden(
-                                &mob,
-                                0.5,
-                                glam::DVec3::ZERO,
-                                &lookup,
-                                0xf0f0,
-                                game.res.mob_data(),
-                                &[],
-                                Default::default(),
-                                None,
-                                &mut baseline,
-                            );
-                            assert_eq!(out.len(), baseline.len());
-                            assert!(
-                                out.iter().zip(&baseline).any(|(a, b)| a.pos != b.pos),
-                                "enderman body edit must change drawn geometry"
-                            );
-                        }
+                    let model = draw.model().expect("the baked body was posed");
+                    let body = model.part("body").unwrap();
+                    assert_eq!(body.pose().y_rot, 0.19, "{kind} route {route}");
+                    if kind == "minecraft:enderman" && route == 0 {
+                        let mut baseline = Vec::new();
+                        render::render_with_frame(
+                            &mob,
+                            0.5,
+                            glam::DVec3::ZERO,
+                            &lookup,
+                            0xf0f0,
+                            game.res.mob_data(),
+                            &[],
+                            &mut render::FrameDraw::default(),
+                            &mut baseline,
+                        );
+                        assert_eq!(out.len(), baseline.len());
+                        assert!(
+                            out.iter().zip(&baseline).any(|(a, b)| a.pos != b.pos),
+                            "enderman body edit must change drawn geometry"
+                        );
                     }
                 }
             }

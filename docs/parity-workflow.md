@@ -1,6 +1,6 @@
 # Parity workflow
 
-How parity work is run, checked and merged. What is ported and where it is checked: [Rust rewrite status](rust-parity.md).
+How parity work is run, checked and merged. What is ported and where it is checked: [Sunrise status](status.md) and [port ledger](port-ledger.md).
 
 ## Datafix downloads and author self-checks
 
@@ -56,6 +56,15 @@ python3 tools/parity.py --changed-files paths.txt  # the same for listed paths, 
 
 CI runs the automatic harnesses only in the [daily on main's head](release-flow.md#parity-on-main), not on pull requests or rollups. The daily posts harness names and outcomes; its logs stay private on the runner. One selection, several shares: the plan job computes the selection once from the tested commit and splits it (`tools/ci/parity_shards.py` names the count), each runner runs exactly its share (`tools/parity.py --harness-file`), and `tools/ci/parity_verdict.py --merge` turns the shares into the one file the daily summary reads, refusing a run whose shares miss a planned harness or run one twice. A commit of main from before the shares runs as one job, as it did then.
 
+The Linux daily also runs `save_kill` and `save_corruption` through this runner, like
+`dedicated_crash_save`. To run them directly on Linux with prepared resources, use
+`python3 tools/test_save_kill_parity.py` and `python3 tools/test_save_corruption_parity.py`.
+They boot a dedicated server in disposable worlds and exercise its real save and load paths.
+The kill check uses `SUNRISE_CRASH_FIXTURE` to stop a writer at a named publish boundary,
+then sends SIGKILL and reopens the world. This tests process death, not disk power loss.
+The corruption check changes copies of the saves and checks recovery, refusal, or chunk regeneration.
+Neither runs in the PR or rollup gate.
+
 Each harness runs unmodified under a tracer that records the files it depended on: its Python modules, its Java oracle and the oracle sources javac pulled in, other repository files it read, and the Rust sources of the probes it ran (from Cargo's `.d` dep-info files). A pass stands until one of those files, the pinned vanilla artifacts, `Cargo.lock` or the Rust/Java toolchains change. State and logs are in `.local/parity-runner/`; each harness's own outputs stay in its `.local/<name>/` directory.
 
 Vanilla oracle runs are reused as well. `tools/parity_shim.py` stands in for `java` and `javac`: it records each oracle run's outputs and the content of every file under the paths its arguments name, and replays the run while those are unchanged. After a Rust-only change a harness pays only for its Rust side (`block_update`: 53 s to 5 s). Files an oracle writes outside its named paths aren't tracked, so a harness that fails while reusing oracle results is rerun fresh, and stops reusing them if it then passes. `--fresh` never reuses them; `--all` allows reuse only when
@@ -80,7 +89,7 @@ All runners on a machine share `PARITY_MACHINE_JOBS` slots (default: half the CP
 
 The game logs into `SUNRISE_HOME` and falls back to the player's own game folder when it is unset, so a harness that starts the game, `sunrise-ctl`, the launcher or the dedicated server builds the environment with `lab.game_env(**extra)`: no audio, and fresh scratch folders for `SUNRISE_HOME`, `SUNRISE_LAUNCHER_HOME`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, removed when the harness exits (a folder you pass, or that the environment already has, is kept). The runner also gives each harness its own `SUNRISE_HOME` under `.local/parity-runner/game-home/`. `tests/test_game_home.py` fails for a script in `tools/` that starts the game without it.
 
-`frame_identity` (`tools/test_frame_identity_parity.py`) holds the picture where a change shouldn't move it, as the HDR design note's first tests ask ([design/hdr-linear-light.md](design/hdr-linear-light.md#tests)). Its oracle is the base build, not vanilla: pictures of the game hold Minecraft's textures and can't be committed. It builds `BASE_SHA` (else the merge-base with `origin/main`) in a worktree and target folder of its own under `.local/frame-identity/`, kept between runs so a later base rebuilds incrementally, draws fixed scenes offscreen with each build under `SUNRISE_STILL=1` (HDR off; the Golden Hour pack in SDR and with offscreen HDR output; HDR turned off in a running game), and requires identical pixels, writing `diff-<scene>.png` where they aren't. Both builds draw on lavapipe where Mesa's Vulkan driver is installed, else on the machine's default adapter. When the change touches only `tools/`, `tests/`, `.github/` or Markdown outside `crates/`, the base reuses the change's binaries (`--build-base` builds it anyway), so the run checks that two runs of one build agree. It is `named_only` in `tools/parity_hosts.json`, since it fails any change that moves the picture on purpose; a change that must leave the picture alone runs it by name with `python3 tools/parity.py frame_identity`.
+`frame_identity` (`tools/test_frame_identity_parity.py`) holds the picture where a change shouldn't move it. Its oracle is the base build, not vanilla: pictures of the game hold Minecraft's textures and can't be committed. It builds `BASE_SHA` (else the merge-base with `origin/main`) in a worktree and target folder of its own under `.local/frame-identity/`, kept between runs so a later base rebuilds incrementally, draws fixed scenes offscreen with each build under `SUNRISE_STILL=1` (HDR off; the Golden Hour pack in SDR and with offscreen HDR output; HDR turned off in a running game), and requires identical pixels, writing `diff-<scene>.png` where they aren't. Both builds draw on lavapipe where Mesa's Vulkan driver is installed, else on the machine's default adapter. When the change touches only `tools/`, `tests/`, `.github/` or Markdown outside `crates/`, the base reuses the change's binaries (`--build-base` builds it anyway), so the run checks that two runs of one build agree. It is `named_only` in `tools/parity_hosts.json`, since it fails any change that moves the picture on purpose; a change that must leave the picture alone runs it by name with `python3 tools/parity.py frame_identity`.
 
 ### Other machines
 
@@ -138,6 +147,21 @@ An agent working an area merges the integration branch first, uses `tools/parity
 
 On ludodesktop, source `~/code/sunrise-parity/env.sh` first: it sets the ALSA build path and the Cargo job cap. Debug builds carry line tables only (`[profile.dev]` in `Cargo.toml`), which keeps backtraces readable while keeping each worktree's build small; a fresh worktree builds `sunrise-client` and its tests in under a minute.
 
+## sunrise-client fixtures
+
+A harness that needs a sunrise-client fixture runs it from the `sunrise-parity-fixtures` program, which
+`lab.parity_fixtures()` builds (`default_features=False` for the vanilla build) and returns. Its command line and
+report are libtest's: filters, `--exact`, `--list`; a filter that selects nothing exits 101. Its package,
+`crates/sunrise-parity-fixtures`, a dev tool, compiles sunrise-client's sources as the program with `cfg(test)` set,
+so test-only code compiles while the `#[test]` functions stay out. It takes sunrise-client's dependencies and
+features with its dev-dependencies, which sunrise-client itself may not ship (docs/layers.md); its manifest is
+written by `tools/ci/parity_fixtures_manifest.py`, which you rerun after changing sunrise-client's. A harness never builds the `sunrise-client` lib test: its one
+rustc outgrows a parity runner's memory, and `tests/test_dyna_ci.py` refuses a harness that does.
+
+A fixture is a `#[test]` under `game` whose body is one call to a function beside it named `run_<test>`;
+the package's `build.rs` finds every such test and lists it, so nothing is registered by hand. List them with
+`$(python3 -c 'from tools import lab; print(lab.parity_fixtures())') --list`.
+
 ## Server execution in game fixtures
 
 `SUNRISE_COMMAND_SCRIPT` runs on the integrated server's `Server thread`, with the
@@ -182,25 +206,44 @@ A build with `--features state-digest` and `SUNRISE_STATE_DIGEST=<file>` appends
 
 - `tools/state_digest_scene.py BINARY RESOURCES TEMPLATE OUT` runs a fixed dedicated-server scene (frozen before the first tick, `tick step N`) and writes `OUT/digest.txt`; `--generate` makes the forceloaded flat template once. Random ticks are off unless `--random-ticks`. `SUNRISE_SCENE_GATE` names an optional script to wait on before each run.
 - `tools/state_digest_players.py BINARY RESOURCES TEMPLATE OUT BOTS` is the same scene with two scripted `sunrise-bots` players (`as_guest`, the level swaps); `--nether` sends one to the Nether, and `--compare A B` compares two runs level by level. The players settle on a wall-clock number of frozen ticks, so the scene pins the randoms again after the settle and only then summons what they can reach; their final `players.txt` still depends on the settle and is reported, not compared; `--integrated` (a LAN guest on a server thread) has no `digest-sync`, so its digest is not comparable run to run either.
+- `--coverage` on either scene tool adds commands for code the default scene never runs (foxes, dolphins and allays that pick up items, a fox that spits out what it held, mobs that pick up loot, tridents, a furnace, a brewing stand, a village with five claimed beds for the cat, a saved wandering-trader delay that runs out inside the window, the siege spawner, and the gamerules and night time they need) and makes `--ticks` default to 2500; the default scene's commands are unchanged, so earlier digests stay comparable. With `state_digest_players.py` Alice stands in the village and gets a Loyalty trident back, and her pickup is placed beside her. After the run the tool writes `OUT/coverage.txt` (each spot reached or missed, the saved trader delay and chance, Alice's pickup stats) and fails when a spot was missed; `state_digest_compare.py` and `--compare` compare that file too. The two-player `--coverage` run is not reproducible run to run (two runs of one binary part within a few hundred ticks, as the bots' moves land on wall-clock ticks over the long window), so it checks its spots and its digest is reported, not compared; the playerless `--coverage` run is reproducible and is the one compared.
+- For gameplay that moved to `sunrise-gameplay` or `sunrise-client-gameplay` (#2210), the digest checks only what it hashes, in the dedicated-server scenes above: entity motion, health and sampled random states, block-entity data, counters and scheduled ticks, plus `coverage.txt`. It does not see the client (rendering, occlusion and particle culling, prediction), sounds, packets, saved stats beyond `coverage.txt`, or the LAN-host run, which cannot pin its randoms; check those with their own harnesses, `lan_e2e` or the game. Harness selection takes candidates from the crate graph (both crates are path dependencies of `sunrise-client`), but an older dependency record that names the old path keeps only the recorded paths when its probe cannot be found (`tools/parity_reach.py`), so read the selected list (`tools/parity.py --changed-files paths.txt --list`) or name the harness.
 - `tools/state_digest_compare.py A/digest.txt B/digest.txt` names the first differing step per group, the game time (`tick`) and the level (`dim`) of each step included. Compare runs from one toolchain: the hashes are not stable across Rust versions.
 - Keep the measured window free of chunk loading, generation and lighting, and of trial spawners, ominous item spawners and `/item modify` (clock-seeded UUIDs and loot random).
 
 ### Fuzzing scenarios
 
-`tools/parity_fuzz.py` runs small generated scenarios in vanilla and Sunrise and reports each divergence once, shrunk, with a reproduction (#12498). A batch of scenarios runs as one command-exec script (`test_command_exec_parity.py --groups-file`). It is a tool to run by hand, not a harness: `parity.py` never selects it.
+`tools/parity_fuzz.py` runs generated scenarios in vanilla and Sunrise and reports each divergence group with a shrunk reproduction. A batch of scenarios runs as one command-exec script (`test_command_exec_parity.py --groups-file`). It is a separate tool: `parity.py` never selects it.
 
 ```sh
-python3 tools/parity_fuzz.py --smoke --binary target/fast/sunrise-client.exe   # fixed scenarios that must match (~30 s)
-python3 tools/parity_fuzz.py persist --seed 1 --count 60                          # summon or place, unload and reload, read
-python3 tools/parity_fuzz.py spawn --seed 1 --count 60                            # each spawn mechanism, read tick by tick
-python3 tools/parity_fuzz.py --replay scenarios.json                               # run these scenarios (a report's, edited)
+python3 tools/parity_fuzz.py --smoke --binary target/fast/sunrise-client  # fixed scenarios that must match
+python3 tools/parity_fuzz.py persist --seed 1                            # summon or place, unload and reload, read
+python3 tools/parity_fuzz.py spawn --seed 1                              # each spawn mechanism, read tick by tick
+python3 tools/parity_fuzz.py --replay scenarios.json                      # run saved scenario steps, not a regenerated seed
 ```
 
-- **Scenarios.** A scenario is a seed and steps: summon (with NBT), place a block (with NBT), a command, ticks, a dispenser activation, an unload and reload, and reads (`/data get`). Each gets a chunk of its own far from the player (x 4096 and up, y 300, on a stone floor), forceloaded, and syncs both engines' randoms first ("Randoms that repeat"). A reload removes the forced ticket, ticks until both engines saved and dropped the chunk (a guard checks vanilla did), and loads it back: a real save and load through each engine's chunk and entity storage. Summoned entities get fixed UUIDs, so reads find them without selectors.
-- **Families** (`tools/parity_fuzz_scenarios.py`). `persist` summons an entity or places a block entity with changed fields, maybe beside other blocks, and reads it before and after a reload. `spawn` makes an entity one way (summon, dispenser, dispenser on a redstone signal, a block broken, an explosion, a piston) and reads it before its first tick and after each of a few. Field names are vanilla's own: the first run summons every entity type and places every block entity bare and caches what vanilla saves for each in the work directory (`defaults.json`); mutations change those fields' values and keep their NBT types. A run of 60 scenarios takes a few minutes; shrinking adds one or two batches per round.
-- **Comparison.** A `/data get` read is parsed as SNBT and compared field by field, so a difference names its field. Key order is not compared, nor the order of `attributes` (vanilla's own order changes run to run). Other commands compare like the harness (feedback, styles, results). `ALLOWED` in the script lists the differences that are not bugs, each with its reason.
+- **Scenarios.** A scenario stores its seed and steps: summon or place with NBT, run a command, tick, activate a dispenser, reload a chunk, or read saved state. Each gets a forceloaded chunk away from the player. Both engines tick to the same game time before syncing their randoms ("Randoms that repeat"). A reload removes the forced ticket and ticks with chunk I/O enabled. A guard checks that the chunk is no longer loaded and vanilla has released its pending unload before it is forced back in; Sunrise's own unload is not read directly, it is inferred from the `/execute unless loaded` result. The load waits for terrain, lighting and entities without advancing game time. Summoned entities get fixed UUIDs.
+- **Families** (`tools/parity_fuzz_scenarios.py`). `persist` reads an entity or block entity with changed fields before and after a reload. It discovers vanilla's saved fields and caches them as `defaults.json` in the work directory; a crashed discovery is not cached. The default field order and set of types affect generation, so keep the steps when sharing a case. `spawn` uses its own tables, then reads the new entity across ticks. Item-drop reads observe all items in the scenario area as an unordered collection, preserving duplicate stacks: the order of entities in an area query is not something the scenarios pin down, so an order difference is not reported here.
+- **Comparison.** A `/data get` read is parsed as SNBT and compared field by field. Key order and the order of `attributes` records do not matter. Other commands compare like the harness (feedback, styles, results). Each batch also runs the same script in vanilla alone: a read that differs between the two vanilla runs is counted as `vanilla-unstable`, not compared against Sunrise.
 - **Grouping and shrinking.** Each diverging read is grouped by family, subject type, whether the read came after a reload, and first differing field. Each group's smallest scenario is shrunk (steps and NBT keys dropped, tick counts halved) while that group's divergence stays, trying all edits of a round in one batch. `report.json` in the work directory lists the groups, largest first, each with its seeds, its shrunk scenario as commands, and its differences.
 - **Triage before filing.** A group is a lead, not a bug: read the vanilla source for the field, check it isn't a seed-sync limit (above) or harness noise, and search existing issues first.
+
+### Fuzzing the shader-pack translator
+
+`tools/shader_fuzz.py` is a robustness fuzzer of `crates/sunrise-shaders`: no reference picture, only invariants every load must keep. The work is done by the `shader_fuzz` example of `sunrise-render-shaderpack`, the crate that holds the game's own pack inputs (`pack_atlas::game_inputs`, which `Renderer::pack_inputs` also calls). It adds no dependency.
+
+```sh
+python3 tools/shader_fuzz.py --smoke                                  # the seed programs unmutated, which must pass
+python3 tools/shader_fuzz.py --seed 1 --count 500                     # cases from the committed seed pack only
+python3 tools/shader_fuzz.py --corpus ~/shaderpacks --budget 1200 --jobs 4   # as many cases as 20 minutes make
+python3 tools/shader_fuzz.py --replay 1234567 --corpus ~/shaderpacks --time-limit 20 --memory-limit 2048 --size-limit 16  # a group's case again, as the run prints it
+```
+
+- **Run controls.** `--budget` alone generates cases until the budget ends, `--count` alone that many, both until the first is reached; with neither, 200 cases.
+- **Corpus.** The hand-written seed pack (`crates/sunrise-render-shaderpack/examples/shader_fuzz/seeds/`), and with `--corpus` every pack (zip or folder) of a local folder. Third-party packs are read, never committed. The run only lists the corpus (names and paths, as `sunrise_shaders::candidates` lists a `shaderpacks` folder). Each of the `--jobs` case processes opens and reads the pack of each case it makes, within `--memory-limit` and `--time-limit`: a pack that exhausts memory, hangs or crashes the loader while it is read is that case's failure (step `sample`), and the run goes on; a pack that doesn't open, a dimension without programs, or a pack the case process can't write to its folder (a file name the run can't write, a file beside a folder of the same name; printed) makes no case: each is printed with why, and counted under `skipped` in the summary and `report.json`. A run in which no case ran fails (exit 1), as one with failures does. A case takes one pack, whole and as it is, one dimension's folder (as the game picks it), one or two of its programs (both stages, or compute shaders only) for the steps to edit, and flat or grid terrain inputs. Unmutated, it loads exactly as the pack does: every file the loader reads is there, and so is what the other programs decide for the case's programs (a shadow pass a reader of the shadow map turns on, terrain drawn in two parts, a fallback, buffer formats). The steps edit the programs' stage files and what they include, as the loader's preprocessor finds it. Terrain inputs follow the pack's `separateAo`, as the game sets them.
+- **Steps.** One to six mutations, each named and drawn from its own SplitMix64 seed: `declaration` (mixed declarators, `struct S {…} a, b;`, anonymous structs, interface, uniform and buffer blocks, arrays on the type or the name), `include` (chains past the preprocessor's depth, cycles, diamonds, paths out of the pack), `preprocessor` (deep and unbalanced conditionals, recursive and doubling macros, odd directives), `array_size`, `collide` (names of the game's inputs, the translator's `hz_` names, later keywords such as `sample`, `filter`, `input`), `numeric` (huge, NaN, negative, malformed literals), `truncate`, `encoding` (BOM, CRLF, invalid UTF-8, NUL), `duplicate`, `reorder`, and `properties` (`shaders.properties` values and keys; never `program.*`, which turns programs off without a note by design).
+- **Invariants.** Each case loads twice through `load_post` as the game loads a pack, in an eval worker process of its case process: no `panic`; within `--time-limit` (`time`) and `--memory-limit` (the worker's allocator refuses past it: `memory`; any other death is `crash`); every stage file of the dimension's folder within `--size-limit` once preprocessed by itself (`size`); every loaded program's modules validate in naga as the translator validates them (`naga`); every note starts with a subject (a non-empty `` `key` ``, or a word without spaces before its first `: `; whether the word is one of the pack's names is not checked; the pack-wide `no program for …` note is accepted), and a program the unmutated case loaded, when only its own stage files changed, loads or has a note naming it (`refusal`); both loads give the same modules, interfaces, settings and notes (`determinism`).
+- **Grouping and shrinking.** A failure's group is its invariant, the first step after which it fails (`base` when the unmutated case already does) and its detail (panic location, naga error, program). Each group's smallest case is shrunk while the same failure stays: steps dropped, then files, then runs of lines halved down to single lines, then files again, within `--shrink-seconds`. For a `refusal`, the stage files of the programs that must load are never removed or emptied: without them the program would be missing, which needs no note. The shrunk case is a pack folder in the new run's `groups/` directory under `.local/shader-fuzz/runs/` (or `<work-dir>/runs/` when calling the Python driver with `--work-dir`) with `case.txt`; `report.json` lists every group with its cases (a generated case by its seed, a fixed smoke case as `smoke:N`) and the arguments that replay its smallest case alone (`replay_args`, printed as a command): `--replay` with that case, the run's `--seed-pack` when it had one (the smoke cases are its programs, and it is the first pack a generated case draws from), the corpus of a generated case (a smoke case takes the seed pack only), and the run's `--time-limit`, `--memory-limit` and `--size-limit`, which decide its failures. `report.json` also lists how each case process and its eval worker ended once their cases did: closed, and waited for. Only `time` depends on timing: a case that takes about the limit can land either side of it.
 
 ## Reading vanilla
 
@@ -247,11 +290,11 @@ when named or explicitly selected with local `--all`. LAN writes `results.json`
 with the host mode and each result beside its screenshots and logs. A skipped
 case is recorded explicitly and does not count as passing coverage.
 
-`known_flaky` in `tools/parity_hosts.json` lists harnesses that fail now and then for a
-cause not fixed yet, each with its reason. One that fails runs once more from
-scratch, and a pass then counts. `parity.py` prints a `RETRIED` line for it
-in its local summary; the daily keeps retry details in the private runner logs. No other harness gets this retry. Fix the cause, then take
-the harness off the list.
+A harness that fails while reusing oracle results runs once more from scratch, and stops reusing
+them if that run passes; it counts as failed either way, and its first failure is its outcome.
+`parity.py` prints the fresh run's outcome on its own line and a `RETRIED` line with both, and the
+daily keeps both runs' logs in the private runner logs. No rerun turns a failure into a pass: a
+harness that fails now and then is a daily red, fixed at its cause.
 
 The game-binary fixture audit keeps these complementary direct rule tests:
 

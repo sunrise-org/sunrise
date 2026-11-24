@@ -1,5 +1,5 @@
-//! A client's `LevelRef::brightness`, `EntityRef::set_sprinting` and the server's
-//! `tick_rate_is_frozen`.
+//! A client's `LevelRef::brightness`, `EntityRef::set_sprinting`, the local and tracked stance
+//! reads, and the server's `tick_rate_is_frozen` and mob jump cooldown.
 
 use super::native_entity_refs::tests::with_game;
 use super::native_guest_turn_tests::with_guests;
@@ -217,44 +217,370 @@ fn a_client_reads_only_its_own_menu() {
 
 #[test]
 #[ignore = "daily"]
+fn client_merchant_offers_follow_the_open_menu() {
+    use super::native_client_session::tests::logged_client;
+    use super::native_entity_refs::tests::with_client_game;
+    use mod_api::__private::game::Fields;
+    use mod_api::ClientHost;
+    use sunrise_client::text::Text;
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::{
+        item::{Component, Stack, component::STORED_ENCHANTMENTS},
+        packets::{
+            configuration::{RegistryData, RegistryEntry},
+            play,
+        },
+        registry::Builtin,
+    };
+    mod_platform::testing::with_mods(Default::default(), || {
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            let remote = game.remote.as_mut().unwrap();
+            remote.builtin = std::sync::Arc::new(
+                Builtin::parse(
+                    r#"{
+                "minecraft:item":{"entries":{
+                    "minecraft:emerald":{"protocol_id":1},
+                    "minecraft:book":{"protocol_id":2},
+                    "minecraft:enchanted_book":{"protocol_id":3}
+                }},
+                "minecraft:data_component_type":{"entries":{
+                    "minecraft:stored_enchantments":{"protocol_id":45}
+                }}
+            }"#,
+                )
+                .unwrap(),
+            );
+            std::sync::Arc::make_mut(&mut remote.registries).add(RegistryData {
+                registry: "minecraft:enchantment".into(),
+                entries: vec![RegistryEntry {
+                    id: "minecraft:mending".into(),
+                    data: None,
+                }],
+            });
+            let current_menu =
+                |host: &dyn ClientHost| host.local_player().unwrap().container_menu(host).unwrap();
+            let inventory = current_menu(game);
+            assert_eq!(inventory.merchant_offers(game), Ok(None));
+
+            let window = 3;
+            game.remote_open_merchant(window, String::new(), Text::literal("Merchant"));
+            let menu = current_menu(game);
+            assert_eq!(menu.merchant_offers(game), Ok(Some(vec![])));
+            let player = menu.fields().player;
+            let foreign = mod_api::__private::game::menu_ref(
+                mod_api::__private::game::player_ref(player.entity(), 99),
+                window,
+                menu.fields().generation,
+            );
+            assert_eq!(foreign.merchant_offers(game), Ok(None));
+
+            let discounted_book = play::NetOffer {
+                cost_a: Stack::new(1, 10).into(),
+                cost_b: Some(Stack::new(2, 1).into()),
+                result: Stack {
+                    added: vec![(STORED_ENCHANTMENTS, Component::Enchantments(vec![(0, 1)]))],
+                    ..Stack::new(3, 1)
+                },
+                out_of_stock: false,
+                uses: 2,
+                max_uses: 12,
+                xp: 5,
+                special_price: -3,
+                price_multiplier: 0.5,
+                demand: 1,
+            };
+            let exhausted = play::NetOffer {
+                result: Stack::new(2, 1),
+                cost_b: None,
+                out_of_stock: true,
+                ..discounted_book.clone()
+            };
+            game.handle_packet(play::Clientbound::MerchantOffers(play::MerchantOffers {
+                container: window,
+                offers: vec![discounted_book, exhausted],
+                level: 2,
+                xp: 10,
+                show_progress: true,
+                can_restock: true,
+            }))
+            .unwrap();
+            let offers = menu.merchant_offers(game).unwrap().unwrap();
+            let [book, exhausted] = offers.as_slice() else {
+                panic!("expected both synchronized offers");
+            };
+            let item = |id| mod_api::__private::item_key(id).unwrap();
+            assert_eq!(book.base_cost_a.stack.item(), item("minecraft:emerald"));
+            assert_eq!(book.base_cost_a.stack.count(), 10);
+            let second = &book.cost_b.as_ref().unwrap().stack;
+            assert_eq!((second.item(), second.count()), (item("minecraft:book"), 1));
+            assert_eq!(
+                (book.result.item(), book.result.count()),
+                (item("minecraft:enchanted_book"), 1)
+            );
+            assert_eq!(
+                book.result
+                    .components()
+                    .unwrap()
+                    .as_nbt()
+                    .get(&"minecraft:stored_enchantments".into()),
+                Some(&Tag::compound([("minecraft:mending", Tag::Int(1))])),
+            );
+            assert_eq!((book.uses, book.max_uses, book.xp), (2, 12, 5));
+            assert_eq!(
+                (book.special_price_diff, book.demand, book.price_multiplier),
+                (-3, 1, 0.5)
+            );
+            assert_eq!(book.cost_a_count(game), Some(12));
+            assert!(!book.out_of_stock());
+            assert_eq!(exhausted.result.item(), item("minecraft:book"));
+            assert!(exhausted.cost_b.is_none());
+            assert!(exhausted.out_of_stock());
+
+            // The server may reuse the window id, but not the handle's generation.
+            game.remote_open_merchant(window, String::new(), Text::literal("Merchant"));
+            let replacement = current_menu(game);
+            assert_eq!(menu.merchant_offers(game), Ok(None));
+            assert_eq!(replacement.merchant_offers(game), Ok(Some(vec![])));
+            game.remote_close_local();
+            assert_eq!(replacement.merchant_offers(game), Ok(None));
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn client_player_state_reads_its_own_copy_only() {
     use super::native_client_session::tests::logged_client;
     use super::native_entity_refs::tests::with_client_game;
-    use sunrise_client::{items::ItemStack, motion::PlayerMotion};
+    use sunrise_client::{
+        chunk::Chunk,
+        items::ItemStack,
+        motion::{MotionWorld, PlayerMotion},
+        pose::Pose,
+    };
     use sunrise_core::geometry::Vec3;
     mod_platform::testing::with_mods(Default::default(), || {
         with_client_game(|game| {
             let _server = logged_client(game);
-            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.streaming
+                .insert_remote(&mut game.world, Chunk::empty(0, 0));
+            // Mid-chunk: a fluid update reads the chunks one block past the box (`hasChunksAt`),
+            // and only column (0, 0) is loaded.
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap());
             let local = game.local_player().unwrap();
             let entity = local.entity();
+            let living = mod_api::LivingRef::new(entity);
             let other = mod_api::EntityRef::new(entity.epoch(), 99);
+            let other_living = mod_api::LivingRef::new(other);
             let other_player = mod_api::__private::game::player_ref(other, 99);
+            let air = game.world.air;
+            let lava = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:lava")
+                .unwrap();
             game.inventory[5] = Some(ItemStack::new("minecraft:stone", 3));
             for flag in [true, false] {
+                game.world
+                    .set(8, 64, 8, if flag { lava } else { air })
+                    .unwrap();
+                {
+                    let body = game.player.as_mut().unwrap();
+                    body.fluids.first_tick = false;
+                }
+                {
+                    let side = game_side!(game);
+                    let mut world = MotionWorld {
+                        side: &side,
+                        entities: &[],
+                        player: game.player.as_mut().unwrap(),
+                        scene: &mut game.world,
+                        assets: &game.pack.assets,
+                        collision_binding: game.collision,
+                        resources: game.motion,
+                        health: &game.health_resources,
+                        tag_items: None,
+                        loop_context: &game.loop_context,
+                        damage_hooks: &game.damage_hooks,
+                        block_registries: None,
+                    };
+                    world.fluid_base_tick().unwrap();
+                }
                 let body = game.player.as_mut().unwrap();
                 body.ground.on_ground = flag;
                 body.fluids.was_touching_water = flag;
                 body.swimming = flag;
+                body.sprinting = flag;
+                body.pose = if flag {
+                    Pose::Crouching
+                } else {
+                    Pose::Standing
+                };
+                body.local_crouching = flag;
+                body.no_jump_delay = if flag { 10 } else { 0 };
                 body.air = if flag { 87 } else { 12 };
                 let host = &*game as &dyn mod_api::ClientHost;
                 assert_eq!(entity.on_ground(host), Some(flag));
                 assert_eq!(entity.is_in_water(host), Some(flag));
+                assert_eq!(entity.is_in_lava(host), Some(flag));
                 assert_eq!(entity.is_swimming(host), Some(flag));
+                assert_eq!(entity.is_sprinting(host), Some(flag));
+                assert_eq!(
+                    entity.pose(host),
+                    Some(if flag { "crouching" } else { "standing" })
+                );
+                assert_eq!(entity.is_crouching(host), Some(flag));
+                assert_eq!(living.no_jump_delay(host), Some(if flag { 10 } else { 0 }));
                 assert_eq!(entity.air_supply(host), Some(if flag { 87 } else { 12 }));
                 assert_eq!(entity.max_air_supply(host), Some(300));
                 assert_eq!(other.on_ground(host), None);
                 assert_eq!(other.is_in_water(host), None);
+                assert_eq!(other.is_in_lava(host), None);
                 assert_eq!(other.is_swimming(host), None);
+                assert_eq!(other.is_sprinting(host), None);
+                assert_eq!(other.pose(host), None);
+                assert_eq!(other.is_crouching(host), None);
+                assert_eq!(other_living.no_jump_delay(host), None);
                 assert_eq!(other.air_supply(host), None);
                 assert_eq!(other.max_air_supply(host), None);
-                let slots = local.inventory_slots(host).unwrap();
-                assert_eq!(slots.len(), 1);
-                assert_eq!(slots[0].0, 5);
-                assert_eq!(slots[0].1.count(), 3);
-                assert_eq!(other_player.inventory_slots(host), None);
+                local
+                    .with_inventory(host, |view| {
+                        let mut slots = view.iter();
+                        let (slot, stack) = slots.next().unwrap();
+                        assert_eq!((slot, stack.count()), (5, 3));
+                        assert!(slots.next().is_none());
+                    })
+                    .unwrap();
+                assert_eq!(other_player.with_inventory(host, |_| ()), None);
+                assert_eq!(local.with_ender_chest(host, |_| ()), None);
+            }
+            // LocalPlayer.isCrouching is its own flag, not the pose: the tick it starts or
+            // stops crouching the two differ.
+            let body = game.player.as_mut().unwrap();
+            body.pose = Pose::Crouching;
+            body.local_crouching = false;
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(entity.pose(host), Some("crouching"));
+            assert_eq!(entity.is_crouching(host), Some(false));
+            let body = game.player.as_mut().unwrap();
+            body.pose = Pose::Standing;
+            body.local_crouching = true;
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(entity.pose(host), Some("standing"));
+            assert_eq!(entity.is_crouching(host), Some(true));
+        });
+    });
+}
+
+/// A client reads a tracked player's and a tracked mob's pose from the `DATA_POSE` the server
+/// sent, and has no jump cooldown for either.
+#[test]
+#[ignore = "daily"]
+fn client_tracked_entities_read_their_synced_pose() {
+    use super::native_client_session::tests::logged_client;
+    use super::native_entity_refs::tests::with_client_game;
+    use sunrise_protocol::packets::play::{self, Clientbound as C};
+    fn add_entity(game: &Game<'_>, id: i32, uuid: u128, kind: &str) -> C {
+        let kind = game
+            .remote
+            .as_ref()
+            .unwrap()
+            .builtin
+            .get("minecraft:entity_type")
+            .unwrap()
+            .id(kind)
+            .unwrap();
+        C::AddEntity(play::AddEntity {
+            id,
+            uuid,
+            kind,
+            position: [2.5, 64.0, 2.5],
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 0,
+            head_yaw: 0,
+            data: 0,
+        })
+    }
+    mod_platform::testing::with_mods(Default::default(), || {
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            let player_uuid = 0x5e4d_0001_u128;
+            game.handle_packet(C::PlayerInfoUpdate(play::PlayerInfoUpdate {
+                actions: 0x01 | 0x04 | 0x08,
+                entries: vec![play::PlayerInfo {
+                    uuid: player_uuid,
+                    name: Some("Tracked".into()),
+                    game_mode: Some(0),
+                    listed: Some(true),
+                    ..play::PlayerInfo::default()
+                }],
+            }))
+            .unwrap();
+            let pkt = add_entity(game, 301, player_uuid, "minecraft:player");
+            game.handle_packet(pkt).unwrap();
+            let pkt = add_entity(game, 302, 0x5e4d_0002, "minecraft:zombie");
+            game.handle_packet(pkt).unwrap();
+            // As SetEntityData's DATA_POSE leaves them: a player's in `synced_pose`, a mob's in
+            // `pose` (crouching is 5, swimming 3).
+            for mob in game.mobs.iter_mut() {
+                match mob.id {
+                    301 => mob.extra.synced_pose = 5,
+                    302 => mob.extra.pose = 3,
+                    _ => {}
+                }
+            }
+            let player = game.entity(301).expect("the tracked player");
+            let zombie = game.entity(302).expect("the tracked zombie");
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(player.pose(host), Some("crouching"));
+            assert_eq!(player.is_crouching(host), Some(true));
+            assert_eq!(zombie.pose(host), Some("swimming"));
+            assert_eq!(zombie.is_crouching(host), Some(false));
+            for entity in [player, zombie] {
+                assert_eq!(mod_api::LivingRef::new(entity).no_jump_delay(host), None);
             }
         });
+    });
+}
+
+/// A server reads a mob's jump cooldown, `LivingEntity.noJumpDelay`, from its own body.
+#[test]
+#[ignore = "daily"]
+fn a_server_reads_a_mobs_jump_cooldown() {
+    use std::sync::Arc;
+    use sunrise_client::chunk::Chunk;
+    use sunrise_core::nbt::{Compound, Tag};
+    with_game(|game| {
+        game.options.dedicated = Some(Vec::new());
+        game.native_level_opened(super::Dim::Overworld);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.streaming.forced.insert((0, 0));
+        game.native_joins_skip();
+        let nbt: Compound = [("NoAI".into(), Tag::Byte(1))].into_iter().collect();
+        let level = game.level("minecraft:overworld").expect("the overworld");
+        let entity = game
+            .level_summon(level, "minecraft:pig", [1.5, 70.0, 1.5], nbt)
+            .expect("a level write")
+            .expect("a pig");
+        let id = entity.id();
+        for delay in [7, 0] {
+            game.mobs
+                .iter_mut()
+                .find(|m| m.id == id)
+                .unwrap()
+                .ai
+                .no_jump_delay = delay;
+            let host = &*game as &dyn mod_api::Host;
+            assert_eq!(
+                mod_api::LivingRef::new(entity).no_jump_delay(host),
+                Some(delay)
+            );
+        }
     });
 }
 

@@ -2,7 +2,7 @@
 //! `remove`): feeding babies, swallowing a held block, shearing it back
 //! out, lighting an explosive one, swallowing blocks from the ground and
 //! splitting into two babies.
-use super::Game;
+use super::{Game, item_abilities::ability};
 use sunrise_client::{
     items::ItemStack,
     mesher::Vertex,
@@ -80,8 +80,7 @@ impl Game<'_> {
 
     fn sulfur_sound(&mut self, index: usize, sound: &str) {
         let at = self.mobs[index].center();
-        self.audio
-            .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
+        self.play_audio(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
     }
     /// Spit the swallowed block out on top (`EntityAttachment.PASSENGER`).
     fn eject_sulfur_block(&mut self, index: usize) {
@@ -139,7 +138,7 @@ impl Game<'_> {
             self.award_stat("used", item, 1);
             return true;
         }
-        if item == "minecraft:shears" && sulfur_cube::has_body(m) {
+        if self.held_shears(ability::SHEARS_REMOVE_ARMOR) && sulfur_cube::has_body(m) {
             // shear: out comes the block, and nothing is swallowed for 5 s.
             let sheared = self.mobs[index].extra.body_stack().map(|s| s.item.clone());
             self.eject_sulfur_block(index);
@@ -190,13 +189,14 @@ impl Game<'_> {
     /// bucket's mobs are picked up in `interact_mob`.
     fn bucket_sulfur_cube(&mut self, index: usize) {
         let held = self.held().cloned();
-        let m = &self.mobs[index];
-        self.audio.play(
+        let center = self.mobs[index].center();
+        self.play_audio(
             "minecraft:item.bucket.fill_sulfur_cube",
-            Some(m.center()),
+            Some(center),
             1.0,
             1.0,
         );
+        let m = &self.mobs[index];
         // getBucketItemStack, then saveToBucketTag.
         let mut filled = ItemStack::new("minecraft:sulfur_cube_bucket", 1);
         filled.extra = Some(Box::new(sunrise_client::entity_nbt::bucket_components(m)));
@@ -209,7 +209,7 @@ impl Game<'_> {
         let id = self.mobs[index].id;
         // Leashable.dropLeash, then discard.
         self.break_leash(id, true, false);
-        self.mobs[index].removed = true;
+        self.remove_mob_now(id, false);
         // ItemUtils.createFilledResult.
         self.filled_result(filled);
         if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone()) {

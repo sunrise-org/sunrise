@@ -4,19 +4,18 @@
 //! launcher and the registry all use it, so a pack is judged the same way
 //! everywhere.
 pub mod check;
-pub mod guard;
 pub mod inputs;
 pub mod manifest;
-pub mod mod_pipeline;
 pub mod package;
 pub mod reference;
 pub mod stages;
 
-pub use check::{Problem, Report, check};
+pub use check::{Report, check};
 pub use inputs::Frame;
 pub use manifest::{
     API, Api, Blend, Coverage, LightColor, MANIFEST, Manifest, Material, OptionKind, OptionPage,
     PackOption, PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
 };
 pub use package::{EXTENSION, Pack};
-pub use stages::{Composed, StageKind, compose};
+pub use stages::{StageKind, compose};
+pub use sunrise_mod_pipeline::check::{Composed, Problem};

@@ -64,8 +64,8 @@ def main():
         run(['java', '-Xmx768m', '-Djava.awt.headless=true', '-cp',
              str(classes) + os.pathsep + dependencies, 'dev.sunriselab.parity.VanillaHelmetDamageOracle',
              fixtures, build / 'server.txt'], 'server', cwd=scratch, env=env)
-        run(['cargo', 'test', '--locked', '-p', 'sunrise-client', '--lib',
-             TEST, '--', '--exact', '--ignored', '--nocapture'], 'rust', env=env)
+        run([lab.parity_fixtures(),
+             TEST, '--exact', '--ignored', '--nocapture'], 'rust', env=env)
     records = [line for line in (build / 'rust.log').read_text(encoding='utf-8').splitlines()
                if re.fullmatch(r'HELMET \d+ -?\d+ -?\d+ [0-9a-f]{8} -?\d+', line)]
     (build / 'rust.txt').write_text('\n'.join(records) + '\n', encoding='utf-8')

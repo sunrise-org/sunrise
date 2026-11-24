@@ -2,8 +2,10 @@ use super::*;
 
 /// Registrar operations for the unsynced global loot modifier serializer registry.
 pub trait GlobalLootModifiersRegistrar {
-    /// Register one serializer in the calling mod's owned namespace.
-    /// Reserved namespaces and duplicates refuse registration, naming both owners.
+    /// Register one serializer. Bare names use the calling mod's namespace;
+    /// explicit valid `namespace:path` keys keep their namespace. The built-in
+    /// `neoforge:add_table` serializer and duplicates refuse registration,
+    /// naming both owners.
     fn add_global_loot_modifier_serializer(
         &mut self,
         name: &str,
@@ -13,13 +15,13 @@ pub trait GlobalLootModifiersRegistrar {
 
 impl dyn Registrar + '_ {
     /// Register a type in `neoforge:global_loot_modifier_serializers` once at
-    /// startup. Its id is owned by the calling manifest; `neoforge:` is reserved
-    /// for built-ins. Data files under `data/<namespace>/loot_modifiers/` enable
-    /// prepared instances; a registered type with no file does not run.
+    /// startup. Bare names use the calling mod's namespace and explicit valid
+    /// `namespace:path` keys keep their namespace; `neoforge:add_table` is
+    /// reserved as a built-in. Data files under `data/<namespace>/loot_modifiers/`
+    /// enable prepared instances; a registered type with no file does not run.
     ///
-    /// Native and wasm use the same resource interface. Reload decodes new
-    /// instances without recompiling code; old instances retain their code store
-    /// until every roll using their generation has returned.
+    /// Reload decodes new instances without recompiling code. An in-progress roll keeps
+    /// using the generation it started with.
     pub fn register_global_loot_modifier_serializer<T: crate::GlobalLootModifierSerializer>(
         &mut self,
         name: &str,
@@ -33,7 +35,7 @@ impl dyn Registrar + '_ {
 pub(crate) struct LootModifierSerializerInfo {
     pub(crate) id: Box<str>,
     pub(crate) owner: &'static str,
-    pub(crate) owner_index: usize,
+    pub(crate) callback_owner: crate::__private::game::CallbackOwner,
     pub(crate) serializer: Arc<dyn crate::GlobalLootModifierSerializer>,
 }
 
@@ -48,8 +50,7 @@ pub(crate) fn loot_modifier_serializer_list()
                 (
                     info.id.to_string(),
                     crate::loot_modifiers::owned_serializer(
-                        info.owner,
-                        info.owner_index,
+                        info.callback_owner.clone(),
                         info.serializer.clone(),
                     ),
                 )

@@ -277,6 +277,8 @@ pub enum LiveWorldError {
     NotCommitted,
     /// Earlier experimental disk metadata requires explicit validated recovery migration.
     MigrationRequired,
+    /// The supplied transaction loan does not identify this host's current frame.
+    InvalidContext,
 }
 
 impl crate::NoBackend for LiveWorldError {

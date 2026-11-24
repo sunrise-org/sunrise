@@ -31,6 +31,51 @@ impl Hooks for After {
     }
 }
 
+#[test]
+fn a_panicking_submersion_listener_preserves_the_incoming_fog() {
+    use mod_api::__private::{HookPanicReport, take_hook_panics};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Panics(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Panics {
+        #[listener(priority = 10)]
+        fn camera_submersion(&self, _: &dyn ClientHost, event: &mut CameraSubmersionEvent<'_>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            *event.fog_type = FogType::Lava;
+            panic!("fog listener failed after changing the value");
+        }
+    }
+
+    let heard = Heard::default();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mods = vec![
+        ModEntry::new("broken-fog", Box::new(Panics(attempts.clone()))),
+        ModEntry::new("observer", Box::new(After(heard.clone()))),
+    ];
+    with_mods(mods.into(), || {
+        let host = mod_api::testing::FakeHost::new();
+        let position = [4.5, 64.5, 4.5];
+        for incoming in [FogType::Water, FogType::Atmospheric] {
+            let mut fog = incoming;
+            mod_api::dispatch_camera_submersion(&host, position, &mut fog);
+            assert_eq!(fog, incoming);
+        }
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *heard.lock().unwrap(),
+            [(position, FogType::Water), (position, FogType::Atmospheric)]
+        );
+        assert_eq!(
+            take_hook_panics(),
+            [HookPanicReport {
+                mod_id: "broken-fog",
+                hook: "camera_submersion",
+            }]
+        );
+    });
+}
+
 fn water_at_4_64_4(game: &mut crate::game::Game<'_>) {
     game.world
         .chunks

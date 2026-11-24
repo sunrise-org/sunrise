@@ -41,7 +41,6 @@ fn host_data_version_matches_a_freshly_saved_chunk() {
         };
         assert_eq!(*version, sunrise_core::version::DATA_VERSION);
 
-        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::Setup);
         for role in [
             ExecutionRole::Client,
             ExecutionRole::IntegratedServer,

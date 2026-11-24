@@ -2,6 +2,53 @@ use super::*;
 use crate::testing::FakeHost;
 
 #[test]
+fn resident_visitors_refuse_without_calling_a_listener_when_the_backend_is_absent() {
+    struct NoWorld;
+    impl Host for NoWorld {}
+    mod_api::impl_host_areas!(NoWorld);
+
+    let epoch = WorldEpoch::new(1);
+    let level = LevelRef::new(epoch, DimensionKey::OVERWORLD);
+    let raid = RaidRef::new(level, 1);
+    assert_eq!(
+        level.visit_map_data(&NoWorld, 0, &mut |_| panic!("no map data")),
+        Err(LevelReadError::Unavailable)
+    );
+    assert_eq!(
+        level.visit_datapack_entries(&NoWorld, "test:entries", &mut |_| panic!("no registry")),
+        Err(DatapackReadError::Unavailable)
+    );
+    assert_eq!(
+        level.datapack_read(&NoWorld, "test:entries", "test:entry", &mut |_| panic!(
+            "no entry"
+        )),
+        Err(DatapackReadError::Unavailable)
+    );
+    assert_eq!(
+        level.visit_game_rules(&NoWorld, &mut |_, _| panic!("no rules")),
+        Err(LevelReadError::Unavailable)
+    );
+    let objective = crate::__private::game::objective_ref(epoch, 1);
+    let player = crate::__private::game::player_ref(EntityRef::new(epoch, 1), 1);
+    assert_eq!(
+        level.visit_raids(&NoWorld, &mut |_| panic!("no raid map")),
+        Err(LevelReadError::Unavailable)
+    );
+    assert_eq!(
+        raid.visit_raiders(&NoWorld, &mut |_| panic!("no raid")),
+        Err(RaidReadError::Unavailable)
+    );
+    assert_eq!(
+        player.visit_discovered_recipes(&NoWorld, &mut |_| panic!("no recipe book")),
+        Err(EntityReadError::Unavailable)
+    );
+    assert_eq!(
+        objective.visit_scores(&NoWorld, &mut |_| panic!("no scoreboard")),
+        Err(ObjectiveReadError::Unavailable)
+    );
+}
+
+#[test]
 fn chat_line_exposes_text_conversion_failure() {
     // This function must type-check for every client host, so callers can
     // propagate a refused text conversion instead of losing the error.
@@ -201,50 +248,62 @@ fn native_switch_skips_and_resumes_subscribed_hooks() {
 }
 
 #[test]
-fn movement_input_writes_back_all_fields() {
-    struct Movement;
+fn movement_input_listeners_share_edits_in_order() {
+    struct Scale;
     #[mod_api::__subscriptions]
-    impl Hooks for Movement {
-        fn movement_input(&self, _host: &dyn ClientHost, event: &mut MovementInputEvent) {
-            event.forward = -0.5;
-            event.strafe = 0.25;
-            event.jump = true;
-            event.sneak = true;
-            assert!(!event.forward_key);
-            assert!(event.backward_key);
-            assert!(!event.left_key);
-            assert!(event.right_key);
-            assert!(!event.sprint);
-            event.forward_key = true;
-            event.backward_key = false;
-            event.left_key = true;
-            event.right_key = false;
-            event.sprint = true;
+    impl Hooks for Scale {
+        fn movement_input_update(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut MovementInputUpdateEvent<'_>,
+        ) {
+            event.input.move_vector[1] *= 0.5;
         }
     }
-    let mods = [ModEntry::new("movement", Box::new(Movement))];
-    install(mods.into());
-    let (mut forward, mut strafe, mut jump, mut sneak) = (1.0, 0.0, false, false);
-    let (mut forward_key, mut backward_key, mut left_key, mut right_key, mut sprint) =
-        (false, true, false, true, false);
-    dispatch_movement_input(
-        &FakeHost::new(),
-        crate::__private::MovementInputCall {
-            forward: &mut forward,
-            strafe: &mut strafe,
-            jump: &mut jump,
-            sneak: &mut sneak,
-            forward_key: &mut forward_key,
-            backward_key: &mut backward_key,
-            left_key: &mut left_key,
-            right_key: &mut right_key,
-            sprint: &mut sprint,
+    struct Jump;
+    #[mod_api::__subscriptions]
+    impl Hooks for Jump {
+        fn movement_input_update(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut MovementInputUpdateEvent<'_>,
+        ) {
+            assert_eq!(event.input.move_vector, [-0.25, 0.5]);
+            assert!(event.input.key_presses.forward);
+            assert!(event.input.key_presses.right);
+            event.input.key_presses.jump = true;
+        }
+    }
+    let mut input = MovementInput {
+        move_vector: [-0.25, 1.0],
+        key_presses: MovementKeys {
+            forward: true,
+            right: true,
+            ..MovementKeys::default()
+        },
+    };
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("scale", Box::new(Scale)),
+            ModEntry::new("jump", Box::new(Jump)),
+        ]
+        .into(),
+        || {
+            dispatch_movement_input_update(
+                &FakeHost::new(),
+                crate::__private::MovementInputUpdateCall { input: &mut input },
+            );
         },
     );
-    assert_eq!((forward, strafe, jump, sneak), (-0.5, 0.25, true, true));
+    assert_eq!(input.move_vector, [-0.25, 0.5]);
     assert_eq!(
-        (forward_key, backward_key, left_key, right_key, sprint),
-        (true, false, true, false, true),
+        input.key_presses,
+        MovementKeys {
+            forward: true,
+            right: true,
+            jump: true,
+            ..MovementKeys::default()
+        }
     );
 }
 
@@ -351,7 +410,20 @@ fn living_death_post_hears_the_entity_the_blow_and_the_attacker() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     testing::with_dispatch(
         vec![ModEntry::new("post", Box::new(Post(heard.clone())))].into(),
-        || dispatch_living_death_post(&mut FakeHost::new(), 7, "minecraft:fall", 0),
+        || {
+            dispatch_living_death_post(
+                &mut FakeHost::new(),
+                crate::__private::LivingDeathPostCall {
+                    entity: 7,
+                    kind: "minecraft:sheep",
+                    damage_type: "minecraft:fall",
+                    attacker: 0,
+                    player: None,
+                    credited_player: None,
+                    message_key: None,
+                },
+            );
+        },
     );
     assert_eq!(
         *heard.lock().unwrap(),
@@ -593,6 +665,190 @@ fn an_event_cancelled_before_dispatch_reaches_only_listeners_receiving_cancelled
 }
 
 #[test]
+fn nested_weather_dispatch_skips_only_the_active_listener() {
+    struct Reenter(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Reenter {
+        #[listener(priority = 10)]
+        fn weather_change(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("reenter", event.thundering));
+            if event.raining && !event.thundering {
+                dispatch_weather_change(host, event.dimension, 0, 2, true, true, &mut false);
+                // Inputs are local to this listener, not outputs to the next.
+                event.clear_ticks = 99;
+                event.weather_ticks = 100;
+            }
+            Flow::Continue
+        }
+    }
+    struct Peer(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Peer {
+        fn weather_change(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            assert_eq!(
+                (event.clear_ticks, event.weather_ticks),
+                (0, if event.thundering { 2 } else { 1 })
+            );
+            self.0.lock().unwrap().push(("peer", event.thundering));
+            if event.thundering {
+                // Both listeners are now active. Neither should hear this deeper event;
+                // the flags also end recursion even if the stack check regresses.
+                dispatch_weather_change(host, event.dimension, 3, 0, false, false, &mut false);
+            }
+            Flow::Continue
+        }
+    }
+    let heard = Heard::default();
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("peer", Box::new(Peer(heard.clone()))),
+            ModEntry::new("reenter", Box::new(Reenter(heard.clone()))),
+        ]
+        .into(),
+        || {
+            let mut host = FakeHost::new();
+            for _ in 0..2 {
+                dispatch_weather_change(
+                    &mut host,
+                    "minecraft:overworld",
+                    0,
+                    1,
+                    true,
+                    false,
+                    &mut false,
+                );
+            }
+        },
+    );
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            ("reenter", false),
+            ("peer", true),
+            ("peer", false),
+            ("reenter", false),
+            ("peer", true),
+            ("peer", false),
+        ]
+    );
+}
+
+#[test]
+fn a_weather_panic_disables_only_that_listener_and_preserves_prior_cancellation() {
+    struct Canceller;
+    #[mod_api::__subscriptions]
+    impl Hooks for Canceller {
+        #[listener(priority = 10)]
+        fn weather_change(&self, _: &mut dyn ServerHost, _: &mut WeatherChangeEvent<'_>) -> Flow {
+            Flow::Cancel
+        }
+    }
+    struct Faulty(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Faulty {
+        #[listener(priority = 5, receive_cancelled)]
+        fn weather_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("faulty", event.cancelled));
+            event.cancelled = false;
+            panic!("weather listener panicked");
+        }
+
+        fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            self.0.lock().unwrap().push(("faulty-tick", false));
+        }
+    }
+    struct Peer(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Peer {
+        #[listener(receive_cancelled)]
+        fn weather_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("peer", event.cancelled));
+            if event.thundering {
+                event.cancelled = false;
+            }
+            Flow::Continue
+        }
+    }
+    struct Plain(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Plain {
+        fn weather_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("plain", event.cancelled));
+            Flow::Continue
+        }
+    }
+    let heard = Heard::default();
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("peer", Box::new(Peer(heard.clone()))),
+            ModEntry::new("faulty", Box::new(Faulty(heard.clone()))),
+            ModEntry::new("plain", Box::new(Plain(heard.clone()))),
+            ModEntry::new("canceller", Box::new(Canceller)),
+        ]
+        .into(),
+        || {
+            let mut host = FakeHost::new();
+            let mut cancelled = false;
+            let failures = crate::runtime::isolated_failures();
+            dispatch_weather_change(
+                &mut host,
+                "minecraft:overworld",
+                0,
+                1,
+                true,
+                false,
+                &mut cancelled,
+            );
+            assert!(cancelled);
+            assert_eq!(crate::runtime::isolated_failures(), failures);
+
+            cancelled = false;
+            dispatch_weather_change(
+                &mut host,
+                "minecraft:overworld",
+                0,
+                2,
+                true,
+                true,
+                &mut cancelled,
+            );
+            assert!(!cancelled);
+            dispatch_client_tick_pre(&mut host);
+        },
+    );
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            ("faulty", true),
+            ("peer", true),
+            ("peer", true),
+            ("plain", false),
+            ("faulty-tick", false),
+        ]
+    );
+}
+
+#[test]
 fn window_resize_delivers_physical_and_gui_dimensions() {
     use std::sync::Mutex;
     struct Listener(Arc<Mutex<Vec<(u32, u32, u32, u32)>>>);
@@ -638,8 +894,12 @@ fn server_inventory_operations_take_a_server_host(
 #[allow(dead_code)]
 fn delayed_tasks_take_a_server_host(
     host: &mut dyn ServerHost,
+    id: TaskId,
 ) -> (Result<TaskId, ScheduleError>, bool) {
-    (host.schedule_task(20, 7), host.cancel_task(TaskId(1)))
+    (
+        host.schedule_task(20, Box::new(|_| {})),
+        host.cancel_task(id),
+    )
 }
 
 /// Compile-only: a mod reads a level's dimension type, and registers a dimension with its own.
@@ -648,7 +908,7 @@ fn dimension_types_take_a_host(
     host: &dyn Host,
     level: LevelRef,
 ) -> Option<(f64, bool, DimensionSettings)> {
-    let ty = level.dimension_type(host)?;
+    let ty: LevelDimensionType<'_> = level.dimension_type(host)?;
     let nether_like = DimensionSettings {
         coordinate_scale: 8.0,
         has_fixed_time: true,
@@ -680,10 +940,30 @@ fn sea_level_takes_a_host(host: &dyn Host, level: LevelRef) -> Option<i32> {
     level.sea_level(host)
 }
 
-/// Compile-only: a client mod reads column heights of the world its window shows.
+/// Compile-only: a mod visits loaded column heights on either host, and streams column slices
+/// on a server host through a `LevelRef`.
 #[allow(dead_code)]
-fn client_heights_take_a_client_host(host: &dyn ClientHost) -> Result<Vec<Option<i32>>, String> {
-    host.client_surface_heights(&[(0, 0), (16, -16)], Heightmap::MotionBlocking)
+fn level_column_visits_take_typed_hosts(
+    any_host: &dyn Host,
+    server_host: &dyn ServerHost,
+    level: LevelRef,
+) -> Result<std::ops::ControlFlow<()>, LevelReadError> {
+    let _ = level.visit_surface_heights(
+        any_host,
+        &[(0, 0), (16, -16)],
+        Heightmap::MotionBlocking,
+        &mut |_, _| std::ops::ControlFlow::Continue(()),
+    )?;
+    level.visit_columns(
+        server_host,
+        &[(0, 0)],
+        Heightmap::WorldSurface,
+        (1, 1),
+        &mut |_, slice: Option<ColumnSlice<'_>>| {
+            let _ = slice.map(|s| (s.base, s.blocks.len(), s.water_color));
+            std::ops::ControlFlow::Continue(())
+        },
+    )
 }
 
 /// Compile-only: a client mod moves the view onto an entity and back through the `&mut dyn ClientHost`
@@ -713,7 +993,11 @@ fn world_data_and_tick_queries_take_their_hosts(
     level: LevelRef,
 ) {
     let _: Option<RespawnData> = level.respawn_data(read);
-    let _: Option<MapState> = level.map_data(read, 0);
+    let _: Result<Option<()>, LevelReadError> =
+        level.visit_map_data(read, 0, &mut |map: MapState<'_>| {
+            let _: &str = map.dimension;
+            let _: &[u8] = map.colors;
+        });
     let _: Option<bool> = level.can_see_sky(read, [0, 64, 0]);
     let _: Option<bool> = level.line_of_sight(read, [0.0, 65.0, 0.0], [8.0, 65.0, 0.0]);
     let _: bool = level.set_respawn_data(server, [0, 64, 0], 90.0, 0.0);
@@ -737,9 +1021,35 @@ fn level_queries_take_their_hosts(
     chunk: ChunkRef,
     shooter: EntityRef,
     tool: &ItemStack,
+    controller: TicketController,
 ) {
-    let _: Option<Vec<PlayerRef>> = level.online_players(read);
-    let _: Option<Vec<PlayerRef>> = chunk.watchers(read);
+    use core::ops::ControlFlow;
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        level.visit_online_players(read, &mut |_: PlayerRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        chunk.visit_watchers(read, &mut |_: PlayerRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        level.visit_loaded_chunks(read, &mut |_: ChunkRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> =
+        level.visit_forced_chunks(read, &mut |_: [i32; 2]| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, LevelReadError> = level.visit_mod_forced_chunks(
+        read,
+        controller,
+        &mut |_: TicketOwner, _: [i32; 2], _: bool| ControlFlow::Break(()),
+    );
+    let _: Result<ControlFlow<()>, LevelReadError> = level.visit_game_rules(
+        read,
+        &mut |_: &str, _: GameRuleValue| ControlFlow::Break(()),
+    );
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        shooter.visit_trackers(read, &mut |_: PlayerRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, ServerReadError> =
+        server.visit_tick_times(&mut |_: u64| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, ServerReadError> =
+        server.visit_game_rules(&mut |_: &str, _: GameRuleValue| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, ServerReadError> = server
+        .levels()
+        .visit_levels(&mut |_: LevelRef| ControlFlow::Break(()));
     let _: Option<StructureSearchResult> = level.find_nearest_structure(
         read,
         "#minecraft:village",
@@ -751,9 +1061,23 @@ fn level_queries_take_their_hosts(
     let _: Option<f32> = level.fluid_height_for_camera(read, [0, 64, 0]);
     let _: Option<bool> =
         level.fluid_can_be_replaced_with(read, [0, 64, 0], FluidKey(0), Direction::Down);
-    let _: Option<bool> = level.has_collisions(read, [0.0, 64.0, 0.0, 1.0, 65.0, 1.0]);
+    let bounds = [0.0, 64.0, 0.0, 1.0, 65.0, 1.0];
+    let _: Option<core::ops::ControlFlow<()>> =
+        level.visit_block_collisions(read, bounds, &mut |shape: &VoxelShape| {
+            let _: Option<[f64; 6]> = shape.boxes().next();
+            core::ops::ControlFlow::Break(())
+        });
+    let _: Option<bool> = level.has_collisions(read, bounds);
     let _: Option<Vec<EntityRayHit>> =
         level.ray_trace_entities(read, [0.0; 3], [8.0, 0.0, 0.0], 0.3, Some(shooter));
+    let _: Result<Option<EntityRayHit>, LevelReadError> = level.ray_trace_nearest_entity(
+        read,
+        [0.0; 3],
+        [8.0, 0.0, 0.0],
+        0.3,
+        Some(shooter),
+        &mut |entity: EntityRef| entity != shooter,
+    );
     let _: Result<Option<Vec<ItemStack>>, StackWriteError> =
         level.block_drops(server, [0, 64, 0], Some(tool), Some(shooter));
     let _: Result<Option<Vec<ItemStack>>, StackWriteError> = level.roll_loot(
@@ -774,7 +1098,13 @@ fn entity_queries_take_a_shared_host(read: &dyn Host, entity: EntityRef) {
     let _: Option<[i32; 3]> = entity.on_block(read);
     let _: Option<ClipHit> = entity.pick(read, 4.5);
     let _: Option<bool> = entity.is_multipart(read);
-    let _: Option<Vec<EntityRef>> = entity.parts(read);
+    use core::ops::ControlFlow;
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        entity.visit_parts(read, &mut |_: EntityRef| ControlFlow::Break(()));
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        entity.visit_passengers(read, &mut |_: EntityRef| ControlFlow::Continue(()));
+    let _: Result<ControlFlow<()>, EntityReadError> =
+        entity.visit_indirect_passengers(read, &mut |_: EntityRef| ControlFlow::Continue(()));
 }
 
 /// Compile-only: an entity is sent to another dimension from a server host.
@@ -821,7 +1151,7 @@ fn player_rules_take_their_hosts(
     let _: Option<bool> = player.text_filtering(read);
     let _: Option<bool> = player.sleep_ignored(read);
     let _: Option<bool> = player.counts_for_sleep(read);
-    let _: Option<u32> = player.sleep_timer(read);
+    let _: Option<i32> = player.sleep_timer(read);
     let _: bool = player.set_respawn_config(server, Some(config));
     let _: bool = player.set_sleep_timer(server, 0);
 }
@@ -882,4 +1212,279 @@ fn spawn_policy_writes_take_a_server_host(
 fn passages_take_a_server_host(server: &mut dyn ServerHost, level: LevelRef, passage: Passage) {
     let id: Result<PassageId, PassageRegistrationError> = level.register_passage(server, passage);
     let _: bool = level.remove_passage(server, id.unwrap());
+}
+
+#[test]
+fn panicking_listener_is_disabled_for_that_hook_and_reported_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct ModA {
+        pre: Arc<AtomicUsize>,
+        post: Arc<AtomicUsize>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for ModA {
+        fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            self.pre.fetch_add(1, Ordering::Relaxed);
+            panic!("mod_a client_tick_pre failure");
+        }
+        fn client_tick_post(&self, _: &mut dyn ClientHost, _: &mut ClientTickPostEvent) {
+            self.post.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct ModB {
+        pre: Arc<AtomicUsize>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for ModB {
+        fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            self.pre.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let a_pre = Arc::new(AtomicUsize::new(0));
+    let a_post = Arc::new(AtomicUsize::new(0));
+    let b_pre = Arc::new(AtomicUsize::new(0));
+
+    testing::with_dispatch(
+        vec![
+            ModEntry::new(
+                "mod_a",
+                Box::new(ModA {
+                    pre: a_pre.clone(),
+                    post: a_post.clone(),
+                }),
+            ),
+            ModEntry::new("mod_b", Box::new(ModB { pre: b_pre.clone() })),
+        ]
+        .into(),
+        || {
+            let mut host = FakeHost::new();
+
+            // Dispatch #1: mod_a panics without unwinding out of dispatch, and mod_b still runs.
+            dispatch_client_tick_pre(&mut host);
+            assert_eq!(a_pre.load(Ordering::Relaxed), 1);
+            assert_eq!(b_pre.load(Ordering::Relaxed), 1);
+
+            // Dispatch #2: mod_a is disabled for client_tick_pre, while mod_b keeps running.
+            dispatch_client_tick_pre(&mut host);
+            assert_eq!(a_pre.load(Ordering::Relaxed), 1);
+            assert_eq!(b_pre.load(Ordering::Relaxed), 2);
+
+            // mod_a's other hook still runs: disablement is per (hook, mod), not whole-mod.
+            dispatch_client_tick_post(&mut host);
+            assert_eq!(a_post.load(Ordering::Relaxed), 1);
+
+            assert_eq!(
+                crate::__private::take_hook_panics(),
+                [crate::__private::HookPanicReport {
+                    mod_id: "mod_a",
+                    hook: "client_tick_pre",
+                }]
+            );
+
+            // Dispatch #3: mod_a stays skipped and no duplicate report is queued.
+            dispatch_client_tick_pre(&mut host);
+            assert_eq!(a_pre.load(Ordering::Relaxed), 1);
+            assert_eq!(b_pre.load(Ordering::Relaxed), 3);
+            assert!(crate::__private::take_hook_panics().is_empty());
+        },
+    );
+}
+
+#[test]
+fn callback_and_registration_contain_panicking_payload_destructors() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Secondary;
+    impl Drop for Secondary {
+        fn drop(&mut self) {
+            panic!("must not drop the secondary panic payload");
+        }
+    }
+
+    struct Payload(Arc<AtomicUsize>);
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            // The real crash hook must still defer to dispatch while the payload drops.
+            self.0.store(
+                crate::runtime::hook_dispatch_depth() as usize,
+                Ordering::Relaxed,
+            );
+            std::panic::panic_any(Secondary);
+        }
+    }
+
+    struct Panicker(Arc<AtomicUsize>);
+    #[crate::__subscriptions]
+    impl Hooks for Panicker {
+        fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            std::panic::panic_any(Payload(self.0.clone()));
+        }
+    }
+
+    struct Healthy(Arc<AtomicUsize>);
+    #[crate::__subscriptions]
+    impl Hooks for Healthy {
+        fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let drop_depth = Arc::new(AtomicUsize::new(0));
+    let healthy_calls = Arc::new(AtomicUsize::new(0));
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("mod_payload", Box::new(Panicker(drop_depth.clone()))),
+            ModEntry::new("mod_healthy", Box::new(Healthy(healthy_calls.clone()))),
+        ]
+        .into(),
+        || {
+            dispatch_client_tick_pre(&mut FakeHost::new());
+            assert_eq!(drop_depth.swap(0, Ordering::Relaxed), 1);
+            assert_eq!(crate::runtime::hook_dispatch_depth(), 0);
+            assert_eq!(healthy_calls.load(Ordering::Relaxed), 1);
+
+            assert!(!crate::runtime::invoke_registration("mod_payload", || {
+                std::panic::panic_any(Payload(drop_depth.clone()));
+            }));
+            assert_eq!(drop_depth.load(Ordering::Relaxed), 1);
+            assert_eq!(crate::runtime::hook_dispatch_depth(), 0);
+            assert!(crate::runtime::invoke_registration("mod_healthy", || {
+                healthy_calls.fetch_add(1, Ordering::Relaxed);
+            }));
+            assert_eq!(healthy_calls.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                crate::__private::take_hook_panics(),
+                [
+                    crate::__private::HookPanicReport {
+                        mod_id: "mod_payload",
+                        hook: "client_tick_pre",
+                    },
+                    crate::__private::HookPanicReport {
+                        mod_id: "mod_payload",
+                        hook: "register",
+                    },
+                ],
+            );
+        },
+    );
+}
+
+#[test]
+fn world_phase_cloned_event_fields_roll_back_on_panic() {
+    struct Panicker;
+    #[crate::__subscriptions]
+    impl Hooks for Panicker {
+        fn broadcast_message(&self, _: &dyn Host, event: &mut BroadcastMessageEvent<'_>) -> Flow {
+            *event.line = Text::literal("corrupted");
+            panic!("boom in broadcast_message");
+        }
+    }
+    struct Observer(Arc<std::sync::Mutex<Option<Text>>>);
+    #[crate::__subscriptions]
+    impl Hooks for Observer {
+        fn broadcast_message(&self, _: &dyn Host, event: &mut BroadcastMessageEvent<'_>) -> Flow {
+            *self.0.lock().unwrap() = Some(event.line.clone());
+            *event.line = Text::literal("clean");
+            Flow::Continue
+        }
+    }
+
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("panicker", Box::new(Panicker)),
+            ModEntry::new("observer", Box::new(Observer(observed.clone()))),
+        ]
+        .into(),
+        || {
+            let host = FakeHost::new();
+            let mut line = Text::literal("hello");
+            let mut cancel = false;
+            dispatch_broadcast_message(&host, &mut line, &mut cancel, &mut |_| Ok(()));
+            assert_eq!(
+                observed.lock().unwrap().as_ref(),
+                Some(&Text::literal("hello"))
+            );
+            assert_eq!(line, Text::literal("clean"));
+            assert!(!cancel);
+            assert_eq!(
+                crate::__private::take_hook_panics(),
+                [crate::__private::HookPanicReport {
+                    mod_id: "panicker",
+                    hook: "broadcast_message",
+                }]
+            );
+        },
+    );
+}
+
+#[test]
+fn register_configuration_tasks_rolls_back_staged_tasks_on_panic() {
+    struct StubTask(Identifier);
+    impl ConfigurationTask for StubTask {
+        fn task_type(&self) -> &Identifier {
+            &self.0
+        }
+        fn start(&mut self, _: &mut dyn ServerHost, _: &mut ConfigurationTaskContext<'_>) {}
+    }
+    struct PanickingRegistrar;
+    #[crate::__subscriptions]
+    impl Hooks for PanickingRegistrar {
+        fn register_configuration_tasks(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut RegisterConfigurationTasksEvent<'_>,
+        ) {
+            event.register(StubTask(Identifier::parse("test:shared_task").unwrap()));
+            panic!("panic after staging configuration task");
+        }
+    }
+    struct HealthyRegistrar;
+    #[crate::__subscriptions]
+    impl Hooks for HealthyRegistrar {
+        fn register_configuration_tasks(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut RegisterConfigurationTasksEvent<'_>,
+        ) {
+            event.register(StubTask(Identifier::parse("test:shared_task").unwrap()));
+        }
+    }
+
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("panicker", Box::new(PanickingRegistrar)),
+            ModEntry::new("healthy", Box::new(HealthyRegistrar)),
+        ]
+        .into(),
+        || {
+            let mut host = FakeHost::new();
+            let mut registration = crate::__private::ConfigurationTaskRegistration::default();
+            dispatch_register_configuration_tasks(
+                &mut host,
+                crate::__private::configuration_connection(1, 1),
+                42,
+                "Steve",
+                &mut registration,
+            );
+            assert_eq!(registration.failure(), None);
+            let tasks = registration.into_tasks();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].owner.id(), "healthy");
+            assert_eq!(
+                tasks[0].task_type(),
+                &Identifier::parse("test:shared_task").unwrap()
+            );
+            assert_eq!(
+                crate::__private::take_hook_panics(),
+                [crate::__private::HookPanicReport {
+                    mod_id: "panicker",
+                    hook: "register_configuration_tasks",
+                }]
+            );
+        },
+    );
 }

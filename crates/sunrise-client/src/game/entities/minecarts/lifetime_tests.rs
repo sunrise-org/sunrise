@@ -111,7 +111,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
     default: || 0,
     codec: None,
     copy_on_death: false,
-    sync: false,
+    sync_codec: None,
 };
 
 struct CancelCartDismount {
@@ -266,16 +266,25 @@ fn disabled_tnt_rule_discards_primed_carts_but_keeps_unprimed_ticks() {
                     "tnt_explodes",
                     sunrise_client::gamerules::Value::Bool(false),
                 ));
-                let start = Vec3::new(0.5, 200.0, 0.5);
+                let start = Vec3::new(0.5, 64.25, 0.5);
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+                );
+                game.world.set(0, 63, 0, stone).unwrap();
                 let mut cart = Minecart::new(71, CartKind::Tnt, start);
                 cart.no_gravity = true;
-                cart.velocity = Vec3::new(0.4, 0.0, 0.0);
+                cart.velocity = Vec3::new(0.4, -1.0, 0.0);
                 cart.tick_count = 9;
                 cart.fuse = if primed { 0 } else { -1 };
-                if !primed {
-                    // MinecartTNT.causeFallDamage's attempted explosion.
-                    cart.fall_blast = Some(1.0);
-                }
+                // MinecartTNT.causeFallDamage attempts a blast on this landing.
+                cart.fall_distance = 10.0;
                 game.carts.push(cart);
                 if ridden {
                     game.player = Some(
@@ -298,7 +307,7 @@ fn disabled_tnt_rule_discards_primed_carts_but_keeps_unprimed_ticks() {
                     assert_eq!(game.carts.len(), 1);
                     assert_eq!(game.carts[0].tick_count, 10);
                     assert_ne!(game.carts[0].position, start);
-                    assert!(game.carts[0].fall_blast.is_none());
+                    assert_eq!(game.carts[0].fall_distance.to_bits(), 0.0_f64.to_bits());
                     if ridden {
                         assert_eq!(game.riding, Some(71));
                         assert!(game.tick_cart_riding(Keys::default()));

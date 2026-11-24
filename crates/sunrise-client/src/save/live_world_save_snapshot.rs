@@ -87,6 +87,15 @@ impl SaveDir {
         if entity_rows.len() != entities.len() || entity_rows.len() != chunks.len() {
             return Err("live-world entity snapshot coverage".into());
         }
+        {
+            let failed = self
+                .failed_entity_reads
+                .lock()
+                .map_err(|_| "failed entity reads poisoned")?;
+            if entity_rows.keys().any(|key| failed.contains(key)) {
+                return Err("live-world entity snapshot would replace an unreadable column".into());
+            }
+        }
         let mut fresh_keys = HashSet::new();
         let encoding = self.encoding_for_save_later(chunks, registry, biomes)?;
         let professions = self
@@ -154,7 +163,7 @@ impl SaveDir {
         {
             return Err("live-world terrain selection outside snapshot".into());
         }
-        // Existing callback rule: even a coalesced captured DiskRecord runs once. Its OnceLock prevents replay.
+        // The owner ran each capture callback once. Reuse its encoded record on the disk worker.
         let encoded = std::thread::scope(|scope| {
             scope
                 .spawn(|| -> std::io::Result<Vec<_>> {
@@ -171,7 +180,7 @@ impl SaveDir {
                     let mut result = Vec::with_capacity(records.len());
                     for (key, record) in &records {
                         let record = if key.0 == Folder::Poi {
-                            resolve_poi(&self.root, &self.poi_regions, (key.1, key.2), record)
+                            resolve_poi(self.region_storage(Folder::Poi), (key.1, key.2), record)
                         } else {
                             Some(record.clone())
                         };
@@ -224,7 +233,7 @@ impl SaveDir {
         let root = NamedTag {
             name: "".into(),
             tag: Tag::compound([
-                ("data", Tag::Compound(attachments.to_nbt())),
+                ("data", Tag::Compound(attachments.try_to_nbt()?)),
                 ("DataVersion", Tag::Int(DATA_VERSION)),
             ]),
         };

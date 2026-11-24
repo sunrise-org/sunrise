@@ -5,7 +5,6 @@ No server constructor, world bootstrap, networking, window or device is used.
 This checks replacement/cooldown behavior, not the full command-corpus transcript.
 """
 import argparse
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -68,18 +67,7 @@ def main():
         assert vanilla.read_text().splitlines() == [
             'fresh false', 'entered true', 'removed true', 'replacement false', 'untouched true',
         ], 'vanilla lifecycle contract changed'
-        compiled = run(['cargo', 'test', '--locked', '-p', 'sunrise-client', '--lib', '--no-run',
-                        '--message-format=json'], 'compile', cwd=lab.ROOT, env=env)
-        binaries = []
-        for line in compiled.read_text(encoding='utf-8').splitlines():
-            if not line.startswith('{'):
-                continue
-            row = json.loads(line)
-            if (row.get('reason') == 'compiler-artifact' and row.get('executable')
-                    and row.get('target', {}).get('name') == 'sunrise_client'
-                    and row.get('profile', {}).get('test')):
-                binaries.append(Path(row['executable']))
-        assert len(binaries) == 1, 'expected one actual Game test binary'
+        binaries = [lab.parity_fixtures()]
         binary_hash = lab.digest(binaries[0], 'sha256')
         env['SUNRISE_TEST_RESOURCES'] = str(args.resources.resolve())
         result = run([binaries[0], TEST, '--exact', '--ignored', '--nocapture'], 'game', cwd=scratch, env=env)

@@ -3,8 +3,8 @@
 //! `/particle` uses) and `ClientboundExplodePacket` (`ServerLevel.explode`).
 use super::{Game, explosion_settings::BlastEffects, lan::LanHost, level_sounds::LevelSound};
 use mod_api::{SoundSource, client::particles::PositionSource};
-use sunrise_client::lan::containers::within_range;
-use sunrise_client::lan::hub::Hub;
+use sunrise_client::lan::{Body, containers::within_range, hub::Hub};
+use sunrise_client::particles::ParticleLevel;
 use sunrise_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
@@ -12,9 +12,7 @@ use sunrise_core::{
     random::RandomSource,
 };
 use sunrise_protocol::{
-    entity_data::{
-        MOD_PARTICLE_ID, Particle, ParticleData, PositionSource as NetworkPositionSource,
-    },
+    entity_data::{Particle, ParticleData, PositionSource as NetworkPositionSource},
     packets::play::{self, Clientbound as C},
 };
 use sunrise_world::registry::BlockStateId;
@@ -72,28 +70,15 @@ fn send_native_nearby(
     }
 }
 
-/// One of a packet's `count` particles (`handleParticleEvent`): its position
-/// and speed. DEFAULT (0) draws both from a Gaussian; ALTERNATIVE (1) and
-/// ALTERNATIVE_WITH_SPEED (2) spread over `[0, dist)`, the first keeping
-/// the speeds as they are, the second scaling each by `nextDouble`.
-fn spread(
-    r: &mut impl RandomSource,
-    randomization: i32,
-    pos: [f64; 3],
-    dist: [f64; 3],
-    speed: [f64; 3],
-) -> ([f64; 3], [f64; 3]) {
-    if matches!(randomization, 1 | 2) {
-        let at = [0, 1, 2].map(|k| pos[k] + r.next_double() * dist[k]);
-        let v = if randomization == 2 {
-            [0, 1, 2].map(|k| speed[k] * r.next_double())
-        } else {
-            speed
-        };
-        (at, v)
-    } else {
-        let at = [0, 1, 2].map(|k| pos[k] + r.next_gaussian() * dist[k]);
-        (at, [0, 1, 2].map(|k| r.next_gaussian() * speed[k]))
+/// Resolve and decode a custom envelope once, before any effect can spawn it.
+pub(super) fn decode_mod_particle(name: &str, bytes: &[u8]) -> Option<ParticleOptions> {
+    match mod_api::__private::decode_particle_stream(name, bytes) {
+        Ok(Some(value)) => ParticleOptions::typed(value),
+        Ok(None) => Some(ParticleOptions::named(name)),
+        Err(error) => {
+            log::warn!("Cannot decode particle {name}: {error}");
+            None
+        }
     }
 }
 
@@ -212,17 +197,40 @@ pub(super) fn send_hub_level_particles(
         count: count as i32,
         randomization: 0,
     });
-    for g in hub.guests.iter().filter(|g| hub.here(g)) {
-        if sunrise_only && !g.is_sunrise() {
-            continue;
+    let mut recipients = hub
+        .guests
+        .iter()
+        .filter(|guest| {
+            if !hub.here(guest)
+                || !guest.participates_online()
+                || sunrise_only && !guest.is_sunrise()
+            {
+                return false;
+            }
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (guest.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            distance < 32.0 * 32.0
+        })
+        .peekable();
+    let Some(first) = recipients.next() else {
+        return;
+    };
+    let body = match packet.try_encode() {
+        Ok(body) => body,
+        Err(error) => {
+            eprintln!("[lan] send refused: {error}");
+            return;
         }
-        // ServerLevel compares the player's block centre, strictly within 32.
-        let distance: f64 = (0..3)
-            .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
-            .sum();
-        if distance < 32.0 * 32.0 {
-            g.send(&packet);
-        }
+    };
+    if recipients.peek().is_none() {
+        first.sender.send(body);
+        return;
+    }
+    let shared = Body::shared(body);
+    for guest in std::iter::once(first).chain(recipients) {
+        guest.sender.send_many([shared.clone()]);
     }
 }
 
@@ -291,6 +299,7 @@ impl Game<'_> {
                     [0.0; 3],
                     speed,
                     count as u32,
+                    None,
                 );
             }
         }
@@ -398,10 +407,8 @@ impl Game<'_> {
         p: &Particle,
         at: [f64; 3],
     ) -> Option<ParticleOptions> {
-        if p.id == MOD_PARTICLE_ID
-            && let Some(ParticleData::Mod(name)) = &p.data
-        {
-            return Some(ParticleOptions::named(name.clone()));
+        if let Some(ParticleData::Mod { name, options }) = &p.data {
+            return decode_mod_particle(name, options);
         }
         let name = self
             .remote
@@ -422,15 +429,11 @@ impl Game<'_> {
                 );
                 self.item_particle_options(&stack)?
             }
-            Some(ParticleData::State(s)) => {
-                let pos = at.map(|v| v.floor() as i32);
-                let state = BlockStateId(*s as u32);
-                let (sprite, tint) = self
-                    .particle_sprite(state, pos)
-                    .unwrap_or_else(|| ("block/stone".into(), 0xFFFFFF));
-                ParticleOptions::block(ty, sprite, tint)
-                    .with_source(&self.res.facts().get(state).name)
-            }
+            Some(ParticleData::State(s)) => self.block_provider_options(
+                ty,
+                BlockStateId(*s as u32),
+                at.map(|v| v.floor() as i32),
+            )?,
             Some(ParticleData::ColorScale(c, scale)) => {
                 ParticleOptions::dust(rgb(rgba(*c)), *scale)
             }
@@ -504,24 +507,16 @@ impl Game<'_> {
         if self.pvp_hides_particle(options.ty) {
             return;
         }
-        let (d, s) = (p.dist.map(f64::from), p.max_speed.map(f64::from));
-        // ClientLevel.addParticle: the camera's 32 blocks and the Particles
-        // option, unless the packet or the type overrides the limiter.
-        let add = |particles: &mut sunrise_client::particles::ParticleEngine, at, v| {
-            particles.add_with(&options, at, v, p.override_limiter, p.always_show);
-        };
-        if p.count == 0 {
-            add(
-                &mut self.particles,
-                p.pos,
-                [s[0] * d[0], s[1] * d[1], s[2] * d[2]],
-            );
+        let Some(remote) = &mut self.remote else {
             return;
-        }
-        for _ in 0..p.count {
-            let (at, v) = spread(self.particles.random(), p.randomization, p.pos, d, s);
-            add(&mut self.particles, at, v);
-        }
+        };
+        let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
+        self.particles.handle_level_particles(
+            &mut remote.particle_packet_random,
+            Some(&level),
+            p,
+            &options,
+        );
     }
 
     /// `ClientPacketListener.handleExplosion`: the blast's particles (its
@@ -538,10 +533,18 @@ impl Game<'_> {
             let sound = self
                 .remote_sound_name(&p.sound)
                 .unwrap_or_else(|| "minecraft:entity.generic.explode".to_owned());
-            self.audio.play(&sound, Some(p.center), 4.0, pitch);
+            self.play_audio(&sound, Some(p.center), 4.0, pitch);
         }
         if let Some(options) = self.received_particle(&p.particle, p.center) {
-            self.particles.add(&options, p.center, [1.0, 0.0, 0.0]);
+            let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
+            self.particles.add_with(
+                Some(&level),
+                &options,
+                p.center,
+                [1.0, 0.0, 0.0],
+                false,
+                false,
+            );
         }
         // A wind charge's burst lists none, and one this client can't draw is left out.
         let block_particles: Vec<_> = p
@@ -562,13 +565,19 @@ impl Game<'_> {
             p.block_count.max(0) as usize,
             &block_particles,
         );
-        // Entity.pushFromExplosion.
-        if let (Some(push), Some(player)) = (p.knockback, self.player.as_mut()) {
-            player.velocity = Vec3::new(
-                player.velocity.x + push[0],
-                player.velocity.y + push[1],
-                player.velocity.z + push[2],
-            );
+        // `Entity.pushFromExplosion` calls `Entity.push`, which rejects a
+        // non-finite impulse before even marking the entity for sync.
+        if let (Some([x, y, z]), Some(player)) = (p.knockback, self.player.as_mut()) {
+            let impulse = Vec3::new(x, y, z);
+            if impulse.is_finite() {
+                let velocity = player.velocity.add_vector(impulse);
+                // `Entity.setDeltaMovement` can reject the sum, but the push
+                // still marks the entity for sync.
+                if velocity.is_finite() {
+                    player.velocity = velocity;
+                }
+                player.needs_sync = true;
+            }
         }
     }
 
@@ -624,72 +633,110 @@ impl Game<'_> {
         });
     }
 
-    /// Native sounds wait until the server host is available. An unknown
-    /// `minecraft:` event is dropped; a mod's goes by name (`sound_packet`).
-    /// Each is asked of the mods first (`play_level_sound_at_entity` when
-    /// bound to an entity, `_at_position` otherwise). One at a position also
-    /// goes wrapped to its level's viewers (`Hub::send_viewed_sound`).
+    /// Resolve through the level-sound hooks in the sound's own level. Sounds emitted from
+    /// inside a listener skip re-dispatch, whether still in the listener or queued for a flush.
+    /// Preserve the original holder unless a listener replaces its event key.
+    pub(super) fn resolve_native_sound(
+        &mut self,
+        mut sound: super::creatures::NativeSound,
+    ) -> Option<super::creatures::NativeSound> {
+        if sound.skip_hooks || self.creatures.asking_level_sound {
+            return Some(sound);
+        }
+        let emitter = sound.entity.and_then(|id| u32::try_from(id).ok());
+        let mut asked = LevelSound::new(&sound.sound, sound.at, sound.volume, sound.pitch)
+            .in_source(
+                SoundSource::ALL
+                    .get(sound.source as usize)
+                    .copied()
+                    .unwrap_or(SoundSource::Master),
+            );
+        asked.emitter = emitter;
+        let dim = super::Dim::from_id(sound.dimension);
+        let heard =
+            self.with_effect_level(dim, |game| game.ask_level_sound(sound.dimension, asked))??;
+        let (edited_name, source, volume, pitch) = (
+            match heard.name {
+                std::borrow::Cow::Borrowed(_) => None,
+                std::borrow::Cow::Owned(name) => Some(name),
+            },
+            heard.source as i32,
+            heard.volume,
+            heard.pitch,
+        );
+        if let Some(name) = edited_name
+            && name != sound.sound
+        {
+            sound.sound = name;
+            sound.inline_range = None;
+        }
+        sound.source = source;
+        sound.volume = volume;
+        sound.pitch = pitch;
+        Some(sound)
+    }
+
+    /// Pure packet delivery for a native sound that has already passed `resolve_native_sound`
+    /// (runs no mod hooks and does not touch `self.creatures.lan_sounds`).
+    pub(super) fn send_resolved_native_sound(&self, sound: &super::creatures::NativeSound) {
+        let Some(host) = &self.lan else { return };
+        let mut packet = host.hub.sound_packet(
+            &sound.sound,
+            sound.at,
+            sound.volume,
+            sound.pitch,
+            sound.source,
+            sound.seed,
+        );
+        if let Some(range) = sound.inline_range
+            && let C::Sound(packet) = &mut packet
+        {
+            packet.sound = (-1, Some((sound.sound.clone(), range)));
+        }
+        // `Level.playSound(except, entity, ...)`: the same sound and
+        // seed, bound to the entity.
+        let packet = match (packet, sound.entity) {
+            (C::Sound(s), Some(id)) => C::SoundEntity(play::SoundEntity {
+                sound: s.sound,
+                source: s.source,
+                id,
+                volume: s.volume,
+                pitch: s.pitch,
+                seed: s.seed,
+            }),
+            (packet, _) => packet,
+        }
+        .encode();
+        let range = sound
+            .inline_range
+            .flatten()
+            .map_or_else(|| f64::from(sound.volume.max(1.0)) * 16.0, f64::from);
+        // Wrapped for the level's viewers too: one bound to an entity for those tracking it.
+        host.hub
+            .send_viewed_sound(sound.dimension, sound.at, range, sound.entity, || {
+                packet.clone()
+            });
+        send_native_nearby(
+            host,
+            sound.dimension,
+            packet,
+            false,
+            sound.except,
+            |position| within_range(sound.at, position, range),
+        );
+    }
+
+    /// Resolve tick-queued sounds and send them to their level's players and viewers.
+    /// The packet uses the registry ID when present or carries the event inline by name.
     pub(super) fn flush_native_sounds(&mut self) {
         if self.lan.is_none() {
             return;
         }
+        // Leave sounds queued by callbacks for the next flush.
         for sound in std::mem::take(&mut self.creatures.lan_sounds) {
-            let emitter = sound.entity.and_then(|id| u32::try_from(id).ok());
-            let mut asked = LevelSound::new(&sound.sound, sound.at, sound.volume, sound.pitch)
-                .in_source(
-                    SoundSource::ALL
-                        .get(sound.source as usize)
-                        .copied()
-                        .unwrap_or(SoundSource::Master),
-                );
-            asked.emitter = emitter;
-            let Some(heard) = self.ask_level_sound(sound.dimension, asked) else {
-                continue;
-            };
-            let Some(host) = &self.lan else { return };
-            if heard.name.starts_with("minecraft:")
-                && host
-                    .hub
-                    .registry_id("minecraft:sound_event", &heard.name)
-                    .is_none()
-            {
-                continue;
+            if let Some(resolved) = self.resolve_native_sound(sound) {
+                self.send_resolved_native_sound(&resolved);
             }
-            let packet = host.hub.sound_packet(
-                &heard.name,
-                sound.at,
-                heard.volume,
-                heard.pitch,
-                heard.source as i32,
-                sound.seed,
-            );
-            // `Level.playSound(except, entity, ...)`: the same sound and
-            // seed, bound to the entity.
-            let packet = match (packet, sound.entity) {
-                (C::Sound(s), Some(id)) => C::SoundEntity(play::SoundEntity {
-                    sound: s.sound,
-                    source: s.source,
-                    id,
-                    volume: s.volume,
-                    pitch: s.pitch,
-                    seed: s.seed,
-                }),
-                (packet, _) => packet,
-            }
-            .encode();
-            let range = f64::from(heard.volume.max(1.0)) * 16.0;
-            // Wrapped for the level's viewers too: one bound to an entity for those tracking it.
-            let (dimension, at) = (sound.dimension, sound.at);
-            host.hub
-                .send_viewed_sound(dimension, at, range, sound.entity, || packet.clone());
-            send_native_nearby(
-                host,
-                sound.dimension,
-                packet,
-                false,
-                sound.except,
-                |position| within_range(sound.at, position, range),
-            );
         }
     }
 
@@ -886,25 +933,90 @@ pub(in crate::game) mod tests {
     use sunrise_core::random::LegacyRandom;
     use sunrise_protocol::packets::play;
 
-    /// The Nether's evaporation smoke (ALTERNATIVE, dist 1, speed 0) lands
-    /// inside the block from its corner and stands still; DEFAULT spreads
-    /// both ways.
     #[test]
-    fn alternative_particles_spread_from_the_corner_over_dist() {
-        let mut r = LegacyRandom::new(1);
-        let mut below = false;
-        for _ in 0..200 {
-            let (at, v) = spread(&mut r, 1, [3.0, 64.0, -7.0], [1.0; 3], [0.0; 3]);
-            assert!((3.0..4.0).contains(&at[0]), "{at:?}");
-            assert!((64.0..65.0).contains(&at[1]), "{at:?}");
-            assert!((-7.0..-6.0).contains(&at[2]), "{at:?}");
-            assert_eq!(v, [0.0; 3]);
-            let (_, v) = spread(&mut r, 2, [0.0; 3], [0.0; 3], [0.5, 0.0, 2.0]);
-            assert!((0.0..0.5).contains(&v[0]) && v[1] == 0.0 && (0.0..2.0).contains(&v[2]));
-            let (at, _) = spread(&mut r, 0, [0.0; 3], [1.0; 3], [0.0; 3]);
-            below |= at.iter().any(|&c| c < 0.0);
-        }
-        assert!(below, "DEFAULT is a Gaussian around the position");
+    #[ignore = "daily"]
+    fn received_block_particles_follow_the_provider_matrix() {
+        use crate::game::{
+            in_own_process, native_client_session::tests::logged_client,
+            native_entity_refs::tests::with_client_game,
+        };
+        in_own_process(
+            "game::lan_particles::tests::received_block_particles_follow_the_provider_matrix",
+            || {
+                with_client_game(|game| {
+                    let _server = logged_client(game);
+                    let types = [
+                        ParticleType::Block,
+                        ParticleType::DustPillar,
+                        ParticleType::BlockCrumble,
+                        ParticleType::FallingDust,
+                        ParticleType::BlockMarker,
+                    ];
+                    let registry = game
+                        .remote
+                        .as_ref()
+                        .unwrap()
+                        .builtin
+                        .get("minecraft:particle_type")
+                        .unwrap();
+                    let ids =
+                        types.map(|ty| registry.id(&format!("minecraft:{}", ty.name())).unwrap());
+                    for (name, terrain, dust) in [
+                        ("air", false, true),
+                        ("cave_air", false, true),
+                        ("void_air", false, true),
+                        ("moving_piston", false, false),
+                        ("barrier", false, false),
+                        ("structure_void", false, false),
+                        ("light", true, false),
+                        ("water", true, false),
+                        ("chest", true, true),
+                        ("sand", true, true),
+                        ("stone", true, true),
+                    ] {
+                        let state = game
+                            .pack
+                            .assets
+                            .registry
+                            .default_state(&format!("minecraft:{name}"))
+                            .unwrap();
+                        for ((ty, id), admit) in types
+                            .into_iter()
+                            .zip(ids)
+                            .zip([terrain, terrain, terrain, dust, true])
+                        {
+                            let result = game.received_particle(
+                                &Particle {
+                                    id,
+                                    data: Some(ParticleData::State(state.0 as i32)),
+                                },
+                                [0.5, 64.5, 0.5],
+                            );
+                            assert_eq!(result.is_some(), admit, "{name} for {}", ty.name());
+                            if let Some(options) = result {
+                                assert_eq!(options.ty, ty);
+                                let (sprite, tint) = options.block.unwrap();
+                                if ty == ParticleType::BlockMarker {
+                                    assert!(!sprite.is_empty());
+                                    assert_eq!(tint, 0xFFFFFF);
+                                } else if ty == ParticleType::FallingDust {
+                                    assert!(
+                                        sprite.is_empty(),
+                                        "falling dust uses the provider's sprite set"
+                                    );
+                                    match name {
+                                        "sand" => assert_eq!(tint, 0xDBD3A0),
+                                        "stone" => assert_eq!(tint, 0x707070),
+                                        "air" | "cave_air" | "void_air" => assert_eq!(tint, 0),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                })
+            },
+        );
     }
 
     /// `PowderSnowBlock.entityInside`: vertical-only movement skips the roll;
@@ -1081,6 +1193,147 @@ pub(in crate::game) mod tests {
             play::Clientbound::LevelParticles(p) => p,
             other => panic!("expected LevelParticles packet, got {other:?}"),
         }
+    }
+
+    thread_local! {
+        pub(in crate::game) static PARTICLE_MAP_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(in crate::game) struct MeasuredParticle;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for MeasuredParticle {
+        fn register(
+            &self,
+            registrar: &mut dyn mod_api::Registrar,
+            _: &mod_api::RegistrationContext,
+        ) {
+            registrar.register_particle_type(
+                "measured",
+                false,
+                mod_api::ParticleMapCodec::new(
+                    |fields, _| match fields.get(&"measure".into()) {
+                        Some(mod_api::Tag::Int(value)) => {
+                            PARTICLE_MAP_READS.set(PARTICLE_MAP_READS.get() + 1);
+                            Ok(*value)
+                        }
+                        _ => Err("measure must be an integer".into()),
+                    },
+                    |value, _| {
+                        Ok(mod_api::Compound::from([(
+                            "measure".into(),
+                            mod_api::Tag::Int(*value),
+                        )]))
+                    },
+                ),
+                mod_api::ParticleStreamCodec::mapped(
+                    |value, _| Ok(value),
+                    |value, _| {
+                        if *value >= 0 {
+                            Ok(*value)
+                        } else {
+                            Err("negative measure".into())
+                        }
+                    },
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn typed_particle_packet_is_shared_by_spawns_and_kept_from_vanilla_peers() {
+        let entries = [mod_api::ModEntry::new("test", Box::new(MeasuredParticle))];
+        mod_platform::__private::part_tests::install_parts_fixture(&entries).unwrap();
+        crate::game::mods::resolve_particle_providers(&Default::default()).unwrap();
+        let (mut hub, sunrise, vanilla) =
+            test_hub("TypedParticle", vec!["minecraft:crit".into()], None);
+        hub.guests.update_all(|guest| {
+            if guest.conn == 1 {
+                guest.brand = "sunrise".into();
+            }
+            guest.position = [1.0, 2.0, 3.0];
+        });
+        let typed = mod_api::__private::decode_particle_map(
+            "test:measured",
+            &mod_api::Compound::from([("measure".into(), mod_api::Tag::Int(257))]),
+        )
+        .unwrap()
+        .unwrap();
+        let options = ParticleOptions::typed(typed).unwrap();
+        let at = [1.0, 2.0, 3.0];
+        send_hub_level_particles(&hub, &options, at, [0.25, 0.5, 1.0], 2.0, 2, None);
+        assert!(vanilla.try_recv().is_err());
+        let mut packet = level_particles(&sunrise);
+        let Some(ParticleData::Mod {
+            name,
+            options: bytes,
+        }) = &packet.particle.data
+        else {
+            panic!("missing mod particle envelope")
+        };
+        assert_eq!(name, "test:measured");
+        assert_eq!(bytes, &[1, 1, 0, 0]);
+        assert!(decode_mod_particle(name, &bytes[..3]).is_none());
+        assert!(decode_mod_particle(name, &[1, 1, 0, 0, 0]).is_none());
+        let decoded = decode_mod_particle(name, bytes).unwrap();
+        assert_eq!(decoded.typed_particle, options.typed_particle);
+        let mut engine = sunrise_client::particles::ParticleEngine::new(
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+        engine.created_requests = Some(Vec::new());
+        let mut random = LegacyRandom::new(23);
+        engine.handle_level_particles(&mut random, None, &packet, &decoded);
+        let created = engine.created_requests.as_mut().unwrap();
+        assert_eq!(created.len(), 2);
+        for request in created.drain(..) {
+            assert_eq!(request.0.typed_particle, decoded.typed_particle);
+        }
+        packet.count = 0;
+        packet.dist = [0.1, -0.2, 0.7];
+        packet.max_speed = [0.3, 0.4, 0.9];
+        engine.handle_level_particles(&mut random, None, &packet, &decoded);
+        let created = engine.created_requests.take().unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].1, at);
+        assert_eq!(
+            created[0].2.map(f64::to_bits),
+            [
+                0x3f9e_b852_0000_0000,
+                0xbfb4_7ae1_6000_0000,
+                0x3fe4_28f5_c000_0000
+            ]
+        );
+
+        send_hub_level_particles(
+            &hub,
+            &ParticleOptions::simple(ParticleType::from_name("crit").unwrap()),
+            at,
+            [0.0; 3],
+            0.0,
+            1,
+            None,
+        );
+        let Out::Packet(vanilla) = vanilla.try_recv().unwrap() else {
+            panic!("expected vanilla particle packet")
+        };
+        let Out::Packet(sunrise) = sunrise.try_recv().unwrap() else {
+            panic!("expected vanilla particle packet")
+        };
+        assert_eq!(vanilla, sunrise);
+        // Numeric particle ID with no mod envelope or appended stream body.
+        let mut expected = vec![
+            sunrise_protocol::ids::play::clientbound::LEVEL_PARTICLES as u8,
+            0,
+            0,
+            0,
+        ];
+        for coordinate in at {
+            expected.extend(coordinate.to_be_bytes());
+        }
+        expected.extend([0; 6 * 4]);
+        expected.extend([1, 0]);
+        assert_eq!(vanilla, expected);
     }
 
     /// `ShulkerBullet.hurtServer`: fifteen crit particles (spread 0.2, speed 0.0)

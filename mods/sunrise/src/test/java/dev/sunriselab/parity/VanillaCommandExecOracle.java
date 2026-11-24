@@ -81,6 +81,7 @@ import net.minecraft.world.level.storage.PrimaryLevelData;
  */
 public final class VanillaCommandExecOracle {
     static final List<JsonArray> messages = new ArrayList<>();
+    static final List<Component> rawMessages = new ArrayList<>();
 
     static final class Resolver implements ProfileResolver, UserNameToIdResolver {
         @Override public Optional<GameProfile> fetchByName(String name) { return Optional.empty(); }
@@ -552,7 +553,7 @@ public final class VanillaCommandExecOracle {
             Files.writeString(output.resolveSibling("orb-water-reference.json"), result.toString());
         }
 
-        void runScript() throws IOException {
+        void runScript() throws IOException, ReflectiveOperationException {
             ServerLevel level = this.overworld();
             GameProfile profile = new GameProfile(UUIDUtil.createOfflinePlayerUUID("Player"), "Player");
             CommonListenerCookie cookie = CommonListenerCookie.createInitial(profile, false);
@@ -560,10 +561,13 @@ public final class VanillaCommandExecOracle {
                 @Override public void sendSystemMessage(Component message, boolean overlay) {
                     if (!overlay) {
                         messages.add(spans(message));
+                        rawMessages.add(message);
                     }
                 }
                 @Override public void sendChatMessage(OutgoingChatMessage message, boolean filtered, ChatType.Bound chatType) {
-                    messages.add(spans(chatType.decorate(message.content())));
+                    Component decorated = chatType.decorate(message.content());
+                    messages.add(spans(decorated));
+                    rawMessages.add(decorated);
                 }
             };
             if(Boolean.getBoolean("sunrise.merchantFixture")||Boolean.getBoolean("sunrise.merchantCraftedFixture")) this.tickRateManager().setFrozen(true);
@@ -625,6 +629,7 @@ public final class VanillaCommandExecOracle {
                     case "cmd" -> {
                         String command = op.get("cmd").getAsString();
                         messages.clear();
+                        rawMessages.clear();
                         List<JsonArray> results = new ArrayList<>();
                         // Reuse the existing feedback receiver while retaining the actual
                         // server stack's null entity, names, position and permissions.
@@ -644,12 +649,58 @@ public final class VanillaCommandExecOracle {
                             JsonArray m = new JsonArray();
                             messages.forEach(m::add);
                             record.add("messages", m);
+                            if (op.has("components") && op.get("components").getAsBoolean()) {
+                                var ops = this.registryAccess().createSerializationContext(com.mojang.serialization.JsonOps.INSTANCE);
+                                JsonArray comps = new JsonArray();
+                                for (Component raw : rawMessages) {
+                                    comps.add(net.minecraft.network.chat.ComponentSerialization.CODEC.encodeStart(ops, raw).getOrThrow());
+                                }
+                                record.add("components", comps);
+                            }
                             JsonArray r = new JsonArray();
                             results.forEach(r::add);
                             record.add("results", r);
+                            if (op.has("released_chunk")) {
+                                var pos = op.getAsJsonArray("released_chunk");
+                                long key = new net.minecraft.world.level.ChunkPos(pos.get(0).getAsInt(), pos.get(1).getAsInt()).pack();
+                                var chunks = player.level().getChunkSource().chunkMap;
+                                var pending = chunks.getClass().getDeclaredField("pendingUnloads");
+                                pending.setAccessible(true);
+                                // A demoted holder can still be reused by the next forceload instead of reading storage.
+                                record.addProperty("unload_complete", chunks.getUpdatingChunkIfPresent(key) == null
+                                    && !((java.util.Map<?, ?>) pending.get(chunks)).containsKey(key));
+                            }
                             if (op.has("trace") && op.get("trace").getAsBoolean()) System.err.println("command trace: " + gson.toJson(record));
                             if (!op.has("record") || op.get("record").getAsBoolean()) out.append(gson.toJson(record)).append('\n');
                         }
+                    }
+                    case "mob_damage_state" -> {
+                        if (op.has("level_seed")) level.getRandom().setSeed(op.get("level_seed").getAsLong());
+                        var mob = (net.minecraft.world.entity.Mob) level.getEntity(UUID.fromString(op.get("uuid").getAsString()));
+                        if (op.has("start_sleeping")) {
+                            var p = op.getAsJsonArray("start_sleeping");
+                            if (!mob.startSleeping(new BlockPos(p.get(0).getAsInt(), p.get(1).getAsInt(), p.get(2).getAsInt())))
+                                throw new IllegalStateException("sleep fixture: villager did not start sleeping");
+                        }
+                        if (op.has("no_action_time")) mob.setNoActionTime(op.get("no_action_time").getAsInt());
+                        var state = new JsonObject();
+                        state.addProperty("no_action_time", mob.getNoActionTime());
+                        state.addProperty("cooldown", mob.damageCooldownTime);
+                        state.addProperty("hurt_time", mob.hurtTime);
+                        state.addProperty("health", String.format("%08x", Float.floatToRawIntBits(mob.getHealth())));
+                        state.addProperty("sleeping", mob.isSleeping());
+                        var position = new JsonArray();
+                        for (double v : new double[] {mob.getX(), mob.getY(), mob.getZ()})
+                            position.add(String.format("%016x", Double.doubleToRawLongBits(v)));
+                        state.add("position", position);
+                        var rotation = new JsonArray();
+                        for (float v : new float[] {mob.getYRot(), mob.getXRot()})
+                            rotation.add(String.format("%08x", Float.floatToRawIntBits(v)));
+                        state.add("rotation", rotation);
+                        var row = new JsonObject();
+                        row.add("cmd", op.get("label"));
+                        row.add("state", state);
+                        out.append(gson.toJson(row)).append('\n');
                     }
                     case "projectile_saved_type" -> {
                         var entity=level.getEntity(UUID.fromString(op.get("uuid").getAsString()));
@@ -741,18 +792,58 @@ public final class VanillaCommandExecOracle {
                         record.add("results", values); out.append(gson.toJson(record)).append('\n');
                     }
                     case "wait_chunks" -> {
+                        // The fixed corpus keeps its original paced simulation. Fuzz waits are I/O only,
+                        // so a read after reload sees exactly the number of scripted ticks in both games.
+                        boolean tickLevel = !op.has("tick_level") || op.get("tick_level").getAsBoolean();
+                        var targetLevel = player.level();
+                        var targets = new java.util.ArrayList<net.minecraft.world.level.ChunkPos>();
+                        for (var target : op.getAsJsonArray("chunks")) {
+                            var p = target.getAsJsonArray();
+                            targets.add(new net.minecraft.world.level.ChunkPos(p.get(0).getAsInt(), p.get(1).getAsInt()));
+                        }
                         long deadline = System.nanoTime() + 180_000_000_000L;
-                        while (true) {
-                            tick(); boolean ready = true;
-                            for (var target : op.getAsJsonArray("chunks")) {
-                                var p = target.getAsJsonArray(); int x = p.get(0).getAsInt(), z = p.get(1).getAsInt();
-                                var chunk = player.level().getChunkSource().getChunkNow(x, z);
-                                ready &= chunk != null && chunk.isLightCorrect()
-                                    && player.level().areEntitiesLoaded(new net.minecraft.world.level.ChunkPos(x, z).pack());
+                        BooleanSupplier ready = () -> {
+                            for (var pos : targets) {
+                                var chunk = targetLevel.getChunkSource().getChunkNow(pos.x(), pos.z());
+                                if (chunk == null || !chunk.isLightCorrect() || !targetLevel.areEntitiesLoaded(pos.pack())) {
+                                    if (System.nanoTime() > deadline) {
+                                        throw new IllegalStateException("target readiness timed out: " + pos);
+                                    }
+                                    return false;
+                                }
                             }
-                            if (ready) break;
-                            if (System.nanoTime() > deadline) throw new IllegalStateException("initial target readiness timed out");
-                            try {Thread.sleep(2);} catch (InterruptedException error) {throw new RuntimeException(error);}
+                            return true;
+                        };
+                        if (tickLevel) {
+                            do {
+                                tick();
+                                if (ready.getAsBoolean()) break;
+                                try {Thread.sleep(2);} catch (InterruptedException error) {throw new RuntimeException(error);}
+                            } while (true);
+                        } else {
+                            var field = ServerLevel.class.getDeclaredField("entityManager");
+                            field.setAccessible(true);
+                            var entities = (net.minecraft.world.level.entity.PersistentEntitySectionManager<?>) field.get(targetLevel);
+                            // managedBlock admits queued server work even between ticks, including the entity
+                            // storage read's completion on this thread; merely polling chunk tasks does not.
+                            managedBlock(() -> {
+                                drain();
+                                entities.processPendingLoads();
+                                return ready.getAsBoolean();
+                            });
+                        }
+                    }
+                    case "align_game_time" -> {
+                        long time = op.get("target").getAsLong();
+                        while (player.level().getGameTime() < time) {
+                            long before = player.level().getGameTime();
+                            tick();
+                            if (player.level().getGameTime() != before + 1) {
+                                throw new IllegalStateException("align_game_time: a tick did not advance the level clock");
+                            }
+                        }
+                        if (player.level().getGameTime() != time) {
+                            throw new IllegalStateException("align_game_time: target is in the past");
                         }
                     }
                     case "weather_state" -> {
@@ -837,6 +928,12 @@ public final class VanillaCommandExecOracle {
                             record.add("results", new JsonArray());
                             out.append(gson.toJson(record)).append('\n');
                         }
+                    }
+                    case "creaking_hit_order" -> {
+                        // Optional fixture: the shared runner still compiles on its own.
+                        Class<?> fixture = Class.forName("dev.sunriselab.parity.VanillaCreakingHitOrderOracle");
+                        var run = fixture.getDeclaredMethod("run", ServerPlayer.class, EmbeddedChannel.class, JsonObject.class);
+                        out.append(gson.toJson(run.invoke(null, player, channel, op))).append('\n');
                     }
                     case "dragon_contacts" -> {
                         // Optional fixture: the shared runner still compiles on its own.

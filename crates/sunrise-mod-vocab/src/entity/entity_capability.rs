@@ -3,8 +3,8 @@
 //! `Capabilities.Item.ENTITY`). A player's inventory is the game's own answer for a player.
 use crate::{
     Capability, ComponentId, Direction, EnergyHandler, EntityRef, EquipmentSlot, FluidResource,
-    Host, ItemPlace, ItemResource, PREVENT_ARMOR_CHANGE, ProvidedBy, ResourceHandler, ServerHost,
-    Tag, Transaction, backend_of,
+    Host, ItemPlace, ItemResource, Overanswered, PREVENT_ARMOR_CHANGE, ResourceHandler, ServerHost,
+    Tag, TransactionContext, TransactionError, backend_of,
 };
 use std::marker::PhantomData;
 
@@ -41,7 +41,7 @@ pub const ENTITY_ITEMS: EntityCapabilityKey<dyn ResourceHandler<ItemResource>> =
     EntityCapabilityKey {
         name: "sunrise:entity_items",
         default: Some(|host, entity, ()| {
-            if !builtin_player_inventory_type(&entity.kind(host)?.id(host)) {
+            if !builtin_player_inventory_type(entity.kind(host)?.id(host)?.as_str()) {
                 if let Some(size) = backend_of(host)?.entity_container_size(entity.id()) {
                     return Some(Box::new(ContainerItems { entity, size }));
                 }
@@ -107,23 +107,20 @@ impl EntityRef {
         if !self.level(host)?.in_place(host) {
             return None;
         }
+        let Some(providers) = crate::entity_providers(key, host, self, context) else {
+            return key.default.and_then(|default| {
+                default(host, self, context).map(|handler| Capability {
+                    handler,
+                    owner: None,
+                })
+            });
+        };
         let mut game = None;
-        let table = host.capability_providers();
-        let kind = table
-            .provided(ProvidedBy::Entity, key.name)
-            .then(|| self.kind(host).map(|kind| kind.id(host)))
-            .flatten();
         crate::answered(
-            crate::ask_providers(
-                host,
-                |index| table.entity_provider(key.name, kind.as_deref()?, index),
-                crate::EntityProviderOf::get::<T, C>,
-                |provider, host| provider.provide(host, self, context),
-                |host| {
-                    game = key.default.and_then(|default| default(host, self, context));
-                    game.is_some()
-                },
-            ),
+            providers.answer(host, |host| {
+                game = key.default.and_then(|default| default(host, self, context));
+                game.is_some()
+            }),
             game,
         )
     }
@@ -163,36 +160,47 @@ impl ResourceHandler<ItemResource> for ContainerItems {
         self.place(host, index)
             .map_or(0, |place| place.amount(host))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         match self.place(host, index) {
-            Some(_) => max_stack(host, resource),
+            Some(_) => resource.map_or(u32::MAX, |item| max_stack(host, item)),
             None => 0,
         }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         let Some(place) = self.place(host, index) else {
-            return 0;
+            return Ok(0);
         };
         let limit = max_stack(host, resource);
         fill(host, tx, &place, resource, amount, limit)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         self.place(host, index)
-            .map_or(0, |place| place.extract(host, tx, resource, amount))
+            .map_or(Ok(0), |place| place.extract(host, tx, resource, amount))
     }
 }
 
@@ -245,51 +253,61 @@ impl ResourceHandler<ItemResource> for LivingEquipment {
         self.place(host, index)
             .map_or(0, |place| place.amount(host))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         let Some(slot) = self.slot(host, index) else {
             return 0;
         };
         match Self::armour(slot) {
             // `Mob.canEquip`: only what its `equippable` names for this kind,
             // one of it (`ArmorSlot.getMaxStackSize`).
-            Some(slot) if !equips(host, resource, slot, &kind_of(host, self.entity)) => 0,
-            Some(_) => max_stack(host, resource).min(1),
-            None => max_stack(host, resource),
+            Some(slot)
+                if resource.is_some_and(|item| {
+                    let name = self.entity.kind(host).and_then(|kind| kind.id(host));
+                    !equips(host, item, slot, name.as_deref().unwrap_or_default())
+                }) =>
+            {
+                0
+            }
+            Some(_) => resource.map_or(1, |item| max_stack(host, item).min(1)),
+            None => resource.map_or(u32::MAX, |item| max_stack(host, item)),
         }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         let Some(place) = self.place(host, index) else {
-            return 0;
+            return Ok(0);
         };
-        let limit = self.capacity(host, index, resource);
+        let limit = self.capacity(host, index, Some(resource));
         fill(host, tx, &place, resource, amount, limit)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         self.place(host, index)
-            .map_or(0, |place| place.extract(host, tx, resource, amount))
+            .map_or(Ok(0), |place| place.extract(host, tx, resource, amount))
     }
-}
-
-/// The entity type `entity` is (`minecraft:zombie`), empty where the handle no longer reads.
-fn kind_of(host: &dyn Host, entity: EntityRef) -> String {
-    entity
-        .kind(host)
-        .map(|kind| kind.id(host))
-        .unwrap_or_default()
 }
 
 /// The player inventory's slots, by `Inventory`'s numbers (`PlayerInventoryWrapper`).
@@ -329,18 +347,22 @@ impl PlayerItems {
 /// empty place or one with the same item, up to `limit`.
 fn fill(
     host: &mut dyn ServerHost,
-    tx: &Transaction,
+    tx: &TransactionContext,
     place: &ItemPlace,
     resource: &ItemResource,
     amount: u32,
     limit: u32,
-) -> u32 {
-    let held = match place.stack(host) {
-        Some(held) if !resource.matches(&held) => return 0,
-        held => held.map_or(0, |held| held.count()),
+) -> Result<u32, TransactionError<Overanswered>> {
+    let held = place.with_stack(host, |held| {
+        resource.matches_view(&held).then(|| held.count())
+    });
+    let held = match held {
+        Some(Some(count)) => count,
+        Some(None) => return Ok(0),
+        None => 0,
     };
     match amount.min(limit.saturating_sub(held)) {
-        0 => 0,
+        0 => Ok(0),
         room => place.insert(host, tx, resource, room),
     }
 }
@@ -390,49 +412,64 @@ impl ResourceHandler<ItemResource> for PlayerItems {
         self.place(host, index)
             .map_or(0, |place| place.amount(host))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
         match index
             .checked_sub(MAIN)
             .and_then(|armour| ARMOUR.get(armour))
         {
-            Some(slot) if !equips(host, resource, slot, "minecraft:player") => 0,
+            Some(slot)
+                if resource.is_some_and(|item| !equips(host, item, slot, "minecraft:player")) =>
+            {
+                0
+            }
             // `ArmorSlot.getMaxStackSize`.
-            Some(_) => max_stack(host, resource).min(1),
+            Some(_) => resource.map_or(1, |item| max_stack(host, item).min(1)),
             _ if index > OFF_HAND => 0,
-            _ => max_stack(host, resource),
+            _ => resource.map_or(u32::MAX, |item| max_stack(host, item)),
         }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         let Some(place) = self.place(host, index) else {
-            return 0;
+            return Ok(0);
         };
-        let limit = self.capacity(host, index, resource);
+        let limit = self.capacity(host, index, Some(resource));
         fill(host, tx, &place, resource, amount, limit)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         let Some(place) = self.place(host, index) else {
-            return 0;
+            return Ok(0);
         };
         // `ArmorSlot.mayPickup`: bound armour stays on outside creative.
         let bound = resource.has_enchantment_effect(host, PREVENT_ARMOR_CHANGE);
         if (MAIN..OFF_HAND).contains(&index) && bound {
             let player = host.player(self.player);
             if player.and_then(|player| player.has_infinite_materials(host)) != Some(true) {
-                return 0;
+                return Ok(0);
             }
         }
         place.extract(host, tx, resource, amount)
@@ -440,15 +477,18 @@ impl ResourceHandler<ItemResource> for PlayerItems {
     /// Where `Inventory.add` puts it: onto the same item in the selected slot, then in the off
     /// hand, then in the main inventory in order, then into its empty slots in order; never
     /// the armour.
-    fn insert_any(
+    fn insert(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        if !host.transaction_matches(Some(tx)) {
+            return Err(TransactionError::InvalidContext);
+        }
         if !live(host, self.entity) {
-            return 0;
+            return Ok(0);
         }
         let limit = max_stack(host, resource);
         // The selected slot as a slot, not a hand: a creative player's hand takes anything.
@@ -462,19 +502,24 @@ impl ResourceHandler<ItemResource> for PlayerItems {
             .filter_map(|index| self.slot(index));
         let mut went = 0;
         for place in same {
-            if went < amount
-                && place
-                    .stack(host)
-                    .is_some_and(|held| resource.matches(&held))
-            {
-                went += fill(host, tx, &place, resource, amount - went, limit);
+            if went >= amount {
+                break;
+            }
+            if let Some(Some(count)) = place.with_stack(host, |held| {
+                resource.matches_view(&held).then(|| held.count())
+            }) {
+                let room = (amount - went).min(limit.saturating_sub(count));
+                went += place.insert(host, tx, resource, room)?;
             }
         }
         for place in (0..MAIN).filter_map(|index| self.slot(index)) {
-            if went < amount && place.stack(host).is_none() {
-                went += fill(host, tx, &place, resource, amount - went, limit);
+            if went >= amount {
+                break;
+            }
+            if place.with_stack(host, |_| ()).is_none() {
+                went += place.insert(host, tx, resource, (amount - went).min(limit))?;
             }
         }
-        went
+        Ok(went)
     }
 }

@@ -8,3 +8,13 @@ impl Game<'_> {
         mod_api::__private::game::check_payload_token(token)
     }
 }
+
+impl Game<'_> {
+    /// The drop counts of `Droppable` channel `id`.
+    pub(super) fn payload_drop_counts(
+        &self,
+        id: &mod_api::PayloadId,
+    ) -> Result<Option<mod_api::PayloadDropCounts>, mod_api::LevelReadError> {
+        Ok(mod_api::__private::game::payload_drop_counts(id))
+    }
+}

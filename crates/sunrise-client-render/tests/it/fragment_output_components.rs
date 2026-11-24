@@ -31,6 +31,7 @@ fn draw(
         &source("void main() { gl_Position = ftransform(); }"),
         &source(fragment),
         Target::Buffers,
+        naga::front::glsl::InterfaceLimits::WGPU_DEFAULT,
     )
     .unwrap_or_else(|e| panic!("{fragment}: {e:?}"));
     let module = |module| {
