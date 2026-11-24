@@ -12,7 +12,7 @@ use glam::Mat4;
 pub const DEFAULT_CAPACITY: u32 = 4096;
 
 /// The stages a frame draws primitives at, in frame order (`RenderLevelStage`).
-pub const STAGES: usize = 5;
+pub const STAGES: usize = 8;
 /// world_primitives.wgsl after what it shares with the frame's other shaders (`frame_stored`).
 pub(super) fn shader() -> String {
     include_str!("../hdr_light.wgsl").to_owned() + include_str!("world_primitives.wgsl")
@@ -510,20 +510,33 @@ mod tests {
     fn each_stage_draws_its_own_part_of_every_slice() {
         // Quads, quads through walls, lines, lines through walls: 6, 2, 4, 3 in all.
         let counts = [6, 2, 4, 3];
-        // AfterSky has 1 quad; AfterOpaqueBlocks nothing; AfterTranslucentBlocks 2 quads and
-        // a line; AfterWeather a quad through walls; AfterLevel the rest.
-        let ends = [[1, 0, 0, 0], [1, 0, 0, 0], [3, 0, 1, 0], [3, 1, 1, 0]];
+        // AfterSky has 1 quad; AfterOpaqueBlocks nothing; AfterOpaqueFeatures 1 line;
+        // AfterTranslucentFeatures nothing; AfterTranslucentBlocks 2 quads;
+        // AfterTranslucentParticles nothing; AfterWeather a quad through walls;
+        // AfterLevel the rest.
+        let ends = [
+            [1, 0, 0, 0],
+            [1, 0, 0, 0],
+            [1, 0, 1, 0],
+            [1, 0, 1, 0],
+            [3, 0, 1, 0],
+            [3, 0, 1, 0],
+            [3, 1, 1, 0],
+        ];
         assert_eq!(spans(counts, &ends, 0, 0), [0..1, 6..6, 0..0, 4..4]);
         assert_eq!(spans(counts, &ends, 1, 1), [1..1, 6..6, 0..0, 4..4]);
-        assert_eq!(spans(counts, &ends, 2, 2), [1..3, 6..6, 0..1, 4..4]);
-        assert_eq!(spans(counts, &ends, 3, 3), [3..3, 6..7, 1..1, 4..4]);
-        assert_eq!(spans(counts, &ends, 4, 4), [3..6, 7..8, 1..4, 4..7]);
+        assert_eq!(spans(counts, &ends, 2, 2), [1..1, 6..6, 0..1, 4..4]);
+        assert_eq!(spans(counts, &ends, 3, 3), [1..1, 6..6, 1..1, 4..4]);
+        assert_eq!(spans(counts, &ends, 4, 4), [1..3, 6..6, 1..1, 4..4]);
+        assert_eq!(spans(counts, &ends, 5, 5), [3..3, 6..6, 1..1, 4..4]);
+        assert_eq!(spans(counts, &ends, 6, 6), [3..3, 6..7, 1..1, 4..4]);
+        assert_eq!(spans(counts, &ends, 7, 7), [3..6, 7..8, 1..4, 4..7]);
         // A pass that skipped the middle stages draws them with the next one, in order.
-        assert_eq!(spans(counts, &ends, 1, 3), [1..3, 6..7, 0..1, 4..4]);
+        assert_eq!(spans(counts, &ends, 1, 6), [1..3, 6..7, 0..1, 4..4]);
         // Everything, as a batch without stages draws.
-        assert_eq!(spans(counts, &ends, 0, 4), [0..6, 6..8, 0..4, 4..7]);
+        assert_eq!(spans(counts, &ends, 0, 7), [0..6, 6..8, 0..4, 4..7]);
         assert_eq!(
-            spans(counts, &[[0; 4]; STAGES - 1], 4, 4),
+            spans(counts, &[[0; 4]; STAGES - 1], STAGES - 1, STAGES - 1),
             [0..6, 6..8, 0..4, 4..7]
         );
     }
@@ -531,12 +544,28 @@ mod tests {
     #[test]
     fn stage_ends_past_the_counts_or_going_back_are_clamped() {
         let ends = clamped_ends(
-            [[9, 0, 2, 0], [1, 0, 1, 0], [9, 9, 9, 9], [0; 4]],
+            [
+                [9, 0, 2, 0],
+                [1, 0, 1, 0],
+                [3, 0, 2, 0],
+                [2, 1, 0, 0],
+                [9, 9, 9, 9],
+                [0; 4],
+                [0; 4],
+            ],
             [6, 2, 4, 3],
         );
         assert_eq!(
             ends,
-            [[6, 0, 2, 0], [6, 0, 2, 0], [6, 2, 4, 3], [6, 2, 4, 3]]
+            [
+                [6, 0, 2, 0],
+                [6, 0, 2, 0],
+                [6, 0, 2, 0],
+                [6, 1, 2, 0],
+                [6, 2, 4, 3],
+                [6, 2, 4, 3],
+                [6, 2, 4, 3],
+            ]
         );
     }
 

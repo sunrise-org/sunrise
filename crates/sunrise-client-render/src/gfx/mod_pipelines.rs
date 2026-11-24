@@ -963,7 +963,7 @@ mod tests {
         let vertices = quad([0.0, 0.0, 64.0, 64.0], 2.0, [255; 4]);
         let runs = [PipelineRun {
             slot: 0,
-            stage: 4,
+            stage: (STAGES - 1) as u32,
             quads: 1,
         }];
         let format = wgpu::TextureFormat::Rgba16Float;
@@ -1098,7 +1098,7 @@ mod tests {
         }
         let runs = [0, 1, 3].map(|slot| PipelineRun {
             slot,
-            stage: 4,
+            stage: (STAGES - 1) as u32,
             quads: 1,
         });
         let pixel = render(

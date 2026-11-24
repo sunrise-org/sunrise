@@ -11,14 +11,18 @@ pub trait Hooks {
 `Hooks::render_level_stage` is the client counterpart of NeoForge 26.3's
 `RenderLevelStageEvent` for the stages Sunrise draws, as one hook with a `RenderLevelStage`:
 `AfterSky` (behind everything else, for backdrops and atmosphere), `AfterOpaqueBlocks` (after
-solid and cutout terrain, before entities), `AfterTranslucentBlocks` (after water and stained
-glass, before translucent particles), `AfterWeather` (after rain and snow, before the world
-border) and `AfterLevel` (with `Hooks::submit_custom_geometry`, before the hand). It is asked
-for each stage in that order, every view of a world, and never on title or connect screens.
+solid and cutout terrain, before entities), `AfterOpaqueFeatures` (after opaque entities, block
+entities and opaque particles), `AfterTranslucentFeatures` (after translucent entities, block
+entities, fluids and additive overlays, before translucent terrain), `AfterTranslucentBlocks`
+(after water and stained glass, before translucent particles), `AfterTranslucentParticles`
+(after translucent particles, before weather), `AfterWeather` (after rain and snow, before the
+world border) and `AfterLevel` (with `Hooks::submit_custom_geometry`, before the hand). It is
+asked for each stage in that order, every view of a world, and never on title or connect screens.
 
 Sunrise gathers a view's geometry before rendering it, so every stage is asked as the view is
 extracted, in stage order, with `Hooks::submit_custom_geometry` and the debug renderers asked
-just before `AfterLevel`. All take the same `WorldRenderView` and `WorldDrawContext`:
+just before `AfterLevel`. All take the same `WorldRenderView` (including the camera-relative
+`model_view` and reversed-Z `projection` matrices) and `WorldDrawContext`:
 [the custom geometry limits and rules](#custom-world-geometry) apply and are shared by all stages. Only where it is drawn differs. `draw_model_instances` copies
 are part of the world's model pass, so they draw with entities whatever the stage, and `name_tag`
 labels draw with the world's name tags, whatever the stage too.
@@ -33,7 +37,8 @@ weather stages. Nothing is dropped, and the order between stages is kept."#]
         side = "client",
         contract = "listen",
         neoforge = "RenderLevelStageEvent",
-        cancellable = false
+        cancellable = false,
+        version = 2
     )]
     fn render_level_stage(
         stage: mod_api::RenderLevelStage,

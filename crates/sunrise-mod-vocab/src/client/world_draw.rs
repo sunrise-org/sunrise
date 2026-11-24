@@ -148,9 +148,18 @@ pub enum RenderLevelStage {
     /// After solid and cutout terrain, before entities and block entities
     /// (`AfterOpaqueBlocks`).
     AfterOpaqueBlocks,
+    /// After opaque entities, block entities and opaque particles, before translucent
+    /// features and translucent terrain (`AfterOpaqueFeatures`).
+    AfterOpaqueFeatures,
+    /// After translucent entities, block entities, fluids and additive entity overlays,
+    /// before translucent terrain (`AfterTranslucentFeatures`).
+    AfterTranslucentFeatures,
     /// After translucent terrain such as water and stained glass, before translucent
     /// particles (`AfterTranslucentBlocks`).
     AfterTranslucentBlocks,
+    /// After translucent particles, before weather and the world border
+    /// (`AfterTranslucentParticles`).
+    AfterTranslucentParticles,
     /// After rain and snow, before the world border (`AfterWeather`).
     AfterWeather,
     /// After the rest of the world, before the first-person hand (`AfterLevel`): where
@@ -159,10 +168,13 @@ pub enum RenderLevelStage {
 }
 impl RenderLevelStage {
     /// Every stage, in the order the frame reaches them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 8] = [
         Self::AfterSky,
         Self::AfterOpaqueBlocks,
+        Self::AfterOpaqueFeatures,
+        Self::AfterTranslucentFeatures,
         Self::AfterTranslucentBlocks,
+        Self::AfterTranslucentParticles,
         Self::AfterWeather,
         Self::AfterLevel,
     ];
@@ -180,14 +192,29 @@ pub struct WorldRenderView {
     pub partial_tick: f32,
     /// Level game time in ticks.
     pub game_time: i64,
+    /// Camera-relative model-view matrix in column-major order (including view bobbing
+    /// and screen distortion), matching the world renderer's view transform
+    /// (NeoForge 26.3's `RenderLevelStageEvent::getModelViewMatrix`).
+    pub model_view: [f32; 16],
+    /// Reversed-Z perspective projection matrix in column-major order, matching the
+    /// world renderer's projection (NeoForge 26.3's `RenderLevelStageEvent::getProjectionMatrix`).
+    pub projection: [f32; 16],
 }
 impl WorldRenderView {
     /// Describe the extracted view.
-    pub fn new(camera: [f64; 3], partial_tick: f32, game_time: i64) -> Self {
+    pub fn new(
+        camera: [f64; 3],
+        partial_tick: f32,
+        game_time: i64,
+        model_view: [f32; 16],
+        projection: [f32; 16],
+    ) -> Self {
         Self {
             camera,
             partial_tick,
             game_time,
+            model_view,
+            projection,
         }
     }
 }
@@ -270,7 +297,10 @@ mod tests {
             ]
             .into(),
         );
-        let view = WorldRenderView::new([0.0; 3], 0.5, 42);
+        let identity = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        let view = WorldRenderView::new([0.0; 3], 0.5, 42, identity, identity);
         dispatch_submit_custom_geometry(&Empty, &view, &mut Empty);
         assert_eq!(CALLS.load(Ordering::Relaxed), 1);
         assert!(set_mod_enabled("geometry", false));

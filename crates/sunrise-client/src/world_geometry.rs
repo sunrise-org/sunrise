@@ -546,7 +546,8 @@ mod tests {
         let quad = WorldQuad::new([[0.0, 0.0, -1.0]; 4], !0, WorldDepth::ThroughWalls);
         draw.begin_stage(AfterSky);
         draw.lines(&[line(WorldDepth::Tested)]).unwrap();
-        // Nothing at AfterOpaqueBlocks; a quad through walls at AfterTranslucentBlocks.
+        // Nothing at AfterOpaqueBlocks, AfterOpaqueFeatures, or AfterTranslucentFeatures;
+        // a quad through walls at AfterTranslucentBlocks.
         draw.begin_stage(AfterTranslucentBlocks);
         draw.quads(&[quad]).unwrap();
         // Still in the current stage: what follows a backwards step is not reordered.
@@ -554,20 +555,36 @@ mod tests {
         draw.lines(&[line(WorldDepth::ThroughWalls)]).unwrap();
         assert_eq!(
             draw.batch().stage_ends,
-            [[0, 0, 1, 0], [0, 0, 1, 0], [0, 1, 1, 1], [0, 1, 1, 1]],
+            [
+                [0, 0, 1, 0],
+                [0, 0, 1, 0],
+                [0, 0, 1, 0],
+                [0, 0, 1, 0],
+                [0, 1, 1, 1],
+                [0, 1, 1, 1],
+                [0, 1, 1, 1],
+            ],
             "the current stage runs to the end until the next begins"
         );
         draw.begin_stage(AfterLevel);
         draw.lines(&[line(WorldDepth::Tested)]).unwrap();
         assert_eq!(
             draw.batch().stage_ends,
-            [[0, 0, 1, 0], [0, 0, 1, 0], [0, 1, 1, 1], [0, 1, 1, 1]]
+            [
+                [0, 0, 1, 0],
+                [0, 0, 1, 0],
+                [0, 0, 1, 0],
+                [0, 0, 1, 0],
+                [0, 1, 1, 1],
+                [0, 1, 1, 1],
+                [0, 1, 1, 1],
+            ]
         );
         assert_eq!(draw.batch().lines.len(), 2);
         // A new view starts at the first stage again.
         draw.reset([0.0; 3], Mat4::IDENTITY, [0.5, 0.5]);
         draw.lines(&[line(WorldDepth::Tested)]).unwrap();
-        assert_eq!(draw.batch().stage_ends, [[0, 0, 1, 0]; 4]);
+        assert_eq!(draw.batch().stage_ends, [[0, 0, 1, 0]; STAGES - 1]);
     }
     #[test]
     fn world_geometry_batches_are_atomic_and_reset_per_view() {
@@ -659,7 +676,7 @@ mod tests {
         let run = |slot, stage, quads| PipelineRun { slot, stage, quads };
         assert_eq!(
             pipelines.runs,
-            [run(4, 0, 3), run(1, 0, 1), run(4, 0, 1), run(4, 3, 1)]
+            [run(4, 0, 3), run(1, 0, 1), run(4, 0, 1), run(4, 6, 1)]
         );
         assert_eq!(pipelines.vertices.len(), 24);
         assert_eq!(pipelines.time, 12.5);

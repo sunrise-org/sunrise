@@ -78,6 +78,8 @@ impl Game<'_> {
         title: bool,
         camera: [f64; 3],
         view: Mat4,
+        model_view: Mat4,
+        projection: Mat4,
         alpha: f64,
         draw: &mut WorldGeometry,
         entities: &mut Vec<Vertex>,
@@ -94,7 +96,13 @@ impl Game<'_> {
         draw.set_model_cut(entities.len() as u32);
         // Seconds of game time, wrapping every hour (72,000 ticks) so f32 keeps sub-tick steps.
         draw.set_time(((self.world.game_time.rem_euclid(72_000) as f64 + alpha) / 20.0) as f32);
-        let view = mod_api::WorldRenderView::new(camera, alpha as f32, self.world.game_time);
+        let view = mod_api::WorldRenderView::new(
+            camera,
+            alpha as f32,
+            self.world.game_time,
+            model_view.to_cols_array(),
+            projection.to_cols_array(),
+        );
         // RenderLevelStageEvent's stages in frame order, so each one's output follows the
         // last's; custom geometry and the debug renderers draw with the last, AfterLevel.
         let (last, earlier) = RenderLevelStage::ALL.split_last().expect("stages");
@@ -1482,7 +1490,10 @@ mod tests {
         )
     }
 
-    /// Draws at AfterSky, AfterWeather and AfterLevel, and in `submit_custom_geometry`.
+    static SEEN_STAGES: Mutex<Vec<RenderLevelStage>> = Mutex::new(Vec::new());
+    static SEEN_MATRICES: Mutex<Option<([f32; 16], [f32; 16])>> = Mutex::new(None);
+
+    /// Draws across early, feature, particle, weather and final stages, and in `submit_custom_geometry`.
     struct Staged;
     #[mod_api::__subscriptions]
     impl Hooks for Staged {
@@ -1500,15 +1511,21 @@ mod tests {
             _: &dyn ClientHost,
             event: &mut mod_api::RenderLevelStageEvent<'_>,
         ) {
+            if !STAGES_ARMED.load(Ordering::Relaxed) {
+                return;
+            }
+            SEEN_STAGES.lock().unwrap().push(event.stage);
+            *SEEN_MATRICES.lock().unwrap() = Some((event.view.model_view, event.view.projection));
             let x = match event.stage {
                 RenderLevelStage::AfterSky => 10.0,
+                RenderLevelStage::AfterOpaqueFeatures => 12.0,
+                RenderLevelStage::AfterTranslucentFeatures => 14.0,
+                RenderLevelStage::AfterTranslucentParticles => 16.0,
                 RenderLevelStage::AfterWeather => 20.0,
                 RenderLevelStage::AfterLevel => 40.0,
                 _ => return,
             };
-            if STAGES_ARMED.load(Ordering::Relaxed) {
-                event.draw.lines(&[marker(x)]).unwrap();
-            }
+            event.draw.lines(&[marker(x)]).unwrap();
         }
     }
 
@@ -1519,41 +1536,71 @@ mod tests {
             mod_platform::__private::install(
                 vec![ModEntry::new("staged", Box::new(Staged))].into(),
             );
+            SEEN_STAGES.lock().unwrap().clear();
+            *SEEN_MATRICES.lock().unwrap() = None;
+            let model_view = Mat4::from_rotation_y(0.5);
+            let projection = Mat4::perspective_rh(70.0_f32.to_radians(), 16.0 / 9.0, 512.0, 0.05);
             STAGES_ARMED.store(true, Ordering::Relaxed);
             let mut draw = WorldGeometry::default();
             game.fill_world_geometry(
                 false,
                 [0.0; 3],
                 Mat4::IDENTITY,
+                model_view,
+                projection,
                 0.0,
                 &mut draw,
                 &mut Vec::new(),
             );
             STAGES_ARMED.store(false, Ordering::Relaxed);
+            assert_eq!(
+                *SEEN_STAGES.lock().unwrap(),
+                RenderLevelStage::ALL,
+                "every stage is asked in NeoForge 26.3 frame order"
+            );
+            assert_eq!(
+                *SEEN_MATRICES.lock().unwrap(),
+                Some((model_view.to_cols_array(), projection.to_cols_array())),
+                "WorldRenderView exposes the frame's model_view and projection matrices"
+            );
             let batch = draw.batch();
             let starts: Vec<f32> = batch.lines.iter().map(|line| line[0]).collect();
             assert_eq!(
                 starts,
-                [10.0, 20.0, 30.0, 40.0],
+                [10.0, 12.0, 14.0, 16.0, 20.0, 30.0, 40.0],
                 "stages in frame order, custom geometry just before AfterLevel"
             );
-            // AfterSky holds the first line, AfterOpaqueBlocks and AfterTranslucentBlocks none,
-            // AfterWeather the second, AfterLevel the rest.
+            // AfterSky (1), AfterOpaqueBlocks (1), AfterOpaqueFeatures (2),
+            // AfterTranslucentFeatures (3), AfterTranslucentBlocks (3),
+            // AfterTranslucentParticles (4), AfterWeather (5), AfterLevel (7).
             assert_eq!(
                 batch.stage_ends,
-                [[0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 2, 0]]
+                [
+                    [0, 0, 1, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 2, 0],
+                    [0, 0, 3, 0],
+                    [0, 0, 3, 0],
+                    [0, 0, 4, 0],
+                    [0, 0, 5, 0],
+                ]
             );
             // A title view draws no world: nothing, and every stage empty.
             game.fill_world_geometry(
                 true,
                 [0.0; 3],
                 Mat4::IDENTITY,
+                Mat4::IDENTITY,
+                Mat4::IDENTITY,
                 0.0,
                 &mut draw,
                 &mut Vec::new(),
             );
             assert!(draw.batch().is_empty());
-            assert_eq!(draw.batch().stage_ends, [[0; 4]; 4]);
+            assert_eq!(
+                draw.batch().stage_ends,
+                [[0; 4]; sunrise_client::gfx::world_primitives::STAGES - 1]
+            );
         });
     }
 
@@ -1576,6 +1623,8 @@ mod tests {
             game.fill_world_geometry(
                 false,
                 [0.0; 3],
+                Mat4::IDENTITY,
+                Mat4::IDENTITY,
                 Mat4::IDENTITY,
                 0.0,
                 &mut draw,

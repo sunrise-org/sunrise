@@ -11668,10 +11668,19 @@ impl Game<'_> {
             self.polytone_gpu_particles(camera, alpha);
         }
         let mut world_geometry = self.world_geometry.take().expect("view storage");
+        let model_view = bob * spin * view;
+        let projection = glam::Mat4::perspective_rh(
+            fov_degrees.to_radians(),
+            size[0] as f32 / size[1].max(1) as f32,
+            depth_far,
+            0.05,
+        );
         self.fill_world_geometry(
             title,
             camera.to_array(),
             view,
+            model_view,
+            projection,
             alpha,
             &mut world_geometry,
             &mut entities,

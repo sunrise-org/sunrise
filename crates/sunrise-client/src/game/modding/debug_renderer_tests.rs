@@ -116,7 +116,16 @@ fn frame(
     title: bool,
     draw: &mut WorldGeometry,
 ) -> (Vec<[f32; 6]>, Vec<&'static str>) {
-    game.fill_world_geometry(title, CAMERA, Mat4::IDENTITY, 0.0, draw, &mut Vec::new());
+    game.fill_world_geometry(
+        title,
+        CAMERA,
+        Mat4::IDENTITY,
+        Mat4::IDENTITY,
+        Mat4::IDENTITY,
+        0.0,
+        draw,
+        &mut Vec::new(),
+    );
     let lines = draw
         .batch()
         .lines
@@ -277,6 +286,8 @@ fn the_renderer_list_refreshes_with_the_selection_and_leaves_nothing_behind() {
         game.fill_world_geometry(
             false,
             CAMERA,
+            Mat4::IDENTITY,
+            Mat4::IDENTITY,
             Mat4::IDENTITY,
             0.0,
             &mut draw,

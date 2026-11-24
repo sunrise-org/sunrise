@@ -2959,6 +2959,15 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            // RenderLevelStageEvent.AfterOpaqueFeatures: after opaque entities, block entities
+            // and opaque particles, before translucent features.
+            if world_primitives && !pack_draws_terrain {
+                self.world_primitives
+                    .draw_through(&mut pass, &mut primitive_stage, 2);
+                pass.set_bind_group(0, &self.group, &[]);
+                pack_frame(&mut pass);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            }
             if text_quads > 0 && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "entity text");
                 pass.set_pipeline(&self.text_polygon_offset_pipeline);
@@ -3150,6 +3159,15 @@ impl Renderer {
                     pass.draw_indexed(0..additive_quads * 6, (world_quads * 4) as i32, 0..1);
                 }
                 pass.set_bind_group(0, &self.group, &[]);
+            }
+            // RenderLevelStageEvent.AfterTranslucentFeatures: after translucent entities,
+            // block entities, fluids and additive entity overlays, before translucent terrain.
+            if world_primitives && !pack_draws_terrain && !oit_on {
+                self.world_primitives
+                    .draw_through(&mut pass, &mut primitive_stage, 3);
+                pass.set_bind_group(0, &self.group, &[]);
+                pack_frame(&mut pass);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             }
             if outline_edges > 0 && !frame.outline_after_terrain && !pack_draws_outline {
                 pass.stage(self.own_timing.as_mut(), "block outline");
@@ -3477,7 +3495,7 @@ impl Renderer {
             // OIT's.
             if world_primitives && !pack_draws_water && !pack_draws_terrain {
                 self.world_primitives
-                    .draw_through(&mut pass, &mut primitive_stage, 2);
+                    .draw_through(&mut pass, &mut primitive_stage, 4);
                 pass.set_bind_group(0, &self.group, &[]);
                 pack_frame(&mut pass);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -3520,6 +3538,15 @@ impl Renderer {
                     self.explicit_translucent_particles.draw(&mut pass);
                 }
                 pass.set_bind_group(0, &self.group, &[]);
+            }
+            // RenderLevelStageEvent.AfterTranslucentParticles: after translucent particles,
+            // before weather and the world border.
+            if world_primitives && !pack_draws_water && !pack_draws_terrain && !oit_on {
+                self.world_primitives
+                    .draw_through(&mut pass, &mut primitive_stage, 5);
+                pass.set_bind_group(0, &self.group, &[]);
+                pack_frame(&mut pass);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             }
             // Native world text is an ordinary depth-tested overlay, after
             // particles (also after the OIT composite) and before the hand.
@@ -3598,7 +3625,7 @@ impl Renderer {
             // RenderLevelStageEvent.AfterWeather: after the rain and snow this pass drew.
             if world_primitives && !pack_draws_weather && !oit_on {
                 self.world_primitives
-                    .draw_through(&mut pass, &mut primitive_stage, 3);
+                    .draw_through(&mut pass, &mut primitive_stage, 6);
                 pass.set_bind_group(0, &self.group, &[]);
                 pack_frame(&mut pass);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);

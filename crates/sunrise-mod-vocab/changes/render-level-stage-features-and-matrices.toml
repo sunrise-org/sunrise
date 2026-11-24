@@ -1,0 +1,3 @@
+ids = ["hook:render_level_stage", "type:RenderLevelStage", "type:WorldRenderView", "handle:WorldRenderView::new"]
+why = "RenderLevelStage gains NeoForge 26.3's AfterOpaqueFeatures, AfterTranslucentFeatures and AfterTranslucentParticles stages in frame order (hook_version bumped to 2 because render_level_stage now runs for 8 stages per frame), and WorldRenderView gains camera-relative model_view and reversed-Z projection matrices (#1161)."
+migrate = "Listeners matching on RenderLevelStage already handle #[non_exhaustive] and now also receive AfterOpaqueFeatures, AfterTranslucentFeatures and AfterTranslucentParticles in frame order. Callers of WorldRenderView::new pass model_view and projection."
