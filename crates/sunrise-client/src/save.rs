@@ -19,12 +19,12 @@ mod backpressure;
 pub mod live_world_journal;
 mod live_world_save_gate;
 mod live_world_save_snapshot;
+use compression_pool::{CompressedWrite, compress_records};
 use live_world_save_gate::LiveWorldGate;
 #[doc(hidden)]
 pub use live_world_save_gate::LiveWorldSaveLease;
 #[doc(hidden)]
 pub use live_world_save_snapshot::FrozenLevelSave;
-use compression_pool::{CompressedWrite, compress_records};
 pub mod biome_regions;
 pub mod block_entity_encode;
 mod block_entity_order;

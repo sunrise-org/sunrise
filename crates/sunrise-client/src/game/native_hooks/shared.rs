@@ -2806,7 +2806,7 @@ impl Game<'_> {
             Ok(plan) => plan,
             Err(_) => return Ok(None),
         };
-        let seal = prepared.as_ref().map(|_| self.transaction_open());
+        let frame = prepared.as_ref().map(|_| self.open_storage_transaction());
         let projected_inputs = prepared.as_ref().map(|_| {
             (
                 self.world.revision,
@@ -2864,9 +2864,12 @@ impl Game<'_> {
                 .as_ref()
                 .is_none_or(|plan| self.projection_placement_fresh(plan))
         })();
-        if let Some(seal) = seal {
-            self.transaction_close(&seal, admitted);
-        }
+        let admitted = frame.map_or(admitted, |frame| {
+            matches!(
+                self.close_storage_frame(frame, admitted),
+                Some(crate::game::transactions::StorageSettlement::Committed(_))
+            )
+        }) && admitted;
         if !admitted
             || prepared
                 .as_ref()

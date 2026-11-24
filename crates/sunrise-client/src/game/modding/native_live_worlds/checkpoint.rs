@@ -96,7 +96,10 @@ impl Game<'_> {
             revision: world.revision,
             content: world.block_entities.content_revision(),
             time: world.game_time,
-            attachments: world.attachments.to_nbt(),
+            attachments: world
+                .attachments
+                .try_to_nbt()
+                .map_err(|error| Self::checkpoint_storage("level attachments", error))?,
             chunks,
             schedules,
             projection: self.projection_save_image(level, epoch)?,
@@ -199,7 +202,7 @@ impl Game<'_> {
                         || !saved.pending_loot.is_empty()
                         || !saved.block_ticks.is_empty()
                         || !saved.fluid_ticks.is_empty()
-                        || !saved.attachments.to_nbt().is_empty()
+                        || !saved.attachments.is_empty()
                 });
             if owned_data {
                 selected.insert((chunk.x, chunk.z));
@@ -226,6 +229,13 @@ impl Game<'_> {
         }
         Ok(())
     }
+    pub(in crate::game) fn live_world_can_retire_streaming(&self, idle_sweep: bool) -> bool {
+        (self.live_world_durability.retiring_streams || idle_sweep)
+            && self.live_world_commit_frontier()
+            && !self.live_world_checkpoint_running()
+            && !self.has_open_transaction()
+    }
+
     /// Retire one held Streaming plan at the same synchronous frontier that saved it. A callback
     /// changing any live readset or the plan's residency inputs refuses retirement, not the save.
     pub(in crate::game) fn checkpoint_live_world_streaming(
@@ -239,9 +249,7 @@ impl Game<'_> {
         ),
         sunrise_client::streaming::StreamingUpdate,
     > {
-        if !(self.live_world_durability.retiring_streams || idle_sweep)
-            || !self.live_world_commit_frontier()
-        {
+        if !self.live_world_can_retire_streaming(idle_sweep) {
             return Err(plan);
         }
         let Some(level) = self.level(self.dim.id()) else {
@@ -275,7 +283,13 @@ impl Game<'_> {
         // No callback, Done drain or tick occurs between this validation and owner removal.
         let revision = self.world.revision;
         let content = self.world.block_entities.content_revision();
-        let attachments = self.world.attachments.to_nbt();
+        let attachments = match self.world.attachments.try_to_nbt() {
+            Ok(attachments) => attachments,
+            Err(error) => {
+                Self::checkpoint_storage("streaming level attachments", error);
+                return Err(plan);
+            }
+        };
         let columns: BTreeMap<_, _> = self
             .world
             .chunks
@@ -286,32 +300,35 @@ impl Game<'_> {
             .prepare_checkpointed_commit(&mut self.world, plan, |world| {
                 world.revision == revision
                     && world.block_entities.content_revision() == content
-                    && world.attachments.to_nbt() == attachments
+                    && world
+                        .attachments
+                        .try_to_nbt()
+                        .is_ok_and(|current| current == attachments)
                     && world.chunks.len() == columns.len()
                     && world.chunks.iter().all(|(key, chunk)| {
                         columns.get(key) == Some(&(Arc::as_ptr(chunk) as usize))
                     })
             })
     }
-    fn live_checkpoint_player_tags(&self) -> BTreeMap<u128, Tag> {
-        self.lan
-            .as_ref()
-            .map(|host| {
-                host.hub
-                    .guests
-                    .iter()
-                    .filter(|g| {
-                        g.placed && g.participates_in_player_simulation() && !self.crash_save.excludes(g.conn)
-                    })
-                    .map(|g| {
-                        (
-                            g.uuid,
-                            sunrise_client::lan::playerdata::player_tag(g, self.res.items()),
-                        )
-                    })
-                    .collect()
+    fn live_checkpoint_player_tags(&self) -> Result<BTreeMap<u128, Tag>, Error> {
+        let Some(host) = &self.lan else {
+            return Ok(BTreeMap::new());
+        };
+        host.hub
+            .guests
+            .iter()
+            .filter(|g| {
+                g.placed
+                    && g.participates_in_player_simulation()
+                    && !g.released
+                    && !self.crash_save.excludes(g.conn)
             })
-            .unwrap_or_default()
+            .map(|g| {
+                sunrise_client::lan::playerdata::try_player_tag(g, self.res.items())
+                    .map(|tag| (g.uuid, tag))
+                    .map_err(|error| Self::checkpoint_storage("guest attachments", error))
+            })
+            .collect()
     }
     fn checkpoint_players_settled(&self) -> bool {
         self.carried.is_none()
@@ -353,7 +370,19 @@ impl Game<'_> {
         }
         self.validate_checkpoint_profile(self.level.player_uuid)?;
         self.sync_level();
+        let owner_expected = self.lan.as_ref().is_some_and(|host| {
+            host.owner.as_ref().is_some_and(|owner| {
+                host.hub.online_players().any(|guest| {
+                    guest.uuid == owner.uuid
+                        && !guest.released
+                        && !self.crash_save.excludes(guest.conn)
+                })
+            })
+        });
         let owner = self.store_owner();
+        if owner_expected && owner.is_none() {
+            return Err(Error::Storage);
+        }
         let profile = self.level.player_uuid;
         self.validate_checkpoint_profile(profile)?;
         let frozen = self
@@ -370,7 +399,7 @@ impl Game<'_> {
             .snapshots()
             .map(|(uuid, name, tag)| (uuid, (name.to_owned(), tag.clone())))
             .collect();
-        let live = self.live_checkpoint_player_tags();
+        let live = self.live_checkpoint_player_tags()?;
         if let Some(host) = self.lan.as_ref() {
             for g in host
                 .hub
@@ -420,14 +449,23 @@ impl Game<'_> {
             live,
             local,
             profile,
-            owner_attachments: self.player_state.attachments.to_nbt(),
+            owner_attachments: self
+                .player_state
+                .attachments
+                .try_to_nbt()
+                .map_err(|error| Self::checkpoint_storage("owner attachments", error))?,
         })
     }
     fn validate_checkpoint_players(&mut self, players: &PlayerCapture) -> Result<(), Error> {
         self.validate_checkpoint_profile(players.profile)?;
         if !self.checkpoint_players_settled()
-            || self.live_checkpoint_player_tags() != players.live
-            || self.player_state.attachments.to_nbt() != players.owner_attachments
+            || self.live_checkpoint_player_tags()? != players.live
+            || self
+                .player_state
+                .attachments
+                .try_to_nbt()
+                .map_err(|error| Self::checkpoint_storage("owner attachments", error))?
+                != players.owner_attachments
         {
             return Err(Error::Revision);
         }

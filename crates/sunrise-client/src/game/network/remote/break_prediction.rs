@@ -319,7 +319,7 @@ impl Game<'_> {
     /// again, if one is running (`if (!isDestroying) return;`), and says whether it did. Only the
     /// progress goes: `destroyBlockPos` and `destroyingItem` keep the target, so a dig resumed on
     /// the same block sends no START and the server's clock runs on (#4124).
-    pub(super) fn stop_remote_mining(&mut self) -> bool {
+    pub(in crate::game) fn stop_remote_mining(&mut self) -> bool {
         let kept = self.remote.as_mut().and_then(|r| {
             if !std::mem::take(&mut r.is_destroying) {
                 return None;

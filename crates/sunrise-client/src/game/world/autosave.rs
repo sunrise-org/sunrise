@@ -197,19 +197,25 @@ impl Game<'_> {
         wait: bool,
     ) -> Result<()> {
         let back = self.dim;
-        for row in &receipt.levels {
-            self.enter_level(super::Dim::from_id(row.level.dimension_id()))?;
-            self.save_border();
-            self.save_chunk_tickets()?;
-            self.save_raids();
-            self.native_level_save(self.dim.id());
-            self.admit_live_world_session()?;
-        }
-        if self.dim != back {
-            self.enter_level(back)?;
-        }
+        let saved: Result<()> = (|| {
+            for row in &receipt.levels {
+                self.enter_level(super::Dim::from_id(row.level.dimension_id()))?;
+                self.save_border();
+                self.save_chunk_tickets()?;
+                self.save_raids();
+                self.native_level_save(self.dim.id());
+                self.admit_live_world_session()?;
+            }
+            Ok(())
+        })();
+        let restored = if self.dim != back {
+            self.enter_level(back)
+        } else {
+            Ok(())
+        };
+        saved.and(restored)?;
         self.save_game_metadata()?;
-        self.native_world_saved(wait);
+        self.notify_world_saved(wait);
         self.admit_live_world_session()
     }
 
@@ -258,18 +264,22 @@ impl Game<'_> {
         } else {
             self.save_all_levels(wait)?;
             self.save_world_metadata(owner_saved)?;
-            self.native_world_saved(wait);
+            self.notify_world_saved(wait);
         }
+        if dedicated {
+            dedicated::events::record_server("saved", serde_json::json!({}));
+        }
+        Ok(())
+    }
+
+    fn notify_world_saved(&mut self, wait: bool) {
         if wait {
             self.message = Some((
                 sunrise_client::lang::get("commands.save.success"),
                 Instant::now(),
             ));
         }
-        if dedicated {
-            dedicated::events::record_server("saved", serde_json::json!({}));
-        }
-        Ok(())
+        self.native_world_saved(wait);
     }
 }
 

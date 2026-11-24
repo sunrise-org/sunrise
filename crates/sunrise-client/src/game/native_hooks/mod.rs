@@ -358,6 +358,7 @@ mod level_sounds;
 mod level_tick_tests;
 mod level_world;
 mod light_emission;
+mod live_world_admission;
 mod living_breathe;
 mod living_change_target;
 mod living_conversion_post;

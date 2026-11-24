@@ -607,7 +607,9 @@ impl Game<'_> {
         stand_grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
     ) -> bool {
         if target == MoveWho::Player {
-            return self.move_local_player(mover, movement, false).is_ok_and(|moved| moved.is_some());
+            return self
+                .move_local_player(mover, movement, false)
+                .is_ok_and(|moved| moved.is_some());
         }
         // Armor stands arm their gate in their own collided shove.
         if let MoveWho::Entity(EntityHandle::ArmorStand(i)) = target {
@@ -820,13 +822,7 @@ impl Game<'_> {
         let mut gate = MoveGate::new();
         let pause = motion_phase!(
             world,
-            world.move_ordinary(
-                &mut gate,
-                mover,
-                movement,
-                auto_jump,
-                conn.is_some(),
-            )
+            world.move_ordinary(&mut gate, mover, movement, auto_jump, conn.is_some(),)
         )?;
         if mover == MoverType::Carried && gate.skipped() {
             return Ok(None);

@@ -1364,7 +1364,7 @@ impl<'g> Game<'g> {
             drop(level.save_gate.take());
             let admitted = commit && eligible && guard.game.retain_live_world_root_coverage(&level);
             let decision = guard.game.finish_live_world_transfer_root(frame, admitted);
-            commit = decision.is_ok();
+            commit = decision.as_ref().is_ok_and(|committed| *committed);
             if requested_commit && let Err(error) = decision {
                 log::warn!("Sunrise: common root decision refused: {error:?}");
             }
@@ -1467,12 +1467,25 @@ impl<'g> Game<'g> {
             let AttachmentKey::Level(dim, Holder::Level) = key else {
                 continue;
             };
-            if let Some(target) = self.level(dim.id())
-                && self
-                    .native_level_world(target)
-                    .is_some_and(|world| world.attachments.to_nbt() != kept.contents.to_nbt())
-            {
-                targets.insert(target);
+            let Some(target) = self.level(dim.id()) else {
+                continue;
+            };
+            let Some(world) = self.native_level_world(target) else {
+                continue;
+            };
+            match (world.attachments.try_to_nbt(), kept.contents.try_to_nbt()) {
+                (Ok(current), Ok(before)) => {
+                    if current != before {
+                        targets.insert(target);
+                    }
+                }
+                (Err(error), _) | (_, Err(error)) => {
+                    log::warn!(
+                        "Sunrise: common save refused the Level attachments for {}: {error}",
+                        dim.id()
+                    );
+                    return false;
+                }
             }
         }
         self.retain_live_world_root_targets(&targets).is_ok()
@@ -1555,7 +1568,9 @@ impl<'g> Game<'g> {
         }
         match (commit, self.transactions.levels.last_mut()) {
             (true, Some(outer)) => {
-                outer.owned_level_attachment_targets.extend(level.owned_level_attachment_targets);
+                outer
+                    .owned_level_attachment_targets
+                    .extend(level.owned_level_attachment_targets);
                 for (source, kept) in level.projection_bindings {
                     outer.projection_bindings.entry(source).or_insert(kept);
                 }
@@ -1861,10 +1876,13 @@ impl<'g> Game<'g> {
                 .save_gate
                 .get_or_insert_with(sunrise_client::join_seq::visibility::PassLease::enter);
             level.owned_level_attachment_targets.insert(target);
-            level.attachments.entry(key).or_insert_with(|| KeptAttachments {
-                contents: attachments.clone(),
-                indexed: attachments.has_index_binding(),
-            });
+            level
+                .attachments
+                .entry(key)
+                .or_insert_with(|| KeptAttachments {
+                    contents: attachments.clone(),
+                    indexed: attachments.has_index_binding(),
+                });
         }
     }
 

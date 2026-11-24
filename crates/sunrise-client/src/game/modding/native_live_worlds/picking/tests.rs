@@ -898,7 +898,7 @@ fn projected_menu_callbacks_and_continuing_cleanup_conserve_cursor_and_openers()
                     let hit = handle.clip(game, eye, [10.5, 64.7, 10.5]).unwrap().unwrap();
                     game.enter_level(Dim::from_id(handle.level().dimension_id()))
                         .unwrap();
-                    let seal = game.transaction_open();
+                    let frame = game.open_storage_transaction();
                     assert_eq!(
                         handle.use_block(game, player, hit, mod_api::Hand::Main),
                         Err(Error::Busy)
@@ -929,7 +929,7 @@ fn projected_menu_callbacks_and_continuing_cleanup_conserve_cursor_and_openers()
                             .iter()
                             .any(|packet| matches!(packet, C::OpenScreen(_)))
                     );
-                    game.transaction_close(&seal, false);
+                    let _ = game.close_storage_frame(frame, false);
                     game.enter_level(Dim::Overworld).unwrap();
                     // Return the nonempty inventory cursor through its actual ordinary close.
                     game.lan_guest_packet(

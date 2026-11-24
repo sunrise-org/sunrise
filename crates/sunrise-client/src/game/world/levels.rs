@@ -1483,8 +1483,19 @@ impl Game<'_> {
     pub(super) fn tick_server(&mut self, paused: bool) -> Result<()> {
         self.admit_live_world_session()?;
         self.live_world_tick_enter();
-        let result = self.with_residency_tick(|game| game.tick_server_body(paused));
-        self.live_world_tick_leave();
+        struct LiveWorldTick<'a, 'g>(&'a mut Game<'g>);
+        impl Drop for LiveWorldTick<'_, '_> {
+            fn drop(&mut self) {
+                self.0.live_world_tick_leave();
+            }
+        }
+        let tick = LiveWorldTick(self);
+        let result = tick
+            .0
+            .with_residency_tick(|game| game.tick_server_body(paused));
+        if result.is_err() {
+            tick.0.native_lifecycle.cancel_server_tick();
+        }
         result
     }
 

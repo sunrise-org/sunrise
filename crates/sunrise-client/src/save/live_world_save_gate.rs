@@ -1,6 +1,6 @@
 //! SaveDir's bounded admission gate. Ordinary unbound stores keep the existing writer path.
 //! Leased stores retain actual Record/QueuedWrite snapshots and their existing admission receipts.
-use super::*;
+use super::{writes::QueuedWrite, *};
 
 pub(super) const MAX_DEFERRED_RECORDS: usize = 8192;
 const MAX_DEFERRED_BYTES: u64 = 64 << 20;
@@ -214,7 +214,7 @@ impl SaveDir {
         let records = records
             .into_iter()
             .map(|(key, record)| self.capture_disk_record(record).map(|record| (key, record)))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         // Measure the actual payload on a disk worker. Freeze reuses the encoded snapshot.
         let costs = std::thread::scope(|scope| {
             scope

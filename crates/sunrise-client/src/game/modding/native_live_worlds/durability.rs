@@ -58,8 +58,8 @@ impl Game<'_> {
         (!self.live_world_durability.in_server_tick || self.live_world_durability.global_frontier)
             && self.lan_acting.is_none()
             && self.lan_acting_uuid.is_none()
-            && self.block_entity_tick_key.is_none()
-            && self.block_entity_tick_items.is_none()
+            && self.item_columns.is_none()
+            && self.pass_mobs.is_none()
             && {
                 let table = self.live_worlds.borrow();
                 table.action.is_none() && table.menu_scope.is_none()

@@ -225,9 +225,10 @@ impl Game<'_> {
             // complete before its live entities can replace the stored ones.
             plan.retain_unloading_columns(|key| !self.world.entities_pending.contains(key));
         }
-        let (commit, protos, saved, unloaded_columns) = if self.save.live_world_barrier_required()
-        {
-            let (entities, refused) = if plan.unloading_columns().is_empty() {
+        let (commit, protos, saved) = if self.save.live_world_barrier_required() {
+            let (entities, refused) = if plan.unloading_columns().is_empty()
+                || !self.live_world_can_retire_streaming(wait)
+            {
                 (Vec::new(), HashSet::new())
             } else {
                 self.unloading_entity_snapshots(plan.unloading_columns())
@@ -235,23 +236,19 @@ impl Game<'_> {
             plan.retain_unloading_columns(|key| {
                 !refused.contains(key) && !self.world.entities_pending.contains(key)
             });
-            let (commit, protos, columns) = match self.checkpoint_live_world_streaming(plan, wait) {
-                Ok((commit, protos)) => {
-                    let columns = commit.unloaded_columns().collect();
-                    (commit, protos, columns)
-                }
-                Err(mut plan) => {
-                    let (commit, protos) =
-                        self.streaming.prepare_commit(&mut self.world, &mut plan);
-                    (commit, protos, plan.unloading_columns().clone())
-                }
+            let (commit, protos) = match self.checkpoint_live_world_streaming(plan, wait) {
+                Ok(admitted) => admitted,
+                Err(mut plan) => self.streaming.prepare_commit(&mut self.world, &mut plan),
             };
             let counts = if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
-                entities.into_iter().map(|(key, rows)| (key, rows.len())).collect()
+                entities
+                    .into_iter()
+                    .map(|(key, rows)| (key, rows.len()))
+                    .collect()
             } else {
                 Vec::new()
             };
-            (commit, protos, Ok(counts), columns)
+            (commit, protos, Ok(counts))
         } else {
             let saved = (|| -> Result<_> {
                 let keys = plan.unloading_columns();
@@ -297,7 +294,7 @@ impl Game<'_> {
                 self.streaming.force_unload_sweep();
             }
             let (commit, protos) = self.streaming.prepare_commit(&mut self.world, &mut plan);
-            (commit, protos, saved, plan.unloading_columns().clone())
+            (commit, protos, saved)
         };
         self.streaming.submit_protos(protos);
         let (mut uploads, unloaded) = sunrise_client::spans::time("streaming", || {
@@ -306,6 +303,7 @@ impl Game<'_> {
         // Sections chosen to mesh wait for the mods' `section_visibility` (none without a mod).
         self.prepare_section_visibility();
         self.streaming.extra.truncate(areas);
+        self.admit_live_world_session()?;
         // The viewed levels' meshing, queued after the player's level's (nothing while no view
         // names one).
         if self.streaming.mesh
@@ -349,6 +347,7 @@ impl Game<'_> {
                 }
             });
         }
+        let unloaded_columns: HashSet<_> = unloaded.iter().map(|c| (c.x, c.z)).collect();
         for key in &unloaded_columns {
             self.world.modified.remove(key);
             self.world.modified.unloaded(key);

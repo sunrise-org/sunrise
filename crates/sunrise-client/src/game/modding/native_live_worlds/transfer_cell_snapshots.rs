@@ -118,14 +118,18 @@ fn validate(
             .iter()
             .find(|(p, _)| *p == at)
             .map(|(_, entity)| {
-                sunrise_client::save::block_entity_data(
+                block_entity_encode::data(
                     at,
                     entity,
                     &cell.source.block_name,
-                    cell.source
-                        .original
-                        .as_ref()
-                        .and_then(|tag| tag.get("lock")),
+                    DataFields {
+                        lock: cell
+                            .source
+                            .original
+                            .as_ref()
+                            .and_then(|tag| tag.get("lock")),
+                        ..Default::default()
+                    },
                     game.res.items(),
                 )
             });
@@ -154,7 +158,9 @@ fn validate(
             .block_entity_attachments
             .iter()
             .find(|(p, _)| *p == at)
-            .map(|(_, map)| map.to_nbt());
+            .map(|(_, map)| map.try_to_nbt())
+            .transpose()
+            .map_err(transfer_attachment_error)?;
         if attachment != cell.source.attachments {
             return Err(Error::Revision);
         }

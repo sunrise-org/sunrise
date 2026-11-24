@@ -116,7 +116,11 @@ fn assert_saved_empty_metadata(game: &Game<'_>, root: &Path, level: mod_api::Lev
     assert_eq!(
         saved.get("data"),
         Some(&sunrise_core::nbt::Tag::Compound(
-            game.native_level_world(level).unwrap().attachments.to_nbt()
+            game.native_level_world(level)
+                .unwrap()
+                .attachments
+                .try_to_nbt()
+                .unwrap()
         ))
     );
     assert!(game.native_level_world(level).unwrap().chunks.is_empty());

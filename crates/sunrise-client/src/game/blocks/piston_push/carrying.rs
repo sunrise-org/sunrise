@@ -218,7 +218,8 @@ impl Game<'_> {
             wave = wave.max(scratch.order[at].0);
             let now = self.placed_moving_colliders();
             {
-                let _scope = moving_colliders::Scope::enter_level(self.collider_level(), now.clone());
+                let _scope =
+                    moving_colliders::Scope::enter_level(self.collider_level(), now.clone());
                 while at < scratch.order.len() && scratch.order[at].0 <= wave {
                     let collider = scratch.order[at].1;
                     let first = scratch.riders.partition_point(|r| r.support < collider);

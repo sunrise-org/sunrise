@@ -994,7 +994,7 @@ impl Game<'_> {
 
     pub(super) fn live_world_retire(&mut self, handle: LiveWorldRef) -> Result<(), Error> {
         self.projection_entry(handle)?;
-        if self.transaction_current().is_some() && self.projection_has_open_menu(handle) {
+        if self.has_open_transaction() && self.projection_has_open_menu(handle) {
             return Err(Error::Busy);
         }
         self.close_projection_menus(handle)?;
@@ -1315,6 +1315,7 @@ impl Game<'_> {
         let anim = |p| anims.block_anim(p, world.game_time, partial as f32, Default::default());
         let scene = sunrise_client::block_entity_render::Scene {
             camera: glam::DVec3::ZERO,
+            sign_outline: sunrise_client::block_entity_render::SignOutline::None,
             orientation: glam::Quat::IDENTITY,
             anim: &anim,
             texts: None,
@@ -1329,6 +1330,7 @@ impl Game<'_> {
             nether: self.nether_lighting(),
             lid: &lid,
             sign: &|_| None,
+            inline_images: None,
             banner: &|_| Vec::new(),
             skull: &|_| None,
             glyph: &|c| self.gui.atlas.glyph_cell(c),

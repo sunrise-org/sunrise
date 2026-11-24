@@ -801,7 +801,8 @@ impl Game<'_> {
                     .count()
                 >= 64
         {
-            return Err(RuntimeLevelError::CapReached);
+            log::warn!("Sunrise: common checkpoint level budget exhausted while opening {id}");
+            return Err(RuntimeLevelError::Unavailable);
         }
         let generation = self.levels.runtime.queue_open(
             owner,

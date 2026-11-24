@@ -70,7 +70,13 @@ fn io_only_chunk_relocation_preserves_furnace_overlay_components_and_saved_tick_
     assert_eq!(original.get("x"), Some(&Tag::Int(17)));
     assert_eq!(original.get("y"), Some(&Tag::Int(72)));
     assert_eq!(original.get("components"), Some(&components));
-    assert!(!saved.block_entity_attachments[0].1.to_nbt().is_empty());
+    assert!(
+        !saved.block_entity_attachments[0]
+            .1
+            .try_to_nbt()
+            .unwrap()
+            .is_empty()
+    );
     // Tick relocation is the separate scheduler-derived step, not a second inventory/tick store.
     let moved = SavedTick {
         pos: point([17, 72, 1]),

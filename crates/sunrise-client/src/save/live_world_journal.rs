@@ -15,7 +15,7 @@ use sunrise_core::{
     nbt::{self, Limits as NbtLimits, NamedTag},
     position::ChunkPos,
 };
-use sunrise_server_files::durable;
+use sunrise_mod_package::durable;
 use sunrise_world::{
     carrier::region_strict::{self, Strict},
     compression::Compression,

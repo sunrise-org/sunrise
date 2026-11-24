@@ -8,6 +8,7 @@ use std::{
 use sunrise_client::{
     chunk::Chunk,
     containers::{BlockEntity, FurnaceKind},
+    save::block_entity_encode::{self, DataFields},
     world::World,
 };
 use sunrise_core::{
@@ -33,6 +34,15 @@ fn point(p: Pos) -> BlockPos {
 fn column(p: Pos) -> (i32, i32) {
     (p[0] >> 4, p[2] >> 4)
 }
+fn transfer_attachment_error(
+    error: sunrise_mod_runtime::attachments::AttachmentEncodeError,
+) -> Error {
+    log::warn!(
+        "Sunrise: live-world transfer could not serialize a block entity attachment: {error}"
+    );
+    Error::Storage
+}
+
 fn tick_error(e: TransferTickError) -> Error {
     #[cfg(test)]
     eprintln!("LIVE_WORLD_TRANSFER actual schedule conversion: {e:?}");
@@ -314,15 +324,23 @@ impl Game<'_> {
             block_name: canonical.name.clone(),
             generation: world.block_entities.generation(&at),
             modeled: entity.map(|entity| {
-                sunrise_client::save::block_entity_data(
+                block_entity_encode::data(
                     at,
                     entity,
                     &canonical.name,
-                    world.block_lock(at),
+                    DataFields {
+                        lock: world.block_lock(at),
+                        ..Default::default()
+                    },
                     self.res.items(),
                 )
             }),
-            attachments: world.block_entities.attachments(at).map(|a| a.to_nbt()),
+            attachments: world
+                .block_entities
+                .attachments(at)
+                .map(|map| map.try_to_nbt())
+                .transpose()
+                .map_err(transfer_attachment_error)?,
             name: world.block_names.get(&at).cloned(),
             original: extra.source,
         })

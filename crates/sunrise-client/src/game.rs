@@ -1392,6 +1392,8 @@ mod native_knockback_credit_site_tests;
 #[cfg(test)]
 #[path = "game/modding/native_knockback_tests.rs"]
 mod native_knockback_tests;
+#[path = "game/modding/native_level_attachments.rs"]
+mod native_level_attachments;
 #[cfg(test)]
 #[path = "game/modding/native_level_block_states_tests.rs"]
 mod native_level_block_states_tests;
@@ -1431,6 +1433,11 @@ mod native_lifecycle;
 #[cfg(test)]
 #[path = "game/modding/native_live_holder_tests.rs"]
 mod native_live_holder_tests;
+#[path = "game/modding/native_live_worlds.rs"]
+mod native_live_worlds;
+#[cfg(test)]
+#[path = "game/modding/native_live_worlds_tests.rs"]
+mod native_live_worlds_tests;
 #[path = "game/modding/native_living_absorption.rs"]
 mod native_living_absorption;
 #[path = "game/modding/native_living_blocking.rs"]
@@ -7544,7 +7551,10 @@ impl Game<'_> {
         let connected_client = self.remote.is_some();
         let start = (!self.is_logical_server()).then(|| self.placed_moving_colliders());
         let scope = start.clone().map(|placed| {
-            sunrise_client_render::moving_colliders::Scope::enter_level(self.collider_level(), placed)
+            sunrise_client_render::moving_colliders::Scope::enter_level(
+                self.collider_level(),
+                placed,
+            )
         });
         let result = self.tick_body();
         drop(scope);
@@ -11598,8 +11608,7 @@ impl Game<'_> {
         {
             self.projection_pick_outline(alpha)
         } else {
-            self
-                .block_outline_hit()
+            self.block_outline_hit()
                 .filter(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
                     let mut canceled = false;

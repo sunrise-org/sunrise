@@ -1,11 +1,8 @@
 //! Negotiated live-world projection metadata. Blocks and block entities use the existing
 //! real viewed-level chunk/update protocol; this channel carries only membership and poses.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
 use std::collections::BTreeSet;
-use sunrise_core::{geometry::oriented, level_id::valid_level_id};
+use sunrise_core::{geometry::oriented, level_id::valid_level_id, vanilla_bytes::Writer};
 
 pub const CHANNEL: &str = "sunrise:live_worlds";
 pub const VERSION: &str = "1";

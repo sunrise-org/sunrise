@@ -368,7 +368,7 @@ impl Game<'_> {
         source: LevelRef,
     ) -> Result<mod_api::LiveWorldSavedProjection, Error> {
         if !self.live_world_commit_frontier()
-            || self.transaction_current().is_some()
+            || self.has_open_transaction()
             || self.live_world_checkpoint_running()
             || self.live_world_durability.migration.is_some()
         {

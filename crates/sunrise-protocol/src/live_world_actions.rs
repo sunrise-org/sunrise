@@ -1,8 +1,6 @@
 //! Bounded engine action requests. Connection identity, level handles and permissions are server-owned.
-use crate::{
-    Error, Result,
-    buf::{Reader, Writer},
-};
+use crate::{Error, Result, buf::Reader};
+use sunrise_core::vanilla_bytes::Writer;
 
 pub const CHANNEL: &str = "sunrise:live_world_actions";
 pub const VERSION: &str = "1";

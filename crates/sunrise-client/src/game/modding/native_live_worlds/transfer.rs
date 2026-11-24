@@ -2,14 +2,17 @@
 use super::transfer_cells::PreparedCells;
 use super::*;
 use mod_api::{
-    LiveWorldTransferCell as Cell, LiveWorldTransferLimits as Limits,
+    __private::TransactionFrame, LiveWorldTransferCell as Cell, LiveWorldTransferLimits as Limits,
     LiveWorldTransferPending as Pending, LiveWorldTransferReceipt as Receipt,
-    LiveWorldTransferRef as Token, TransactionContext, __private::TransactionFrame,
+    LiveWorldTransferRef as Token, TransactionContext,
 };
 
 pub(super) enum State {
     Prepared(PreparedCells),
-    Staged { root: TransactionFrame, plan: PreparedCells },
+    Staged {
+        root: TransactionFrame,
+        plan: PreparedCells,
+    },
     Done(Receipt),
     Refused(Error),
 }
@@ -294,9 +297,8 @@ impl Game<'_> {
             return Err(Error::Busy);
         }
         self.transfer_authority(token)?;
-        let result = self.storage_transaction_settled(|game, tx| {
-            game.live_world_transfer_stage(token, tx)
-        });
+        let result =
+            self.storage_transaction_settled(|game, tx| game.live_world_transfer_stage(token, tx));
         if self.live_world_session_failed() {
             return Err(Error::Storage);
         }
