@@ -139,6 +139,19 @@ until then, download the assets from GitHub and verify the files for the exact t
 sunrise-release-sign verify --tag dev-<date>-<short> --signature SHA256SUMS.v2.sig <folder>
 ```
 
+#### The dylib game alone
+
+A game build comes in two shapes: the static game (the player archives) and the dylib game (the `runtime-<target>`
+slices of `sdk-<sha>`, the engine the SDK's native mods build against). Nightlies and Stable releases always carry
+both. A Dev build may carry the dylib game alone, on the SDK's platforms, so it comes out without the static legs:
+`release.yml -f kind=dev -f dylib_only=true` (refused for any other kind). `nightly build` then builds no game: no
+exporters, player archives, musl archive or smoke test, since the SDK's legs smoke-tested and linkage-probed that
+engine before `sdk-<sha>` was published. The `dev-<date>-<short>` release is a thin one, signed as any Dev build:
+`sunrise-release.json`, the SDK's `sdk.json`, the source, `SHA256SUMS` and its signatures. Its `sunrise-release.json`
+names in `launcher_min` the first launcher that installs the dylib game alone
+(`DYLIB_ONLY_LAUNCHER_MIN` in `tools/release_file.py`), so an older launcher asks to be updated; until that launcher is
+released the release file refuses `--dylib-only`, and so does the build.
+
 ### Daily run
 
 `.github/workflows/daily.yml` runs the in-game legs once a day, at 09:00 UTC on main's head, and when root

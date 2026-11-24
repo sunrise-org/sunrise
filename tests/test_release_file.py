@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -48,6 +49,18 @@ class ReleaseFileTest(unittest.TestCase):
         files[release_file.VERSION_RS] = "pub const VERSION_ID: &str = \"9.9\";\n"
         with self.assertRaises(SystemExit):
             release_file.facts(files.__getitem__, "nightly", "2026-11-16", COMMIT)
+
+    def test_the_dylib_game_alone_needs_the_launcher_that_installs_it(self):
+        files = {release_file.VERSION_RS: VERSION_RS, release_file.RUST_VERSION: "1.99.1"}
+        with mock.patch.object(release_file, "DYLIB_ONLY_LAUNCHER_MIN", ""), self.assertRaises(SystemExit):
+            release_file.facts(files.__getitem__, "dev", "2026-11-16", COMMIT, dylib_only=True)
+        with mock.patch.object(release_file, "DYLIB_ONLY_LAUNCHER_MIN", "9.8.7"):
+            written = release_file.facts(files.__getitem__, "dev", "2026-11-16", COMMIT, dylib_only=True)
+            self.assertEqual(written["launcher_min"], "9.8.7")
+            self.assertEqual(release_file.facts(files.__getitem__, "dev", "2026-11-16", COMMIT)["launcher_min"],
+                             release_file.LAUNCHER_MIN)
+            with self.assertRaises(SystemExit):
+                release_file.facts(files.__getitem__, "nightly", "2026-11-16", COMMIT, dylib_only=True)
 
     def test_this_checkout_writes_a_file_from_its_own_commit(self):
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True,

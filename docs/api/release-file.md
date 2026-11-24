@@ -37,7 +37,7 @@ SDK releases (`sdk-<sha>`) have no `sunrise-release.json`: their signed `sdk.jso
 | Field | Means |
 | --- | --- |
 | `contract` | What a launcher must understand to install and run this build (below). An integer |
-| `launcher_min` | The oldest launcher version that may install it, even when it knows the contract |
+| `launcher_min` | The oldest launcher version that may install it, even when it knows the contract. A Dev build with the dylib game alone (no player archives) names the first launcher that installs one ([release-flow.md](../release-flow.md#the-dylib-game-alone)) |
 | `channel` | `nightly`, `dev` or `stable` |
 | `build` | `<channel>-<date>-<short commit>`: the version `SHA256SUMS.v2.sig` is signed for and the release title names. A stable release's is its tag, `<target>-<semver>` (`26.3-0.1.0`), which its `SHA256SUMS.sig` is signed for |
 | `commit` | The full id of the commit built |
@@ -70,7 +70,8 @@ can't follow:
 
 An addition an older launcher can ignore moves nothing. Such a pull request links the launcher's change, so a
 launcher that supports the new contract is released first. `launcher_min` moves only when an older launcher would
-misbehave on builds of a contract it claims to know.
+misbehave on builds of a contract it claims to know, or on a build whose shape it cannot install: a release with the
+dylib game alone sets it per build.
 
 ## Stability
 

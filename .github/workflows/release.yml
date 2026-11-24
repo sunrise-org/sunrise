@@ -8,6 +8,9 @@ name: release
 #   commit's SDK (prebuilt-game-build.yml), publishes it as sdk-<sha> (sdk-publish.yml, skipped when it exists),
 #   then starts `nightly build` with kind=dev, which builds, signs and publishes the game as the pre-release
 #   dev-<date>-<short> on its own tag: never the `nightly` tag or channel, never `daily-green`, no daily tests.
+#   With dylib_only, that Dev release carries the dylib game alone (owner, 2026-11-22): sdk-<sha>'s prebuilt engine
+#   and runtime, on the SDK's platforms, and no static player archives; `nightly build` builds no game then, and
+#   publishes only the release record (sunrise-release.json, sdk.json, the source) signed for the Dev build.
 # tools/release_train.py decides (`--channel`): a Nightly when a pull request merged since the published Nightly
 # changed what players run (and the batch rules below), and `nightly build` (nightly-build.yml) builds, signs and
 # publishes it under the `nightly` tag and channel. RELEASES_PAUSED=1 (repository variable) stops it; so does an
@@ -21,6 +24,7 @@ name: release
 #   gh workflow run release -f kind=nightly -f dry_run=false -f commit=<sha> -f exception="owner <date>: <why>"
 #                                                                     # only with the owner's one-time grant
 #   gh workflow run release -f kind=dev -f dry_run=false         # on main: a Dev build of main's head
+#   gh workflow run release -f kind=dev -f dylib_only=true -f dry_run=false   # the same, the dylib game alone
 on:
   workflow_call:
     inputs:
@@ -71,6 +75,12 @@ on:
         description: A Nightly even without player-facing changes, before merges settle, while paused or past the day's cap
         type: boolean
         default: false
+      dylib_only:
+        description: >-
+          Dev only: publish the dylib game alone (sdk-<sha> and the Dev release record), without building the
+          static player archives. Refused for a nightly
+        type: boolean
+        default: false
 permissions:
   contents: read
   # The open release-blocker issues (decide).
@@ -111,6 +121,14 @@ jobs:
           KIND: ${{ inputs.kind }}
           DRY_INPUT: ${{ inputs.dry_run }}
         run: python3 tools/release_train.py authorize --publish-kind "$KIND" --dry-run "$DRY_INPUT"
+      - name: The dylib game alone is a Dev build's choice only
+        # Nightlies and stable releases always carry the static player archives (owner, 2026-11-22).
+        if: inputs.kind != 'dev' && inputs.dylib_only
+        run: |
+          echo "::error::dylib_only is for kind dev: a $KIND build always carries the static player archives"
+          exit 1
+        env:
+          KIND: ${{ inputs.kind }}
       - id: decide
         shell: bash
         env:
@@ -198,11 +216,13 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head }}
           TAG: ${{ needs.decide.outputs.tag }}
           DRY_RUN: ${{ needs.decide.outputs.dry_run }}
+          DYLIB_ONLY: ${{ inputs.dylib_only && 'true' || 'false' }}
         run: |
           gh workflow run nightly-build.yml --repo "$GITHUB_REPOSITORY" --ref main -f kind=dev -f base="$HEAD_SHA" \
-            -f dry_run="$DRY_RUN"
+            -f dry_run="$DRY_RUN" -f dylib_only="$DYLIB_ONLY"
+          what=""; [ "$DYLIB_ONLY" = true ] && what=" with the dylib game alone"
           if [ "$DRY_RUN" = true ]; then
-            echo "### Dry run: started \`nightly build\` (kind dev, dry run) on ${HEAD_SHA:0:9}; a real run would publish sdk-$HEAD_SHA (unless it exists) and the pre-release $TAG" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Dry run: started \`nightly build\` (kind dev, dry run) on ${HEAD_SHA:0:9}; a real run would publish sdk-$HEAD_SHA (unless it exists) and the pre-release $TAG$what" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### Published sdk-$HEAD_SHA (or it existed); started \`nightly build\` (kind dev) for $TAG" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Published sdk-$HEAD_SHA (or it existed); started \`nightly build\` (kind dev) for $TAG$what" >> "$GITHUB_STEP_SUMMARY"
           fi

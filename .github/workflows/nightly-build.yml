@@ -41,6 +41,10 @@ run-name: ${{ inputs.kind == 'dev' && format('dev build {0}', inputs.base) || in
 # release-blocker hold), signed for the `dev` channel and its version, and published as the pre-release
 # dev-<date>-<short> ("Dev <date> · <short>"); never the `nightly` tag, its rotation or nightly-source tags.
 # The newest Dev build and all Dev builds from the last 7 days stay (nightly.py prune-dev).
+# kind=dev with dylib_only (owner, 2026-11-22): the dylib game alone. No game is built here (no exporters, archives
+# or smoke test: the SDK's legs smoke-tested and linkage-probed that engine before sdk-<sha> was published);
+# the Dev release is a thin one: sunrise-release.json (its launcher_min the first launcher that installs the dylib game
+# alone), sdk.json and the source, signed as any Dev build. A launcher installs the game from sdk-<sha>'s slices.
 # kind=stable on release/26.3 publishes the full release 26.3-<semver>; only main and the two branches publish (docs/release-flow.md "Release branches").
 # With `break_glass` (why), a stable patch release ships on the daily legs its changes select instead of the full daily,
 # once the people of both break-glass environments approved; the full daily runs on it after publishing
@@ -101,6 +105,12 @@ on:
           It waits for both break-glass environments' approvals; empty for every other release
         type: string
         default: ''
+      dylib_only:
+        description: >-
+          kind=dev only: the dylib game alone (sdk-<sha>), with no static player archives built; the release carries
+          its record, sdk.json and the source
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -155,6 +165,14 @@ jobs:
           KIND: ${{ inputs.kind }}
           DRY_INPUT: ${{ inputs.dry_run }}
         run: python3 tools/release_train.py authorize --publish-kind "$KIND" --dry-run "$DRY_INPUT"
+      - name: The dylib game alone is a Dev build's choice only
+        # Nightlies and stable releases always carry the static player archives (owner, 2026-11-22).
+        if: inputs.kind != 'dev' && inputs.dylib_only
+        env:
+          KIND: ${{ inputs.kind }}
+        run: |
+          echo "::error::dylib_only is for kind dev: a $KIND build always carries the static player archives"
+          exit 1
       - id: pick
         env:
           GH_TOKEN: ${{ github.token }}
@@ -172,6 +190,7 @@ jobs:
           BREAK_GLASS: ${{ inputs.kind == 'stable' && inputs.break_glass || '' }}
           RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
           KIND: ${{ inputs.kind }}
+          NIGHTLY_DYLIB_ONLY: ${{ inputs.dylib_only && 'true' || 'false' }}
         run: |
           set -euo pipefail
           python3 tools/ci/nightly.py pick --kind "$KIND" ${FORCE:+--force} | tee -a "$GITHUB_STEP_SUMMARY"
@@ -205,7 +224,9 @@ jobs:
           DATE: ${{ steps.pick.outputs.date }}
           KIND: ${{ inputs.kind }}
           BUILD: ${{ inputs.kind == 'stable' && steps.pick.outputs.tag || '' }}
-        run: python3 tools/release_file.py write --channel "$KIND" ${BUILD:+--build "$BUILD"} --date "$DATE" --commit "$SHA" sunrise-release.json
+          # The dylib game alone raises launcher_min to the first launcher that installs it (release_file.py).
+          DYLIB_ONLY: ${{ inputs.dylib_only && 'yes' || '' }}
+        run: python3 tools/release_file.py write --channel "$KIND" ${BUILD:+--build "$BUILD"} ${DYLIB_ONLY:+--dylib-only} --date "$DATE" --commit "$SHA" sunrise-release.json
       - uses: actions/upload-artifact@v7
         if: steps.pick.outputs.build == 'true'
         with:
@@ -320,9 +341,9 @@ jobs:
   exporters:
     needs: [pick, break-glass]
     # A break-glass release only once `break-glass` found both approvals; build and so sign and publish all wait
-    # for this job.
+    # for this job. The dylib game alone builds no game here: build skips with it.
     if: >-
-      !cancelled() && needs.pick.result == 'success' && needs.pick.outputs.build == 'true' &&
+      !cancelled() && needs.pick.result == 'success' && needs.pick.outputs.build == 'true' && !inputs.dylib_only &&
       (needs.pick.outputs.break_glass == 'false' ||
       (needs.break-glass.result == 'success' && github.run_attempt == '1'))
     uses: ./.github/workflows/game-build.yml
@@ -370,8 +391,11 @@ jobs:
 
   sign:
     needs: [pick, build, complete, break-glass]
+    # Every required leg built, or the dylib game alone, which builds nothing here.
     if: >-
-      !cancelled() && needs.complete.outputs.complete == 'true' &&
+      !cancelled() &&
+      (needs.complete.outputs.complete == 'true' ||
+      (inputs.dylib_only && needs.pick.result == 'success' && needs.pick.outputs.build == 'true')) &&
       (needs.pick.outputs.break_glass == 'false' ||
       (needs.break-glass.result == 'success' && github.run_attempt == '1'))
     runs-on: ubuntu-latest
@@ -402,7 +426,17 @@ jobs:
           # A stable release signs both files for its own tag (horizon release 26.3-0.1.0), as signed_digest checks.
           SIGN_FOR: ${{ inputs.kind == 'stable' && needs.pick.outputs.tag || inputs.kind }}
           ALSO_FOR: ${{ inputs.kind == 'stable' && needs.pick.outputs.tag || format('{0}-{1}-{2}', inputs.kind, needs.pick.outputs.date, needs.pick.outputs.short) }}
+          DYLIB_ONLY: ${{ inputs.dylib_only && 'yes' || '' }}
+          PUBLISH: ${{ needs.pick.outputs.publish }}
         run: |
+          if [[ -n "${DYLIB_ONLY:-}" ]]; then
+            # The record of the dylib game alone: a real run must carry sdk-<sha>'s index, the game it points to.
+            sdk=(); if [[ -f dist/sdk.json ]]; then sdk=(dist/sdk.json)
+            elif [[ "$PUBLISH" == true ]]; then echo "::error::the dylib game alone needs sdk.json"; exit 1
+            else echo "::warning::no sdk.json (the SDK is unpublished in a dry run): signed without it"; fi
+            bash tools/ci/sign_release.sh "$SIGN_FOR" ${sdk[@]+"${sdk[@]}"} dist/sunrise-source.tar.gz dist/sunrise-release.json
+            exit 0
+          fi
           sdk=(); if [[ -f dist/sdk.json ]]; then sdk=(dist/sdk.json); fi
           bash tools/ci/sign_release.sh "$SIGN_FOR" dist/sunrise-linux-x86_64.tar.gz dist/sunrise-windows-x64.zip \
             ${sdk[@]+"${sdk[@]}"} dist/sunrise-macos-arm64.zip dist/sunrise-server-linux-x86_64.tar.gz \
@@ -423,7 +457,8 @@ jobs:
   publish:
     needs: [pick, build, complete, sign, break-glass]
     if: >-
-      !cancelled() && needs.complete.outputs.complete == 'true' && needs.sign.result == 'success' &&
+      !cancelled() && needs.sign.result == 'success' &&
+      (needs.complete.outputs.complete == 'true' || inputs.dylib_only) &&
       (needs.pick.outputs.break_glass == 'false' ||
       (needs.break-glass.result == 'success' && github.run_attempt == '1'))
     runs-on: ubuntu-latest
@@ -459,7 +494,10 @@ jobs:
             --signature SHA256SUMS.v2.sig --publishing "${key[@]}" dist
       - name: Ready to publish (the smoke test drew a world, no release-blocker is open)
         # Right before publishing, as for a release: an issue labelled while the builds ran still holds it. A dry run
-        # only reports what a real run would do (that is how a blocker's fix is tried).
+        # only reports what a real run would do (that is how a blocker's fix is tried). The dylib game alone has no
+        # static game to smoke-test: its engine passed the SDK legs' smoke test and linkage probe, and require-sdk
+        # below refuses a Dev build whose sdk-<sha> is not published and complete.
+        if: ${{ !inputs.dylib_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ needs.pick.outputs.dry_run }}
@@ -513,17 +551,24 @@ jobs:
           SHORT: ${{ needs.pick.outputs.short }}
           DATE: ${{ needs.pick.outputs.date }}
           TAG: ${{ needs.pick.outputs.tag }}
+          DYLIB_ONLY: ${{ inputs.dylib_only && 'yes' || '' }}
         run: |
           set -euo pipefail
           python3 tools/ci/nightly.py require-sdk "$SHA"
           # The title is what launchers parse (strictly) into the version SHA256SUMS.v2.sig is signed for: the tag.
           [[ "${SHA:0:7}" == "$SHORT" && "$TAG" == "dev-$DATE-$SHORT" ]] || { echo "::error::the build's commit isn't the one signed"; exit 1; }
+          smoke=(dist/smoke-test.json)
+          if [[ -n "${DYLIB_ONLY:-}" ]]; then
+            # A thin release with no smoke test; the notes (nightly.py pick) say what it holds.
+            [[ -f dist/sdk.json ]] || { echo "::error::the dylib game alone needs sdk.json"; exit 1; }
+            smoke=()
+          fi
           # Exactly the files SHA256SUMS lists, and the signatures.
           files=(); while read -r _ name; do files+=("dist/${name#\*}"); done < dist/SHA256SUMS
           # A pre-release, never GitHub's latest, under its own tag: no launcher lists or updates to it.
           gh release create "$TAG" --prerelease --latest=false --target "$SHA" \
             --title "Dev $DATE · $SHORT" --notes-file dist/nightly-notes.md \
-            "${files[@]}" dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.v2.sig dist/smoke-test.json
+            "${files[@]}" dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.v2.sig ${smoke[@]+"${smoke[@]}"}
           python3 tools/ci/nightly.py prune-dev --days 7
       - name: Check stable mod API compatibility and list changed mixin targets
         # Run before tag reservation, including publish-only retries and dry runs.

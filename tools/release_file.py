@@ -3,6 +3,7 @@
 
     python3 tools/release_file.py write --channel nightly --date 2026-11-16 --commit <sha> sunrise-release.json
     python3 tools/release_file.py write --channel dev --date 2026-11-16 --commit <sha> sunrise-release.json
+    python3 tools/release_file.py write --channel dev --dylib-only --date 2026-11-16 --commit <sha> out.json
     python3 tools/release_file.py write --channel stable --build 26.3-0.1.0 --date 2026-11-20 --commit <sha> out.json
 
 The contract is docs/api/release-file.md. Values come from the built commit through `git show`, so nothing of the
@@ -24,6 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = 1
 # The oldest launcher that may install a build of this contract.
 LAUNCHER_MIN = "1.0.0"
+# The oldest launcher that installs a build with the dylib game alone (a thin release: sunrise-release.json, sdk.json
+# and the signed sums, no player archives), so an older one says "update the launcher" instead of failing. Empty until
+# a launcher that does is released; until then a dylib-only release file is refused.
+DYLIB_ONLY_LAUNCHER_MIN = ""
 # The first launcher that reads an SDK index listing an asset kind it doesn't know: it skips the kind and refuses only a
 # route that needs it. Empty until that launcher is released. A build's SDK lists a kind newer than its launchers
 # (`programs`) only once LAUNCHER_MIN reaches it, since every launcher that may install the build reads its sdk.json
@@ -44,11 +49,17 @@ def constant(source: str, name: str) -> str:
     return found.group(1).strip('"')
 
 
-def facts(read: Callable[[str], str], channel: str, date: str, commit: str, build: str = "") -> dict:
+def facts(read: Callable[[str], str], channel: str, date: str, commit: str, build: str = "",
+          dylib_only: bool = False) -> dict:
     """The release file for the build of `commit` on `channel`, reading the commit's files with `read`. A stable
-    release names its tag in `build`; the other channels' builds are `<channel>-<date>-<short commit>`."""
+    release names its tag in `build`; the other channels' builds are `<channel>-<date>-<short commit>`. A Dev build
+    with the dylib game alone (`dylib_only`) needs a launcher that installs it."""
     if channel not in CHANNELS:
         raise SystemExit(f"--channel takes {' or '.join(CHANNELS)}, not {channel}")
+    if dylib_only and channel != "dev":
+        raise SystemExit(f"--dylib-only is for --channel dev: a {channel} build carries the static player archives")
+    if dylib_only and not DYLIB_ONLY_LAUNCHER_MIN:
+        raise SystemExit("--dylib-only: no released launcher installs the dylib game alone (DYLIB_ONLY_LAUNCHER_MIN)")
     if (channel == "stable") != bool(build) or (build and not re.fullmatch(STABLE_BUILD, build)):
         raise SystemExit(f"--build takes a release's tag, like 26.3-0.1.0, for --channel stable only, not {build!r}")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
@@ -58,7 +69,7 @@ def facts(read: Callable[[str], str], channel: str, date: str, commit: str, buil
     version = read(VERSION_RS)
     return {
         "contract": CONTRACT,
-        "launcher_min": LAUNCHER_MIN,
+        "launcher_min": DYLIB_ONLY_LAUNCHER_MIN if dylib_only else LAUNCHER_MIN,
         "channel": channel,
         "build": build or f"{channel}-{date}-{commit[:7]}",
         "commit": commit,
@@ -83,11 +94,13 @@ def main(argv: list[str] | None = None) -> None:
     write = commands.add_parser("write", help="write the release file of one build")
     write.add_argument("--channel", required=True, choices=CHANNELS)
     write.add_argument("--build", default="", help="--channel stable: the release's tag (26.3-0.1.0)")
+    write.add_argument("--dylib-only", action="store_true",
+                       help="--channel dev: the build has the dylib game alone, no player archives")
     write.add_argument("--date", required=True, help="the build's date, YYYY-MM-DD (UTC)")
     write.add_argument("--commit", required=True, help="the full id of the commit built")
     write.add_argument("out", type=Path)
     args = parser.parse_args(argv)
-    document = facts(git_reader(args.commit), args.channel, args.date, args.commit, args.build)
+    document = facts(git_reader(args.commit), args.channel, args.date, args.commit, args.build, args.dylib_only)
     args.out.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     print(f"{args.out}: contract {CONTRACT}, {document['build']}, Minecraft {document['version_id']}", file=sys.stderr)
 

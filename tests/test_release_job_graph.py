@@ -246,6 +246,14 @@ class NightlyBuildPathTests(unittest.TestCase):
                     self.assertEqual(results[job], "success", job)
                 self.assertEqual(results["full-daily"], "success" if kind == "stable" else "skipped")
 
+    def test_a_dev_build_of_the_dylib_game_alone_builds_no_game_and_still_signs_and_publishes(self):
+        outputs = {"pick": {"build": "true", "publish": "true", "break_glass": "false"}}
+        results = simulate(self.workflow, {"kind": "dev", "dry_run": False, "issue": "", "dylib_only": True}, outputs)
+        for job in ("exporters", "build", "complete"):
+            self.assertEqual(results[job], "skipped", job)
+        for job in ("sign", "publish"):
+            self.assertEqual(results[job], "success", job)
+
     def test_a_break_glass_release_publishes_after_both_approvals_in_its_first_attempt_only(self):
         results = self.run_kind("stable", break_glass="true")
         for job in ("break-glass-umceko", "break-glass-aria", "break-glass", "build", "sign", "publish"):

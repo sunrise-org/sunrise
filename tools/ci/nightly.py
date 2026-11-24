@@ -566,7 +566,8 @@ def pick(force: bool) -> None:
 def pick_dev() -> None:
     """A Dev build (release.yml kind dev, docs/release-flow.md "Dev"): a commit of main that recognizes the Dev
     version prefix, passed the gate and has a published SDK. It builds alone: no picks, build branch, nightly-state
-    record or daily cap. If dev-<date>-<short> already has a release, skip it (a tag is never replaced)."""
+    record or daily cap. If dev-<date>-<short> already has a release, skip it (a tag is never replaced).
+    NIGHTLY_DYLIB_ONLY=true: the thin release of the dylib game alone, whose notes say so."""
     require_ref("dev")
     git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main")
     repo, dry_run = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("DRY_RUN") == "true"
@@ -582,12 +583,18 @@ def pick_dev() -> None:
     tag = train.build_tag("dev", today, sha)
     # A tag is never replaced: skip a published build of the same commit on the same day (a dry run still builds).
     build = dry_run or not gh("release", "view", tag, "--json", "tagName", check=False)
+    if os.environ.get("NIGHTLY_DYLIB_ONLY") == "true":
+        shape = (f"This build has the dylib game alone, with no player archives: the prebuilt engine and runtime of "
+                 f"`sdk-{sha}`, for the platforms its `sdk.json` lists, which a launcher that installs the dylib game "
+                 "installs from there.")
+    else:
+        shape = f"The matching SDK is `sdk-{sha}`."
     with open("nightly-notes.md", "w") as f:
         f.write(f"Dev {today} · {sha[:7]}: main at {sha}, built to test it after merge.\n\n"
                 "Starting with Sunrise Launcher 1.1.3, install Dev builds by exact tag "
                 f"(`sunrise-launcher install {tag}`); until then, download and verify the release assets by hand. "
                 f"Run `sunrise-release-sign verify --tag {tag} --signature SHA256SUMS.v2.sig <folder>`. "
-                f"The matching SDK is `sdk-{sha}`.\n\n{train.DISCLAIMER}\n")
+                f"{shape}\n\n{train.DISCLAIMER}\n")
     output(build=str(build).lower(), sha=sha, short=sha[:7], source="main", date=today, version=f"dev-{today}",
            nightly=f"{today} {sha[:7]}", source_tag="", tag=tag, sdk=str(sdk).lower())
     print(f"{'build' if build else f'skip ({tag} is already published)'}: {tag} {sha}")

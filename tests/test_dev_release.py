@@ -141,6 +141,100 @@ class NightlyBuildDevTests(unittest.TestCase):
         self.assertIn("format('dev-build{0}'", group)
 
 
+class DylibOnlyDevTests(unittest.TestCase):
+    """A Dev build with the dylib game alone (owner, 2026-11-22): sdk-<sha> and a thin, signed Dev release."""
+
+    def setUp(self):
+        self.release = load("release.yml")
+        self.build = load("nightly-build.yml")
+
+    def test_only_a_dev_build_may_leave_the_static_game_out(self):
+        for workflow, job in ((self.release, "decide"), (self.build, "pick")):
+            dispatch = workflow["on"]["workflow_dispatch"]["inputs"]["dylib_only"]
+            self.assertEqual((dispatch["type"], dispatch["default"]), ("boolean", "false"))
+            refusal = [step for step in workflow["jobs"][job]["steps"] if "dylib_only" in step.get("if", "")]
+            self.assertEqual([step["if"] for step in refusal], ["inputs.kind != 'dev' && inputs.dylib_only"])
+            self.assertIn("exit 1", refusal[0]["run"])
+        dev = self.release["jobs"]["dev"]["steps"][0]
+        self.assertIn('-f dylib_only="$DYLIB_ONLY"', dev["run"])
+        self.assertEqual(dev["env"]["DYLIB_ONLY"], "${{ inputs.dylib_only && 'true' || 'false' }}")
+
+    def test_no_game_is_built_and_no_smoke_test_is_asked_for(self):
+        jobs = self.build["jobs"]
+        self.assertIn("!inputs.dylib_only", jobs["exporters"]["if"])
+        # build needs exporters, so it skips with it.
+        self.assertIn("exporters", jobs["build"]["needs"])
+        self.assertNotIn("always()", jobs["build"]["if"])
+        gate = [step for step in jobs["publish"]["steps"] if step.get("name", "").startswith("Ready to publish")]
+        self.assertEqual(gate[0]["if"], "${{ !inputs.dylib_only }}")
+        for job in ("sign", "publish"):
+            self.assertIn("inputs.dylib_only", jobs[job]["if"])
+
+    @unittest.skipIf(os.name == "nt", "executes the POSIX signing and publishing steps")
+    def test_the_thin_release_is_its_record_signed_and_published_without_archives(self):
+        sign = self.build["jobs"]["sign"]["steps"][2]["run"]
+        publish = [step for step in self.build["jobs"]["publish"]["steps"]
+                   if step.get("name") == "Publish as the dev-<date>-<short> pre-release"][0]["run"]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "dist").mkdir()
+            (root / "tools/ci").mkdir(parents=True)
+            (root / "tools/ci/sign_release.sh").write_text(
+                'for file in "${@:2}"; do test -f "$file" || exit 9; done\nprintf "%s\\n" "$@" > signed\n')
+            for name in ("sunrise-source.tar.gz", "sunrise-release.json"):
+                (root / "dist" / name).touch()
+            env = dict(os.environ, KIND="dev", SIGN_FOR="dev", DYLIB_ONLY="yes", GITHUB_REPOSITORY="sunrise-org/sunrise")
+            run = lambda script, **extra: subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script], cwd=root,
+                                                        env={**env, **extra}, capture_output=True, text=True)
+            # A real run refuses a record without the SDK's index; a dry run signs what it has.
+            self.assertNotEqual(run(sign, PUBLISH="true").returncode, 0)
+            self.assertEqual(run(sign, PUBLISH="false").returncode, 0)
+            (root / "dist/sdk.json").touch()
+            result = run(sign, PUBLISH="true")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "signed").read_text().split(),
+                             ["dev", "dist/sdk.json", "dist/sunrise-source.tar.gz", "dist/sunrise-release.json"])
+            # Publishing: no smoke test, no platform table; exactly SHA256SUMS' files and the signatures.
+            (root / "dist/SHA256SUMS").write_text("aa  sdk.json\nbb  sunrise-source.tar.gz\ncc  sunrise-release.json\n")
+            (root / "dist/nightly-notes.md").write_text("notes\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for tool, body in (("python3", "exit 0"), ("gh", 'printf "%s\\n" "$@" > "$GH_ARGS"')):
+                (bin_dir / tool).write_text(f"#!/bin/sh\n{body}\n")
+                (bin_dir / tool).chmod(0o755)
+            sha = "0c02067" + "a" * 33
+            result = run(publish, PATH=f"{bin_dir}:{os.environ['PATH']}", GH_ARGS=str(root / "gh-args"), SHA=sha,
+                         SHORT="0c02067", DATE="2026-11-22", TAG="dev-2026-11-22-0c02067")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            published = (root / "gh-args").read_text().split("\n")
+            self.assertNotIn("dist/smoke-test.json", published)
+            self.assertEqual([arg for arg in published if arg.startswith("dist/")],
+                             ["dist/nightly-notes.md", "dist/sdk.json", "dist/sunrise-source.tar.gz",
+                              "dist/sunrise-release.json", "dist/SHA256SUMS", "dist/SHA256SUMS.sig",
+                              "dist/SHA256SUMS.v2.sig"])
+            self.assertNotIn("Platform build results", (root / "dist/nightly-notes.md").read_text())
+
+    def test_the_notes_say_the_build_is_the_dylib_game_alone(self):
+        sha = "0c02067" + "a" * 33
+        with tempfile.TemporaryDirectory() as folder:
+            back = os.getcwd()
+            os.chdir(folder)
+            try:
+                env = {"GITHUB_REPOSITORY": "sunrise-org/sunrise", "GITHUB_OUTPUT": str(Path(folder) / "out"),
+                       "NIGHTLY_BASE": sha, "GITHUB_REF": "refs/heads/main", "NIGHTLY_DYLIB_ONLY": "true"}
+                with mock.patch.dict(os.environ, env), mock.patch.object(nightly, "git"), \
+                        mock.patch.object(nightly.train, "channel_head", return_value=sha), \
+                        mock.patch.object(nightly, "sdk_ready", return_value=True), \
+                        mock.patch.object(nightly, "gh", return_value=""):
+                    nightly.pick_dev()
+                notes = Path("nightly-notes.md").read_text()
+            finally:
+                os.chdir(back)
+        self.assertIn(f"the dylib game alone, with no player archives: the prebuilt engine and runtime of `sdk-{sha}`",
+                      notes)
+        self.assertNotIn("The matching SDK is", notes)
+
+
 class DevToolsTests(unittest.TestCase):
     def test_old_dev_builds_go_but_the_newest_and_everything_else_stay(self):
         tags = [{"tagName": "dev-2026-11-01-aaaaaaa", "isPrerelease": True},
