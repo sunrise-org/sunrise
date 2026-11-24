@@ -65,6 +65,10 @@ impl Game<'_> {
             Option<&sunrise_client::menu::StackedOutcome>,
         ) -> Option<R>,
     ) -> Option<R> {
+        let conn = self.lan.as_ref()?.hub.guests.get(gi)?.conn;
+        if !self.projection_menu_apply_fresh(conn) {
+            return None;
+        }
         let Some((slot, button, mode)) =
             click.filter(|c| matches!(c.2, Input::Pickup | Input::QuickCraft))
         else {
@@ -84,7 +88,6 @@ impl Game<'_> {
         let (Some(frozen), Some(())) = (found.filter(Self::stacked_listens_for), planned) else {
             return action(self, menu, None);
         };
-        let conn = self.lan.as_ref()?.hub.guests[gi].conn;
         let route = self.lan.as_mut()?.menus.entry(conn).or_default().hub.id();
         let mut ran = None;
         let (carried, same, resolved_slot, primary) = (
@@ -114,6 +117,9 @@ impl Game<'_> {
                 .unwrap_or(false)
             },
             |game, answer| {
+                if !game.projection_menu_apply_fresh(conn) {
+                    return;
+                }
                 game.journal_guest_click(conn);
                 ran = action(game, menu, answer);
             },

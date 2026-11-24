@@ -267,6 +267,19 @@ impl super::Game<'_> {
     }
 
     pub(super) fn publish_menu_click(&mut self, reply: MenuClickReply) {
+        if matches!(
+            reply.reply,
+            ClickReply::Predicted(..) | ClickReply::Resend(_)
+        ) && self.projection_menu_bound(reply.conn)
+            && !self.projection_menu_in_scope(reply.conn)
+        {
+            if let Err(error) =
+                self.with_projection_menu(reply.conn, |game| game.publish_menu_click(reply))
+            {
+                log::warn!("projected menu click reply refused: {error:?}");
+            }
+            return;
+        }
         use sunrise_protocol::packets::play::{Clientbound as C, SetPlayerInventory};
         let MenuClickReply {
             conn,

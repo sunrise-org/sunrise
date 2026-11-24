@@ -165,6 +165,17 @@ impl Game<'_> {
         }
     }
 
+    /// After guest teardown, deferred player snapshots and callback writes still belong to the
+    /// common journal. Its synchronous writer/fsync path replaces an independent final flush.
+    fn finish_server_storage(&mut self) -> Result<()> {
+        if !self.world_adopted || self.session_lock.is_none() {
+            return Err("common final save requires an adopted locked world".into());
+        }
+        self.checkpoint_live_world_shutdown()
+            .map(|_| ())
+            .map_err(|error| format!("final common shutdown checkpoint refused: {error:?}").into())
+    }
+
     /// `MinecraftServer.stopServer` body:
     /// 1. Stop network admission (`getConnection().stop()` / `teardownPublishedState`).
     /// 2. Save and remove players (`playerList.saveAll(); playerList.removeAll()`).
@@ -246,7 +257,11 @@ impl Game<'_> {
         let saved = match catch_unwind(AssertUnwindSafe(|| {
             if save_world {
                 // PlayerList already saved the live owner; the shell is not a player.
-                self.save_world_after_players(owner_saved)
+                self.save_world_after_players(owner_saved)?;
+                if self.live_world_durability_active() {
+                    self.finish_server_storage()?;
+                }
+                Ok(())
             } else {
                 Ok(())
             }

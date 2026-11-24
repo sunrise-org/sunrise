@@ -93,6 +93,9 @@ impl Game<'_> {
             self.tick_item_activation();
         }
         if running {
+            if let Some(remote) = self.remote.as_mut() {
+                remote.viewed.tick_projection_animations();
+            }
             self.world.game_time += 1;
             self.remote_clock_tick();
         }

@@ -67,12 +67,20 @@ pub struct Frame {
     pub origin: Vec3,
     /// The world directions of the local x, y and z axes: the columns of the rotation.
     axes: [Vec3; 3],
+    /// Present only for explicit rigid-pose users; ordinary collider interpolation is unchanged.
+    interpolation: Option<PivotInterpolation>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PivotInterpolation {
+    pivot: Vec3,
+    rotation: [f64; 4],
 }
 
 impl Frame {
     pub const fn translation(origin: Vec3) -> Self {
         Self {
             origin,
+            interpolation: None,
             axes: [
                 Vec3::new(1.0, 0.0, 0.0),
                 Vec3::new(0.0, 1.0, 0.0),
@@ -91,6 +99,7 @@ impl Frame {
         let [x, y, z, w] = q.map(|v| v / norm);
         Self {
             origin,
+            interpolation: None,
             axes: [
                 Vec3::new(
                     1.0 - 2.0 * (y * y + z * z),
@@ -111,11 +120,89 @@ impl Frame {
         }
     }
 
+    /// An explicit rigid pose `translation + pivot + rotation * (point - pivot)`.
+    /// Two samples with the same local pivot interpolate its world position linearly
+    /// and its quaternion by the shortest arc. Collider history and drawing use this same frame.
+    pub fn from_quaternion_about(translation: Vec3, pivot: Vec3, q: [f64; 4]) -> Self {
+        let mut frame = Self::from_quaternion(Vec3::ZERO, q);
+        let norm = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if !norm.is_finite() || norm < 1.0e-12 || !pivot.is_finite() {
+            return Self::translation(translation);
+        }
+        frame.origin = translation
+            .add_vector(pivot)
+            .subtract(frame.to_world(pivot));
+        frame.interpolation = Some(PivotInterpolation {
+            pivot,
+            rotation: q.map(|v| v / norm),
+        });
+        frame
+    }
+
+    /// Conservative broad-phase bounds between explicit pivot samples. This is
+    /// a query volume over real sparse boxes, never a solid collision shape.
+    pub fn pivot_swept_bounds(&self, other: &Self, local: Aabb) -> Option<Aabb> {
+        let (a, b) = (self.interpolation?, other.interpolation?);
+        if a.pivot != b.pivot {
+            return None;
+        }
+        let radius = (0..8)
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 == 0 { local.min.x } else { local.max.x },
+                    if i & 2 == 0 { local.min.y } else { local.max.y },
+                    if i & 4 == 0 { local.min.z } else { local.max.z },
+                )
+                .subtract(a.pivot)
+                .length()
+            })
+            .fold(0.0_f64, f64::max);
+        let extent = Vec3::new(radius, radius, radius);
+        let from = self.to_world(a.pivot);
+        let to = other.to_world(a.pivot);
+        Some(
+            Aabb::new(from.subtract(extent), from.add_vector(extent))
+                .union_bounds(Aabb::new(to.subtract(extent), to.add_vector(extent))),
+        )
+    }
+
     /// The frame `amount` of the way from `self` to `other` (0 is `self`): the origin in a
     /// line, the axes blended and made orthonormal again, which for the small turns between two
     /// ticks is the shortest rotation.
     pub fn interpolate(&self, other: &Self, amount: f64) -> Self {
         let a = amount.clamp(0.0, 1.0);
+        if let (Some(left), Some(right)) = (self.interpolation, other.interpolation)
+            && left.pivot == right.pivot
+        {
+            if a == 0.0 {
+                return *self;
+            }
+            if a == 1.0 {
+                return *other;
+            }
+            let mut q = right.rotation;
+            let mut dot: f64 = left.rotation.iter().zip(q).map(|(l, r)| l * r).sum();
+            if dot < 0.0 {
+                q = q.map(|v| -v);
+                dot = -dot;
+            }
+            let blended = if dot > 1.0 - 1.0e-12 {
+                std::array::from_fn(|i| left.rotation[i] * (1.0 - a) + q[i] * a)
+            } else {
+                let angle = dot.clamp(-1.0, 1.0).acos();
+                let left_weight = ((1.0 - a) * angle).sin() / angle.sin();
+                let right_weight = (a * angle).sin() / angle.sin();
+                std::array::from_fn(|i| left.rotation[i] * left_weight + q[i] * right_weight)
+            };
+            let pivot_world = self
+                .to_world(left.pivot)
+                .lerp(other.to_world(left.pivot), a);
+            return Self::from_quaternion_about(
+                pivot_world.subtract(left.pivot),
+                left.pivot,
+                blended,
+            );
+        }
         let mix = |k: usize| {
             self.axes[k]
                 .scale(1.0 - a)
@@ -135,6 +222,7 @@ impl Frame {
         Self {
             origin: self.origin.lerp(other.origin, a),
             axes: [x, y, z],
+            interpolation: None,
         }
     }
 
@@ -822,6 +910,40 @@ mod tests {
     fn yaw(origin: Vec3, degrees: f64) -> Frame {
         let half = degrees.to_radians() / 2.0;
         Frame::from_quaternion(origin, [0.0, half.sin(), 0.0, half.cos()])
+    }
+
+    #[test]
+    fn explicit_rigid_frames_preserve_nonzero_pivot_and_midpoint_turn() {
+        let pivot = Vec3::new(2.0, 64.0, 1.0);
+        let translation = Vec3::new(10.0, 0.0, 10.0);
+        let left = Frame::from_quaternion_about(translation, pivot, [0.0, 0.0, 0.0, 1.0]);
+        let half = std::f64::consts::FRAC_PI_4;
+        let right =
+            Frame::from_quaternion_about(translation, pivot, [0.0, half.sin(), 0.0, half.cos()]);
+        let middle = left.interpolate(&right, 0.5);
+        assert!(
+            middle
+                .to_world(pivot)
+                .distance_squared(Vec3::new(12.0, 64.0, 11.0))
+                < 1.0e-24
+        );
+        let expected = Vec3::new(
+            12.0 + std::f64::consts::FRAC_1_SQRT_2,
+            64.0,
+            11.0 - std::f64::consts::FRAC_1_SQRT_2,
+        );
+        assert!(
+            middle
+                .to_world(pivot.add_vector(Vec3::new(1.0, 0.0, 0.0)))
+                .distance_squared(expected)
+                < 1.0e-24
+        );
+        let local = Aabb::new(
+            pivot.add_vector(Vec3::new(10.0, 0.0, 0.0)),
+            pivot.add_vector(Vec3::new(11.0, 1.0, 0.1)),
+        );
+        let swept = left.pivot_swept_bounds(&right, local).unwrap();
+        assert!(swept.min.x <= 1.0 && swept.max.x >= 23.0);
     }
 
     #[test]

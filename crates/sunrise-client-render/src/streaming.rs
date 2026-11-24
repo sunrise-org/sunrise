@@ -26,6 +26,8 @@ use sunrise_world::worldgen::decoration_order::DecorationOrder;
 /// generator's scratch buffers ([`ChunkGenerator::idle`]).
 pub const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
 
+const UNLOAD_SWEEP_AGE: u8 = 8;
+
 /// Worker CPU time and job counts by kind, for benchmarks
 /// (`examples/gen_light_bench.rs`). Off unless enabled: a relaxed load per
 /// job then.
@@ -184,6 +186,14 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     }
     /// Put a saved proto chunk's state back onto `proto`, generated again.
     fn restore_proto(&self, _proto: &mut Proto, _saved: crate::chunk::SavedProto) {}
+    /// Whether retirement requires a checkpoint covering the live world and its terrain.
+    fn live_world_barrier_required(&self) -> bool {
+        false
+    }
+    fn live_world_barrier_pending(&self) -> bool {
+        false
+    }
+    fn request_live_world_barrier(&self) {}
     /// Save proto chunks decoration wrote to, so that they come back as they
     /// were: generating them again would lose those writes.
     fn save_protos(&self, _protos: &[&Proto]) {}
@@ -269,6 +279,9 @@ trait Saves: LodSource {
     fn accept_loaded_chunk(&self, chunk: &mut Chunk);
     fn accept_loaded_proto(&self, proto: &mut Proto, saved: crate::chunk::SavedProto) -> bool;
     fn save_protos_on_owner(&self) -> bool;
+    fn live_world_barrier_required(&self) -> bool;
+    fn live_world_barrier_pending(&self) -> bool;
+    fn request_live_world_barrier(&self);
     fn save_protos(&self, protos: &[&Proto]);
     fn save_finished(&self, chunk: Chunk);
 }
@@ -281,6 +294,15 @@ impl<G: ChunkGenerator> Saves for G {
     }
     fn save_protos_on_owner(&self) -> bool {
         ChunkGenerator::save_protos_on_owner(self)
+    }
+    fn live_world_barrier_required(&self) -> bool {
+        ChunkGenerator::live_world_barrier_required(self)
+    }
+    fn live_world_barrier_pending(&self) -> bool {
+        ChunkGenerator::live_world_barrier_pending(self)
+    }
+    fn request_live_world_barrier(&self) {
+        ChunkGenerator::request_live_world_barrier(self);
     }
     fn save_protos(&self, protos: &[&Proto]) {
         ChunkGenerator::save_protos(self, protos);
@@ -722,6 +744,8 @@ pub struct Streaming {
     commanded: HashSet<(i32, i32)>,
     /// The same membership in `ForceLoadCommand.listForceLoad`'s signed packed order.
     ordered_commanded: BTreeSet<i64>,
+    /// Ephemeral engine-owned retention. It is never part of saved `/forceload` or mod tickets.
+    runtime_forced: HashSet<(i32, i32)>,
     mod_tickets: ModTickets,
     /// No work is scheduled while paused (title screen).
     pub paused: bool,
@@ -1435,6 +1459,7 @@ impl Streaming {
             forced: HashSet::new(),
             commanded: HashSet::new(),
             ordered_commanded: BTreeSet::new(),
+            runtime_forced: HashSet::new(),
             mod_tickets: ModTickets::default(),
             paused: false,
             upload_backlog: 0,
@@ -1791,6 +1816,9 @@ impl Streaming {
         self.generation_scan.exhausted = false;
         self.saving -= 1;
         for (key, proto) in protos {
+            if self.saves.live_world_barrier_required() {
+                self.written.insert(key);
+            }
             self.light_views.remove(&key);
             self.protos.insert(key, Some(proto));
         }
@@ -1802,7 +1830,7 @@ impl Streaming {
     /// Queue checked-out protos ahead of other generation work.
     pub fn submit_protos(&mut self, protos: Vec<ProtoSave>) -> bool {
         if !protos.is_empty() {
-            if self.saves.save_protos_on_owner() {
+            if self.saves.live_world_barrier_required() || self.saves.save_protos_on_owner() {
                 // This only captures and queues the region records; encoding stays on workers.
                 self.finish_save(protos, true);
             } else {
@@ -1826,15 +1854,18 @@ impl Streaming {
         // neighbours were decorated around it, so generating it again would
         // not give it back.
         if !self.ranges().chunk_kept(key.0, key.1, self.decorates) {
-            // Its proto chunk is gone too: forget the decoration with it, as
-            // the sweep used to do for the whole set on every tick.
-            self.decorated.remove(&key);
-            world.set_proto_light_support(key, SectionMask::EMPTY);
-            if chunk.fresh {
-                self.dropped_new.insert(key);
-                return Some(chunk);
+            if self.saves.live_world_barrier_required() {
+                self.saves.request_live_world_barrier();
+            } else {
+                // Its proto chunk is gone too. Forget its decoration and light support.
+                self.decorated.remove(&key);
+                world.set_proto_light_support(key, SectionMask::EMPTY);
+                if chunk.fresh {
+                    self.dropped_new.insert(key);
+                    return Some(chunk);
+                }
+                return None;
             }
-            return None;
         }
         if !chunk.generated {
             self.saves.accept_loaded_chunk(&mut chunk);
@@ -2242,7 +2273,7 @@ impl Streaming {
         // The sweep unloads columns, saving them and dropping their block entities' bindings:
         // never while a transaction is open, whose values may still be tentative. A due sweep
         // waits for the next update instead.
-        let sweep = (area != self.scan_area || self.scan_age >= 8)
+        let sweep = (area != self.scan_area || self.scan_age >= UNLOAD_SWEEP_AGE)
             && !world.block_entities.defers_retirement();
         if sweep {
             (self.scan_area, self.scan_age) = (area, 0);
@@ -2340,6 +2371,9 @@ impl Streaming {
         } else {
             HashSet::new()
         };
+        if !far.is_empty() && self.saves.live_world_barrier_required() {
+            self.saves.request_live_world_barrier();
+        }
         PlanStep::Ready(StreamingUpdate {
             uploads: resume.uploads,
             sweep: resume.sweep,
@@ -2365,6 +2399,36 @@ impl Streaming {
         world: &mut World,
         plan: &mut StreamingUpdate,
     ) -> (StreamingCommit, Vec<ProtoSave>) {
+        self.prepare_commit_admitted(world, plan, false)
+    }
+    /// Game holds the plan through the common checkpoint and passes its EXACT live cell/BE/schedule/
+    /// attachment/proto readset validator. This function receives no Done result, runs no callback and
+    /// starts no tick between validation and removal. The moved plan makes admission once-only.
+    pub fn prepare_checkpointed_commit(
+        &mut self,
+        world: &mut World,
+        mut plan: StreamingUpdate,
+        validate: impl FnOnce(&World) -> bool,
+    ) -> Result<(StreamingCommit, Vec<ProtoSave>), StreamingUpdate> {
+        if !self.saves.live_world_barrier_required()
+            || self.saves.live_world_barrier_pending()
+            || plan
+                .far
+                .len()
+                .checked_add(self.protos.len())
+                .is_none_or(|n| n > 8192)
+            || !validate(world)
+        {
+            return Err(plan);
+        }
+        Ok(self.prepare_commit_admitted(world, &mut plan, true))
+    }
+    fn prepare_commit_admitted(
+        &mut self,
+        world: &mut World,
+        plan: &mut StreamingUpdate,
+        checkpointed: bool,
+    ) -> (StreamingCommit, Vec<ProtoSave>) {
         let uploads = std::mem::take(&mut plan.uploads);
         if plan.paused {
             return (
@@ -2379,6 +2443,13 @@ impl Streaming {
         let mut hz_laps = crate::spans::laps();
         let mut removed = Vec::new();
         let mut proto_saves = Vec::new();
+        if self.saves.live_world_barrier_required() && !checkpointed && !plan.far.is_empty() {
+            self.saves.request_live_world_barrier();
+            // Keep retirement due: frontier service builds a fresh plan, then checkpoints
+            // and commits that exact plan instead of saving a fresh empty plan.
+            self.scan_age = UNLOAD_SWEEP_AGE;
+            plan.keep_columns();
+        }
         if plan.sweep {
             self.decoration_changed = true;
             let far = &mut plan.far;
@@ -2405,7 +2476,7 @@ impl Streaming {
             // Drop far proto chunks that are not checked out.
             let (center, r4) = (self.center, i64::from(self.radius + 4));
             let ranges = self.ranges();
-            let far: Vec<(i32, i32)> = self
+            let mut far: Vec<(i32, i32)> = self
                 .protos
                 .iter()
                 .filter(|&(&(x, z), p)| {
@@ -2420,6 +2491,12 @@ impl Streaming {
                 })
                 .map(|(k, _)| *k)
                 .collect();
+            if self.saves.live_world_barrier_required() && !checkpointed && !far.is_empty() {
+                self.saves.request_live_world_barrier();
+                // Proto retirement needs the same fresh sweep after common admission.
+                self.scan_age = UNLOAD_SWEEP_AGE;
+                far.clear();
+            }
             if !far.is_empty() {
                 self.generation_scan.invalidate();
             }
@@ -2427,18 +2504,21 @@ impl Streaming {
             // `ChunkGenerator::save_protos`), and dropped once back.
             let mut written = Vec::new();
             for key in far {
-                if self.written.remove(&key) {
+                if checkpointed {
+                    // The exact current proto records already joined the acknowledged common WAL.
+                    self.written.remove(&key);
+                } else if self.written.remove(&key) {
                     written.push(key);
-                } else {
-                    self.protos.remove(&key);
-                    self.light_views.remove(&key);
-                    // Nothing will decorate it again until it is generated
-                    // afresh, so it is no longer decorated.
-                    if !world.chunks.contains_key(&key) && !self.finishing.contains(&key) {
-                        self.decorated.remove(&key);
-                    }
-                    world.set_proto_light_support(key, SectionMask::EMPTY);
+                    continue;
                 }
+                self.protos.remove(&key);
+                self.light_views.remove(&key);
+                // Nothing will decorate it again until it is generated
+                // afresh, so it is no longer decorated.
+                if !world.chunks.contains_key(&key) && !self.finishing.contains(&key) {
+                    self.decorated.remove(&key);
+                }
+                world.set_proto_light_support(key, SectionMask::EMPTY);
             }
             proto_saves = self.checkout_protos(written);
         }
@@ -3409,11 +3489,14 @@ impl Streaming {
 
     /// Complete a prepared save, returning synchronous protos to streaming.
     pub fn finish_save(&mut self, protos: Vec<ProtoSave>, wait: bool) {
-        if wait {
+        if wait || self.saves.live_world_barrier_required() {
             if !protos.is_empty() {
                 let refs: Vec<&Proto> = protos.iter().map(|p| &p.proto).collect();
                 self.saves.save_protos(&refs);
                 for proto in protos {
+                    if self.saves.live_world_barrier_required() {
+                        self.written.insert(proto.pos);
+                    }
                     self.protos.insert(proto.pos, Some(proto.proto));
                 }
             }
@@ -3772,6 +3855,25 @@ impl Streaming {
             (pos.x, pos.z)
         })
     }
+    /// Replace bounded runtime retention, leaving ordinary persistent ticket owners intact.
+    /// Admission belongs to the engine service before this call; this only uses the existing
+    /// forced-column streaming and ticking machinery and does not synchronously load chunks.
+    pub fn set_runtime_forced(&mut self, chunks: HashSet<(i32, i32)>) {
+        if chunks == self.runtime_forced {
+            return;
+        }
+        let changed: Vec<_> = self
+            .runtime_forced
+            .symmetric_difference(&chunks)
+            .copied()
+            .collect();
+        self.runtime_forced = chunks;
+        for chunk in changed {
+            if self.settle(chunk) {
+                self.rank_forced(chunk.0, chunk.1, chunk.0, chunk.1);
+            }
+        }
+    }
     /// The chunk tickets of mods.
     pub fn mod_tickets(&self) -> &ModTickets {
         &self.mod_tickets
@@ -3811,7 +3913,10 @@ impl Streaming {
     /// Bring `forced` in line with who holds `chunk`: true when it just
     /// became forced. The one writer of `forced`.
     fn settle(&mut self, chunk: (i32, i32)) -> bool {
-        if self.commanded.contains(&chunk) || self.mod_tickets.holds(chunk) {
+        if self.commanded.contains(&chunk)
+            || self.runtime_forced.contains(&chunk)
+            || self.mod_tickets.holds(chunk)
+        {
             self.forced.insert(chunk)
         } else {
             self.forced.remove(&chunk);
@@ -4013,7 +4118,8 @@ pub fn chunk_pos_is_valid((x, z): (i32, i32)) -> bool {
 /// out, features (34) at three, terrain (35) at four.
 const FORCED_FULL_RING: i32 = 2;
 const FORCED_FEATURES_RING: i32 = 3;
-const FORCED_TERRAIN_RING: i32 = 4;
+/// The terrain generation ring around a forced column, also charged by runtime retention admission.
+pub const FORCED_TERRAIN_RING: i32 = 4;
 #[derive(Clone, Copy)]
 struct AsyncRequests<'a> {
     chunks: &'a HashSet<(i32, i32)>,

@@ -199,6 +199,18 @@ impl EntityJournal {
     }
 }
 
+impl EntityJournal {
+    pub(super) fn common_is_unchanged(&self, game: &Game<'_>) -> bool {
+        self.mark == JoinSeq::upcoming()
+            && self.potions == game.potions.thrown.len()
+            && self.arrivals.is_empty()
+            && self.removals.is_empty()
+            && self.mob_removed.is_empty()
+            && self.announcements.is_empty()
+            && self.anon.is_empty()
+    }
+}
+
 impl Game<'_> {
     /// The journal a transaction opening now starts with.
     pub(super) fn entity_journal_open(&self) -> EntityJournal {

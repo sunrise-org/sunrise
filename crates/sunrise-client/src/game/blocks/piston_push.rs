@@ -605,22 +605,22 @@ impl Game<'_> {
         movement: Vec3,
         no_physics: bool,
         stand_grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
-    ) {
+    ) -> bool {
         if target == MoveWho::Player {
-            let _ = self.move_local_player(mover, movement, false);
-            return;
+            return self
+                .move_local_player(mover, movement, false)
+                .is_ok_and(|moved| moved.is_some());
         }
         // Armor stands arm their gate in their own collided shove.
         if let MoveWho::Entity(EntityHandle::ArmorStand(i)) = target {
-            self.shoves_armor_stand(i, mover, movement, stand_grid);
-            return;
+            return self.shoves_armor_stand(i, mover, movement, stand_grid);
         }
         let Some(selected) = self.stable_push_target(target) else {
-            return;
+            return false;
         };
         let mut gate = self.entity_move(target, mover, movement);
         if gate.skipped() {
-            return;
+            return false;
         }
         let movement = gate.delta();
         let lid_move = matches!(mover, MoverType::ShulkerBox | MoverType::Shulker);
@@ -633,7 +633,7 @@ impl Game<'_> {
                 }
                 self.release_after_block_move(target);
             }
-            return;
+            return true;
         }
         let entities = match target {
             MoveWho::Entity(EntityHandle::Boat(i)) if lid_move => {
@@ -668,7 +668,7 @@ impl Game<'_> {
             collision.map(|(context, _)| context),
             &entities,
         ) else {
-            return;
+            return false;
         };
         let placed = moved.length_squared() > 1.0e-7
             || movement.length_squared() - moved.length_squared() < 1.0e-7;
@@ -681,7 +681,7 @@ impl Game<'_> {
             self.apply_push(&mut gate, target, moved);
         }
         let Some(target) = self.resolve_push_target(selected) else {
-            return;
+            return false;
         };
         if lid_move
             && placed
@@ -709,6 +709,7 @@ impl Game<'_> {
         {
             self.release_after_block_move(target);
         }
+        true
     }
 
     /// A mod's `Entity.move(cause, movement)` for the listed entity `handle` (never the player
@@ -818,16 +819,14 @@ impl Game<'_> {
                 $body
             }};
         }
+        let mut gate = MoveGate::new();
         let pause = motion_phase!(
             world,
-            world.move_ordinary(
-                &mut MoveGate::new(),
-                mover,
-                movement,
-                auto_jump,
-                conn.is_some(),
-            )
+            world.move_ordinary(&mut gate, mover, movement, auto_jump, conn.is_some(),)
         )?;
+        if mover == MoverType::Carried && gate.skipped() {
+            return Ok(None);
+        }
         if let Some(pause) = pause {
             let landing = match pause.landing {
                 PlayerLandingPause::Trample(trample) => {

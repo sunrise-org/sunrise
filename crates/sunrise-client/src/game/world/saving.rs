@@ -241,6 +241,22 @@ impl Game<'_> {
                     Ok(true)
                 }
                 Stage::Generation => {
+                    if self.live_world_durability_active() {
+                        match self.checkpoint_live_world_levels(&[]) {
+                            Ok(receipt) => {
+                                self.finish_common_game_save(&receipt, true)?;
+                                return Ok(true);
+                            }
+                            Err(
+                                mod_api::LiveWorldError::Busy | mod_api::LiveWorldError::Revision,
+                            ) => return Ok(false),
+                            Err(error) => {
+                                return Err(
+                                    format!("common closing save refused: {error:?}").into()
+                                );
+                            }
+                        }
+                    }
                     if save.started.elapsed() > Duration::from_secs(30) {
                         return Err("chunk generation did not finish before saving".into());
                     }
@@ -499,6 +515,22 @@ impl Game<'_> {
     /// Save the level in place: its changed chunks, its entities and its raids.
     pub(super) fn save_level(&mut self, wait: bool) -> Result<()> {
         self.admit_level_save()?;
+        if self.live_world_durability_active() {
+            if !self.live_world_commit_frontier() {
+                if wait {
+                    return Err("common level save requires a completed server frontier".into());
+                }
+                self.request_live_world_save();
+                return Ok(());
+            }
+            self.save_border();
+            self.save_chunk_tickets()?;
+            self.checkpoint_live_world_levels(&[])
+                .map_err(|error| format!("common level save refused: {error:?}"))?;
+            self.save_raids();
+            self.native_level_save(self.dim.id());
+            return Ok(());
+        }
         // No save holds a player vehicle: a mob a mod seated on a player gets off first.
         self.eject_player_riders(None);
         self.save_border();

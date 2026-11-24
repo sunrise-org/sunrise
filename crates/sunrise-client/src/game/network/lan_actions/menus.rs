@@ -267,9 +267,19 @@ impl Game<'_> {
             let Some(gi) = game.guest_index(conn) else {
                 return Err(MenuOpen::Refused);
             };
+            let projected = game
+                .prepare_projection_menu(conn, menu, slots, pos)
+                .map_err(|_| MenuOpen::Stale)?;
             // Park the opener's window-0 cursor and build the first contents from
             // their inventory, even when an open through BlockEntityRef runs in their turn.
-            let Some(menu_generation) = game.with_own_record(gi, |host, _, _| {
+            let Some(menu_generation) = game.with_own_record(gi, |host, _, world| {
+                // Open callbacks may have changed the source slots. Read them with the
+                // opener's actual inventory parked and immediately before publication.
+                let items = if projected.is_some() || slots == Slots::Ender {
+                    slots.read(world, host.hub.guest(conn)?)?
+                } else {
+                    items
+                };
                 if host
                     .hub
                     .open_menu_window(conn, menu, title, Some(pos), slots, items, extra)
@@ -291,6 +301,7 @@ impl Game<'_> {
             }) else {
                 return Err(MenuOpen::Refused);
             };
+            game.install_projection_menu(conn, projected);
             Ok(menu_generation)
         }, |game, result| {
             let menu_generation = match result {
@@ -539,7 +550,7 @@ impl Game<'_> {
         generation: u64,
         tell: bool,
     ) {
-        self.in_menu_owner_level(conn, |game| {
+        let close = |game: &mut Self| {
             if let Some(host) = game.lan.as_ref()
                 && host.hub.guest(conn).is_some_and(|guest| {
                     guest.menu_generation == generation && !guest.disconnect_pending
@@ -553,7 +564,14 @@ impl Game<'_> {
                     game.guest_replace_menu(conn, tell, |_| ());
                 }
             }
-        });
+        };
+        if self.projection_menu_bound(conn) {
+            if let Err(error) = self.with_projection_menu(conn, close) {
+                log::warn!("projected menu close refused: {error:?}");
+            }
+        } else {
+            self.in_menu_owner_level(conn, close);
+        }
     }
 
     /// Finish removal before saving or exporting a live guest. Neither menu's
@@ -593,6 +611,17 @@ impl Game<'_> {
     }
 
     fn guest_remove_menus(&mut self, conn: u32, removal: MenuRemoval, tell: bool) -> Option<i32> {
+        if self.projection_menu_bound(conn) && !self.projection_menu_in_scope(conn) {
+            return match self
+                .with_projection_menu(conn, |game| game.guest_remove_menus(conn, removal, tell))
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    log::warn!("projected menu cleanup refused: {error:?}");
+                    None
+                }
+            };
+        }
         let host = self.lan.as_mut()?;
         let gi = host.hub.guests.connection_index(conn)?;
         if host.menus.get(&conn).is_some_and(|menus| menus.closing) {
@@ -669,6 +698,7 @@ impl Game<'_> {
             && let Some(host) = self.lan.as_mut()
         {
             host.hub.finish_close_container(conn, generation);
+            self.forget_projection_menu(conn);
         }
         if let Some(menus) = self.lan.as_mut().and_then(|host| host.menus.get_mut(&conn)) {
             menus.closing = false;
@@ -789,6 +819,9 @@ impl Game<'_> {
     /// `stillValid` of the guest's open container: its blocks are still there
     /// and in reach, or its vehicle exists and is in reach. True with none open.
     pub(super) fn container_menu_valid(&self, g: &sunrise_client::lan::guest::Guest) -> bool {
+        if let Some(valid) = self.projection_menu_valid(g) {
+            return valid;
+        }
         let Some(host) = self.lan.as_ref() else {
             return true;
         };

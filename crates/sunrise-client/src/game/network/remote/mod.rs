@@ -726,7 +726,7 @@ pub(super) struct Remote {
     is_destroying: bool,
     /// Per-hand swing policy, restored when the current input attempt ends.
     pub(in crate::game) interaction_swing: [bool; 2],
-    destroy_delay: u32,
+    pub(super) destroy_delay: u32,
     /// Whether the main and off hand still wait for the server's answer to
     /// a SWAP_ITEM_WITH_OFFHAND (`remote_hand_slot_set`).
     swap_answer: [bool; 2],
@@ -785,7 +785,7 @@ pub(in crate::game) const MOUNT_MENU: &str = "sunrise:mount";
 /// ServerboundPlayerInputPacket's shift bit.
 const SHIFT_INPUT: u8 = 1 << 5;
 
-fn face_direction(face: [i32; 3]) -> u8 {
+pub(super) fn face_direction(face: [i32; 3]) -> u8 {
     match face {
         [0, -1, 0] => 0,
         [0, 1, 0] => 1,
@@ -876,7 +876,7 @@ impl Game<'_> {
         self.remote_shift_down()
             && (self.stack_in(self.selected).is_some() || self.offhand.is_some())
     }
-    fn next_sequence(&mut self) -> i32 {
+    pub(in crate::game) fn next_sequence(&mut self) -> i32 {
         let r = self.remote.as_mut().expect("remote");
         r.sequence += 1;
         r.sequence
@@ -1246,6 +1246,10 @@ impl Game<'_> {
             // A native mod's general row the server starts showing the window.
             C::CustomPayload(p) if p.channel == sunrise_protocol::general_entity::CHANNEL => {
                 self.remote_general_entity(&p.data);
+            }
+            // Sparse projections of real viewed local worlds; no client authority over their state.
+            C::CustomPayload(p) if p.channel == sunrise_protocol::live_world_sync::CHANNEL => {
+                self.remote_live_world_sync(&p.data)?;
             }
             // The collider boxes of an entity the server shows the window.
             C::CustomPayload(p) if p.channel == sunrise_protocol::collider_sync::CHANNEL => {

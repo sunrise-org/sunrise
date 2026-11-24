@@ -80,6 +80,16 @@ pub(in crate::game) struct Journal {
     pub(in crate::game) refused_clicks: std::collections::BTreeSet<(u32, i32)>,
 }
 impl Journal {
+    pub(in crate::game) fn is_empty(&self) -> bool {
+        self.guests.is_empty()
+            && self.windows.is_empty()
+            && self.mobs.is_empty()
+            && self.sequences.is_none()
+            && self.active.is_none()
+            && self.correct_on_abort.is_empty()
+            && self.refused_clicks.is_empty()
+    }
+
     pub(in crate::game) fn merge(&mut self, child: Self) {
         for (conn, kept) in child.guests {
             self.guests.entry(conn).or_insert(kept);

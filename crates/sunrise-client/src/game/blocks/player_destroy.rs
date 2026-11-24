@@ -69,6 +69,7 @@ impl Game<'_> {
             );
         }
         let removed = match destroyed {
+            _ if !self.projection_break_fresh(pos) => false,
             Some(removed) => {
                 if removed {
                     self.invalidate_active_player_breaks(pos);

@@ -1146,6 +1146,14 @@ impl LevelAccess for GameLevel<'_> {
     /// `Level.isUnobstructed(state, pos, CollisionContext.of(player))`: no
     /// entity that blocks building is in the state's collision shape.
     fn is_unobstructed(&self, pos: BlockPos, state: BlockStateId) -> bool {
+        // No contextual physical Y/held context is projected into a source shape. Such
+        // shapes are refused before mutation, matching ordinary membership admission.
+        if self.projection_building.is_some()
+            && (self.collision.has_context_rule(state)
+                || self.collision.has_positioned_collision(state))
+        {
+            return false;
+        }
         let player = self.player_collision.as_ref();
         let context = player.map_or_else(
             || CollisionContext::empty(false),
@@ -1194,6 +1202,10 @@ impl LevelAccess for GameLevel<'_> {
             &shape,
         )
         .unwrap_or(false)
+            && self
+                .projection_building
+                .as_ref()
+                .is_none_or(|physical| physical.unobstructed(&shape))
     }
     /// `ServerLevel.shouldTickBlocksAt`: only the block-ticking ticket range.
     fn should_tick_blocks_at(&self, chunk: sunrise_core::position::ChunkPos) -> bool {

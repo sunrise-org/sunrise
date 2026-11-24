@@ -1476,21 +1476,44 @@ impl Game<'_> {
     /// whether their player file was replaced; the owner's state also goes
     /// into the in-memory level data, without writing level.dat here.
     pub(super) fn save_guest(&mut self, guest: &mut sunrise_client::lan::guest::Guest) -> bool {
+        if self.live_world_session_failed() {
+            return false;
+        }
         if !guest.participates_in_player_simulation() {
             return false;
         }
         // A proxy released this record to another server, which now owns saving it.
         let saved = if guest.joined() && !guest.released && !self.crash_save.excludes(guest.conn) {
-            let _ = self.finish_player_autosaves(true);
-            if self
+            let owner = self
                 .lan
                 .as_ref()
                 .and_then(|host| host.owner.as_ref())
-                .is_some_and(|o| o.uuid == guest.uuid)
-            {
-                playerdata::save_owner(guest, &mut self.level, &self.world_root, self.res.items())
+                .is_some_and(|owner| owner.uuid == guest.uuid);
+            if self.player_autosaves.common_required() {
+                if owner {
+                    if let Err(error) = playerdata::try_store(guest, &mut self.level, None) {
+                        log::error!("Sunrise: the owner's playerdata is not saved: {error}");
+                        self.player_autosaves.fail_common();
+                        return false;
+                    }
+                    self.level.player_uuid = Some(playerdata::uuid_ints(guest.uuid));
+                }
+                // Keep the logout snapshot after the guest leaves the hub.
+                self.player_autosaves
+                    .enqueue(guest, &self.world_root, self.res.items());
+                false
             } else {
-                playerdata::save(guest, &self.world_root, self.res.items())
+                let _ = self.finish_player_autosaves(true);
+                if owner {
+                    playerdata::save_owner(
+                        guest,
+                        &mut self.level,
+                        &self.world_root,
+                        self.res.items(),
+                    )
+                } else {
+                    playerdata::save(guest, &self.world_root, self.res.items())
+                }
             }
         } else {
             false

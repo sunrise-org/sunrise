@@ -1430,3 +1430,66 @@ fn a_travel_with_the_epochs_spent_closes_the_view_first() {
         "the Nether is sent again as its own"
     );
 }
+
+/// The same guest admission and ordinary packet stream enforce the negotiated capacity: a
+/// current four-slot client receives every source; an older two-slot client refuses the batch
+/// before any view changes. The fifth source is refused without dropping an admitted source.
+#[test]
+#[ignore = "daily"]
+fn negotiated_four_sources_stream_and_old_two_slot_guests_keep_their_cap() {
+    let ids = [
+        "test:source/a",
+        "test:source/b",
+        "test:source/c",
+        "test:source/d",
+        "test:source/e",
+    ];
+    for capacity in [2, 4] {
+        let (mut hub, rx) = hub_answered(
+            &[1],
+            Answer {
+                revision: viewed_levels::REVISION_4,
+                max_levels: capacity,
+            },
+        );
+        open_levels(&mut hub, &ids);
+        let sources: Vec<_> = ids[..4]
+            .iter()
+            .map(|id| area(id, (0, 0), 0, ChunkAreaMode::Loaded))
+            .collect();
+        let result = hub.set_viewed_areas(1, "test:projection", sources.clone());
+        if capacity == 2 {
+            assert_eq!(
+                result,
+                Err(ChunkAreaRefusal::TooManyLevels { asked: 4, cap: 2 })
+            );
+            assert!(hub.guests[0].viewed.views.is_empty());
+            assert!(got_bound(&rx[0]).is_empty());
+            continue;
+        }
+        result.unwrap();
+        for id in &ids[..4] {
+            hub.set_dimension(id);
+            let mut world = lit_columns(1);
+            run_level(&mut hub, &mut world);
+        }
+        let sent = got_bound(&rx[0]);
+        let opened: Vec<_> = sent
+            .iter()
+            .filter_map(|message| match message {
+                Bound::Open { dimension, .. } => Some(dimension.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opened, ids[..4]);
+        assert_eq!(hub.guests[0].viewed.views.len(), 4);
+        let mut fifth = sources;
+        fifth.push(area(ids[4], (0, 0), 0, ChunkAreaMode::Loaded));
+        assert_eq!(
+            hub.set_viewed_areas(1, "test:projection", fifth),
+            Err(ChunkAreaRefusal::TooManyLevels { asked: 5, cap: 4 })
+        );
+        assert_eq!(hub.guests[0].viewed.views.len(), 4);
+        assert!(got_bound(&rx[0]).is_empty());
+    }
+}

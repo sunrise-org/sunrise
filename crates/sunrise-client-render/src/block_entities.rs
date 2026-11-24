@@ -120,6 +120,8 @@ struct LiveTicker {
 
 #[derive(Default)]
 pub struct BlockEntities {
+    /// Conservative content/attachment mutation epoch, independent of canonical block states.
+    content_revision: u64,
     map: FxHashMap<Pos, BlockEntity>,
     /// Runtime contents subscriptions, retired with their observer identity.
     pub contents_watches: ContentsWatches,
@@ -351,6 +353,17 @@ pub fn chunk_map_order(positions: impl IntoIterator<Item = Pos>) -> Vec<Pos> {
 }
 
 impl BlockEntities {
+    /// Mutation epoch of live payloads and attachments. Mutable leases invalidate it conservatively;
+    /// reading immutable contents does not. Physics/model caches use the world's block-state epoch.
+    pub fn content_revision(&self) -> u64 {
+        self.content_revision
+    }
+    fn touch_contents(&mut self) {
+        self.content_revision = self
+            .content_revision
+            .checked_add(1)
+            .expect("block entity content revision exhausted");
+    }
     /// Gameplay supplies its subscription decision; storage knows no hook identifiers.
     pub fn set_on_load_enabled(&mut self, enabled: bool) {
         self.on_load_enabled = enabled;
@@ -416,6 +429,7 @@ impl BlockEntities {
     pub fn restore_generation(&mut self, pos: Pos, generation: u64) {
         assert!(self.map.contains_key(&pos));
         if self.generation(&pos) != Some(generation) {
+            self.touch_contents();
             self.contents_watches.remove(pos);
             retire_attachments(
                 &mut self.attachments,
@@ -553,6 +567,7 @@ impl BlockEntities {
         &mut self,
         pos: Pos,
     ) -> Option<&mut sunrise_mod_runtime::attachments::Attachments> {
+        self.touch_contents();
         // Identity survives a temporary take and retires on removal or an
         // abandoned-lease sweep, exactly like attachment ownership.
         if !self.generations.contains_key(&pos) {
@@ -577,6 +592,7 @@ impl BlockEntities {
         pos: Pos,
         data: Option<sunrise_mod_runtime::attachments::Attachments>,
     ) {
+        self.touch_contents();
         match data {
             Some(data) => self.restore_attachments(pos, data),
             None => {
@@ -636,6 +652,7 @@ impl BlockEntities {
     /// in this transaction, as it was then, still bound: a removed block entity a later write
     /// in the same transaction put back.
     pub fn reattach_retired(&mut self, pos: Pos, generation: u64) {
+        self.touch_contents();
         if self.generation(&pos) != Some(generation) || self.attachments.contains_key(&pos) {
             return;
         }
@@ -659,6 +676,7 @@ impl BlockEntities {
         generation: Option<u64>,
         data: Option<sunrise_mod_runtime::attachments::Attachments>,
     ) {
+        self.touch_contents();
         let kept = self.retiring.as_mut().and_then(|retiring| {
             let at = retiring
                 .iter()
@@ -706,6 +724,7 @@ impl BlockEntities {
         pos: Pos,
         data: sunrise_mod_runtime::attachments::Attachments,
     ) {
+        self.touch_contents();
         if self.map.contains_key(&pos) || self.out.contains_key(&pos) {
             let map = self.attachments.entry(pos).or_default();
             map.replace_contents(data);
@@ -771,6 +790,7 @@ impl BlockEntities {
     /// `SignBlockEntity.setAllowedPlayerEditor`: the one player whose editor
     /// is on the sign at `pos`, or `None` for nobody's.
     pub fn set_sign_editor(&mut self, pos: Pos, who: Option<u128>) {
+        self.touch_contents();
         let Some(BlockEntity::Sign(sign)) = self.map.get_mut(&pos) else {
             return;
         };
@@ -815,15 +835,18 @@ impl BlockEntities {
         if !accepts(self.map.get(pos)?) {
             return None;
         }
+        self.touch_contents();
         self.wake_at(pos);
         self.wake_below(pos);
         self.map.get_mut(pos)
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Pos, &mut BlockEntity)> {
+        self.touch_contents();
         self.clear_asleep();
         self.map.iter_mut()
     }
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut BlockEntity> {
+        self.touch_contents();
         self.clear_asleep();
         self.map.values_mut()
     }
@@ -834,6 +857,7 @@ impl BlockEntities {
         if identity.generation != generation {
             return None;
         }
+        self.touch_contents();
         let BlockEntity::Mod(entity) = self.map.get_mut(&pos)? else {
             return None;
         };
@@ -920,6 +944,7 @@ impl BlockEntities {
         entity: BlockEntity,
         replace_identity: bool,
     ) -> Option<BlockEntity> {
+        self.touch_contents();
         let new_is_mod = matches!(entity, BlockEntity::Mod(_));
         let same_type = |old: &BlockEntity| match (old, &entity) {
             (BlockEntity::Mod(old), BlockEntity::Mod(new)) => old.id() == new.id(),
@@ -966,6 +991,7 @@ impl BlockEntities {
         pos: Pos,
         make: impl FnOnce() -> BlockEntity,
     ) -> &mut BlockEntity {
+        self.touch_contents();
         let absent = !self.map.contains_key(&pos);
         if absent {
             self.replace_taken(pos);
@@ -991,6 +1017,7 @@ impl BlockEntities {
     }
     /// `LevelChunk.removeBlockEntity`: the block entity and its slot.
     pub fn remove(&mut self, pos: &Pos) -> Option<BlockEntity> {
+        self.touch_contents();
         self.out.remove(pos);
         self.retire(*pos);
         self.generations.remove(pos);
@@ -1006,6 +1033,7 @@ impl BlockEntities {
     /// The block entity at `pos`, out of the map for a while: its slot stays
     /// for `put` to bring it back (a tick working on it).
     pub fn take(&mut self, pos: &Pos) -> Option<(BlockEntityLease, BlockEntity)> {
+        self.touch_contents();
         self.wake_at(pos);
         let entity = self.map.remove(pos)?;
         let token = next_token();
@@ -1060,9 +1088,11 @@ impl BlockEntities {
     /// original owner's `put` succeeds with its original identity and attachments.
     pub fn restore_taken_lease(&mut self, pos: Pos, snapshot: TakenLeaseSnapshot) {
         assert!(!self.map.contains_key(&pos));
+        self.touch_contents();
         self.replaced.remove(&pos);
         self.generations.insert(pos, snapshot.generation);
         self.out.insert(pos, snapshot.taken);
+        list(&mut self.columns, pos);
         if snapshot.is_mod {
             self.mods.entry(chunk_of(pos)).or_default().insert(pos);
         }
@@ -1072,6 +1102,7 @@ impl BlockEntities {
     }
     /// Return the taken instance in its slot; false if its lease was retired.
     pub fn put(&mut self, lease: BlockEntityLease, entity: BlockEntity) -> bool {
+        self.touch_contents();
         let pos = lease.pos;
         if self.out.get(&pos).map(|taken| taken.token) != Some(lease.token)
             || self.generation(&pos) != Some(lease.generation)
@@ -1131,6 +1162,7 @@ impl BlockEntities {
     /// chunk's alone, so a frame that loads or unloads many columns costs what they hold, not
     /// what the whole map holds.
     pub fn unload_column_where(&mut self, chunk: (i32, i32), mut gone: impl FnMut(&Pos) -> bool) {
+        self.touch_contents();
         if let Entry::Occupied(mut column) = self.carried.entry(chunk) {
             let payloads = column.get_mut();
             self.column_unload_entries += payloads.len() as u64;
@@ -1162,6 +1194,7 @@ impl BlockEntities {
     /// Removes the block entities `keep` refuses, and their slots
     /// (`clearAllBlockEntities` of unloaded chunks).
     pub fn retain(&mut self, mut keep: impl FnMut(&Pos, &mut BlockEntity) -> bool) {
+        self.touch_contents();
         self.clear_asleep();
         let mut gone = Vec::new();
         self.map.retain(|p, e| {
@@ -1195,6 +1228,7 @@ impl BlockEntities {
         self.sign_editors.remove(&pos);
     }
     pub fn clear(&mut self) {
+        self.touch_contents();
         self.contents_watches = ContentsWatches::default();
         self.unload_attachments();
         self.generations.clear();
@@ -1223,6 +1257,7 @@ impl BlockEntities {
     /// already at its position (`LevelChunk.setBlockEntity`) drops that one;
     /// its slot is decided by the block state at the next tick.
     pub fn load_chunk(&mut self, entities: Vec<(Pos, BlockEntity)>) {
+        self.touch_contents();
         let _load = if entities.is_empty() {
             None
         } else {

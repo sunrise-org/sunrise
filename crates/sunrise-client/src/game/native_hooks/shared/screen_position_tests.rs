@@ -1101,6 +1101,7 @@ fn stock_menu_data_sync_round_trips_above_255_and_enforces_signed_short_boundary
                 guest.placed = true;
                 guest.dimension = "minecraft:overworld".into();
                 guest.menu = Some(Menu {
+                    source_dimension: "minecraft:overworld".into(),
                     window: 1,
                     kind: 2,
                     pos: Some(pos),

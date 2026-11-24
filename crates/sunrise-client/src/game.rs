@@ -1392,6 +1392,8 @@ mod native_knockback_credit_site_tests;
 #[cfg(test)]
 #[path = "game/modding/native_knockback_tests.rs"]
 mod native_knockback_tests;
+#[path = "game/modding/native_level_attachments.rs"]
+mod native_level_attachments;
 #[cfg(test)]
 #[path = "game/modding/native_level_block_states_tests.rs"]
 mod native_level_block_states_tests;
@@ -1431,6 +1433,11 @@ mod native_lifecycle;
 #[cfg(test)]
 #[path = "game/modding/native_live_holder_tests.rs"]
 mod native_live_holder_tests;
+#[path = "game/modding/native_live_worlds.rs"]
+mod native_live_worlds;
+#[cfg(test)]
+#[path = "game/modding/native_live_worlds_tests.rs"]
+mod native_live_worlds_tests;
 #[path = "game/modding/native_living_absorption.rs"]
 mod native_living_absorption;
 #[path = "game/modding/native_living_blocking.rs"]
@@ -2757,6 +2764,7 @@ struct GameLevel<'w> {
     /// The world's enabled feature flags as this side knows them (`LevelReader.enabledFeatures`).
     enabled_features: &'w std::sync::Arc<[String]>,
     player_box: Option<([f64; 3], [f64; 3])>,
+    projection_building: Option<std::rc::Rc<native_live_worlds::obstruction::Building>>,
     /// The LAN guests in this level who trigger blocks (not spectators).
     guest_boxes: Vec<([f64; 3], [f64; 3])>,
     /// Other players that block placement during a guest turn, including live
@@ -2937,6 +2945,19 @@ impl GameLevel<'_> {
     /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
     /// armor stand, whose box is empty, doesn't).
     fn building_blocker_boxes(&self) -> Vec<Aabb> {
+        self.building_blockers().collect()
+    }
+    fn building_blocker_boxes_limited(&self, limit: usize) -> Option<Vec<Aabb>> {
+        let mut boxes = Vec::new();
+        for bounds in self.building_blockers() {
+            if boxes.len() == limit {
+                return None;
+            }
+            boxes.push(bounds);
+        }
+        Some(boxes)
+    }
+    fn building_blockers(&self) -> impl Iterator<Item = Aabb> + '_ {
         let boxed = |(lo, hi): &([f64; 3], [f64; 3])| {
             Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
@@ -2956,7 +2977,6 @@ impl GameLevel<'_> {
             .chain(
                 b.non_mob_building_blocker_boxes(self.cart_boxes.iter().map(boxed), self.crystals),
             )
-            .collect()
     }
 }
 
@@ -4231,6 +4251,10 @@ struct Game<'a> {
     /// What changed in entities' colliders this tick, for the players who track them.
     collider_changes: Vec<native_colliders::ColliderChange>,
     collider_placements: native_colliders::Placements,
+    /// Runtime levels projected as sparse moving local worlds.
+    live_worlds: std::cell::RefCell<native_live_worlds::LiveWorlds>,
+    /// Common save coverage and a sticky post-Prepared session fence.
+    live_world_durability: native_live_worlds::Durability,
     collider_histories: native_colliders::Histories,
     entity_initialization: entity_initialization::EntityInitialization,
     /// Typed per-level membership follows dimensions, not the temporary world swap.
@@ -5015,6 +5039,9 @@ impl Game<'_> {
     }
 
     fn eye_position(&self) -> Option<[f64; 3]> {
+        if let Some(eye) = self.live_world_action_eye() {
+            return Some(eye);
+        }
         let p = self.player.as_ref()?;
         Some([
             p.position.x,
@@ -5532,6 +5559,7 @@ impl Game<'_> {
         placement_preview: bool,
         f: impl FnOnce(&Behaviours, &mut GameLevel<'_>, &mut Ticks) -> R,
     ) -> R {
+        let projection_building = self.projection_building_context();
         let darken = self.sky_darken();
         let (rain, thunder) = self.weather_levels(1.0);
         let (
@@ -5551,31 +5579,39 @@ impl Game<'_> {
         } else {
             // Spectators ignore block triggers (Entity.isIgnoringBlockTriggers).
             let spectator = self.spectator();
-            let player_box = self.player.as_ref().filter(|_| !spectator).map(|p| {
-                let w = f64::from(p.dimensions.width) / 2.0;
-                (
-                    [p.position.x - w, p.position.y, p.position.z - w],
-                    [
-                        p.position.x + w,
-                        p.position.y + f64::from(p.dimensions.height),
-                        p.position.z + w,
-                    ],
-                )
-            });
-            let player_collision = self.player.as_ref().filter(|_| !spectator).map(|p| {
-                let main_hand = self.inventory.get(self.selected).and_then(Option::as_ref);
-                PlayerCollision {
-                    y: p.position.y,
-                    descending: p.velocity.y < 0.0,
-                    fall_distance: p.fall_distance,
-                    main_hand_item: main_hand.map_or_else(
-                        || Arc::from("minecraft:air"),
-                        |stack| Arc::clone(&stack.item),
-                    ),
-                    main_hand_count: main_hand.map_or(0, |stack| stack.count as i32),
-                    leather_boots: worn_boots::leather_boots(&self.armor),
-                }
-            });
+            let player_box = self
+                .player
+                .as_ref()
+                .filter(|_| !spectator && projection_building.is_none())
+                .map(|p| {
+                    let w = f64::from(p.dimensions.width) / 2.0;
+                    (
+                        [p.position.x - w, p.position.y, p.position.z - w],
+                        [
+                            p.position.x + w,
+                            p.position.y + f64::from(p.dimensions.height),
+                            p.position.z + w,
+                        ],
+                    )
+                });
+            let player_collision = self
+                .player
+                .as_ref()
+                .filter(|_| !spectator && projection_building.is_none())
+                .map(|p| {
+                    let main_hand = self.inventory.get(self.selected).and_then(Option::as_ref);
+                    PlayerCollision {
+                        y: p.position.y,
+                        descending: p.velocity.y < 0.0,
+                        fall_distance: p.fall_distance,
+                        main_hand_item: main_hand.map_or_else(
+                            || Arc::from("minecraft:air"),
+                            |stack| Arc::clone(&stack.item),
+                        ),
+                        main_hand_count: main_hand.map_or(0, |stack| stack.count as i32),
+                        leather_boots: worn_boots::leather_boots(&self.armor),
+                    }
+                });
             let cart_boxes = self
                 .carts
                 .iter()
@@ -5641,12 +5677,18 @@ impl Game<'_> {
                 self.lan
                     .iter()
                     .flat_map(|h| {
-                        h.hub
-                            .guests
-                            .simulation_iter()
-                            .filter(|g| h.hub.here(g) && !g.spectator())
+                        h.hub.guests.simulation_iter().filter(|g| {
+                            g.placed
+                                && !g.spectator()
+                                && (h.hub.here(g) || self.projection_menu_bound(g.conn))
+                        })
                     })
-                    .filter_map(|g| g.menu.as_ref().and_then(|m| m.pos)),
+                    .filter_map(|g| {
+                        g.menu
+                            .as_ref()
+                            .filter(|menu| menu.source_dimension == self.dim.id())
+                            .and_then(|m| m.pos)
+                    }),
             ) {
                 open_containers.push(key);
                 if let Some(other) = self.chest_other_half(key) {
@@ -5727,6 +5769,7 @@ impl Game<'_> {
                     &remote.features
                 }),
             player_box,
+            projection_building,
             guest_boxes,
             building_player_boxes,
             player_collision,
@@ -6995,7 +7038,10 @@ impl Game<'_> {
         // If canceled, if a nested break already completed removal at this
         // position in this level (even when a block or fluid remains), or if
         // the listener left air here, do not apply removal effects again.
-        if canceled || removed_by_nested || self.res.behaviours().is_air(self.world.block(x, y, z))
+        if canceled
+            || removed_by_nested
+            || self.res.behaviours().is_air(self.world.block(x, y, z))
+            || !self.projection_break_fresh(pos)
         {
             return Ok(false);
         }
@@ -7500,15 +7546,25 @@ impl Game<'_> {
         let _parts = (!self.is_logical_server())
             .then(|| self.collision_parts())
             .flatten();
-        // A client's tick of the level it shows holds the colliders as it began, then carries
-        // its own player with the one it stands on; a server's level tick holds its own scope.
-        let _scope = (!self.is_logical_server()).then(|| {
+        // A client's tick holds collision geometry while it runs. A connected client's
+        // player tick owns its carry before sendChanges; a server level owns its own scope.
+        let connected_client = self.remote.is_some();
+        let start = (!self.is_logical_server()).then(|| self.placed_moving_colliders());
+        let scope = start.clone().map(|placed| {
             sunrise_client_render::moving_colliders::Scope::enter_level(
                 self.collider_level(),
-                self.placed_moving_colliders(),
+                placed,
             )
         });
-        self.tick_body()
+        let result = self.tick_body();
+        drop(scope);
+        if let (Some(start), Ok(())) = (&start, &result)
+            && !connected_client
+        {
+            self.carry_pass(start);
+            self.observe_carry_age(start);
+        }
+        result
     }
     fn tick_body(&mut self) -> Result<()> {
         self.expire_client_cracks();
@@ -8577,6 +8633,7 @@ impl Game<'_> {
         self.mark_entity(out.len(), "minecraft:evoker_fangs");
         self.fangs_geometry(camera, alpha, &mut out);
         self.block_item_display_geometry(camera, alpha, &mut out);
+        self.live_world_geometry(camera, alpha, &mut out);
         laps.lap("eg_displays");
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
@@ -9455,11 +9512,20 @@ impl Game<'_> {
         &mut self,
         mut prepared: world_loading::PreparedWorld,
     ) -> Result<functions::PackStack> {
+        self.admit_live_world_session()?;
+        if self.player_autosaves.common_required() && !self.player_autosaves.writes_finished()? {
+            return Err("the previous world still has an unacknowledged common player save".into());
+        }
+        // PreparedWorld owns a newly recovered SessionLock. Never reuse an old queue identity.
+        self.player_autosaves = Default::default();
         self.reset_tutorial();
         // Another world: its generator, not the last one's Density line.
         self.debug_density.borrow_mut().clear();
         self.server_loot = Default::default();
         self.world_root.clone_from(&prepared.save_root);
+        // PreparedWorld holds the new SessionLock and completed recovery before any reader.
+        self.live_world_durability.reset_for_recovered_world();
+        self.read_integrated_live_world_properties();
         // The root moves before the prepared level is installed. Until then a
         // final save must not run: the lock below only marks tag tables.
         self.world_adopted = false;
@@ -11535,29 +11601,36 @@ impl Game<'_> {
         // CAN_PLACE_ON item matching the block, and spectators with a menu block; Sunrise
         // does not open menus for spectators, so those never show it. An open
         // screen does not hide it: vanilla checks the HUD and the game mode, not the screen.
-        let outline: Vec<_> = self
-            .block_outline_hit()
-            .filter(|h| {
-                let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
-                let mut canceled = false;
-                self.native_block_highlight(h.pos, state, alpha as f32, &mut canceled);
-                !canceled
-            })
-            .map(|h| {
-                let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
-                outline_after_terrain = self
-                    .pack
-                    .render
-                    .model_catalog
-                    .collect(state, BlockPos::new(h.pos[0], h.pos[1], h.pos[2]))
-                    .is_ok_and(|models| {
-                        models
-                            .iter()
-                            .any(|(_, model)| model.faces.iter().any(|f| f.translucent))
-                    });
-                self.outline_edges_iter(state, h.pos).collect()
-            })
-            .unwrap_or_default();
+        let outline: Vec<_> = if self.projection_pick().is_some()
+            && self.may_build()
+            && !self.entity_targeted()
+            && self.should_render_block_outline_for_hit(None)
+        {
+            self.projection_pick_outline(alpha)
+        } else {
+            self.block_outline_hit()
+                .filter(|h| {
+                    let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
+                    let mut canceled = false;
+                    self.native_block_highlight(h.pos, state, alpha as f32, &mut canceled);
+                    !canceled
+                })
+                .map(|h| {
+                    let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
+                    outline_after_terrain = self
+                        .pack
+                        .render
+                        .model_catalog
+                        .collect(state, BlockPos::new(h.pos[0], h.pos[1], h.pos[2]))
+                        .is_ok_and(|models| {
+                            models
+                                .iter()
+                                .any(|(_, model)| model.faces.iter().any(|f| f.translucent))
+                        });
+                    self.outline_edges_iter(state, h.pos).collect()
+                })
+                .unwrap_or_default()
+        };
         pr.lap("pr_outline");
         let title = self.shows_panorama();
         let (yaw, pitch, roll) = if title {
@@ -11921,6 +11994,7 @@ impl Game<'_> {
         hud.patches.append(&mut self.map_patches);
         hud.patches.append(self.text_patches.get_mut());
         self.dynamic_texture_patches(&mut hud.image_patches);
+        native_live_worlds::trace::marker(&mut hud, &self.gui.atlas);
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let entity_motion = std::mem::take(self.entity_motion.get_mut());
         let entity_motion_posed = std::mem::take(self.entity_motion_posed.get_mut());
@@ -12101,6 +12175,12 @@ impl Game<'_> {
         let debug_passes = self.debug_lists_gpu_passes();
         let lightmap_chart = self.debug_shows_lightmap();
         let mut prepared_draws = std::mem::take(&mut *self.prepared_model_draws.borrow_mut());
+        native_live_worlds::trace::emit("frame_submit", || {
+            serde_json::json!({
+                "client_tick": self.ticks, "world_partial": alpha, "camera_partial": camera_alpha,
+                "size": size, "outline_edges": frame.outline.len(), "hide_gui": self.ui.hide_gui
+            })
+        });
         let mut renderer_slot = self.renderer.take();
         let result = match renderer_slot.as_mut() {
             Some(renderer) => {
@@ -12151,6 +12231,12 @@ impl Game<'_> {
         drop(frame);
         self.renderer = renderer_slot;
         self.requested_post_effects_buf = requested_post_effects;
+        native_live_worlds::trace::emit("frame_submit_result", || {
+            serde_json::json!({
+                "client_tick": self.ticks, "rendered": matches!(result, Ok(true)),
+                "error": result.as_ref().err().map(|error| error.to_string())
+            })
+        });
         prepared_draws.clear();
         *self.prepared_model_draws.borrow_mut() = prepared_draws;
         let _cleanup = spans::guard("pr_cleanup");
@@ -13308,6 +13394,7 @@ impl Game<'_> {
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
+                    native_live_worlds::trace::frame_begin(elapsed, self.ticks);
                     self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
@@ -13346,6 +13433,13 @@ impl Game<'_> {
                     self.report_activity();
                     let target = self.tick_target_millis();
                     let steps = self.clock.advance(elapsed, target);
+                    native_live_worlds::trace::emit("frame_steps", || {
+                        serde_json::json!({
+                            "client_tick": self.ticks, "steps": steps, "target_millis": target,
+                            "world_partial": self.frame_world_partial_tick(),
+                            "camera_partial": self.clock.camera_fraction()
+                        })
+                    });
                     if steps > 0
                         && self.title.is_none()
                         && let Err(e) = self.poll_remote_before_tick()
@@ -13361,6 +13455,14 @@ impl Game<'_> {
                     self.tick_world_icon();
                     let ticked = Instant::now();
                     let rendered = self.render_and_flip(elapsed)?;
+                    native_live_worlds::trace::emit("frame_end", || {
+                        serde_json::json!({
+                            "client_tick": self.ticks, "steps": steps, "rendered": rendered,
+                            "world_partial": self.frame_world_partial_tick(),
+                            "camera_partial": self.clock.camera_fraction(),
+                            "frame_cpu_ns": now.elapsed().as_nanos() as u64
+                        })
+                    });
                     self.native_frame_end()?;
                     // Drain once for both the raw flight and the slow-frame/capture route.
                     let frame_spans = if sunrise_client::spans::recording_here() {
@@ -14567,6 +14669,8 @@ impl<'a> Game<'a> {
             entity_attachments: Default::default(),
             collider_changes: Vec::new(),
             collider_placements: Default::default(),
+            live_worlds: Default::default(),
+            live_world_durability: Default::default(),
             collider_histories: Default::default(),
             entity_initialization: Default::default(),
             attachment_indexes: Default::default(),

@@ -45,6 +45,9 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     pub(in crate::game) fn remote_mining(&mut self, start: bool) -> bool {
+        if let Some(consumed) = self.remote_projection_mining(start) {
+            return consumed;
+        }
         let debug_stick = self
             .held()
             .is_some_and(|stack| &*stack.item == "minecraft:debug_stick");

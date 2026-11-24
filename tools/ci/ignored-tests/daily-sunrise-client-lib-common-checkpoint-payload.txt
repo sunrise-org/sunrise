@@ -1,0 +1,2 @@
+# Bounded common-checkpoint player payload admission; no prepared resources.
+sunrise-client-lib lan::playerdata::common_checkpoint::tests::aggregate_serialized_payload_budget_refuses_without_any_player_file lib daily slow # Isolated large-payload memory tier; keep the real 64 MiB aggregate refusal and no-file assertions.

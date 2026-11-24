@@ -99,6 +99,7 @@ impl Game<'_> {
     }
 
     pub(in crate::game) fn refresh_client_pick(&mut self, partial_tick: f32) {
+        self.clear_projection_pick();
         if !self.native_window()
             || self.title.is_some()
             || self.player.is_none()
@@ -190,6 +191,7 @@ impl Game<'_> {
                     || self.client_pick.dimension != Some(self.dim)
                 {
                     self.client_pick.ray = None;
+                    self.clear_projection_pick();
                     self.publish_client_pick(None);
                     return;
                 }
@@ -213,7 +215,17 @@ impl Game<'_> {
                 }
             }
         };
-        self.publish_client_pick(original);
+        self.refresh_projection_pick(
+            origin,
+            direction,
+            match original {
+                Some(CrosshairTarget::Block { hit, .. }) => Some(self.pick_distance(hit.point)),
+                Some(CrosshairTarget::Entity { point, .. }) => Some(self.pick_distance(point)),
+                _ => None,
+            },
+        );
+        let visible = self.finish_projection_pick(original);
+        self.publish_client_pick(visible);
         self.client_pick.taken += 1;
         if !mod_api::__private::listened(mod_api::HookId::ClientPick) {
             self.client_pick.ray = None;
@@ -242,6 +254,7 @@ impl Game<'_> {
                 || self.client_pick.dimension != Some(self.dim)
             {
                 self.client_pick.ray = None;
+                self.clear_projection_pick();
                 self.publish_client_pick(None);
                 return;
             }
@@ -262,11 +275,11 @@ impl Game<'_> {
         self.client_pick.entity_reach = self.client_pick_entity_reach(direction);
         self.storage_scope(|game, _| {
             game.client_pick.dispatching = true;
-            let mut result = original;
+            let mut result = visible;
             game.native_client_pick(mod_api::__private::ClientPickCall {
                 partial_tick,
                 origin,
-                original,
+                original: visible,
                 block_candidate,
                 entity_candidate,
                 result: &mut result,
@@ -274,10 +287,13 @@ impl Game<'_> {
             game.client_pick.dispatching = false;
             let valid_context = game.client_pick.epoch == game.native_lifecycle.epoch()
                 && game.client_pick.dimension == Some(game.dim);
+            if !valid_context {
+                game.clear_projection_pick();
+            }
             let result = result.filter(|&result| {
-                valid_context && (Some(result) == original || game.accept_client_pick(result))
+                valid_context && (Some(result) == visible || game.accept_client_pick(result))
             });
-            game.publish_client_pick(result);
+            game.publish_client_pick(game.finish_projection_pick(result));
             ((), true)
         });
     }

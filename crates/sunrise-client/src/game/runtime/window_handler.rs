@@ -295,6 +295,7 @@ impl Game<'_> {
         // resources are still held. A dedicated server skips it, as `client_setup` does.
         if self.options.is_client_start() {
             self.native_client_stopping();
+            native_live_worlds::trace::finish();
         }
     }
 

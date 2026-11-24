@@ -110,6 +110,7 @@ impl Game<'_> {
 
     /// A forced idle sweep waits for its writes before removing resident data.
     pub(super) fn update_world_with_eviction(&mut self, wait: bool) -> Result<()> {
+        self.admit_live_world_session()?;
         if let Err(e) = sunrise_client::spans::time("poll_remote", || self.poll_remote()) {
             log::warn!("Sunrise: {e}");
         }
@@ -224,51 +225,77 @@ impl Game<'_> {
             // complete before its live entities can replace the stored ones.
             plan.retain_unloading_columns(|key| !self.world.entities_pending.contains(key));
         }
-        let saved = (|| -> Result<_> {
-            let keys = plan.unloading_columns();
-            if keys.is_empty() {
-                return Ok(Vec::new());
-            }
-            self.admit_level_save()?;
-            let chunks = self.with_entities(
-                keys.iter()
-                    .filter(|key| self.world.modified.contains(key))
-                    .filter_map(|key| self.world.chunks.get(key)),
-            );
-            let (entities, refused_entities) = self.unloading_entity_snapshots(keys);
-            let mut counts = Vec::new();
-            if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
-                counts.extend(entities.iter().map(|(key, rows)| (*key, rows.len())));
-            }
-            if wait {
-                let refused = self.save.save_eviction(
-                    &chunks,
-                    self.pack.assets.registry,
-                    world_biomes!(self),
-                    entities,
-                )?;
-                plan.retain_unloading_columns(|key| {
-                    !refused.contains(key) && !refused_entities.contains(key)
-                });
+        let (commit, protos, saved) = if self.save.live_world_barrier_required() {
+            let (entities, refused) = if plan.unloading_columns().is_empty()
+                || !self.live_world_can_retire_streaming(wait)
+            {
+                (Vec::new(), HashSet::new())
             } else {
-                if !chunks.is_empty() {
-                    self.save.save_later(
+                self.unloading_entity_snapshots(plan.unloading_columns())
+            };
+            plan.retain_unloading_columns(|key| {
+                !refused.contains(key) && !self.world.entities_pending.contains(key)
+            });
+            let (commit, protos) = match self.checkpoint_live_world_streaming(plan, wait) {
+                Ok(admitted) => admitted,
+                Err(mut plan) => self.streaming.prepare_commit(&mut self.world, &mut plan),
+            };
+            let counts = if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
+                entities
+                    .into_iter()
+                    .map(|(key, rows)| (key, rows.len()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (commit, protos, Ok(counts))
+        } else {
+            let saved = (|| -> Result<_> {
+                let keys = plan.unloading_columns();
+                if keys.is_empty() {
+                    return Ok(Vec::new());
+                }
+                self.admit_level_save()?;
+                let chunks = self.with_entities(
+                    keys.iter()
+                        .filter(|key| self.world.modified.contains(key))
+                        .filter_map(|key| self.world.chunks.get(key)),
+                );
+                let (entities, refused_entities) = self.unloading_entity_snapshots(keys);
+                let mut counts = Vec::new();
+                if mod_api::__private::listened(mod_api::HookId::EntitiesUnload) {
+                    counts.extend(entities.iter().map(|(key, rows)| (*key, rows.len())));
+                }
+                if wait {
+                    let refused = self.save.save_eviction(
                         &chunks,
                         self.pack.assets.registry,
                         world_biomes!(self),
+                        entities,
                     )?;
+                    plan.retain_unloading_columns(|key| {
+                        !refused.contains(key) && !refused_entities.contains(key)
+                    });
+                } else {
+                    if !chunks.is_empty() {
+                        self.save.save_later(
+                            &chunks,
+                            self.pack.assets.registry,
+                            world_biomes!(self),
+                        )?;
+                    }
+                    self.save.save_entities_later(entities)?;
+                    plan.retain_unloading_columns(|key| !refused_entities.contains(key));
                 }
-                self.save.save_entities_later(entities)?;
-                plan.retain_unloading_columns(|key| !refused_entities.contains(key));
+                Ok(counts)
+            })();
+            if saved.is_err() {
+                plan.keep_columns();
+                self.streaming.force_unload_sweep();
             }
-            Ok(counts)
-        })();
-        if saved.is_err() {
-            plan.keep_columns();
-            self.streaming.force_unload_sweep();
-        }
-        let (commit, protos) = self.streaming.prepare_commit(&mut self.world, &mut plan);
-        let unloaded_columns = plan.unloading_columns();
+            let (commit, protos) = self.streaming.prepare_commit(&mut self.world, &mut plan);
+            (commit, protos, saved)
+        };
         self.streaming.submit_protos(protos);
         let (mut uploads, unloaded) = sunrise_client::spans::time("streaming", || {
             self.streaming.complete_commit(&mut self.world, commit)
@@ -276,6 +303,7 @@ impl Game<'_> {
         // Sections chosen to mesh wait for the mods' `section_visibility` (none without a mod).
         self.prepare_section_visibility();
         self.streaming.extra.truncate(areas);
+        self.admit_live_world_session()?;
         // The viewed levels' meshing, queued after the player's level's (nothing while no view
         // names one).
         if self.streaming.mesh
@@ -319,12 +347,13 @@ impl Game<'_> {
                 }
             });
         }
-        for key in unloaded_columns {
+        let unloaded_columns: HashSet<_> = unloaded.iter().map(|c| (c.x, c.z)).collect();
+        for key in &unloaded_columns {
             self.world.modified.remove(key);
             self.world.modified.unloaded(key);
         }
         if !unloaded_columns.is_empty() {
-            self.remove_unloading_entities(unloaded_columns);
+            self.remove_unloading_entities(&unloaded_columns);
             if let Ok(counts) = &saved {
                 for &(chunk, count) in counts {
                     if unloaded_columns.contains(&chunk) {
@@ -333,7 +362,7 @@ impl Game<'_> {
                 }
             }
             sunrise_client::spans::time("unload_block_entities", || {
-                for &column in unloaded_columns {
+                for &column in &unloaded_columns {
                     self.world.block_entities.unload_column(column);
                 }
             });

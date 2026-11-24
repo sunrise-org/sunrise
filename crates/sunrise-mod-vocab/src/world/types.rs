@@ -10,7 +10,7 @@ pub struct UnresolvedFluid(pub(crate) Identifier);
 /// A dimension (`minecraft:the_nether`), as the game's table numbers it: a `LevelRef`'s identity.
 /// A key stays the same dimension until the game exits; `key.id(host)` borrows the name.
 // no wire: decoding validates the u32 slot with DimensionKey::from_slot on the host.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 // exhaustive: its field is private, so only the game's table creates a key
 pub struct DimensionKey(pub(crate) u32);
 
@@ -253,7 +253,9 @@ pub struct ExplosionStart<'a> {
 }
 
 /// One server world open or client level; it rejects a previous world's handles.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct WorldEpoch(pub(crate) u64);
 
@@ -319,9 +321,62 @@ pub struct PlayerRespawnConfig {
     pub forced: bool,
 }
 
+/// One binding of a mod-owned runtime level to a destination level.
+/// Reads and motion never copy authoritative block entities or inventories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: only the engine constructs handles
+pub struct LiveWorldRef {
+    pub(crate) source: LevelRef,
+    pub(crate) generation: u64,
+}
+
+impl LiveWorldRef {
+    /// Construct an engine handle; the backend validates every field and its owner.
+    // hidden: engine allocates a binding generation; mods obtain it from project/restore.
+    #[doc(hidden)]
+    pub fn new(source: LevelRef, generation: u64) -> Self {
+        Self { source, generation }
+    }
+    /// The real local level. Ordinary block/attachment/Part APIs retain their normal context rules.
+    pub fn level(self) -> LevelRef {
+        self.source
+    }
+    /// The generation of this binding, for engine tables.
+    // hidden: engine metadata and wire matching need the scoped binding generation.
+    #[doc(hidden)]
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+/// Conservative current read epochs of an actual open server level, independent of a projection.
+/// These are optimistic read witnesses, not save or transaction completion receipts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LevelRevisions {
+    /// Changes to the actual World's block states.
+    pub block_revision: u64,
+    /// Changes to actual block-entity contents and their attachment storage.
+    /// This does not replace the separate opaque level-attachment readset.
+    pub content_revision: u64,
+}
+impl LevelRevisions {
+    /// Engine constructor over the actual existing World counters.
+    // hidden: engine reads the actual world counters; mods use LevelRef::revisions.
+    #[doc(hidden)]
+    pub fn new(block_revision: u64, content_revision: u64) -> Self {
+        Self {
+            block_revision,
+            content_revision,
+        }
+    }
+}
+
 /// A level of the open world, by its dimension (`minecraft:the_nether`).
 /// `Host::level` makes one, and `entity.level(host)` gives an entity's.
-#[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct LevelRef {
     pub(crate) epoch: WorldEpoch,
@@ -2229,5 +2284,29 @@ impl From<BlockStateError> for BlockEditError {
             BlockStateError::Unavailable => Self::Unavailable,
             error => Self::InvalidState(error),
         }
+    }
+}
+
+/// An owner-bound prepared transfer in this world session; no payload lives in this handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: only the host creates a prepared transfer identity
+pub struct LiveWorldTransferRef {
+    pub(crate) epoch: WorldEpoch,
+    pub(crate) generation: u64,
+}
+impl LiveWorldTransferRef {
+    /// Engine constructor; each operation revalidates identity and owner.
+    // hidden: engine issues session-bound prepared tokens after admission.
+    #[doc(hidden)]
+    pub fn new(epoch: WorldEpoch, generation: u64) -> Self {
+        Self { epoch, generation }
+    }
+    /// The world session that prepared this batch.
+    pub fn epoch(self) -> WorldEpoch {
+        self.epoch
+    }
+    /// Its session-local monotone identity.
+    pub fn generation(self) -> u64 {
+        self.generation
     }
 }

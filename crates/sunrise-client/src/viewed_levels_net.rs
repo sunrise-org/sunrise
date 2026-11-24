@@ -4,9 +4,11 @@
 //! allows; the game keeps a world for each level it opens (`game::viewed_worlds`).
 use sunrise_protocol::{packets::configuration as cfg, viewed_levels};
 
-/// Levels besides its own this client can view: the other two of vanilla's three dimensions.
-/// The game refuses an `open` past it.
-pub const MAX_LEVELS: u8 = 2;
+/// The bounded operational capacity advertised by this client, besides its own level.
+/// Four slots support independent runtime-level projections without allocating worlds until
+/// an admitted `open`. The same capacity is enforced by the play router. Server area, column,
+/// entity and projection quotas still apply; older clients retain their own advertised cap.
+pub const MAX_LEVELS: u8 = 4;
 
 /// Whether `payload` is the server's viewed-levels query.
 pub fn asked(payload: &cfg::CustomPayload) -> bool {

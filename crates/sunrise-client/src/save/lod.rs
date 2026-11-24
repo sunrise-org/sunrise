@@ -532,6 +532,15 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     fn proto_heap_bytes(&self, proto: &crate::streaming::Proto) -> ([usize; 6], [usize; 16]) {
         self.inner.proto_heap_bytes(proto)
     }
+    fn live_world_barrier_required(&self) -> bool {
+        self.save.live_world_barrier_required()
+    }
+    fn live_world_barrier_pending(&self) -> bool {
+        self.save.live_world_barrier_pending()
+    }
+    fn request_live_world_barrier(&self) {
+        self.save.request_live_world_barrier();
+    }
     fn save_protos_on_owner(&self) -> bool {
         self.save.has_chunk_disk_hook(mod_api::ChunkDiskPhase::Save)
     }

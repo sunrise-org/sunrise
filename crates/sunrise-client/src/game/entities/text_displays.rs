@@ -1381,7 +1381,7 @@ impl Game<'_> {
 
 /// Whether vanilla's built-in block models give this block a special model,
 /// drawn by its block-entity renderer.
-fn has_special_model(block: &str) -> bool {
+pub(super) fn has_special_model(block: &str) -> bool {
     matches!(
         block,
         "bell"

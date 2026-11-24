@@ -96,6 +96,9 @@ struct Game {
     veto: bool,
 }
 impl Game {
+    // This existing vanilla packet fixture has no projected target. Actual transformed input
+    // and authoritative refusal are exercised through the separate real Game guest tests.
+    fn remote_projection_mining(&mut self, _: bool) -> Option<bool> { None }
     // No display subscribers in this packet/gameplay fixture.
     fn set_client_mining(&mut self, mining: Option<Mining>) { self.mining = mining; }
     fn main_hand_key(&self) -> String { String::new() }

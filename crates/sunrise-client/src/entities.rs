@@ -2567,14 +2567,17 @@ impl ArmorStand {
         authoritative: bool,
         mover: sunrise_world::entity_move::MoverType,
         context: &sunrise_world::native_load_context::LoopContext,
-    ) {
+    ) -> bool {
         // The lid's `Entity.move(mover, delta)` goes through the
         // move gate (#2414); PR 1a records the movement unchanged.
         let mut gate =
             crate::move_gate::armed(context, self.id, "minecraft:armor_stand", mover, delta);
+        if gate.skipped() {
+            return false;
+        }
         let delta = gate.delta();
         let Ok(moved) = self.collide(&mut gate, &scene, delta, border, entities) else {
-            return;
+            return false;
         };
         let length = moved.length_squared();
         if length > 1.0e-7 || delta.length_squared() - length < 1.0e-7 {
@@ -2598,6 +2601,7 @@ impl ArmorStand {
             self.ground.on_ground = vertical && delta.y < 0.0;
             self.ground_support(&scene, moved);
         }
+        true
     }
     /// `Entity.checkSupportingBlock` after a move by `movement`: the block
     /// under the feet while `on_ground`, none otherwise.

@@ -140,6 +140,7 @@ fn setup(game: &mut Game<'_>) -> &'static ModMenuType {
     guest.placed = true;
     guest.loaded = true;
     guest.menu = Some(HubMenu {
+        source_dimension: "minecraft:overworld".into(),
         window: WINDOW,
         kind: 0,
         registry_id: t.id.into(),

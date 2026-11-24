@@ -1392,7 +1392,7 @@ impl Game<'_> {
         mover: sunrise_world::entity_move::MoverType,
         delta: Vec3,
         grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
-    ) {
+    ) -> bool {
         let grid = grid.get_or_insert_with(|| self.stand_entity_collisions());
         let mut nearby = Vec::new();
         let a = &mut self.armor_stands[i];
@@ -1413,7 +1413,7 @@ impl Game<'_> {
             !self.options.execution_role.is_client() && self.remote.is_none(),
             mover,
             &self.loop_context,
-        );
+        )
     }
     /// `Ravager.roar` with `mob_griefing` on: every armor stand in `area` (the
     /// ravager's box grown by 4) takes `strongKnockback` from the ravager at

@@ -4827,6 +4827,7 @@ pub(crate) mod tests {
             }
             let guest = crate::lan::menu::tests::guest();
             let menu = crate::lan::menu::Menu {
+                source_dimension: "minecraft:overworld".into(),
                 window: 1,
                 kind: 2,
                 pos: Some(k),

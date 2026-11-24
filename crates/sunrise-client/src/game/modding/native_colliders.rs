@@ -299,6 +299,9 @@ impl Game<'_> {
         &self,
         id: u32,
     ) -> Option<sunrise_core::geometry::oriented::Frame> {
+        if let Some(frame) = self.live_world_frame(id) {
+            return Some(frame);
+        }
         let state = if self.is_logical_server() {
             self.entity_attachments.collider(id)?
         } else {
@@ -377,7 +380,7 @@ impl Game<'_> {
         });
         if !any {
             self.collider_placements.0.remove(&level);
-            return Prepared::empty();
+            return self.live_world_colliders(Prepared::empty());
         }
         if let Some(kept) = self.collider_placements.0.get(&level) {
             let mut at = 0;
@@ -395,7 +398,7 @@ impl Game<'_> {
                 })
             });
             if same && at == kept.keys.len() {
-                return kept.prepared.clone();
+                return self.live_world_colliders(kept.prepared.clone());
             }
         }
         let mut keys = Vec::new();
@@ -425,7 +428,7 @@ impl Game<'_> {
                 prepared: prepared.clone(),
             },
         );
-        prepared
+        self.live_world_colliders(prepared)
     }
 
     /// The history the level keeps of its colliders, if it has any.

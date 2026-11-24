@@ -20,6 +20,8 @@ pub mod general_entity;
 pub mod hash_ops;
 pub mod ids;
 pub mod item;
+pub mod live_world_actions;
+pub mod live_world_sync;
 pub mod menu_extra;
 pub mod mod_list;
 pub mod packets;

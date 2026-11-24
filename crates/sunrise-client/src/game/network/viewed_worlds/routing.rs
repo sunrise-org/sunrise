@@ -434,6 +434,7 @@ impl Game<'_> {
             columns,
         );
         world.nether_shading = facts.cardinal_light == CardinalLight::Nether;
+        world.anims.classify(self.pack.assets.registry);
         if let Some(r) = self.remote.as_mut() {
             r.viewed.insert(slot, epoch, world);
         }

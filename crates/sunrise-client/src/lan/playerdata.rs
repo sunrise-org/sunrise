@@ -15,6 +15,10 @@ use {
     sunrise_mod_runtime::attachments::{ATTACHMENTS_KEY, attachment_compound},
 };
 
+#[path = "playerdata_common_checkpoint.rs"]
+mod common_checkpoint;
+pub use common_checkpoint::FrozenPlayerSaves;
+
 /// `PlayerDataStorage`'s player directory (`players/data`), created on first use
 /// as its constructor does with `mkdirs`.
 pub fn directory(world: &Path) -> PathBuf {
@@ -486,6 +490,7 @@ struct PlayerWriter {
     send: std::sync::mpsc::Sender<Snapshot>,
     done: std::sync::mpsc::Receiver<Result<SavedPlayer, String>>,
     thread: std::thread::JoinHandle<()>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// One FIFO writer for a server's player autosaves. Synchronous logout writes
@@ -496,15 +501,27 @@ pub struct Autosaves {
     pending: usize,
     error: Option<String>,
     ready: Vec<SavedPlayer>,
+    common: common_checkpoint::CommonPlayerSaves,
 }
 
 impl Autosaves {
     pub fn enqueue(&mut self, guest: &Guest, world: &Path, items: &crate::items::Items) {
+        if self.common_required() && self.common.check().is_err() {
+            return;
+        }
+        if !self.common_required() {
+            self.common.observe_root(world);
+        }
         let file = path(world, guest.uuid);
         let tag = match try_player_tag(guest, items) {
             Ok(tag) => tag,
             Err(error) => {
-                log::error!("Sunrise: {} is not saved: {error}", file.display());
+                let message = format!("{} is not saved: {error}", file.display());
+                log::error!("Sunrise: {message}");
+                if self.common_required() {
+                    self.common.fail(message.clone());
+                }
+                self.error = Some(message);
                 return;
             }
         };
@@ -514,17 +531,39 @@ impl Autosaves {
             file,
             tag,
         };
+        if self.common_required() {
+            if let Err(error) = self.common.admit(world, snapshot) {
+                let message = format!("common player save refused: {error}");
+                log::warn!("Sunrise: {message}");
+                self.error = Some(message.clone());
+                self.common.fail(message);
+            }
+            return;
+        }
         if self.writer.is_none() {
             let (send, receive) = std::sync::mpsc::channel::<Snapshot>();
             let (complete, done) = std::sync::mpsc::channel();
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let worker_stop = stop.clone();
             match std::thread::Builder::new()
                 .name("sunrise-player-writer".into())
                 .spawn(move || {
                     for snapshot in receive {
+                        if worker_stop.load(std::sync::atomic::Ordering::Acquire) {
+                            let _ = complete.send(Err("the player writer was fenced".into()));
+                            continue;
+                        }
                         let _ = complete.send(write_snapshot(snapshot));
                     }
                 }) {
-                Ok(thread) => self.writer = Some(PlayerWriter { send, done, thread }),
+                Ok(thread) => {
+                    self.writer = Some(PlayerWriter {
+                        send,
+                        done,
+                        thread,
+                        stop,
+                    })
+                }
                 Err(error) => {
                     log::warn!("Sunrise: cannot start player writer, saving inline: {error}")
                 }
@@ -556,6 +595,24 @@ impl Autosaves {
                 self.error = Some(error);
             }
         }
+    }
+
+    /// Serialize a newer logout snapshot after every queued autosave.
+    pub fn save_after(
+        &mut self,
+        guest: &Guest,
+        world: &Path,
+        items: &crate::items::Items,
+    ) -> Vec<SavedPlayer> {
+        if self.common_required() {
+            let saved = self.completed(false);
+            self.enqueue(guest, world, items);
+            return saved;
+        }
+        self.common.observe_root(world);
+        let saved = self.completed(true);
+        save(guest, world, items);
+        saved
     }
 
     /// Drain completions on the tick thread; `wait` is the durability barrier
@@ -597,6 +654,13 @@ impl Autosaves {
     }
 
     pub fn writes_finished(&mut self) -> crate::Result<bool> {
+        if self.common_required() {
+            self.common.check()?;
+            if let Some(error) = &self.error {
+                return Err(error.clone().into());
+            }
+            return Ok(self.common.is_empty() && self.pending == 0 && self.writer.is_none());
+        }
         match self.error.take() {
             Some(error) => Err(error.into()),
             None => Ok(self.pending == 0),
@@ -607,6 +671,11 @@ impl Autosaves {
 impl Drop for Autosaves {
     fn drop(&mut self) {
         if let Some(writer) = self.writer.take() {
+            if self.common_required() {
+                writer
+                    .stop
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
             drop(writer.send);
             let _ = writer.thread.join();
         }
@@ -1099,6 +1168,7 @@ mod tests {
             send,
             done,
             thread: std::thread::spawn(|| {}),
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         saves.pending = 1;
         saves.enqueue(

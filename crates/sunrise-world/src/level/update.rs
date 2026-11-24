@@ -880,3 +880,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.signals().state(pos)
     }
 }
+
+impl NeighborUpdater {
+    pub(crate) fn transfer_settled(&self) -> bool {
+        self.count == 0 && self.stack.is_empty() && self.added.is_empty() && self.notices.is_empty()
+    }
+}

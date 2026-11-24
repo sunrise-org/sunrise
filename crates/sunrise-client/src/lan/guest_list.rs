@@ -117,6 +117,7 @@ impl GuestList {
         std::mem::swap(&mut g.offhand, &mut i.offhand);
         std::mem::swap(&mut g.equipment, &mut i.equipment);
         std::mem::swap(&mut g.carried, &mut i.carried);
+        std::mem::swap(&mut g.ender_items, &mut i.ender_items);
     }
 
     /// Edit rows in join order, through the same bounded mutation scope.
@@ -1007,6 +1008,7 @@ mod tests {
             links: None,
         }));
         let block_menu = |pos: crate::block_entities::Pos| Menu {
+            source_dimension: "minecraft:overworld".into(),
             window: 1,
             kind: 0,
             registry_id: layout.id.into(),
@@ -1029,6 +1031,7 @@ mod tests {
             slot_changed_seen: None,
         };
         let owned_menu = || Menu {
+            source_dimension: "minecraft:overworld".into(),
             window: 2,
             kind: 0,
             registry_id: layout.id.into(),

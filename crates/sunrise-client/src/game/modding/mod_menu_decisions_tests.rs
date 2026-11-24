@@ -779,6 +779,7 @@ fn container_click(window: i32, slot: i16, input: i32) -> Serverbound {
 fn open_native_menu(game: &mut crate::game::Game<'_>) -> i32 {
     use sunrise_client::lan::menu::Menu;
     let menu = Menu {
+        source_dimension: "minecraft:overworld".into(),
         window: 5,
         kind: 2,
         pos: None,

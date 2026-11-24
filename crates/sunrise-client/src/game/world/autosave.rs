@@ -70,7 +70,23 @@ impl Game<'_> {
     }
 
     pub(super) fn save_game_metadata(&mut self) -> Result<()> {
-        let owner_saved = self.save_placed_players();
+        let owner_saved = if self.player_autosaves.common_required() {
+            self.validate_common_metadata_profile()?;
+            self.save_stats();
+            self.save_advancements();
+            if let Some(host) = &self.lan {
+                self.save_connected_guest_statistics(host);
+                let owner = host.owner.as_ref().map(|owner| owner.uuid);
+                for guest in host.hub.guests.iter() {
+                    if Some(guest.uuid) != owner && host.play.contains_key(&guest.conn) {
+                        self.save_guest_advancements(host, guest);
+                    }
+                }
+            }
+            false
+        } else {
+            self.save_placed_players()
+        };
         self.save_world_metadata(owner_saved)
     }
 
@@ -160,7 +176,11 @@ impl Game<'_> {
         self.save_schedule();
         self.save_warden_tracker();
         self.sync_world_level_data();
-        if self.options.execution_role.writes_singleplayer_player() && !owner_saved {
+        if self.player_autosaves.common_required() {
+            self.validate_common_metadata_profile()?;
+            // The common decision owns player files and its exact profile selector.
+            self.level.write_keeping_player(&self.world_root)?;
+        } else if self.options.execution_role.writes_singleplayer_player() && !owner_saved {
             // No placed owner (including IntegratedServer.initServer), or the stop path
             // already saved them. Name a known profile on creation without writing its file.
             self.level.write_keeping_player(&self.world_root)?;
@@ -171,6 +191,34 @@ impl Game<'_> {
         Ok(())
     }
 
+    pub(in crate::game) fn finish_common_game_save(
+        &mut self,
+        receipt: &mod_api::LiveWorldSaveReceipt,
+        wait: bool,
+    ) -> Result<()> {
+        let back = self.dim;
+        let saved: Result<()> = (|| {
+            for row in &receipt.levels {
+                self.enter_level(super::Dim::from_id(row.level.dimension_id()))?;
+                self.save_border();
+                self.save_chunk_tickets()?;
+                self.save_raids();
+                self.native_level_save(self.dim.id());
+                self.admit_live_world_session()?;
+            }
+            Ok(())
+        })();
+        let restored = if self.dim != back {
+            self.enter_level(back)
+        } else {
+            Ok(())
+        };
+        saved.and(restored)?;
+        self.save_game_metadata()?;
+        self.notify_world_saved(wait);
+        self.admit_live_world_session()
+    }
+
     /// The autosave doesn't `wait` for the chunks to be on disk: every
     /// generated chunk is saved, hundreds at a time, encoded and written on
     /// the region writer meanwhile.
@@ -179,7 +227,11 @@ impl Game<'_> {
             return Ok(());
         }
         self.admit_level_save()?;
-        let owner_saved = self.save_placed_players();
+        let owner_saved = if self.live_world_durability_active() {
+            false
+        } else {
+            self.save_placed_players()
+        };
         self.write_world(wait, owner_saved)
     }
 
@@ -193,12 +245,34 @@ impl Game<'_> {
     fn write_world(&mut self, wait: bool, owner_saved: bool) -> Result<()> {
         // `DedicatedServer.saveAllChunks` tells the management protocol's clients when a save starts and when
         // it ends without failing, for every save: the command, the autosave, the pause.
+        if self.live_world_durability_active() && !self.live_world_commit_frontier() {
+            if wait {
+                return Err("common save requires a completed server frontier".into());
+            }
+            self.request_live_world_save();
+            return Ok(());
+        }
         let dedicated = self.is_dedicated_server();
         if dedicated {
             dedicated::events::record_server("saving", serde_json::json!({}));
         }
-        self.save_all_levels(wait)?;
-        self.save_world_metadata(owner_saved)?;
+        if self.live_world_durability_active() {
+            let receipt = self
+                .checkpoint_live_world_levels(&[])
+                .map_err(|error| format!("common save refused: {error:?}"))?;
+            self.finish_common_game_save(&receipt, wait)?;
+        } else {
+            self.save_all_levels(wait)?;
+            self.save_world_metadata(owner_saved)?;
+            self.notify_world_saved(wait);
+        }
+        if dedicated {
+            dedicated::events::record_server("saved", serde_json::json!({}));
+        }
+        Ok(())
+    }
+
+    fn notify_world_saved(&mut self, wait: bool) {
         if wait {
             self.message = Some((
                 sunrise_client::lang::get("commands.save.success"),
@@ -206,15 +280,12 @@ impl Game<'_> {
             ));
         }
         self.native_world_saved(wait);
-        if dedicated {
-            dedicated::events::record_server("saved", serde_json::json!({}));
-        }
-        Ok(())
     }
 }
 
 impl Game<'_> {
     pub(super) fn admit_level_save(&self) -> Result<()> {
+        self.admit_live_world_session()?;
         // A carrier transfer that broke after `prepared` stopped the
         // session (`carrier_stop_session`): its recovery replays the
         // affected regions from the disk state the transfer itself

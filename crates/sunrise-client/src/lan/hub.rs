@@ -6843,6 +6843,7 @@ mod tests {
         let open = |hub: &mut Hub| {
             hub.guests.update(0, |g| {
                 g.menu = Some(super::super::menu::Menu {
+                    source_dimension: "minecraft:overworld".into(),
                     window: 1,
                     kind: 2,
                     pos: Some(k),
@@ -8709,6 +8710,7 @@ mod tests {
         );
         hub.guests.update(0, |g| {
             g.menu = Some(super::super::menu::Menu {
+                source_dimension: "minecraft:overworld".into(),
                 window: 1,
                 kind: 2,
                 pos: Some(pos),

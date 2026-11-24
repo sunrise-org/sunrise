@@ -146,6 +146,14 @@ impl RuntimeTable {
             .is_some_and(|entry| entry.state != State::Opening)
     }
 
+    /// A queued close/delete has already invalidated prepared live-world actions, even
+    /// though ordinary level handles remain readable until the scheduler applies it.
+    pub(in crate::game) fn is_closing(&self, id: &str) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|entry| entry.state == State::Closing)
+    }
+
     /// Whether `id` is a runtime level, open or not yet.
     pub(in crate::game) fn holds(&self, id: &str) -> bool {
         self.entries.contains_key(id)
@@ -201,8 +209,17 @@ impl RuntimeTable {
     }
 
     /// The mod that opened `id`, or "?" for a level the table no longer holds.
-    fn owner_of(&self, id: &str) -> &'static str {
+    pub(in crate::game) fn owner_of(&self, id: &str) -> &'static str {
         self.entries.get(id).map_or("?", |entry| entry.owner)
+    }
+
+    /// A live projection may bind only its caller's genuinely open empty-generator level.
+    pub(in crate::game) fn owned_void(&self, id: &str, owner: &str) -> bool {
+        self.entries.get(id).is_some_and(|entry| {
+            entry.state == State::Open
+                && entry.owner == owner
+                && matches!(entry.level.generate, Generate::Layers { flat: false, .. })
+        })
     }
 
     /// The requests waiting, in the order made. Later requests wait for the next tick.
@@ -624,12 +641,24 @@ impl Dim {
 }
 
 impl Game<'_> {
-    /// Require an open logical server world for runtime level operations and return the current
-    /// mod name (or `"?"` outside a hook) for logging.
-    fn runtime_caller(&self) -> Result<&'static str, RuntimeLevelError> {
-        if !self.is_logical_server() || self.native_lifecycle.epoch().is_none() {
+    /// A live-world operation always requires an identified native mod.
+    pub(in crate::game) fn runtime_caller(&self) -> Result<&'static str, RuntimeLevelError> {
+        self.admit_runtime_world()?;
+        mod_api::content::crash::current_native_mod().ok_or(RuntimeLevelError::Unavailable)
+    }
+
+    fn admit_runtime_world(&self) -> Result<(), RuntimeLevelError> {
+        if self.live_world_session_failed()
+            || !self.is_logical_server()
+            || self.native_lifecycle.epoch().is_none()
+        {
             return Err(RuntimeLevelError::Unavailable);
         }
+        Ok(())
+    }
+
+    fn runtime_level_owner(&self) -> Result<&'static str, RuntimeLevelError> {
+        self.admit_runtime_world()?;
         Ok(mod_api::content::crash::current_native_mod().unwrap_or("?"))
     }
 
@@ -752,7 +781,7 @@ impl Game<'_> {
         level: RuntimeLevel,
         generators: &ModChunkGenerators,
     ) -> Result<LevelRef, RuntimeLevelError> {
-        let owner = self.runtime_caller()?;
+        let owner = self.runtime_level_owner()?;
         Self::valid_runtime_level_id(id)?;
         if !self.levels.runtime.holds(id) && Dim::exists(id) {
             return Err(RuntimeLevelError::ReservedId);
@@ -760,6 +789,21 @@ impl Game<'_> {
         let (shape, facts) = resolve_type(id, &level.dimension_type)
             .ok_or(RuntimeLevelError::UnknownDimensionType)?;
         let generate = self.runtime_generation(&level, generators)?;
+        if self.player_autosaves.common_required()
+            && !self.levels.runtime.holds(id)
+            && self.live_world_common_level_count()
+                + self
+                    .levels
+                    .runtime
+                    .entries
+                    .values()
+                    .filter(|e| e.state == State::Opening)
+                    .count()
+                >= 64
+        {
+            log::warn!("Sunrise: common checkpoint level budget exhausted while opening {id}");
+            return Err(RuntimeLevelError::Unavailable);
+        }
         let generation = self.levels.runtime.queue_open(
             owner,
             id,
@@ -795,7 +839,7 @@ impl Game<'_> {
     }
 
     fn runtime_level_queue_unload(&mut self, id: &str) -> Result<(), RuntimeLevelError> {
-        let owner = self.runtime_caller()?;
+        let owner = self.runtime_level_owner()?;
         Self::valid_runtime_level_id(id)?;
         if self.levels.runtime.is_open(id) && self.level_has_players(Dim::from_id(id)) {
             return Err(RuntimeLevelError::PlayersInside);
@@ -816,7 +860,7 @@ impl Game<'_> {
     }
 
     fn runtime_level_queue_delete(&mut self, id: &str) -> Result<(), RuntimeLevelError> {
-        let owner = self.runtime_caller()?;
+        let owner = self.runtime_level_owner()?;
         Self::valid_runtime_level_id(id)?;
         if !self.levels.runtime.holds(id) && Dim::exists(id) {
             return Err(RuntimeLevelError::ReservedId);
@@ -868,11 +912,21 @@ impl Game<'_> {
     /// Whether a player, or an arrival on its way, is in the level `dim`.
     fn level_has_players(&self, dim: Dim) -> bool {
         let id = dim.id();
+        // A projected turn borrows a physical destination body without moving it. Guests
+        // remain in the hub under that destination; the borrowed Game body is not another
+        // player in the contextual source. A direct local actor retains its captured level.
+        let physical = self
+            .native_acting_player()
+            .and_then(|player| self.projection_physical_player_level(player))
+            .map_or(self.dim, |level| Dim::from_id(level.dimension_id()));
         self.lan
             .as_ref()
             .is_some_and(|host| host.hub.guests.as_slice().iter().any(|g| g.dimension == id))
             || !self.arrival_chunks(dim).is_empty()
-            || (self.options.dedicated.is_none() && self.player.is_some() && self.dim == dim)
+            || (self.options.dedicated.is_none()
+                && self.lan_acting.is_none()
+                && self.player.is_some()
+                && physical == dim)
     }
 
     /// Whether `level` names the level now open under its id: the world open it was made in, and

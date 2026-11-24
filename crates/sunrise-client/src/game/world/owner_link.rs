@@ -78,6 +78,11 @@ pub(super) enum ControlRequest {
     },
     /// `simulation`: the server's clock and projectiles.
     Simulation(Reply<Value>),
+    /// `simulation live-worlds`: bounded authoritative projection/cell inspection.
+    LiveWorlds {
+        source: Option<String>,
+        reply: Reply<Value>,
+    },
     /// `server-hold`: stop or resume the server's tick.
     HoldServer { held: bool, done: Reply<()> },
     /// A console command run as the owner: the chat lines it produced and its outcome.
@@ -201,6 +206,9 @@ impl Game<'_> {
                 let _ = reply.send(self.in_owner_level(|g| {
                     json!({ "game_time": g.world.game_time, "projectiles": g.projectiles_status() })
                 }));
+            }
+            ControlRequest::LiveWorlds { source, reply } => {
+                let _ = reply.send(self.control_live_worlds(source.as_deref()));
             }
             ControlRequest::HoldServer { held, done } => {
                 self.agent.hold_server = held;

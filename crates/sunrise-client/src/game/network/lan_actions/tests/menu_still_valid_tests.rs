@@ -215,6 +215,7 @@ fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
                 .block_entities
                 .insert(vehicle, BlockEntity::Chest(vec![None; 27]));
             let menu = Menu {
+                source_dimension: "minecraft:overworld".into(),
                 window: 1,
                 kind: 2,
                 pos: Some(vehicle),

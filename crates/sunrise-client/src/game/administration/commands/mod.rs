@@ -311,6 +311,9 @@ impl Game<'_> {
     /// Commands.performCommand for a line without its slash. Client dispatcher
     /// handling belongs to the chat entry points, not server or console execution.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
+        if self.live_world_session_failed() {
+            return false;
+        }
         let d = self.ui.dispatcher.0.clone();
         let parse = d.parse(command, &self.ui.registries);
         let result = match parse.executable() {
@@ -1004,6 +1007,9 @@ impl Game<'_> {
     // ---- dispatch -------------------------------------------------------
 
     fn execute_command(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        if self.live_world_session_failed() {
+            return Ok(0);
+        }
         match id {
             "native_mod_command" => self.run_native_command(ctx.clone()),
             "help" => self.cmd_help(ctx),

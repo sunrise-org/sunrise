@@ -68,6 +68,36 @@ impl Game<'_> {
     }
 
     pub(in crate::game) fn drop_guest_items(&mut self, gi: usize, stacks: Vec<ItemStack>) {
+        let conn = self
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guests.get(gi))
+            .map(|guest| guest.conn);
+        if let Some(destination) = conn.and_then(|conn| self.projection_drop_destination(conn))
+            && destination.dimension() != self.dim.key()
+        {
+            // The action/menu scope preflights both actual worlds. Runtime close is queued;
+            // its synchronous menu cleanup runs before the source or destination can be dropped.
+            assert!(
+                self.level_handle_current(destination),
+                "projected cursor destination retained through cleanup"
+            );
+            let back = self.dim;
+            self.enter_level(Dim::from_id(destination.dimension_id()))
+                .expect("projected cursor destination already admitted");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.drop_guest_items_here(gi, stacks)
+            }));
+            self.enter_level(back)
+                .expect("projected menu source retained through cleanup");
+            if let Err(panic) = result {
+                std::panic::resume_unwind(panic);
+            }
+            return;
+        }
+        self.drop_guest_items_here(gi, stacks);
+    }
+    fn drop_guest_items_here(&mut self, gi: usize, stacks: Vec<ItemStack>) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };

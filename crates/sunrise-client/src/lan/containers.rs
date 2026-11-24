@@ -455,6 +455,7 @@ impl Hub {
             None => None,
         };
         self.close_container_at(i);
+        let source_dimension = self.config.dimension.clone();
         let window = self.guests.update(i, |g| {
             let window = g.next_menu_window();
             if slots == Slots::Native {
@@ -478,6 +479,7 @@ impl Hub {
                 seen
             });
             g.menu = Some(Menu {
+                source_dimension: source_dimension.clone(),
                 window,
                 kind,
                 registry_id: menu_kind.into(),
@@ -1471,11 +1473,14 @@ impl Hub {
     pub fn sync_containers(&mut self, world: &World) -> Vec<super::hub::HostEvent> {
         let mut events = Vec::new();
         for i in 0..self.guests.len() {
-            let Some(menu) = self.guests[i]
-                .menu
-                .as_ref()
-                .filter(|menu| !menu.removed && self.here(&self.guests[i]))
-            else {
+            let Some(menu) = self.guests[i].menu.as_ref().filter(|menu| {
+                !menu.removed
+                    && menu.source_dimension == self.config.dimension
+                    && (self.here(&self.guests[i])
+                        || (self.guests[i].dimension != self.config.dimension
+                            && self.guests[i].participates_online()
+                            && self.guests[i].placed))
+            }) else {
                 continue;
             };
             let (total, window, slots) = (menu.slot_count(), menu.window, menu.slots);

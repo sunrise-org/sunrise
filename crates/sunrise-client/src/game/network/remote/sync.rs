@@ -411,10 +411,8 @@ impl Game<'_> {
                     r.position_sender
                         .update(pos, (yaw, pitch), on_ground, collision)
             {
-                // A server that sent colliders reads how old the copy carrying the player is.
-                if !r.colliders.is_empty()
-                    && let Some(hint) = r.carry_age.hint()
-                {
+                // Both ordinary entity colliders and live projections use this support hint.
+                if let Some(hint) = r.carry_age.hint() {
                     out.push(S::CustomPayload(
                         sunrise_protocol::packets::configuration::CustomPayload {
                             channel: sunrise_protocol::carry_age::CHANNEL.into(),

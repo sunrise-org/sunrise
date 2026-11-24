@@ -2802,44 +2802,89 @@ impl Game<'_> {
         }) else {
             return Ok(None);
         };
-        let veto = mod_api::__private::listened(mod_api::HookId::EntityPlace);
-        if veto {
-            let against_pos = decision.placed_against_pos();
-            let block = |game: &Game<'_>, pos: BlockPos| game.world.block(pos.x, pos.y, pos.z);
-            let against = block(self, against_pos);
-            let target_before = block(self, preview.pos);
-            // One proposed state per affected cell. A companion at the pre-clear
-            // position supersedes the intermediate air or water write.
-            let extra = preview.companion.into_iter().chain(
-                preview
-                    .pre_clear
-                    .filter(|(pos, _)| preview.companion.is_none_or(|(at, _)| at != *pos)),
-            );
-            let hand = if by_player {
-                self.held().cloned()
-            } else {
-                None
-            };
-            let placer = by_player
-                .then(|| self.native_clicker().1.cast_unsigned())
-                .and_then(|entity| self.entity(entity));
-            // The block revision and journal epoch cover supporting blocks and
-            // block-entity shapes without tracing ordinary reads.
-            let level = (self.dim, self.world.revision, self.transactions.writes());
-            if self.placement_canceled(placer, preview.pos, preview.state, against, extra)
-                || level != (self.dim, self.world.revision, self.transactions.writes())
-                || block(self, preview.pos) != target_before
-                || block(self, against_pos) != against
-                || (by_player && self.held() != hand.as_ref())
+        let prepared = match self.prepare_projection_placement(&preview) {
+            Ok(plan) => plan,
+            Err(_) => return Ok(None),
+        };
+        let frame = prepared.as_ref().map(|_| self.open_storage_transaction());
+        let projected_inputs = prepared.as_ref().map(|_| {
+            (
+                self.world.revision,
+                self.transactions.writes(),
+                self.held().cloned(),
+            )
+        });
+        let admitted = (|| {
+            if let Some(plan) = prepared.as_ref()
+                && !self.admit_projection_placement(plan)
             {
-                return Ok(None);
+                return false;
             }
+            let veto = mod_api::__private::listened(mod_api::HookId::EntityPlace);
+            if veto {
+                let against_pos = decision.placed_against_pos();
+                let block = |game: &Game<'_>, pos: BlockPos| game.world.block(pos.x, pos.y, pos.z);
+                let against = block(self, against_pos);
+                let target_before = block(self, preview.pos);
+                // One proposed state per affected cell. A companion at the pre-clear
+                // position supersedes the intermediate air or water write.
+                let extra = preview.companion.into_iter().chain(
+                    preview
+                        .pre_clear
+                        .filter(|(pos, _)| preview.companion.is_none_or(|(at, _)| at != *pos)),
+                );
+                let hand = if by_player {
+                    self.held().cloned()
+                } else {
+                    None
+                };
+                let placer = by_player
+                    .then(|| self.native_clicker().1.cast_unsigned())
+                    .and_then(|entity| self.entity(entity));
+                // The block revision and journal epoch cover supporting blocks and
+                // block-entity shapes without tracing ordinary reads.
+                let level = (self.dim, self.world.revision, self.transactions.writes());
+                if self.placement_canceled(placer, preview.pos, preview.state, against, extra)
+                    || level != (self.dim, self.world.revision, self.transactions.writes())
+                    || block(self, preview.pos) != target_before
+                    || block(self, against_pos) != against
+                    || (by_player && self.held() != hand.as_ref())
+                {
+                    return false;
+                }
+            }
+            if let Some((revision, writes, held)) = projected_inputs.as_ref()
+                && (*revision != self.world.revision
+                    || *writes != self.transactions.writes()
+                    || self.held() != held.as_ref())
+            {
+                return false;
+            }
+            prepared
+                .as_ref()
+                .is_none_or(|plan| self.projection_placement_fresh(plan))
+        })();
+        let admitted = frame.map_or(admitted, |frame| {
+            matches!(
+                self.close_storage_frame(frame, admitted),
+                Some(crate::game::transactions::StorageSettlement::Committed(_))
+            )
+        }) && admitted;
+        if !admitted
+            || prepared
+                .as_ref()
+                .is_some_and(|plan| !self.projection_placement_fresh(plan))
+        {
+            return Ok(None);
         }
         let Some(placed) = self
             .with_level(|b, level, ticks| b.apply_placement(level, ticks, decision, stack_state))
         else {
             return Ok(None);
         };
+        if let Some(plan) = prepared {
+            self.finish_projection_placement(plan);
+        }
         if placed.matches_candidate {
             let pos = placed.context.pos;
             let target = [pos.x, pos.y, pos.z];

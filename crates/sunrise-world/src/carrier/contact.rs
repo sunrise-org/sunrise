@@ -399,6 +399,10 @@ pub struct CarrierHit {
     pub location: Vec3,
     /// The hit face in world space.
     pub direction: Direction,
+    /// The actual face returned by the local voxel-shape clip, before rotation.
+    pub local_direction: Direction,
+    /// The actual local hit point, before rotation and translation.
+    pub local_location: Vec3,
     /// The local cell whose real voxel box was hit.
     pub local_cell: BlockPos,
 }
@@ -558,12 +562,13 @@ enum PairState {
 /// `2 * angle^2 * radius` of gap change per unit fraction squared), so at
 /// most `COLLISION_EPSILON` of gap can be lost before the next
 /// classification re-checks, preserving the never-skip-a-contact guarantee.
-fn rotation_pair_state(
+fn motion_pair_state(
     carrier: &OrientedBox,
     obstacle: Aabb,
     unit_axis: Vec3,
     angle_rad: f64,
     pivot: Vec3,
+    delta: Vec3,
 ) -> PairState {
     let center_offset = obstacle.center().subtract(carrier.center);
     let obstacle_half = obstacle.size().scale(0.5);
@@ -581,7 +586,7 @@ fn rotation_pair_state(
             return;
         }
         let normal = if offset >= 0.0 { axis } else { axis.reverse() };
-        if normal.dot(unit_axis).abs() >= 1.0 - 1.0e-9 {
+        if normal.dot(unit_axis).abs() >= 1.0 - 1.0e-9 && normal.dot(delta).abs() <= RATE_EPSILON {
             // Rotation about the contact plane's own normal leaves this
             // axis's gap unchanged.
             constant_gap = true;
@@ -598,6 +603,7 @@ fn rotation_pair_state(
                 unit_axis
                     .cross(corner.subtract(pivot))
                     .scale(angle_rad)
+                    .add_vector(delta)
                     .dot(normal)
             })
             .fold(f64::NEG_INFINITY, f64::max);
@@ -893,6 +899,31 @@ impl CarrierGeometry {
         obstacles: &[Obstacle],
         budget: &ContactBudget,
     ) -> Result<StepContact, Refused> {
+        self.rigid_step(placement, Vec3::ZERO, axis, angle_rad, obstacles, budget)
+    }
+
+    /// One continuous rigid step: the pivot travels linearly by `delta` while
+    /// every point turns about that moving pivot. Conservative advancement uses
+    /// the sum of linear speed and angular corner speed; it never alternates
+    /// translation/rotation or skips the volume between configurations.
+    pub fn rigid_step(
+        &self,
+        placement: &RigidTransform,
+        delta: Vec3,
+        axis: Vec3,
+        angle_rad: f64,
+        obstacles: &[Obstacle],
+        budget: &ContactBudget,
+    ) -> Result<StepContact, Refused> {
+        if !delta.is_finite() {
+            return Err(Refused::NonFinite);
+        }
+        if delta.components().iter().any(|v| v.abs() > MAX_TRANSLATION) {
+            return Err(Refused::TranslationTooFar);
+        }
+        if angle_rad == 0.0 {
+            return self.translate_step(placement, delta, obstacles, budget);
+        }
         if !angle_rad.is_finite() {
             return Err(Refused::NonFinite);
         }
@@ -923,11 +954,13 @@ impl CarrierGeometry {
                 max_radius = max_radius.max(radial.length());
             }
         }
-        let swept = Aabb::of_size(
+        let initial_bounds = Aabb::of_size(
             pivot_world,
             Vec3::new(2.0 * pivot_radius, 2.0 * pivot_radius, 2.0 * pivot_radius),
-        )
-        .inflate(sweep_margin());
+        );
+        let swept = initial_bounds
+            .union_bounds(initial_bounds.move_by(delta))
+            .inflate(sweep_margin());
         let candidates: Vec<&Obstacle> = obstacles
             .iter()
             .filter(|obstacle| {
@@ -951,7 +984,7 @@ impl CarrierGeometry {
         // (see `rotation_pair_state`); a non-closing touch without an
         // invariant axis additionally caps the sub-step by the corner
         // paths' curvature, so it cannot slip into closing while unobserved.
-        let travel = angle_rad.abs() * max_radius;
+        let travel = delta.length() + angle_rad.abs() * max_radius;
         let curvature_cap = if max_radius > 0.0 {
             (COLLISION_EPSILON / (2.0 * angle_rad * angle_rad * max_radius)).sqrt()
         } else {
@@ -974,12 +1007,13 @@ impl CarrierGeometry {
                         if iterations > budget.iterations {
                             return Err(Refused::IterationBudget);
                         }
-                        match rotation_pair_state(
+                        match motion_pair_state(
                             carrier_box,
                             obstacle_box,
                             unit_axis,
                             angle_rad,
-                            pivot_world,
+                            pivot_world.add_vector(delta.scale(advanced)),
+                            delta,
                         ) {
                             PairState::Blocked { overlap } => {
                                 overlap_block |= overlap;
@@ -1023,7 +1057,9 @@ impl CarrierGeometry {
             }
             advanced += step;
             last_clear = advanced;
-            current = placement.rotated(axis, angle_rad * advanced)?;
+            current = placement
+                .rotated(axis, angle_rad * advanced)?
+                .translated(delta.scale(advanced));
         }
     }
 
@@ -1047,6 +1083,8 @@ impl CarrierGeometry {
         best.map(|(_, hit)| CarrierHit {
             location: placement.to_world(hit.location),
             direction: world_direction(placement.rotation(), hit.direction),
+            local_direction: hit.direction,
+            local_location: hit.location,
             local_cell: hit.block,
         })
     }
@@ -1309,6 +1347,92 @@ mod tests {
         assert_eq!(step.contacts.len(), 1);
         let moved = placement.translated(Vec3::new(1.0, 0.0, 0.0).scale(step.fraction));
         assert!((geometry.world_bounds(&moved).unwrap().max(Axis::X) - 13.0).abs() < EPSILON);
+    }
+
+    #[test]
+    fn coupled_rigid_step_handles_closing_and_tangential_floor_contacts() {
+        let geometry = CarrierGeometry::new(7, two_full_cells()).unwrap();
+        let pose = RigidTransform::identity_at(Vec3::new(0.0, 1.0, 0.0)).unwrap();
+        let floor = [Obstacle::with_identity(
+            0,
+            BlockPos::new(0, 0, 0),
+            Vec3::ZERO,
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(-4.0, 0.0, -4.0),
+                Vec3::new(4.0, 1.0, 4.0),
+            ))
+            .unwrap(),
+        )
+        .unwrap()];
+        // A turning cube moving down closes a horizontal contact even though the
+        // rotation axis alone leaves that plane invariant.
+        let closing = geometry
+            .rigid_step(
+                &pose,
+                Vec3::new(0.1, -0.1, 0.0),
+                PLUS_Y,
+                FIVE_DEGREES,
+                &floor,
+                &ContactBudget::default(),
+            )
+            .unwrap();
+        assert_eq!(closing.fraction, 0.0);
+        assert!(!closing.contacts.is_empty());
+        let sliding = geometry
+            .rigid_step(
+                &pose,
+                Vec3::new(0.1, 0.0, 0.0),
+                PLUS_Y,
+                FIVE_DEGREES,
+                &floor,
+                &ContactBudget::default(),
+            )
+            .unwrap();
+        assert_eq!(sliding.fraction, 1.0);
+        assert!(sliding.contacts.is_empty());
+        let refused = geometry.rigid_step(
+            &pose,
+            Vec3::new(0.1, -0.1, 0.0),
+            PLUS_Y,
+            FIVE_DEGREES,
+            &floor,
+            &ContactBudget {
+                boxes: 2,
+                iterations: 0,
+            },
+        );
+        assert_eq!(refused, Err(Refused::IterationBudget));
+    }
+
+    #[test]
+    fn coupled_rigid_step_finds_a_thin_obstacle_between_clear_endpoints() {
+        let shape = VoxelShape::from_box(Aabb::new(Vec3::ZERO, Vec3::new(0.1, 0.1, 0.1))).unwrap();
+        let geometry =
+            CarrierGeometry::new(7, vec![CarrierCell::new(BlockPos::new(0, 0, 0), shape)]).unwrap();
+        let pose = RigidTransform::identity_at(Vec3::ZERO).unwrap();
+        let wall = [Obstacle::with_identity(
+            0,
+            BlockPos::new(0, 0, 0),
+            Vec3::ZERO,
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(0.45, -1.0, -1.0),
+                Vec3::new(0.46, 1.0, 1.0),
+            ))
+            .unwrap(),
+        )
+        .unwrap()];
+        let step = geometry
+            .rigid_step(
+                &pose,
+                Vec3::new(1.0, 0.0, 0.0),
+                PLUS_Y,
+                FIVE_DEGREES,
+                &wall,
+                &ContactBudget::default(),
+            )
+            .unwrap();
+        assert!(step.fraction > 0.3 && step.fraction < 0.46, "{step:?}");
+        assert!(!step.contacts.is_empty());
     }
 
     #[test]

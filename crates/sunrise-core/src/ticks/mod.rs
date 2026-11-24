@@ -1,6 +1,10 @@
 //! Scheduled block/fluid tick machinery for Java Edition 26.3. Type IDs identify
 //! registry-owned types; each block/fluid registry uses its own LevelTicks.
+mod transfer;
+pub use transfer::{TransferOccurrence, TransferTickError, TransferTicks};
 mod generation;
+#[cfg(test)]
+mod transfer_tests;
 pub use generation::{
     ProtoChunkTicks, TickContainerAccess, WorldGenTickAccess, WorldGenTickContainers,
 };
@@ -98,8 +102,35 @@ pub struct ChunkTicks {
     // Held occurrences are still scheduled, but don't occupy the runnable heap.
     // Several occurrences at one key may have come from a saved list.
     held: FxHashMap<(TickTypeId, BlockPos), Vec<ScheduledTick>>,
+    // Derived persistence bookkeeping on this real queue, not another scheduler.
+    persistence_revision: u64,
+    saved_revision: u64,
 }
 impl ChunkTicks {
+    fn changed_for_save(&mut self) {
+        self.persistence_revision = self
+            .persistence_revision
+            .checked_add(1)
+            .expect("scheduled tick persistence revision exhausted");
+    }
+    #[doc(hidden)]
+    pub fn persistence_revision(&self) -> u64 {
+        self.persistence_revision
+    }
+    #[doc(hidden)]
+    pub fn needs_persistent_save(&self) -> bool {
+        self.persistence_revision != self.saved_revision
+    }
+    /// Called only after the corresponding real queue payload has a durable acknowledgment.
+    /// A later mutation keeps the queue dirty, even if its pack happens to look equal again.
+    #[doc(hidden)]
+    pub fn acknowledge_persistent_save(&mut self, expected_revision: u64) -> bool {
+        if self.persistence_revision != expected_revision {
+            return false;
+        }
+        self.saved_revision = expected_revision;
+        true
+    }
     pub fn from_saved(ticks: Vec<SavedTick>) -> Self {
         Self {
             positions: ticks.iter().map(|t| (t.kind, t.pos)).collect(),
@@ -112,6 +143,7 @@ impl ChunkTicks {
     }
     pub fn poll(&mut self) -> Option<ScheduledTick> {
         let tick = self.queue.pop(ScheduledTick::drain_cmp)?;
+        self.changed_for_save();
         self.positions.remove(&tick.key());
         self.trim();
         Some(tick)
@@ -141,12 +173,15 @@ impl ChunkTicks {
             return false;
         }
         self.queue.push(tick, ScheduledTick::drain_cmp);
+        self.changed_for_save();
         true
     }
     fn hold(&mut self, tick: ScheduledTick) {
         self.held.entry(tick.key()).or_default().push(tick);
+        self.changed_for_save();
     }
     fn release_where(&mut self, can_run: &mut impl FnMut(ScheduledTick) -> bool) {
+        let mut changed = false;
         self.held.retain(|&key, occurrences| {
             occurrences.retain(|&tick| {
                 if !can_run(tick) {
@@ -155,10 +190,14 @@ impl ChunkTicks {
                 // Restore this occurrence, never apply new-schedule deduplication.
                 self.positions.insert(key);
                 self.queue.push(tick, ScheduledTick::drain_cmp);
+                changed = true;
                 false
             });
             !occurrences.is_empty()
         });
+        if changed {
+            self.changed_for_save();
+        }
         if self.held.is_empty() {
             self.held = FxHashMap::default();
         }
@@ -180,6 +219,7 @@ impl ChunkTicks {
         self.held.values().flatten()
     }
     pub fn remove_if(&mut self, mut predicate: impl FnMut(ScheduledTick) -> bool) {
+        let before = self.count();
         self.queue.remove_if(
             |tick| {
                 if !predicate(tick) {
@@ -198,6 +238,9 @@ impl ChunkTicks {
             self.held = FxHashMap::default();
         }
         self.trim();
+        if self.count() != before {
+            self.changed_for_save();
+        }
     }
     pub fn pack(&self, game_time: i64) -> Vec<SavedTick> {
         let mut saved = self.pending.clone().unwrap_or_default();
@@ -209,6 +252,9 @@ impl ChunkTicks {
     }
     pub fn unpack(&mut self, game_time: i64) {
         if let Some(pending) = self.pending.take() {
+            if !pending.is_empty() {
+                self.changed_for_save();
+            }
             let mut order = (pending.len() as i32).wrapping_neg() as i64;
             for saved in pending {
                 // Vanilla does not deduplicate a saved list during unpack.
@@ -279,6 +325,48 @@ mod tests {
         assert_eq!(chunk.queue.values.capacity(), 0);
         assert_eq!(chunk.positions.capacity(), 0);
     }
+    #[test]
+    fn persistence_ack_tracks_empty_deletion_and_every_queue_mutation() {
+        let original = tick(1, 1, 10, 0, -1);
+        let mut chunk = ChunkTicks::from_saved(vec![original.saved(0)]);
+        assert!(!chunk.needs_persistent_save());
+        chunk.unpack(0);
+        let unpacked = chunk.persistence_revision();
+        assert!(chunk.acknowledge_persistent_save(unpacked));
+        assert!(!chunk.needs_persistent_save());
+        assert_eq!(chunk.poll(), Some(original));
+        assert!(chunk.pack(0).is_empty());
+        assert!(
+            chunk.needs_persistent_save(),
+            "last saved occurrence deletion is dirty"
+        );
+        assert!(!chunk.acknowledge_persistent_save(unpacked));
+        let deletion = chunk.persistence_revision();
+        assert!(chunk.acknowledge_persistent_save(deletion));
+        assert!(!chunk.needs_persistent_save());
+        assert!(chunk.schedule(original));
+        let scheduled = chunk.persistence_revision();
+        assert!(!chunk.schedule(original));
+        assert_eq!(chunk.persistence_revision(), scheduled);
+        chunk.hold(tick(2, 2, 11, 0, 1));
+        assert!(chunk.persistence_revision() > scheduled);
+        let held = chunk.persistence_revision();
+        chunk.release_where(&mut |_| true);
+        assert!(chunk.persistence_revision() > held);
+        let released = chunk.persistence_revision();
+        chunk.remove_if(|_| true);
+        assert!(chunk.persistence_revision() > released);
+        assert_eq!(chunk.count(), 0);
+        assert!(!chunk.acknowledge_persistent_save(released));
+        assert!(chunk.needs_persistent_save());
+        let mut empty = ChunkTicks::from_saved(Vec::new());
+        empty.unpack(0);
+        assert!(
+            !empty.needs_persistent_save(),
+            "empty ordinary loaded sentinel is unchanged"
+        );
+    }
+
     #[test]
     fn due_chunks_compete_by_priority_not_trigger_time() {
         let mut level = level();
@@ -591,6 +679,12 @@ impl LevelTicks {
     }
     pub fn chunk(&self, pos: ChunkPos) -> Option<&ChunkTicks> {
         self.chunks.get(&pos.pack())
+    }
+    #[doc(hidden)]
+    pub fn acknowledge_persistent_save(&mut self, pos: ChunkPos, revision: u64) -> bool {
+        self.chunks
+            .get_mut(&pos.pack())
+            .is_some_and(|chunk| chunk.acknowledge_persistent_save(revision))
     }
     pub fn unpack_chunk(&mut self, pos: ChunkPos, game_time: i64) {
         if let Some(chunk) = self.chunks.get_mut(&pos.pack()) {

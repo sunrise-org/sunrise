@@ -174,6 +174,13 @@ impl WorldRequest {
             #[cfg(test)]
             stem_order,
         } = self;
+        // The exclusive session owns recovery before any migration or saved-data reader.
+        // A malformed or divergent decision refuses open; it is never treated as a fresh world.
+        let session_lock = sunrise_client::save::SessionLock::acquire(&save_root)?;
+        sunrise_client::save::live_world_journal::recover(
+            &save_root,
+            sunrise_client::save::live_world_journal::Limits::default(),
+        )?;
         let name = name.as_deref();
         sunrise_client::biome::Biomes::forget_missing_warnings();
         let create = create.map(|mut create| {
@@ -192,7 +199,6 @@ impl WorldRequest {
         )?;
         sunrise_client::save::upgrade_older_world_with(&save_root, upgrade)?;
         sunrise_client::save::migrate_legacy(&save_root)?;
-        let session_lock = sunrise_client::save::SessionLock::acquire(&save_root)?;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         let rand_sequences = super::trading::read_random_sequences(&save_root);
         let existing = Level::read_with_registry(&save_root, rule_registry.clone());

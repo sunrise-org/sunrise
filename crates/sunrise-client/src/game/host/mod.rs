@@ -16,13 +16,17 @@ include!(concat!(env!("OUT_DIR"), "/game_host_generated.rs"));
 
 impl Host for Game<'_> {
     fn backend(&self) -> Option<BackendRef<'_>> {
-        Some(BackendRef::of(self))
+        (!self.live_world_session_failed()).then(|| BackendRef::of(self))
     }
 }
 
 impl ServerHost for Game<'_> {
     fn backend_mut(&mut self) -> Option<BackendMutRef<'_>> {
-        Some(BackendMutRef::of(self))
+        if self.live_world_session_failed() {
+            None
+        } else {
+            Some(BackendMutRef::of(self))
+        }
     }
 
     fn with_current_transaction_scope(
@@ -107,7 +111,11 @@ impl ServerHost for Game<'_> {
 
 impl ClientHost for Game<'_> {
     fn client_backend_mut(&mut self) -> Option<ClientBackendMutRef<'_>> {
-        Some(ClientBackendMutRef::of(self))
+        if self.live_world_session_failed() {
+            None
+        } else {
+            Some(ClientBackendMutRef::of(self))
+        }
     }
 }
 

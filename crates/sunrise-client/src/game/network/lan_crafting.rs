@@ -2970,6 +2970,7 @@ mod recipe_check_tests {
             guest.loaded = true;
             guest.inventory[0] = Some(ItemStack::new("minecraft:oak_planks", 2));
             guest.menu = Some(HubMenu {
+                source_dimension: "minecraft:overworld".into(),
                 window: WINDOW,
                 kind: 0,
                 registry_id: "test:station".into(),

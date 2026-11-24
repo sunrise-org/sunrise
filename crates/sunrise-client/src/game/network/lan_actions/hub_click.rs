@@ -102,7 +102,7 @@ impl Game<'_> {
                     for key in blocks {
                         game.journal_block_entity(key);
                     }
-                    *outcome_ref.borrow_mut() = game.hub_click_run(p, shared, answer);
+                    *outcome_ref.borrow_mut() = game.hub_click_run(conn, p, shared, answer);
                 },
             );
             if matches!(picked, Pickup::Refused) {
@@ -118,7 +118,7 @@ impl Game<'_> {
             for key in blocks {
                 self.journal_block_entity(key);
             }
-            *outcome.borrow_mut() = self.hub_click_run(p, &prepared, None);
+            *outcome.borrow_mut() = self.hub_click_run(conn, p, &prepared, None);
         }
         let (drops, changed) = outcome.into_inner()?;
         self.reply_predicted_menu_click(conn, p, changed);
@@ -130,10 +130,14 @@ impl Game<'_> {
     /// as if none were open) and the mods' answer to the pickup, if they gave one.
     fn hub_click_run(
         &mut self,
+        conn: u32,
         p: &play::ContainerClick,
         prepared: &RefCell<Option<sunrise_client::lan::containers::PreparedClick>>,
         answer: Option<&StackedOutcome>,
     ) -> Option<(Vec<ItemStack>, Vec<usize>)> {
+        if !self.projection_menu_apply_fresh(conn) {
+            return None;
+        }
         let mut click = prepared.take()?;
         self.with_lan_lifted(|game, host| {
             let rules = ItemRules(

@@ -159,6 +159,9 @@ impl Game<'_> {
             .map(sunrise_world::level::LevelEventPlayer);
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let block_entity = self.removed_block_entity_data(pos, state);
+        if !self.projection_break_fresh(pos) {
+            return false;
+        }
         let removed = self.with_level(|b, level, ticks| {
             b.player_destroy_block(
                 level,
@@ -170,6 +173,7 @@ impl Game<'_> {
             )
         });
         if removed {
+            self.projection_block_removed(pos);
             self.invalidate_active_player_breaks(pos);
             self.native_player_destroyed_block(pos, state, block_entity);
         }

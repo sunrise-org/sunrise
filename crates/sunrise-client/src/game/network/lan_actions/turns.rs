@@ -189,6 +189,7 @@ impl Game<'_> {
                     std::mem::swap(&mut game.offhand, &mut g.offhand);
                     std::mem::swap(&mut game.equipment, &mut g.equipment);
                     std::mem::swap(&mut game.carried, &mut g.carried);
+                    std::mem::swap(&mut game.ender_items, &mut g.ender_items);
                 }),
                 None => {}
             }
@@ -1026,7 +1027,9 @@ impl Game<'_> {
             }
         }
         self.stat_criteria_changed(&name, stat_events);
-        if let Some(pos) = opened {
+        if let Some(pos) = opened
+            && self.finish_projection_menu_open(conn, pos).is_none()
+        {
             self.lan_open_container(conn, pos);
         }
         if let Some(station) = opened_station {

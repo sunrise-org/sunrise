@@ -57,6 +57,7 @@ fn open_mod_menu_named(
         // Use the real window lifecycle so a resend can find this window's cursor.
         let window = g.next_menu_window();
         g.menu = Some(Open {
+            source_dimension: "minecraft:overworld".into(),
             window,
             kind: 0,
             registry_id: menu_id.into(),

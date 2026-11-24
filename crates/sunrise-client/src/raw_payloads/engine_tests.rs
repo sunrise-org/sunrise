@@ -173,6 +173,38 @@ fn a_negotiated_engine_message_reaches_the_engine_decoder_and_nothing_else_does(
 }
 
 #[test]
+fn projected_action_channel_is_reserved_negotiated_serverbound_only() {
+    let local = engine_only();
+    let both = accepted(&local, Some(&local.manifest));
+    let packet = || CustomPayload {
+        channel: sunrise_protocol::live_world_actions::CHANNEL.into(),
+        data: vec![0; sunrise_protocol::live_world_actions::MESSAGE_BYTES],
+    };
+    assert!(sunrise_protocol::packets::custom_payload::is_reserved_channel(&packet().channel));
+    let server = playing(&local, Side::Server, &both);
+    assert!(matches!(
+        Incoming::classify(&server, Phase::Play, packet()),
+        Ok(Classified::Other(_))
+    ));
+    let client = playing(&local, Side::Client, &both);
+    assert!(matches!(
+        Incoming::classify(&client, Phase::Play, packet()),
+        Err(Failure {
+            error: PayloadSendError::WrongDirection(_),
+            ..
+        })
+    ));
+    let absent = playing(&local, Side::Server, &accepted(&local, None));
+    assert!(matches!(
+        Incoming::classify(&absent, Phase::Play, packet()),
+        Err(Failure {
+            error: PayloadSendError::UnsupportedPeer(_),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn a_send_is_bound_to_the_epoch_it_was_prepared_in() {
     let local = engine_only();
     let id = PayloadId(attachment_sync::CHANNEL.into());

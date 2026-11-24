@@ -912,6 +912,215 @@ fn a_listener_hears_a_carry_and_may_cancel_it() {
     });
 }
 
+/// A real living body with a positive step height falls onto the carrier, then the ordinary
+/// authoritative move hook can cancel the additional upright-footprint clearance itself.
+#[test]
+#[ignore = "daily"]
+fn an_authoritative_positive_step_rider_can_cancel_pivot_clearance_once() {
+    use crate::game::entity::Entity as _;
+    use mod_api::{EntityMoveEvent, Flow, Hooks, LoopContext, MoveCause};
+    use std::sync::Mutex;
+    struct CancelUpright {
+        actor: u32,
+        heard: Arc<Mutex<Vec<[f64; 3]>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for CancelUpright {
+        fn entity_move(&self, _: &dyn LoopContext, event: &mut EntityMoveEvent<'_>) -> Flow {
+            if event.entity == self.actor && event.cause == MoveCause::Carried {
+                self.heard.lock().unwrap().push(*event.delta);
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        }
+    }
+    with_world(|game| {
+        let (_, holder) = stand_with_id(game, [8.0, 70.0, 8.0]);
+        holder.set_collider(game, Some(deck())).unwrap();
+        // Pause only AI goals through the ordinary public service. NoAI would also skip
+        // travel, so it cannot establish this falling/grounded physics precondition.
+        let actor = game
+            .summon(
+                game.dim.id(),
+                "minecraft:pig",
+                [8.0, 72.0, 8.0],
+                [("Silent".into(), Tag::Byte(1))].into(),
+            )
+            .unwrap();
+        let actor_handle = game.mob(game.entity(actor).unwrap()).unwrap();
+        assert_eq!(actor_handle.set_ai_paused(game, true), Ok(()));
+        assert_eq!(actor_handle.no_ai(game), Some(false));
+        settle(game);
+        let (before, bounds, step) = {
+            let actor = game.mobs.iter().find(|mob| mob.id == actor).unwrap();
+            eprintln!(
+                "UPRIGHT_CANCEL_SETUP position={:?} velocity={:?} ground={} no_ai={} ai_paused={} step={}",
+                actor.position,
+                actor.velocity,
+                actor.on_ground,
+                actor.no_ai,
+                actor.ai.ai_paused,
+                actor.get_step_height()
+            );
+            assert!(
+                actor.on_ground,
+                "ordinary falling/collision establishes the support: {:?}",
+                actor.position
+            );
+            assert_eq!(actor.position, Vec3::new(8.0, 70.0, 8.0));
+            (actor.position, actor.bounds(), actor.get_step_height())
+        };
+        assert!(
+            step > 0.0,
+            "the actual living actor has positive step allowance"
+        );
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new(
+                "carry_upright_cancel",
+                Box::new(CancelUpright {
+                    actor,
+                    heard: heard.clone(),
+                }),
+            )]
+            .into(),
+            || {
+                let before_colliders = game.placed_moving_colliders();
+                let before_frame = before_colliders.placed().next().unwrap().collider.frame;
+                let centre = bounds.center();
+                let contact = Vec3::new(centre.x, bounds.min_position().y, centre.z);
+                let half = 0.01_f32 / 2.0;
+                let mut before_cancel = None;
+                tick_level_moving(game, |game| {
+                    let body = game.mobs.iter().find(|mob| mob.id == actor).unwrap();
+                    before_cancel = Some((
+                        body.position,
+                        body.velocity,
+                        body.on_ground,
+                        body.horizontal_collision,
+                        body.vertical_collision_below,
+                        body.fall_distance,
+                    ));
+                    eprintln!(
+                        "UPRIGHT_CANCEL_BEFORE body={:?} step={} no_physics={} mount={:?}",
+                        before_cancel,
+                        body.get_step_height(),
+                        body.no_physics(None),
+                        body.extra.mount
+                    );
+                    assert!(
+                        body.on_ground,
+                        "ordinary pre-carry tick still has actual support"
+                    );
+                    holder
+                        .set_collider_transform(game, [0.0, 0.0, half.sin(), half.cos()])
+                        .unwrap();
+                    let after = game.placed_moving_colliders();
+                    let support = &after.placed().next().unwrap().collider;
+                    assert_eq!(
+                        support
+                            .frame
+                            .to_world(before_frame.to_local(contact))
+                            .subtract(contact),
+                        Vec3::ZERO,
+                        "the rigid feet centre is exactly the actual rotation pivot"
+                    );
+                    assert!(
+                        support.intersects(bounds),
+                        "the real upright footprint still needs clearance"
+                    );
+                });
+                let body = game.mobs.iter().find(|mob| mob.id == actor).unwrap();
+                let after_cancel = (
+                    body.position,
+                    body.velocity,
+                    body.on_ground,
+                    body.horizontal_collision,
+                    body.vertical_collision_below,
+                    body.fall_distance,
+                );
+                let actual_bounds = body.bounds();
+                let actual_ground = body.on_ground;
+                let events = heard.lock().unwrap().clone();
+                eprintln!(
+                    "UPRIGHT_CANCEL_AFTER before={before_cancel:?} after={after_cancel:?} flow=Cancel events={events:?}"
+                );
+                assert_eq!(
+                    events.len(),
+                    1,
+                    "pure contact inspection fires no second movement callback"
+                );
+                assert_eq!((events[0][0], events[0][2]), (0.0, 0.0));
+                assert!(
+                    events[0][1] > 0.0 && events[0][1] <= f64::from(step),
+                    "the cancelled request is additional upright clearance, not rigid-centre rise"
+                );
+                assert_eq!(
+                    after_cancel.0, before,
+                    "cancelled clearance is never replaced by a position assignment"
+                );
+                let actual = game.placed_moving_colliders();
+                let intersects = actual
+                    .placed()
+                    .next()
+                    .unwrap()
+                    .collider
+                    .intersects(actual_bounds);
+                let exempt = actual.placed().next().unwrap().exempt.clone();
+                let probes = sunrise_client_render::moving_colliders::in_level(actual, || {
+                    let mut scene = sunrise_client::collisions::SceneCollisions {
+                        world: &game.world,
+                        binding: game.collision,
+                        subject: None,
+                    };
+                    let mut inspect = |bounds| {
+                        sunrise_world::world_movement::no_world_collision(
+                            &mut scene,
+                            sunrise_world::world_movement::CollisionCheckRequest {
+                                entity: sunrise_world::entity_obstruction::EntityIdentity(
+                                    u64::from(actor),
+                                ),
+                                context:
+                                    sunrise_world::collision_context::CollisionContext::position(
+                                        actual_bounds.min_position().y,
+                                    ),
+                                bounds,
+                                candidate_budget: 1_000_000,
+                            },
+                        )
+                    };
+                    (
+                        inspect(actual_bounds),
+                        inspect(actual_bounds.move_by(Vec3::new(0.0, -0.01, 0.0))),
+                    )
+                });
+                eprintln!(
+                    "UPRIGHT_CANCEL_CONTACT intersects={intersects} exempt={exempt:?} current={:?} below={:?}",
+                    probes.0, probes.1
+                );
+                assert!(
+                    intersects,
+                    "the cancelled body still overlaps the actual newly tilted box"
+                );
+                assert!(
+                    matches!(probes.0, Ok(false)) && matches!(probes.1, Ok(false)),
+                    "pure collision inspection sees the actual overlap"
+                );
+                // Actual source5 recorded one positive-lift FlowCancel and this identical
+                // tuple. MoveDecision::Skip preserves the old flags; it does not manufacture
+                // a new ground=false even when the externally moved shape now overlaps.
+                assert_eq!(
+                    Some(after_cancel),
+                    before_cancel,
+                    "cancelled carry preserves position, velocity, ground/collision flags and fall state exactly"
+                );
+                assert_eq!(actual_ground, before_cancel.unwrap().2);
+            },
+        );
+    });
+}
+
 /// A carried vehicle takes its passenger and that passenger's own passenger with it: all three
 /// move by the same displacement, the riders seated by the one rider positioning the tick uses.
 #[test]
@@ -1000,5 +1209,213 @@ fn the_level_records_its_colliders_as_each_tick_begins() {
         holder_ref.set_collider(game, None).unwrap();
         game.tick_server(false).unwrap();
         assert!(game.level_collider_history().is_none());
+    });
+}
+
+/// A flag-storing authoritative body must keep every pre-invocation field when its real
+/// Carried move is cancelled. An item has zero step allowance, so use a nonpivot rigid rise.
+#[test]
+#[ignore = "daily"]
+fn a_flag_storing_item_preserves_cancelled_angular_carry_state() {
+    use mod_api::{EntityMoveEvent, Flow, Hooks, LoopContext, MoveCause};
+    use std::sync::Mutex;
+    struct CancelItem {
+        actor: u32,
+        heard: Arc<Mutex<Vec<[f64; 3]>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for CancelItem {
+        fn entity_move(&self, _: &dyn LoopContext, event: &mut EntityMoveEvent<'_>) -> Flow {
+            if event.entity == self.actor && event.cause == MoveCause::Carried {
+                self.heard.lock().unwrap().push(*event.delta);
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        }
+    }
+    with_world(|game| {
+        let (_, holder) = stand_with_id(game, [8.0, 70.0, 8.0]);
+        holder.set_collider(game, Some(deck())).unwrap();
+        let actor = drop_item(game, [8.5, 70.0, 8.0]);
+        settle(game);
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new(
+                "carry_item_cancel",
+                Box::new(CancelItem {
+                    actor,
+                    heard: heard.clone(),
+                }),
+            )]
+            .into(),
+            || {
+                let mut before = None;
+                let half = 0.01_f32 / 2.0;
+                tick_level_moving(game, |game| {
+                    let item = game.dropped.iter().find(|item| item.id == actor).unwrap();
+                    assert!(
+                        item.on_ground,
+                        "ordinary item ticks established actual support"
+                    );
+                    before = Some((
+                        item.position,
+                        item.velocity,
+                        item.on_ground,
+                        item.horizontal_collision,
+                        item.vertical_collision,
+                        item.fall_distance,
+                    ));
+                    holder
+                        .set_collider_transform(game, [0.0, 0.0, half.sin(), half.cos()])
+                        .unwrap();
+                });
+                let item = game.dropped.iter().find(|item| item.id == actor).unwrap();
+                let after = (
+                    item.position,
+                    item.velocity,
+                    item.on_ground,
+                    item.horizontal_collision,
+                    item.vertical_collision,
+                    item.fall_distance,
+                );
+                let bounds = item.bounds();
+                let events = heard.lock().unwrap().clone();
+                let current = game.placed_moving_colliders();
+                let intersects = current.placed().next().unwrap().collider.intersects(bounds);
+                eprintln!(
+                    "ITEM_CANCEL before={before:?} after={after:?} flow=Cancel events={events:?} actual_shape_overlap={intersects}"
+                );
+                assert_eq!(
+                    events.len(),
+                    1,
+                    "one cancelled move, no second probe callback"
+                );
+                assert!(
+                    events[0][1] > 0.0,
+                    "the cancelled invocation has real rigid upward movement"
+                );
+                assert!(
+                    intersects,
+                    "the independently moved support now overlaps the unchanged body"
+                );
+                assert_eq!(
+                    Some(after),
+                    before,
+                    "MoveDecision::Skip preserves position, velocity, ground/collision flags and fall state"
+                );
+            },
+        );
+    });
+}
+
+/// The actual armor-stand delegate must return its own gate decision to carrying.
+/// A real gravity-landed stand cancels one nonpivot rigid rise without changing its state.
+#[test]
+#[ignore = "daily"]
+fn an_armor_stand_delegate_preserves_cancelled_angular_carry_state() {
+    use mod_api::{EntityMoveEvent, Flow, Hooks, LoopContext, MoveCause};
+    use std::sync::Mutex;
+    struct CancelStand {
+        actor: u32,
+        heard: Arc<Mutex<Vec<[f64; 3]>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for CancelStand {
+        fn entity_move(&self, _: &dyn LoopContext, event: &mut EntityMoveEvent<'_>) -> Flow {
+            if event.entity == self.actor && event.cause == MoveCause::Carried {
+                self.heard.lock().unwrap().push(*event.delta);
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        }
+    }
+    with_world(|game| {
+        let (_, holder) = stand_with_id(game, [8.0, 70.0, 8.0]);
+        holder.set_collider(game, Some(deck())).unwrap();
+        let dimension = game.dim.id();
+        let actor = game
+            .summon(
+                dimension,
+                "minecraft:armor_stand",
+                [8.5, 72.0, 8.0],
+                Compound::new(),
+            )
+            .expect("ordinary armor stand spawn");
+        settle(game);
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new(
+                "carry_stand_cancel",
+                Box::new(CancelStand {
+                    actor,
+                    heard: heard.clone(),
+                }),
+            )]
+            .into(),
+            || {
+                let mut before = None;
+                let half = 0.01_f32 / 2.0;
+                tick_level_moving(game, |game| {
+                    let stand = game
+                        .armor_stands
+                        .iter()
+                        .find(|stand| stand.id == actor)
+                        .unwrap();
+                    assert!(
+                        stand.on_ground,
+                        "ordinary armor stand ticks established actual support"
+                    );
+                    before = Some((
+                        stand.position,
+                        stand.velocity,
+                        stand.on_ground,
+                        stand.support,
+                        stand.enchantment_fall_distance,
+                    ));
+                    holder
+                        .set_collider_transform(game, [0.0, 0.0, half.sin(), half.cos()])
+                        .unwrap();
+                });
+                let stand = game
+                    .armor_stands
+                    .iter()
+                    .find(|stand| stand.id == actor)
+                    .unwrap();
+                let after = (
+                    stand.position,
+                    stand.velocity,
+                    stand.on_ground,
+                    stand.support,
+                    stand.enchantment_fall_distance,
+                );
+                let bounds = stand.bounds();
+                let events = heard.lock().unwrap().clone();
+                let current = game.placed_moving_colliders();
+                let intersects = current.placed().next().unwrap().collider.intersects(bounds);
+                eprintln!(
+                    "STAND_CANCEL before={before:?} after={after:?} flow=Cancel events={events:?} actual_shape_overlap={intersects}"
+                );
+                assert_eq!(
+                    events.len(),
+                    1,
+                    "one cancelled move, no second probe callback"
+                );
+                assert!(
+                    events[0][1] > 0.0,
+                    "the cancelled invocation has real rigid upward movement"
+                );
+                assert!(
+                    intersects,
+                    "the independently moved support now overlaps the unchanged body"
+                );
+                assert_eq!(
+                    Some(after),
+                    before,
+                    "MoveDecision::Skip preserves position, velocity, ground/collision flags and fall state"
+                );
+            },
+        );
     });
 }

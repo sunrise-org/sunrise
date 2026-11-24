@@ -16,6 +16,7 @@ pub struct SaveDir {
     pub(super) sequence: AtomicU64,
     pub(super) disk: OnceLock<Arc<chunk_disk::DiskRuntime>>,
     pub(super) writer: Mutex<Option<Writer>>,
+    pub(super) live_world_gate: Arc<Mutex<LiveWorldGate>>,
     pub(super) outstanding: Arc<Outstanding>,
     /// Set by `Persistent` before the first load.
     pub tables: OnceLock<Arc<SaveTables>>,
@@ -94,16 +95,13 @@ impl SaveDir {
         {
             return Ok(());
         }
-        write_dat(
-            &path,
-            Tag::compound([
-                ("data", Tag::Compound(data)),
-                ("DataVersion", Tag::Int(DATA_VERSION)),
-            ]),
-        )
+        self.write_or_defer_attachments(Tag::compound([
+            ("data", Tag::Compound(data)),
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+        ]))
     }
 
-    fn attachments_path(&self) -> PathBuf {
+    pub(super) fn attachments_path(&self) -> PathBuf {
         self.root
             .join("data")
             .join("sunrise")
@@ -129,6 +127,7 @@ impl SaveDir {
             sequence: AtomicU64::new(0),
             disk: OnceLock::new(),
             writer: Mutex::new(None),
+            live_world_gate: Default::default(),
             outstanding: Default::default(),
             tables: OnceLock::new(),
             professions: Default::default(),

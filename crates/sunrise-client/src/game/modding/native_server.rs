@@ -1451,6 +1451,9 @@ impl Game<'_> {
         if !self.is_logical_server() {
             return (self.local_player()? == player).then(|| self.native_level_key());
         }
+        if let Some(physical) = self.projection_physical_player_level(player) {
+            return Some(physical.dimension());
+        }
         if self.native_acting_player() == Some(player) {
             let dim = match self.lan_acting {
                 Some(conn) => {
@@ -1559,6 +1562,9 @@ impl Game<'_> {
     /// Sends `packet` to that player, also when they are the acting player
     /// (their packets then go after the hook); false when they aren't on.
     pub(super) fn native_send(&mut self, uuid: u128, packet: C) -> bool {
+        if self.live_world_session_failed() {
+            return false;
+        }
         if self.lan_acting_uuid == Some(uuid) && !self.lan_acting_fake {
             self.guest_packets.push(packet);
             return true;
@@ -1916,6 +1922,9 @@ impl Game<'_> {
     }
     /// A system line in every player's chat and the server's log.
     pub(super) fn native_broadcast(&self, mut line: Text) {
+        if self.live_world_session_failed() {
+            return;
+        }
         let mut cancel = false;
         self.native_broadcast_message(&mut line, &mut cancel);
         if cancel {
@@ -1941,7 +1950,10 @@ impl Game<'_> {
     /// about (empty and 0 for no one), `message` is the line (`§` codes colour it).
     /// Only on a dedicated server; false elsewhere and for an empty message.
     pub(super) fn native_server_event(&self, name: &str, uuid: u128, message: &str) -> bool {
-        if !self.is_dedicated_server() || message.trim().is_empty() {
+        if self.live_world_session_failed()
+            || !self.is_dedicated_server()
+            || message.trim().is_empty()
+        {
             return false;
         }
         super::dedicated::events::record("announce", name, uuid, json!({ "message": message }));
@@ -1953,6 +1965,9 @@ impl Game<'_> {
     /// and the log (`send_success`). The executing level is in place: the
     /// entity's name is read there, the origin block or minecart in its own.
     pub(super) fn native_feedback(&mut self, line: Text, broadcast_to_admins: bool) {
+        if self.live_world_session_failed() {
+            return;
+        }
         let source = self
             .command_source
             .clone()
@@ -1963,6 +1978,9 @@ impl Game<'_> {
     /// source, using vanilla's silence and block/cart track-output rules. The command's result
     /// is whatever the executor returns.
     pub(super) fn native_failure(&mut self, line: Text) {
+        if self.live_world_session_failed() {
+            return;
+        }
         let source = self
             .command_source
             .clone()
@@ -2330,6 +2348,9 @@ impl Game<'_> {
     /// equip sound or block break requires that level in place; `/give`'s effects replay in
     /// that level separately.
     pub(in crate::game) fn acting_in_level_in_place(&self) -> bool {
+        if self.live_world_action_in_level() {
+            return true;
+        }
         let Some(conn) = self.lan_acting else {
             return true;
         };

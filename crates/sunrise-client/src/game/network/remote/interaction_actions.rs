@@ -45,6 +45,9 @@ impl Game<'_> {
         if self.start_client_item_use() {
             return;
         }
+        if self.remote_projection_use() {
+            return;
+        }
         // Resolve the crosshair once. A passing entity interaction keeps
         // that target and may only fall back to using the item itself.
         let entity = self.remote_use_targets_entity();
@@ -113,6 +116,12 @@ impl Game<'_> {
             self.play_at_feet(kinetic.attack_sound);
             return true;
         }
+        if let Some(consumed) = self.remote_projection_mining(true) {
+            if consumed {
+                self.remote_swing_packet();
+            }
+            return false;
+        }
         if self.mod_attack_targets() {
             self.remote_swing_packet();
             return false;
@@ -173,6 +182,23 @@ impl Game<'_> {
                 .held()
                 .is_some_and(|s| sunrise_client::spear::Kinetic::of(&s.item).is_some())
         {
+            return;
+        }
+        if down && self.projection_pick().is_some() {
+            if let Some(swing) = self
+                .native_interaction(
+                    InteractionKey::Attack,
+                    Hand::Main,
+                    mod_api::InteractionAttempt::Held,
+                )
+                .canceled_swing()
+            {
+                if swing {
+                    self.remote_swing_packet();
+                }
+            } else if self.remote_projection_mining(false) == Some(true) {
+                self.remote_swing_packet();
+            }
             return;
         }
         let entity = self.entity_targeted();

@@ -227,6 +227,7 @@ impl Game<'_> {
     /// tick failure or panic, save failure, and client disconnect).
     pub(super) fn native_lifecycle_world_closed(&mut self) {
         self.instance_groups.borrow_mut().clear();
+        self.live_worlds.borrow_mut().clear();
         self.levels.clear();
         self.world.water_tickets.clear();
         self.native_lifecycle.retire();

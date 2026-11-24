@@ -1635,7 +1635,7 @@ pub(in crate::game) fn register_iterated_registries(
     Ok(spawner_types)
 }
 
-fn register_block_entity_types(
+pub(in crate::game) fn register_block_entity_types(
     root: &std::path::Path,
     mods: &[sunrise_client::mod_content::ContentMod],
 ) -> sunrise_client::Result<()> {

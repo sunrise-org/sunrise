@@ -16,6 +16,11 @@
 mod shoving;
 use super::*;
 use sunrise_client_render::moving_colliders::{self, Prepared};
+use sunrise_core::geometry::oriented::OrientedCollider;
+use sunrise_world::{
+    entity_obstruction::EntityIdentity,
+    world_movement::{CollisionCheckRequest, no_world_collision},
+};
 
 /// How far under its feet a body may have a box and still stand on it.
 const SUPPORT_PROBE: f64 = 0.01;
@@ -28,8 +33,8 @@ struct Rider {
     support: u32,
 }
 
-/// What a carry pass works on, kept from tick to tick so a pass allocates nothing once these
-/// have grown to the level's size.
+/// Reused carry selection/contact buffers. Ordinary movement collision queries retain their
+/// own allocation behavior; these buffers grow only when a pass needs more scratch space.
 #[derive(Default)]
 struct Scratch {
     /// The bodies standing on a collider, ordered by the collider.
@@ -40,6 +45,8 @@ struct Scratch {
     order: Vec<(u32, u32)>,
     /// The collider entities of the level, sorted.
     ids: Vec<u32>,
+    /// Actual support-face heights for an upright body's carried footprint.
+    heights: Vec<f64>,
 }
 
 thread_local! {
@@ -64,6 +71,9 @@ fn support_of(start: &Prepared, bounds: Aabb, id: u32) -> Option<u32> {
         if allowed <= -SUPPORT_PROBE {
             return;
         }
+        if placed.collider.intersects(bounds) {
+            return;
+        }
         let gap = -allowed;
         let better =
             best.is_none_or(|(g, c)| gap < g - 1.0e-9 || (gap <= g + 1.0e-9 && placed.id < c));
@@ -72,6 +82,36 @@ fn support_of(start: &Prepared, bounds: Aabb, id: u32) -> Option<u32> {
         }
     });
     best.map(|(_, support)| support)
+}
+
+/// A rigid contact point turns with its support, but the body stays upright. Its uphill
+/// bottom edge can therefore need a little more height than the centre of its feet. Find
+/// the first actual support face that clears that footprint within the body's step height.
+/// The answer is still only a requested delta: the ordinary carried move may cancel or clip it.
+fn upright_carried_delta(
+    support: &OrientedCollider,
+    bounds: Aabb,
+    movement: Vec3,
+    step_height: f32,
+    heights: &mut Vec<f64>,
+) -> Vec3 {
+    let proposed = bounds.move_by(movement);
+    if !support.intersects(proposed) || !step_height.is_finite() || step_height <= 0.0 {
+        return movement;
+    }
+    heights.clear();
+    support.step_heights(proposed, Vec3::ZERO, f64::from(step_height), heights);
+    heights.sort_unstable_by(f64::total_cmp);
+    heights.dedup();
+    for &height in heights.iter() {
+        let lifted = proposed.move_by(Vec3::new(0.0, height, 0.0));
+        if !support.intersects(lifted)
+            && support.collide(lifted, Axis::Y, -SUPPORT_PROBE) > -SUPPORT_PROBE
+        {
+            return movement.add_vector(Vec3::new(0.0, height, 0.0));
+        }
+    }
+    movement
 }
 
 impl Game<'_> {
@@ -178,7 +218,8 @@ impl Game<'_> {
             wave = wave.max(scratch.order[at].0);
             let now = self.placed_moving_colliders();
             {
-                let _scope = moving_colliders::Scope::enter_level(self.collider_level(), now);
+                let _scope =
+                    moving_colliders::Scope::enter_level(self.collider_level(), now.clone());
                 while at < scratch.order.len() && scratch.order[at].0 <= wave {
                     let collider = scratch.order[at].1;
                     let first = scratch.riders.partition_point(|r| r.support < collider);
@@ -189,8 +230,10 @@ impl Game<'_> {
                     self.carry_riders_of(
                         collider,
                         start,
+                        &now,
                         steps,
-                        &scratch.riders[first..first + count],
+                        first..first + count,
+                        scratch,
                         &mut stand_grid,
                     );
                     at += 1;
@@ -270,48 +313,176 @@ impl Game<'_> {
         &mut self,
         collider: u32,
         start: &Prepared,
+        now: &Prepared,
         steps: &StepHeights,
-        riders: &[Rider],
+        riders: std::ops::Range<usize>,
+        scratch: &mut Scratch,
         stand_grid: &mut Option<sunrise_client::entities::ObstacleGrid>,
     ) {
         let Some(before) = start.placed().find(|p| p.id == collider) else {
             return;
         };
-        let Some(after) = self.collider_now_frame(collider) else {
+        let Some(after) = now.placed().find(|p| p.id == collider) else {
             return;
         };
-        for rider in riders {
+        for rider in &scratch.riders[riders] {
             let Some(body) = self.push_body(rider.target, None, steps) else {
                 continue;
             };
             let centre = body.bounds.center();
             let contact = Vec3::new(centre.x, body.bounds.min(Axis::Y), centre.z);
             let carried = after
+                .collider
+                .frame
                 .to_world(before.collider.frame.to_local(contact))
                 .subtract(contact);
-            if carried.length_squared() < 1.0e-18 {
+            let carried = upright_carried_delta(
+                &after.collider,
+                body.bounds,
+                carried,
+                body.step_height,
+                &mut scratch.heights,
+            );
+            // A contact exactly at the rotation pivot has no rigid delta, but its upright
+            // footprint can still need the support-face clearance calculated above.
+            if carried.length_squared() >= 1.0e-18
+                && !self.move_pushed_body(
+                    MoverType::Carried,
+                    rider.target,
+                    body,
+                    carried,
+                    false,
+                    stand_grid,
+                )
+            {
+                // A skipped invocation preserves the whole body, including its old flags.
                 continue;
             }
-            self.move_pushed_body(
-                MoverType::Carried,
-                rider.target,
-                body,
-                carried,
-                false,
-                stand_grid,
-            );
-            // It still stands on what carries it: a sideways or rising carry must not leave it
-            // airborne for the next tick to find.
+            // Query the body where an admitted ordinary move actually left it. A
+            // ceiling/wall-clipped lift must not manufacture a grounded flag.
+            let grounded = self
+                .push_body(rider.target, None, steps)
+                .is_some_and(|body| self.carried_body_grounded(rider.target, rider.id, body));
             match rider.target {
                 MoveWho::Player => {
                     if let Some(player) = self.player.as_mut() {
-                        player.ground.on_ground = true;
+                        player.ground.on_ground = grounded;
                     }
                 }
                 MoveWho::Entity(handle) => {
-                    with_entity_mut!(self, handle, entity => entity.set_piston_on_ground(true));
+                    with_entity_mut!(self, handle, entity => entity.set_piston_on_ground(grounded));
                 }
                 MoveWho::Guest(_) => {}
+            }
+        }
+    }
+
+    /// Pure collision inspection of the actual post-move body and its downward probe. This
+    /// does not resolve/apply another move or arm another movement callback. Errors refuse
+    /// grounding, and a body already intersecting any block/entity/collider is never support.
+    fn carried_body_grounded(&mut self, target: MoveWho, id: u32, body: Body) -> bool {
+        let entities = if target == MoveWho::Player {
+            self.entity_collisions(Mover::Player)
+        } else {
+            self.pushed_entity_colliders(target)
+        };
+        let mut collisions = EntityCollisions::with_border(
+            SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            },
+            self.border.geometry(),
+            [body.position.x, body.position.z],
+        );
+        collisions.entities = &entities;
+        let mut clear = |bounds| {
+            no_world_collision(
+                &mut collisions,
+                CollisionCheckRequest {
+                    entity: EntityIdentity(u64::from(id)),
+                    context: CollisionContext::position(body.bounds.min(Axis::Y)),
+                    bounds,
+                    // The existing ordinary SceneCollisions collision-inspection budget.
+                    candidate_budget: 1_000_000,
+                },
+            )
+        };
+        clear(body.bounds).is_ok_and(|clear| clear)
+            && clear(body.bounds.move_by(Vec3::new(0.0, -SUPPORT_PROBE, 0.0)))
+                .is_ok_and(|clear| !clear)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use sunrise_core::geometry::oriented::{ColliderBoxes, Frame};
+
+    #[test]
+    fn upright_carry_clears_both_horizontal_axis_slopes_within_the_body_step() {
+        let boxes = Arc::new(ColliderBoxes::new(vec![Aabb::new(
+            Vec3::new(-4.0, -1.0, -4.0),
+            Vec3::new(4.0, 0.0, 4.0),
+        )]));
+        let origin = Vec3::new(0.0, 10.0, 0.0);
+        let before = Frame::translation(origin);
+        let mut heights = Vec::new();
+        for contact in [
+            Vec3::new(2.0, 10.0, 2.0),
+            origin,
+            Vec3::new(1.0e-8, 10.0, 1.0e-8),
+        ] {
+            let body = Aabb::new(
+                contact.add_vector(Vec3::new(-0.3, 0.0, -0.3)),
+                contact.add_vector(Vec3::new(0.3, 1.8, 0.3)),
+            );
+            for axis in [Axis::X, Axis::Z] {
+                for angle in [-0.01_f64, 0.01] {
+                    let mut rotation = [0.0, 0.0, 0.0, (angle * 0.5).cos()];
+                    rotation[if axis == Axis::X { 0 } else { 2 }] = (angle * 0.5).sin();
+                    let support = OrientedCollider::new(
+                        Frame::from_quaternion(origin, rotation),
+                        boxes.clone(),
+                    );
+                    let rigid = support
+                        .frame
+                        .to_world(before.to_local(contact))
+                        .subtract(contact);
+                    if contact == origin {
+                        assert_eq!(
+                            rigid,
+                            Vec3::ZERO,
+                            "the contact at the actual pivot has no rigid displacement"
+                        );
+                    }
+                    assert!(
+                        support.intersects(body.move_by(rigid)),
+                        "the centre alone embeds the uphill edge"
+                    );
+                    let carried = upright_carried_delta(&support, body, rigid, 0.6, &mut heights);
+                    let corrected = body.move_by(carried);
+                    assert!(
+                        !support.intersects(corrected),
+                        "{axis:?} {angle}: {carried:?}"
+                    );
+                    assert_eq!(support.collide(corrected, Axis::Y, -SUPPORT_PROBE), 0.0);
+                    // Independent plane geometry: the upright half-width adds 0.3*tan(|angle|).
+                    let expected_extra = 0.3 * angle.abs().tan();
+                    assert!((carried.y - rigid.y - expected_extra).abs() < 1.0e-12);
+                    assert_eq!((carried.x, carried.z), (rigid.x, rigid.z));
+                    assert_eq!(
+                        upright_carried_delta(&support, body, rigid, 0.0, &mut heights),
+                        rigid,
+                        "no step allowance is never replaced by an unbounded lift",
+                    );
+                    assert_eq!(
+                        upright_carried_delta(&support, body, rigid, 0.001, &mut heights),
+                        rigid,
+                        "a face above the existing step limit is not admitted",
+                    );
+                }
             }
         }
     }

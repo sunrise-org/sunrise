@@ -36,6 +36,7 @@ const HELP: &[&str] = &[
     "hello                          the control protocol's version, the game's release and the command groups it serves",
     "status                         game, player, streaming and renderer state",
     "simulation                     authoritative projectiles in the owner's level",
+    "simulation live-worlds [SOURCE] authoritative bounded projection cells, content and pose samples",
     "server-hold on|off             hold simulation and player packets at a control-fixture barrier",
     "stall MILLISECONDS             stall the window thread (0..5000), leaving transport alive",
     "key KEY down|up|tap|repeat     press, release or auto-repeat a key (w a s d space shift ctrl e q esc f3 1-9 arrows ...)",
@@ -715,6 +716,23 @@ impl Game<'_> {
             }
             "simulation" => {
                 self.require_world()?;
+                if words.get(1) == Some(&"live-worlds") {
+                    if words.len() > 3 {
+                        return Err("simulation live-worlds [SOURCE]".into());
+                    }
+                    let source = words.get(2).map(|id| (*id).to_owned());
+                    return Ok(Some(if let Some(server) = &self.integrated {
+                        server
+                            .ask(|reply| {
+                                OwnerRequest::Control(ControlRequest::LiveWorlds { source, reply })
+                            })
+                            .ok_or(super::integrated::NO_ANSWER)?
+                    } else if self.remote.is_some() {
+                        return Err("projection inspection requires the world's host".into());
+                    } else {
+                        self.control_live_worlds(source.as_deref())
+                    }));
+                }
                 // `simulation blocks X1 Y1 Z1 X2 Y2 Z2`: the server's own blocks in a box. `blocks` reads this
                 // window's copy, which the server's changes reach in the next tick's broadcast.
                 if words.get(1) == Some(&"blocks") {

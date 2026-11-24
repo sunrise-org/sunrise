@@ -7,3 +7,6 @@ sunrise-client game::native_colliders_tests::a_listener_hears_a_carry_and_may_ca
 sunrise-client game::native_colliders_tests::a_rising_collider_carries_the_body_up lib daily resources
 sunrise-client game::native_colliders_tests::a_tilting_collider_lifts_the_body_by_its_contact_point lib daily resources
 sunrise-client game::native_colliders_tests::a_turning_collider_carries_the_body_along_the_arc lib daily resources
+sunrise-client game::native_colliders_tests::an_authoritative_positive_step_rider_can_cancel_pivot_clearance_once lib daily resources # Real gravity-landed living actor with positive step height, zero pivot-contact delta, one cancelled authoritative upright-clearance move with exact pre-invocation body-state preservation.
+sunrise-client game::native_colliders_tests::a_flag_storing_item_preserves_cancelled_angular_carry_state lib daily resources # Real flag-storing ItemEntity, one cancelled positive rigid angular carry and exact full-body state preservation.
+sunrise-client game::native_colliders_tests::an_armor_stand_delegate_preserves_cancelled_angular_carry_state lib daily resources # Actual gravity-landed ArmorStand delegated collided shove, one cancelled positive rigid rise and exact state/gate result conservation.

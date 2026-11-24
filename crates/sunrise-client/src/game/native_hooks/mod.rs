@@ -16,7 +16,9 @@ pub(in crate::game) use fire::{
     ConnectsToCall, EntityChangeBlockPreCall, HotbarAttackIndicatorProgressCall,
     ItemAfterVerticalCollisionCall, PlayerPongCall, UpdateShapeCall,
 };
-use mod_api::{BlockEntityDataSource, BlockEntityRef, ClockAdjustment};
+use mod_api::{
+    BlockEntityDataSource, BlockEntityRef, ClockAdjustment, LiveWorldPlacementCell, LiveWorldRef,
+};
 
 use super::native_data_maps::DataMapType;
 use super::{
@@ -356,6 +358,7 @@ mod level_sounds;
 mod level_tick_tests;
 mod level_world;
 mod light_emission;
+mod live_world_admission;
 mod living_breathe;
 mod living_change_target;
 mod living_conversion_post;

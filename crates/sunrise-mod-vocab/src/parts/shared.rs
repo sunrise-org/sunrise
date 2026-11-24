@@ -60,6 +60,8 @@ impl<P: ?Sized> Clone for Attached<P> {
 #[derive(Clone, Default)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct Parts {
+    /// Derived presence of actual declared factories; resolved once with Parts.
+    pub(crate) transfer_factory_blocks: HashSet<Box<str>>,
     pub(crate) key_mappings: Vec<(&'static str, crate::KeyRegistration)>,
     /// Settings by owner, in registration order (`Registrar::register_setting`).
     pub(crate) settings: Vec<(&'static str, crate::SettingSpec)>,
@@ -453,6 +455,15 @@ pub fn prepare_parts(
         return Err(ResolvePartsError::Parts(unknown));
     }
     let mut parts = installed.keys.clone();
+    parts.transfer_factory_blocks = installed
+        .block_entity_types
+        .iter()
+        .flat_map(|(_, decl)| {
+            decl.blocks
+                .iter()
+                .map(|block| block.clone().into_boxed_str())
+        })
+        .collect();
     add_tagged(
         &mut parts.blocks,
         &installed.tags.blocks,
@@ -705,3 +716,44 @@ mod lookup_context_tests {
 #[cfg(test)]
 #[path = "shared/worldgen_tests.rs"]
 mod worldgen_tests;
+
+/// Engine-only conservative admission query over the actual resolved Parts and factory table.
+// hidden: engine-only stock-handoff admission over the resolved Parts, not a mod service.
+#[doc(hidden)]
+pub fn transfer_parts_present(block_name: &str, be_type: Option<&str>) -> Option<bool> {
+    GAME_PARTS.with_borrow(|lookup| {
+        if !lookup.game_thread || lookup.pre_world {
+            return None;
+        }
+        let parts = lookup.parts.as_ref()?;
+        Some(
+            parts
+                .blocks
+                .get(block_name)
+                .is_some_and(|parts| !parts.is_empty())
+                || parts
+                    .block_entities
+                    .get(block_name)
+                    .is_some_and(|parts| !parts.is_empty())
+                || be_type.is_some_and(|kind| {
+                    parts
+                        .block_entity_kinds
+                        .get(kind)
+                        .is_some_and(|parts| !parts.is_empty())
+                })
+                || parts.transfer_factory_blocks.contains(block_name)
+                || parts
+                    .default_block_containers
+                    .get(block_name)
+                    .is_some_and(|rows| !rows.is_empty())
+                || parts
+                    .default_block_fluids
+                    .get(block_name)
+                    .is_some_and(|rows| !rows.is_empty())
+                || parts
+                    .default_block_energy
+                    .get(block_name)
+                    .is_some_and(|rows| !rows.is_empty()),
+        )
+    })
+}

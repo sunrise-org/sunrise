@@ -52,6 +52,10 @@ impl Game<'_> {
                 native_hooks::BlockClickAnswer::Canceled(answer)
                     if answer.consumes_action() || answer == Answer::Fail =>
                 {
+                    if !self.projection_action_fresh() {
+                        self.use_failed = true;
+                        return Ok(true);
+                    }
                     if matches!(answer, Answer::Success | Answer::SuccessServer) {
                         self.swing_arm();
                     }
@@ -65,6 +69,10 @@ impl Game<'_> {
                 }
             }
         }
+        if !self.projection_action_fresh() {
+            self.use_failed = true;
+            return Ok(true);
+        }
         // ServerPlayerGameMode.useItemOn: the held item's onItemUseFirst, when RightClickBlock didn't deny the item, ahead of the sneak gate and every block behaviour. Any non-PASS answer ends this hand's block interaction.
         if use_item.or(true)
             && let Some(hit) = block_hit
@@ -72,6 +80,10 @@ impl Game<'_> {
             && let Ok(Some(answer)) = self.item_use_first(hit, self.hand, &held)
             && answer != Answer::Pass
         {
+            if !self.projection_action_fresh() {
+                self.use_failed = true;
+                return Ok(true);
+            }
             if matches!(answer, Answer::Success | Answer::SuccessServer) {
                 self.swing_arm();
             }
@@ -95,6 +107,10 @@ impl Game<'_> {
             {
                 let click = self.block_click(hit, self.hand, snapshot.as_ref());
                 self.native_use_item_on(state, &click, &mut block_answer);
+            }
+            if !self.projection_action_fresh() {
+                self.use_failed = true;
+                return Ok(true);
             }
             let mut chains_sign = false;
             if block_answer.is_none() {

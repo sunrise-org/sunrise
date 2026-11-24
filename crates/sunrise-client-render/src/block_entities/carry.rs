@@ -22,8 +22,17 @@ impl BlockEntities {
     /// leave, but it is not removed: no side effects run, so nothing it holds
     /// drops. False when there is none, or it is out for its own tick.
     pub fn carry(&mut self, from: Pos, to: Pos) -> bool {
-        if !self.map.contains_key(&from) {
+        let Some(owned) = self.extract_owned(from) else {
             return false;
+        };
+        self.hold_carried(to, owned);
+        true
+    }
+
+    /// Relinquish the actual payload without removal callbacks or inventory cloning.
+    pub fn extract_owned(&mut self, from: Pos) -> Option<Carried> {
+        if !self.map.contains_key(&from) || self.is_taken(&from) {
+            return None;
         }
         let attachments = self.attachments.remove(&from);
         if attachments.is_some()
@@ -31,37 +40,52 @@ impl BlockEntities {
         {
             observer.unload(identity(from, &self.generations));
         }
-        let Some(entity) = self.remove(&from) else {
-            return false;
-        };
-        self.hold_carried(
-            to,
-            Carried {
-                entity,
-                position_data: Default::default(),
-                attachments,
-            },
-        );
-        true
-    }
-    /// Installs the block entity carried to `at` there as a new holder: a new
-    /// ticker slot at the end of the list, and its attachments bound again.
-    /// False when none was carried there.
-    pub fn land(&mut self, at: Pos) -> bool {
-        let Some(Carried {
+        let entity = self
+            .remove(&from)
+            .expect("owned block entity remained in its slot");
+        Some(Carried {
             entity,
+            position_data: Default::default(),
             attachments,
-            ..
-        }) = self.take_carried(&at)
-        else {
-            return false;
-        };
-        self.remove(&at);
+        })
+    }
+
+    /// Install unique ownership in an empty holder; refusal returns the unchanged owned payload.
+    pub fn install_owned(
+        &mut self,
+        at: Pos,
+        owned: Carried,
+    ) -> Result<sunrise_core::nbt::Compound, Box<Carried>> {
+        if self.map.contains_key(&at) || self.is_taken(&at) {
+            return Err(Box::new(owned));
+        }
+        let Carried {
+            entity,
+            position_data,
+            attachments,
+        } = owned;
         self.insert(at, entity);
         if let Some(attachments) = attachments {
             self.restore_attachments(at, attachments);
         }
-        true
+        Ok(position_data)
+    }
+
+    /// Install the moving piston's payload as a new ordinary holder.
+    pub fn land(&mut self, at: Pos) -> bool {
+        let Some(owned) = self.take_carried(&at) else {
+            return false;
+        };
+        // Preserve the existing piston replacement rule. Checked general handoffs call
+        // install_owned directly and must admit an empty destination before relinquishing source.
+        self.remove(&at);
+        match self.install_owned(at, owned) {
+            Ok(_) => true,
+            Err(owned) => {
+                self.hold_carried(at, *owned);
+                false
+            }
+        }
     }
     /// The block entity carried to `at`, for its moving piston's save.
     pub fn carried(&self, at: &Pos) -> Option<&Carried> {
@@ -73,10 +97,12 @@ impl BlockEntities {
     }
     /// The owning adapter updates position-owned state before a save or landing.
     pub fn carried_mut(&mut self, at: &Pos) -> Option<&mut Carried> {
+        self.touch_contents();
         self.carried.get_mut(&chunk_of(*at))?.get_mut(at)
     }
     /// Holds `carried` for the moving piston at `at`, loaded with it.
     pub fn hold_carried(&mut self, at: Pos, carried: Carried) {
+        self.touch_contents();
         self.carried
             .entry(chunk_of(at))
             .or_default()
@@ -89,6 +115,7 @@ impl BlockEntities {
     }
 
     fn take_carried(&mut self, at: &Pos) -> Option<Carried> {
+        self.touch_contents();
         let Entry::Occupied(mut column) = self.carried.entry(chunk_of(*at)) else {
             return None;
         };
@@ -196,3 +223,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "owned_transfer_tests.rs"]
+mod owned_transfer_tests;

@@ -129,9 +129,16 @@ impl FrameLog {
     /// log, for finding the colliders a position can have stood on.
     pub fn swept(&self, local: Aabb) -> Option<Aabb> {
         let mut all: Option<Aabb> = None;
+        let mut previous: Option<&Frame> = None;
         for (_, frame) in &self.entries {
-            let at = frame.world_bounds(local);
+            let mut at = frame.world_bounds(local);
+            if let Some(before) = previous
+                && let Some(swept) = before.pivot_swept_bounds(frame, local)
+            {
+                at = at.union_bounds(swept);
+            }
             all = Some(all.map_or(at, |a| a.union_bounds(at)));
+            previous = Some(frame);
         }
         all
     }

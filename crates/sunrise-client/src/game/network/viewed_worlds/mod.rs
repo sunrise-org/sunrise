@@ -263,8 +263,8 @@ pub(in crate::game) mod tests {
         assert!(viewed(&game, 0).is_none());
     }
 
-    /// The client views two levels besides its own, in slots 0 and 1: a slot past them closes the
-    /// connection, and an `open` of a bound slot starts it afresh.
+    /// All four advertised slots accept distinct runtime levels; a fifth closes the connection.
+    /// Reopening an admitted bound slot still starts its world afresh.
     #[test]
     #[ignore = "daily"]
     fn an_open_past_the_clients_cap_closes_the_connection() {
@@ -272,15 +272,21 @@ pub(in crate::game) mod tests {
         let mut game = client(&mut resources);
         game.handle_packet(open(0, "minecraft:the_nether")).unwrap();
         game.handle_packet(open(1, "minecraft:the_end")).unwrap();
+        game.handle_packet(open(2, "test:runtime/a")).unwrap();
+        game.handle_packet(open(3, "test:runtime/b")).unwrap();
+        for slot in 0..4 {
+            game.handle_packet(run(slot, &[column(slot, 0)])).unwrap();
+            assert!(viewed(&game, slot).unwrap().chunks.contains_key(&(slot, 0)));
+        }
         assert_eq!(
-            game.route_viewed_levels(data(&open(2, "test:void"))),
-            Err(RouteError::OverCap { level: 2, cap: 2 })
+            game.route_viewed_levels(data(&open(4, "test:fifth"))),
+            Err(RouteError::OverCap { level: 4, cap: 4 })
         );
         game.handle_packet(run(1, &[column(0, 0)])).unwrap();
         game.handle_packet(open(1, "minecraft:the_end")).unwrap();
         assert_eq!(viewed(&game, 1).unwrap().chunks.len(), 0, "afresh");
         assert!(game.remote.is_some());
-        game.handle_packet(open(2, "test:void")).unwrap();
+        game.handle_packet(open(4, "test:fifth")).unwrap();
         assert!(game.remote.is_none());
     }
 

@@ -7,6 +7,7 @@ impl Game<'_> {
     /// What the tick runs after the local player's own update: effects, the
     /// world's entities and blocks, and the network hub.
     pub(in crate::game) fn tick_world(&mut self, running: bool) -> Result<()> {
+        let running = running && self.live_world_local_ready();
         // Entities added since the last tick join the level before it ticks.
         span("mods_joins_flush", || self.native_joins_flush(false, 0));
         span("share_spawn_conditions", || self.share_spawn_conditions());

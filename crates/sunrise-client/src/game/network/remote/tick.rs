@@ -20,6 +20,13 @@ impl Game<'_> {
     }
 
     pub(in crate::game) fn tick_remote_player(&mut self, running: bool, hold: bool) -> Result<()> {
+        // The last coherent placement the player consumed precedes this tick's packets.
+        let current = self.placed_moving_colliders();
+        let start = self.client_projection_contact_start(current);
+        let scope = sunrise_client_render::moving_colliders::Scope::enter_level(
+            self.collider_level(),
+            start.clone(),
+        );
         // Inventory.tick's ItemStack.inventoryTick: the pop time runs down.
         if !hold {
             for pop in &mut self.hotbar_pop {
@@ -80,9 +87,11 @@ impl Game<'_> {
         let input = sent?;
         // Like the block-entity push above, collider displacement belongs in this tick's
         // LocalPlayer.sendChanges, before the client closes the tick on the wire.
-        let start = sunrise_client_render::moving_colliders::Scope::placed();
+        drop(scope);
         self.carry_pass(&start);
-        self.observe_carry_age(&start);
+        self.client_projection_contact_complete();
+        let current = self.placed_moving_colliders();
+        self.observe_carry_age(&current);
         if let Some(input) = input {
             self.remote_send_state(input);
         }

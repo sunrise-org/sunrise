@@ -70,7 +70,7 @@ impl Drop for BatchCompletion {
 pub(super) struct QueuedWrite {
     pub(super) key: (i32, i32),
     pub(super) record: Record,
-    seq: u64,
+    pub(super) seq: u64,
     eviction: Option<EvictionWrites>,
 }
 
@@ -201,14 +201,74 @@ impl SaveDir {
         records: Vec<((i32, i32), Record)>,
         wait: bool,
     ) -> Result<()> {
-        self.enqueue_records(folder, records, None)?;
+        self.admit_records(folder, records, wait, None)
+    }
+
+    pub(super) fn enqueue_records(
+        &self,
+        folder: Folder,
+        records: Vec<((i32, i32), Record)>,
+        eviction: Option<&EvictionWrites>,
+    ) -> Result<()> {
+        self.admit_records(folder, records, false, eviction)
+    }
+
+    fn admit_records(
+        &self,
+        folder: Folder,
+        records: Vec<((i32, i32), Record)>,
+        wait: bool,
+        eviction: Option<&EvictionWrites>,
+    ) -> Result<()> {
+        // Keep the gate through independent admission and flush so a first lease cannot race them.
+        let mut gate = self
+            .live_world_gate
+            .lock()
+            .map_err(|_| "live-world gate poisoned")?;
+        gate.check()?;
+        if gate.required() {
+            if eviction.is_some() {
+                return Err("eviction requires the common live-world checkpoint".into());
+            }
+            if !records.is_empty() {
+                let keys: Vec<_> = records.iter().map(|(key, _)| *key).collect();
+                if let Err(error) = self.defer_live_world_records(&mut gate, folder, records) {
+                    let report = std::io::Error::other(error.to_string());
+                    for key in keys {
+                        self.report_record_failure(folder, key, &report);
+                    }
+                    gate.refuse();
+                    return Err(error);
+                }
+            }
+            if wait {
+                return Err("save deferred until the common live-world checkpoint".into());
+            }
+            return Ok(());
+        }
+        self.enqueue_unfenced(folder, records, eviction)?;
         if wait {
-            self.flush()?;
+            self.flush_writer()?;
         }
         Ok(())
     }
 
-    pub(super) fn enqueue_records(
+    /// Only the exact Prepared save may enqueue and force records through an active lease.
+    pub(super) fn write_prepared_records(
+        &self,
+        folder: Folder,
+        records: Vec<((i32, i32), Record)>,
+    ) -> Result<()> {
+        let attempts = EvictionWrites::default();
+        self.enqueue_unfenced(folder, records, Some(&attempts))?;
+        self.flush_writer()?;
+        if !attempts.refused().is_empty() {
+            return Err("a Prepared live-world record was refused by the writer".into());
+        }
+        Ok(())
+    }
+
+    fn enqueue_unfenced(
         &self,
         folder: Folder,
         records: Vec<((i32, i32), Record)>,
@@ -296,6 +356,7 @@ impl SaveDir {
     /// Queue a durable barrier behind all earlier writes. The window only polls
     /// its receiver; draining writes and forcing regions stay off the event loop.
     pub fn flush_later(&self) -> Result<mpsc::Receiver<std::io::Result<()>>> {
+        let _gate = self.independent_flush_guard()?;
         let mut writer = self.writer.lock().map_err(|_| "writer poisoned")?;
         let writer = writer
             .get_or_insert_with(|| self.start_writer(fs::File::sync_data, RegionFile::sync_all));
@@ -464,6 +525,23 @@ impl SaveDir {
     /// Drain queued writes and force every cached writable region. Individual record failures
     /// are reported by the writer; a storage sync failure fails the barrier that reports it.
     pub fn flush(&self) -> Result<()> {
+        let _gate = self.independent_flush_guard()?;
+        self.flush_writer()
+    }
+
+    fn independent_flush_guard(&self) -> Result<std::sync::MutexGuard<'_, LiveWorldGate>> {
+        let gate = self
+            .live_world_gate
+            .lock()
+            .map_err(|_| "live-world gate poisoned")?;
+        gate.check()?;
+        if gate.required() {
+            return Err("flush requires the common live-world checkpoint".into());
+        }
+        Ok(gate)
+    }
+
+    pub(super) fn flush_writer(&self) -> Result<()> {
         self.flush_with(RegionFile::sync_all)
     }
 
@@ -552,6 +630,14 @@ impl SaveDir {
     /// Poll completion of queued write attempts without blocking. This does not force cached
     /// regions; callers that need a durable barrier use `flush` or `flush_later`.
     pub fn writes_finished(&self) -> Result<bool> {
+        let gate = self
+            .live_world_gate
+            .lock()
+            .map_err(|_| "live-world gate poisoned")?;
+        gate.check()?;
+        if gate.required() {
+            return Ok(false);
+        }
         let count = self
             .outstanding
             .count

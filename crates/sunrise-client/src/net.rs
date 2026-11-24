@@ -3731,7 +3731,7 @@ mod tests {
         for expected in [
             cfg::Serverbound::CustomPayload(cfg::CustomPayload {
                 channel: "sunrise:levels".into(),
-                data: sunrise_protocol::viewed_levels::answer(2),
+                data: sunrise_protocol::viewed_levels::answer(4),
             }),
             cfg::Serverbound::FinishConfiguration(Empty),
         ] {

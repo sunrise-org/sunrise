@@ -7,6 +7,13 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelTickingBackend {
     /// Side: server.
+    /// Current actual block and block-entity content read epochs without a projection or chunk
+    /// load. Reads an ordinary open level or this enabled mod's owned open parked runtime level,
+    /// including an empty destination. Stale/closing targets refuse `Stale`; a client,
+    /// unavailable phase or foreign parked runtime target refuses `Unavailable`.
+    /// These epochs do not certify durable completion.
+    fn level_revisions(&self, level: LevelRef) -> Result<LevelRevisions, LevelReadError>;
+    /// Side: server.
     /// Whether this is the level in place: the one the server ticks now, whose block entities
     /// the game's own capabilities read and write and whose capabilities
     /// `LevelRef::capability` looks up. False for a level parked while the server ticks
@@ -29,10 +36,13 @@ pub trait LevelTickingBackend {
     /// `Some(false)` for unloaded or out-of-bounds positions, tickets that forbid ticking,
     /// or a chunk waiting for its entities. With no ticket system, resident in-bounds
     /// chunks with no pending entities tick; an active but empty ticket system permits none.
-    /// `None` for stale handles, a client or a level not currently in place. Parked
-    /// levels cannot answer because the live ticket state belongs to the level in place.
-    /// Does not load chunks. Each call shares the ticket map through a reference count
-    /// and borrows the pending-entity set without copying it or allocating a memo table.
+    /// Reads any open server level, including one parked while another level ticks, using
+    /// that level's own current ticket map and pending-entity set. `None` for stale,
+    /// closed or unavailable handles and on a client. A positive answer is a current
+    /// readiness decision, not a promise that the scheduler will activate an otherwise
+    /// idle level: request its ordinary forced chunks from a running/global callback.
+    /// Does not load chunks or switch levels. Each call shares the ticket map through a
+    /// reference count and borrows pending entities without copying or allocating a memo table.
     fn level_should_tick_blocks_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
 }
 /// The handles' writes of the `level_ticking` area, implemented by the game and reached through [`BackendMut`].
