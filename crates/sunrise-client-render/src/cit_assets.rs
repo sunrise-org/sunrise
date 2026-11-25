@@ -356,7 +356,7 @@ mod tests {
         let source = ResourceSource::directory(root.clone());
         let present = load_models(
             &source,
-            &[rule.clone()],
+            std::slice::from_ref(&rule),
             &LoadConditions::new(["compat_mod"]),
         );
         let absent = load_models(&source, &[rule], &LoadConditions::new([]));
