@@ -119,6 +119,54 @@ pub(crate) fn launch_arguments(project: &Path, args: &[String]) -> Result<Launch
 }
 
 /// Stage independent snapshots of every selected package's exact originals.
+/// Checks, before a build, that every original jar `manifests` list is in the store with its
+/// SHA-512, so `run` fails at once, with the message staging gives, rather than after the native
+/// compile. Staging still checks every jar, those of libraries the build adds included.
+pub(crate) fn check_for_run<'a>(
+    manifests: impl IntoIterator<Item = &'a Manifest>,
+    source: Option<&Path>,
+) -> Result<(), String> {
+    let requirements = collect_jar_requirements(
+        manifests
+            .into_iter()
+            .map(|manifest| (manifest.id.as_str(), manifest.jar.as_slice())),
+    )
+    .map_err(|e| e.to_string())?;
+    let source = source.map_or_else(default_store, Path::to_path_buf);
+    for requirement in &requirements {
+        let path = requirement.jar.cache_path(&source);
+        let unavailable =
+            |why: &str| jar_unavailable(&requirement.owners, &requirement.jar, &path, why);
+        let original = dunce::canonicalize(&path).map_err(|e| unavailable(&e.to_string()))?;
+        if !fs::metadata(&original)
+            .map_err(|e| unavailable(&e.to_string()))?
+            .is_file()
+        {
+            return Err(unavailable("not a file"));
+        }
+        let file = fs::File::open(&original).map_err(|e| unavailable(&e.to_string()))?;
+        let hash = hash_reader::<sha2::Sha512>(file, io::sink())
+            .map_err(|e| unavailable(&e.to_string()))?;
+        if format!("{hash:x}") != requirement.jar.sha512() {
+            return Err(unavailable("the file does not match the listed SHA-512"));
+        }
+    }
+    Ok(())
+}
+
+/// Why `owners` cannot have their original `jar` at `path`, and how to add it.
+fn jar_unavailable(owners: &[String], jar: &JarRef, path: &Path, why: &str) -> String {
+    format!(
+        "{} needs Java jar {} {} (SHA-512 {}): {}: {why}\n\
+         Add the exact original with `cargo sunrise-mod use-jar <path>` and run without --jars, or use `cargo sunrise-mod run --jars <dir>` with `<sha512>.jar` files",
+        owners.join(", "),
+        jar.id(),
+        jar.version(),
+        jar.sha512(),
+        path.display()
+    )
+}
+
 pub(crate) fn stage_for_run<'a>(
     manifests: impl IntoIterator<Item = &'a Manifest>,
     project: &Path,
@@ -181,17 +229,7 @@ pub(crate) fn stage_for_run<'a>(
     for requirement in requirements {
         let jar = requirement.jar;
         let path = jar.cache_path(&source);
-        let unavailable = |why: &str| {
-            format!(
-                "{} needs Java jar {} {} (SHA-512 {}): {}: {why}\n\
-                 Add the exact original with `cargo sunrise-mod use-jar <path>` and run without --jars, or use `cargo sunrise-mod run --jars <dir>` with `<sha512>.jar` files",
-                requirement.owners.join(", "),
-                jar.id(),
-                jar.version(),
-                jar.sha512(),
-                path.display()
-            )
-        };
+        let unavailable = |why: &str| jar_unavailable(&requirement.owners, &jar, &path, why);
         let original = dunce::canonicalize(&path).map_err(|e| unavailable(&e.to_string()))?;
         if source_in_stage || original.starts_with(&dest) {
             return Err(unavailable(

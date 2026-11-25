@@ -647,6 +647,15 @@ pub(crate) fn run(
     } else {
         contract::TargetName::Client
     };
+    // A missing or wrong original jar is known before the native compile: say so now.
+    let libraries = with
+        .iter()
+        .filter_map(|path| Package::read(path).ok())
+        .collect::<Vec<_>>();
+    crate::jar::check_for_run(
+        std::iter::once(&mod_package.manifest).chain(libraries.iter().map(|p| &p.manifest)),
+        jars,
+    )?;
     let built = build(project, mod_package, with, false, target, false)?;
     let mut staged = fs::read_dir(&built.prepared.plan.mods)
         .map_err(|e| e.to_string())?

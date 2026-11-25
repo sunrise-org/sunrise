@@ -333,3 +333,58 @@ fn a_lock_the_pinned_sdk_moved_is_refused_until_refreshed() {
         "{lock}"
     );
 }
+
+/// `run` reports a listed jar that is missing from the store, or whose bytes differ, before it
+/// builds: with no Cargo project in the folder, a build would fail with another message.
+#[test]
+fn run_refuses_a_missing_or_wrong_jar_before_building() {
+    const SHA512: &str = "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
+                          2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f";
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("garden");
+    let resources = root.path().join("resources");
+    let jars = root.path().join("originals");
+    for folder in [&project, &resources, &jars] {
+        fs::create_dir(folder).unwrap();
+    }
+    fs::write(
+        project.join(sunrise_mod_package::manifest::MANIFEST),
+        format!(
+            "id = 'garden'\nname = 'Garden'\nversion = '0.1.0'\napi = '0.2'\ncapabilities = ['registries']\n\
+             [[jar]]\nid = 'original'\nversion = '1.0'\nsha512 = '{SHA512}'\n"
+        ),
+    )
+    .unwrap();
+    let package = Package::read(&project).unwrap();
+    let original = package.manifest.jar[0].cache_path(&jars);
+    let run = || {
+        run(
+            &project,
+            &package,
+            &[],
+            Some(resources.to_str().unwrap()),
+            Some(&jars),
+            &[],
+        )
+        .unwrap_err()
+    };
+
+    let missing = run();
+    for expected in ["garden", "original", "1.0", SHA512, "use-jar"] {
+        assert!(missing.contains(expected), "{missing}");
+    }
+    // The fix is its own line, as staging words it.
+    assert!(
+        missing
+            .lines()
+            .any(|line| line.starts_with("Add the exact original with `cargo sunrise-mod use-jar")),
+        "{missing}"
+    );
+    fs::write(&original, b"not abc").unwrap();
+    let wrong = run();
+    assert!(
+        wrong.contains("the file does not match the listed SHA-512"),
+        "{wrong}"
+    );
+    assert!(!project.join(crate::RUN_DIR).exists());
+}
