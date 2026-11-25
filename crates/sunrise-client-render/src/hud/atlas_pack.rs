@@ -550,6 +550,7 @@ impl HudAtlas {
             sky_expressions: Vec::new(),
             stars_expressions: Vec::new(),
             lightmap_shader: None,
+            lightmap_origin: crate::gfx::ShaderOrigin::Vanilla,
             lightmap_expressions: Vec::new(),
             clouds_shader: None,
             sprite_modifiers: Default::default(),

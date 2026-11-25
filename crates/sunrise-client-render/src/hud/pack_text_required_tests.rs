@@ -64,7 +64,8 @@ fn resources(files: &[(String, String)]) -> ResourceSource {
 
 /// The atlas's load of the packs at `root` over the game's `defaults`: the required pipeline
 /// that fails it, else whether each drawn program loaded (the GUI's, the world's and the
-/// see-through text, the block outline, the sky, the stars, the lightmap).
+/// see-through text, the block outline, the sky, the stars, a pack's lightmap: without one the
+/// game's own pair loads).
 fn load(
     root: &[(String, String)],
     defaults: &[(String, String)],
@@ -79,7 +80,11 @@ fn load(
         atlas.lines_shader.is_some(),
         atlas.sky_shader.is_some(),
         atlas.stars_shader.is_some(),
-        atlas.lightmap_shader.is_some(),
+        super::packs_lightmap(
+            atlas.lightmap_shader.as_deref(),
+            &resources(root),
+            &resources(defaults),
+        ),
     ])
 }
 

@@ -131,6 +131,7 @@ pub(in crate::game) fn build_renderer(
     let lightmap = renderer.set_lightmap_shader(
         atlas.lightmap_shader.as_deref(),
         &atlas.lightmap_expressions,
+        atlas.lightmap_origin,
     );
     let required = [world_text, gui_text, clouds, lines, sky, lightmap]
         .into_iter()

@@ -88,8 +88,12 @@ pub struct HudAtlas {
     /// Their Polytone expression uniforms, resolved when they loaded.
     pub sky_expressions: Vec<crate::polytone_post::ExpressionUniform>,
     pub stars_expressions: Vec<crate::polytone_post::ExpressionUniform>,
-    /// The packs' `core/lightmap` (with `core/screenquad`), when a pack replaces either stage.
+    /// `core/lightmap` with `core/screenquad`, which draw the light texture: the packs' when a pack
+    /// replaces either stage, else the game's own (`pack_text::load_lightmap`). None in an atlas
+    /// made from resources with neither of the game's stages.
     pub lightmap_shader: Option<std::sync::Arc<sunrise_glsl::Translated>>,
+    /// Whose `lightmap_shader` is: a pack's override or vanilla's own (`Vanilla` without one).
+    pub lightmap_origin: crate::gfx::ShaderOrigin,
     /// Its Polytone expression uniforms (`shader_modifiers`), resolved when it loaded: the
     /// blocks its stages read, with their programs.
     pub lightmap_expressions: Vec<crate::polytone_post::ExpressionUniform>,
@@ -392,6 +396,7 @@ impl HudAtlas {
             sky_expressions: self.sky_expressions.clone(),
             stars_expressions: self.stars_expressions.clone(),
             lightmap_shader: self.lightmap_shader.clone(),
+            lightmap_origin: self.lightmap_origin,
             lightmap_expressions: self.lightmap_expressions.clone(),
             clouds_shader: self.clouds_shader.clone(),
             sprite_modifiers: self.sprite_modifiers.clone(),
@@ -650,6 +655,7 @@ impl HudAtlas {
             sky_expressions: Vec::new(),
             stars_expressions: Vec::new(),
             lightmap_shader: None,
+            lightmap_origin: crate::gfx::ShaderOrigin::Vanilla,
             lightmap_expressions: Vec::new(),
             clouds_shader: None,
             sprite_modifiers: Default::default(),
@@ -745,6 +751,7 @@ impl HudAtlas {
             sky_expressions: Vec::new(),
             stars_expressions: Vec::new(),
             lightmap_shader: None,
+            lightmap_origin: crate::gfx::ShaderOrigin::Vanilla,
             lightmap_expressions: Vec::new(),
             clouds_shader: None,
             sprite_modifiers: Default::default(),

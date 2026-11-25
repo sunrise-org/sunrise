@@ -2,6 +2,7 @@
 //! with `IS_GUI`): servers' HUDs that their pack's vertex shader moves to the screen's corners,
 //! and text effects in its fragment shader. Without one the text draws natively.
 
+use crate::gfx::ShaderOrigin;
 use crate::resource_source::ResourceSource;
 use std::sync::Arc;
 
@@ -471,13 +472,34 @@ fn translate_required(
         pipeline: required[0].pipeline,
         why: e.to_string(),
     })?;
-    (required.iter().zip(&defines))
+    translate_programs(
+        root,
+        &stages,
+        names,
+        required,
+        &defines,
+        (modifiers, ids, own),
+    )
+    .map(Some)
+}
+
+/// Each of `required`'s pipelines' programs of the stage texts `stages` (vertex, fragment), its
+/// includes read from `root`, with its expression uniforms: `translate_required`'s checks.
+fn translate_programs(
+    root: &ResourceSource,
+    stages: &(String, String),
+    names: (&str, &str),
+    required: &[Required],
+    defines: &[Vec<&str>],
+    (modifiers, ids, own): Blocks<'_>,
+) -> Result<Vec<Checked>, RequiredShaderRefused> {
+    (required.iter().zip(defines))
         .map(|(r, defines)| {
             let refused = |why: String| RequiredShaderRefused {
                 pipeline: r.pipeline,
                 why,
             };
-            let program = translate_selected(root, &stages, names, defines, r.glue, &|_| true)
+            let program = translate_selected(root, stages, names, defines, r.glue, &|_| true)
                 .map_err(|e| refused(e.to_string()))?;
             let stage = r
                 .oit
@@ -489,8 +511,7 @@ fn translate_required(
                 (modifiers.resolve(ids, &program, &own)).map_err(|e| refused(e.to_string()))?;
             Ok((program, expressions))
         })
-        .collect::<Result<_, _>>()
-        .map(Some)
+        .collect()
 }
 
 /// A loaded pack shader program with its expression uniforms, as the atlas keeps them.
@@ -691,19 +712,32 @@ pub(super) fn load_shaders(
     let stars = crate::gfx::expression_blocks::STARS[0];
     (atlas.stars_shader, atlas.stars_expressions) =
         unzip_or_default(load_one(packs, stars, &STARS)?);
+    let lightmap = load_lightmap(root, defaults, &modifiers)?;
+    atlas.lightmap_origin = lightmap.as_ref().map_or(ShaderOrigin::Vanilla, |&(_, o)| o);
     (atlas.lightmap_shader, atlas.lightmap_expressions) =
-        unzip_or_default(load_lightmap(root, defaults, &modifiers)?);
+        unzip_or_default(lightmap.map(|(loaded, _)| loaded));
     Ok(())
 }
 
-/// The packs' `core/lightmap` with `core/screenquad`, when a pack replaces either stage or an
-/// include they keep: the pass gives it `LightmapInfo` besides vanilla's blocks, and the packs'
-/// expression uniforms (`modifiers`) of either stage's file. Unspecified float blocks read zero.
+/// `core/screenquad` with `core/lightmap`, which draw the light texture: the packs', when a pack
+/// replaces either stage or an include they keep, else the game's own, as vanilla's `Lightmap`
+/// draws it. The pass gives it `LightmapInfo` besides vanilla's blocks, and the packs' expression
+/// uniforms (`modifiers`) of either stage's file. Polytone binds those to whatever shader is
+/// active under the id (wiki "Shaders", "Expression Uniforms on Any Shader"); the game's own
+/// declares no such block, so none is bound to it. Unspecified float blocks read zero.
+///
+/// Nothing else draws the light texture, so the game's own pair failing to translate fails the
+/// load as a pack's does (`ShaderManager.apply`), and so does a vanilla block either declares that
+/// doesn't fit the slot Sunrise binds it in ([`lightmap_loaded`]). Resources with neither of the
+/// game's stages (the boot screen's, `HudAtlas::boot`) have none.
+///
+/// Each comes with whose it is: only a pack's pair is an override (`ShaderOrigin::Pack`); the
+/// game's own is vanilla's (`ShaderOrigin::Vanilla`), the default light texture.
 fn load_lightmap(
     root: &ResourceSource,
     defaults: &ResourceSource,
     modifiers: &crate::polytone_post::ShaderModifiers,
-) -> Result<Option<Loaded>, RequiredShaderRefused> {
+) -> Result<Option<(Loaded, ShaderOrigin)>, RequiredShaderRefused> {
     let shaders = crate::gfx::core_lightmap::SHADERS;
     let names = ("screenquad", "lightmap");
     let own = [
@@ -711,10 +745,46 @@ fn load_lightmap(
         sunrise_polytone::globals::BLOCK,
     ];
     let blocks = (modifiers, (shaders[0], shaders[1]), &own[..]);
-    let Some(programs) = translate_required(root, defaults, names, &LIGHTMAP, blocks)? else {
-        return Ok(None);
+    if let Some(programs) = translate_required(root, defaults, names, &LIGHTMAP, blocks)? {
+        return lightmap_loaded(programs).map(|loaded| Some((loaded, ShaderOrigin::Pack)));
+    }
+    let refused = |why: String| RequiredShaderRefused {
+        pipeline: LIGHTMAP[0].pipeline,
+        why,
     };
-    Ok((programs.into_iter().next()).and_then(|p| loaded(p, LIGHTMAP[0].pipeline)))
+    let path =
+        |name: &str, extension: &str| format!("assets/minecraft/shaders/core/{name}.{extension}");
+    let stage = |file: &str| read_shader_file(root, file).map_err(|e| refused(e.to_string()));
+    let (vertex, fragment) = (path(names.0, "vsh"), path(names.1, "fsh"));
+    let stages = match (stage(&vertex)?, stage(&fragment)?) {
+        (Some(v), Some(f)) => (v, f),
+        (None, None) => return Ok(None),
+        (None, Some(_)) => return Err(refused(format!("{vertex} is missing"))),
+        (Some(_), None) => return Err(refused(format!("{fragment} is missing"))),
+    };
+    let defines: Vec<Vec<&str>> = LIGHTMAP.iter().map(Required::all_defines).collect();
+    let programs = translate_programs(root, &stages, names, &LIGHTMAP, &defines, blocks)?;
+    lightmap_loaded(programs).map(|loaded| Some((loaded, ShaderOrigin::Vanilla)))
+}
+
+/// `LIGHTMAP`'s program as the atlas keeps it, said in the log, or why it fails the load: a
+/// vanilla block it declares doesn't fit the slot Sunrise binds it in
+/// (`expression_blocks::OversizedBlock`).
+fn lightmap_loaded(programs: Vec<Checked>) -> Result<Loaded, RequiredShaderRefused> {
+    let pipeline = LIGHTMAP[0].pipeline;
+    let (program, expressions) = programs
+        .into_iter()
+        .next()
+        .expect("one program per pipeline");
+    let own = [crate::gfx::core_lightmap::INFO_BLOCK];
+    if let Some(oversized) = crate::gfx::expression_blocks::oversized_block(&program, &own) {
+        return Err(RequiredShaderRefused {
+            pipeline,
+            why: oversized.to_string(),
+        });
+    }
+    log::info!("the lightmap shader for {pipeline} translated");
+    Ok((Arc::new(program), expressions))
 }
 
 /// The pipeline and its resources.
@@ -928,6 +998,20 @@ pub(super) fn text_runs(
     runs
 }
 
+/// Whether `program`, the atlas's lightmap from the packs at `root`, is a pack's: one replaces
+/// either stage (`load_lightmap`'s choice); otherwise it is the game's own pair.
+#[cfg(test)]
+fn packs_lightmap(
+    program: Option<&Translated>,
+    root: &ResourceSource,
+    defaults: &ResourceSource,
+) -> bool {
+    let defines: Vec<Vec<&str>> = LIGHTMAP.iter().map(Required::all_defines).collect();
+    let variants: Vec<&[&str]> = defines.iter().map(Vec::as_slice).collect();
+    let names = ("screenquad", "lightmap");
+    program.is_some() && selected_stages(root, defaults, names, &variants).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,40 +1103,47 @@ mod tests {
         }
     }
 
+    /// Vanilla's lightmap stages, in shape.
+    const GAME_LIGHTMAP: [(&str, &str); 2] = [
+        (
+            "assets/minecraft/shaders/core/screenquad.vsh",
+            "#version 330\nlayout(location = 0) out vec2 texCoord;\n\
+             void main() {\n    vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n\
+                 gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);\n    texCoord = uv;\n}\n",
+        ),
+        (
+            "assets/minecraft/shaders/core/lightmap.fsh",
+            "#version 330\nlayout(std140) uniform LightmapInfo {\n    float SkyFactor;\n} info;\n\
+             layout(location = 0) in vec2 texCoord;\nlayout(location = 0) out vec4 fragColor;\n\
+             void main() {\n    fragColor = vec4(info.SkyFactor);\n}\n",
+        ),
+    ];
+
+    /// Files in memory.
+    fn indexed(files: &[(&str, &str)]) -> ResourceSource {
+        use sunrise_assets::resource_source::Resource;
+        ResourceSource::indexed(
+            files
+                .iter()
+                .map(|(path, text)| {
+                    (
+                        (*path).to_owned(),
+                        Resource::bytes(text.as_bytes().to_vec()),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// Packs in memory: vanilla's lightmap stages (in shape) as the defaults, and `own` files
     /// of a pack over them.
     fn lightmap_packs(own: &[(&str, &str)]) -> (ResourceSource, ResourceSource) {
-        use sunrise_assets::resource_source::Resource;
-        let vanilla = [
-            (
-                "assets/minecraft/shaders/core/screenquad.vsh",
-                "#version 330\nlayout(location = 0) out vec2 texCoord;\n\
-                 void main() {\n    vec2 uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n\
-                     gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);\n    texCoord = uv;\n}\n",
-            ),
-            (
-                "assets/minecraft/shaders/core/lightmap.fsh",
-                "#version 330\nlayout(std140) uniform LightmapInfo {\n    float SkyFactor;\n} info;\n\
-                 layout(location = 0) in vec2 texCoord;\nlayout(location = 0) out vec4 fragColor;\n\
-                 void main() {\n    fragColor = vec4(info.SkyFactor);\n}\n",
-            ),
-        ];
-        let source = |files: Vec<(&str, &str)>| {
-            ResourceSource::indexed(
-                files
-                    .into_iter()
-                    .map(|(path, text)| {
-                        (path.to_owned(), Resource::bytes(text.as_bytes().to_vec()))
-                    })
-                    .collect(),
-            )
-        };
-        let mut pack = vanilla.to_vec();
+        let mut pack = GAME_LIGHTMAP.to_vec();
         for (path, text) in own {
             pack.retain(|(p, _)| p != path);
             pack.push((path, text));
         }
-        (source(pack), source(vanilla.to_vec()))
+        (indexed(&pack), indexed(&GAME_LIGHTMAP))
     }
 
     /// The pack's lightmap program as the atlas loads it: none when no pack changes it, or why
@@ -1067,7 +1158,7 @@ mod tests {
     ) -> Result<Option<Loaded>, RequiredShaderRefused> {
         let (root, defaults) = lightmap_packs(own);
         let modifiers = crate::polytone_post::ShaderModifiers::read(&root, Default::default());
-        load_lightmap(&root, &defaults, &modifiers)
+        load_lightmap(&root, &defaults, &modifiers).map(|l| l.map(|(loaded, _)| loaded))
     }
 
     /// A pack's lightmap reading an expression uniform (`Tint`) is given it when a pack's
@@ -1484,9 +1575,70 @@ mod tests {
         );
     }
 
+    /// The game's own pair, which no pack replaces, failing to translate fails the load, as a
+    /// pack's does: nothing else draws the light texture. So does one of its stages missing; with
+    /// neither, as the boot screen's resources, there is none.
+    #[test]
+    fn the_games_own_lightmap_failing_to_translate_fails_the_load() {
+        let undeclared = "#version 330\nlayout(location = 0) out vec4 fragColor;\n\
+                          void main() {\n    fragColor = vec4(undeclared);\n}\n";
+        let fsh = GAME_LIGHTMAP[1].0;
+        let load = |files: &[(&str, &str)]| {
+            let game = indexed(files);
+            let modifiers = crate::polytone_post::ShaderModifiers::read(&game, Default::default());
+            load_lightmap(&game, &game, &modifiers).map(|loaded| loaded.is_some())
+        };
+        assert_eq!(load(&GAME_LIGHTMAP), Ok(true));
+        let refused = load(&[GAME_LIGHTMAP[0], (fsh, undeclared)]).unwrap_err();
+        assert_eq!(refused.pipeline, LIGHTMAP[0].pipeline);
+        let refused = load(&GAME_LIGHTMAP[..1]).unwrap_err();
+        assert_eq!(refused.why, format!("{fsh} is missing"));
+        assert_eq!(load(&[]), Ok(false));
+    }
+
+    /// The game's own pair is vanilla's, never a pack's override, so what replaces the default
+    /// light texture stands in for it alone; a pack replacing either stage is an override.
+    #[test]
+    fn the_games_own_lightmap_is_never_a_pack_override() {
+        let origin = |own: &[(&str, &str)]| {
+            let (root, defaults) = lightmap_packs(own);
+            let modifiers = crate::polytone_post::ShaderModifiers::read(&root, Default::default());
+            let loaded = load_lightmap(&root, &defaults, &modifiers).unwrap();
+            loaded.map(|(_, origin)| origin)
+        };
+        assert_eq!(origin(&[]), Some(ShaderOrigin::Vanilla));
+        let [(vsh, quad), (fsh, lightmap)] = GAME_LIGHTMAP;
+        let darker = lightmap.replace("vec4(info.SkyFactor)", "vec4(info.SkyFactor * 0.5)");
+        assert_eq!(origin(&[(fsh, darker.as_str())]), Some(ShaderOrigin::Pack));
+        let moved = quad.replace("texCoord = uv;", "texCoord = uv * 1.0;");
+        assert_eq!(origin(&[(vsh, moved.as_str())]), Some(ShaderOrigin::Pack));
+    }
+
+    /// A pack's lightmap declaring `LightmapInfo` larger than the slot Sunrise binds it in fails
+    /// the load: nothing else draws the light texture.
+    #[test]
+    fn a_lightmap_block_past_its_slot_fails_the_load() {
+        let fsh = GAME_LIGHTMAP[1].0;
+        let info = |extra: &str| {
+            format!(
+                "#version 330\nlayout(std140) uniform LightmapInfo {{\n    float SkyFactor;\n{extra}}} info;\n\
+                 layout(location = 0) in vec2 texCoord;\nlayout(location = 0) out vec4 fragColor;\n\
+                 void main() {{\n    fragColor = vec4(info.SkyFactor);\n}}\n"
+            )
+        };
+        let whole = info("    vec4 More[15];\n");
+        assert!(
+            lightmap(&[(fsh, whole.as_str())]).unwrap().is_some(),
+            "256 bytes, the whole slot"
+        );
+        let past = info("    vec4 More[16];\n");
+        let refused = lightmap(&[(fsh, past.as_str())]).unwrap_err();
+        assert_eq!(refused.pipeline, LIGHTMAP[0].pipeline);
+    }
+
     /// A pack's `core/lightmap` is loaded with vanilla's `core/screenquad` (a stage of another
-    /// name), and the reverse; none when no pack replaces either; the load fails when it reads
-    /// an extra block whose layout the lightmap pass cannot bind.
+    /// name), and the reverse; the game's own pair when no pack replaces either; the load fails
+    /// when it reads an extra block whose layout the lightmap pass cannot bind.
     #[test]
     fn a_pack_replacing_either_lightmap_stage_is_loaded() {
         let red = "#version 330\nlayout(std140) uniform LightmapInfo {\n    float SkyFactor;\n} info;\n\
@@ -1501,9 +1653,13 @@ mod tests {
         let quad = "#version 330\nlayout(location = 0) out vec2 texCoord;\n\
                     void main() {\n    texCoord = vec2(0.5);\n    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n}\n";
         assert!(lightmap(&[(vsh, quad)]).unwrap().is_some());
+        let (root, defaults) = lightmap_packs(&[(fsh, red)]);
+        assert!(packs_lightmap(Some(&*program), &root, &defaults));
+        let own = lightmap(&[]).unwrap().expect("the game's own lightmap");
+        let (root, defaults) = lightmap_packs(&[]);
         assert!(
-            matches!(lightmap(&[]), Ok(None)),
-            "no pack replaces either stage"
+            !packs_lightmap(Some(&*own), &root, &defaults),
+            "no pack replaces either stage: the game's own pair"
         );
         let other = red
             .replace("LightmapInfo", "Elsewhere")

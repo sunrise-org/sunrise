@@ -288,8 +288,8 @@ pub struct Renderer {
     pub(crate) section_copy_bytes: u64,
     /// When a large translucent page may start to shrink (`shrink_translucent`).
     pub(crate) shrink_gate: ShrinkGate,
-    /// Whether `lightmap` holds `lightmap_chart`'s native pixels yet.
-    pub(crate) lightmap_uploaded: bool,
+    /// Whether `lightmap` holds the white texture (fullbright, or no lightmap pipeline).
+    pub(crate) lightmap_white: bool,
     pub(crate) sprite_minimum_size: u32,
     /// Each sprite layer's own side, before the arrays scaled it up (`mipmap::Settings::native_size`).
     pub(crate) sprite_native: Vec<u32>,

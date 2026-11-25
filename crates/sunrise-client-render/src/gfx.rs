@@ -204,6 +204,7 @@ pub mod compositor;
 pub(crate) mod core_clouds;
 pub(crate) mod core_lightmap;
 pub use core_lightmap::SHADERS as LIGHTMAP_SHADERS;
+pub use core_lightmap::ShaderOrigin;
 pub(crate) mod core_lines;
 mod core_particles;
 mod particle_draws;

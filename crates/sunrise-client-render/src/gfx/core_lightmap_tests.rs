@@ -168,7 +168,7 @@ fn a_pack_lightmap_with_an_older_larger_info_block_draws() {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = lightmap_for(&device, Some(&program), &[])
+    let mut core = lightmap_for(&device, Some(&program), &[], ShaderOrigin::Vanilla)
         .unwrap_or_else(|e| panic!("{e}"))
         .expect("the lightmap pipeline");
     core.set_readback(&device, true);
@@ -199,7 +199,8 @@ fn a_pack_lightmap_shader_fills_the_texture_by_sky_row_and_block_column() {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = CoreLightmap::new(&device, &program, &[]).expect("the lightmap pipeline");
+    let mut core = CoreLightmap::new(&device, &program, &[], ShaderOrigin::Vanilla)
+        .expect("the lightmap pipeline");
     core.set_readback(&device, true);
     let pixels = draw(&device, &queue, &mut core, &PROBE);
     for sky in 0..16usize {
@@ -304,7 +305,8 @@ fn stores_the_nearest_byte(device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = CoreLightmap::new(device, &program, &[]).expect("the lightmap pipeline");
+    let mut core = CoreLightmap::new(device, &program, &[], ShaderOrigin::Vanilla)
+        .expect("the lightmap pipeline");
     core.set_readback(device, true);
     let pixels = draw(device, queue, &mut core, &PROBE);
     match (pixels[0], pixels[2]) {
@@ -357,7 +359,8 @@ fn vanillas_lightmap_shaders_draw_vanillas_light_texture() {
         eprintln!("skipped: this adapter does not store a unorm byte as the nearest one");
         return;
     }
-    let mut core = CoreLightmap::new(&device, &program, &[]).expect("the lightmap pipeline");
+    let mut core = CoreLightmap::new(&device, &program, &[], ShaderOrigin::Vanilla)
+        .expect("the lightmap pipeline");
     core.set_readback(&device, true);
     let expected = vanilla_textures();
     for (info, want) in STATES.iter().zip(expected) {
@@ -391,7 +394,8 @@ fn the_light_texture_is_read_back_only_while_f3_charts_it() {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = CoreLightmap::new(&device, &program, &[]).expect("the lightmap pipeline");
+    let mut core = CoreLightmap::new(&device, &program, &[], ShaderOrigin::Vanilla)
+        .expect("the lightmap pipeline");
     // One frame: its uniforms, its draw, its submission, and the readback it starts (if any).
     let frame = |core: &mut CoreLightmap, info: &LightmapInfo| {
         let (buffer, data) = core.uniforms([0; 48], info);
@@ -501,7 +505,8 @@ fn a_lightmap_shader_reads_its_expression_uniforms_values() {
         return;
     };
     let (program, expressions) = expression_lightmap(0, 2);
-    let mut core = CoreLightmap::new(&device, &program, &expressions).expect("the pipeline");
+    let mut core = CoreLightmap::new(&device, &program, &expressions, ShaderOrigin::Vanilla)
+        .expect("the pipeline");
     core.set_readback(&device, true);
     let names: Vec<String> = (core.extra.values().iter())
         .map(|(e, _)| e.name.clone())
@@ -563,7 +568,8 @@ fn a_lightmap_shader_reads_poly_globals() {
             &[INFO_BLOCK, sunrise_polytone::globals::BLOCK],
         )
         .expect("the uniforms resolve");
-    let mut core = CoreLightmap::new(&device, &program, &expressions).expect("the pipeline");
+    let mut core = CoreLightmap::new(&device, &program, &expressions, ShaderOrigin::Vanilla)
+        .expect("the pipeline");
     core.set_readback(&device, true);
     assert!(core.extra.reads_globals());
     core.extra.evaluate(&Default::default());
@@ -586,9 +592,9 @@ fn a_lightmap_shader_reads_poly_globals() {
 /// A device binds at most `max_uniform_buffers_per_shader_stage` blocks to each stage (12 by
 /// default): each block counts only for the stages that read it. Seven expression uniforms in
 /// each stage are drawn (seven and eight with `LightmapInfo`), and eleven in the fragment stage
-/// beside `LightmapInfo`; twelve there are past wgpu's default limit, which vanilla's device
-/// isn't held to: the light texture is computed natively and the pack stays, the note naming
-/// the stage, its 13 blocks and the limit.
+/// beside `LightmapInfo`; twelve there are past the device's limit, which fails the load as a
+/// program the driver doesn't link fails vanilla's: the refusal names the pipeline, the stage,
+/// its 13 blocks and the limit.
 #[test]
 #[ignore = "daily"]
 fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
@@ -599,25 +605,18 @@ fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
     assert_eq!(device.limits().max_uniform_buffers_per_shader_stage, 12);
     let made = |vertex, fragment| {
         let (program, expressions) = expression_lightmap(vertex, fragment);
-        let past = program.past_device_limit(&device.limits(), &[wgpu::TextureFormat::Rgba8Unorm]);
-        let made = lightmap_for(&device, Some(&program), &expressions)
-            .unwrap_or_else(|e| panic!("{e}"))
-            .is_some();
-        (made, past)
+        lightmap_for(&device, Some(&program), &expressions, ShaderOrigin::Pack)
+            .map(|made| made.is_some())
     };
-    assert_eq!(made(7, 7), (true, None));
-    assert_eq!(made(0, 11), (true, None));
-    assert_eq!(
-        made(0, 12),
-        (
-            false,
-            Some(sunrise_glsl::PastDeviceLimit::UniformBlocks {
-                stage: wgpu::ShaderStages::FRAGMENT,
-                blocks: 13,
-                limit: 12
-            })
-        )
-    );
+    assert_eq!(made(7, 7), Ok(true));
+    assert_eq!(made(0, 11), Ok(true));
+    let past = sunrise_glsl::PastDeviceLimit::UniformBlocks {
+        stage: wgpu::ShaderStages::FRAGMENT,
+        blocks: 13,
+        limit: 12,
+    };
+    let pipeline = crate::hud::pack_text::LIGHTMAP[0].pipeline;
+    assert_eq!(made(0, 12), Err(format!("{pipeline}: {past}")));
 }
 
 /// What F3's lightmap chart paints across the chart closing and opening again and fullbright
@@ -626,33 +625,32 @@ fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
 #[test]
 fn the_lightmap_chart_never_shows_a_stale_sample() {
     let mut chart = LightmapChart::new();
-    let pack = Drawn::now(false, true);
-    let (native, white) = (Drawn::now(false, false), Drawn::now(true, true));
+    let drawn = Drawn::now(false, true);
+    let (no_pipeline, fullbright) = (Drawn::now(false, false), Drawn::now(true, true));
     assert_eq!(
-        (pack, native, white),
-        (Drawn::Pack, Drawn::Native, Drawn::Native)
+        (drawn, no_pipeline, fullbright),
+        (Drawn::Shader, Drawn::White, Drawn::White)
     );
-    assert_eq!(chart.shown(pack), None, "nothing read yet");
-    // The chart open: a pack-drawn copy lands.
+    assert_eq!(chart.shown(drawn), None, "nothing read yet");
+    // The chart open: a drawn copy lands.
     chart.pixels = [9; 16 * 16 * 4];
-    chart.pack_copied();
-    assert_eq!(chart.shown(pack), Some(&[9; 16 * 16 * 4]));
+    chart.copied();
+    assert_eq!(chart.shown(drawn), Some(&[9; 16 * 16 * 4]));
     // Closed, then opened again: nothing until a fresh copy.
-    chart.forget_pack();
-    assert_eq!(chart.shown(pack), None);
+    chart.forget_drawn();
+    assert_eq!(chart.shown(drawn), None);
     chart.pixels = [10; 16 * 16 * 4];
-    chart.pack_copied();
-    assert_eq!(chart.shown(pack), Some(&[10; 16 * 16 * 4]));
-    // Fullbright on: the pack's copy is not the white texture drawn now, until the native path
-    // writes it.
-    assert_eq!(chart.shown(white), None);
-    chart.native([255; 16 * 16 * 4]);
-    assert_eq!(chart.shown(white), Some(&[255; 16 * 16 * 4]));
-    // Fullbright off with the pack's shader: the white pixels are not its texture.
-    assert_eq!(chart.shown(pack), None);
-    // Closing the chart leaves a native sample alone: it is current.
-    chart.forget_pack();
-    assert_eq!(chart.shown(native), Some(&[255; 16 * 16 * 4]));
+    chart.copied();
+    assert_eq!(chart.shown(drawn), Some(&[10; 16 * 16 * 4]));
+    // Fullbright on: the drawn copy is not the white texture shown now, until white goes up.
+    assert_eq!(chart.shown(fullbright), None);
+    chart.white();
+    assert_eq!(chart.shown(fullbright), Some(&[255; 16 * 16 * 4]));
+    // Fullbright off with the shader drawing: the white pixels are not its texture.
+    assert_eq!(chart.shown(drawn), None);
+    // Closing the chart leaves the white sample alone: it is current.
+    chart.forget_drawn();
+    assert_eq!(chart.shown(fullbright), Some(&[255; 16 * 16 * 4]));
 }
 
 /// Fullbright stops a pack's shader with copies mapped or still in flight: once it draws again,
@@ -673,7 +671,8 @@ fn copies_from_before_fullbright_are_never_read() {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = CoreLightmap::new(&device, &program, &[]).expect("the lightmap pipeline");
+    let mut core = CoreLightmap::new(&device, &program, &[], ShaderOrigin::Vanilla)
+        .expect("the lightmap pipeline");
     core.set_readback(&device, true);
     let frame = |core: &mut CoreLightmap, info: &LightmapInfo, poll: bool| {
         let (buffer, data) = core.uniforms([0; 48], info);
@@ -703,11 +702,4 @@ fn copies_from_before_fullbright_are_never_read() {
     frame(&mut core, &STATES[0], true);
     assert!(core.collect(&mut pixels));
     assert_eq!(pixels[2], 0);
-}
-
-/// The `notGamma` scale multiplies left to right as `lightmap.fsh` writes it. At 0.0015 Java's
-/// float `1.0f - x * x * x * x` (jshell) gives bits 1002711808; squaring twice gives 1002711680.
-#[test]
-fn the_not_gamma_scale_multiplies_in_the_shaders_order() {
-    assert_eq!(max_scaled(0.0015).to_bits(), 1_002_711_808);
 }
