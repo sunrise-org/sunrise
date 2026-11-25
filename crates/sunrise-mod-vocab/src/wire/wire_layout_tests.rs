@@ -22,8 +22,22 @@ fn checked_records_have_declared_field_bytes() {
     );
     fields(JavaString(vec![65, 0xd800, 90]), (vec![65u16, 0xd800, 90],));
     fields(
-        EnchantmentInfo::new("example:keen".to_owned(), 5, 10, 1, false),
-        ("example:keen".to_owned(), 5u32, 10u32, 1u32, false),
+        EnchantmentInfo::new(
+            "example:keen".to_owned(),
+            5,
+            10,
+            1,
+            false,
+            crate::Text::translate("enchantment.example.keen", Vec::new()),
+        ),
+        (
+            "example:keen".to_owned(),
+            5u32,
+            10u32,
+            1u32,
+            false,
+            crate::Text::translate("enchantment.example.keen", Vec::new()),
+        ),
     );
     let mut nbt = Compound::new();
     nbt.insert("answer".into(), Tag::Int(42));

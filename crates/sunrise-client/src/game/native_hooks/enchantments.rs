@@ -16,6 +16,8 @@ impl Game<'_> {
                     e.weight,
                     e.anvil_cost,
                     enchantments.is_curse(&e.id),
+                    crate::game::api_values::TryIntoApi::try_into_api(&e.description_text)
+                        .unwrap_or_else(|_| mod_api::Text::literal(e.description.clone())),
                 )
             })
             .collect()

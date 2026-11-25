@@ -250,6 +250,9 @@ pub struct Enchantment {
     pub description: String,
     /// `description`'s translation key (`enchantment.minecraft.<name>`).
     pub description_key: String,
+    /// `Enchantment.description`, the definition's component as written: a translatable key
+    /// with its fallback and arguments, or a literal, with its style.
+    pub description_text: sunrise_client_core::text::Text,
     pub max_level: u32,
     pub weight: u32,
     pub anvil_cost: u32,
@@ -473,6 +476,11 @@ fn parse_entry(
             }
         }),
         description_key: key.to_owned(),
+        description_text: if v["description"].is_null() {
+            sunrise_client_core::text::Text::literal(id)
+        } else {
+            sunrise_client_core::scoreboard::comp_text(&v["description"])
+        },
         max_level: v["max_level"].as_u64().unwrap_or(1) as u32,
         weight: v["weight"].as_u64().unwrap_or(1) as u32,
         anvil_cost: v["anvil_cost"].as_u64().unwrap_or(0) as u32,
@@ -2012,6 +2020,7 @@ pub mod tests {
                 id: Arc::from(*id),
                 description: id.trim_start_matches("minecraft:").into(),
                 description_key: v["description"]["translate"].as_str().unwrap_or("").into(),
+                description_text: sunrise_client_core::scoreboard::comp_text(&v["description"]),
                 max_level: v["max_level"].as_u64().unwrap() as u32,
                 weight: v["weight"].as_u64().unwrap() as u32,
                 anvil_cost: v["anvil_cost"].as_u64().unwrap() as u32,
@@ -2634,6 +2643,7 @@ mod ignite_tests {
             id: Arc::from("minecraft:fire_aspect"),
             description: "fire_aspect".into(),
             description_key: String::new(),
+            description_text: sunrise_client_core::text::Text::literal("fire_aspect"),
             max_level: 2,
             weight: 2,
             anvil_cost: 4,

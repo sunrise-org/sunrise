@@ -14,6 +14,13 @@ fn enchantment_registry_returns_records_and_unknown_cost() {
                 assert_eq!(facts("minecraft:sharpness"), (5, 10, 1, false));
                 assert_eq!(facts("minecraft:binding_curse"), (1, 1, 8, true));
                 assert_eq!(facts("minecraft:mending"), (1, 2, 4, false));
+                // `Enchantment.description`: vanilla's are translatable keys.
+                let sharpness = all.iter().find(|e| e.id == "minecraft:sharpness").unwrap();
+                assert!(matches!(
+                    &sharpness.description.content,
+                    mod_api::text::TextContent::Translatable { key, .. }
+                        if key == "enchantment.minecraft.sharpness"
+                ));
                 assert!(
                     game.enchantment_min_cost("minecraft:sharpness", 1)
                         .is_some()
@@ -59,6 +66,8 @@ fn a_servers_synced_enchantment_reaches_the_registry_reads() {
                     (3, 7, 6, false)
                 );
                 assert_eq!(game.enchantment_min_cost("fixture:drill", 1), Some(4));
+                // A data pack's literal description stays literal.
+                assert_eq!(drill.description, mod_api::Text::literal("Drill"));
             });
         },
     );
