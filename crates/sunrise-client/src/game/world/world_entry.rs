@@ -561,8 +561,17 @@ impl Game<'_> {
         );
         pack_tags.insert("damage_type", damage_tags);
 
-        let datapack_candidate =
-            Self::stage_datapack_registries(stack, root, &registry_overlay, &mut view);
+        let datapack_candidate = self.stage_datapack_registries(
+            stack,
+            root,
+            &registry_overlay,
+            &mut view,
+            &load_conditions::VanillaValueInputs {
+                items: &items,
+                tag_files: &tag_files,
+                biomes: &biomes.table,
+            },
+        );
         // The downstream reload listeners see every completed producer and the
         // world's flags, not the codec's vanilla flags or a previous generation.
         let conditions = view
@@ -664,8 +673,13 @@ impl Game<'_> {
         );
         self.prepare_professions(root, &items, &mut stations)?;
         // Use the same candidate's IDs and bound tags for data map targets.
-        let datapack_registries =
-            datapack_candidate?.map(mod_api::DatapackRegistrySet::from_candidate);
+        let (datapack_registries, datapack_vanilla_values) = match datapack_candidate? {
+            Some((candidate, values)) => (
+                Some(mod_api::DatapackRegistrySet::from_candidate(candidate)),
+                values,
+            ),
+            None => (None, None),
+        };
         let datapack_set = if self.is_logical_server() {
             datapack_registries.as_ref()
         } else {
@@ -767,6 +781,7 @@ impl Game<'_> {
             advancements,
             health,
             datapack_registries,
+            datapack_vanilla_values,
         })
     }
     /// A world open's tables, and the first generation of the registries the mods declared.
@@ -782,6 +797,7 @@ impl Game<'_> {
         self.world_tables = staged.tables;
         self.health_resources = staged.health;
         self.mods.datapack_registries = staged.datapack_registries.map(Arc::new);
+        self.mods.datapack_vanilla_values = staged.datapack_vanilla_values.map(Arc::new);
         self.adv.tree = staged.advancements;
         self.adv.reset_tree();
         self.load_server_loot();
@@ -799,7 +815,7 @@ impl Game<'_> {
     }
     /// Sends each joined Sunrise client the snapshot of the set just published, built from the
     /// offer owned by its connection. A refused replacement ends that connection with its reason.
-    fn send_datapack_snapshots(&mut self) {
+    pub(super) fn send_datapack_snapshots(&mut self) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
@@ -826,6 +842,7 @@ impl Game<'_> {
             wire,
             wire_tags,
             datapack_registries,
+            datapack_vanilla_values,
         } = prepared;
         self.close_stonecutters_for_reload();
         lan::sync::forget_server_sources();
@@ -845,6 +862,7 @@ impl Game<'_> {
             );
         }
         self.mods.datapack_registries = datapack_registries.map(Arc::new);
+        self.mods.datapack_vanilla_values = datapack_vanilla_values.map(Arc::new);
         self.health_resources = health;
         self.world_tables = tables;
         // Publish the paired item and world evaluators before any callbacks.
@@ -865,7 +883,6 @@ impl Game<'_> {
             world.pois.clear();
         }
         sunrise_client::datapack_net::serve(self.mods.datapack_registries.clone());
-        self.send_datapack_snapshots();
         self.refresh_recipe_property_context();
         self.structure_spawns = structure_spawns;
         self.refresh_infiniburn();
@@ -889,6 +906,17 @@ impl Game<'_> {
             && let Some(sync) = wire
         {
             self.with_advancement_hub(|hub, owners| hub.reload_resources(sync, owners));
+        }
+        // Send datapack snapshots after `UpdateTags` so clients re-decoding vanilla values
+        // (`HolderSet` / `BlockPredicate` tags) already hold the reload's tags. When native mods
+        // defer `finish_reload_resources` until `run_native_advancement_grants`, that path sends
+        // the snapshots right after `UpdateTags`.
+        if !self
+            .lan
+            .as_ref()
+            .is_some_and(|lan| lan.hub.native_reload_pending)
+        {
+            self.send_datapack_snapshots();
         }
         self.adv.tree = advancements;
         self.adv.reset_tree();
@@ -1023,6 +1051,7 @@ impl Game<'_> {
             advancements,
             health,
             datapack_registries,
+            datapack_vanilla_values,
             ..
         } = self.stage_world_tables(stack, true, root)?;
         let items = tables
@@ -1078,6 +1107,7 @@ impl Game<'_> {
             wire,
             wire_tags,
             datapack_registries,
+            datapack_vanilla_values,
         })
     }
 

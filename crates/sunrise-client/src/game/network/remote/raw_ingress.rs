@@ -75,6 +75,25 @@ impl Game<'_> {
         self.poll_remote_events(true).unwrap();
     }
 
+    #[cfg(test)]
+    pub(in crate::game) fn drain_test_remote_join(&mut self) {
+        self.wait_for_test_remote_event(|event| matches!(event, Event::Joined { .. }));
+        self.poll_remote_events(true).unwrap();
+    }
+
+    #[cfg(test)]
+    pub(in crate::game) fn dispatch_test_remote_event(&mut self, event: Event) -> Result<()> {
+        let (tx, rx) = sunrise_client::net::ingress::channel(1024, |_| 1).unwrap();
+        tx.send(event).unwrap();
+        let (event, credit) = rx.try_recv_owned().unwrap().into_parts();
+        self.remote
+            .as_mut()
+            .unwrap()
+            .backlog
+            .push_back(Received::Event(event, credit));
+        self.poll_remote_events(true)
+    }
+
     /// `Minecraft.runTick`: exhaust the packet phase before starting client tasks. A
     /// worker-decoded column defers its position, every later packet and the task phase.
     pub(super) fn poll_remote_events(&mut self, before_tick: bool) -> Result<()> {
@@ -388,11 +407,16 @@ impl Game<'_> {
                 name,
                 uuid,
             } => {
-                if let Some(remote) = &mut self.remote {
-                    remote.datapacks = datapacks;
-                }
                 if let Err(error) = self.set_registries(registries) {
                     return self.refuse_remote_input(error);
+                }
+                // Vanilla `ClientConfigurationPacketListenerImpl.handleConfigurationFinished` ->
+                // `RegistryDataCollector.collectGameRegistries` throws on registry decode failure
+                // and disconnects via `ClientCommonPacketListenerImpl.onPacketError`.
+                if let Err(error) = self.install_client_datapack_receiver(datapacks) {
+                    log::warn!("Sunrise: failed to bind datapack vanilla values: {error}");
+                    self.record_packet_error(turn, packet_error_notice);
+                    return Ok(());
                 }
                 self.connection_joined();
                 self.close_dialogs();
@@ -468,6 +492,7 @@ impl Game<'_> {
                 // own features again.
                 if let Some(remote) = &mut self.remote {
                     remote.datapacks = Default::default();
+                    remote.datapack_vanilla_values = None;
                     remote.has_logical_player = false;
                     remote.viewed.clear();
                     remote.far_terrain = None;
@@ -518,7 +543,8 @@ impl Game<'_> {
                 self.score.board = Default::default();
                 self.clear_waypoints();
                 if let Some(r) = self.remote.as_mut() {
-                    r.datapacks = datapacks;
+                    r.datapacks = Default::default();
+                    r.datapack_vanilla_values = None;
                     r.clear_attachments();
                     r.players.clear();
                     r.tab_players.clear();
@@ -531,6 +557,13 @@ impl Game<'_> {
                     r.custom_completions.clear();
                 }
                 self.ui.registries.custom_completions.clear();
+                // Vanilla `ClientConfigurationPacketListenerImpl.handleConfigurationFinished` ->
+                // `RegistryDataCollector.collectGameRegistries` disconnects via `onPacketError`.
+                if let Err(error) = self.install_client_datapack_receiver(datapacks) {
+                    log::warn!("Sunrise: failed to bind datapack vanilla values: {error}");
+                    self.record_packet_error(turn, packet_error_notice);
+                    return Ok(());
+                }
                 self.begin_book_negotiation();
             }
             Event::Transfer(task) => {
@@ -657,7 +690,7 @@ impl Game<'_> {
 
 /// Protocol error raised while handling a play packet (`ClientCommonPacketListenerImpl.onPacketError`).
 #[derive(Debug)]
-pub(super) struct PacketError(pub(super) &'static str);
+pub(in crate::game) struct PacketError(pub(super) &'static str);
 
 impl std::fmt::Display for PacketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

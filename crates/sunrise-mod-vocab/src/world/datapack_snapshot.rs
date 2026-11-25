@@ -3,7 +3,7 @@
 //! registries a peer gets and carrying the bytes are the game's.
 use super::datapack_registry::{
     DatapackEntry, DatapackField, DatapackRegistryDeclaration, DatapackRegistrySync, DatapackValue,
-    valid_namespaced,
+    unbind_vanilla_values, valid_namespaced,
 };
 use super::datapack_registry_set::{
     DatapackCandidate, DatapackLoadError, DatapackRegistrySet, resolve_references,
@@ -129,7 +129,15 @@ impl DatapackRegistrySet {
                         .iter()
                         .map(|(id, entry)| DatapackSnapshotEntry {
                             id: id.clone(),
-                            values: entry.values.iter().map(|(_, v)| v.clone()).collect(),
+                            values: entry
+                                .values
+                                .iter()
+                                .map(|(_, v)| {
+                                    let mut wire_value = v.clone();
+                                    unbind_vanilla_values(&mut wire_value);
+                                    wire_value
+                                })
+                                .collect(),
                         })
                         .collect(),
                 })
@@ -265,12 +273,15 @@ impl DatapackSnapshot {
                 {
                     return Err(invalid());
                 }
-                let values = declaration
+                let mut values: Vec<(String, DatapackValue)> = declaration
                     .fields
                     .iter()
                     .map(|field| field.name.clone())
                     .zip(entry.values.iter().cloned())
                     .collect();
+                for (_, value) in &mut values {
+                    unbind_vanilla_values(value);
+                }
                 if entries
                     .insert(entry.id.clone(), DatapackEntry { values })
                     .is_some()
@@ -305,7 +316,7 @@ impl DatapackSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::datapack_registry::DatapackFieldKind;
+    use crate::world::datapack_registry::{DatapackFieldKind, NoVanillaValueDecoder};
 
     fn spell(sync: DatapackRegistrySync) -> DatapackRegistryDeclaration {
         DatapackRegistryDeclaration {
@@ -339,8 +350,12 @@ mod tests {
                 )],
             ),
         ];
-        let mut candidate =
-            DatapackCandidate::build(std::slice::from_ref(declaration), &files).unwrap();
+        let mut candidate = DatapackCandidate::build(
+            std::slice::from_ref(declaration),
+            &files,
+            &mut NoVanillaValueDecoder,
+        )
+        .unwrap();
         candidate
             .bind_tags(
                 "example:spell",
@@ -429,6 +444,7 @@ mod tests {
                     "data/addon/example/spell/fire.json".to_owned(),
                     vec![("pack".to_owned(), br#"{"power": 9}"#.to_vec())],
                 )],
+                &mut NoVanillaValueDecoder,
             )
             .unwrap(),
         );
@@ -835,7 +851,8 @@ mod tests {
                             .to_vec(),
                     )],
                 )],
-            )
+&mut NoVanillaValueDecoder,
+)
             .unwrap(),
         );
         let snapshot = server.snapshot(std::slice::from_ref(&declaration), |_| true);

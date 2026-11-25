@@ -25,6 +25,7 @@ fn candidate_registry_folders_do_not_choose_between_two_declared_registries() {
         &mut view,
         &declarations,
         &files,
+        &mut mod_api::__private::NoVanillaValueDecoder,
     )
     .unwrap();
     let conditions = view.conditions(&base);

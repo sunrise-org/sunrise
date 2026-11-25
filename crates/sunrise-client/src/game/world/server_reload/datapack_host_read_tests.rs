@@ -72,6 +72,7 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                                 vec![("pack".to_owned(), br#"{"power":3}"#.to_vec())],
                             ),
                         ],
+                        &mut mod_api::__private::NoVanillaValueDecoder,
                     )
                     .unwrap()
                 };
@@ -206,6 +207,7 @@ fn native_datapack_host_reads_enforce_level_session_and_generation() {
                         "data/registry_test/registry_test/spell/fire.json".into(),
                         vec![("pack".to_owned(), br#"{"power":19}"#.to_vec())],
                     )],
+                    &mut mod_api::__private::NoVanillaValueDecoder,
                 )
                 .unwrap();
                 sunrise_client::datapack_net::serve(Some(std::sync::Arc::new(

@@ -1259,11 +1259,19 @@ impl Game<'_> {
                 hub.finish_native_first_tick(&task, &fresh, owners);
             });
         }
-        self.with_advancement_hub(|hub, owners| {
-            if hub.native_reload_pending {
-                hub.finish_reload_resources(owners);
-            }
-        });
+        let finished_reload = self
+            .with_advancement_hub(|hub, owners| {
+                if hub.native_reload_pending {
+                    hub.finish_reload_resources(owners);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if finished_reload {
+            self.send_datapack_snapshots();
+        }
     }
     /// `PlayerAdvancements.progressChanged`, kept for a network player's client.
     fn progress_changed(&mut self, index: usize) {

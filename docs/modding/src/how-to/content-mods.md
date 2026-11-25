@@ -1138,7 +1138,19 @@ entry's record schema. Its scalar kinds are `Bool`, `Int { min, max }`, `Float {
   `DatapackVariant`s the schema lists, with that variant's fields beside it (`Codec.dispatch`). The id reads as
   vanilla's `byNameCodec` reads one (`growing` is `minecraft:growing`), and an id no variant declares fails the
   entry. `variant_id` names the variant, and `get` reads its fields. Only the declaring mod lists variants; there
-  is no way for another mod to add one.
+  is no way for another mod to add one;
+- Four vanilla codec kinds, decoded by the engine at load (and re-decoded on clients for synced registries) into
+  small `Copy` handles you copy out of `level.datapack_read` and evaluate afterwards:
+  - `IntProvider { min, max }` (`IntProviders.codec(min, max)`): `as_int_provider()` gives an `IntProviderValue`,
+    evaluated with `value.sample(host, random)`;
+  - `BlockStateProvider` (`BlockStateProvider.CODEC`): `as_block_state_provider()` gives a
+    `BlockStateProviderValue`, evaluated with `value.state(host, level, random, pos)`;
+  - `BlockPredicate` (`BlockPredicate.CODEC`): `as_block_predicate()` gives a `BlockPredicateValue`, evaluated
+    with `value.test(host, level, pos)`;
+  - `HolderSet { registry }` (`RegistryCodecs.homogeneousList`, `minecraft:block` only; any other registry is
+    refused at registration): `as_holder_set()` gives a `HolderSetValue`, queried with `value.contains(host, block)`.
+  Handles carry the load's generation number: after `/reload` (or a client snapshot swap), evaluating an older
+  handle returns `Err(DatapackValueError::Stale)` instead of panicking.
 
 Each field, at any depth, is required (`DatapackField::required`), given a default (`with_default`) or optional with
 no default (`DatapackField::optional`, `optionalFieldOf`), which reads as `None` when left out. An optional kind

@@ -485,6 +485,7 @@ fn generic_client_entries_use_only_builtin_synced_and_negotiated_tables() {
                             vec![("fixture".into(), br#"{"power":9}"#.to_vec())],
                         ),
                     ],
+                    &mut mod_api::__private::NoVanillaValueDecoder,
                 )
                 .unwrap();
                 candidate

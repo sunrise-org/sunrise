@@ -61,6 +61,10 @@ impl<'r> StateProviderBindings<'r> {
         ]);
         Ok(self)
     }
+    pub fn with_bound_properties(mut self, properties: [BoundBlockProperty; 4]) -> Self {
+        self.physical_properties = Some(properties);
+        self
+    }
     pub fn with_biomes(
         mut self,
         biomes: Arc<super::biome_predicate::BiomePredicateBindings>,

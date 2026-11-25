@@ -168,6 +168,7 @@ fn client_level_notices_pair_across_replacement_reconfiguration_leave_and_quit()
                                 format!(r#"{{"power":{power}}}"#).into_bytes(),
                             )],
                         )],
+                        &mut mod_api::__private::NoVanillaValueDecoder,
                     )
                     .unwrap()
                 };

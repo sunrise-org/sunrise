@@ -74,6 +74,7 @@ fn candidate(power: i64) -> DatapackCandidate {
             "data/addon/example/spell/fire.json".to_owned(),
             vec![("pack".to_owned(), file)],
         )],
+        &mut mod_api::__private::NoVanillaValueDecoder,
     )
     .unwrap()
 }

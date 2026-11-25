@@ -11,6 +11,7 @@ use super::{
     feature_graph::{FeatureDefinition, PlacedFeatureDefinition},
     generator::{GeneratorData, GeneratorError},
     placement::PlacementContext,
+    state_provider::StateProviderCatalog,
     tags::TagDefinitions,
 };
 use serde_json::Value;
@@ -172,6 +173,13 @@ impl LiveFeatures {
     }
     pub fn data(&self) -> &Arc<GeneratorData> {
         &self.data
+    }
+    /// The named block-state provider catalog (`worldgen/block_state_provider`), when present.
+    pub fn state_provider_catalog(&self) -> Option<&StateProviderCatalog> {
+        self.bindings
+            .simple_blocks
+            .as_ref()
+            .map(|(_, catalog, _)| catalog)
     }
     /// Registry identities are admitted by the same codecs used for live placement,
     /// not by the presence of source JSON in the worldgen bundle.

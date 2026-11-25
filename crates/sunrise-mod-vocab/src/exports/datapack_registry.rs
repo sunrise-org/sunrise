@@ -1,4 +1,8 @@
 pub use world::datapack_registry::{
+    BlockPredicateValue, BlockStateProviderValue, DatapackValueError, DatapackVanillaValue,
+    HolderSetValue, IntProviderValue,
+};
+pub use world::datapack_registry::{
     DatapackDecodeError, DatapackEntry, DatapackField, DatapackFieldKind, DatapackKeyKind,
     DatapackRegistrationError, DatapackRegistryDeclaration, DatapackRegistrySync, DatapackValue,
     DatapackVariant,
@@ -21,5 +25,8 @@ mod __private {
             DatapackCandidateBuilder, datapack_entry_id, datapack_tag_members,
         };
     }
-    pub use crate::world::datapack_registry_set::queued_datapack_set_bytes;
+    pub use crate::world::datapack_registry::{NoVanillaValueDecoder, VanillaValueDecoder};
+    pub use crate::world::datapack_registry_set::{
+        declarations_use_vanilla_values, queued_datapack_set_bytes, rebind_datapack_vanilla_values,
+    };
 }

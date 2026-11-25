@@ -68,7 +68,12 @@ fn reload_resolves_parts_against_reloaded_tags() {
         );
         let root = game.options.resources.clone();
         let previous = std::sync::Arc::new(mod_api::DatapackRegistrySet::from_candidate(
-            mod_api::DatapackCandidate::build(&[], &[]).unwrap(),
+            mod_api::DatapackCandidate::build(
+                &[],
+                &[],
+                &mut mod_api::__private::NoVanillaValueDecoder,
+            )
+            .unwrap(),
         ));
         sunrise_client::datapack_net::serve(Some(previous.clone()));
         let prepared = game.prepare_world_reload(&stack, &root).unwrap();

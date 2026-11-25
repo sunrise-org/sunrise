@@ -107,6 +107,259 @@ pub enum DatapackFieldKind {
         /// The variants, each an id and the fields that follow it.
         variants: Vec<DatapackVariant>,
     },
+    /// A vanilla `IntProvider` (`IntProviders.codec(min, max)`): an integer constant or a typed
+    /// provider (`constant`, `uniform`, `biased_to_bottom`, `very_biased_to_bottom`, `clamped`,
+    /// `weighted_list`, `clamped_normal`, `trapezoid`) whose minimum and maximum inclusive bounds
+    /// lie in `[min, max]`. Decodes to [`DatapackValue::Vanilla`]
+    /// ([`DatapackVanillaValue::IntProvider`]), read with [`DatapackValue::as_int_provider`] and
+    /// sampled through [`IntProviderValue::sample`].
+    IntProvider {
+        /// The lowest permitted provider minimum (`IntProviders.codec(min, max)`).
+        min: i32,
+        /// The highest permitted provider maximum (`IntProviders.codec(min, max)`).
+        max: i32,
+    },
+    /// A vanilla `BlockStateProvider` (`BlockStateProvider.CODEC`): a full block state object
+    /// (`BlockState.FULL_CODEC`), a typed provider (`simple`, `weighted`, `random_block`,
+    /// `rotated`, `copy_properties`, `randomized_int`, `rule_based`, `noise`, `noise_threshold`,
+    /// `dual_noise`), or a named provider holder in `worldgen/block_state_provider`. Decodes to
+    /// [`DatapackValue::Vanilla`] ([`DatapackVanillaValue::BlockStateProvider`]), read with
+    /// [`DatapackValue::as_block_state_provider`] and evaluated through
+    /// [`BlockStateProviderValue::state`].
+    BlockStateProvider,
+    /// A vanilla `BlockPredicate` (`BlockPredicate.CODEC`): `true`, `all_of`, `any_of`, `not`,
+    /// `matching_blocks`, `matching_block_tag`, `matching_fluids`, `matching_biomes`, `solid`,
+    /// `replaceable`, `would_survive`, `has_sturdy_face`, `unobstructed`, `height_range`,
+    /// `volume_match`, `inside_world_bounds`. Decodes to [`DatapackValue::Vanilla`]
+    /// ([`DatapackVanillaValue::BlockPredicate`]), read with [`DatapackValue::as_block_predicate`]
+    /// and evaluated through [`BlockPredicateValue::test`].
+    BlockPredicate,
+    /// A vanilla `HolderSet` (`RegistryCodecs.homogeneousList`): a single id, a list of ids, or
+    /// `#tag` (plus NeoForge compound holder sets). Currently only `minecraft:block` is accepted;
+    /// any other registry is refused at registration as
+    /// [`DatapackRegistrationError::InvalidFieldKind`]. Decodes to [`DatapackValue::Vanilla`]
+    /// ([`DatapackVanillaValue::HolderSet`]), read with [`DatapackValue::as_holder_set`] and
+    /// queried through [`HolderSetValue::contains`].
+    HolderSet {
+        /// The registry whose entries the holder set names (`minecraft:block`).
+        registry: String,
+    },
+}
+
+/// Why reading or evaluating a decoded vanilla datapack value handle failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum DatapackValueError {
+    /// The handle came from an earlier datapack load (before `/reload` or a client snapshot
+    /// replacement), or was never bound to a live load.
+    Stale,
+    /// No host backend answered, the level handle is stale or unloaded, or a level query failed.
+    Unavailable,
+    /// The block key is not known to this game.
+    UnknownBlock,
+    /// Evaluation failed inside the vanilla provider (for example an invalid random bound or
+    /// randomized property value).
+    EvaluationFailed,
+}
+
+impl crate::NoBackend for DatapackValueError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
+/// The engine-bound plumbing every vanilla value handle shares: the unbound handle, its
+/// construction from a load generation and slot, and the two reads.
+macro_rules! vanilla_value_handle {
+    ($handle:ident) => {
+        impl $handle {
+            pub(crate) const UNBOUND: Self = Self {
+                generation: 0,
+                index: 0,
+            };
+
+            /// Construct a handle for the engine's active decoded table.
+            // hidden: only the engine constructs bound handles for its decoded vanilla value table.
+            #[doc(hidden)]
+            pub const fn from_raw(generation: u64, index: u32) -> Self {
+                Self { generation, index }
+            }
+
+            /// The load generation this handle belongs to (`0` when unbound).
+            // hidden: only the engine checks a handle's load generation against its active table.
+            #[doc(hidden)]
+            pub const fn generation(self) -> u64 {
+                self.generation
+            }
+
+            /// The slot index within the load's decoded table.
+            // hidden: only the engine indexes its decoded vanilla value table by slot.
+            #[doc(hidden)]
+            pub const fn index(self) -> u32 {
+                self.index
+            }
+        }
+    };
+}
+
+/// An opaque handle to a decoded vanilla `IntProvider` (`IntProviders.codec(min, max)`) from one
+/// datapack load.
+///
+/// Copy this out of [`LevelRef::datapack_read`](crate::LevelRef::datapack_read) and call
+/// [`Self::sample`]. After `/reload` (or a client snapshot swap), handles from the earlier load
+/// return [`DatapackValueError::Stale`] rather than panicking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: opaque handle with private fields; only the game binds live handles
+pub struct IntProviderValue {
+    generation: u64,
+    index: u32,
+}
+
+vanilla_value_handle!(IntProviderValue);
+
+impl IntProviderValue {
+    /// Sample one integer from this provider using `random`, in vanilla's draw order
+    /// (`IntProvider.sample(RandomSource)`). Works on both sides where the registry syncs.
+    pub fn sample(
+        self,
+        host: &dyn crate::Host,
+        random: &mut dyn crate::RandomSource,
+    ) -> Result<i32, DatapackValueError> {
+        crate::backend_of(host)
+            .ok_or(DatapackValueError::Unavailable)?
+            .datapack_int_provider_sample(self, random)
+    }
+}
+
+/// An opaque handle to a decoded vanilla `BlockStateProvider` (`BlockStateProvider.CODEC`) from
+/// one datapack load.
+///
+/// Copy this out of [`LevelRef::datapack_read`](crate::LevelRef::datapack_read) and call
+/// [`Self::state`]. After `/reload` (or a client snapshot swap), handles from the earlier load
+/// return [`DatapackValueError::Stale`] rather than panicking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: opaque handle with private fields; only the game binds live handles
+pub struct BlockStateProviderValue {
+    generation: u64,
+    index: u32,
+}
+
+vanilla_value_handle!(BlockStateProviderValue);
+
+impl BlockStateProviderValue {
+    /// Evaluate this provider at `pos` in `level` using `random`
+    /// (`BlockStateProvider.getState(LevelAccessor, RandomSource, BlockPos)`). Works on both
+    /// sides where the registry syncs.
+    pub fn state(
+        self,
+        host: &dyn crate::Host,
+        level: crate::LevelRef,
+        random: &mut dyn crate::RandomSource,
+        pos: [i32; 3],
+    ) -> Result<crate::BlockState, DatapackValueError> {
+        crate::backend_of(host)
+            .ok_or(DatapackValueError::Unavailable)?
+            .datapack_block_state_provider_state(self, level, random, pos)
+    }
+}
+
+/// An opaque handle to a decoded vanilla `BlockPredicate` (`BlockPredicate.CODEC`) from one
+/// datapack load.
+///
+/// Copy this out of [`LevelRef::datapack_read`](crate::LevelRef::datapack_read) and call
+/// [`Self::test`]. After `/reload` (or a client snapshot swap), handles from the earlier load
+/// return [`DatapackValueError::Stale`] rather than panicking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: opaque handle with private fields; only the game binds live handles
+pub struct BlockPredicateValue {
+    generation: u64,
+    index: u32,
+}
+
+vanilla_value_handle!(BlockPredicateValue);
+
+impl BlockPredicateValue {
+    /// Test this predicate at `pos` in `level` (`BlockPredicate.test(WorldGenLevel, BlockPos)`).
+    /// Works on both sides where the registry syncs.
+    pub fn test(
+        self,
+        host: &dyn crate::Host,
+        level: crate::LevelRef,
+        pos: [i32; 3],
+    ) -> Result<bool, DatapackValueError> {
+        crate::backend_of(host)
+            .ok_or(DatapackValueError::Unavailable)?
+            .datapack_block_predicate_test(self, level, pos)
+    }
+}
+
+/// An opaque handle to a decoded vanilla `HolderSet` (`RegistryCodecs.homogeneousList`) from one
+/// datapack load.
+///
+/// Copy this out of [`LevelRef::datapack_read`](crate::LevelRef::datapack_read) and call
+/// [`Self::contains`]. After `/reload` (or a client snapshot swap), handles from the earlier load
+/// return [`DatapackValueError::Stale`] rather than panicking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
+// exhaustive: opaque handle with private fields; only the game binds live handles
+pub struct HolderSetValue {
+    generation: u64,
+    index: u32,
+}
+
+vanilla_value_handle!(HolderSetValue);
+
+impl HolderSetValue {
+    /// Whether `block` is a member of this block holder set (`HolderSet.contains`). Works on both
+    /// sides where the registry syncs.
+    pub fn contains(
+        self,
+        host: &dyn crate::Host,
+        block: crate::BlockKey,
+    ) -> Result<bool, DatapackValueError> {
+        crate::backend_of(host)
+            .ok_or(DatapackValueError::Unavailable)?
+            .datapack_holder_set_contains(self, block)
+    }
+}
+
+/// Engine-supplied decoder for vanilla datapack value kinds, exported through `__private`
+/// for `DatapackCandidate::build` and `rebind_datapack_vanilla_values`.
+pub trait VanillaValueDecoder {
+    /// Decode `IntProviders.codec(min, max)`.
+    fn decode_int_provider(
+        &mut self,
+        json: &str,
+        min: i32,
+        max: i32,
+    ) -> Result<IntProviderValue, String>;
+    /// Decode `BlockStateProvider.CODEC`.
+    fn decode_block_state_provider(
+        &mut self,
+        json: &str,
+    ) -> Result<BlockStateProviderValue, String>;
+    /// Decode `BlockPredicate.CODEC`.
+    fn decode_block_predicate(&mut self, json: &str) -> Result<BlockPredicateValue, String>;
+    /// Decode `RegistryCodecs.homogeneousList(registry)` (`minecraft:block`).
+    fn decode_holder_set(&mut self, registry: &str, json: &str) -> Result<HolderSetValue, String>;
+}
+
+/// A decoder for schemas with no vanilla value kind: every decode is refused.
+// exhaustive: a unit marker with no fields to add
+pub struct NoVanillaValueDecoder;
+impl VanillaValueDecoder for NoVanillaValueDecoder {
+    fn decode_int_provider(&mut self, _: &str, _: i32, _: i32) -> Result<IntProviderValue, String> {
+        Err("vanilla value kinds require an engine decoder".into())
+    }
+    fn decode_block_state_provider(&mut self, _: &str) -> Result<BlockStateProviderValue, String> {
+        Err("vanilla value kinds require an engine decoder".into())
+    }
+    fn decode_block_predicate(&mut self, _: &str) -> Result<BlockPredicateValue, String> {
+        Err("vanilla value kinds require an engine decoder".into())
+    }
+    fn decode_holder_set(&mut self, _: &str, _: &str) -> Result<HolderSetValue, String> {
+        Err("vanilla value kinds require an engine decoder".into())
+    }
 }
 
 /// One variant of a [`DatapackFieldKind::Dispatch`]: the id its key names and the record of
@@ -190,9 +443,132 @@ pub enum DatapackValue {
         /// The variant's fields.
         fields: Vec<(String, DatapackValue)>,
     },
+    /// A vanilla codec value ([`DatapackFieldKind::IntProvider`],
+    /// [`DatapackFieldKind::BlockStateProvider`], [`DatapackFieldKind::BlockPredicate`] or
+    /// [`DatapackFieldKind::HolderSet`]), boxed so recursive `DatapackValue` trees keep a small
+    /// stack frame.
+    Vanilla(Box<DatapackVanillaValue>),
+}
+
+/// Payload of [`DatapackValue::Vanilla`]: the value's canonical JSON text (synced over snapshots
+/// and re-decoded on clients) paired with its per-load handle.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum DatapackVanillaValue {
+    /// A [`DatapackFieldKind::IntProvider`].
+    IntProvider {
+        /// Canonical JSON text (synced over snapshots and re-decoded on clients).
+        json: String,
+        /// The handle into this load's decoded table.
+        value: IntProviderValue,
+    },
+    /// A [`DatapackFieldKind::BlockStateProvider`].
+    BlockStateProvider {
+        /// Canonical JSON text (synced over snapshots and re-decoded on clients).
+        json: String,
+        /// The handle into this load's decoded table.
+        value: BlockStateProviderValue,
+    },
+    /// A [`DatapackFieldKind::BlockPredicate`].
+    BlockPredicate {
+        /// Canonical JSON text (synced over snapshots and re-decoded on clients).
+        json: String,
+        /// The handle into this load's decoded table.
+        value: BlockPredicateValue,
+    },
+    /// A [`DatapackFieldKind::HolderSet`].
+    HolderSet {
+        /// The registry key (`minecraft:block`).
+        registry: String,
+        /// Canonical JSON text (synced over snapshots and re-decoded on clients).
+        json: String,
+        /// The handle into this load's decoded table.
+        value: HolderSetValue,
+    },
 }
 
 impl DatapackValue {
+    /// A schema default for [`DatapackFieldKind::IntProvider`], given as JSON text; bound into
+    /// each load's decoded table when an entry uses the default.
+    pub fn int_provider(json: &str) -> Self {
+        Self::Vanilla(Box::new(DatapackVanillaValue::IntProvider {
+            json: json.to_owned(),
+            value: IntProviderValue::UNBOUND,
+        }))
+    }
+
+    /// A schema default for [`DatapackFieldKind::BlockStateProvider`], given as JSON text; bound
+    /// into each load's decoded table when an entry uses the default.
+    pub fn block_state_provider(json: &str) -> Self {
+        Self::Vanilla(Box::new(DatapackVanillaValue::BlockStateProvider {
+            json: json.to_owned(),
+            value: BlockStateProviderValue::UNBOUND,
+        }))
+    }
+
+    /// A schema default for [`DatapackFieldKind::BlockPredicate`], given as JSON text; bound into
+    /// each load's decoded table when an entry uses the default.
+    pub fn block_predicate(json: &str) -> Self {
+        Self::Vanilla(Box::new(DatapackVanillaValue::BlockPredicate {
+            json: json.to_owned(),
+            value: BlockPredicateValue::UNBOUND,
+        }))
+    }
+
+    /// A schema default for [`DatapackFieldKind::HolderSet`], given as a registry key and JSON
+    /// text; bound into each load's decoded table when an entry uses the default.
+    pub fn holder_set(registry: &str, json: &str) -> Self {
+        Self::Vanilla(Box::new(DatapackVanillaValue::HolderSet {
+            registry: registry.to_owned(),
+            json: json.to_owned(),
+            value: HolderSetValue::UNBOUND,
+        }))
+    }
+
+    /// The handle of a [`DatapackFieldKind::IntProvider`].
+    pub fn as_int_provider(&self) -> Option<IntProviderValue> {
+        match self {
+            Self::Vanilla(vanilla) => match vanilla.as_ref() {
+                DatapackVanillaValue::IntProvider { value, .. } => Some(*value),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The handle of a [`DatapackFieldKind::BlockStateProvider`].
+    pub fn as_block_state_provider(&self) -> Option<BlockStateProviderValue> {
+        match self {
+            Self::Vanilla(vanilla) => match vanilla.as_ref() {
+                DatapackVanillaValue::BlockStateProvider { value, .. } => Some(*value),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The handle of a [`DatapackFieldKind::BlockPredicate`].
+    pub fn as_block_predicate(&self) -> Option<BlockPredicateValue> {
+        match self {
+            Self::Vanilla(vanilla) => match vanilla.as_ref() {
+                DatapackVanillaValue::BlockPredicate { value, .. } => Some(*value),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The handle of a [`DatapackFieldKind::HolderSet`].
+    pub fn as_holder_set(&self) -> Option<HolderSetValue> {
+        match self {
+            Self::Vanilla(vanilla) => match vanilla.as_ref() {
+                DatapackVanillaValue::HolderSet { value, .. } => Some(*value),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     /// The items of a list.
     pub fn as_list(&self) -> Option<&[DatapackValue]> {
         match self {
@@ -331,8 +707,9 @@ pub enum DatapackRegistrationError {
     InvalidFieldName,
     /// A field's kind is unusable: bounds that are not finite or `min > max`,
     /// a scalar text field's `max_len` of 0, a list's `min_len` over its `max_len`, an
-    /// optional kind nested in another, a reference to a malformed registry key, or a dispatch
-    /// with an empty key, no variants, or a variant id that is malformed or repeated, at any depth.
+    /// optional kind nested in another, a reference to a malformed registry key, a dispatch
+    /// with an empty key, no variants, or a variant id that is malformed or repeated, or a
+    /// holder set for a registry other than `minecraft:block`, at any depth.
     InvalidFieldKind,
     /// A default is not a value of its field's kind, or is out of its bounds.
     InvalidDefault,
@@ -418,6 +795,14 @@ pub enum DatapackDecodeError {
         field: String,
         /// The id it names, normalised.
         id: String,
+    },
+    /// A vanilla value kind (`IntProvider`, `BlockStateProvider`, `BlockPredicate` or
+    /// `HolderSet`) whose JSON the engine's vanilla codec refused.
+    InvalidVanillaValue {
+        /// The offending value's path (`behavior.blocks_to_grow`).
+        field: String,
+        /// Why the vanilla codec refused it.
+        reason: String,
     },
 }
 
@@ -519,6 +904,9 @@ impl DatapackFieldKind {
                 }
                 !key.is_empty() && !variants.is_empty()
             }
+            Self::IntProvider { min, max } => min <= max,
+            Self::BlockStateProvider | Self::BlockPredicate => true,
+            Self::HolderSet { registry } => registry == "minecraft:block",
         };
         if ok {
             Ok(())
@@ -573,6 +961,29 @@ impl DatapackFieldKind {
                 .iter()
                 .find(|variant| variant.id == *id)
                 .is_some_and(|variant| record_accepts(&variant.fields, fields)),
+            (Self::IntProvider { .. }, DatapackValue::Vanilla(vanilla)) => matches!(
+                vanilla.as_ref(),
+                DatapackVanillaValue::IntProvider { json, .. }
+                    if serde_json::from_str::<Value>(json).is_ok()
+            ),
+            (Self::BlockStateProvider, DatapackValue::Vanilla(vanilla)) => matches!(
+                vanilla.as_ref(),
+                DatapackVanillaValue::BlockStateProvider { json, .. }
+                    if serde_json::from_str::<Value>(json).is_ok()
+            ),
+            (Self::BlockPredicate, DatapackValue::Vanilla(vanilla)) => matches!(
+                vanilla.as_ref(),
+                DatapackVanillaValue::BlockPredicate { json, .. }
+                    if serde_json::from_str::<Value>(json).is_ok()
+            ),
+            (Self::HolderSet { registry }, DatapackValue::Vanilla(vanilla)) => matches!(
+                vanilla.as_ref(),
+                DatapackVanillaValue::HolderSet {
+                    registry: value_registry,
+                    json,
+                    ..
+                } if value_registry == registry && serde_json::from_str::<Value>(json).is_ok()
+            ),
             _ => false,
         }
     }
@@ -587,6 +998,10 @@ impl DatapackFieldKind {
             Self::List { .. } => "array",
             Self::Map { .. } | Self::Record { .. } | Self::Dispatch { .. } => "object",
             Self::Optional { of } => of.expected(),
+            Self::IntProvider { .. } => "integer or int provider object",
+            Self::BlockStateProvider => "block state or block state provider",
+            Self::BlockPredicate => "block predicate object",
+            Self::HolderSet { .. } => "block id, tag, or list",
         }
     }
 }
@@ -761,7 +1176,176 @@ fn normalize_value(
                 .zip(fields.iter_mut())
                 .try_for_each(|(field, (_, v))| normalize_value(&field.kind, v))
         }
+        (DatapackFieldKind::IntProvider { .. }, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::IntProvider { json, value } = vanilla.as_mut() {
+                canonicalize_json_default(json)?;
+                *value = IntProviderValue::UNBOUND;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::BlockStateProvider, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::BlockStateProvider { json, value } = vanilla.as_mut() {
+                canonicalize_json_default(json)?;
+                *value = BlockStateProviderValue::UNBOUND;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::BlockPredicate, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::BlockPredicate { json, value } = vanilla.as_mut() {
+                canonicalize_json_default(json)?;
+                *value = BlockPredicateValue::UNBOUND;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::HolderSet { .. }, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::HolderSet { json, value, .. } = vanilla.as_mut() {
+                canonicalize_json_default(json)?;
+                *value = HolderSetValue::UNBOUND;
+            }
+            Ok(())
+        }
         _ => Ok(()),
+    }
+}
+
+fn canonicalize_json_default(json: &mut String) -> Result<(), DatapackRegistrationError> {
+    let parsed: Json =
+        serde_json::from_str(json).map_err(|_| DatapackRegistrationError::InvalidDefault)?;
+    *json = parsed.to_canonical_json();
+    Ok(())
+}
+
+/// Whether any field in `fields` (at any depth) uses a vanilla value kind.
+pub(super) fn schema_has_vanilla_kind(fields: &[DatapackField]) -> bool {
+    fields.iter().any(|field| kind_has_vanilla(&field.kind))
+}
+
+fn kind_has_vanilla(kind: &DatapackFieldKind) -> bool {
+    match kind {
+        DatapackFieldKind::IntProvider { .. }
+        | DatapackFieldKind::BlockStateProvider
+        | DatapackFieldKind::BlockPredicate
+        | DatapackFieldKind::HolderSet { .. } => true,
+        DatapackFieldKind::List { of, .. } | DatapackFieldKind::Optional { of } => {
+            kind_has_vanilla(of)
+        }
+        DatapackFieldKind::Map { value, .. } => kind_has_vanilla(value),
+        DatapackFieldKind::Record { fields } => schema_has_vanilla_kind(fields),
+        DatapackFieldKind::Dispatch { variants, .. } => variants
+            .iter()
+            .any(|variant| schema_has_vanilla_kind(&variant.fields)),
+        _ => false,
+    }
+}
+
+/// Decode (or re-decode) every vanilla value inside `value` against `decoder`, binding its
+/// handle to `decoder`'s generation.
+pub(super) fn bind_vanilla_values(
+    kind: &DatapackFieldKind,
+    value: &mut DatapackValue,
+    path: &str,
+    decoder: &mut dyn VanillaValueDecoder,
+) -> Result<(), DatapackDecodeError> {
+    match (kind, value) {
+        (DatapackFieldKind::IntProvider { min, max }, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::IntProvider { json, value } = vanilla.as_mut() {
+                *value = decoder
+                    .decode_int_provider(json, *min, *max)
+                    .map_err(|reason| DatapackDecodeError::InvalidVanillaValue {
+                        field: path.to_owned(),
+                        reason,
+                    })?;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::BlockStateProvider, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::BlockStateProvider { json, value } = vanilla.as_mut() {
+                *value = decoder
+                    .decode_block_state_provider(json)
+                    .map_err(|reason| DatapackDecodeError::InvalidVanillaValue {
+                        field: path.to_owned(),
+                        reason,
+                    })?;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::BlockPredicate, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::BlockPredicate { json, value } = vanilla.as_mut() {
+                *value = decoder.decode_block_predicate(json).map_err(|reason| {
+                    DatapackDecodeError::InvalidVanillaValue {
+                        field: path.to_owned(),
+                        reason,
+                    }
+                })?;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::HolderSet { registry }, DatapackValue::Vanilla(vanilla)) => {
+            if let DatapackVanillaValue::HolderSet { json, value, .. } = vanilla.as_mut() {
+                *value = decoder
+                    .decode_holder_set(registry, json)
+                    .map_err(|reason| DatapackDecodeError::InvalidVanillaValue {
+                        field: path.to_owned(),
+                        reason,
+                    })?;
+            }
+            Ok(())
+        }
+        (DatapackFieldKind::Optional { .. }, DatapackValue::Absent) => Ok(()),
+        (DatapackFieldKind::Optional { of }, value) => {
+            bind_vanilla_values(of, value, path, decoder)
+        }
+        (DatapackFieldKind::List { of, .. }, DatapackValue::List(items)) => {
+            items.iter_mut().enumerate().try_for_each(|(n, item)| {
+                bind_vanilla_values(of, item, &format!("{path}[{n}]"), decoder)
+            })
+        }
+        (DatapackFieldKind::Map { value: kind, .. }, DatapackValue::Map(pairs)) => pairs
+            .iter_mut()
+            .try_for_each(|(k, v)| bind_vanilla_values(kind, v, &joined(path, k), decoder)),
+        (DatapackFieldKind::Record { fields }, DatapackValue::Record(pairs)) => fields
+            .iter()
+            .zip(pairs.iter_mut())
+            .try_for_each(|(field, (_, v))| {
+                bind_vanilla_values(&field.kind, v, &joined(path, &field.name), decoder)
+            }),
+        (DatapackFieldKind::Dispatch { variants, .. }, DatapackValue::Variant { id, fields }) => {
+            let Some(variant) = variants.iter().find(|variant| variant.id == *id) else {
+                return Ok(());
+            };
+            variant
+                .fields
+                .iter()
+                .zip(fields.iter_mut())
+                .try_for_each(|(field, (_, v))| {
+                    bind_vanilla_values(&field.kind, v, &joined(path, &field.name), decoder)
+                })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Clear every vanilla value handle inside `value` back to `UNBOUND` before wire serialization,
+/// so snapshots carry only canonical JSON and clients re-bind against their own tables.
+pub(super) fn unbind_vanilla_values(value: &mut DatapackValue) {
+    match value {
+        DatapackValue::Vanilla(vanilla) => match vanilla.as_mut() {
+            DatapackVanillaValue::IntProvider { value, .. } => *value = IntProviderValue::UNBOUND,
+            DatapackVanillaValue::BlockStateProvider { value, .. } => {
+                *value = BlockStateProviderValue::UNBOUND;
+            }
+            DatapackVanillaValue::BlockPredicate { value, .. } => {
+                *value = BlockPredicateValue::UNBOUND;
+            }
+            DatapackVanillaValue::HolderSet { value, .. } => *value = HolderSetValue::UNBOUND,
+        },
+        DatapackValue::List(items) => items.iter_mut().for_each(unbind_vanilla_values),
+        DatapackValue::Map(pairs)
+        | DatapackValue::Record(pairs)
+        | DatapackValue::Variant { fields: pairs, .. } => {
+            pairs.iter_mut().for_each(|(_, v)| unbind_vanilla_values(v));
+        }
+        _ => {}
     }
 }
 
@@ -799,8 +1383,14 @@ impl DatapackRegistryDeclaration {
         let json: Json = serde_json::from_str(text)
             .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
         let object = json.as_object().ok_or(DatapackDecodeError::NotAnObject)?;
-        decode_fields(&self.fields, object, RecordMetadata::None, "")
-            .map(|values| DatapackEntry { values })
+        decode_fields(
+            &self.fields,
+            object,
+            RecordMetadata::None,
+            "",
+            &mut NoVanillaValueDecoder,
+        )
+        .map(|values| DatapackEntry { values })
     }
 }
 
@@ -883,6 +1473,42 @@ impl Json {
             _ => None,
         }
     }
+    /// Compact canonical JSON text, preserving object key order.
+    fn to_canonical_json(&self) -> String {
+        let mut out = String::new();
+        self.write_json(&mut out);
+        out
+    }
+    fn write_json(&self, out: &mut String) {
+        match self {
+            Self::Null => out.push_str("null"),
+            Self::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Self::Number(n) => out.push_str(&n.to_string()),
+            Self::String(s) => out.push_str(&serde_json::to_string(s).unwrap_or_default()),
+            Self::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    item.write_json(out);
+                }
+                out.push(']');
+            }
+            Self::Object(pairs) => {
+                out.push('{');
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(k).unwrap_or_default());
+                    out.push(':');
+                    v.write_json(out);
+                }
+                out.push('}');
+            }
+        }
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for Json {
@@ -944,10 +1570,13 @@ impl<'de> serde::Deserialize<'de> for Json {
 }
 
 /// Decode a resource whose load conditions have already passed, following
-/// ConditionalDecoder: unwrap `neoforge:value` or hide the outer conditions key.
+/// ConditionalDecoder: unwrap `neoforge:value` or hide the outer conditions key. `decoder` is
+/// the engine's decoder for vanilla value kinds ([`NoVanillaValueDecoder`] when the schema has
+/// none).
 pub fn decode_datapack_entry(
     declaration: &DatapackRegistryDeclaration,
     text: &str,
+    decoder: &mut dyn VanillaValueDecoder,
 ) -> Result<DatapackEntry, DatapackDecodeError> {
     let json: Json = serde_json::from_str(text)
         .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
@@ -962,7 +1591,8 @@ pub fn decode_datapack_entry(
     } else {
         (object, RecordMetadata::DatapackConditions)
     };
-    decode_fields(&declaration.fields, object, metadata, "").map(|values| DatapackEntry { values })
+    decode_fields(&declaration.fields, object, metadata, "", decoder)
+        .map(|values| DatapackEntry { values })
 }
 
 pub(crate) enum RecordMetadata<'a> {
@@ -987,7 +1617,8 @@ pub(crate) fn decode_record(
         .iter()
         .map(|(k, v)| (k.clone(), Json::of(v)))
         .collect();
-    decode_fields(fields, &object, metadata, "").map(|values| DatapackEntry { values })
+    decode_fields(fields, &object, metadata, "", &mut NoVanillaValueDecoder)
+        .map(|values| DatapackEntry { values })
 }
 
 /// A record's fields at `path` (empty for an entry's own).
@@ -996,6 +1627,7 @@ fn decode_fields(
     object: &[(String, Json)],
     metadata: RecordMetadata<'_>,
     path: &str,
+    decoder: &mut dyn VanillaValueDecoder,
 ) -> Result<Vec<(String, DatapackValue)>, DatapackDecodeError> {
     let (extra, hidden) = match metadata {
         RecordMetadata::None => (None, None),
@@ -1019,12 +1651,16 @@ fn decode_fields(
             (*key == field.name && Some(key.as_str()) != hidden).then_some(json)
         });
         let value = match (json, &field.kind) {
-            (Some(json), kind) => decode_value(kind, json, &at)?,
+            (Some(json), kind) => decode_value(kind, json, &at, decoder)?,
             (None, DatapackFieldKind::Optional { .. }) => DatapackValue::Absent,
-            (None, _) => field
-                .default
-                .clone()
-                .ok_or(DatapackDecodeError::MissingField { field: at })?,
+            (None, kind) => {
+                let mut value = field
+                    .default
+                    .clone()
+                    .ok_or_else(|| DatapackDecodeError::MissingField { field: at.clone() })?;
+                bind_vanilla_values(kind, &mut value, &at, decoder)?;
+                value
+            }
         };
         values.push((field.name.clone(), value));
     }
@@ -1048,6 +1684,7 @@ fn decode_value(
     kind: &DatapackFieldKind,
     json: &Json,
     path: &str,
+    decoder: &mut dyn VanillaValueDecoder,
 ) -> Result<DatapackValue, DatapackDecodeError> {
     let name = || path.to_owned();
     let wrong = || DatapackDecodeError::WrongType {
@@ -1102,7 +1739,7 @@ fn decode_value(
             items
                 .iter()
                 .enumerate()
-                .map(|(n, item)| decode_value(of, item, &format!("{path}[{n}]")))
+                .map(|(n, item)| decode_value(of, item, &format!("{path}[{n}]"), decoder))
                 .collect::<Result<_, _>>()
                 .map(DatapackValue::List)
         }
@@ -1118,15 +1755,16 @@ fn decode_value(
                 if !seen.insert(k.clone()) {
                     return Err(DatapackDecodeError::DuplicateKey { field: at });
                 }
-                pairs.push((k, decode_value(value, v, &at)?));
+                pairs.push((k, decode_value(value, v, &at, decoder)?));
             }
             Ok(DatapackValue::Map(pairs))
         }
         DatapackFieldKind::Record { fields } => {
             let object = json.as_object().ok_or_else(wrong)?;
-            decode_fields(fields, object, RecordMetadata::None, path).map(DatapackValue::Record)
+            decode_fields(fields, object, RecordMetadata::None, path, decoder)
+                .map(DatapackValue::Record)
         }
-        DatapackFieldKind::Optional { of } => decode_value(of, json, path),
+        DatapackFieldKind::Optional { of } => decode_value(of, json, path, decoder),
         DatapackFieldKind::Dispatch { key, variants } => {
             let object = json.as_object().ok_or_else(wrong)?;
             let at = joined(path, key);
@@ -1151,8 +1789,61 @@ fn decode_value(
                 object,
                 RecordMetadata::DispatchKey(key),
                 path,
+                decoder,
             )?;
             Ok(DatapackValue::Variant { id, fields })
+        }
+        DatapackFieldKind::IntProvider { min, max } => {
+            let text = json.to_canonical_json();
+            let value = decoder
+                .decode_int_provider(&text, *min, *max)
+                .map_err(|reason| DatapackDecodeError::InvalidVanillaValue {
+                    field: name(),
+                    reason,
+                })?;
+            Ok(DatapackValue::Vanilla(Box::new(
+                DatapackVanillaValue::IntProvider { json: text, value },
+            )))
+        }
+        DatapackFieldKind::BlockStateProvider => {
+            let text = json.to_canonical_json();
+            let value = decoder
+                .decode_block_state_provider(&text)
+                .map_err(|reason| DatapackDecodeError::InvalidVanillaValue {
+                    field: name(),
+                    reason,
+                })?;
+            Ok(DatapackValue::Vanilla(Box::new(
+                DatapackVanillaValue::BlockStateProvider { json: text, value },
+            )))
+        }
+        DatapackFieldKind::BlockPredicate => {
+            let text = json.to_canonical_json();
+            let value = decoder.decode_block_predicate(&text).map_err(|reason| {
+                DatapackDecodeError::InvalidVanillaValue {
+                    field: name(),
+                    reason,
+                }
+            })?;
+            Ok(DatapackValue::Vanilla(Box::new(
+                DatapackVanillaValue::BlockPredicate { json: text, value },
+            )))
+        }
+        DatapackFieldKind::HolderSet { registry } => {
+            let text = json.to_canonical_json();
+            let value = decoder
+                .decode_holder_set(registry, &text)
+                .map_err(|reason| DatapackDecodeError::InvalidVanillaValue {
+                    field: name(),
+                    reason,
+                })?;
+            Ok(DatapackValue::Vanilla(Box::new(
+                DatapackVanillaValue::HolderSet {
+                    registry: registry.clone(),
+                    json: text,
+                    value,
+                },
+            )))
         }
     }
 }
@@ -1314,9 +2005,13 @@ pub(crate) mod tests {
         };
         let wrapped = json!({"neoforge:conditions":[{"type":"neoforge:always"}]});
         assert_eq!(
-            decode_datapack_entry(&declaration, &wrapped.to_string())
-                .unwrap()
-                .get("neoforge:conditions"),
+            decode_datapack_entry(
+                &declaration,
+                &wrapped.to_string(),
+                &mut NoVanillaValueDecoder
+            )
+            .unwrap()
+            .get("neoforge:conditions"),
             Some(&DatapackValue::Bool(false))
         );
 
@@ -1737,6 +2432,7 @@ pub(crate) mod tests {
         let entry = decode_datapack_entry(
             &decl,
             r#"{"neoforge:conditions": [], "tiers": {"z": {"data_per_kill": 1}, "a": {"data_per_kill": 2}}}"#,
+            &mut NoVanillaValueDecoder,
         ).unwrap();
         let keys: Vec<_> = entry
             .get("tiers")
@@ -1761,9 +2457,12 @@ pub(crate) mod tests {
             DatapackFieldKind::Bool,
             DatapackValue::Bool(true),
         ));
-        let entry =
-            decode_datapack_entry(&overlapping, r#"{"neoforge:conditions": [], "tiers": {}}"#)
-                .unwrap();
+        let entry = decode_datapack_entry(
+            &overlapping,
+            r#"{"neoforge:conditions": [], "tiers": {}}"#,
+            &mut NoVanillaValueDecoder,
+        )
+        .unwrap();
         assert_eq!(
             entry.get("neoforge:conditions"),
             Some(&DatapackValue::Bool(true))
@@ -2136,6 +2835,465 @@ pub(crate) mod tests {
                 fields: vec![("x".into(), DatapackValue::Bool(true))],
             })),
             Err(E::InvalidDefault)
+        );
+    }
+
+    #[test]
+    fn vanilla_value_kinds_validate_registration_and_defaults() {
+        use DatapackRegistrationError as E;
+        let field = |kind| vec![DatapackField::required("x", kind)];
+        assert_eq!(
+            check_schema(&field(DatapackFieldKind::IntProvider { min: 0, max: 128 })),
+            Ok(())
+        );
+        assert_eq!(
+            check_schema(&field(DatapackFieldKind::IntProvider { min: 5, max: 1 })),
+            Err(E::InvalidFieldKind)
+        );
+        assert_eq!(
+            check_schema(&field(DatapackFieldKind::BlockStateProvider)),
+            Ok(())
+        );
+        assert_eq!(
+            check_schema(&field(DatapackFieldKind::BlockPredicate)),
+            Ok(())
+        );
+        assert_eq!(
+            check_schema(&field(DatapackFieldKind::HolderSet {
+                registry: "minecraft:block".into(),
+            })),
+            Ok(())
+        );
+        // Any registry other than `minecraft:block` is refused at registration.
+        for other in [
+            "minecraft:item",
+            "minecraft:worldgen/biome",
+            "example:spell",
+            "block",
+            "",
+        ] {
+            assert_eq!(
+                check_schema(&field(DatapackFieldKind::HolderSet {
+                    registry: other.into(),
+                })),
+                Err(E::InvalidFieldKind),
+                "holder set registry {other:?} must be refused"
+            );
+        }
+        // Valid JSON defaults pass and canonicalize; malformed JSON or wrong registry fail.
+        let mut with_defaults = vec![
+            DatapackField::with_default(
+                "attempts",
+                DatapackFieldKind::IntProvider { min: 1, max: 64 },
+                DatapackValue::int_provider(" 1 "),
+            ),
+            DatapackField::with_default(
+                "state",
+                DatapackFieldKind::BlockStateProvider,
+                DatapackValue::block_state_provider(r#"{ "id" : "minecraft:stone" }"#),
+            ),
+            DatapackField::with_default(
+                "can_grow_into",
+                DatapackFieldKind::BlockPredicate,
+                DatapackValue::block_predicate(
+                    r#"{"type": "minecraft:matching_block_tag", "tag": "minecraft:air"}"#,
+                ),
+            ),
+            DatapackField::with_default(
+                "targets",
+                DatapackFieldKind::HolderSet {
+                    registry: "minecraft:block".into(),
+                },
+                DatapackValue::holder_set("minecraft:block", r##""#minecraft:air""##),
+            ),
+        ];
+        normalize_defaults(&mut with_defaults).unwrap();
+        assert_eq!(check_schema(&with_defaults), Ok(()));
+        assert_eq!(
+            with_defaults[1].default,
+            Some(DatapackValue::block_state_provider(
+                r#"{"id":"minecraft:stone"}"#
+            ))
+        );
+        let mut bad_json = vec![DatapackField::with_default(
+            "attempts",
+            DatapackFieldKind::IntProvider { min: 0, max: 10 },
+            DatapackValue::int_provider("{not json"),
+        )];
+        assert_eq!(normalize_defaults(&mut bad_json), Err(E::InvalidDefault));
+        let wrong_registry = vec![DatapackField::with_default(
+            "targets",
+            DatapackFieldKind::HolderSet {
+                registry: "minecraft:block".into(),
+            },
+            DatapackValue::holder_set("minecraft:item", r#""minecraft:stone""#),
+        )];
+        assert_eq!(check_schema(&wrong_registry), Err(E::InvalidDefault));
+    }
+
+    struct StubDecoder {
+        generation: u64,
+        next: u32,
+        reject: Option<&'static str>,
+    }
+
+    impl StubDecoder {
+        fn new(generation: u64) -> Self {
+            Self {
+                generation,
+                next: 0,
+                reject: None,
+            }
+        }
+        fn rejecting(needle: &'static str) -> Self {
+            Self {
+                generation: 1,
+                next: 0,
+                reject: Some(needle),
+            }
+        }
+        fn take_index(&mut self, json: &str) -> Result<u32, String> {
+            if let Some(needle) = self.reject
+                && json.contains(needle)
+            {
+                return Err(format!("refused {needle}"));
+            }
+            let idx = self.next;
+            self.next += 1;
+            Ok(idx)
+        }
+    }
+
+    impl VanillaValueDecoder for StubDecoder {
+        fn decode_int_provider(
+            &mut self,
+            json: &str,
+            min: i32,
+            max: i32,
+        ) -> Result<IntProviderValue, String> {
+            if let Ok(v) = json.parse::<i32>()
+                && (v < min || v > max)
+            {
+                return Err("out of bounds".into());
+            }
+            Ok(IntProviderValue::from_raw(
+                self.generation,
+                self.take_index(json)?,
+            ))
+        }
+        fn decode_block_state_provider(
+            &mut self,
+            json: &str,
+        ) -> Result<BlockStateProviderValue, String> {
+            Ok(BlockStateProviderValue::from_raw(
+                self.generation,
+                self.take_index(json)?,
+            ))
+        }
+        fn decode_block_predicate(&mut self, json: &str) -> Result<BlockPredicateValue, String> {
+            Ok(BlockPredicateValue::from_raw(
+                self.generation,
+                self.take_index(json)?,
+            ))
+        }
+        fn decode_holder_set(
+            &mut self,
+            registry: &str,
+            json: &str,
+        ) -> Result<HolderSetValue, String> {
+            assert_eq!(registry, "minecraft:block");
+            Ok(HolderSetValue::from_raw(
+                self.generation,
+                self.take_index(json)?,
+            ))
+        }
+    }
+
+    fn ubm_schema() -> DatapackRegistryDeclaration {
+        DatapackRegistryDeclaration {
+            mod_id: "universalbonemeal".into(),
+            key: "universalbonemeal:bone_meal_behavior".into(),
+            fields: vec![
+                DatapackField::required(
+                    "behavior",
+                    DatapackFieldKind::Dispatch {
+                        key: "type".into(),
+                        variants: vec![
+                            DatapackVariant::new(
+                                "universalbonemeal:growing_plant",
+                                vec![
+                                    DatapackField::required(
+                                        "blocks_to_grow",
+                                        DatapackFieldKind::IntProvider { min: 0, max: 128 },
+                                    ),
+                                    DatapackField::with_default(
+                                        "can_grow_into",
+                                        DatapackFieldKind::BlockPredicate,
+                                        DatapackValue::block_predicate(
+                                            r#"{"type":"minecraft:matching_block_tag","tag":"minecraft:air"}"#,
+                                        ),
+                                    ),
+                                    DatapackField::required(
+                                        "vegetation",
+                                        DatapackFieldKind::BlockStateProvider,
+                                    ),
+                                ],
+                            ),
+                            DatapackVariant::new(
+                                "universalbonemeal:neighbor_conversion",
+                                vec![DatapackField::required(
+                                    "spread_sources",
+                                    DatapackFieldKind::HolderSet {
+                                        registry: "minecraft:block".into(),
+                                    },
+                                )],
+                            ),
+                        ],
+                    },
+                ),
+                DatapackField::optional("predicate", DatapackFieldKind::BlockPredicate),
+            ],
+            sync: DatapackRegistrySync::Required,
+        }
+    }
+
+    #[test]
+    fn vanilla_value_kinds_decode_ubm_examples_and_refuse_bad_values_with_paths() {
+        let schema = ubm_schema();
+        assert_eq!(check_schema(&schema.fields), Ok(()));
+        let mut decoder = StubDecoder::new(7);
+        // UBM cactus.json shape (uniform IntProvider, weighted BlockStateProvider, defaulted BlockPredicate).
+        let cactus = decode_datapack_entry(
+            &schema,
+            r#"{
+                    "behavior": {
+                        "type": "universalbonemeal:growing_plant",
+                        "blocks_to_grow": {"type": "minecraft:uniform", "min_inclusive": 1, "max_inclusive": 2},
+                        "vegetation": {
+                            "type": "minecraft:weighted",
+                            "entries": [
+                                {"data": "minecraft:cactus", "weight": 9},
+                                {"data": "minecraft:cactus_flower", "weight": 1}
+                            ]
+                        }
+                    },
+                    "predicate": {"type": "minecraft:matching_block_tag", "offset": [0, 1, 0], "tag": "minecraft:air"}
+                }"#,
+            &mut decoder,
+        )
+        .unwrap();
+        let behavior = cactus.get("behavior").unwrap();
+        let blocks_to_grow = behavior
+            .get("blocks_to_grow")
+            .unwrap()
+            .as_int_provider()
+            .unwrap();
+        let can_grow_into = behavior
+            .get("can_grow_into")
+            .unwrap()
+            .as_block_predicate()
+            .unwrap();
+        let vegetation = behavior
+            .get("vegetation")
+            .unwrap()
+            .as_block_state_provider()
+            .unwrap();
+        let predicate = cactus
+            .get("predicate")
+            .unwrap()
+            .as_block_predicate()
+            .unwrap();
+        assert_eq!(blocks_to_grow.generation(), 7);
+        assert_eq!(can_grow_into.generation(), 7);
+        assert_eq!(vegetation.generation(), 7);
+        assert_eq!(predicate.generation(), 7);
+        assert_ne!(can_grow_into.index(), predicate.index());
+
+        // UBM dirt.json shape (block HolderSet list).
+        let dirt = decode_datapack_entry(
+            &schema,
+            r#"{
+                    "behavior": {
+                        "type": "universalbonemeal:neighbor_conversion",
+                        "spread_sources": ["minecraft:grass_block", "minecraft:mycelium"]
+                    }
+                }"#,
+            &mut decoder,
+        )
+        .unwrap();
+        let spread_sources = dirt
+            .get("behavior")
+            .unwrap()
+            .get("spread_sources")
+            .unwrap()
+            .as_holder_set()
+            .unwrap();
+        assert_eq!(spread_sources.generation(), 7);
+
+        // Bad value for each kind reports its full nested path.
+        assert_eq!(
+            decode_datapack_entry(
+                &schema,
+                r#"{"behavior":{"type":"universalbonemeal:growing_plant","blocks_to_grow":999,"vegetation":{"id":"minecraft:cactus"}}}"#,
+                &mut StubDecoder::new(1),
+            )
+            .unwrap_err(),
+            DatapackDecodeError::InvalidVanillaValue {
+                field: "behavior.blocks_to_grow".into(),
+                reason: "out of bounds".into(),
+            }
+        );
+        assert_eq!(
+            decode_datapack_entry(
+                &schema,
+                r#"{"behavior":{"type":"universalbonemeal:growing_plant","blocks_to_grow":1,"vegetation":{"id":"bad"}}}"#,
+                &mut StubDecoder::rejecting("bad"),
+            )
+            .unwrap_err(),
+            DatapackDecodeError::InvalidVanillaValue {
+                field: "behavior.vegetation".into(),
+                reason: "refused bad".into(),
+            }
+        );
+        assert_eq!(
+            decode_datapack_entry(
+                &schema,
+                r#"{"behavior":{"type":"universalbonemeal:neighbor_conversion","spread_sources":"minecraft:dirt"},"predicate":{"type":"bad"}}"#,
+                &mut StubDecoder::rejecting("bad"),
+            )
+            .unwrap_err(),
+            DatapackDecodeError::InvalidVanillaValue {
+                field: "predicate".into(),
+                reason: "refused bad".into(),
+            }
+        );
+        assert_eq!(
+            decode_datapack_entry(
+                &schema,
+                r##"{"behavior":{"type":"universalbonemeal:neighbor_conversion","spread_sources":"#bad:tag"}}"##,
+                &mut StubDecoder::rejecting("#bad:tag"),
+            )
+            .unwrap_err(),
+            DatapackDecodeError::InvalidVanillaValue {
+                field: "behavior.spread_sources".into(),
+                reason: "refused #bad:tag".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn vanilla_value_snapshot_unbinds_on_wire_and_rebinds_on_client() {
+        use super::super::datapack_registry_set::{DatapackCandidate, DatapackRegistrySet};
+        use super::super::datapack_snapshot::{DatapackSnapshot, DatapackSnapshotError};
+        let schema = ubm_schema();
+        let declarations = std::slice::from_ref(&schema);
+        let files = vec![(
+            "data/universalbonemeal/universalbonemeal/bone_meal_behavior/dirt.json".to_owned(),
+            vec![(
+                "pack".to_owned(),
+                br#"{"behavior":{"type":"universalbonemeal:neighbor_conversion","spread_sources":["minecraft:grass_block","minecraft:mycelium"]}}"#.to_vec(),
+            )],
+        )];
+        let candidate =
+            DatapackCandidate::build(declarations, &files, &mut StubDecoder::new(11)).unwrap();
+        let server = DatapackRegistrySet::from_candidate(candidate);
+        assert_eq!(
+            server
+                .get(
+                    "universalbonemeal:bone_meal_behavior",
+                    "universalbonemeal:dirt"
+                )
+                .unwrap()
+                .get("behavior")
+                .unwrap()
+                .get("spread_sources")
+                .unwrap()
+                .as_holder_set()
+                .unwrap()
+                .generation(),
+            11
+        );
+        let snapshot = server.snapshot_for(declarations, declarations).unwrap();
+        // Wire snapshot strips the server's generation number.
+        let decoded_snapshot = DatapackSnapshot::decode(&snapshot.encode().unwrap()).unwrap();
+        let wire_candidate = decoded_snapshot.candidate(declarations).unwrap();
+        let wire_set = DatapackRegistrySet::received(wire_candidate);
+        assert_eq!(
+            wire_set
+                .get(
+                    "universalbonemeal:bone_meal_behavior",
+                    "universalbonemeal:dirt"
+                )
+                .unwrap()
+                .get("behavior")
+                .unwrap()
+                .get("spread_sources")
+                .unwrap()
+                .as_holder_set()
+                .unwrap()
+                .generation(),
+            0
+        );
+        // Client re-binds against its own generation.
+        let bound = wire_set
+            .rebind_vanilla_values(declarations, &mut StubDecoder::new(22))
+            .unwrap();
+        assert_eq!(
+            bound
+                .get(
+                    "universalbonemeal:bone_meal_behavior",
+                    "universalbonemeal:dirt"
+                )
+                .unwrap()
+                .get("behavior")
+                .unwrap()
+                .get("spread_sources")
+                .unwrap()
+                .as_holder_set()
+                .unwrap()
+                .generation(),
+            22
+        );
+        // Invalid vanilla value on client re-bind fails atomically as InvalidEntry.
+        assert_eq!(
+            wire_set
+                .rebind_vanilla_values(declarations, &mut StubDecoder::rejecting("mycelium"))
+                .map(|_| ())
+                .unwrap_err(),
+            DatapackSnapshotError::InvalidEntry {
+                registry: "universalbonemeal:bone_meal_behavior".into(),
+                entry: "universalbonemeal:dirt".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn vanilla_value_handles_refuse_without_backend() {
+        struct BareHost;
+        impl crate::Host for BareHost {}
+        crate::impl_host_areas!(BareHost);
+        let host = BareHost;
+        let level = crate::LevelRef::new(
+            crate::WorldEpoch(1),
+            crate::DimensionKey::from_slot(0).unwrap(),
+        );
+        let block = crate::BlockKey(1);
+        let mut rng = crate::LegacyRandomSource::new(1);
+        assert_eq!(
+            IntProviderValue::from_raw(1, 0).sample(&host, &mut rng),
+            Err(DatapackValueError::Unavailable)
+        );
+        assert_eq!(
+            BlockStateProviderValue::from_raw(1, 0).state(&host, level, &mut rng, [0, 0, 0]),
+            Err(DatapackValueError::Unavailable)
+        );
+        assert_eq!(
+            BlockPredicateValue::from_raw(1, 0).test(&host, level, [0, 0, 0]),
+            Err(DatapackValueError::Unavailable)
+        );
+        assert_eq!(
+            HolderSetValue::from_raw(1, 0).contains(&host, block),
+            Err(DatapackValueError::Unavailable)
         );
     }
 }

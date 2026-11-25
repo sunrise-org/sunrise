@@ -201,7 +201,12 @@ mod tests {
             vec![("pack".to_owned(), br#"{"power": 7}"#.to_vec())],
         )];
         DatapackRegistrySet::from_candidate(
-            DatapackCandidate::build(std::slice::from_ref(declaration), &files).unwrap(),
+            DatapackCandidate::build(
+                std::slice::from_ref(declaration),
+                &files,
+                &mut mod_api::__private::NoVanillaValueDecoder,
+            )
+            .unwrap(),
         )
     }
 
@@ -253,6 +258,7 @@ mod tests {
                     "data/addon/example/spell/fire.json".to_owned(),
                     vec![("pack".to_owned(), br#"{"power": 9}"#.to_vec())],
                 )],
+                &mut mod_api::__private::NoVanillaValueDecoder,
             )
             .unwrap(),
         );
@@ -279,7 +285,12 @@ mod tests {
         let declarations = std::slice::from_ref(&declaration);
         let first = set(&declaration);
         let reloaded = DatapackRegistrySet::from_candidate(
-            DatapackCandidate::build(declarations, &[]).unwrap(),
+            DatapackCandidate::build(
+                declarations,
+                &[],
+                &mut mod_api::__private::NoVanillaValueDecoder,
+            )
+            .unwrap(),
         );
         let offer = mod_api::DatapackSnapshot::decode_offer(
             &mod_api::DatapackSnapshot::encode_offer(declarations).unwrap(),
@@ -337,7 +348,12 @@ mod tests {
         };
         let mut declarations = [required, oversized];
         let server = DatapackRegistrySet::from_candidate(
-            DatapackCandidate::build(&declarations, &[]).unwrap(),
+            DatapackCandidate::build(
+                &declarations,
+                &[],
+                &mut mod_api::__private::NoVanillaValueDecoder,
+            )
+            .unwrap(),
         );
         for sync in [
             DatapackRegistrySync::Optional,

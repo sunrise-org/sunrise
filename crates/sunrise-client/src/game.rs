@@ -1183,6 +1183,8 @@ mod native_datafix;
 mod native_datafix_tests;
 #[path = "game/modding/native_datapack_refs.rs"]
 mod native_datapack_refs;
+#[path = "game/modding/native_datapack_values.rs"]
+mod native_datapack_values;
 #[path = "game/modding/native_death_weapon.rs"]
 mod native_death_weapon;
 #[path = "game/modding/native_detached_generation.rs"]
@@ -2983,7 +2985,7 @@ impl GameLevel<'_> {
 impl<'w> entity::EntityLists<'w> {
     /// Non-player, non-mob boxes with `Entity.blocksBuilding`. The block level
     /// supplies its minecart snapshot; the mob level reads the live cart boxes.
-    fn non_mob_building_blocker_boxes(
+    pub(in crate::game) fn non_mob_building_blocker_boxes(
         self,
         carts: impl Iterator<Item = Aabb> + 'w,
         crystals: &'w [dragon::Crystal],

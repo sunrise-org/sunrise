@@ -96,6 +96,7 @@ mod tests {
                                     format!(r#"{{"power":{power}}}"#).into_bytes(),
                                 )],
                             )],
+                            &mut mod_api::__private::NoVanillaValueDecoder,
                         )
                         .unwrap()
                     };

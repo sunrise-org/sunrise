@@ -4,6 +4,7 @@ use mod_api::__private::game::{
     CallbackOwner, DatapackCandidateBuilder, RegistrationContextNew, datapack_entry_id,
     datapack_registry_directory, decode_datapack_entry, valid_namespaced,
 };
+use mod_api::__private::{NoVanillaValueDecoder, VanillaValueDecoder};
 use mod_api::{
     DatapackCandidate, DatapackDecodeError, DatapackLoadReason, DatapackRegistryDeclaration,
 };
@@ -79,11 +80,19 @@ impl Game<'_> {
 
     /// Stage the enabled packs’ actual winners before readers use their holders.
     pub(super) fn stage_datapack_registries(
+        &self,
         stack: &super::functions::PackStack,
         root: &Path,
         overlay: &PackOverlay<'_>,
         view: &mut RegistryView,
-    ) -> Result<Option<DatapackCandidate>, String> {
+        inputs: &VanillaValueInputs<'_, '_>,
+    ) -> Result<
+        Option<(
+            DatapackCandidate,
+            Option<super::native_datapack_values::DatapackVanillaValues>,
+        )>,
+        String,
+    > {
         let declarations = mod_api::__private::datapack_registry_declarations();
         if declarations.is_empty() {
             return Ok(None);
@@ -97,8 +106,45 @@ impl Game<'_> {
             .collect();
         let files = sunrise_client::datapack::registry_files(&packs, &keys)
             .map_err(|error| format_datapack_error(&error))?;
-        admit_datapack_registries(root, overlay, view, declarations, &files).map(Some)
+        if !mod_api::__private::declarations_use_vanilla_values(declarations) {
+            return admit_datapack_registries(
+                root,
+                overlay,
+                view,
+                declarations,
+                &files,
+                &mut NoVanillaValueDecoder,
+            )
+            .map(|candidate| Some((candidate, None)));
+        }
+        let biome_tags = sunrise_client::items::load_tags(root, "worldgen/biome", inputs.tag_files)
+            .map_err(|error| format!("datapack vanilla value biome tags: {error}"))?;
+        let live_features = self.res.behaviours().live_features();
+        let catalog = live_features
+            .as_ref()
+            .and_then(|features| features.state_provider_catalog());
+        let biome_names = inputs.biomes.registry_order();
+        let mut decoder = super::native_datapack_values::VanillaValueTableBuilder::new(
+            self.pack.assets.registry,
+            self.res.behaviours(),
+            &inputs.items.block_tags,
+            &inputs.items.fluid_tags,
+            &biome_names,
+            &biome_tags,
+            catalog,
+        )
+        .map_err(|error| format!("datapack vanilla value decoder: {error}"))?;
+        let candidate =
+            admit_datapack_registries(root, overlay, view, declarations, &files, &mut decoder)?;
+        Ok(Some((candidate, Some(decoder.finish()))))
     }
+}
+
+/// The world's loaded tables a vanilla value decoder reads while datapack registries are staged.
+pub(super) struct VanillaValueInputs<'a, 'b> {
+    pub(super) items: &'a sunrise_client::items::Items,
+    pub(super) tag_files: &'a PackOverlay<'b>,
+    pub(super) biomes: &'a sunrise_client::biome::Biomes,
 }
 
 #[derive(Default)]
@@ -136,6 +182,7 @@ fn admit_datapack_registries(
     view: &mut RegistryView,
     declarations: &[DatapackRegistryDeclaration],
     files: &RegistryFiles,
+    decoder: &mut dyn VanillaValueDecoder,
 ) -> Result<DatapackCandidate, String> {
     use DatapackLoadReason::{Decode, InvalidEntryId, NotUtf8};
     let base = overlay.conditions;
@@ -224,7 +271,7 @@ fn admit_datapack_registries(
                     }
                     Ok(ConditionProgress::Complete(false)) => return false,
                     Ok(ConditionProgress::Complete(true)) => {
-                        decode_datapack_entry(declaration, text).map_err(Decode)
+                        decode_datapack_entry(declaration, text, &mut *decoder).map_err(Decode)
                     }
                     Err(error) => Err(malformed(error)),
                 };

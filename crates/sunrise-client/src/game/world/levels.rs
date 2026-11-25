@@ -227,6 +227,45 @@ impl Parked {
         ))
     }
 
+    /// Whether `obstructs` returns `true` for any live `blocksBuilding` entity in this parked
+    /// level (`EntityGetter.isUnobstructed`), without allocating.
+    pub(super) fn any_building_blocker(
+        &self,
+        mut obstructs: impl FnMut(sunrise_core::geometry::Aabb) -> bool,
+    ) -> bool {
+        if self
+            .mobs
+            .iter()
+            .any(|m| !m.removed && obstructs(m.bounds()))
+            || self
+                .dragon
+                .as_ref()
+                .is_some_and(|dragon| obstructs(dragon.body_bounds()))
+        {
+            return true;
+        }
+        let entities = crate::game::entity::EntityLists {
+            mobs: &self.mobs,
+            dropped: &self.dropped,
+            boats: &self.boats,
+            carts: &self.carts,
+            armor_stands: &self.armor_stands,
+            tnts: &self.tnts,
+            falling: &self.falling,
+            orbs: &self.orbs,
+            projectiles: &self.projectiles,
+            rockets: &self.rockets,
+            tridents: &self.tridents,
+            general: &self.general.rows,
+        };
+        entities
+            .non_mob_building_blocker_boxes(
+                self.carts.iter().map(minecarts::Minecart::bounds),
+                &self.crystals,
+            )
+            .any(obstructs)
+    }
+
     resident_owners!(
         define_resident_access,
         self,

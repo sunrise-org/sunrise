@@ -1575,6 +1575,37 @@ impl Behaviours {
     pub fn data(&self, state: BlockStateId) -> &BlockData {
         self.block_data(self.table.block(state))
     }
+    /// The four physical properties (`Solid`, `Replaceable`, `Liquid`, `SolidRender`) in
+    /// `BlockProperty` order, bound from the loaded behaviour tables.
+    pub fn bound_physical_properties(&self) -> [crate::block_properties::BoundBlockProperty; 4] {
+        use crate::block_properties::{BlockProperty, BoundBlockProperty};
+        let states: Arc<[u8]> = self
+            .facts
+            .iter()
+            .map(|fact| {
+                let mut mask = 0u8;
+                if fact.flags & data::state_flags::SOLID != 0 {
+                    mask |= 1;
+                }
+                if fact.flags & data::state_flags::REPLACEABLE != 0 {
+                    mask |= 2;
+                }
+                if fact.flags & data::state_flags::LIQUID != 0 {
+                    mask |= 4;
+                }
+                if fact.flags & data::state_flags::SOLID_RENDER != 0 {
+                    mask |= 8;
+                }
+                mask
+            })
+            .collect();
+        [
+            BoundBlockProperty::from_flags(states.clone(), BlockProperty::Solid),
+            BoundBlockProperty::from_flags(states.clone(), BlockProperty::Replaceable),
+            BoundBlockProperty::from_flags(states.clone(), BlockProperty::Liquid),
+            BoundBlockProperty::from_flags(states, BlockProperty::SolidRender),
+        ]
+    }
     pub fn block(&self, state: BlockStateId) -> BlockId {
         self.table.block(state)
     }
