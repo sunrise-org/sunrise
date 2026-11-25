@@ -5581,7 +5581,7 @@ pub(super) fn play_wolf_ambient(
     let kind = if super::tame::angry(m) {
         "growl"
     } else if m.random.next_int_bound(3).unwrap_or(1) == 0 {
-        if m.extra.tame && m.health < m.attrs.max_health / 2.0 {
+        if m.extra.tame && m.health < 20.0 {
             "whine"
         } else {
             "pant"

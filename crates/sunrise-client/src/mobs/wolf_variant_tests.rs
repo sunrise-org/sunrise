@@ -434,3 +434,32 @@ fn pack_wolf_sound_variant_is_chosen_and_played_for_bark() {
         baby_death_wolf.outbox
     );
 }
+
+/// `Wolf.getAmbientSound`: a tame wolf under 20 health whines, whatever its maximum health.
+#[test]
+fn tame_wolf_under_twenty_health_whines() {
+    let files = [(
+        "wolf_sound_variant/test:husky".to_owned(),
+        vec![wolf_sound_json("test:wolf.husky", "test:wolf.husky_baby")],
+    )];
+    let packed = stage_pack(&files);
+    let variants = packed.variant_tables();
+    let mut wolf = Mob::new(1, wolf_type(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+    wolf.extra.wolf_sound_variant = variants.wolf_sound.lookup("test:husky");
+    wolf.extra.tame = true;
+    wolf.attrs.max_health = 10.0;
+    wolf.health = 10.0;
+    let mut whined = false;
+    for seed in 0..16i64 {
+        wolf.random = LegacyRandom::new(seed);
+        let mut events = Vec::new();
+        ai::play_wolf_ambient(&mut wolf, Some(&variants), &mut events);
+        for event in &events {
+            if let MobEvent::SoundId(id, ..) = event {
+                assert_ne!(id, "test:wolf.husky.pant", "seed {seed}");
+                whined |= id == "test:wolf.husky.whine";
+            }
+        }
+    }
+    assert!(whined, "a tame wolf at 10 health should whine");
+}
