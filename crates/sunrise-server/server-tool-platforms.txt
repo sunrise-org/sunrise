@@ -1,0 +1,5 @@
+linux x86_64 server-tool-linux-x86_64.tar.gz
+macos aarch64 server-tool-macos-arm64.tar.gz
+macos x86_64 server-tool-macos-x64.tar.gz
+windows aarch64 server-tool-windows-arm64.zip
+windows x86_64 server-tool-windows-x64.zip

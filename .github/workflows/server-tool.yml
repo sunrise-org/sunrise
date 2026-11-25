@@ -1,0 +1,389 @@
+name: server tool
+# The rolling server manager (docs/release-flow.md, "Rolling server tool") ships separately from the game.
+# `server-tool` is a prerelease, never "latest". It contains one archive per server-tool-platforms.txt entry,
+# server-tool.json (the built commit, its UTC commit time, and supported dedicated launch contracts), SHA256SUMS
+# and SHA256SUMS.sig. The release key signs "horizon release server-tool\n" and the sums, binding the metadata
+# and every archive to this tag.
+# - `decide` uses a read-only token and checks that the candidate is on main before running anything from it.
+#   The candidate must contain the last published tool, change an input (unless forced), and have a green main gate.
+# - `build` and `assemble` use no secrets. Build packages just the manager; assemble runs the Linux x86_64 manager
+#   to get its own build metadata. The manager's platform list selects the build legs; game-build.yml supplies their
+#   runner, target and Rust flags. Unlike the Windows ARM64 and Mac legs in game-build.yml, every leg here is
+#   required: an installed manager's self-update needs its platform's archive in every set.
+# - `sign` is the only job with the release key, from the `release` environment, and only for publishing on main.
+#   It checks out only sign_release.sh and never runs a candidate binary. Dry runs use a throwaway key instead.
+# - `verify` checks the file set and the signature with a read-only token; dry runs end here.
+# - `publish` alone has a write token, and only on main. It uses the workflow's own checkout and builds nothing.
+#   It checks the held commit again before replacing the assets, so a rerun cannot replace a newer tool.
+# Main push runs follow completed dyna-checks. SERVER_TOOL_AUTOPUBLISH=true opts them into publishing; otherwise
+# they are dry runs. A main dispatch publishes only with -f dry_run=false.
+on:
+  workflow_run:
+    workflows: [dyna-checks]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: The commit to build (default the dispatched ref's head); a commit of main
+        type: string
+        default: ''
+      dry_run:
+        description: Build and sign with a throwaway key, publish nothing
+        type: boolean
+        default: true
+      force:
+        description: Build even when the tool is unchanged since what server-tool holds
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  # One at a time: a newer push waits behind the one running (and replaces an older waiting one: its commit holds the
+  # older one's changes). A dry run has a group of its own, as release.yml's: a dispatched one, a run off main, and a
+  # push while SERVER_TOOL_AUTOPUBLISH is off, so none of them holds up or cancels a publishing dispatch.
+  group: server-tool${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'workflow_run' && vars.SERVER_TOOL_AUTOPUBLISH != 'true') || github.ref != 'refs/heads/main') && '-dry-run' || '' }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  TAG: server-tool
+  ROLLING_TOOL_PACKAGE: sunrise-server
+jobs:
+  decide:
+    # Of dyna-checks' runs, only this repository's main pushes that ran to the end: a pull request from a branch
+    # named main is a `pull_request` run, and a push run a newer push cancelled is covered by that push's own.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.conclusion != 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read  # dyna-checks' gate jobs on the commit
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      commit: ${{ steps.decide.outputs.commit }}
+      publish: ${{ steps.mode.outputs.publish }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      date: ${{ steps.commit.outputs.date }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.commit || github.event.workflow_run.head_sha }}
+      # Before anything of the checkout runs: the commit, as a full id, is on main. Every later job builds this id.
+      - name: The commit is on main
+        id: commit
+        env:
+          COMMIT: ${{ inputs.commit || github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          sha=$(git rev-parse --verify --end-of-options "$COMMIT^{commit}")
+          git fetch -q --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/main \
+            || { echo "::error::refused: $sha is not on main; $TAG holds only a commit of main"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$sha" ] || { echo "::error::the checkout is not $sha"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          git show -s --format='date=%ct' "$sha" >> "$GITHUB_OUTPUT"
+      # A workflow-branch dry run can use these tools while building a candidate already on main.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workflow-tools
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            tools/ci/mod_tool.py
+            tools/ci/server_tool.py
+            tools/ci/vendor/pyyaml-6.0.3.zip
+      - name: The Rust that reads the workspace
+        id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+      # Publishing: on main only, from a dispatch with dry_run false or a push while SERVER_TOOL_AUTOPUBLISH is true.
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          DRY: ${{ inputs.dry_run }}
+          AUTO: ${{ vars.SERVER_TOOL_AUTOPUBLISH }}
+        run: |
+          publish=false
+          if [ "$GITHUB_REPOSITORY" = sunrise-org/sunrise ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            if [ "$EVENT" = workflow_dispatch ] && [ "$DRY" = false ]; then publish=true; fi
+            if [ "$EVENT" = workflow_run ] && [ "$AUTO" = true ]; then publish=true; fi
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ steps.commit.outputs.sha }}
+          FORCE: ${{ inputs.force && 'yes' || '' }}
+        run: |
+          ROLLING_TOOL_ROOT="$GITHUB_WORKSPACE" python3 .workflow-tools/tools/ci/mod_tool.py decide ${FORCE:+--force} \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - id: matrix
+        if: steps.decide.outputs.build == 'true'
+        run: |
+          matrix=$(python3 .workflow-tools/tools/ci/server_tool.py matrix .github/workflows/game-build.yml \
+            crates/sunrise-server/server-tool-platforms.txt)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.decide.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      COMMIT: ${{ needs.decide.outputs.commit }}
+      COMMIT_DATE: ${{ needs.decide.outputs.date }}
+      TARGET: ${{ matrix.target }}
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      EXE: sunrise-server${{ matrix.exe }}
+      ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.decide.outputs.commit }}
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workflow-tools
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            tools/ci/server_tool.py
+            tools/check_imports.py
+            tools/check_glibc.py
+      - name: The pinned Rust
+        id: rust
+        run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: server-tool-${{ matrix.name }}
+          save-if: ${{ needs.decide.outputs.publish == 'true' }}
+      - name: Build and pack the manager
+        run: |
+          target=()
+          if [[ -n "$TARGET" ]]; then target=(--target "$TARGET"); fi
+          cargo build --release --locked --no-default-features -p sunrise-server --bin sunrise-server "${target[@]}"
+          bin="target/${TARGET:+$TARGET/}release"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            python3 .workflow-tools/tools/check_imports.py --server "$bin/$EXE"
+            python3 .workflow-tools/tools/check_glibc.py "$bin/$EXE"
+          fi
+          "$bin/$EXE" --version --json | python .workflow-tools/tools/ci/server_tool.py info "$COMMIT" "$COMMIT_DATE"
+          mkdir dist
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python -m zipfile -c "dist/$ASSET" "$bin/$EXE"
+          else
+            tar -czf "dist/$ASSET" -C "$bin" "$EXE"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: server-tool-leg-${{ matrix.name }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  assemble:
+    needs: [decide, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      COMMIT: ${{ needs.decide.outputs.commit }}
+      COMMIT_DATE: ${{ needs.decide.outputs.date }}
+      MATRIX: ${{ needs.decide.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: server-tool-leg-*
+          path: dist
+          merge-multiple: true
+      - name: Read the built manager's release metadata
+        run: |
+          mkdir unpacked
+          archive=$(jq -er '.include[] | select(.name == "linux-x86_64") | .asset' <<< "$MATRIX")
+          tar -xzf "dist/$archive" -C unpacked -- sunrise-server
+          ./unpacked/sunrise-server --version --json \
+            | python3 tools/ci/server_tool.py info "$COMMIT" "$COMMIT_DATE" > dist/server-tool.json
+          cat dist/server-tool.json
+          python3 tools/ci/server_tool.py assets dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: server-tool-release
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  sign:
+    needs: [decide, assemble]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      COMMIT: ${{ needs.decide.outputs.commit }}
+      PUBLISH: ${{ needs.decide.outputs.publish }}
+    # The key's only job, and only for a publishing run on main: sign_release.sh hashes the assets and signs with the
+    # runner's OpenSSL, never running what the legs built.
+    environment: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' && 'release' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/ci/sign_release.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          # main's history without its files' contents: enough for the check below.
+          fetch-depth: 0
+          filter: blob:none
+      # Where the key is: whatever the caller says, the real key signs only a commit of main.
+      - name: The commit is on main
+        if: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' }}
+        run: |
+          git fetch -q --no-tags --filter=blob:none origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main \
+            || { echo "::error::$COMMIT is not on main: its tool is not signed"; exit 1; }
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-tool-release
+          path: dist
+      - name: Sign SHA256SUMS for server-tool
+        env:
+          RELEASE_SIGNING_KEY: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' && secrets.RELEASE_SIGNING_KEY || '' }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
+          EPHEMERAL: ${{ !(needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main') && 'yes' || '' }}
+        run: bash tools/ci/sign_release.sh "$TAG" dist/*
+      - name: A signature was written
+        run: test -s dist/SHA256SUMS.sig
+      - uses: actions/upload-artifact@v7
+        with:
+          name: server-tool-signature
+          path: |
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - uses: actions/upload-artifact@v7
+        if: ${{ !(needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main') }}
+        with:
+          name: server-tool-ephemeral.pub
+          path: dist/ephemeral.pub
+          retention-days: 7
+          overwrite: true
+
+  verify:
+    needs: [decide, assemble, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      COMMIT: ${{ needs.decide.outputs.commit }}
+      MATRIX: ${{ needs.decide.outputs.matrix }}
+      PUBLISH: ${{ needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main' }}
+    steps:
+      # The workflow's own checker, never the built commit's.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-tool-release
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-tool-signature
+          path: dist
+      - uses: actions/download-artifact@v8
+        if: env.PUBLISH != 'true'
+        with:
+          name: server-tool-ephemeral.pub
+          path: key
+      - name: The release signature covers every expected asset
+        run: |
+          assets=$(python3 tools/ci/server_tool.py assets --signed dist)
+          only=()
+          while IFS= read -r name; do only+=(--only "$name"); done <<< "$assets"
+          key=(); [[ "$PUBLISH" != true ]] && key=(--key "$(cat key/ephemeral.pub)")
+          python3 tools/ci/nightly.py verify-sums --tag "$TAG" "${key[@]}" "${only[@]}" dist
+      - name: Dry run, the tool that would be published
+        if: env.PUBLISH != 'true'
+        run: |
+          echo "### Would publish $TAG at $COMMIT (a branch or dry run: signed with a throwaway key)" >> "$GITHUB_STEP_SUMMARY"
+          ls -l dist | tee -a "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [decide, verify]
+    # The only job with a write token, and only for a publishing run on main. It runs no code but the workflow's own
+    # tools/ci/mod_tool.py (never the built commit's), and compiles nothing.
+    if: needs.decide.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # the server-tool release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      COMMIT: ${{ needs.decide.outputs.commit }}
+    steps:
+      # The workflow's own checkout, with main's history: `decide` found the built commit on main.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-tool-release
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: server-tool-signature
+          path: dist
+      - name: Release server-tool
+        run: |
+          set -euo pipefail
+          # Never replace a newer tool with an older one (a rerun, or a dispatch for an old commit).
+          python3 tools/ci/mod_tool.py newer "$COMMIT"
+          notes="The newest sunrise-server built from main ($COMMIT): server-tool.json names the commit and supported game contracts. SHA256SUMS is signed for $TAG."
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" dist/* --target "$COMMIT" --prerelease --latest=false \
+              --title "Server tool ${COMMIT::10}" --notes "$notes"
+            exit 0
+          fi
+          # The archives first, the sums and their signature last: until then a reader's check of the new archive
+          # against the old sums fails, never passes.
+          gh release upload "$TAG" dist/server-tool-*.tar.gz dist/server-tool-*.zip dist/server-tool.json --clobber
+          gh release upload "$TAG" dist/SHA256SUMS dist/SHA256SUMS.sig --clobber
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$COMMIT" -F force=true > /dev/null
+          gh release edit "$TAG" --prerelease --latest=false --title "Server tool ${COMMIT::10}" --notes "$notes"

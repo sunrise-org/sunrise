@@ -278,6 +278,10 @@ pub const SDK_PREFIX: &str = "sdk-";
 /// whose sums are signed for exactly this tag. It is never a game release.
 pub const MOD_TOOL: &str = "mod-tool";
 
+/// The tag of the rolling server manager release (`server-tool`): the newest `sunrise-server`
+/// built from main, whose sums are signed for exactly this tag. It is never a game release.
+pub const SERVER_TOOL: &str = "server-tool";
+
 /// Whether `tag` names a mod SDK's release (`sdk-…`), whatever follows the prefix.
 pub fn is_sdk(tag: &str) -> bool {
     tag.starts_with(SDK_PREFIX)
@@ -287,7 +291,7 @@ pub fn is_sdk(tag: &str) -> bool {
 /// `sums` and `signature` are the release's SHA256SUMS and SHA256SUMS.sig, None when it has none.
 /// A Nightly or Dev build is never a stable release: their tags are refused here, whatever their
 /// signature ([`build_digest`] checks those). Nor is a mod SDK: its files are never game files
-/// ([`sdk_digest`] checks those).
+/// ([`sdk_digest`] checks those). The rolling mod tool and server manager are refused too.
 pub fn signed_digest(
     tag: &str,
     asset: &str,
@@ -313,12 +317,14 @@ pub fn signed_digest(
             "{tag} is a mod SDK, not a game release: it is never installed as the game."
         ));
     }
-    if tag == MOD_TOOL {
-        return Err(format!(
-            "{tag} is the mod tool, not a game release: it is never installed as the game."
-        ));
-    }
-    digest_in(tag, tag, asset, sums, signature, keys)
+    let tool = match tag {
+        MOD_TOOL => "mod tool",
+        SERVER_TOOL => "server tool",
+        _ => return digest_in(tag, tag, asset, sums, signature, keys),
+    };
+    Err(format!(
+        "{tag} is the {tool}, not a game release: it is never installed as the game."
+    ))
 }
 
 /// The signed SHA-256 of `asset` in the mod SDK of game build `build` (a full 40-character commit
@@ -738,6 +744,24 @@ mod tests {
         assert!(verify(MOD_TOOL, sums.as_bytes(), &signature, &keys).is_ok());
         // And its signature is not valid for a game release's tag.
         assert!(verify("v2026.11.13", sums.as_bytes(), &signature, &keys).is_err());
+    }
+
+    #[test]
+    fn the_server_tools_signed_list_is_never_a_game_release() {
+        let (key, sums, signature) = signed(SERVER_TOOL);
+        let keys = [key.public()];
+        assert!(verify(SERVER_TOOL, sums.as_bytes(), &signature, &keys).is_ok());
+        // Even a game-named asset with a valid signature for this tag cannot be installed as the game.
+        assert!(
+            signed_digest(
+                SERVER_TOOL,
+                "sunrise-linux-x86_64.tar.gz",
+                Some(sums.as_bytes()),
+                Some(&signature),
+                &keys
+            )
+            .is_err()
+        );
     }
 
     #[test]

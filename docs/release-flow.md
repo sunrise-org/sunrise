@@ -460,6 +460,23 @@ Why it exists: the tool shipped only inside each `sdk-<commit>`, so a tool fix r
   then an old `mod-tool` set that was once signed still verifies if it were served again; `tool.json`'s commit and date
   and `cargo sunrise-mod --version` show which tool a user has.
 
+## Rolling server tool
+
+| Release | Assets |
+| --- | --- |
+| `server-tool` (prerelease, never "latest") | `server-tool-<os>-<arch>.tar.gz` (`.zip` on Windows), each holding only `sunrise-server`; `server-tool.json` (the manager's commit, UTC commit time and inclusive range of supported dedicated launch contracts); `SHA256SUMS` and `SHA256SUMS.sig` |
+
+[`server-tool.yml`](../.github/workflows/server-tool.yml) publishes the manager separately from the game. It follows
+completed dyna-checks main pushes or runs by dispatch. It needs a green gate for the selected commit, refuses to move
+the tag backwards, and skips when the manager's Cargo dependencies and build inputs are unchanged unless forced.
+The [manager's platform list](../crates/sunrise-server/server-tool-platforms.txt) names the required archives.
+Each entry uses the matching game build leg's runner, target and Rust flags. The archives contain no game files.
+
+Only `sign` takes the `release` environment's key. It signs `horizon release server-tool\n` followed by `SHA256SUMS`,
+covering the metadata and every archive. Only `publish` can replace release assets. Main pushes publish when
+`SERVER_TOOL_AUTOPUBLISH` is `true`; a dispatch on main publishes with `-f dry_run=false`. Other runs sign with a
+throwaway key, verify, and publish nothing.
+
 ## Release branches
 
 Two long-lived branches carry the game version they target (umceko and ari, 2026-11-20); no branch per release.

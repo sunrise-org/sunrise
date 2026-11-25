@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""The rolling release of the mod tool (docs/release-flow.md, "Rolling mod tool"): the one tag `mod-tool` always holds
-the newest `cargo-sunrise-mod` built from main, for the three hosts, with a signed `tool.json` naming its commit.
+"""Change detection and ancestry checks for the rolling tool releases (docs/release-flow.md).
 
-    mod_tool.py crates                       the folders whose change changes the tool, one per line (from cargo metadata)
-    mod_tool.py decide [--force]             what mod-tool.yml's `decide` job writes to GITHUB_OUTPUT (reads COMMIT)
-    mod_tool.py tool-json COMMIT OUT         OUT = tool.json for COMMIT
-    mod_tool.py newer COMMIT                 fails when the published tool is a commit that COMMIT does not contain
+Set ROLLING_TOOL_PACKAGE to cargo-sunrise-mod (the default) or sunrise-server. ROLLING_TOOL_ROOT points to the
+candidate checkout if the script runs from a separate workflow checkout.
 
-The folders are the workspace packages `cargo-sunrise-mod` depends on (normal and build dependencies, not dev), found
-by `cargo metadata`, so a crate the tool starts to use is watched without anyone editing a list here.
+    mod_tool.py crates                       the tool's build-time workspace dependencies, one folder per line
+    mod_tool.py decide [--force]             write the build decision to GITHUB_OUTPUT (reads COMMIT)
+    mod_tool.py tool-json COMMIT OUT         write the mod tool's tool.json for COMMIT
+    mod_tool.py newer COMMIT                 fail if COMMIT does not contain the currently published commit
 """
 import argparse
 import importlib.util
@@ -20,15 +19,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("ROLLING_TOOL_ROOT", Path(__file__).resolve().parents[2]))
 
-TAG = "mod-tool"
-TOOL = "cargo-sunrise-mod"
-INFO = "tool.json"
-# What builds the tool besides its crates: the lock and the manifest every crate resolves through, the pinned compiler,
-# and the files that build, pack, sign and publish it.
-BUILD_INPUTS = ("Cargo.toml", "Cargo.lock", "tools/ci/rust-version", "tools/prebuilt_game.py", "tools/ci/mod_tool.py",
-                "tools/ci/sign_release.sh", ".github/workflows/mod-tool.yml")
+# Package: (release tag, signed metadata asset, additional build inputs).
+TOOLS = {
+    "cargo-sunrise-mod": ("mod-tool", "tool.json", ("tools/prebuilt_game.py",)),
+    "sunrise-server": ("server-tool", "server-tool.json", (
+        ".github/workflows/game-build.yml", "packaging/executable_link.rs",
+        "tools/ci/server_tool.py", "tools/ci/vendor/pyyaml-6.0.3.zip",
+    )),
+}
+BUILD_INPUTS = ("Cargo.toml", "Cargo.lock", "tools/ci/rust-version", "tools/ci/mod_tool.py", "tools/ci/sign_release.sh")
 CONTRACT_SOURCE = "crates/sunrise-native-build/src/contract.rs"
 RELEASE_CONTRACT_SOURCE = "crates/sunrise-mod-package/src/page.rs"
 
@@ -40,13 +41,13 @@ def run(*command: str, check: bool = True) -> str:
     return done.stdout
 
 
-def crates(metadata: dict | None = None) -> list[str]:
+def crates(tool: str, metadata: dict | None = None) -> list[str]:
     """The repository-relative folders of the tool's own crate and of every workspace crate it needs to build."""
     metadata = metadata or json.loads(run("cargo", "metadata", "--locked", "--format-version", "1"))
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     members = set(metadata["workspace_members"])
-    start = next(id for id in members if packages[id]["name"] == TOOL)
+    start = next(id for id in members if packages[id]["name"] == tool)
     seen, todo = set(), [start]
     while todo:
         id = todo.pop()
@@ -61,18 +62,17 @@ def crates(metadata: dict | None = None) -> list[str]:
     return sorted(Path(packages[id]["manifest_path"]).parent.relative_to(root).as_posix() for id in seen)
 
 
-def previous() -> str:
-    """The commit the published `mod-tool` holds (its tool.json), or "" when there is none yet. Only decides whether to
-    build; what a user trusts is the signature, which the publish job checks."""
-    done = subprocess.run(["gh", "release", "download", TAG, "--pattern", INFO, "--output", "-"], cwd=ROOT,
+def previous(tag: str, info: str) -> str:
+    """The commit in the rolling release's metadata, or "" on its first build."""
+    done = subprocess.run(["gh", "release", "download", tag, "--pattern", info, "--output", "-"], cwd=ROOT,
                           capture_output=True, text=True)
     if done.returncode != 0:
         if "release not found" in done.stderr or "no assets match" in done.stderr:
             return ""
-        sys.exit(f"could not read the published {TAG}: {done.stderr.strip()}")
+        sys.exit(f"could not read the published {tag}: {done.stderr.strip()}")
     commit = json.loads(done.stdout)["commit"]
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        sys.exit(f"the published {TAG}'s {INFO} names no commit")
+        sys.exit(f"the published {tag}'s {info} names no commit")
     return commit
 
 
@@ -80,33 +80,35 @@ def is_ancestor(older: str, newer: str) -> bool:
     return subprocess.run(["git", "merge-base", "--is-ancestor", older, newer], cwd=ROOT).returncode == 0
 
 
-def changed(since: str, head: str) -> list[str]:
+def changed(tool: str, since: str, head: str) -> list[str]:
     """The files that changed the tool between `since` and `head`; everything when `since` is not in head's history."""
-    folders = crates()
+    folders = crates(tool)
     if not since or not is_ancestor(since, head):
         return folders
-    paths = [*(folder + "/" for folder in folders), *BUILD_INPUTS]
+    tag, _, extra = TOOLS[tool]
+    paths = [*(folder + "/" for folder in folders), *BUILD_INPUTS, f".github/workflows/{tag}.yml", *extra]
     return [line for line in run("git", "diff", "--name-only", since, head, "--", *paths).splitlines() if line]
 
 
-def decide(force: bool) -> None:
+def decide(tool: str, force: bool) -> None:
     # By its path: putting tools/ on sys.path would shadow the tests' modules of the same names.
     spec = importlib.util.spec_from_file_location("release_train", ROOT / "tools/release_train.py")
     train = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(train)
     head = run("git", "rev-parse", "--verify", os.environ["COMMIT"] + "^{commit}").strip()
+    tag, info, _ = TOOLS[tool]
     if not is_ancestor(head, "refs/remotes/origin/main"):
-        sys.exit(f"::error::refused: {head} is not on main; {TAG} holds only a commit of main")
-    held = previous()
+        sys.exit(f"::error::refused: {head} is not on main; {tag} holds only a commit of main")
+    held = previous(tag, info)
     if held and not is_ancestor(held, head):
-        sys.exit(f"::error::refused: {TAG} holds {held}, which {head} does not contain: it is newer or from elsewhere")
-    touched = changed(held, head)
+        sys.exit(f"::error::refused: {tag} holds {held}, which {head} does not contain: it is newer or from elsewhere")
+    touched = changed(tool, held, head)
     build = bool(touched) or force
     reason = (f"{len(touched)} file(s) of the tool changed since {held[:9] or 'nothing'}" if touched else
               f"the tool is unchanged since {held[:9]}" + (", rebuilt by force" if force else ""))
     if build and not train.fork_gate_passed(head):
         sys.exit(f"::error::refused: dyna-checks' gate jobs ({', '.join(sorted(train.GATE))}) did not all pass on a "
-                 f"main push of {head}; {TAG} follows a green gate")
+                 f"main push of {head}; {tag} follows a green gate")
     print(f"{'build' if build else 'skip'}: {reason}")
     with open(os.environ["GITHUB_OUTPUT"], "a") as out:
         out.write(f"build={str(build).lower()}\ncommit={head}\n")
@@ -117,16 +119,17 @@ def tool_json(commit: str, out: Path) -> None:
     contract = re.search(r"pub const CONTRACT: u32 = (\d+);", (ROOT / CONTRACT_SOURCE).read_text())
     release = re.search(r"pub const RELEASE_CONTRACT: u32 = (\d+);", (ROOT / RELEASE_CONTRACT_SOURCE).read_text())
     date = run("git", "log", "-1", "--format=%cd", "--date=format-local:%Y-%m-%d", commit).strip()
-    out.write_text(json.dumps({"schema": 1, "tag": TAG, "commit": commit, "date": date,
+    out.write_text(json.dumps({"schema": 1, "tag": "mod-tool", "commit": commit, "date": date,
                                "native_contract": int(contract.group(1)),
                                "release_contract": int(release.group(1)),
                                "rust": (ROOT / "tools/ci/rust-version").read_text().strip()}, indent=2) + "\n")
 
 
-def newer(commit: str) -> None:
-    held = previous()
+def newer(tool: str, commit: str) -> None:
+    tag, info, _ = TOOLS[tool]
+    held = previous(tag, info)
     if held and not is_ancestor(held, commit):
-        sys.exit(f"::error::not publishing: {TAG} holds {held}, which {commit} does not contain")
+        sys.exit(f"::error::not publishing: {tag} holds {held}, which {commit} does not contain")
 
 
 def main() -> None:
@@ -139,14 +142,19 @@ def main() -> None:
     made.add_argument("out", type=Path)
     commands.add_parser("newer").add_argument("commit")
     args = parser.parse_args()
+    tool = os.environ.get("ROLLING_TOOL_PACKAGE", "cargo-sunrise-mod")
+    if tool not in TOOLS:
+        parser.error(f"no rolling release for {tool!r}")
     if args.command == "crates":
-        print("\n".join(crates()))
+        print("\n".join(crates(tool)))
     elif args.command == "decide":
-        decide(args.force)
+        decide(tool, args.force)
     elif args.command == "tool-json":
+        if tool != "cargo-sunrise-mod":
+            parser.error("the server tool writes its metadata with sunrise-server --version --json")
         tool_json(args.commit, args.out)
     else:
-        newer(args.commit)
+        newer(tool, args.commit)
 
 
 if __name__ == "__main__":

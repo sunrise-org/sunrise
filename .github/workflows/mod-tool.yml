@@ -55,6 +55,7 @@ defaults:
     shell: bash
 env:
   TAG: mod-tool
+  ROLLING_TOOL_PACKAGE: cargo-sunrise-mod
 jobs:
   decide:
     # Of dyna-checks' runs, only this repository's main pushes that ran to the end: a pull request from a branch
