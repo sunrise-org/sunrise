@@ -7,6 +7,7 @@ pub(super) struct StagedWorldTables {
     pub(super) datapack_registries: Option<mod_api::DatapackRegistrySet>,
     pub(super) datapack_vanilla_values:
         Option<super::native_datapack_values::DatapackVanillaValues>,
+    pub(super) data: Arc<sunrise_client::datapack::DataPacks>,
 }
 
 pub(super) struct PreparedWorldReload {
@@ -20,4 +21,5 @@ pub(super) struct PreparedWorldReload {
     pub(super) datapack_registries: Option<mod_api::DatapackRegistrySet>,
     pub(super) datapack_vanilla_values:
         Option<super::native_datapack_values::DatapackVanillaValues>,
+    pub(super) data: Arc<sunrise_client::datapack::DataPacks>,
 }

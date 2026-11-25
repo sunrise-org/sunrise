@@ -28,7 +28,10 @@ pub(super) fn load_world_rest(
         "sunrise-content".into(),
         resource_root.data_changes().clone(),
     );
-    let store = sunrise_client::datapack::DataStore::load(&[&content]);
+    let store =
+        sunrise_client::datapack::DataStore::load(&sunrise_client::datapack::DataPacks::new(&[
+            &content,
+        ]));
     let files = store.files.into_iter().collect::<Vec<_>>();
     let overlay = &sunrise_world::loot::PackOverlay {
         conditions,

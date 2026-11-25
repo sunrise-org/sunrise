@@ -1978,7 +1978,7 @@ mod tests {
         higher: Value,
         expected: Tag,
     ) {
-        use crate::datapack::{DataPack, DataStore};
+        use crate::datapack::{DataPack, DataPacks, DataStore};
         use sunrise_assets::resource_source::{Resource, ResourceSource};
         use sunrise_world::{item_defaults, loot::PackOverlay};
 
@@ -2018,7 +2018,7 @@ mod tests {
                 ])),
             ),
         ];
-        let files: Vec<_> = DataStore::load(&packs.iter().collect::<Vec<_>>())
+        let files: Vec<_> = DataStore::load(&DataPacks::new(&packs.iter().collect::<Vec<_>>()))
             .files
             .into_iter()
             .collect();
@@ -2169,7 +2169,10 @@ mod tests {
             }"##,
         );
         let packs = crate::datapack::discover(&world);
-        let mut files = crate::datapack::DataStore::load(&packs.iter().collect::<Vec<_>>()).files;
+        let mut files = crate::datapack::DataStore::load(&crate::datapack::DataPacks::new(
+            &packs.iter().collect::<Vec<_>>(),
+        ))
+        .files;
         // Native contributions sit below the world's enabled packs.
         files
             .get_mut("world_clock/minecraft:the_end")

@@ -1357,7 +1357,7 @@ fn content_files(
         "sunrise-content".into(),
         resources.data_changes().clone(),
     );
-    crate::datapack::DataStore::load(&[&content])
+    crate::datapack::DataStore::load(&crate::datapack::DataPacks::new(&[&content]))
         .files
         .into_iter()
         .collect()

@@ -152,6 +152,129 @@ impl DataPack {
         )
     }
 }
+/// The packs of one data load as one view, as vanilla's `MultiPackResourceManager` holds them:
+/// layers lowest first, each a pack with its overlays already composed. A layer's `filter` hides
+/// the matching names of the layers below it, never its own, when the view is built.
+#[derive(Clone)]
+pub struct DataPacks {
+    /// Each layer's id and source, lowest first.
+    layers: Vec<(String, ResourceSource)>,
+    /// `data/` of every layer: the winner per name, and every copy lowest first.
+    source: ResourceSource,
+    /// The index in `layers` each copy of `source`'s stack of a name came from.
+    owners: BTreeMap<String, Vec<usize>>,
+}
+impl Default for DataPacks {
+    fn default() -> Self {
+        Self::new(&[])
+    }
+}
+impl DataPacks {
+    /// The view over `layers`, lowest first.
+    pub fn new(layers: &[&DataPack]) -> Self {
+        let mut copies: BTreeMap<String, Vec<(usize, crate::resource_source::Resource)>> =
+            BTreeMap::new();
+        for (index, pack) in layers.iter().enumerate() {
+            if !pack.filter.is_empty() {
+                copies.retain(|name, _| {
+                    let Some((namespace, path)) = name
+                        .strip_prefix("data/")
+                        .and_then(|rest| rest.split_once('/'))
+                    else {
+                        return true;
+                    };
+                    !pack
+                        .filter
+                        .iter()
+                        .any(|filter| filter.matches(namespace, path))
+                });
+            }
+            for name in pack.list("data/") {
+                let resource =
+                    crate::resource_source::Resource::file(pack.source.clone(), name.clone());
+                copies.entry(name).or_default().push((index, resource));
+            }
+        }
+        let mut files = BTreeMap::new();
+        let mut stacks = BTreeMap::new();
+        let mut owners = BTreeMap::new();
+        for (name, found) in copies {
+            let Some((_, winner)) = found.last() else {
+                continue;
+            };
+            files.insert(name.clone(), winner.clone());
+            owners.insert(
+                name.clone(),
+                found.iter().map(|(index, _)| *index).collect(),
+            );
+            stacks.insert(
+                name,
+                found.into_iter().map(|(_, resource)| resource).collect(),
+            );
+        }
+        Self {
+            layers: layers
+                .iter()
+                .map(|pack| (pack.id.clone(), pack.source.clone()))
+                .collect(),
+            source: ResourceSource::indexed_with_layers(files, stacks, None),
+            owners,
+        }
+    }
+    /// Each layer's id and source, lowest first.
+    pub fn layers(&self) -> &[(String, ResourceSource)] {
+        &self.layers
+    }
+    fn name(id: &Identifier) -> String {
+        format!("data/{}/{}", id.namespace(), id.path())
+    }
+    /// `ResourceManager.getResource`: the winning copy's bytes.
+    pub fn read(&self, id: &Identifier) -> io::Result<Vec<u8>> {
+        self.source.read(&Self::name(id))
+    }
+    /// `ResourceManager.getResourceStack`: every copy, lowest layer first, with its layer's id.
+    pub fn stack(&self, id: &Identifier) -> Vec<(&str, crate::resource_source::Resource)> {
+        let name = Self::name(id);
+        let Some(owners) = self.owners.get(&name) else {
+            return Vec::new();
+        };
+        owners
+            .iter()
+            .zip(self.source.stack(&name))
+            .map(|(&index, resource)| (self.layers[index].0.as_str(), resource))
+            .collect()
+    }
+    /// `ResourceManager.listResources`: the ids `<namespace>:<folder>/<path><suffix>` of every
+    /// namespace, in `Identifier` order. A path no identifier can spell is reported and ignored.
+    pub fn list(&self, folder: &str, suffix: &str) -> Vec<Identifier> {
+        let mut ids = Vec::new();
+        for name in self.owners.keys() {
+            let Some((namespace, path)) = name
+                .strip_prefix("data/")
+                .and_then(|rest| rest.split_once('/'))
+            else {
+                continue;
+            };
+            if !path
+                .strip_prefix(folder)
+                .is_some_and(|rest| rest.starts_with('/'))
+                || !path.ends_with(suffix)
+            {
+                continue;
+            }
+            if sunrise_world::json_folder::valid_resource_path(namespace, path)
+                && let Ok(id) = Identifier::from_parts(namespace, path)
+            {
+                ids.push(id);
+            } else {
+                log::warn!("Sunrise: invalid path {namespace}:{path} in pack, ignored");
+            }
+        }
+        ids.sort();
+        ids
+    }
+}
+
 /// Open one resource from the published selection, highest-priority pack first.
 /// The passive content and vanilla sources are below every selected pack.
 pub fn open_resource<'a>(
@@ -943,8 +1066,10 @@ pub fn read_recipe_priority_layer(
 }
 
 impl DataStore {
-    pub fn load(packs: &[&DataPack]) -> Self {
-        let mut kinds: Vec<_> = [
+    /// Every function, tag, predicate and content file of the merged view, as the
+    /// reload listeners read them: each name's copies from the lowest layer up.
+    pub fn load(data: &DataPacks) -> Self {
+        let kinds: Vec<_> = [
             "advancement",
             "banner_pattern",
             "damage_type",
@@ -971,16 +1096,14 @@ impl DataStore {
         .into_iter()
         .chain(crate::providers::NUMBER_PROVIDER_KINDS)
         .collect();
-        kinds.sort_unstable();
         let mut s = Self::default();
-        for pack in packs {
-            let builtin = pack.id == "vanilla";
+        for (layer, source) in data.layers() {
             // The prepared root supplies the baseline to the recipe loader directly.
-            if !builtin {
-                let sources = pack.source().named_sources();
+            if layer.as_str() != "vanilla" {
+                let sources = source.named_sources();
                 if sources.is_empty() {
                     s.priority_layers
-                        .extend(read_recipe_priority_layer(&pack.id, pack.source()));
+                        .extend(read_recipe_priority_layer(layer, source));
                 } else {
                     s.priority_layers.extend(
                         sources
@@ -989,37 +1112,31 @@ impl DataStore {
                     );
                 }
             }
-            // `tags` walks the whole tags tree, so a `tags/function` file is
-            // listed by both kinds: handle every file once.
-            let mut seen = std::collections::BTreeSet::new();
-            for f in pack.list_kinds(&kinds) {
-                if !seen.insert(f.clone()) {
-                    continue;
-                }
-                let Some((namespace, path)) =
-                    f.strip_prefix("data/").and_then(|f| f.split_once('/'))
-                else {
-                    continue;
-                };
-                if !sunrise_world::json_folder::valid_resource_path(namespace, path) {
-                    continue;
-                }
+        }
+        // `tags` walks the whole tags tree, so a name can be listed by more than one kind:
+        // handle every name once.
+        let listed: std::collections::BTreeSet<Identifier> =
+            kinds.iter().flat_map(|kind| data.list(kind, "")).collect();
+        for name in listed {
+            let f = format!("data/{}/{}", name.namespace(), name.path());
+            for (layer, resource) in data.stack(&name) {
+                let builtin = layer == "vanilla";
                 // Preserve JSON stacks independently of the command views
                 // below. World-table readers evaluate the winning resource's
                 // conditions using their captured server inventory.
                 if !builtin && let Some(id) = content_id(&f) {
-                    match pack.source().read(&f) {
+                    match resource.read() {
                         Ok(bytes) => {
                             s.file_errors.remove(&id);
                             s.files.entry(id).or_default().push(bytes);
                         }
                         Err(error) => {
-                            s.file_errors.insert(id, format!("{}: {error}", pack.id));
+                            s.file_errors.insert(id, format!("{layer}: {error}"));
                         }
                     }
                 }
                 if let Some(id) = resource_id(&f, "function", ".mcfunction")
-                    && let Some(bytes) = pack.read(&f)
+                    && let Some(bytes) = resource.read().ok()
                 {
                     match parse_function(&id, &String::from_utf8_lossy(&bytes)) {
                         Ok(func) => {
@@ -1028,7 +1145,7 @@ impl DataStore {
                         Err(e) => s.errors.push((id, e)),
                     }
                 } else if let Some(id) = resource_id(&f, "tags/function", ".json")
-                    && let Some(bytes) = pack.read(&f)
+                    && let Some(bytes) = resource.read().ok()
                     && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 {
                     let mut entries = tag_entries(&v);
@@ -1045,17 +1162,17 @@ impl DataStore {
                     }
                     slot.extend(entries);
                 } else if let Some(id) = resource_id(&f, "predicate", ".json")
-                    && let Some(bytes) = pack.read(&f)
+                    && let Some(bytes) = resource.read().ok()
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.predicates.insert(id, v);
                 } else if let Some(id) = resource_id(&f, "item_modifier", ".json")
-                    && let Some(bytes) = pack.read(&f)
+                    && let Some(bytes) = resource.read().ok()
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.item_modifiers.insert(id, v);
                 } else if let Some(id) = resource_id(&f, "tags/slot_source", ".json")
-                    && let Some(bytes) = pack.read(&f)
+                    && let Some(bytes) = resource.read().ok()
                     && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 {
                     let mut entries = tag_entries(&v);
@@ -1072,7 +1189,7 @@ impl DataStore {
                     }
                     slot.extend(entries);
                 } else if let Some(id) = resource_id(&f, "slot_source", ".json")
-                    && let Some(bytes) = pack.read(&f)
+                    && let Some(bytes) = resource.read().ok()
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.slot_sources.insert(id, v);
@@ -1447,6 +1564,167 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn memory_pack(id: &str, files: &[(&str, &str)]) -> DataPack {
+        use crate::resource_source::Resource;
+        DataPack::from_source(
+            id.into(),
+            ResourceSource::indexed(
+                files
+                    .iter()
+                    .map(|(name, text)| {
+                        (name.to_string(), Resource::bytes(text.as_bytes().to_vec()))
+                    })
+                    .collect(),
+            ),
+        )
+    }
+    fn function(name: &str) -> Identifier {
+        Identifier::parse(&format!("test:function/{name}.mcfunction")).unwrap()
+    }
+    fn texts(data: &DataPacks, id: &Identifier) -> Vec<(String, String)> {
+        data.stack(id)
+            .into_iter()
+            .map(|(layer, resource)| {
+                (
+                    layer.to_owned(),
+                    String::from_utf8(resource.read().unwrap()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_layers_filter_hides_the_names_below_it_but_not_its_own() {
+        let low = memory_pack(
+            "low",
+            &[
+                ("data/test/function/x.mcfunction", "low x"),
+                ("data/test/function/y.mcfunction", "low y"),
+                ("data/test/function/z.mcfunction", "low z"),
+            ],
+        );
+        let meta = serde_json::json!({"filter": {"block": [
+            {"namespace": "^test$", "path": "^function/[xz][.]mcfunction$"},
+        ]}});
+        let high = memory_pack("high", &[("data/test/function/x.mcfunction", "high x")])
+            .with_filter(filter_of(&meta));
+        let data = DataPacks::new(&[&low, &high]);
+        assert_eq!(
+            texts(&data, &function("x")),
+            [("high".to_owned(), "high x".to_owned())]
+        );
+        assert_eq!(data.read(&function("x")).unwrap(), b"high x");
+        assert!(texts(&data, &function("z")).is_empty());
+        assert!(data.read(&function("z")).is_err());
+        assert_eq!(
+            texts(&data, &function("y")),
+            [("low".to_owned(), "low y".to_owned())]
+        );
+        let listed: Vec<_> = data
+            .list("function", ".mcfunction")
+            .iter()
+            .map(Identifier::to_string)
+            .collect();
+        assert_eq!(
+            listed,
+            ["test:function/x.mcfunction", "test:function/y.mcfunction"]
+        );
+    }
+
+    #[test]
+    fn the_stack_runs_from_the_prepared_root_through_mods_and_contributions_to_the_packs() {
+        let layers = [
+            memory_pack("vanilla", &[("data/test/function/x.mcfunction", "vanilla")]),
+            memory_pack("mod_a", &[("data/test/function/x.mcfunction", "mod")]),
+            memory_pack(
+                "mod_files",
+                &[("data/test/function/x.mcfunction", "contribution")],
+            ),
+            memory_pack(
+                "file/a",
+                &[("data/test/function/x.mcfunction", "first pack")],
+            ),
+            memory_pack(
+                "file/b",
+                &[("data/test/function/x.mcfunction", "second pack")],
+            ),
+        ];
+        let data = DataPacks::new(&layers.iter().collect::<Vec<_>>());
+        let expected = [
+            ("vanilla", "vanilla"),
+            ("mod_a", "mod"),
+            ("mod_files", "contribution"),
+            ("file/a", "first pack"),
+            ("file/b", "second pack"),
+        ]
+        .map(|(layer, text)| (layer.to_owned(), text.to_owned()));
+        assert_eq!(texts(&data, &function("x")), expected);
+        assert_eq!(data.read(&function("x")).unwrap(), b"second pack");
+    }
+
+    #[test]
+    fn a_pack_written_as_vanilla_writes_one_reads_through_the_view() {
+        let scratch = tempfile::tempdir().unwrap();
+        let low = scratch.path().join("a_low");
+        let high = scratch.path().join("b_high");
+        for (pack, files) in [
+            (
+                &low,
+                [
+                    ("data/test/function/gone.mcfunction", "low gone"),
+                    ("data/test/function/kept.mcfunction", "low kept"),
+                    ("data/test/function/over.mcfunction", "low over"),
+                ]
+                .as_slice(),
+            ),
+            (
+                &high,
+                [
+                    ("data/test/function/over.mcfunction", "high root"),
+                    ("fmt/data/test/function/over.mcfunction", "high overlay"),
+                ]
+                .as_slice(),
+            ),
+        ] {
+            for (name, text) in files {
+                let path = pack.join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, text).unwrap();
+            }
+        }
+        fs::write(
+            low.join("pack.mcmeta"),
+            br#"{"pack":{"description":"low","min_format":[121,0],"max_format":[121,0]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            high.join("pack.mcmeta"),
+            br#"{
+                "pack": {"description": "high", "min_format": [121, 0], "max_format": [121, 0]},
+                "overlays": {"entries": [
+                    {"directory": "fmt", "min_format": [121, 0], "max_format": [121, 0]}
+                ]},
+                "filter": {"block": [{"namespace": "^test$", "path": "^function/gone[.]mcfunction$"}]}
+            }"#,
+        )
+        .unwrap();
+        let mut packs = discover_folder(scratch.path());
+        packs.sort_by(|a, b| compare_ids(&a.id, &b.id));
+        let data = DataPacks::new(&packs.iter().collect::<Vec<_>>());
+        assert!(data.stack(&function("gone")).is_empty());
+        assert_eq!(
+            texts(&data, &function("kept")),
+            [("file/a_low".to_owned(), "low kept".to_owned())]
+        );
+        assert_eq!(data.read(&function("over")).unwrap(), b"high overlay");
+        let layers: Vec<_> = data
+            .stack(&function("over"))
+            .into_iter()
+            .map(|(layer, _)| layer.to_owned())
+            .collect();
+        assert_eq!(layers, ["file/a_low", "file/b_high"]);
+    }
+
     #[test]
     fn selected_data_pack_filter_hides_lower_files_but_not_its_own() {
         use crate::resource_source::Resource;
@@ -1564,7 +1842,7 @@ mod tests {
             }
         }
         let packs = discover(&root);
-        let store = DataStore::load(&packs.iter().collect::<Vec<_>>());
+        let store = DataStore::load(&DataPacks::new(&packs.iter().collect::<Vec<_>>()));
         let layers = store.priority_layers;
         assert_eq!(
             layers
@@ -1832,7 +2110,7 @@ mod tests {
                 "file/numeric"
             ]
         );
-        let store = DataStore::load(&packs.iter().collect::<Vec<_>>());
+        let store = DataStore::load(&DataPacks::new(&packs.iter().collect::<Vec<_>>()));
         assert_eq!(
             store
                 .functions
@@ -1904,7 +2182,7 @@ mod tests {
             "file/registry-fixture".into(),
             ResourceSource::directory(root.path().to_owned()),
         );
-        let store = DataStore::load(&[&pack]);
+        let store = DataStore::load(&DataPacks::new(&[&pack]));
         assert_eq!(
             store.files.keys().map(String::as_str).collect::<Vec<_>>(),
             ["recipe/example:sub/value"]
@@ -2136,7 +2414,7 @@ mod tests {
         );
         write("data/t/function/plain.mcfunction", "say plain\n");
         let packs = discover(&dir);
-        let store = DataStore::load(&[&packs[0]]);
+        let store = DataStore::load(&DataPacks::new(&[&packs[0]]));
         for id in ["t:novar", "t:lone"] {
             assert!(!store.functions.contains_key(id), "{id} was registered");
             assert!(
@@ -2194,7 +2472,7 @@ mod tests {
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].id, "file/mypack");
         assert_eq!(packs[0].description().plain(), "Hello");
-        let store = DataStore::load(&[&packs[0]]);
+        let store = DataStore::load(&DataPacks::new(&[&packs[0]]));
         assert_eq!(store.functions.len(), 2);
         assert!(store.functions.contains_key("mine:sub/b"));
         assert_eq!(
@@ -2320,7 +2598,7 @@ mod tests {
                 ResourceSource::directory(folder),
             ));
         }
-        let store = DataStore::load(&packs.iter().collect::<Vec<_>>());
+        let store = DataStore::load(&DataPacks::new(&packs.iter().collect::<Vec<_>>()));
         for kind in kinds {
             let versions = &store.files[&format!("{kind}/demo:nested/entry")];
             assert_eq!(versions.len(), 2);
@@ -2356,7 +2634,7 @@ mod tests {
             std::fs::write(file, value.to_string()).unwrap();
         }
         let pack = DataPack::from_source("pack".into(), ResourceSource::directory(root.clone()));
-        let store = DataStore::load(&[&pack]);
+        let store = DataStore::load(&DataPacks::new(&[&pack]));
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(store.predicates.get("demo:entry"), Some(&predicate));
         assert_eq!(store.item_modifiers.get("demo:entry"), Some(&modifier));
@@ -2388,7 +2666,7 @@ mod tests {
                 ResourceSource::directory(folder),
             ));
         }
-        let store = DataStore::load(&packs.iter().collect::<Vec<_>>());
+        let store = DataStore::load(&DataPacks::new(&packs.iter().collect::<Vec<_>>()));
         assert_eq!(
             store.function_tags["demo:load"],
             [("demo:high".into(), true, false)]

@@ -270,17 +270,19 @@ impl Game<'_> {
         let mut contributed = Vec::new();
         self.native_data_pack_files(&mut contributed);
         let modifier_files = global_loot_modifiers::contributed(&contributed);
+        let data = Arc::new(
+            stack.data_packs(
+                contributed
+                    .into_iter()
+                    .filter(|(key, _)| !key.starts_with("loot_modifiers/"))
+                    .collect(),
+            ),
+        );
         let functions::OverlayFiles {
             files,
             read_errors,
             priority_layers,
-        } = functions::overlay_files(
-            stack,
-            contributed
-                .into_iter()
-                .filter(|(key, _)| !key.starts_with("loot_modifiers/"))
-                .collect(),
-        );
+        } = functions::overlay_files(&data);
         let inventory = sunrise_mod_package::enabled::EnabledMods::read(root)?;
         let base_conditions = load_conditions::conditions_for_mods(&self.mods, &inventory)?;
         // Tag files are not conditional. Collect the candidate's static holders
@@ -828,6 +830,7 @@ impl Game<'_> {
             health,
             datapack_registries,
             datapack_vanilla_values,
+            data,
         })
     }
     /// A world open's tables, and the first generation of the registries the mods declared.
@@ -844,6 +847,7 @@ impl Game<'_> {
         self.health_resources = staged.health;
         self.mods.datapack_registries = staged.datapack_registries.map(Arc::new);
         self.mods.datapack_vanilla_values = staged.datapack_vanilla_values.map(Arc::new);
+        self.fns.data = staged.data;
         self.adv.tree = staged.advancements;
         self.adv.reset_tree();
         self.load_server_loot();
@@ -889,7 +893,9 @@ impl Game<'_> {
             wire_tags,
             datapack_registries,
             datapack_vanilla_values,
+            data,
         } = prepared;
+        self.fns.data = data;
         self.close_stonecutters_for_reload();
         lan::sync::forget_server_sources();
         if let Some(tables) = &tables
@@ -1098,6 +1104,7 @@ impl Game<'_> {
             health,
             datapack_registries,
             datapack_vanilla_values,
+            data,
             ..
         } = self.stage_world_tables(stack, true, root)?;
         let items = tables
@@ -1154,6 +1161,7 @@ impl Game<'_> {
             wire_tags,
             datapack_registries,
             datapack_vanilla_values,
+            data,
         })
     }
 

@@ -632,7 +632,7 @@ fn registered_reads_the_candidate_packs_not_the_last_load() {
         DatapackField, DatapackFieldKind, DatapackRegistryDeclaration, DatapackRegistrySync,
     };
     use sunrise_assets::resource_source::ResourceSource;
-    use sunrise_client::datapack::{DataPack, DataStore, RegistryFiles, registry_files};
+    use sunrise_client::datapack::{DataPack, DataPacks, DataStore, RegistryFiles, registry_files};
     use sunrise_world::{conditions::LoadConditions, loot::PackOverlay};
 
     let root = tempfile::tempdir().unwrap();
@@ -738,7 +738,7 @@ fn registered_reads_the_candidate_packs_not_the_last_load() {
             counter.fetch_add(1, Ordering::SeqCst);
             Ok(true)
         })]);
-    let tags: Vec<_> = DataStore::load(&[&packs[0], &packs[1]])
+    let tags: Vec<_> = DataStore::load(&DataPacks::new(&[&packs[0], &packs[1]]))
         .files
         .into_iter()
         .collect();

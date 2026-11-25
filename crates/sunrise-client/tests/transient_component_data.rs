@@ -531,7 +531,7 @@ fn recipe_nested_text_item_values_are_persistent_too() {
 #[test]
 fn command_datastore_filters_winning_files_without_lower_pack_fallback() {
     use sunrise_client::{
-        datapack::{DataPack, DataStore},
+        datapack::{DataPack, DataPacks, DataStore},
         resource_source::ResourceSource,
     };
     let root = tempfile::tempdir().unwrap();
@@ -589,7 +589,7 @@ fn command_datastore_filters_winning_files_without_lower_pack_fallback() {
     );
     let low = DataPack::from_source("low".into(), ResourceSource::directory(low));
     let high = DataPack::from_source("high".into(), ResourceSource::directory(high));
-    let (store, messages) = capture(|| DataStore::load(&[&low, &high]));
+    let (store, messages) = capture(|| DataStore::load(&DataPacks::new(&[&low, &high])));
     assert!(!store.item_modifiers.contains_key("minecraft:override"));
     assert!(store.item_modifiers.contains_key("minecraft:z_good"));
     assert!(!store.predicates.contains_key("minecraft:bad_predicate"));
@@ -611,7 +611,7 @@ fn command_datastore_filters_winning_files_without_lower_pack_fallback() {
         "slot source minecraft:bad_slots",
         "minecraft:creative_slot_lock",
     );
-    let (reloaded, messages) = capture(|| DataStore::load(&[&low, &high]));
+    let (reloaded, messages) = capture(|| DataStore::load(&DataPacks::new(&[&low, &high])));
     assert_eq!(reloaded.item_modifiers.len(), 1);
     assert_eq!(reloaded.predicates.len(), 1);
     diagnostic(

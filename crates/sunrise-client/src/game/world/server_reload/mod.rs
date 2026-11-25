@@ -11,7 +11,7 @@ use mod_api::{
     FileToIdConverter, HookId, Identifier, ServerReloadContext, ServerReloadListener,
     ServerReloadResources,
 };
-use sunrise_client::datapack::DataStore;
+use sunrise_client::datapack::{DataPacks, DataStore};
 
 pub(super) type PreparedReload = PreparedStep<Box<DataStore>>;
 
@@ -35,7 +35,7 @@ impl PreparedServerReload {
 /// Loads the vanilla function library from `stack`, logging per-file failures.
 fn functions_store(stack: &PackStack) -> DataStore {
     let packs: Vec<_> = stack.builtin.iter().chain(stack.enabled_packs()).collect();
-    let store = DataStore::load(&packs);
+    let store = DataStore::load(&DataPacks::new(&packs));
     for (id, e) in &store.errors {
         log::warn!("Sunrise: failed to load function {id}: {e}");
     }

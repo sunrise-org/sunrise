@@ -1,5 +1,5 @@
 use super::*;
-use crate::datapack::{self, DataPack, DataStore};
+use crate::datapack::{self, DataPack, DataPacks, DataStore};
 use std::io::Write as _;
 use sunrise_mod_package::manifest::MissingJar;
 
@@ -204,7 +204,7 @@ fn jar_data_layers_merge_tags_and_replace_recipes_below_world_datapacks() {
     let world = datapack::discover(&f.0.join("world"));
     let mut packs = vec![&builtin];
     packs.extend(world.iter());
-    let store = DataStore::load(&packs);
+    let store = DataStore::load(&DataPacks::new(&packs));
     assert!(store.errors.is_empty(), "{:?}", store.errors);
     assert_eq!(
         store.function_tags["minecraft:ordered"]

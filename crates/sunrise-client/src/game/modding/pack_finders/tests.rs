@@ -2,7 +2,7 @@ use super::*;
 use mod_api::{AddPackFindersEvent, Hooks, Identifier, ModEntry};
 use mod_platform::testing::with_mods;
 use std::{fs, io::Write, path::PathBuf};
-use sunrise_client::datapack::{DataStore, FunctionLine};
+use sunrise_client::datapack::{DataPacks, DataStore, FunctionLine};
 use sunrise_client::text::Text;
 
 const ASSET_PACK: &str = "assets/packmod/resourcepacks/optional";
@@ -366,7 +366,7 @@ fn contributed_packs_are_discoverable_and_only_selected_resources_apply() {
                 &data,
             );
             let enabled = stack.enabled_packs().collect::<Vec<_>>();
-            let store = DataStore::load(&enabled);
+            let store = DataStore::load(&DataPacks::new(&enabled));
             assert_eq!(
                 store.functions["packmod:probe"].lines,
                 [FunctionLine::Command("say from-optional".into())]
@@ -781,7 +781,7 @@ fn hidden_optional_data_pack_is_command_selectable_and_loads_its_function() {
             &data,
         );
         let enabled = stack.enabled_packs().collect::<Vec<_>>();
-        let store = DataStore::load(&enabled);
+        let store = DataStore::load(&DataPacks::new(&enabled));
         assert_eq!(
             store.functions["packmod:probe"].lines,
             [FunctionLine::Command("say from-optional".into())]
