@@ -1,0 +1,3 @@
+# EntityRef::with_random (Entity.getRandom): a mod's draws advance the entity's own random, so the game's next draw from it sees the following value; with_guests loads prepared resources, so each runs in its own process.
+sunrise-client game::native_entity_random_tests::a_draw_through_with_random_advances_the_entitys_own_random lib daily child-process
+sunrise-client game::native_entity_random_tests::with_random_refuses_a_stale_handle_without_drawing lib daily child-process

@@ -109,6 +109,12 @@ pub trait EntitiesBackendMut {
         orb: ExperienceOrbRef,
         age: i32,
     ) -> Result<(), ExperienceOrbWriteError>;
+    /// Side: server.
+    /// Lend the entity's own random (`Entity.getRandom`) to `draw`. Run no callback when the
+    /// handle is stale, the entity is not in the level in place, or its kind has no random of
+    /// its own in the engine yet (an armor stand, #4826). See [`EntityRef::with_random`].
+    #[decline_unavailable]
+    fn with_entity_random(&mut self, entity: EntityRef, draw: RandomDraw<'_>);
 }
 /// The handles' client writes of the `entities` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

@@ -38,7 +38,7 @@ use core::ops::ControlFlow;
 use mod_api::{
     BlockFace, BlockShapeKind, BlockUpdateFlags, ClipBlock, ClipFluid, ClipHit, DimensionKey,
     EntityRayHit, EntityReadError, EntityRef, LevelReadError, LevelRef, LevelWriteError,
-    NeighbourUpdate,
+    NeighbourUpdate, RandomDraw,
 };
 use sunrise_client::join_seq::{
     JoinList, JoinSeq, Joined,
@@ -1391,6 +1391,32 @@ impl Game<'_> {
             _ => self.uuid_for(entity.id()),
         };
         Some(uuid_from_words(words))
+    }
+    /// Lend the entity's own random (`Entity.getRandom`) to `draw`: a mob's, or a player's (a
+    /// parked guest's through its own turn). Nothing runs for a stale handle, an entity outside
+    /// the level in place, a client, or a kind with no random of its own yet (an armor stand,
+    /// #4826).
+    pub(in crate::game) fn with_entity_random(&mut self, entity: EntityRef, draw: RandomDraw<'_>) {
+        match self.native_entity_target(entity) {
+            Some(Target::Mob(id)) => {
+                if let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+                    super::api_values::with_live_level_random(&mut mob.random, draw);
+                }
+            }
+            Some(Target::Player) => {
+                if let Some(player) = self.player.as_mut() {
+                    super::api_values::with_live_level_random(&mut player.random, draw);
+                }
+            }
+            Some(Target::Guest(conn)) => {
+                self.as_guest(conn, |game| {
+                    if let Some(player) = game.player.as_mut() {
+                        super::api_values::with_live_level_random(&mut player.random, draw);
+                    }
+                });
+            }
+            _ => {}
+        }
     }
     /// The level the entity is in (`Entity.level`): on a client, the
     /// client's level. API 373.

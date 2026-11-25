@@ -1700,6 +1700,9 @@ mod native_scoreboard;
 #[path = "game/modding/native_scoreboard_teams.rs"]
 mod native_scoreboard_teams;
 
+#[cfg(test)]
+#[path = "game/modding/native_entity_random_tests.rs"]
+mod native_entity_random_tests;
 #[path = "game/modding/native_section_visibility.rs"]
 mod native_section_visibility;
 #[path = "game/modding/native_server.rs"]
