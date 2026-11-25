@@ -245,14 +245,14 @@ mod tests {
         ] {
             assert_eq!(decode(json).unwrap(), turn, "{json}");
         }
-        let m = turn.block_centred().unwrap();
-        let [x, y, z] = point(&m, [0.5, 0.0, 0.0]).map(|v| (v * 1024.0).round() / 1024.0);
-        assert_eq!([x.abs(), y, z], [0.0, 0.0, -0.5]);
-        // Three numbers are XYZ degrees: a quarter turn about Y.
+        // Three numbers are XYZ degrees: a quarter turn about Y, the same quaternion bit for bit.
         let xyz = decode(r#"{"rotation":[0,90,0],"origin":"center"}"#).unwrap();
-        let [x, _, z] = point(&xyz.block_centred().unwrap(), [0.5, 0.0, 0.0])
-            .map(|v| (v * 1024.0).round() / 1024.0);
-        assert_eq!([x.abs(), z], [0.0, -0.5]);
+        assert_eq!(xyz, turn);
+        let m = turn.block_centred().unwrap();
+        assert_eq!(
+            point(&xyz.block_centred().unwrap(), [0.5, 0.0, 0.0]),
+            point(&m, [0.5, 0.0, 0.0])
+        );
     }
 
     #[test]

@@ -71,7 +71,7 @@ that isn't finite, or a texture key the model doesn't define, is skipped by itse
         answered_by = "mod",
         registration_append = "custom",
         neoforge = "ModelEvent.RegisterLoaders",
-        version = 2
+        version = 4
     )]
     fn register_model_loaders(loaders: &mut Vec<Answered<ModelLoaderRegistration>>);
 }
