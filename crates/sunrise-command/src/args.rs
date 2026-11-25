@@ -18,6 +18,8 @@ pub enum CustomArgumentKind {
     Word,
     /// The rest of the line, spaces included.
     Greedy,
+    /// An identifier as vanilla reads it, preserving the spelling for the custom parser.
+    Id,
     /// Brigadier's `StringArgumentType.string()` (`QUOTABLE_PHRASE`), read by
     /// [`Reader::read_string`]: one unquoted word, or one single- or double-quoted phrase, empty
     /// included, in which only the active quote and `\` are escaped. The parser receives the
@@ -620,13 +622,19 @@ pub fn read_id(reader: &mut Reader) -> CmdResult<String> {
 }
 /// Identifier.read.
 pub fn read_identifier(reader: &mut Reader) -> CmdResult<String> {
+    let (_, (namespace, path)) = read_identifier_token(reader)?;
+    Ok(format!("{namespace}:{path}"))
+}
+
+/// Read the original token and its canonical namespace and path without allocating.
+fn read_identifier_token<'a>(reader: &mut Reader<'a>) -> CmdResult<(&'a str, (&'a str, &'a str))> {
     let start = reader.cursor;
     while reader.can_read() && is_id_char(reader.peek()) {
         reader.skip();
     }
     let raw = &reader.string[start..reader.cursor];
-    match parse_identifier(raw) {
-        Some(id) => Ok(id),
+    match sunrise_client_core::identifier::parse_identifier_parts(raw) {
+        Some(parts) => Ok((raw, parts)),
         None => {
             reader.cursor = start;
             Err(CommandError::tr_at("argument.id.invalid", &[], reader))
@@ -1913,6 +1921,7 @@ impl ArgType {
                         reader.cursor = reader.string.len();
                         text
                     }
+                    CustomArgumentKind::Id => read_identifier_token(reader)?.0.to_owned(),
                     // The number is checked as Brigadier's own type first; the mod's parser sees
                     // the digits it accepted.
                     CustomArgumentKind::Integer { min, max } => {

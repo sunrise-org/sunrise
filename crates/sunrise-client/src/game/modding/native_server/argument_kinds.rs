@@ -261,6 +261,7 @@ pub(super) fn custom_parser(kind: mod_api::CommandArgumentKind) -> Option<(&'sta
             number_properties(true, min.map(i64::from), max.map(i64::from)),
         ),
         Kind::Long { min, max } => ("brigadier:long", number_properties(false, min, max)),
+        Kind::Id => ("minecraft:resource_location", Value::Null),
         _ => return None,
     })
 }
@@ -377,6 +378,7 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
                 let (min, max) = long_bounds(node);
                 Kind::Long { min, max }
             }
+            Some("minecraft:resource_location") => Kind::Id,
             _ if node["properties"]["type"] == "greedy" => Kind::Greedy,
             _ if node["properties"]["type"] == "phrase" => Kind::Quotable,
             _ => Kind::Word,

@@ -48,6 +48,7 @@ fn parser_id(ty: &ArgType) -> String {
             | CustomArgumentKind::Greedy => "brigadier:string".into(),
             CustomArgumentKind::Integer { .. } => "brigadier:integer".into(),
             CustomArgumentKind::Long { .. } => "brigadier:long".into(),
+            CustomArgumentKind::Id => "minecraft:resource_location".into(),
         },
         ArgType::Entity { .. } => "minecraft:entity".into(),
         ArgType::BlockPos => "minecraft:block_pos".into(),

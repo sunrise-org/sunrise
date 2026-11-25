@@ -150,9 +150,9 @@ fn usage_nodes(
         if kind == "vec3_uncentered" {
             node[UNCENTERED] = true.into();
         }
-        // A registered type goes out as the Brigadier type its kind names, which an unmodded
-        // client can read; it and the free `id`, which has no list of its own, ask the server
-        // (the mods' `tab_complete`).
+        // A registered type goes out as the Brigadier or vanilla parser its kind names, which an
+        // unmodded client can read; it and the free `id`, which has no list of its own, ask the
+        // server (the mods' `tab_complete`).
         if custom.is_some() || kind == "id" {
             if let Some(id) = custom {
                 node["custom_argument"] = id.into();

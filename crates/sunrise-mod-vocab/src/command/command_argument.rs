@@ -2,9 +2,10 @@
 //! tab-completion for one kind of value in a `Command` usage.
 //!
 //! A client that does not know the type still parses the command: the wire tree sends the
-//! argument as a Brigadier string (one word, a word or quoted phrase, or the rest of the line) and
-//! asks the server for its completions. Fabric instead registers the type in the command-argument registry, whose id an
-//! unmodded client cannot read and whose node it drops; the string keeps a vanilla tree valid.
+//! argument as a vanilla parser of the declared shape (a Brigadier string of one word, a word or
+//! quoted phrase, or the rest of the line, or `minecraft:resource_location` for an identifier) and
+//! asks the server for its completions. The tree never exposes the mod's parser or provider to the
+//! client, so a vanilla client reads the tree.
 
 use crate::{PermissionLevel, Suggestion, Text};
 
@@ -21,7 +22,7 @@ use crate::{PermissionLevel, Suggestion, Text};
 pub enum CommandArgumentKind {
     /// One word, as Brigadier's `word` string: ASCII letters and digits, and `_ - . +`. The word
     /// ends at the first other character, a space included, so a value containing `:` or `/`
-    /// needs [`Greedy`](Self::Greedy) as the usage's last argument, or
+    /// needs [`Id`](Self::Id), [`Greedy`](Self::Greedy) as the usage's last argument, or
     /// [`Quotable`](Self::Quotable) with the value in quotes.
     #[default]
     Word,
@@ -60,6 +61,10 @@ pub enum CommandArgumentKind {
         /// The largest value accepted; `None` for `i64::MAX`.
         max: Option<i64>,
     },
+    /// A vanilla identifier (`minecraft:resource_location`), reading `a-z`, `0-9`, `_`, `-`,
+    /// `.`, `:` and `/` through the first other character. It can precede other arguments.
+    /// The parser receives the original text, not the canonical identifier. `#` tags are not read.
+    Id,
 }
 
 /// Why a custom argument's parser refused the text a player wrote.
@@ -236,19 +241,19 @@ pub trait CommandArgumentType: Send + Sync + 'static {
 
     /// Validate the text a client wrote and return the value the command executor receives.
     ///
-    /// `input` is one word (see [`CommandArgumentKind::Word`] for its characters), the rest
-    /// of the line for [`CommandArgumentKind::Greedy`], or the decoded word or phrase for
+    /// `input` is one word (see [`CommandArgumentKind::Word`] for its characters), the
+    /// identifier as typed for [`CommandArgumentKind::Id`], the rest of the line for
+    /// [`CommandArgumentKind::Greedy`], or the decoded word or phrase for
     /// [`CommandArgumentKind::Quotable`] (`"a \"b\""` arrives as `a "b"`). Return the canonical
-    /// text to deliver (an
-    /// id, a lower-cased name, `"3"` for `"03"`), or the message shown to the player when the
-    /// input is not valid.
+    /// text to deliver (an id, a lower-cased name, `"3"` for `"03"`), or the message shown to the
+    /// player when the input is not valid.
     fn parse(&self, input: &str) -> Result<String, CommandArgumentError>;
 
     /// The completions for `request` at this argument, on both server and client commands.
     ///
     /// `request.prefix` is the text the argument holds so far: one word's worth for
-    /// [`Word`](CommandArgumentKind::Word), the whole tail of the line up to the cursor for
-    /// [`Greedy`](CommandArgumentKind::Greedy), and the raw typed text for
+    /// [`Word`](CommandArgumentKind::Word) or [`Id`](CommandArgumentKind::Id), the whole tail of the
+    /// line up to the cursor for [`Greedy`](CommandArgumentKind::Greedy), and the raw typed text for
     /// [`Quotable`](CommandArgumentKind::Quotable), often mid-quote (`"Some Ti`), as Brigadier
     /// hands a provider. A quotable type returns insertable syntax: a candidate that is not one
     /// word is quoted (`"Some Title"`), as NeoForge's `EntityCommand` quotes its ids.

@@ -1821,6 +1821,25 @@ fn a_long_argument_reads_past_int_and_refuses_out_of_range() {
 }
 
 #[test]
+fn a_custom_id_parser_receives_the_original_identifier_token() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:target",
+        CustomArgumentKind::Id,
+        |input| Err(Text::literal(format!("unknown target `{input}`"))),
+        |_, _, _| Vec::new(),
+    ));
+    let mut reader = Reader::new("group/path 2");
+    let error = argument.parse(&mut reader, &reg()).unwrap_err();
+    assert_eq!(error.message.plain(), "unknown target `group/path`");
+    assert_eq!(reader.cursor, 0, "a parser refusal resets the cursor");
+
+    let mut reader = Reader::new("example:group:path 2");
+    let error = argument.parse(&mut reader, &reg()).unwrap_err();
+    assert_eq!(error.key, "argument.id.invalid");
+    assert_eq!(reader.cursor, 0);
+}
+
+#[test]
 fn a_custom_argument_parses_completes_and_keeps_its_id() {
     let argument = ArgType::Custom(CustomArgument::new(
         "example:machine",

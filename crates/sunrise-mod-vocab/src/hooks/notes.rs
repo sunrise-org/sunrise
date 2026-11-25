@@ -25,13 +25,11 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   Kinds: `word`, `text` (the rest of the line, last), `integer`,
   `number`, `boolean`, `player`, `item`, `block_pos`, `vec3`, `id`, and any command argument type a mod registered
   (`Registrar::register_command_argument`): its namespaced id is the kind, as in
-  `<machine:mymod:machine>`. A custom argument is one word (or the rest of the line when its type says
-  `Greedy`) and delivers its type's canonical value to the executor. The usages of one command merge into
-  one tree, which every player receives after vanilla's (filtered by their level, as vanilla's is), so their
-  chat box completes and colours it. A client that does not know a custom type still parses and completes it:
-  the tree sends the argument as a Brigadier string and asks the server for its suggestions. Fabric sends
-  the registered argument type's id instead, which an unmodded client cannot read; the string keeps its
-  tree valid. The server also parses player and console invocations against that tree, including each
+  `<machine:mymod:machine>`. A custom argument reads one word, a vanilla identifier (`Id`), or the rest of the
+  line (`Greedy`) and delivers its type's canonical value to the executor. Usages merge into one tree that
+  each player receives alongside vanilla's, filtered by permission. Even a client that does not know the
+  custom type can parse and complete it: the tree sends the matching vanilla parser and asks the server
+  for suggestions. The server parses player and console invocations against that tree, including each
   usage's permission and argument types, before calling the executor as the registering mod.
   Each executable usage keeps its own permission: an operator-only `foo` remains unavailable to ordinary players
   even if `foo bar` is public. Players can traverse the shared `foo` prefix to reach `bar`, but cannot execute

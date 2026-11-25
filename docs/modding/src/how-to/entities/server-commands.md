@@ -359,13 +359,23 @@ the diagnostics; the others are kept, and the player's chat is never disconnecte
 `tab_complete` still sees and may change the server's completions. A client that does not know
 the type asks the server (the node carries `minecraft:ask_server`).
 
-`CommandArgumentKind::Word` takes one word of ASCII letters, digits and `_ - . +`; the
-word ends at the first other character, a space included, so a value with `:` or `/`
-needs `Greedy`, which takes the rest of the line, or `Quotable` with the value in quotes.
-`suggest` receives that text as typed so far: one word, or the whole tail of the line up to the
-cursor. Players whose client does not know the type parse and complete the command: the server
-sends the argument as a Brigadier string of that shape with `minecraft:ask_server`, and their
-chat asks the server for the suggestions.
+Choose a `CommandArgumentKind` for how much of the input the type reads:
+
+- `Word` takes one word of ASCII letters, digits and `_ - . +`; the word ends at the first
+  other character, a space included.
+- `Id` reads a vanilla identifier using `a-z 0-9 _ - . : /` and stops at the first other
+  character. For example, `<modifier:mymod:modifier> <level:integer>` can read
+  `mymod:haste 2`. The type's `parse` receives the original spelling: it decides what
+  value to return and whether the identifier belongs to its own list. `#` is not part
+  of an identifier; this kind doesn't read tags.
+- `Greedy` takes the rest of the line and can only be the last argument.
+- `Quotable` takes one word or one quoted phrase (below).
+
+`suggest` receives the text as typed so far: one word, the identifier, or the whole tail of the
+line up to the cursor. Players whose client does not know the type parse and complete the
+command: the server sends `Id` as vanilla's `minecraft:resource_location` and the other kinds as
+Brigadier strings of that shape, all with `minecraft:ask_server`, and their chat asks the server
+for the suggestions.
 
 ### Quoted phrases
 

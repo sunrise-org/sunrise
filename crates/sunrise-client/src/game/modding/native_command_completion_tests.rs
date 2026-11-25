@@ -159,6 +159,96 @@ fn last_tree(rx: &mpsc::Receiver<Out>) -> play::Commands {
     last.expect("no command tree")
 }
 
+struct ModifierId;
+
+impl mod_api::CommandArgumentType for ModifierId {
+    fn kind(&self) -> mod_api::CommandArgumentKind {
+        mod_api::CommandArgumentKind::Id
+    }
+
+    fn parse(&self, input: &str) -> Result<String, mod_api::CommandArgumentError> {
+        Ok(format!("parsed {input}"))
+    }
+
+    fn suggest(&self, request: &mod_api::SuggestionRequest) -> Vec<mod_api::Suggestion> {
+        assert_eq!(request.prefix, "tconstruct:ha");
+        vec![request.suggest("tconstruct:haste")]
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn custom_id_reads_a_mid_command_identifier_and_sends_its_vanilla_parser() {
+    crate::game::in_own_process(
+        "game::native_command_completion_tests::custom_id_reads_a_mid_command_identifier_and_sends_its_vanilla_parser",
+        || {
+            use sunrise_client::command::{Arg, Dispatcher, network};
+            let arguments = CommandArguments::from([(
+                "test:modifier".to_owned(),
+                Arc::new(ModifierId) as Arc<dyn mod_api::CommandArgumentType>,
+            )]);
+            let (tree, _, problems) = command_tree(
+                &[mod_api::Command::new(
+                    "modprobe <modifier:test:modifier> <amount:integer>",
+                )],
+                &Dispatcher::new(),
+                &arguments,
+            );
+            assert!(problems.is_empty(), "{problems:?}");
+            let mut dispatcher = Dispatcher::new();
+            register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
+            let registries = Registries::default();
+            for raw in ["tconstruct:haste", "group/haste"] {
+                let line = format!("modprobe {raw} 2");
+                let parsed = dispatcher.parse(&line, &registries);
+                let (context, _) = parsed.executable().unwrap();
+                assert_eq!(
+                    context.get("modifier"),
+                    Some(&Arg::Custom {
+                        kind: "test:modifier".into(),
+                        value: format!("parsed {raw}"),
+                    })
+                );
+                assert_eq!(context.get("amount"), Some(&Arg::Int(2)));
+            }
+            for raw in ["tconstruct:haste#tag", "tconstruct:haste:extra"] {
+                let line = format!("modprobe {raw} 2");
+                assert!(dispatcher.parse(&line, &registries).executable().is_err());
+            }
+
+            let mut resources = None;
+            let (mut game, rx) = game_with_guest(&mut resources, "IdTester");
+            game.ui.dispatcher.0 = Arc::new(dispatcher);
+            game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
+            game.send_player_command_tree(2);
+            let packet = last_tree(&rx);
+            let root = packet
+                .nodes
+                .iter()
+                .find(|node| node.name == "modprobe")
+                .unwrap();
+            let modifier = &packet.nodes[root.children[0] as usize];
+            // 26.3 ArgumentTypeInfos: resource_location is parser 36 and has no properties.
+            assert_eq!(modifier.parser, Some((36, Vec::new())));
+            assert_eq!(
+                modifier.suggestions.as_deref(),
+                Some("minecraft:ask_server")
+            );
+            let vanilla_client = network::from_packet(&packet, &Dispatcher::new());
+            assert!(
+                vanilla_client
+                    .parse("modprobe tconstruct:haste 2", &registries)
+                    .executable()
+                    .is_ok()
+            );
+            assert_eq!(
+                suggestions(&mut game, &rx, "/modprobe tconstruct:ha"),
+                ["tconstruct:haste"]
+            );
+        },
+    );
+}
+
 /// The children of the node named `name`, in the tree's order.
 fn children(packet: &play::Commands, name: &str) -> Vec<String> {
     let node = packet
