@@ -1196,6 +1196,16 @@ impl Game<'_> {
         // The Chat option's Hidden level takes the server's messages too.
         self.local_chat_line(text, Some(SYSTEM_INDICATOR), ChatSource::Server);
     }
+    /// `ChatComponent.MAX_CHAT_HISTORY`, or the cap a mod set.
+    pub(super) fn chat_history_limit(&self) -> u32 {
+        u32::try_from(self.ui.chat.history_limit()).unwrap_or(u32::MAX)
+    }
+    /// A mod's chat history cap, clamped as [`sunrise_client::chat::Chat::set_history_limit`] says.
+    pub(super) fn set_chat_history_limit(&mut self, limit: u32) {
+        self.ui
+            .chat
+            .set_history_limit(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
     /// `ChatComponent.addClientSystemMessage`: a line the client adds itself.
     /// It joins the connection's chat and its history, with the system
     /// marker; the Chat option's server-message filter does not hide it

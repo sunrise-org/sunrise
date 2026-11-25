@@ -1274,3 +1274,40 @@ fn the_suggestion_list_asks_for_the_pointing_hand() {
     screen.draw(&m, (rect[0] - 1, rect[1] + 2), 0, 0);
     assert_eq!(crate::widgets::take_cursor(), crate::widgets::Cursor::Arrow);
 }
+
+/// `ChatComponent.MAX_CHAT_HISTORY` (#5598): the chat keeps 100 messages, wrapped lines and sent
+/// lines until a mod sets another cap; a higher cap keeps more, a lower one trims the oldest at
+/// once, and the cap stays within `1..=MAX_CHAT_HISTORY_LIMIT`.
+#[test]
+fn the_chat_history_cap_is_vanillas_100_until_a_mod_sets_another() {
+    let font = font();
+    let mut chat = Chat::default();
+    let post = |chat: &mut Chat, from: usize, n: usize| {
+        for i in from..from + n {
+            chat.add_message(
+                &font,
+                Text::literal(format!("m{i}")),
+                None,
+                ChatSource::Client,
+                0,
+                false,
+            );
+            chat.add_recent(&format!("s{i}"));
+        }
+    };
+    let sizes = |chat: &Chat| (chat.messages.len(), chat.lines.len(), chat.recent.len());
+    post(&mut chat, 0, 150);
+    assert_eq!(chat.history_limit(), DEFAULT_CHAT_HISTORY_LIMIT);
+    assert_eq!(sizes(&chat), (100, 100, 100));
+    chat.set_history_limit(300);
+    post(&mut chat, 150, 150);
+    assert_eq!(sizes(&chat), (250, 250, 250));
+    chat.set_history_limit(10);
+    assert_eq!(sizes(&chat), (10, 10, 10));
+    assert_eq!(chat.recent.first().map(String::as_str), Some("s290"));
+    assert_eq!(chat.recent.last().map(String::as_str), Some("s299"));
+    chat.set_history_limit(0);
+    assert_eq!(chat.history_limit(), 1);
+    chat.set_history_limit(usize::MAX);
+    assert_eq!(chat.history_limit(), MAX_CHAT_HISTORY_LIMIT);
+}

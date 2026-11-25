@@ -22,6 +22,16 @@ pub trait NetworkClientHost {
     /// nesting limits; rejected text is not added.
     fn chat_line(&mut self, line: Text) -> Result<(), TextFormError>;
     /// Side: client.
+    /// How many messages, wrapped lines and sent lines (`recentChat`) the chat keeps
+    /// (`ChatComponent.MAX_CHAT_HISTORY`): vanilla's 100 unless a mod set another cap.
+    fn chat_history_limit(&self) -> u32;
+    /// Side: client.
+    /// Sets the chat history cap for this session, as chat-history mods raise
+    /// `ChatComponent.MAX_CHAT_HISTORY`, clamped to 1 to 16384. A lower cap trims the oldest
+    /// messages, wrapped lines and sent lines now; a higher one lets later ones gather up to it.
+    /// The saved command history (`command_history.txt`, 50 commands) keeps its own cap.
+    fn set_chat_history_limit(&mut self, limit: u32);
+    /// Side: client.
     /// Sends directly through `ClientPacketListener.sendChat` or `sendCommand`
     /// (a leading `/` selects the command path). Chat passes through `client_chat`
     /// before signing; commands run the local dispatcher before being sent to the server.

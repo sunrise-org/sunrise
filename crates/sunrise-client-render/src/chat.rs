@@ -362,10 +362,17 @@ pub struct Chat {
     pub search_prompt: bool,
     /// PvP & HUD's chat search: only messages holding this (lower case) show.
     search: Option<String>,
+    /// A mod's chat history cap in place of `MAX_CHAT_HISTORY` ([`Chat::history_limit`]).
+    history_limit: Option<usize>,
     /// The tests' clock in place of the local time.
     #[cfg(test)]
     clock: Option<(u8, u8)>,
 }
+/// `ChatComponent.MAX_CHAT_HISTORY`: the messages, wrapped lines and sent lines vanilla keeps.
+pub const DEFAULT_CHAT_HISTORY_LIMIT: usize = 100;
+/// The most a mod may raise the chat history cap to, so a mistaken value can't hold the whole
+/// session's chat in memory.
+pub const MAX_CHAT_HISTORY_LIMIT: usize = 16_384;
 /// `ChatComponent.QUEUE_EXPAND_ID`: the queue row's click event, handled by
 /// the chat screen itself (`ChatListener.acceptNextDelayedMessage`).
 pub const QUEUE_EXPAND_ID: &str = "minecraft:internal/expand_chat_queue";
@@ -386,6 +393,23 @@ pub fn queue_line(queued: usize) -> Text {
     })
 }
 impl Chat {
+    /// How many messages, wrapped lines and sent lines (`recentChat`) the chat keeps:
+    /// `ChatComponent.MAX_CHAT_HISTORY`, 100, unless a mod set another cap.
+    pub fn history_limit(&self) -> usize {
+        self.history_limit.unwrap_or(DEFAULT_CHAT_HISTORY_LIMIT)
+    }
+    /// Sets the chat history cap, clamped to `1..=`[`MAX_CHAT_HISTORY_LIMIT`]: a lower cap trims
+    /// the oldest messages, lines and sent lines now; a higher one lets later ones gather up to
+    /// it. The saved command history keeps its own cap.
+    pub fn set_history_limit(&mut self, limit: usize) {
+        let limit = limit.clamp(1, MAX_CHAT_HISTORY_LIMIT);
+        self.history_limit = Some(limit);
+        self.messages.truncate(limit);
+        self.lines.truncate(limit);
+        let excess = self.recent.len().saturating_sub(limit);
+        self.recent.drain(..excess);
+        self.scroll = self.scroll.min(self.lines.len());
+    }
     pub fn lines_per_page(&self, focused: bool) -> usize {
         (self.options.height_px(focused) / self.options.line_height().max(1)) as usize
     }
@@ -393,7 +417,7 @@ impl Chat {
     fn max_width(&self) -> i32 {
         (f64::from(self.options.width_px()) / self.options.scale).floor() as i32
     }
-    /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines. A
+    /// ChatComponent.addMessage: wrap, prepend and trim to the history cap (100). A
     /// message the Chat option hides is dropped, unlogged.
     #[sunrise_mod_api_macros::replaceable]
     pub fn add(
@@ -520,7 +544,7 @@ impl Chat {
         message.wrapped = self.add_lines(font, &message, focused);
         self.inline_images_pending = true;
         self.messages.insert(0, message);
-        self.messages.truncate(100);
+        self.messages.truncate(self.history_limit());
     }
     fn now(&self) -> (u8, u8) {
         #[cfg(test)]
@@ -564,7 +588,7 @@ impl Chat {
                 },
             );
         }
-        self.lines.truncate(100);
+        self.lines.truncate(self.history_limit());
         count
     }
     /// What a message's lines wrap (ComponentRenderUtils.wrapComponents):
@@ -796,7 +820,7 @@ impl Chat {
     /// `ChatComponent.addRecentChat`: a command also goes to the saved history.
     pub fn add_recent(&mut self, message: &str) {
         if self.recent.last().map(String::as_str) != Some(message) {
-            if self.recent.len() >= 100 {
+            if self.recent.len() >= self.history_limit() {
                 self.recent.remove(0);
             }
             self.recent.push(message.to_owned());
