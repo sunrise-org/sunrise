@@ -88,7 +88,9 @@ pub struct HudAtlas {
     /// Their Polytone expression uniforms, resolved when they loaded.
     pub sky_expressions: Vec<crate::polytone_post::ExpressionUniform>,
     pub stars_expressions: Vec<crate::polytone_post::ExpressionUniform>,
-    /// The packs' `core/lightmap` (with `core/screenquad`), when a pack replaces either stage.
+    /// `core/lightmap` with `core/screenquad`, which draw the light texture: the packs' when a pack
+    /// replaces either stage, else the game's own (`pack_text::load_lightmap`). None only when the
+    /// game's own pair didn't translate, or in an atlas made without resources.
     pub lightmap_shader: Option<std::sync::Arc<sunrise_glsl::Translated>>,
     /// Its Polytone expression uniforms (`shader_modifiers`), resolved when it loaded: the
     /// blocks its stages read, with their programs.

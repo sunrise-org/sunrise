@@ -57,8 +57,8 @@ fn game(plain: &str, extra: &[(&str, String)]) -> Vec<(String, String)> {
 }
 
 /// Which programs load (the GUI's, the world's and the see-through text, the block outline,
-/// the sky, the stars, the lightmap) from the packs at `root` over the game's `defaults`, or the
-/// required pipeline that fails the load.
+/// the sky, the stars, a pack's lightmap) from the packs at `root` over the game's `defaults`,
+/// or the required pipeline that fails the load.
 fn loaded(
     root: &[(String, String)],
     defaults: &[(String, String)],
@@ -80,7 +80,11 @@ fn loaded(
         atlas.lines_shader.is_some(),
         atlas.sky_shader.is_some(),
         atlas.stars_shader.is_some(),
-        atlas.lightmap_shader.is_some(),
+        super::packs_lightmap(
+            atlas.lightmap_shader.as_deref(),
+            &files(root),
+            &files(defaults),
+        ),
     ])
 }
 
