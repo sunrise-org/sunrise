@@ -10,6 +10,9 @@ use crate::{
 use serde_json::value::RawValue;
 use std::{collections::BTreeMap, sync::Arc};
 
+mod root_transform;
+pub use root_transform::RootTransform;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Direction {
     Down,
@@ -72,6 +75,8 @@ pub struct CuboidModel {
     pub render_type: Option<String>,
     /// A model's `visibility`: an obj object or composite child name to shown; absent is shown.
     pub visibility: BTreeMap<String, bool>,
+    /// NeoForge's root `transform`; the model closest to the leaf that names one wins.
+    pub root_transform: Option<RootTransform>,
 }
 /// A custom model loader's payload; a model inherits its parent's loader unless it names its own.
 #[derive(Clone, Debug, PartialEq)]
@@ -244,7 +249,18 @@ impl CuboidModel {
     fn decode(raw: &RawValue, loaders: &dyn Fn(&str) -> Option<LoaderProvider>) -> Result<Self> {
         let obj = object(raw)?;
         let loader = match obj.get("loader").filter(|raw| raw.get() != "null") {
-            Some(declaration) => Loader::decode(declaration, raw, &obj, loaders)?,
+            Some(declaration) => {
+                let (id, optional) = Loader::declared(declaration)?;
+                // `EmptyModel.LOADER`: no parent, textures or properties, and empty geometry,
+                // whatever else the file holds.
+                if id == "neoforge:empty" {
+                    return Ok(Self {
+                        elements: Some(Vec::new()),
+                        ..Self::default()
+                    });
+                }
+                Loader::decode(id, optional, raw, &obj, loaders)?
+            }
             None => None,
         };
         let schema = match &loader {
@@ -317,6 +333,11 @@ impl CuboidModel {
             display,
             render_type,
             visibility: visibility(&obj)?,
+            root_transform: obj
+                .get("transform")
+                .filter(|raw| raw.get() != "null")
+                .map(|raw| RootTransform::decode(raw))
+                .transpose()?,
         })
     }
     /// The models this one needs besides itself: its parent and its composite children's parents.
@@ -340,12 +361,8 @@ fn visibility(obj: &Object<'_>) -> Result<BTreeMap<String, bool>> {
     Ok(visibility)
 }
 impl Loader {
-    fn decode(
-        declaration: &RawValue,
-        model: &RawValue,
-        obj: &Object<'_>,
-        loaders: &dyn Fn(&str) -> Option<LoaderProvider>,
-    ) -> Result<Option<Self>> {
+    /// The loader a model names, canonical, and whether it is optional.
+    fn declared(declaration: &RawValue) -> Result<(String, bool)> {
         let (name, optional) = if declaration.get().starts_with('{') {
             let declaration = object(declaration)?;
             let id = primitive_string(required(&declaration, "id")?)?;
@@ -358,7 +375,15 @@ impl Loader {
         } else {
             (primitive_string(declaration)?, false)
         };
-        let canonical = identifier(&name)?;
+        Ok((identifier(&name)?, optional))
+    }
+    fn decode(
+        canonical: String,
+        optional: bool,
+        model: &RawValue,
+        obj: &Object<'_>,
+        loaders: &dyn Fn(&str) -> Option<LoaderProvider>,
+    ) -> Result<Option<Self>> {
         let loader = match canonical.as_str() {
             "neoforge:composite" => {
                 let mut children = Vec::new();
