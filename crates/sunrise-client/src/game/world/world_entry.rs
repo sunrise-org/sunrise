@@ -427,11 +427,36 @@ impl Game<'_> {
             &self.res.motion().health
         };
         let health = base.with_packs(root, &registry_overlay, reload)?;
+        let mut songs_admission: std::result::Result<(), String> = Ok(());
         let (packed_registry_definitions, packed_admission) = if let Some(tables) = frozen {
             items.songs.clone_from(&tables.items.songs);
             (tables.packed_registries.clone(), Ok(()))
         } else {
-            items.load_songs(root, &registry_overlay);
+            // JukeboxSong.DIRECT_CODEC: a definition that fails refuses the load,
+            // its description decoded as ComponentSerialization.CODEC does.
+            songs_admission = items.load_songs(root, &registry_overlay).and_then(|()| {
+                let mut errors: Vec<_> = items
+                    .songs
+                    .iter()
+                    .filter(|(_, song)| {
+                        sunrise_client::text_grammar::build(
+                            &song.description,
+                            &items.component_registry,
+                            false,
+                        )
+                        .is_none()
+                    })
+                    .map(|(id, _)| {
+                        format!("jukebox_song {id}: description: invalid JSON text component")
+                    })
+                    .collect();
+                errors.sort();
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join("; "))
+                }
+            });
             let (packed, admission) = SyncData::stage_registry_definitions(
                 root,
                 self.res.item_defaults(),
@@ -660,6 +685,7 @@ impl Game<'_> {
         // No table is installed, even if another owning loader succeeded.
         let errors = [
             packed_admission.err(),
+            songs_admission.err(),
             providers.as_ref().err().cloned(),
             install_items_result.err().map(|error| error.to_string()),
             conditions.check_errors().err(),

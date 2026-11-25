@@ -957,6 +957,44 @@ pub struct Song {
     pub description: Value,
 }
 impl Song {
+    /// `JukeboxSong.DIRECT_CODEC`: every field is required: a `sound_event`
+    /// (a sound id or an inline definition), a `description` (a text
+    /// component), a positive `length_in_seconds` and a `comparator_output`
+    /// from 0 to 15.
+    pub fn decode(v: &Value) -> std::result::Result<Self, String> {
+        let event = &v["sound_event"];
+        let sound = match event {
+            Value::String(id) => id.as_str(),
+            Value::Object(_) => event["sound_id"]
+                .as_str()
+                .ok_or("sound_event needs a sound_id")?,
+            _ => return Err("sound_event must be a sound id or definition".into()),
+        };
+        let sound = sunrise_core::identifier::Identifier::parse(sound)
+            .map_err(|error| format!("sound_event: {error}"))?
+            .to_string();
+        let description = v["description"].clone();
+        if description.is_null() {
+            return Err("description is required".into());
+        }
+        let length = v["length_in_seconds"]
+            .as_f64()
+            .map(|n| n as f32)
+            .filter(|n| *n > 0.0 && *n <= f32::MAX)
+            .ok_or("length_in_seconds must be positive and finite")?;
+        // `Codec.INT` reads `Number.intValue`, which truncates.
+        let comparator = v["comparator_output"]
+            .as_f64()
+            .map(|n| n as i32)
+            .filter(|n| (0..=15).contains(n))
+            .ok_or("comparator_output must be an integer from 0 to 15")?;
+        Ok(Self {
+            sound,
+            length_ticks: i64::from((length * 20.0).ceil() as i32),
+            comparator,
+            description,
+        })
+    }
     /// `hasFinished`: the length plus one second.
     pub fn finished(&self, ticks: i64) -> bool {
         ticks >= self.length_ticks + 20
@@ -1067,26 +1105,28 @@ fn load_instruments(root: &Path, overlay: &PackOverlay) -> HashMap<String, Instr
         })
         .collect()
 }
-fn load_songs(root: &Path, overlay: &PackOverlay) -> HashMap<String, Song> {
-    data_files(root, "jukebox_song", overlay)
-        .into_iter()
-        .map(|(id, v)| {
-            let sound = match &v["sound_event"] {
-                Value::String(s) => s.clone(),
-                other => other["sound_id"].as_str().unwrap_or("").to_owned(),
-            };
-            (
-                id,
-                Song {
-                    sound,
-                    length_ticks: (v["length_in_seconds"].as_f64().unwrap_or(0.0) as f32 * 20.0)
-                        .ceil() as i64,
-                    comparator: v["comparator_output"].as_i64().unwrap_or(0) as i32,
-                    description: v["description"].clone(),
-                },
-            )
-        })
-        .collect()
+/// `RegistryDataLoader`: one definition that fails its `DIRECT_CODEC` fails the
+/// whole load, and every failure is reported.
+fn load_songs(
+    root: &Path,
+    overlay: &PackOverlay,
+) -> std::result::Result<HashMap<String, Song>, String> {
+    let mut songs = HashMap::new();
+    let mut errors = Vec::new();
+    for (id, v) in data_files(root, "jukebox_song", overlay) {
+        match Song::decode(&v) {
+            Ok(song) => {
+                songs.insert(id, song);
+            }
+            Err(error) => errors.push(format!("jukebox_song {id}: {error}")),
+        }
+    }
+    if errors.is_empty() {
+        Ok(songs)
+    } else {
+        errors.sort();
+        Err(errors.join("; "))
+    }
 }
 pub fn load_tags(
     root: &Path,
@@ -1202,7 +1242,7 @@ impl Items {
             defaults,
             LoadEntityTags::Prepared,
         )?;
-        items.load_songs(root, overlay);
+        items.load_songs(root, overlay)?;
         items.load_resource_registries(root, overlay, defaults)?;
         items.load_table_loot(root, overlay, defaults)?;
         Ok(items)
@@ -1324,7 +1364,7 @@ impl Items {
             LoadEntityTags::Prepared,
             |id| block_items.contains_key(id),
         )?;
-        items.load_songs(root, overlay);
+        items.load_songs(root, overlay)?;
         load_registries(&mut items)?;
         items.block_items = Arc::new(block_items);
         Ok(items)
@@ -1669,8 +1709,13 @@ impl Items {
     }
 
     /// Install jukebox definitions with the owning load's condition context.
-    pub fn load_songs(&mut self, root: &Path, overlay: &PackOverlay<'_>) {
-        self.songs = load_songs(root, overlay);
+    pub fn load_songs(
+        &mut self,
+        root: &Path,
+        overlay: &PackOverlay<'_>,
+    ) -> std::result::Result<(), String> {
+        self.songs = load_songs(root, overlay)?;
+        Ok(())
     }
 
     /// Load from resource files when there is no staged world registry snapshot.
@@ -4361,7 +4406,7 @@ mod tests {
         )
         .unwrap();
 
-        let songs = load_songs(&root, &PackOverlay::NONE);
+        let songs = load_songs(&root, &PackOverlay::NONE).unwrap();
         assert!(songs.contains_key("minecraft:cat"));
         assert!(songs.contains_key("mymod:tune"));
         let tune = &songs["mymod:tune"];
@@ -4369,6 +4414,75 @@ mod tests {
         assert_eq!((tune.length_ticks, tune.comparator), (100, 3));
         assert!(songs.contains_key("minecraft:cat"));
         assert!(!songs.contains_key("minecraft:tune"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `JukeboxSong.DIRECT_CODEC` requires every field: a definition missing
+    /// one is refused, not filled with a default.
+    #[test]
+    fn load_songs_refuses_a_definition_missing_a_required_field() {
+        let root = std::env::temp_dir().join(format!("sunrise-songs-bad-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/demo/jukebox_song")).unwrap();
+        fs::write(root.join("items.json"), "{}").unwrap();
+        let whole = json!({"sound_event": "demo:tune", "length_in_seconds": 5.0, "comparator_output": 3, "description": "tune"});
+        for missing in [
+            None,
+            Some("sound_event"),
+            Some("description"),
+            Some("length_in_seconds"),
+            Some("comparator_output"),
+        ] {
+            let mut song = whole.clone();
+            if let Some(field) = missing {
+                song.as_object_mut().unwrap().remove(field);
+            }
+            fs::write(
+                root.join("data/demo/jukebox_song/tune.json"),
+                song.to_string(),
+            )
+            .unwrap();
+            let songs = load_songs(&root, &PackOverlay::NONE);
+            assert_eq!(songs.is_ok(), missing.is_none(), "{missing:?}");
+            if missing.is_none() {
+                assert!(songs.unwrap().contains_key("demo:tune"));
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `ExtraCodecs.POSITIVE_FLOAT` is exclusive of 0 and takes any float above
+    /// it; `intRange(0, 15)` reads `Number.intValue`, which truncates; one bad
+    /// definition refuses the whole load and the message names it.
+    #[test]
+    fn song_numbers_decode_like_the_codec_and_a_bad_one_refuses_the_load() {
+        let song = |length: f64, comparator: f64| {
+            Song::decode(
+                &json!({"sound_event": "demo:tune", "length_in_seconds": length,
+                "comparator_output": comparator, "description": "tune"}),
+            )
+        };
+        assert!(song(1e-40, 1.0).is_ok());
+        assert!(song(0.0, 1.0).is_err());
+        assert!(song(-1.0, 1.0).is_err());
+        assert_eq!(song(5.0, 3.5).unwrap().comparator, 3);
+        assert_eq!(song(5.0, 15.0).unwrap().comparator, 15);
+        assert!(song(5.0, 16.0).is_err());
+        assert!(song(5.0, -1.0).is_err());
+
+        let root = std::env::temp_dir().join(format!("sunrise-songs-all-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/demo/jukebox_song")).unwrap();
+        fs::write(root.join("items.json"), "{}").unwrap();
+        let good = json!({"sound_event": "demo:tune", "length_in_seconds": 5.0, "comparator_output": 3, "description": "tune"});
+        fs::write(
+            root.join("data/demo/jukebox_song/good.json"),
+            good.to_string(),
+        )
+        .unwrap();
+        fs::write(root.join("data/demo/jukebox_song/bad.json"), "{}").unwrap();
+        let error = load_songs(&root, &PackOverlay::NONE).unwrap_err();
+        assert!(error.starts_with("jukebox_song demo:bad: "), "{error}");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -4383,7 +4497,7 @@ mod tests {
             fs::write(dir.join("entry.json"), "{}").unwrap();
             files.push((format!("{kind}/demo:entry"), vec![
                 b"{}".to_vec(),
-                json!({"neoforge:conditions":[{"type":"neoforge:mod_loaded","modid":"provider"}],"description":"winning","max_level":7,"sound_event":"demo:note","use_duration":4.0,"range":16.0}).to_string().into_bytes(),
+                json!({"neoforge:conditions":[{"type":"neoforge:mod_loaded","modid":"provider"}],"description":"winning","max_level":7,"sound_event":"demo:note","use_duration":4.0,"range":16.0,"length_in_seconds":4.0,"comparator_output":1}).to_string().into_bytes(),
             ]));
             files.push((
                 format!("{kind}/demo:unknown"),
@@ -4410,9 +4524,9 @@ mod tests {
             assert_eq!(selected.len(), 1);
             assert_eq!(selected["demo:entry"]["description"], "winning");
         }
-        assert!(load_songs(&root, &off).is_empty());
+        assert!(load_songs(&root, &off).unwrap().is_empty());
         assert_eq!(
-            load_songs(&root, &on)["demo:entry"].description,
+            load_songs(&root, &on).unwrap()["demo:entry"].description,
             json!("winning")
         );
         assert!(load_instruments(&root, &off).is_empty());
