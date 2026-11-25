@@ -1,0 +1,3 @@
+ids = ["handle:EntityRef::spectator"]
+why = "EntityRef::spectator answers on a client too (Entity.isSpectator, AbstractClientPlayer.gameMode from PlayerInfo), for the local player and every tracked player, so client raycasts and overlays can skip spectators as EntitySelector.NO_SPECTATORS does (#5613)."
+migrate = "Nothing to change: it now takes any &dyn Host instead of &dyn ServerHost."

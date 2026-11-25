@@ -172,6 +172,18 @@ impl Game<'_> {
     /// `Entity.isSpectator`: true for a player in spectator mode, false for
     /// every other entity.
     pub(super) fn entity_spectator(&self, entity: EntityRef) -> Option<bool> {
+        if self.remote.is_some() {
+            // `AbstractClientPlayer.gameMode`: the player's `PlayerInfo`, mirrored onto a
+            // tracked player as its spectator flag.
+            return Some(match self.native_entity_read_target(entity)? {
+                Target::Player => self.own_player_is_spectator(),
+                Target::Mob(id) => {
+                    let mob = self.mobs.iter().find(|m| m.id == id)?;
+                    &*mob.kind.id == "minecraft:player" && mob.extra.spectator
+                }
+                _ => false,
+            });
+        }
         Some(match self.native_entity_target(entity)? {
             Target::Player => self.spectator(),
             Target::Guest(conn) => self.command_guest(conn)?.game_mode == 3,

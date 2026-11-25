@@ -1626,3 +1626,50 @@ pub(in crate::game) fn run_hud_camera_mounts_match_26_3_oracle() {
         },
     );
 }
+
+/// `EntityRef::spectator` on a client (#5613): the local player and a tracked player answer from
+/// their `PlayerInfo` game mode, as `AbstractClientPlayer.gameMode` does, and a mob is no
+/// spectator.
+#[test]
+#[ignore = "daily"]
+fn a_client_reads_each_players_spectator_mode_from_its_player_info() {
+    with_client_game(|game| {
+        let (_peer, _writer) = setup_client(game, 2, None, [0.5, 64.0, 0.5]);
+        game.handle_packet(player_info_add_mode(SELF_UUID, SELF_NAME, 2))
+            .unwrap();
+        let me = game.local_player().unwrap().entity();
+        assert_eq!(me.spectator(game), Some(false));
+        game.handle_packet(player_info_mode(SELF_UUID, 3)).unwrap();
+        assert_eq!(me.spectator(game), Some(true));
+
+        let builtin = &game.remote.as_ref().unwrap().builtin;
+        let types = builtin.get("minecraft:entity_type").unwrap();
+        let (player_type, zombie_type) = (
+            types.id("minecraft:player").unwrap(),
+            types.id("minecraft:zombie").unwrap(),
+        );
+        let other_uuid = 0x2222_3333_4444_5555_6666_7777_8888_9999_u128;
+        game.handle_packet(player_info_add_mode(other_uuid, "Watcher", 0))
+            .unwrap();
+        for (id, uuid, kind) in [(99, other_uuid, player_type), (100, 100, zombie_type)] {
+            game.handle_packet(C::AddEntity(play::AddEntity {
+                id,
+                uuid,
+                kind,
+                position: [2.5, 64.0, 2.5],
+                velocity: [0.0; 3],
+                pitch: 0,
+                yaw: 0,
+                head_yaw: 0,
+                data: 0,
+            }))
+            .unwrap();
+        }
+        let other = game.entity(99).unwrap();
+        let zombie = game.entity(100).unwrap();
+        assert_eq!(other.spectator(game), Some(false));
+        game.handle_packet(player_info_mode(other_uuid, 3)).unwrap();
+        assert_eq!(other.spectator(game), Some(true));
+        assert_eq!(zombie.spectator(game), Some(false));
+    });
+}

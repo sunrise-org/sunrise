@@ -6,9 +6,11 @@ use crate::*;
 #[doc(hidden)]
 #[sunrise_mod_api_macros::host_area]
 pub trait EntityStanceBackend {
-    /// Side: server.
+    /// Side: both.
     /// `Entity.isSpectator`: true for a player in spectator mode, false for
-    /// every other entity.
+    /// every other entity. On a client, a player's game mode as its `PlayerInfo` says
+    /// (`AbstractClientPlayer.gameMode`), the local player's and every tracked player's;
+    /// false while that `PlayerInfo` is missing. None for a stale handle.
     fn entity_spectator(&self, entity: EntityRef) -> Option<bool>;
     /// Side: both.
     /// `isSecondaryUseActive`: the local client's live semantic sneak state (not the
