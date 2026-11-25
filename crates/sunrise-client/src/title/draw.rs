@@ -50,8 +50,14 @@ impl Title {
             // alone, centred, no progress.
             crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
             phases(crate::screen_draw::RenderPhase::Background, batch);
-            let text =
-                crate::lang::get_or("createWorld.preparing", "Preparing for world creation...");
+            let text = if self.pack_validation.is_some() {
+                crate::lang::get_or(
+                    "dataPack.validation.working",
+                    "Validating selected data packs...",
+                )
+            } else {
+                crate::lang::get_or("createWorld.preparing", "Preparing for world creation...")
+            };
             let tw = atlas.font.width_text(&Text::literal(text.clone()));
             let (tx, ty) = (w / 2.0 - tw / 2.0, h / 2.0 - 4.5);
             // `FocusableTextWidget.builder(title, font, 12)`: 12 pixels of
@@ -563,6 +569,22 @@ impl Title {
                 for (i, line) in lines.iter().enumerate() {
                     centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
                 }
+            }
+            Mode::PackValidationFailed { .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                phases(crate::screen_draw::RenderPhase::Background, batch);
+                // ConfirmScreen with an empty message: the title alone.
+                self.message_lines.set(0);
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or(
+                        "dataPack.validation.failed",
+                        "Failed to validate selected data packs!",
+                    ),
+                    confirm_top(h, 0),
+                    u32::MAX,
+                );
             }
             Mode::MissingBiomeRegions { missing, .. } => {
                 self.draw_missing_biome_regions(atlas, batch, (w, h), missing, phases)

@@ -336,6 +336,11 @@ pub enum Mode {
         /// An AlertScreen, not the access failure.
         alert: Option<Alert>,
     },
+    /// `CreateWorldScreen.applyNewPackConfig`'s ConfirmScreen when the selected packs fail to
+    /// load: Back reopens the Data Packs screen with the selection it had, Reset with the default.
+    PackValidationFailed {
+        return_to: Box<Mode>,
+    },
     Multiplayer(crate::multiplayer::Screen),
     Realms(crate::realms::Screen),
     /// SafetyScreen: the warning before the first Multiplayer click, with its
@@ -506,6 +511,20 @@ pub struct Title {
     preparing: bool,
     /// The confirm screen's Back: the Data Packs screen reopens.
     reopen_data_packs: bool,
+    /// The selection the Data Packs screen reopens with when it is not the Create screen's own
+    /// (`WorldDataConfiguration.DEFAULT` after Reset).
+    reopen_selected: Option<Vec<String>>,
+    /// The selection before the read that validates a new one (`dataPack.validation.working`);
+    /// `None` while the read is the Create screen's first.
+    pack_validation: Option<(Vec<String>, PackScreen)>,
+    /// The screen the failed selection came from, for the confirm's answer.
+    pack_validation_from: PackScreen,
+}
+/// The screen whose Done started a selection change: `onAbort` reopens it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PackScreen {
+    DataPacks,
+    Experiments,
 }
 pub(crate) struct Button {
     x: f32,
@@ -805,6 +824,7 @@ impl Mode {
             Self::Recover { .. } => "world_recover",
             Self::Recovered { .. } => "world_recovered",
             Self::Error { .. } => "error",
+            Self::PackValidationFailed { .. } => "pack_validation_failed",
             Self::Multiplayer(screen) => screen.id(),
             Self::MultiplayerWarning { .. } => "multiplayer_warning",
             Self::Onboarding(_) => "onboarding",
@@ -878,7 +898,9 @@ impl Title {
                     options.rules.rebind_registry(registry.clone())
                 }
                 Mode::CreatePreset { parent, .. } => rebind(parent, registry),
-                Mode::Error { return_to, .. } => rebind(return_to, registry),
+                Mode::Error { return_to, .. } | Mode::PackValidationFailed { return_to } => {
+                    rebind(return_to, registry)
+                }
                 _ => {}
             }
         }
@@ -962,6 +984,9 @@ impl Title {
             confirm_experiments: RefCell::new(None),
             preparing: false,
             reopen_data_packs: false,
+            reopen_selected: None,
+            pack_validation: None,
+            pack_validation_from: PackScreen::DataPacks,
         }
     }
     /// Retain additional repository sources across world-creation screens.
@@ -1182,6 +1207,7 @@ impl Title {
     /// filled in after the data packs changed (`openCreateWorldScreen`).
     pub fn finish_preparing(&mut self) {
         self.preparing = false;
+        self.pack_validation = None;
         if !matches!(self.mode, Mode::Create { .. }) {
             self.set_mode(self.new_world());
         }
@@ -1240,9 +1266,56 @@ impl Title {
                     &self.additional_data_packs,
                 ));
         } else {
-            self.set_data_packs(ids);
-            self.preparing = true;
+            self.apply_data_packs(ids, PackScreen::DataPacks);
         }
+    }
+    /// `applyNewPackConfig`: the selection applies and its data is read again, the old selection
+    /// kept for a failed read.
+    fn apply_data_packs(&mut self, ids: Vec<String>, from: PackScreen) {
+        self.pack_validation = Some((self.data_packs(), from));
+        self.set_data_packs(ids);
+        self.preparing = true;
+    }
+    /// The read of a new selection failed: the Create screen has the old selection back, and
+    /// `dataPack.validation.failed` asks where to go. False when the read was not a selection's.
+    pub fn pack_validation_failed(&mut self) -> bool {
+        let Some((previous, from)) = self.pack_validation.take() else {
+            return false;
+        };
+        self.preparing = false;
+        self.set_data_packs(previous);
+        self.pack_validation_from = from;
+        let return_to = Box::new(self.mode.clone());
+        self.set_mode(Mode::PackValidationFailed { return_to });
+        true
+    }
+    /// The confirm's answer (`onAbort`): Back reopens the Data Packs screen with the selection it
+    /// had, Reset with the default.
+    fn answer_pack_validation(&mut self, back: bool) {
+        let Mode::PackValidationFailed { return_to } = &self.mode else {
+            return;
+        };
+        let create = *return_to.clone();
+        self.set_mode(create);
+        let selected = if back {
+            self.data_packs()
+        } else {
+            vec!["vanilla".to_owned()]
+        };
+        match self.pack_validation_from {
+            PackScreen::DataPacks => {
+                self.reopen_data_packs = true;
+                self.reopen_selected = (!back).then_some(selected);
+            }
+            PackScreen::Experiments => self.open_experiments(&selected),
+        }
+    }
+    /// `CreateWorldScreen.openExperimentsScreen`: the feature packs the jar ships, switched on
+    /// or off as `selected` has them.
+    fn open_experiments(&mut self, selected: &[String]) {
+        let flags =
+            experiments::repository_flags(&self.resources, selected, &self.additional_data_packs);
+        *self.experiments.get_mut() = Some(experiments::ExperimentsScreen::new(flags));
     }
     /// Whether the confirm screen declined: the Data Packs screen reopens.
     pub fn take_reopen_data_packs(&mut self) -> bool {
@@ -1257,7 +1330,9 @@ impl Title {
         let (dir, selected) = match &self.mode {
             Mode::Create { options, .. } => (
                 options.pack_dir.clone().unwrap_or_default(),
-                options.data_packs.clone(),
+                self.reopen_selected
+                    .take()
+                    .unwrap_or_else(|| options.data_packs.clone()),
             ),
             _ => (Default::default(), Vec::new()),
         };
@@ -2084,6 +2159,13 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     join(&[&get("recover_world.done.title", "Recovery done"), &message]),
                 )
             }
+            Mode::PackValidationFailed { .. } => ScreenInfo::new(
+                "pack_validation_failed",
+                get(
+                    "dataPack.validation.failed",
+                    "Failed to validate selected data packs!",
+                ),
+            ),
             Mode::Error { message, alert, .. } => {
                 let title = match alert {
                     Some(Alert::Incompatible) => {
@@ -2783,6 +2865,10 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 self.escape();
                 Action::None
             }
+            (Mode::PackValidationFailed { .. }, Some(id @ (104 | 105))) => {
+                self.answer_pack_validation(id == 104);
+                Action::None
+            }
             (Mode::Error { return_to, .. }, Some(39)) => {
                 let back = *return_to.clone();
                 self.set_mode(back);
@@ -2861,12 +2947,8 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             // CreateWorldScreen.openExperimentsScreen: the feature packs the
             // jar ships, switched on or off.
             (Mode::Create { options, .. }, Some(30)) => {
-                let flags = experiments::repository_flags(
-                    &self.resources,
-                    &options.data_packs,
-                    &options.additional_data_packs,
-                );
-                *self.experiments.get_mut() = Some(experiments::ExperimentsScreen::new(flags));
+                let selected = options.data_packs.clone();
+                self.open_experiments(&selected);
                 Action::None
             }
             (Mode::Create { .. }, Some(21)) => self.create_or_upload(),
@@ -3550,8 +3632,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     // their data is read again (`applyNewPackConfig`'s load
                     // screen).
                     if let Some(pending) = pending {
-                        self.set_data_packs(pending);
-                        self.preparing = true;
+                        self.apply_data_packs(pending, PackScreen::DataPacks);
                     }
                     return (true, true);
                 }
@@ -3600,6 +3681,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     // ExperimentsScreen.onDone: the other packs keep their
                     // order, the selected features are appended in reverse
                     // screen order. Cancel drops the switches.
+                    let previous = self.data_packs();
                     if outcome == experiments::Outcome::Done
                         && let Mode::Create { options, .. } = &mut self.mode
                         && let Some(flags) = self.experiments.borrow().as_ref().map(|s| {
@@ -3620,6 +3702,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     // `applyNewPackConfig`'s load screen: the data is read
                     // again for the packs the screen picked (Done only).
                     if outcome == experiments::Outcome::Done {
+                        self.pack_validation = Some((previous, PackScreen::Experiments));
                         self.preparing = true;
                     }
                     return (true, true);
@@ -3753,6 +3836,8 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 let folder = world.folder.clone();
                 self.return_to_list(Some(&folder));
             }
+            // ConfirmScreen.keyPressed: Escape runs the callback with false, Reset.
+            Mode::PackValidationFailed { .. } => self.answer_pack_validation(false),
             Mode::Error { return_to, .. } => self.set_mode(*return_to.clone()),
             Mode::CreateFlat { .. } => {
                 if matches!(&self.mode, Mode::CreateFlat { flat, .. } if flat.page == flat::Page::Presets)

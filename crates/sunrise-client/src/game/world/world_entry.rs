@@ -146,7 +146,9 @@ impl Game<'_> {
                 Ok(job) => self.creation_job = Some(job),
                 Err(error) => {
                     log::warn!("Sunrise: world creation worker could not start: {error}");
-                    if let Some(title) = self.title.as_mut() {
+                    if let Some(title) = self.title.as_mut()
+                        && !title.pack_validation_failed()
+                    {
                         title.finish_preparing();
                         title.failed(format!(
                             "{}: {error}",
@@ -175,17 +177,21 @@ impl Game<'_> {
                         .and_then(|r| r.err())
                         .unwrap_or_else(|| "the read never ran".to_owned());
                     log::warn!("Sunrise: preparing world creation failed: {e}");
-                    // Clear the flag first: `failed` sets the error screen
-                    // with Create as its back target, which
-                    // `finish_preparing` would replace with a fresh world.
-                    title.finish_preparing();
-                    title.failed(format!(
-                        "{}: {e}",
-                        sunrise_client::lang::get_or(
-                            "createWorld.preparing",
-                            "Preparing for world creation..."
-                        )
-                    ));
+                    // A new selection's failed read asks where to go
+                    // (`dataPack.validation.failed`). The first read clears the
+                    // flag before `failed` sets the error screen with Create as
+                    // its back target, which `finish_preparing` would replace
+                    // with a fresh world.
+                    if !title.pack_validation_failed() {
+                        title.finish_preparing();
+                        title.failed(format!(
+                            "{}: {e}",
+                            sunrise_client::lang::get_or(
+                                "createWorld.preparing",
+                                "Preparing for world creation..."
+                            )
+                        ));
+                    }
                 }
             }
         }

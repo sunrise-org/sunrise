@@ -507,6 +507,28 @@ impl Title {
                     .does(crate::widgets::Action::Back),
                 ]
             }
+            Mode::PackValidationFailed { .. } => {
+                let y = confirm_top(h, 0) + 41.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 152.0,
+                        y,
+                        150.0,
+                        &lang::get_or("dataPack.validation.back", "Back to Pack Selection"),
+                        true,
+                        104,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 2.0,
+                        y,
+                        150.0,
+                        &lang::get_or("dataPack.validation.reset", "Reset to Default"),
+                        true,
+                        105,
+                    )
+                    .does(crate::widgets::Action::Back),
+                ]
+            }
             Mode::MissingMods { .. } => {
                 let (_, _, narrow) = missing_mods::layout(w, h);
                 let button_width = if narrow { (w - 20.0).min(300.0) } else { 150.0 };

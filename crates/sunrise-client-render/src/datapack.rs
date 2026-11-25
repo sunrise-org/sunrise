@@ -512,7 +512,7 @@ pub fn feature_repository(
 /// Create World's Data Packs screen (`PackSelectionScreen` on vanilla's
 /// `mcworld-` folder): the folder's packs (`PackSource.WORLD`), the
 /// built-in one (`resources` holds its `pack.png`), and the feature packs
-/// of `resources` (`PackSource.FEATURE`), available at the bottom and off
+/// of `resources` (`PackSource.FEATURE`), available at the top and off
 /// until picked — the Experiments.
 pub fn screen_packs(dir: &Path, resources: &Path) -> Vec<crate::pack_screen::PackInfo> {
     use crate::{

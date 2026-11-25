@@ -965,6 +965,51 @@ fn offer_data_packs_with_a_feature_asks_and_the_confirm_screen_decides() {
 }
 
 #[test]
+fn a_failed_pack_validation_restores_the_selection_and_reopens_the_pack_screen() {
+    let mut f = Fixture::new();
+    f.enter_create_world_for_packs();
+    f.title
+        .offer_data_packs(&f.root, vec!["vanilla".into(), "file/t.zip".into()]);
+    f.title.finish_preparing();
+    f.title
+        .offer_data_packs(&f.root, vec!["vanilla".into(), "file/u.zip".into()]);
+    assert!(f.title.pack_validation_failed());
+    // The failed selection is dropped, the confirm asks where to go.
+    assert!(!f.title.preparing());
+    assert!(matches!(f.title.mode, Mode::PackValidationFailed { .. }));
+    let labels: Vec<String> = f
+        .title
+        .buttons(480.0, 262.0)
+        .into_iter()
+        .map(|b| b.label)
+        .collect();
+    assert_eq!(labels, ["Back to Pack Selection", "Reset to Default"]);
+    assert_eq!(f.click("Back to Pack Selection"), Action::None);
+    let expected = vec!["vanilla".to_owned(), "file/t.zip".to_owned()];
+    assert_eq!(
+        f.title.creation_packs().map(|(_, ids)| ids),
+        Some(expected.clone())
+    );
+    assert!(matches!(
+        f.title.reopen_data_packs_action(),
+        Some(Action::DataPacks { selected, .. }) if selected == expected
+    ));
+    // Reset reopens with the default selection, the Create screen keeps its own.
+    f.title
+        .offer_data_packs(&f.root, vec!["vanilla".into(), "file/u.zip".into()]);
+    assert!(f.title.pack_validation_failed());
+    assert_eq!(f.click("Reset to Default"), Action::None);
+    assert!(matches!(
+        f.title.reopen_data_packs_action(),
+        Some(Action::DataPacks { selected, .. }) if selected == ["vanilla"]
+    ));
+    assert_eq!(f.title.creation_packs().map(|(_, ids)| ids), Some(expected));
+    // A first read that fails is not a selection's.
+    f.title.finish_preparing();
+    assert!(!f.title.pack_validation_failed());
+}
+
+#[test]
 fn preparing_takes_no_input() {
     let mut f = Fixture::new();
     f.enter_create_world_for_packs();
@@ -3077,6 +3122,22 @@ mod hidden_features {
         assert_eq!(
             f.title.creation_packs().map(|(_, ids)| ids),
             Some(vec!["vanilla".to_owned(), "hidden".to_owned()])
+        );
+        // Done reads the data again; a failed read keeps the old selection and asks, and
+        // Back reopens the Experiments screen, not the Data Packs one.
+        assert!(f.title.preparing());
+        assert!(f.title.pack_validation_failed());
+        assert!(matches!(f.title.mode, Mode::PackValidationFailed { .. }));
+        assert_eq!(f.click("Back to Pack Selection"), Action::None);
+        assert!(f.title.experiments.borrow().is_some());
+        assert!(!f.title.take_reopen_data_packs());
+        assert_eq!(
+            f.title.creation_packs().map(|(_, ids)| ids),
+            Some(vec![
+                "vanilla".to_owned(),
+                "hidden".to_owned(),
+                "visible".to_owned()
+            ])
         );
     }
 }
