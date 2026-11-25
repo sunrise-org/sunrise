@@ -147,6 +147,17 @@ impl Game<'_> {
     pub(super) fn player_give_experience_points(&mut self, player: PlayerRef, points: i32) -> bool {
         self.native_player_write(player, |game| game.give_experience_points(points))
     }
+    /// `ExperienceOrb.repairPlayerItems` for `player` (#5593): the orb pickup's Mending, the
+    /// points left over.
+    pub(super) fn player_repair_items_with_xp(
+        &mut self,
+        player: PlayerRef,
+        points: i32,
+    ) -> Option<i32> {
+        let mut rest = None;
+        self.native_player_write(player, |game| rest = Some(game.mending(points)));
+        rest
+    }
     /// `Player.giveExperienceLevels`: adds `levels`, or takes them off when
     /// negative, as the anvil and the enchanting table charge with. Below 0
     /// the level, the total and the progress toward the next level are all 0.
@@ -168,6 +179,37 @@ mod tests {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
         crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
         game.player(123).unwrap()
+    }
+
+    /// A mod spends experience on Mending as an orb's pickup does: 2 durability a point, the
+    /// rest returned and the player's experience untouched (#5593).
+    #[test]
+    #[ignore = "daily"]
+    fn repairing_with_experience_returns_what_mending_leaves() {
+        with_game(|game| {
+            let player = acting_player(game);
+            let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
+            sword.damage = 1000;
+            sword.enchant("minecraft:mending", 1);
+            game.inventory[game.selected] = Some(sword);
+            assert_eq!(player.repair_items_with_xp(game, 7), Some(0));
+            let damage =
+                |game: &super::Game<'_>| game.inventory[game.selected].as_ref().unwrap().damage;
+            assert_eq!(damage(game), 986);
+            // ExperienceOrb.repairPlayerItems: 4 damage costs 2 of 7 points, and the 5 left find
+            // nothing more to repair.
+            game.inventory[game.selected].as_mut().unwrap().damage = 4;
+            assert_eq!(player.repair_items_with_xp(game, 7), Some(5));
+            assert_eq!(damage(game), 0);
+            assert_eq!(player.repair_items_with_xp(game, 7), Some(7));
+            let xp = player.experience(game).unwrap();
+            assert_eq!((xp.level, xp.total), (0, 0));
+            let stale = mod_api::__private::game::player_ref(
+                EntityRef::new(WorldEpoch::new(u64::MAX), 7),
+                player.uuid(),
+            );
+            assert_eq!(stale.repair_items_with_xp(game, 7), None);
+        });
     }
 
     #[test]

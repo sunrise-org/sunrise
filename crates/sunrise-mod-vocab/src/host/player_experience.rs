@@ -53,6 +53,16 @@ pub trait PlayerExperienceBackendMut {
     /// unavailable player.
     fn player_give_experience_points(&mut self, player: PlayerRef, points: i32) -> bool;
     /// Side: server.
+    /// `ExperienceOrb.repairPlayerItems`: spends `points` on the player's damaged equipment
+    /// enchanted with `minecraft:repair_with_xp` (Mending), as an orb's pickup does before it
+    /// gives the rest. A piece is drawn at random, repaired by its enchantments' xp rate and the
+    /// `xp_repair_ratio` hook, `player_item_mend` fires for it, and what is left repairs again
+    /// until no damaged piece is left. Returns the points left over, which a mod that took over
+    /// the pickup passes to `PlayerRef::give_experience_points`; the player's experience itself
+    /// is not changed. A value of zero or below repairs nothing. None for a stale or unavailable
+    /// player.
+    fn player_repair_items_with_xp(&mut self, player: PlayerRef, points: i32) -> Option<i32>;
+    /// Side: server.
     /// `Player.giveExperienceLevels`: adds `levels`, or takes them off when
     /// negative, as the anvil and the enchanting table charge with. Below 0
     /// the level, the total and the progress toward the next level are all 0. A level-up sound
