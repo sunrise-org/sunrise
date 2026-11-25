@@ -196,8 +196,14 @@ jobs:
               --identifier "dev.sunrise.${binary#sunrise-}" --sign "$MACOS_SIGN_IDENTITY" "$BIN/$binary"
             codesign --verify --strict --verbose=2 "$BIN/$binary"
           done
-          codesign -d --entitlements - --xml "$BIN/sunrise-client" | grep -q 'com.apple.security.device.audio-input' \
-            || { echo "::error::sunrise-client is missing com.apple.security.device.audio-input entitlement"; exit 1; }
+          granted=$(codesign -d --entitlements - --xml "$BIN/sunrise-client")
+          for wanted in com.apple.security.device.audio-input com.apple.security.cs.allow-jit; do
+            grep -q "$wanted" <<<"$granted" || { echo "::error::sunrise-client is missing the $wanted entitlement"; exit 1; }
+          done
+          # allow-jit permits MAP_JIT regions only; these two would open every page to writes and execution.
+          for refused in com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-executable-page-protection; do
+            ! grep -q "$refused" <<<"$granted" || { echo "::error::sunrise-client must not hold $refused"; exit 1; }
+          done
       - name: Only system libraries
         # Windows: no non-system DLL (a "DLL not found" dialog on some players' machines). Linux: the standard
         # loader and libraries every desktop distribution has. macOS: only the system's own libraries.
