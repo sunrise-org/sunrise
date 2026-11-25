@@ -46,7 +46,7 @@ impl StationData {
             root,
             items,
             overlay,
-            defaults,
+            crate::banner::Banners::load(root, defaults),
             (&sources, &recipes),
         ))
     }
@@ -55,7 +55,7 @@ impl StationData {
         root: &Path,
         items: &Items,
         overlay: &PackOverlay,
-        defaults: &sunrise_world::item_defaults::ItemDefaults,
+        banners: crate::banner::Banners,
         (sources, recipes): (&crate::crafting::ResolvedSources, &crate::crafting::Recipes),
     ) -> Self {
         Self {
@@ -72,7 +72,7 @@ impl StationData {
             },
             trades: crate::merchant::Trades::load(root, overlay),
             professions: Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
-            banners: crate::banner::Banners::load(root, defaults),
+            banners,
             recipe_index: crate::recipe_book::RecipeIndex::from_recipes(recipes),
         }
     }

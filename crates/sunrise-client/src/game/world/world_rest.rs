@@ -71,7 +71,7 @@ pub(super) fn load_world_rest(
                 root,
                 &items,
                 overlay,
-                resources.item_defaults(),
+                sunrise_client::banner::Banners::load(root, resources.item_defaults()),
                 (&sources, &recipes),
             )
         });

@@ -2976,7 +2976,7 @@ mod tests {
             root.path(),
             &items,
             &PackOverlay::NONE,
-            &defaults,
+            crate::banner::Banners::load(root.path(), &defaults),
             (&sources, &recipes),
         );
         assert_eq!(stations.brewing.recipes.len(), 1);

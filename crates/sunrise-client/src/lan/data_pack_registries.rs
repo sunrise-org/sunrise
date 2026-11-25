@@ -131,6 +131,7 @@ enum Definition {
     Enchantment(Value),
     Instrument(Instrument, Tag),
     Painting(crate::entities::PaintingVariant, Tag),
+    BannerPattern(crate::banner::Pattern, Tag),
 }
 
 impl PackRegistryDefinitions {
@@ -398,7 +399,8 @@ impl PackRegistryDefinitions {
                 let tag = match definition {
                     Definition::Encoded(tag)
                     | Definition::Instrument(_, tag)
-                    | Definition::Painting(_, tag) => tag.clone(),
+                    | Definition::Painting(_, tag)
+                    | Definition::BannerPattern(_, tag) => tag.clone(),
                     Definition::Enchantment(json) => json_to_nbt(json),
                 };
                 Some((key.clone(), tag, *from_pack))
@@ -442,6 +444,19 @@ impl PackRegistryDefinitions {
             key(&a.id).cmp(&key(&b.id))
         });
         all
+    }
+
+    /// The admitted `banner_pattern` winners from the world's packs, as the
+    /// registry packets carry them.
+    pub fn banner_patterns(&self) -> impl Iterator<Item = &crate::banner::Pattern> {
+        self.entries
+            .get("minecraft:banner_pattern")
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, entry)| match entry {
+                Some((Definition::BannerPattern(pattern, _), _)) => Some(pattern),
+                _ => None,
+            })
     }
 
     /// Use the same selected definitions as the synchronized registry packets.
@@ -764,10 +779,12 @@ fn decode_banner_pattern(
     value: Value,
 ) -> Result<Definition, String> {
     let pattern = crate::banner::Pattern::decode(id, &value)?;
-    encoded(Tag::compound([
+    let tag = Tag::compound([
         ("asset_id", asset_id(&pattern.asset)),
         ("translation_key", string(&pattern.translation_key)),
-    ]))
+    ]);
+    check_network_nbt(&tag)?;
+    Ok(Definition::BannerPattern(pattern, tag))
 }
 
 fn decode_enchantment(
@@ -1412,6 +1429,51 @@ mod tests {
                 && group("painting_variant").contains("width"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_packs_banner_pattern_in_no_item_required_reaches_the_loom() {
+        let files = [
+            (
+                "banner_pattern/test:stripe_x".into(),
+                vec![br#"{"asset_id":"test:stripe_x_asset","translation_key":"block.test.banner.stripe_x"}"#.to_vec()],
+            ),
+            (
+                "tags/minecraft:banner_pattern/no_item_required".into(),
+                vec![br#"{"values":["test:stripe_x"]}"#.to_vec()],
+            ),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let overlay = PackOverlay::new(&files);
+        let (packed, admitted) = super::super::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &overlay,
+            &BTreeMap::new(),
+            &Default::default(),
+            |_| true,
+        );
+        admitted.unwrap();
+        let tags = super::super::registry_tag_bindings(
+            root.path(),
+            &overlay,
+            "minecraft:banner_pattern",
+            |id| id == "test:stripe_x",
+        )
+        .unwrap();
+        let banners = crate::banner::Banners::stage(root.path(), &defaults, &packed, tags);
+        assert_eq!(
+            banners.selectable(None),
+            [std::sync::Arc::from("test:stripe_x")]
+        );
+        assert_eq!(
+            banners.banner_texture("test:stripe_x"),
+            "test:entity/banner/stripe_x_asset"
+        );
+        let layer = crate::banner::BannerLayer::new("test:stripe_x", "red");
+        assert_eq!(banners.layer_key(&layer), "block.test.banner.stripe_x.red");
     }
 
     #[test]

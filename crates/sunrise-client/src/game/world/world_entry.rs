@@ -345,6 +345,7 @@ impl Game<'_> {
             items.entity_type_tags.ids().iter().cloned().collect(),
         );
         let mut pack_tags = HashMap::new();
+        let mut banner_tags = std::collections::BTreeMap::new();
         let gameplay_tags = WorldTables::PACK_TAG_REGISTRIES
             .into_iter()
             .chain(sunrise_client::neoforge_mob_maps::MAPS.map(|definition| definition.directory))
@@ -367,6 +368,9 @@ impl Game<'_> {
                     .map(|(tag, _)| tag.clone())
                     .collect(),
             );
+            if registry == "minecraft:banner_pattern" {
+                banner_tags.clone_from(&tags);
+            }
             if let Some(directory) = registry
                 .strip_prefix("minecraft:")
                 .and_then(|name| gameplay_tags.get(name))
@@ -716,7 +720,12 @@ impl Game<'_> {
             root,
             &items,
             &overlay,
-            self.res.item_defaults(),
+            sunrise_client::banner::Banners::stage(
+                root,
+                self.res.item_defaults(),
+                &packed_registry_definitions,
+                banner_tags,
+            ),
             (&sources, &recipes),
         );
         self.prepare_professions(root, &items, &mut stations)?;
