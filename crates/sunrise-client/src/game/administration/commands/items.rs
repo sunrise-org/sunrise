@@ -2936,9 +2936,11 @@ mod registered_slot_source_preservation_tests {
             .unwrap();
         count(&mut game, 2);
         std::fs::write(file, "{").unwrap();
-        game.reload_datapacks(true, &game.level.enabled_features.clone())
-            .unwrap();
-        count(&mut game, 1); // Existing policy: invalid higher JSON is skipped.
+        assert!(
+            game.reload_datapacks(true, &game.level.enabled_features.clone())
+                .is_err()
+        );
+        count(&mut game, 2); // A refused reload keeps the loaded data (ReloadableServerRegistries).
         assert!(!game.run_command("execute if slots block 0 100 0 first_three"));
         assert_eq!(game.block_entity_nbt([0, 100, 0]).as_ref(), Some(&before));
         assert_eq!(game.world.game_time, clock);
