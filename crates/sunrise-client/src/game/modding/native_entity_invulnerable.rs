@@ -152,13 +152,21 @@ impl Game<'_> {
     /// Counted down by the base tick; `isTemporarilyInvulnerable` is it above
     /// zero. None for a stale handle or a kind that keeps none.
     pub(super) fn entity_invulnerable_time(&self, entity: EntityRef) -> Option<i32> {
-        match self.native_entity_target(entity)? {
+        match self.timer_read_target(entity)? {
             Target::Mob(id) => Some(self.mobs.iter().find(|m| m.id == id)?.invulnerable_time),
             t @ (Target::Player | Target::Guest(_)) => {
                 Some(self.native_player_body(t)?.health.invulnerable_time)
             }
             t => self.saved_invulnerable_time(t),
         }
+    }
+    /// What a damage timer read names: the server's entity, or on a client the local player
+    /// or a kept entity (a tracked player or mob), the bodies whose timers the client counts
+    /// itself (#5694).
+    fn timer_read_target(&self, entity: EntityRef) -> Option<Target> {
+        let target = self.native_entity_read_target(entity)?;
+        (self.is_logical_server() || matches!(target, Target::Player | Target::Mob(_)))
+            .then_some(target)
     }
     /// `Entity.setInvulnerableTime` (#916): the write side of
     /// [`native_entity_invulnerable_time`](Self::native_entity_invulnerable_time).
@@ -448,7 +456,7 @@ impl Game<'_> {
     /// while it is above 10 a hit does only what it deals beyond the last
     /// one. Mobs and players.
     pub(super) fn entity_damage_cooldown_time(&self, entity: EntityRef) -> Option<i32> {
-        match self.native_entity_target(entity)? {
+        match self.timer_read_target(entity)? {
             Target::Mob(id) => Some(self.mobs.iter().find(|m| m.id == id)?.invulnerable),
             t => Some(self.native_player_body(t)?.health.hurt.cooldown),
         }
@@ -485,6 +493,86 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
+
+    /// A client reads its own player's damage cooldown as `LocalPlayer.hurtTo` sets it from
+    /// the server's health (20 on a drop, 10 on a rise), its invulnerable time, and a tracked
+    /// mob's cooldown from its damage event; an entity it doesn't keep reads None (#5694).
+    #[test]
+    #[ignore = "daily"]
+    fn a_client_reads_its_players_and_a_kept_mobs_damage_timers() {
+        use super::super::native_client_session::tests::logged_client;
+        use super::super::native_entity_refs::tests::with_client_game;
+        use sunrise_client::motion::PlayerMotion;
+        use sunrise_protocol::packets::play::{self, Clientbound as C};
+        mod_platform::testing::with_mods(Default::default(), || {
+            with_client_game(|game| {
+                let _server = logged_client(game);
+                game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+                let local = game.local_player().unwrap().entity();
+                let health = |game: &mut super::super::Game<'_>, health: f32| {
+                    game.handle_packet(C::SetHealth(play::SetHealth {
+                        health,
+                        food: 20,
+                        saturation: 5.0,
+                    }))
+                    .unwrap();
+                };
+                // The first health after joining sets it without a flash.
+                health(game, 20.0);
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(local.damage_cooldown_time(host), Some(0));
+                health(game, 15.0);
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(local.damage_cooldown_time(host), Some(20));
+                health(game, 18.0);
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(local.damage_cooldown_time(host), Some(10));
+                game.player.as_mut().unwrap().health.invulnerable_time = 6;
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(local.invulnerable_time(host), Some(6));
+
+                let zombie = game
+                    .remote
+                    .as_ref()
+                    .unwrap()
+                    .builtin
+                    .get("minecraft:entity_type")
+                    .unwrap()
+                    .id("minecraft:zombie")
+                    .unwrap();
+                game.handle_packet(C::AddEntity(play::AddEntity {
+                    id: 302,
+                    uuid: 0x5694_0002,
+                    kind: zombie,
+                    position: [2.5, 64.0, 2.5],
+                    velocity: [0.0; 3],
+                    pitch: 0,
+                    yaw: 0,
+                    head_yaw: 0,
+                    data: 0,
+                }))
+                .unwrap();
+                let zombie = game.entity(302).expect("the tracked zombie");
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(zombie.damage_cooldown_time(host), Some(0));
+                assert_eq!(zombie.invulnerable_time(host), Some(0));
+                game.handle_packet(C::DamageEvent(play::DamageEvent {
+                    id: 302,
+                    source_type: 0,
+                    cause: None,
+                    direct: None,
+                    position: None,
+                }))
+                .unwrap();
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(zombie.damage_cooldown_time(host), Some(20));
+
+                let untracked = EntityRef::new(local.epoch(), 99);
+                assert_eq!(untracked.damage_cooldown_time(host), None);
+                assert_eq!(untracked.invulnerable_time(host), None);
+            });
+        });
+    }
     use mod_api::{EntityRef, WorldEpoch};
     use sunrise_client::mobs::Mob;
     use sunrise_core::geometry::Vec3;

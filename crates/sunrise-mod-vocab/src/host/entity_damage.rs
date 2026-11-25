@@ -15,17 +15,25 @@ pub trait EntityDamageBackend {
     /// tag of their entity data — the tag the item damage path
     /// already refuses by.
     fn entity_permanently_invulnerable(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// `Entity.invulnerableTime`: the entity-level invulnerability
     /// window, its own field on a mob and a player — never the living damage
     /// cooldown — and the saved `invulnerable_time` tag for the other kinds.
     /// Counted down by the base tick; `isTemporarilyInvulnerable` is it above
-    /// zero. None for a stale handle or a kind that keeps none.
+    /// zero. None for a stale handle or a kind that keeps none. On a client, the
+    /// local player's own value or a kept entity's (a tracked player or mob),
+    /// which the server doesn't send: the client's own copy. None for the other
+    /// kinds and for an entity whose body the client doesn't keep.
     fn entity_invulnerable_time(&self, entity: EntityRef) -> Option<i32>;
-    /// Side: server.
+    /// Side: both.
     /// `LivingEntity.damageCooldownTime`: 20 after a hit, counting down;
     /// while it is above 10 a hit does only what it deals beyond the last
-    /// one. Mobs and players.
+    /// one. Mobs and players. On a client, the local player's own value
+    /// (`LocalPlayer.hurtTo`: 20 when its health drops, 10 when it rises, what
+    /// `Hud.extractPlayerHealth` blinks the hearts by) or a kept entity's (a
+    /// tracked player or mob: 20 on its damage event), counted down by the
+    /// client's tick. None for the other kinds and for an entity whose body the
+    /// client doesn't keep.
     fn entity_damage_cooldown_time(&self, entity: EntityRef) -> Option<i32>;
     /// Side: server.
     /// `Entity.isInvulnerableTo` for a source of `damage_type`: the entity's own
