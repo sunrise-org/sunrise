@@ -82,36 +82,149 @@ pub mod engine {
         }
     }
 
-    /// Replaces `path` with `text` in one step: a new sibling temporary file, synced, then renamed
-    /// over it, so a failure or an interruption leaves the old file whole.
+    /// Replaces the settings file at `path` with `text`, one of two ways:
+    /// - A file that doesn't exist yet, or a plain one (a regular file, not a symbolic link, with
+    ///   one link, owned by this user, with no setuid, setgid or sticky bit), is replaced whole: a
+    ///   temporary file in the same folder, made with the old file's mode, synced, renamed over
+    ///   it, and on Unix the folder synced, so a failure or an interruption leaves the old file.
+    /// - Any other regular file (reached through a link, with another hard link, another
+    ///   owner's, or with a special bit) is written in place through `path`, which keeps every
+    ///   attribute it has, at the cost of being cut short if the write fails partway.
+    ///
+    /// Anything else (a folder, a FIFO, a socket, a device) is refused and left as it is, and so
+    /// is everything when its metadata can't be read for another reason than not being there.
     pub fn replace(path: &Path, text: &str) -> io::Result<()> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("settings")
-            .to_owned();
-        let pid = std::process::id();
-        let names = std::iter::repeat_with(|| NEXT.fetch_add(1, Ordering::Relaxed))
-            .map(|n| path.with_file_name(format!(".{name}.{pid}.{n}.tmp")));
-        replace_through(path, text, names.take(16))
+        let found = facts(path)?;
+        match way(&found) {
+            Way::Refuse => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{}: not a regular file, so it is left as it is",
+                    path.display()
+                ),
+            )),
+            Way::InPlace => write_in_place(path, text),
+            Way::Whole => {
+                // A short name of one length, whatever the file's: a long file name can't push the
+                // temporary one past the file system's limit.
+                let pid = std::process::id();
+                let names =
+                    std::iter::repeat_with(|| NEXT.fetch_add(1, Ordering::Relaxed)).map(|n| {
+                        path.with_file_name(format!(".sunrise-{pid:08x}-{:04x}.tmp", n & 0xffff))
+                    });
+                replace_through(path, found.old.as_ref(), text, names.take(16))
+            }
+        }
     }
 
-    /// `replace` through the first of `temps` that doesn't exist yet: one that does is left alone.
+    /// What `replace` reads of `path` before it writes: the entry itself (a link is not followed),
+    /// and for a link whether it names a regular file.
+    pub(super) struct Facts {
+        pub(super) kind: Kind,
+        /// The entry's own metadata, for a regular file that is no link.
+        pub(super) old: Option<fs::Metadata>,
+        /// No other hard link, no special bit, this user's: `None` where it can't be told.
+        pub(super) plain: Option<bool>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Kind {
+        Missing,
+        File,
+        /// A symbolic link to a regular file, or to nothing yet.
+        LinkToFile,
+        /// A folder, FIFO, socket or device, or a link to one.
+        Other,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Way {
+        Whole,
+        InPlace,
+        Refuse,
+    }
+
+    /// How `replace` writes what `facts` found.
+    pub(super) fn way(facts: &Facts) -> Way {
+        match (facts.kind, facts.plain) {
+            (Kind::Missing, _) => Way::Whole,
+            (Kind::File, Some(true)) => Way::Whole,
+            (Kind::File, _) | (Kind::LinkToFile, _) => Way::InPlace,
+            (Kind::Other, _) => Way::Refuse,
+        }
+    }
+
+    fn facts(path: &Path) -> io::Result<Facts> {
+        let entry = match fs::symlink_metadata(path) {
+            Ok(entry) => entry,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Ok(Facts {
+                    kind: Kind::Missing,
+                    old: None,
+                    plain: None,
+                });
+            }
+            Err(e) => return Err(e),
+        };
+        if entry.file_type().is_symlink() {
+            // The system follows the link when the file is opened; this only says what it names.
+            let kind = match fs::metadata(path) {
+                Ok(target) if target.is_file() => Kind::LinkToFile,
+                Ok(_) => Kind::Other,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Kind::LinkToFile,
+                Err(e) => return Err(e),
+            };
+            return Ok(Facts {
+                kind,
+                old: None,
+                plain: None,
+            });
+        }
+        if !entry.is_file() {
+            return Ok(Facts {
+                kind: Kind::Other,
+                old: None,
+                plain: None,
+            });
+        }
+        let plain = plain_bits(&entry);
+        Ok(Facts {
+            kind: Kind::File,
+            old: Some(entry),
+            plain,
+        })
+    }
+
+    /// One link and no setuid, setgid or sticky bit (the owner is checked against the new file's,
+    /// which is this process's).
+    #[cfg(unix)]
+    fn plain_bits(entry: &fs::Metadata) -> Option<bool> {
+        use std::os::unix::fs::MetadataExt;
+        Some(entry.nlink() == 1 && entry.mode() & 0o7000 == 0)
+    }
+
+    /// Outside Unix the standard library doesn't say how many links a file has, and this crate
+    /// forbids the `unsafe` a system call would need to read them or the file's own access list;
+    /// a regular file there is replaced whole, as before.
+    #[cfg(not(unix))]
+    fn plain_bits(_entry: &fs::Metadata) -> Option<bool> {
+        Some(true)
+    }
+
+    /// The whole-file way, through the first of `temps` that doesn't exist yet (one that does
+    /// is left alone). `old` is the file's metadata, `None` when there is no file yet.
     pub(super) fn replace_through(
         path: &Path,
+        old: Option<&fs::Metadata>,
         text: &str,
         temps: impl IntoIterator<Item = std::path::PathBuf>,
     ) -> io::Result<()> {
         use std::io::Write;
         let mut taken = io::Error::new(io::ErrorKind::AlreadyExists, "no free temporary name");
         for temp in temps {
-            let mut file = match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-            {
+            let mut file = match open_temp(&temp, old) {
                 Ok(file) => file,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                     taken = e;
@@ -119,16 +232,103 @@ pub mod engine {
                 }
                 Err(e) => return Err(e),
             };
-            let result = file
-                .write_all(text.as_bytes())
-                .and_then(|()| file.sync_all())
-                .and_then(|()| fs::rename(&temp, path));
+            if let Some(old) = old
+                && !same_owner(&file, old)?
+            {
+                // Another user's file: a new one would be this user's, so it is written in place.
+                drop(file);
+                let _ = fs::remove_file(&temp);
+                return write_in_place(path, text);
+            }
+            // The old file's mode exactly: the umask may have left the new one tighter.
+            let result = match old {
+                Some(old) => file.set_permissions(old.permissions()),
+                None => Ok(()),
+            }
+            .and_then(|()| file.write_all(text.as_bytes()))
+            .and_then(|()| file.sync_all())
+            .and_then(|()| fs::rename(&temp, path));
             if result.is_err() {
                 let _ = fs::remove_file(&temp);
             }
-            return result;
+            result?;
+            return sync_folder(path);
         }
         Err(taken)
+    }
+
+    #[cfg(unix)]
+    fn same_owner(file: &fs::File, old: &fs::Metadata) -> io::Result<bool> {
+        use std::os::unix::fs::MetadataExt;
+        Ok(file.metadata()?.uid() == old.uid())
+    }
+
+    #[cfg(not(unix))]
+    fn same_owner(_file: &fs::File, _old: &fs::Metadata) -> io::Result<bool> {
+        Ok(true)
+    }
+
+    /// The folder's entry for the renamed file, synced. The new file is already in place, so a
+    /// failure here says so.
+    #[cfg(unix)]
+    fn sync_folder(path: &Path) -> io::Result<()> {
+        let folder = match path.parent() {
+            Some(folder) if !folder.as_os_str().is_empty() => folder,
+            _ => Path::new("."),
+        };
+        fs::File::open(folder).and_then(|f| f.sync_all()).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "{} was replaced, but its folder didn't sync, so the change may not survive a crash: {e}",
+                    path.display()
+                ),
+            )
+        })
+    }
+
+    /// Windows has no folder to sync: `std::fs::rename` is `MoveFileExW` with
+    /// `MOVEFILE_REPLACE_EXISTING`, without write-through.
+    #[cfg(not(unix))]
+    fn sync_folder(_path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// The file at `path` itself (the system follows a link), written from its start, cut to the
+    /// text's length and synced: every attribute stays as it is.
+    fn write_in_place(path: &Path, text: &str) -> io::Result<()> {
+        use std::io::Write;
+        // Not truncated on open: the file is cut to the text's length once it is written.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        file.write_all(text.as_bytes())?;
+        file.set_len(text.len() as u64)?;
+        file.sync_all()
+    }
+
+    /// A new temporary file, made with the old file's mode where there is one, so it is never
+    /// readable by anyone the old file wasn't (the umask can only take more away).
+    #[cfg(unix)]
+    pub(super) fn open_temp(temp: &Path, old: Option<&fs::Metadata>) -> io::Result<fs::File> {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        if let Some(old) = old {
+            options.mode(old.permissions().mode() & 0o777);
+        }
+        options.open(temp)
+    }
+
+    /// A new temporary file: it takes its folder's permissions, as a new settings file does.
+    #[cfg(not(unix))]
+    pub(super) fn open_temp(temp: &Path, _old: Option<&fs::Metadata>) -> io::Result<fs::File> {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temp)
     }
 
     /// The keys of `text`'s `key:value` lines: what the stores wrote.
@@ -401,7 +601,7 @@ mod tests {
     fn a_failed_replace_leaves_the_old_file_and_no_temporary() {
         let dir = scratch("replace");
         let target = dir.join("sunrise-pad.txt");
-        // A directory in the file's place: the rename onto it fails.
+        // A directory in the file's place is no regular file: refused, before anything is written.
         fs::create_dir_all(target.join("kept")).unwrap();
         assert!(engine::replace(&target, "rumble:true\n").is_err());
         assert!(target.join("kept").is_dir());
@@ -411,6 +611,304 @@ mod tests {
             .map(|e| e.file_name())
             .collect();
         assert_eq!(left, [std::ffi::OsString::from("sunrise-pad.txt")]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// The names in `dir`, sorted: what a replace left there.
+    #[cfg(unix)]
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_a_linked_file_replaces_what_it_names_and_keeps_the_link() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch("replace-link");
+        let real = dir.join("real");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("sunrise-pad.txt"), "rumble:false\n").unwrap();
+        let link = dir.join("sunrise-pad.txt");
+        symlink("real/sunrise-pad.txt", &link).unwrap();
+        engine::replace(&link, "rumble:true\n").unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            Path::new("real/sunrise-pad.txt")
+        );
+        assert_eq!(
+            fs::read_to_string(real.join("sunrise-pad.txt")).unwrap(),
+            "rumble:true\n"
+        );
+        // Written in place: no temporary file in either folder.
+        assert_eq!(names(&dir), ["real", "sunrise-pad.txt"]);
+        assert_eq!(names(&real), ["sunrise-pad.txt"]);
+        // A link to that link ends at the same file; one to a file not made yet makes it.
+        symlink("sunrise-pad.txt", dir.join("again.txt")).unwrap();
+        engine::replace(&dir.join("again.txt"), "rumble:false\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(real.join("sunrise-pad.txt")).unwrap(),
+            "rumble:false\n"
+        );
+        symlink("real/new.txt", dir.join("new.txt")).unwrap();
+        engine::replace(&dir.join("new.txt"), "zoom:true\n").unwrap();
+        assert!(
+            fs::symlink_metadata(dir.join("new.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_to_string(real.join("new.txt")).unwrap(),
+            "zoom:true\n"
+        );
+        // A loop of links is an error, and nothing is written.
+        symlink("loop-b.txt", dir.join("loop-a.txt")).unwrap();
+        symlink("loop-a.txt", dir.join("loop-b.txt")).unwrap();
+        assert!(engine::replace(&dir.join("loop-a.txt"), "x:1\n").is_err());
+        assert!(
+            fs::symlink_metadata(dir.join("loop-a.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// The temporary file is made with the old file's mode, never looser, before a byte of the
+    /// text is in it.
+    #[cfg(unix)]
+    #[test]
+    fn the_temporary_file_is_never_looser_than_the_one_it_replaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("replace-temp-mode");
+        let path = dir.join("sunrise-extras.txt");
+        fs::write(&path, "zoom:false\n").unwrap();
+        for mode in [0o600, 0o640, 0o400] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            let temp = dir.join(format!(".temp-{mode:o}"));
+            let old = fs::metadata(&path).unwrap();
+            drop(engine::open_temp(&temp, Some(&old)).unwrap());
+            let made = fs::metadata(&temp).unwrap().permissions().mode() & 0o777;
+            assert_eq!(made & !mode, 0, "{made:o} is looser than {mode:o}");
+            fs::remove_file(&temp).unwrap();
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_a_missing_or_plain_file_is_replaced_whole() {
+        use engine::{Facts, Kind, Way, way};
+        let facts = |kind, plain| Facts {
+            kind,
+            old: None,
+            plain,
+        };
+        assert_eq!(way(&facts(Kind::Missing, None)), Way::Whole);
+        assert_eq!(way(&facts(Kind::File, Some(true))), Way::Whole);
+        // Another hard link, a special bit, or anything that can't be told: in place.
+        assert_eq!(way(&facts(Kind::File, Some(false))), Way::InPlace);
+        assert_eq!(way(&facts(Kind::File, None)), Way::InPlace);
+        // Through a link the system follows it, whatever the link names.
+        assert_eq!(way(&facts(Kind::LinkToFile, Some(true))), Way::InPlace);
+        assert_eq!(way(&facts(Kind::LinkToFile, None)), Way::InPlace);
+        // Not a regular file, or a link to one that isn't: never written.
+        assert_eq!(way(&facts(Kind::Other, None)), Way::Refuse);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plain_file_is_replaced_whole_and_keeps_its_mode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = scratch("replace-plain");
+        // A fresh file for each mode: 0400 can't be written again by the test itself.
+        for mode in [0o600, 0o640, 0o644, 0o400] {
+            let path = dir.join(format!("sunrise-extras-{mode:o}.txt"));
+            fs::write(&path, "zoom:false\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            let before = fs::metadata(&path).unwrap();
+            engine::replace(&path, "zoom:true\n").unwrap();
+            let after = fs::metadata(&path).unwrap();
+            assert_ne!(
+                after.ino(),
+                before.ino(),
+                "{mode:o}: a new file, renamed over"
+            );
+            assert_eq!(after.mode() & 0o7777, mode);
+            assert_eq!((after.uid(), after.gid()), (before.uid(), before.gid()));
+            assert_eq!(fs::read_to_string(&path).unwrap(), "zoom:true\n");
+        }
+        let mut left = names(&dir);
+        left.retain(|n| n.ends_with(".tmp"));
+        assert!(left.is_empty(), "{left:?}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_isnt_a_regular_file_is_refused_and_left_as_it_is() {
+        use std::os::unix::fs::{FileTypeExt, symlink};
+        use std::os::unix::net::UnixListener;
+        let dir = scratch("replace-refused");
+        // A socket stands in for a FIFO or a device: none of them is a regular file.
+        let socket = dir.join("sunrise-pad.txt");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        symlink("sunrise-pad.txt", dir.join("linked.txt")).unwrap();
+        for path in [socket.clone(), dir.join("linked.txt")] {
+            let error = engine::replace(&path, "rumble:true\n").unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+        }
+        assert!(
+            fs::symlink_metadata(&socket)
+                .unwrap()
+                .file_type()
+                .is_socket()
+        );
+        assert!(
+            fs::symlink_metadata(dir.join("linked.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(names(&dir), ["linked.txt", "sunrise-pad.txt"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A file name near the system's limit: the temporary name has one short length whatever the
+    /// file's, and through a link the file is written in place.
+    #[cfg(unix)]
+    #[test]
+    fn a_long_file_name_is_replaced_plain_and_through_a_link() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch("replace-long-name");
+        let long = format!("{}.txt", "s".repeat(240));
+        fs::write(dir.join(&long), "zoom:false\n").unwrap();
+        engine::replace(&dir.join(&long), "zoom:true\n").unwrap();
+        assert_eq!(fs::read_to_string(dir.join(&long)).unwrap(), "zoom:true\n");
+        let real = dir.join("real");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join(&long), "zoom:false\n").unwrap();
+        symlink(format!("real/{long}"), dir.join("link.txt")).unwrap();
+        engine::replace(&dir.join("link.txt"), "zoom:true\n").unwrap();
+        assert_eq!(fs::read_to_string(real.join(&long)).unwrap(), "zoom:true\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_linked_file_is_written_in_place_and_keeps_its_links() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = scratch("replace-hard-link");
+        let path = dir.join("sunrise-pad.txt");
+        let other = dir.join("backup.txt");
+        fs::write(&path, "rumble:false\n").unwrap();
+        fs::hard_link(&path, &other).unwrap();
+        let before = fs::metadata(&path).unwrap();
+        engine::replace(&path, "rumble:true\n").unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!((after.ino(), after.nlink()), (before.ino(), 2));
+        assert_eq!(fs::read_to_string(&other).unwrap(), "rumble:true\n");
+        assert_eq!(names(&dir), ["backup.txt", "sunrise-pad.txt"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_file_is_written_in_place_and_keeps_its_owner_group_and_mode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+        let dir = scratch("replace-owner");
+        let real = dir.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let file = real.join("sunrise-extras.txt");
+        fs::write(&file, "zoom:false\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+        symlink("real/sunrise-extras.txt", dir.join("sunrise-extras.txt")).unwrap();
+        let before = fs::metadata(&file).unwrap();
+        engine::replace(&dir.join("sunrise-extras.txt"), "zoom:true\n").unwrap();
+        let after = fs::metadata(&file).unwrap();
+        assert_eq!(
+            (
+                after.ino(),
+                after.uid(),
+                after.gid(),
+                after.mode() & 0o7777,
+                after.nlink()
+            ),
+            (before.ino(), before.uid(), before.gid(), 0o640, 1)
+        );
+        let link = fs::symlink_metadata(dir.join("sunrise-extras.txt")).unwrap();
+        assert!(link.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "zoom:true\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A file whose metadata can't be read (here, behind a folder this user may not search) is
+    /// not taken for a new one: the save stops, and the file stays as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_metadata_error_stops_the_save_and_leaves_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("replace-metadata-error");
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        let path = locked.join("sunrise-pad.txt");
+        fs::write(&path, "rumble:false\n").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o600)).unwrap();
+        // Where permissions aren't enforced (root), the metadata reads and nothing fails.
+        let enforced = fs::metadata(&path).is_err();
+        let result = engine::replace(&path, "rumble:true\n");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        if enforced {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), "rumble:false\n");
+            assert_eq!(names(&locked), ["sunrise-pad.txt"]);
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A store's own file, saved by the engine: through a link, and private, it stays both.
+    #[cfg(unix)]
+    #[test]
+    fn a_stores_own_file_keeps_its_link_and_mode() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = scratch("store-link-mode");
+        let real = dir.join("synced");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("sunrise-pad.txt"), "rumble:false\n").unwrap();
+        fs::set_permissions(
+            real.join("sunrise-pad.txt"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        symlink("synced/sunrise-pad.txt", dir.join("sunrise-pad.txt")).unwrap();
+        let pad = Switch::new("sunrise-pad.txt", "rumble");
+        pad.set(true);
+        let stores: [&dyn Store; 1] = [&pad];
+        save_files(&stores, &dir, &["sunrise-extras.txt"]);
+        assert!(
+            fs::symlink_metadata(dir.join("sunrise-pad.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let saved = real.join("sunrise-pad.txt");
+        assert_eq!(fs::read_to_string(&saved).unwrap(), "rumble:true\n");
+        assert_eq!(
+            fs::metadata(&saved).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -453,7 +951,13 @@ mod tests {
         let target = dir.join("sunrise-pad.txt");
         let (taken, free) = (dir.join(".taken.tmp"), dir.join(".free.tmp"));
         fs::write(&taken, "someone else's").unwrap();
-        engine::replace_through(&target, "rumble:true\n", [taken.clone(), free.clone()]).unwrap();
+        engine::replace_through(
+            &target,
+            None,
+            "rumble:true\n",
+            [taken.clone(), free.clone()],
+        )
+        .unwrap();
         assert_eq!(fs::read_to_string(&taken).unwrap(), "someone else's");
         assert_eq!(fs::read_to_string(&target).unwrap(), "rumble:true\n");
         assert!(!free.exists());
