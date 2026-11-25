@@ -357,6 +357,10 @@ pub struct ClientGuiOptions {
     pub notification_display_time: f32,
     /// Opacity of the background behind text, 0 to 1.
     pub text_background_opacity: f32,
+    /// The "Text Background: Chat only" switch (`backgroundForChatOnly`, on by default): only
+    /// chat takes [`Self::text_background_opacity`]; every other backdrop keeps its caller's
+    /// default. [`Self::background_opacity`] and [`Self::background_color`] resolve it.
+    pub background_for_chat_only: bool,
     /// Menu background blur radius.
     pub menu_blur: i32,
     /// Distortion / screen effect intensity scale (`Options.screenEffectScale`, 0 to 1).
@@ -365,6 +369,27 @@ pub struct ClientGuiOptions {
     /// the Damage Tilt accessibility option): the factor of vanilla's own hurt tilt, so a mod's
     /// camera shake can scale with it as that tilt does.
     pub damage_tilt_strength: f64,
+}
+
+impl ClientGuiOptions {
+    /// `Options.getBackgroundOpacity(default)`: the opacity of a text backdrop whose own default
+    /// is `default_opacity` (0.0 for titles, 0.3 and 0.4 for the scoreboard and tab list):
+    /// that default while [`Self::background_for_chat_only`] is on, the player's
+    /// [`Self::text_background_opacity`] otherwise.
+    pub fn background_opacity(&self, default_opacity: f32) -> f32 {
+        if self.background_for_chat_only {
+            default_opacity
+        } else {
+            self.text_background_opacity
+        }
+    }
+    /// `Options.getBackgroundColor(default)`: black ARGB with [`Self::background_opacity`]'s
+    /// alpha (`ARGB.colorFromFloat`, the opacity times 255 rounded down), the colour vanilla
+    /// draws behind its own text.
+    pub fn background_color(&self, default_opacity: f32) -> u32 {
+        let alpha = (self.background_opacity(default_opacity) * 255.0).floor() as i32 as u32;
+        (alpha & 255) << 24
+    }
 }
 
 /// A snapshot of the client's chat preferences.

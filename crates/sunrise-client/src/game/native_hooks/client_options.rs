@@ -101,6 +101,7 @@ fn gui_options_snapshot(s: &sunrise_client::settings::Settings) -> ClientGuiOpti
         show_subtitles: s.show_subtitles,
         notification_display_time: s.notification_display_time as f32,
         text_background_opacity: s.text_background_opacity as f32,
+        background_for_chat_only: s.file.bool("backgroundForChatOnly"),
         menu_blur: s.menu_blur,
         screen_effect_scale: s.file.double("screenEffectScale") as f32,
         // The factor the engine's own hurt tilt reads (`fov.rs`, `bob_hurt`).
@@ -153,6 +154,29 @@ mod tests {
                 strength
             );
         }
+    }
+
+    /// `Options.getBackgroundColor` (#5653): with "Text Background: Chat only" on (the default)
+    /// a backdrop keeps its own default opacity; off, it takes the player's opacity. The
+    /// snapshot's resolvers give the colour the engine's own text backdrops use.
+    #[test]
+    fn gui_snapshot_resolves_the_text_background_as_vanilla_does() {
+        let mut settings = sunrise_client::settings::Settings::default();
+        settings.text_background_opacity = 0.6;
+        let gui = gui_options_snapshot(&settings);
+        assert!(gui.background_for_chat_only);
+        assert_eq!(gui.background_opacity(0.4), 0.4);
+        assert_eq!(gui.background_color(0.4), 0x6600_0000);
+        assert_eq!(gui.background_color(0.4), settings.text_background(0.4));
+        settings.file.set(
+            "backgroundForChatOnly",
+            sunrise_client::options_file::V::Bool(false),
+        );
+        let gui = gui_options_snapshot(&settings);
+        assert!(!gui.background_for_chat_only);
+        assert_eq!(gui.background_opacity(0.4), 0.6);
+        assert_eq!(gui.background_color(0.0), 0x9900_0000);
+        assert_eq!(gui.background_color(0.0), settings.text_background(0.0));
     }
 
     /// The literal `Window.calculateScale` outcomes the issue asks for: the
