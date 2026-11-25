@@ -565,19 +565,13 @@ def pick(force: bool) -> None:
 
 def pick_dev() -> None:
     """A Dev build (release.yml kind dev, docs/release-flow.md "Dev"): a commit of main that recognizes the Dev
-    version prefix, passed the gate and has a published SDK. It builds alone: no picks, build branch, nightly-state
-    record or daily cap. If dev-<date>-<short> already has a release, skip it (a tag is never replaced)."""
+    version prefix and passed the gate. It builds alone: no picks, build branch, nightly-state record or daily cap.
+    Its SDK is built and published in the same run (nightly-build.yml `sdk`), before its game is signed. If
+    dev-<date>-<short> already has a release, skip it (a tag is never replaced)."""
     require_ref("dev")
     git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main")
-    repo, dry_run = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("DRY_RUN") == "true"
+    dry_run = os.environ.get("DRY_RUN") == "true"
     sha = train.channel_head("dev", os.environ.get("NIGHTLY_BASE", "").strip())
-    sdk = repo != "sunrise-org/sunrise" or sdk_ready(sha)
-    if not sdk:
-        if not dry_run:
-            stop(repo, "", f"the Dev build stopped: {sha} has no complete published SDK "
-                 "(release.yml publishes it first).")
-        print(f"::warning::{sha} has no published SDK yet: a real Dev build publishes sdk-{sha} first; this dry run "
-              "carries no sdk.json")
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     tag = train.build_tag("dev", today, sha)
     # A tag is never replaced: skip a published build of the same commit on the same day (a dry run still builds).
@@ -589,7 +583,7 @@ def pick_dev() -> None:
                 f"Run `sunrise-release-sign verify --tag {tag} --signature SHA256SUMS.v2.sig <folder>`. "
                 f"The matching SDK is `sdk-{sha}`.\n\n{train.DISCLAIMER}\n")
     output(build=str(build).lower(), sha=sha, short=sha[:7], source="main", date=today, version=f"dev-{today}",
-           nightly=f"{today} {sha[:7]}", source_tag="", tag=tag, sdk=str(sdk).lower())
+           nightly=f"{today} {sha[:7]}", source_tag="", tag=tag)
     print(f"{'build' if build else f'skip ({tag} is already published)'}: {tag} {sha}")
 
 

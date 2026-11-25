@@ -454,3 +454,52 @@ fn enchant_particles_share_native_power_and_rebuild_only_on_parts_reload() {
         },
     );
 }
+
+/// A mod's scanned offsets and its `is_valid_book_shelf` answers: a bookshelf on its ring three
+/// blocks out counts, a repeat of one of vanilla's offsets counts once, a `false` drops a shelf
+/// vanilla counts, and a `true` counts a shelf behind a blocked midpoint.
+#[test]
+#[ignore = "daily"]
+fn mods_add_scanned_offsets_and_decide_which_shelves_count() {
+    if run_fresh_cases(
+        "game::enchant_power_beam_tests::mods_add_scanned_offsets_and_decide_which_shelves_count",
+        "SUNRISE_ENCHANT_SHELF_CHILD",
+        &["shelves"],
+    ) {
+        return;
+    }
+    struct FarShelves;
+    #[mod_api::__subscriptions]
+    impl Hooks for FarShelves {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.add_enchanting_table_offsets(&[[3, 0, 0], [-2, 0, -2]]);
+        }
+        fn is_valid_book_shelf(&self, _: &dyn Host, event: &mut mod_api::IsValidBookShelfEvent) {
+            match [event.offset.x, event.offset.y, event.offset.z] {
+                [2, 0, 0] => event.valid = false,
+                [0, 0, -2] => event.valid = true,
+                _ => {}
+            }
+        }
+    }
+    let mods: Mods = vec![ModEntry::new("far_shelves", Box::new(FarShelves))].into();
+    mod_platform::testing::with_mods(mods.clone(), || {
+        crate::game::api_values::install_parts(&mods).unwrap();
+        with_game_role(fixture_root(), ExecutionRole::IntegratedServer, |game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            // Beyond vanilla's ring; the block halfway, (1, 0, 0), is air.
+            place(game, [3, 0, 0], "minecraft:bookshelf");
+            assert_eq!(game.count_bookshelves(TABLE), 1);
+            place(game, [-2, 0, -2], "minecraft:bookshelf");
+            assert_eq!(game.count_bookshelves(TABLE), 2);
+            place(game, [2, 0, 0], "minecraft:bookshelf");
+            assert_eq!(game.count_bookshelves(TABLE), 2);
+            // Vanilla refuses a shelf whose midpoint doesn't transmit; the listener accepts it.
+            place(game, [0, 0, -1], "minecraft:stone");
+            place(game, [0, 0, -2], "minecraft:bookshelf");
+            assert_eq!(game.count_bookshelves(TABLE), 3);
+        });
+    });
+}

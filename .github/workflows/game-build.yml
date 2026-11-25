@@ -1,19 +1,15 @@
 name: game build
-# Builds the game for every platform from `ref`: the Java exporters, then Linux x86_64 and the Linux server, Windows
-# x64 and Apple-chip macOS, the SDK's three platforms, on Blacksmith's machines (GitHub's runners with
-# BLACKSMITH=off). Musl Linux, Intel macOS and Windows ARM64 are not built: each returns only with its own SDK
-# (#4556). Called by nightly-build.yml (the Nightly and Dev builds), once for shared exporters and then for the
-# platforms. It always runs from main's copy: the caller's commit, never the one being built. It holds no secrets: signing is the caller's job,
-# which never runs what this one built. Linux artifacts always build on Ubuntu 22.04; optional Dyna runners
-# compile portable Java exporter classes and smoke the downloaded hosted Linux artifact with private data.
+# Builds the game for every platform from `ref`: Linux x86_64 and the Linux server, Windows x64 and Apple-chip macOS,
+# the SDK's three platforms, on Blacksmith's machines (GitHub's runners with BLACKSMITH=off), with the Java exporter
+# classes the caller's run made (exporters.yml, artifact original-exporters). Musl Linux, Intel macOS and Windows
+# ARM64 are not built: each returns only with its own SDK (#4556). Called by nightly-build.yml (the Nightly and Dev
+# builds). It always runs from main's copy: the caller's commit, never the one being built. It holds no secrets: signing is the caller's job,
+# which never runs what this one built. Linux artifacts always build on Ubuntu 22.04; an optional Dyna runner
+# smokes the downloaded hosted Linux artifact with private data.
 # See docs/release-flow.md.
 on:
   workflow_call:
     inputs:
-      part:
-        description: exporters (shared inputs) or game (launcher and server platforms)
-        type: string
-        required: true
       ref:
         description: The commit to build
         type: string
@@ -39,84 +35,14 @@ on:
         description: Sign the macOS programs with Developer ID and notarize the zip (the runner's keychain)
         type: boolean
         default: true
+      dev:
+        description: A Dev release's build (nightly-build.yml kind dev), whose macOS leg BLACKSMITH_DEV_MACOS may move
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
-  exporters:
-    if: inputs.part == 'exporters'
-    # Compiles our Java exporters against the pinned Minecraft jars; only our classes leave the runner. An untrusted
-    # build uses Dyna's runner (NIGHTLY_EXPORTERS_RUNNER), which keeps the prepared jars; a trusted one never shares
-    # a machine with pull requests' jobs, so it uses GitHub's, where vanilla-data.sh fetches the jars.
-    runs-on: ${{ fromJSON(!inputs.trusted && vars.DYNA_CI_SELF_HOSTED == 'true' && vars.NIGHTLY_EXPORTERS_RUNNER || '"ubuntu-latest"') }}
-    # Three full preparations (two isolated, one batched) besides the compile.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-          clean: true
-      - name: The pinned Rust (tools/ci/rust-version)
-        id: rust
-        shell: bash
-        run: echo "version=$(cat "$GITHUB_WORKSPACE/tools/ci/rust-version")" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.version }}
-      - uses: actions/setup-python@v6
-        if: runner.environment == 'github-hosted'
-        with:
-          python-version: '3.13'
-      - uses: actions/setup-java@v4
-        if: runner.environment == 'github-hosted' || runner.os == 'Linux'
-        with:
-          distribution: temurin
-          java-version: '25'
-      - if: runner.environment == 'self-hosted'
-        run: |
-          if [[ -z "${DYNA_CI_BUILD:-}" ]]; then bash tools/ci/runner-env.sh; fi
-        env:
-          SUNRISE_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
-      # A self-hosted runner's persistent target: keep its source snapshot true, as every job building there does
-      # (tools/ci/source_mtimes.py). The Nightly builds a commit that need not be main's head.
-      - name: Restore unchanged source timestamps
-        if: runner.environment == 'self-hosted'
-        run: python3 tools/ci/source_mtimes.py "${CARGO_TARGET_DIR:-target}/ci-source-mtimes-v2.json"
-      - name: Private exporter inputs
-        run: |
-          if [[ -n "${DYNA_CI_BUILD:-}" ]]; then
-            SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
-          else
-            bash tools/ci/vanilla-data.sh
-          fi
-      - name: Compile and validate original exporters against the pinned jars
-        shell: bash
-        run: |
-          set -euo pipefail
-          # target/ is gone after the clean checkout, and vanilla-data.sh builds the preparer only when it
-          # prepares afresh.
-          cargo build --release --locked -p sunrise-prepare
-          preparer="${CARGO_TARGET_DIR:-target}/release/sunrise-prepare"
-          # Compiled here, never taken from the runner's shared preparations: other game jobs
-          # write those (vanilla-data.sh links .local/exporters to them).
-          rm -rf .local/exporters
-          bundle=$("$preparer" compile-exporters --root "$PWD" | tail -1)
-          mkdir -p exporters
-          cp -R "$bundle/server" "$bundle/client" "$bundle/manifest.json" exporters/
-          # Only our classes and their manifest leave this runner.
-          stray=$(find exporters -type f ! -path exporters/manifest.json \
-            ! \( -name '*.class' \( -path 'exporters/server/dev/sunriselab/parity/*' -o -path 'exporters/client/dev/sunriselab/parity/*' \) \))
-          [ -z "$stray" ] || { echo "::error::not one of our classes: $stray"; exit 1; }
-          python3 tools/check_prepare_exporters.py --binary "$preparer"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: original-exporters
-          path: exporters/
-          if-no-files-found: error
-          retention-days: 3
-
   build:
-    if: inputs.part == 'game'
     name: build ${{ matrix.name }}
     # Every leg is required: the three platforms Sunrise ships, the SDK's. The legs job below decides from each
     # leg's marker, so callers wait on it instead.
@@ -151,8 +77,11 @@ jobs:
     # Blacksmith's machines (owner, 2026-11-18), the same images as GitHub's with the Rust cache beside them: 16 vCPUs
     # for Linux and Windows, the 12-vCPU M4 for macOS. The repository variable
     # BLACKSMITH=off puts every leg back on GitHub's `os`. Every leg is a fresh machine: nothing of a pull
-    # request's earlier jobs is on it.
-    runs-on: ${{ vars.BLACKSMITH != 'off' && matrix.blacksmith || matrix.os }}
+    # request's earlier jobs is on it. BLACKSMITH_DEV_MACOS=on (the owner's switch; unset or anything else is off) puts
+    # a Dev release's macOS leg alone back on Blacksmith while BLACKSMITH stays off.
+    runs-on: >-
+      ${{ (vars.BLACKSMITH != 'off' || (inputs.dev && matrix.mac && vars.BLACKSMITH_DEV_MACOS == 'on'))
+      && matrix.blacksmith || matrix.os }}
     # The fork's cold client + headless builds need both feature variants; keep upstream's limits unchanged.
     # GitHub's macOS runner builds Sunrise's game cold: 60 minutes ran out mid-build (nightly dry run
     # 43813225420), and a timed-out job counts as cancelled, which continue-on-error does not cover, so the
@@ -409,7 +338,7 @@ jobs:
 
   legs:
     needs: build
-    if: ${{ !cancelled() && inputs.part == 'game' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

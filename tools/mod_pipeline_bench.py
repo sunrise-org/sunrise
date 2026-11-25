@@ -51,25 +51,63 @@ PIPELINES = 32
 COLD = {"MESA_SHADER_CACHE_DISABLE": "true", "__GL_SHADER_DISK_CACHE": "0"}
 
 
-def shader(index):
+VERTEX_SHADER = """#version 330
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:projection.glsl>
+
+in vec3 Position;
+in vec2 UV0;
+in vec4 Color;
+
+out vec2 texCoord0;
+out vec4 vertexColor;
+
+void main() {
+    gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
+    texCoord0 = UV0;
+    vertexColor = Color;
+}
+"""
+
+
+def fragment_shader(index):
     """Distinct per pipeline, so no cache shares one compile between two of them."""
-    body = f"    let k = {index + 1}.0 / {PIPELINES}.0;\n"
+    k = f"{index + 1}.0 / {PIPELINES}.0"
     if index >= PIPELINES // 2:
-        return ("fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {\n" + body
-                + "    return pipeline_texture(input.uv) * input.color * vec4(k, 1.0 - k, 1.0, 1.0);\n}\n")
-    return ("fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {\n" + body
-            + "    let pulse = 0.5 + 0.5 * sin(frame.time * 4.0 * k + input.uv.x * 6.2831853);\n"
-            + "    return vec4(input.color.rgb * pulse, input.color.a * (1.0 - input.uv.y * k));\n}\n")
+        return (
+            "#version 330\n"
+            "#include <sunrise:pipeline_sprite.glsl>\n"
+            "in vec2 texCoord0;\n"
+            "in vec4 vertexColor;\n"
+            "out vec4 fragColor;\n"
+            "void main() {\n"
+            f"    float k = {k};\n"
+            "    fragColor = sampleSprite(texCoord0) * vertexColor * vec4(k, 1.0 - k, 1.0, 1.0);\n"
+            "}\n"
+        )
+    return (
+        "#version 330\n"
+        "#include <minecraft:globals.glsl>\n"
+        "in vec2 texCoord0;\n"
+        "in vec4 vertexColor;\n"
+        "out vec4 fragColor;\n"
+        "void main() {\n"
+        f"    float k = {k};\n"
+        "    float pulse = 0.5 + 0.5 * sin(GameTime * 24000.0 * 0.2 * k + texCoord0.x * 6.2831853);\n"
+        "    fragColor = vec4(vertexColor.rgb * pulse, vertexColor.a * (1.0 - texCoord0.y * k));\n"
+        "}\n"
+    )
 
 
 def stage(game):
     target = game.parent / "sunrise-native-mods/pipeline_bench"
     shutil.rmtree(target, ignore_errors=True)
     shutil.copytree(FIXTURE, target, ignore=shutil.ignore_patterns("target", "Cargo.lock"))
-    shaders = target / "assets/pipeline_bench/shaders/pipeline"
+    shaders = target / "assets/pipeline_bench/shaders/core"
     shaders.mkdir(parents=True)
     for index in range(PIPELINES):
-        (shaders / f"p{index:02}.wgsl").write_text(shader(index))
+        (shaders / f"p{index:02}.vsh").write_text(VERTEX_SHADER)
+        (shaders / f"p{index:02}.fsh").write_text(fragment_shader(index))
 
 
 def run_row(args, ctl, game_exe, name, extra_env, home):

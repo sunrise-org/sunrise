@@ -1588,6 +1588,7 @@ impl Renderer {
             let batch = hooks
                 .as_deref()
                 .map_or(frame.world_primitives, |hooks| hooks.prepared_primitives());
+            let mod_blocks = (!batch.pipelines.runs.is_empty()).then(vanilla_blocks);
             let prepared = self
                 .world_primitives
                 .as_mut()
@@ -1599,6 +1600,7 @@ impl Renderer {
                     jittered,
                     [self.config.width, self.config.height],
                     &self.entity_atlas,
+                    mod_blocks.as_ref(),
                 );
             let bound = self
                 .pack_post

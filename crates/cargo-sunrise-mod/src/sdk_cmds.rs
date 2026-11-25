@@ -730,7 +730,12 @@ pub(crate) fn check_mod(
 ) -> Result<(), String> {
     let package = Package::read(root)?;
     let files = package.directory_files(root)?;
-    let (pipelines, refused) = crate::check::pipeline_shaders(&files);
+    let prepared_resources = std::env::var_os("SUNRISE_RESOURCES")
+        .or_else(|| std::env::var_os("SUNRISE_TEST_RESOURCES"))
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir());
+    let (pipelines, refused) =
+        crate::check::pipeline_shaders(&files, prepared_resources.as_deref());
     if !refused.is_empty() {
         return Err(format!(
             "render pipeline shaders refused:\n{}",
@@ -738,9 +743,13 @@ pub(crate) fn check_mod(
         ));
     }
     if pipelines > 0 {
+        let source = if prepared_resources.is_some() {
+            "prepared resources"
+        } else {
+            "Sunrise interface stubs (set SUNRISE_RESOURCES for prepared 26.3 includes)"
+        };
         println!(
-            "{pipelines} render pipeline shader(s) compose and validate as the game does \
-             (a file that calls pipeline_texture is checked as textured, any other as untextured)."
+            "{pipelines} GLSL render pipeline program(s) translate and validate as the game does ({source})."
         );
     }
     crate::check::references(root, &package.manifest)?;

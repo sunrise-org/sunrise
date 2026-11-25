@@ -1,145 +1,318 @@
-//! Keeps a mod's or a pack's shader from crashing the game. naga's WGSL parser, validator and
-//! backends recurse over the shape of the source, so an expression chain of ten thousand terms
-//! (`a + a + a + ...`) overflows a thread's stack, and a stack overflow aborts the process: a
-//! shader file (a resource pack's, possibly pushed by a server) could take the game or the
-//! check tool down.
+//! Crash and memory containment for untrusted GLSL shader text before naga's GLSL front end
+//! parses it.
 //!
-//! Two bounds and a thread, which together hold for any input. They are crash containment, not a
-//! limit on what a shader may do: a stack overflow aborts the process and cannot be caught, and
-//! anything a refused shader computes can be written within them (a long sum split over `let`
-//! statements). Vanilla and NeoForge have no counterpart, because their shaders' compiler is the
-//! driver's. The game's load and `cargo sunrise-mod check` apply the same bounds, through
-//! [`crate::compose_with`].
+//! naga's GLSL parser, validator and backends recurse over the syntactic shape of the source, so
+//! deeply nested brackets, chained unary operators, deeply nested brace-less statements, or an
+//! expression chain of thousands of binary operators (`a + a + a + ...`) can overflow a thread's
+//! stack, and a stack overflow aborts the process.
 //!
-//! Each value comes from the stack the whole check (parse, validation and translation for all
-//! three backends) was measured to take, on naga 30, for the deepest input the bound allows:
-//! - [`MAX_SOURCE_BYTES`]: a shader longer than that is refused before it is parsed. naga's
-//!   other recursion (a chain of structs, aliases or calls) grows with the length of the
-//!   source. The deepest of these a shader this long can hold (5,117 structs, each holding the
-//!   one before) takes 575 KiB of a debug build's stack and 31 KiB of a release build's: over
-//!   100 times inside the checking thread's [`STACK_BYTES`].
-//! - [`MAX_CHAINED_OPERATORS`]: naga limits the nesting of parentheses, blocks and unary
-//!   operators itself, but not a chain of binary operators, member accesses or indexings,
-//!   which it lowers by recursion as deep as the chain is long. [`refusal`] counts them in
-//!   the text, before it is parsed. This is the bound that makes a shader which passed safe
-//!   to parse again on another thread, as wgpu does when it builds the pipeline.
-//! - [`guarded`]: the check runs on a thread with a large stack, so a shape the two bounds
-//!   above did not foresee still does not reach the limit of the caller's own stack, and a
-//!   panic comes back as a refusal.
+//! These bounds are crash and memory containment, not a feature cap on what a shader may compute:
+//! vanilla and NeoForge delegate GLSL compilation to the GPU driver, whereas Sunrise parses GLSL
+//! in-process via naga. Anything refused by these bounds can be written with local variables or
+//! braces, and every vanilla 26.3 core shader sits well below every bound (checked by the daily
+//! test `vanilla_core_shaders_pass_guard_with_margin`).
+//!
+//! Bounds applied to every expanded GLSL stage (on top of `sunrise_glsl::expand_includes`'s
+//! include depth 16, 1,024 pastes, 1 MiB expanded and 8 MiB scanned memory containment):
+//! - [`MAX_EXPANDED_BYTES`] (1 MiB, matching `sunrise_glsl::MAX_EXPANDED`): caps total expanded
+//!   work per stage so pathological input cannot exhaust memory or stack via declaration chains.
+//! - [`MAX_CHAINED_OPERATORS`] (200): caps binary operators, member accesses and indexings in
+//!   one expression; naga lowers left-associative chains recursively, and 200 stays well inside
+//!   both the 64 MiB checking thread (`STACK_BYTES`) and a default 2 MiB debug thread.
+//! - [`MAX_NESTING`] (200): caps bracket nesting (`(`, `[`, `{`), consecutive unary prefix
+//!   operators (`!`, `~`, `+`, `-`), and chained brace-less control statements (`if`, `else`,
+//!   `for`, `while`), matching naga's own WGSL parser nesting limit so naga's GLSL front end
+//!   cannot overflow its stack on deeply nested syntax.
+//! - [`guarded`]: runs translation and validation on a 64 MiB stack thread (`STACK_BYTES`) and
+//!   catches panics as refusals.
 
-/// The most bytes of WGSL a shader (the prelude, the files and the entry points as composed)
-/// may hold.
-pub const MAX_SOURCE_BYTES: usize = 128 * 1024;
+/// The most bytes an expanded GLSL stage may hold (1 MiB, matching `sunrise_glsl::MAX_EXPANDED`).
+pub const MAX_EXPANDED_BYTES: usize = sunrise_glsl::MAX_EXPANDED;
 
-/// The most binary operators, member accesses and indexings one expression may chain. Measured,
-/// the longest chain the whole check survives is 3,339 operators on a release build's 2 MiB
-/// thread (a Rust thread's default, where wgpu may parse it again), 13,422 on 8 MiB, and 5,379
-/// on a debug build's checking thread ([`STACK_BYTES`]): 200 leaves a margin of 16 times or more
-/// on each. Written code stays well under it (a polynomial of 90 terms has about 180).
+/// The most binary operators, member accesses and indexings one expression may chain.
+/// Crash containment for naga's recursive GLSL parser/lowering; verified in tests to parse and
+/// validate comfortably on a debug build's 2 MiB thread as well as on [`STACK_BYTES`].
 pub const MAX_CHAINED_OPERATORS: usize = 200;
 
-/// The stack of the thread a shader is checked on. It is address space the system commits as
-/// it is used.
+/// The deepest nesting of brackets (`(`, `[`, `{`), consecutive unary prefix operators, or
+/// chained brace-less statements (`if`, `else`, `for`, `while`) allowed before naga parses GLSL.
+/// Crash containment matching naga's WGSL nesting bound; verified in tests on a debug 2 MiB thread.
+pub const MAX_NESTING: usize = 200;
+
+/// Stack size of the checking thread; address space committed lazily by the OS.
 const STACK_BYTES: usize = 64 << 20;
 
-/// Why `text` may not be parsed, and the byte offset it is found at when it has one: it is too
-/// long, or an expression chains more than [`MAX_CHAINED_OPERATORS`] operators.
+/// Why expanded GLSL `text` may not be handed to naga, with its byte offset when localized.
 pub fn refusal(text: &str) -> Option<(Option<usize>, String)> {
-    if text.len() > MAX_SOURCE_BYTES {
+    if text.len() > MAX_EXPANDED_BYTES {
         return Some((
             None,
             format!(
-                "{} bytes of shader; a shader may hold {MAX_SOURCE_BYTES}",
+                "{} bytes of expanded shader; a stage may hold {MAX_EXPANDED_BYTES}",
                 text.len()
             ),
         ));
     }
-    let (at, count) = longest_chain(text)?;
-    Some((
-        Some(at),
-        format!(
-            "an expression chains more than {MAX_CHAINED_OPERATORS} operators ({count} here); \
-             split it with `let`"
-        ),
-    ))
+    scan(text)
 }
 
-/// Where the first expression of `text` that chains more than [`MAX_CHAINED_OPERATORS`] binary
-/// operators, member accesses or indexings gets past them (its byte offset) and how many it
-/// chains there. An expression is what lies between `;`, `{` and `}`, which no expression
-/// contains. Comments and numbers are read as naga reads them, so that nothing naga takes for
-/// an operator is hidden from the count; what it counts beyond them (such as the angle
-/// brackets of a template) only makes the bound stricter.
-fn longest_chain(text: &str) -> Option<(usize, usize)> {
+/// Single-pass lexical scan of GLSL `text` checking:
+/// 1. chained binary operators / member accesses / indexings per expression (`MAX_CHAINED_OPERATORS`),
+/// 2. bracket nesting (`(`, `[`, `{`) (`MAX_NESTING`),
+/// 3. consecutive unary prefix operators (`!`, `~`, `+`, `-`) (`MAX_NESTING`),
+/// 4. chained brace-less control statements (`if`, `else`, `for`, `while`) (`MAX_NESTING`).
+///
+/// GLSL comments (`//` to line end, non-nested `/* ... */`) and numbers (decimal/hex/float with
+/// exponents) are skipped so operators inside comments or exponents are neither missed nor
+/// over-counted.
+fn scan(text: &str) -> Option<(Option<usize>, String)> {
     let mut chars = text.char_indices().peekable();
-    let (mut count, mut after_operand) = (0, false);
+    let mut chain = 0usize;
+    let mut after_operand = false;
+    let mut bracket_depth = 0usize;
+    let mut unary_depth = 0usize;
+    let mut braceless_depth = 0usize;
+    let mut in_control_header_parens: Option<usize> = None;
+    let mut expecting_control_body = false;
+
     while let Some((at, c)) = chars.next() {
         match c {
             '/' if chars.peek().is_some_and(|(_, n)| *n == '/') => {
-                while chars.next_if(|(_, n)| !is_line_end(*n)).is_some() {}
+                while chars.next_if(|(_, n)| *n != '\n' && *n != '\r').is_some() {}
                 continue;
             }
             '/' if chars.peek().is_some_and(|(_, n)| *n == '*') => {
-                // naga's own scan: the character after `/*` only starts what follows it, so
-                // `/**/` ends at once and `/*/*` opens a nested comment.
+                // GLSL block comments do not nest: the first `*/` closes the comment.
                 chars.next();
-                let (mut depth, mut prev) = (1, chars.next().map(|(_, c)| c));
+                let mut prev = None;
                 for (_, c) in &mut chars {
-                    match (prev, c) {
-                        (Some('*'), '/') => {
-                            prev = None;
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        (Some('/'), '*') => {
-                            prev = None;
-                            depth += 1;
-                        }
-                        _ => prev = Some(c),
+                    if prev == Some('*') && c == '/' {
+                        break;
+                    }
+                    prev = Some(c);
+                }
+                continue;
+            }
+            '#' => {
+                // Skip preprocessor directives (with backslash line continuations).
+                let mut prev = '#';
+                for (_, ch) in chars.by_ref() {
+                    if ch == '\n' && prev != '\\' {
+                        break;
+                    }
+                    if ch != '\r' {
+                        prev = ch;
                     }
                 }
                 continue;
             }
-            ';' | '{' | '}' => {
-                count = 0;
+            c if c.is_ascii_whitespace() => {}
+            ';' => {
+                chain = 0;
                 after_operand = false;
+                unary_depth = 0;
+                if in_control_header_parens.is_none() {
+                    braceless_depth = 0;
+                    expecting_control_body = false;
+                }
             }
-            c if is_blank(c) => {}
+            '{' => {
+                bracket_depth += 1;
+                if bracket_depth > MAX_NESTING {
+                    return Some((
+                        Some(at),
+                        format!("nesting exceeds {MAX_NESTING} levels ({bracket_depth} here)"),
+                    ));
+                }
+                chain = 0;
+                after_operand = false;
+                unary_depth = 0;
+                braceless_depth = 0;
+                expecting_control_body = false;
+            }
+            '}' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                chain = 0;
+                after_operand = false;
+                unary_depth = 0;
+                braceless_depth = 0;
+                expecting_control_body = false;
+            }
+            '(' => {
+                bracket_depth += 1;
+                if bracket_depth > MAX_NESTING {
+                    return Some((
+                        Some(at),
+                        format!("nesting exceeds {MAX_NESTING} levels ({bracket_depth} here)"),
+                    ));
+                }
+                if expecting_control_body && in_control_header_parens.is_none() {
+                    in_control_header_parens = Some(bracket_depth);
+                    expecting_control_body = false;
+                }
+                after_operand = false;
+                unary_depth = 0;
+            }
+            ')' => {
+                if in_control_header_parens == Some(bracket_depth) {
+                    in_control_header_parens = None;
+                    braceless_depth += 1;
+                    if braceless_depth > MAX_NESTING {
+                        return Some((
+                            Some(at),
+                            format!(
+                                "brace-less statement nesting exceeds {MAX_NESTING} levels \
+                                 ({braceless_depth} here); add braces"
+                            ),
+                        ));
+                    }
+                    // Header finished; body starts next, so reset expression chain.
+                    chain = 0;
+                    after_operand = false;
+                } else {
+                    after_operand = true;
+                }
+                bracket_depth = bracket_depth.saturating_sub(1);
+                unary_depth = 0;
+            }
+            '[' => {
+                bracket_depth += 1;
+                if bracket_depth > MAX_NESTING {
+                    return Some((
+                        Some(at),
+                        format!("nesting exceeds {MAX_NESTING} levels ({bracket_depth} here)"),
+                    ));
+                }
+                if after_operand {
+                    chain += 1;
+                    if chain > MAX_CHAINED_OPERATORS {
+                        return Some((
+                            Some(at),
+                            format!(
+                                "an expression chains more than {MAX_CHAINED_OPERATORS} operators \
+                                 ({chain} here); split it with local variables"
+                            ),
+                        ));
+                    }
+                }
+                after_operand = false;
+                unary_depth = 0;
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                after_operand = true;
+                unary_depth = 0;
+            }
             c if c.is_ascii_digit() => {
                 number(c, &mut chars);
                 after_operand = true;
+                unary_depth = 0;
             }
-            c if c.is_alphanumeric() || c == '_' || !c.is_ascii() => {
-                while chars
-                    .next_if(|(_, n)| n.is_alphanumeric() || *n == '_' || !n.is_ascii())
-                    .is_some()
-                {}
+            c if c.is_ascii_alphabetic() || c == '_' => {
+                let mut end = at + c.len_utf8();
+                while let Some(&(idx, n)) = chars.peek() {
+                    if n.is_ascii_alphanumeric() || n == '_' {
+                        end = idx + n.len_utf8();
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let word = &text[at..end];
+                if in_control_header_parens.is_none() {
+                    match word {
+                        "if" | "for" | "while" => {
+                            expecting_control_body = true;
+                            after_operand = false;
+                            unary_depth = 0;
+                            continue;
+                        }
+                        "else" => {
+                            braceless_depth += 1;
+                            if braceless_depth > MAX_NESTING {
+                                return Some((
+                                    Some(at),
+                                    format!(
+                                        "brace-less statement nesting exceeds {MAX_NESTING} levels \
+                                         ({braceless_depth} here); add braces"
+                                    ),
+                                ));
+                            }
+                            after_operand = false;
+                            unary_depth = 0;
+                            continue;
+                        }
+                        "return" | "case" => {
+                            after_operand = false;
+                            unary_depth = 0;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
                 after_operand = true;
+                unary_depth = 0;
             }
-            ')' | ']' => after_operand = true,
-            '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '=' | '!' | '.' | '['
+            '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '=' | '!' | '.' | '?'
+            | ':'
                 if after_operand =>
             {
-                count += 1;
-                if count == MAX_CHAINED_OPERATORS + 1 {
-                    return Some((at, count));
+                // Consume second character of multi-char operators (`==`, `!=`, `<=`, `>=`, `&&`,
+                // `||`, `<<`, `>>`, `++`, `--`, `+=`, etc.) as one operator.
+                let next = chars.peek().map(|&(_, n)| n);
+                match (c, next) {
+                    ('+' | '-' | '&' | '|' | '<' | '>' | '=', Some(n)) if n == c => {
+                        chars.next();
+                    }
+                    (
+                        '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '!',
+                        Some('='),
+                    ) => {
+                        chars.next();
+                    }
+                    _ => {}
+                }
+                chain += 1;
+                if chain > MAX_CHAINED_OPERATORS {
+                    return Some((
+                        Some(at),
+                        format!(
+                            "an expression chains more than {MAX_CHAINED_OPERATORS} operators \
+                             ({chain} here); split it with local variables"
+                        ),
+                    ));
+                }
+                // Postfix `++`/`--` leaves us still after an operand; binary ops expect an operand.
+                after_operand = matches!((c, next), ('+', Some('+')) | ('-', Some('-')));
+                unary_depth = 0;
+            }
+            '!' | '~' | '+' | '-' => {
+                // Unary prefix operator (or prefix `++`/`--`).
+                if matches!(c, '+' | '-') && chars.peek().is_some_and(|&(_, n)| n == c) {
+                    chars.next();
+                }
+                unary_depth += 1;
+                if unary_depth > MAX_NESTING {
+                    return Some((
+                        Some(at),
+                        format!(
+                            "unary operator nesting exceeds {MAX_NESTING} levels ({unary_depth} here)"
+                        ),
+                    ));
                 }
                 after_operand = false;
             }
-            _ => after_operand = false,
+            _ => {
+                after_operand = false;
+                unary_depth = 0;
+            }
         }
     }
     None
 }
 
-/// The rest of a number whose first digit, `first`, was read, tokenized by its radix as naga
-/// does, so that no operator is taken into it: a decimal number's digits, point and fraction,
-/// then an exponent after `e`/`E` whose sign belongs to it (`1.5e-3`); a hexadecimal number
-/// (`0x`), whose `e` is a digit, with its exponent only after `p`/`P` (`0x1p+4`). After the
-/// exponent's sign only digits and a suffix follow, so `0x1e+0x1e` is two numbers and an
-/// operator.
+/// Skip the rest of a GLSL numeric literal starting with `first`, handling decimal, hex (`0x`),
+/// floats with exponents (`1.5e-3`, `0x1p+4`), and suffixes (`u`, `f`).
 fn number(first: char, chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
     let hex = first == '0' && chars.next_if(|&(_, c)| matches!(c, 'x' | 'X')).is_some();
     let digit = |c: char| {
@@ -154,33 +327,18 @@ fn number(first: char, chars: &mut std::iter::Peekable<std::str::CharIndices<'_>
     if chars.next_if(|&(_, c)| exponent.contains(&c)).is_some() {
         chars.next_if(|&(_, c)| matches!(c, '+' | '-'));
     }
-    // The exponent's digits and a suffix (`f`, `h`, `i`, `u`), or the rest of a malformed
-    // number, which naga refuses: never a sign.
     while chars
-        .next_if(|&(_, c)| c.is_alphanumeric() || c == '_')
+        .next_if(|&(_, c)| c.is_ascii_alphanumeric() || c == '_')
         .is_some()
     {}
 }
 
-/// What ends a `//` comment in WGSL.
-fn is_line_end(c: char) -> bool {
-    matches!(c, '\u{a}'..='\u{d}' | '\u{85}' | '\u{2028}' | '\u{2029}')
-}
-
-/// WGSL's blank space.
-fn is_blank(c: char) -> bool {
-    matches!(
-        c,
-        ' ' | '\t'..='\r' | '\u{85}' | '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
-    )
-}
-
-/// Runs `work` on a thread with a large stack and gives its result, or why it could not: the
-/// thread would not start, or `work` panicked.
+/// Runs `work` on a thread with a 64 MiB stack and returns its result, or why it failed (the
+/// thread failed to spawn or `work` panicked).
 pub fn guarded<T: Send>(work: impl FnOnce() -> T + Send) -> Result<T, String> {
     std::thread::scope(|scope| {
         let thread = std::thread::Builder::new()
-            .name("shader-check".to_owned())
+            .name("glsl-pipeline-check".to_owned())
             .stack_size(STACK_BYTES)
             .spawn_scoped(scope, work)
             .map_err(|e| format!("the shader check could not start: {e}"))?;
@@ -201,118 +359,115 @@ pub fn guarded<T: Send>(work: impl FnOnce() -> T + Send) -> Result<T, String> {
 mod tests {
     use super::*;
 
-    fn chain(terms: usize) -> String {
-        format!("fn f(x: f32) -> f32 {{ return x{}; }}", "+x".repeat(terms))
+    fn chain_glsl(terms: usize) -> String {
+        format!(
+            "#version 450 core\nfloat f(float x) {{ return x{}; }}\n",
+            "+x".repeat(terms)
+        )
     }
 
-    /// The count is of the chain, not of the file: the longest chain that passes has exactly
-    /// the cap's operators, and a statement ends the count.
     #[test]
-    fn the_cap_is_on_one_expression_exactly() {
-        assert_eq!(refusal(&chain(MAX_CHAINED_OPERATORS)), None);
-        let (at, message) = refusal(&chain(MAX_CHAINED_OPERATORS + 1)).unwrap();
-        assert!(message.contains("201 here"), "{message}");
-        // The 201st `+`: after `fn f(x: f32) -> f32 { return x` (30 bytes) and 200 `+x`.
-        assert_eq!(at, Some(30 + 2 * 200));
-        // Many statements of a chain each are many expressions.
-        let statements = format!("var a = 1.0; {}", "a = a + a * a - a; ".repeat(5_000));
+    fn operator_chain_bound_is_per_expression() {
+        assert_eq!(refusal(&chain_glsl(MAX_CHAINED_OPERATORS)), None);
+        let (at, msg) = refusal(&chain_glsl(MAX_CHAINED_OPERATORS + 1)).unwrap();
+        assert!(at.is_some());
+        assert!(msg.contains("201 here"), "{msg}");
+        // Many separate statements stay well under the per-expression bound.
+        let statements = format!(
+            "#version 450 core\nvoid f() {{ float a = 1.0; {} }}\n",
+            "a = a + a * a - a; ".repeat(2_000)
+        );
         assert_eq!(refusal(&statements), None);
     }
 
-    /// A hexadecimal number's `e` is a digit, not an exponent: an unspaced chain of hex terms
-    /// is counted term by term, so it cannot pass as one long number.
     #[test]
-    fn hex_numbers_cannot_hide_a_chain() {
-        for (term, first) in [
-            ("+0x1e", "0x1e"),
-            ("-0x1E", "0x1E"),
-            ("+0xe", "0xe"),
-            ("+1e+1", "1e+1"),
-        ] {
-            // The `=` is one of the chain's operators, as the other tests count it.
-            let refused = format!("let a = {first}{};", term.repeat(MAX_CHAINED_OPERATORS));
-            assert!(refusal(&refused).is_some(), "{term}");
-            let accepted = format!("let a = {first}{};", term.repeat(MAX_CHAINED_OPERATORS - 1));
-            assert_eq!(refusal(&accepted), None, "{term}");
-        }
-        // Exponent signs still belong to their numbers: one operator per term.
-        let floats = format!(
-            "let a = 0x1p+4{};",
-            "+0x1p-4".repeat(MAX_CHAINED_OPERATORS - 1)
-        );
-        assert_eq!(refusal(&floats), None);
-        let floats = format!("let a = 1e+4{};", "+1e-4f".repeat(MAX_CHAINED_OPERATORS));
-        assert!(refusal(&floats).is_some());
-    }
-
-    /// What is not a chain is not counted: unary signs (negative table entries), the points and
-    /// exponent signs of numbers, comments, and words with a digit before a point.
-    #[test]
-    fn only_binary_operators_members_and_indexings_count() {
-        let table = format!("const T = array<f32, 600>({});", "-1.5e-3, ".repeat(600));
-        assert_eq!(refusal(&table), None);
-        let points = format!("let a = 0.5{};", "+0.25".repeat(MAX_CHAINED_OPERATORS - 1));
-        assert_eq!(refusal(&points), None);
-        let comments = format!(
-            "let a = x{};\n// {}\n/* {} /* nested {} */ */",
-            "+x".repeat(100),
-            "+x".repeat(500),
-            "+x".repeat(500),
-            "+x".repeat(500)
-        );
-        assert_eq!(refusal(&comments), None);
-        // A member after a name ending in a digit is one, as are indexings and swizzles.
-        for tail in [".x1", "[0]", ".xy"] {
-            let source = format!("let a = v{};", tail.repeat(MAX_CHAINED_OPERATORS + 1));
-            assert!(refusal(&source).is_some(), "{tail}");
-        }
-        // A non-ASCII letter ends a name; the operator after it still counts.
-        let accented = format!("let a = e\u{301}{};", "+e\u{301}".repeat(300));
-        assert!(refusal(&accented).is_some());
-    }
-
-    /// A comment is read as naga reads it: what hides a chain's rest from the count would
-    /// have to end where naga's comment does not, and every end of a line is one.
-    #[test]
-    fn a_comment_cannot_hide_or_break_a_chain() {
-        let half = "+x".repeat(150);
-        // `;` inside a comment does not end the expression.
-        for comment in ["// ;\n", "/* ; */", "/* /* ; */ ; */", "// {\u{85}"] {
-            let source = format!("let a = x{half}{comment}{half};");
-            assert!(refusal(&source).is_some(), "{comment:?}");
-        }
-        // An unterminated comment hides what follows it from naga as well.
-        assert_eq!(refusal(&format!("/* {}", "+x".repeat(500))), None);
-        // The end of a line other than `\n` ends a `//` comment, so the chain after it counts.
-        let source = format!("let a = x{half}// c\u{2028}{half};");
-        assert!(refusal(&source).is_some());
-    }
-
-    /// What the cap lets through parses and validates on an ordinary test thread's 2 MiB stack,
-    /// in a debug build, whose frames are the largest: the claim that a shader which passed
-    /// can be parsed again anywhere.
-    #[test]
-    fn the_longest_chains_allowed_parse_on_a_small_stack() {
-        let wgsl = |tail: &str| {
+    fn bracket_unary_and_braceless_nesting_bounds_hold() {
+        let parens = |n: usize| {
             format!(
-                "fn f(x: array<f32, 1>) -> f32 {{ var v = vec2<f32>(1.0); return {}; }}",
-                tail
+                "#version 450 core\nfloat f(float x) {{ return {}x{}; }}\n",
+                "(".repeat(n),
+                ")".repeat(n)
             )
         };
-        let sources = [
-            chain(MAX_CHAINED_OPERATORS),
-            wgsl(&format!(
-                "x[0]{}",
-                "+x[0]".repeat(MAX_CHAINED_OPERATORS / 3)
-            )),
-            wgsl(&format!("v{}.x", ".yx".repeat(MAX_CHAINED_OPERATORS - 1))),
-        ];
-        for source in sources {
-            assert_eq!(refusal(&source), None);
-            let module = naga::front::wgsl::parse_str(&source).unwrap();
+        // `{` of function body counts as 1 level, so `MAX_NESTING - 1` parens fit, `MAX_NESTING` overflows.
+        assert_eq!(refusal(&parens(MAX_NESTING - 1)), None);
+        assert!(refusal(&parens(MAX_NESTING)).is_some());
+
+        let unary = |n: usize| {
+            format!(
+                "#version 450 core\nfloat f(float x) {{ return {}x; }}\n",
+                "- ".repeat(n)
+            )
+        };
+        assert_eq!(refusal(&unary(MAX_NESTING)), None);
+        assert!(refusal(&unary(MAX_NESTING + 1)).is_some());
+        let not_chain = |n: usize| {
+            format!(
+                "#version 450 core\nbool f(bool x) {{ return {}x; }}\n",
+                "!".repeat(n)
+            )
+        };
+        assert_eq!(refusal(&not_chain(MAX_NESTING)), None);
+        assert!(refusal(&not_chain(MAX_NESTING + 1)).is_some());
+
+        let braceless = |n: usize| {
+            format!(
+                "#version 450 core\nvoid f(bool c) {{ {}c = false; }}\n",
+                "if (c) ".repeat(n)
+            )
+        };
+        assert_eq!(refusal(&braceless(MAX_NESTING)), None);
+        assert!(refusal(&braceless(MAX_NESTING + 1)).is_some());
+    }
+
+    #[test]
+    fn glsl_block_comments_do_not_nest_and_cannot_hide_chains() {
+        let half = "+x".repeat(150);
+        // `/* /* */` closes at the first `*/` in GLSL, so the second half is live code.
+        let source = format!("void f(float x) {{ float a = x{half}/* /* */{half}; }}");
+        assert!(refusal(&source).is_some());
+        // A `;` inside a comment does not reset the expression chain.
+        for comment in ["// ;\n", "/* ; */"] {
+            let source = format!("void f(float x) {{ float a = x{half}{comment}{half}; }}");
+            assert!(refusal(&source).is_some(), "{comment:?}");
+        }
+    }
+
+    #[test]
+    fn expanded_stage_over_one_mib_is_refused() {
+        let long = format!("// {}", "x".repeat(MAX_EXPANDED_BYTES));
+        let (at, msg) = refusal(&long).unwrap();
+        assert_eq!(at, None);
+        assert!(
+            msg.contains(&format!("a stage may hold {MAX_EXPANDED_BYTES}")),
+            "{msg}"
+        );
+    }
+
+    /// The longest chains and deepest nesting allowed parse and validate with naga's GLSL front
+    /// end on a standard test thread's 2 MiB stack in a debug build.
+    #[test]
+    fn max_allowed_glsl_parses_and_validates_on_default_thread() {
+        let chain_src = format!(
+            "#version 450 core\nlayout(location = 0) out vec4 fragColor;\n\
+             void main() {{ float x = 0.001; float y = x{}; fragColor = vec4(y); }}\n",
+            "+x".repeat(MAX_CHAINED_OPERATORS - 1)
+        );
+        let parens_src = format!(
+            "#version 450 core\nlayout(location = 0) out vec4 fragColor;\n\
+             void main() {{ float x = 1.0; float y = {}x{}; fragColor = vec4(y); }}\n",
+            "(".repeat(MAX_NESTING - 1),
+            ")".repeat(MAX_NESTING - 1)
+        );
+        for src in [&chain_src, &parens_src] {
+            assert_eq!(refusal(src), None);
+            let options = naga::front::glsl::Options::from(naga::ShaderStage::Fragment);
+            let module = naga::front::glsl::Frontend::default()
+                .parse(&options, src)
+                .unwrap();
             naga::valid::Validator::new(
                 naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::default(),
+                naga::valid::Capabilities::all(),
             )
             .validate(&module)
             .unwrap();
@@ -320,16 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_shader_is_refused_before_parsing() {
-        let long = format!("{}// {}", chain(3), "x".repeat(MAX_SOURCE_BYTES));
-        let (at, message) = refusal(&long).unwrap();
-        assert_eq!(at, None);
-        assert!(message.ends_with("a shader may hold 131072"), "{message}");
-    }
-
-    #[test]
-    fn guarded_work_runs_on_a_large_stack_and_a_panic_is_a_refusal() {
-        // Nested calls a thread's default 2 MiB cannot hold: 8 MiB of frames.
+    fn guarded_runs_on_large_stack_and_catches_panics() {
         fn deep(n: usize) -> usize {
             let pad = [n as u8; 1024];
             if n == 0 {
@@ -339,7 +485,79 @@ mod tests {
             }
         }
         assert_eq!(guarded(|| deep(8_192).min(1)), Ok(1));
-        let reason = guarded(|| -> () { panic!("boom") }).unwrap_err();
-        assert_eq!(reason, "the shader check panicked: boom");
+        assert_eq!(
+            guarded(|| -> () { panic!("boom") }),
+            Err("the shader check panicked: boom".to_owned())
+        );
+    }
+
+    /// Daily test (§6 & §13 Q1): every vanilla 26.3 core shader (expanded with its includes)
+    /// passes `guard::refusal` with comfortable margin under `MAX_EXPANDED_BYTES`.
+    #[test]
+    #[ignore = "daily"]
+    fn vanilla_core_shaders_pass_guard_with_margin() {
+        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .expect("SUNRISE_TEST_RESOURCES must point to prepared 26.3 resources");
+        let core_dir = root.join("assets/minecraft/shaders/core");
+        let read = |id: &str| -> Result<Option<String>, String> {
+            let Some((ns, rest)) = id.split_once(':') else {
+                return Ok(None);
+            };
+            let path = root.join("assets").join(ns).join(rest);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => Ok(Some(text)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(format!("{}: {e}", path.display())),
+            }
+        };
+        let includes = sunrise_glsl::Includes {
+            read: &read,
+            namespace: "minecraft",
+            folder: "shaders/include/",
+            once: &["moj_import"],
+        };
+        let mut count = 0usize;
+        let mut largest_name = String::new();
+        let mut largest_bytes = 0usize;
+        for entry in std::fs::read_dir(&core_dir).expect("read vanilla core shaders dir") {
+            let path = entry.unwrap().path();
+            let ext = path.extension().and_then(|e| e.to_str());
+            if !matches!(ext, Some("vsh" | "fsh")) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let file_id = format!(
+                "minecraft:shaders/core/{}",
+                path.file_name().unwrap().to_string_lossy()
+            );
+            let expanded = sunrise_glsl::expand_includes(
+                &text,
+                &file_id,
+                "minecraft:shaders/core/",
+                &includes,
+                Some(&[crate::DEPTH_ZERO_TO_ONE]),
+            )
+            .unwrap_or_else(|e| panic!("{}: expand failed: {e}", path.display()))
+            .text()
+            .to_owned();
+            assert_eq!(
+                refusal(&expanded),
+                None,
+                "vanilla core shader {} failed guard",
+                path.display()
+            );
+            count += 1;
+            if expanded.len() > largest_bytes {
+                largest_bytes = expanded.len();
+                largest_name = path.file_name().unwrap().to_string_lossy().into_owned();
+            }
+        }
+        assert!(count > 0, "expected vanilla core shaders in {core_dir:?}");
+        // Vanilla's largest core shader must sit well under MAX_EXPANDED_BYTES (at least 10x margin).
+        assert!(
+            largest_bytes * 10 < MAX_EXPANDED_BYTES,
+            "largest vanilla core shader {largest_name} is {largest_bytes} bytes (budget {MAX_EXPANDED_BYTES})"
+        );
     }
 }

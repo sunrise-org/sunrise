@@ -98,10 +98,31 @@ pub struct BlockProperties {
     /// Skip faces against any state of this same block; false disables the template's render rule.
     /// Leaf and ice graphics culling still follows the template class.
     pub skip_same_block_faces: Option<bool>,
+    /// Which mobs may spawn on the block (`BlockBehaviour.Properties.isValidSpawn`), the same
+    /// `spawn_rule` key a content file's `properties` take; unset keeps the template block's rule.
+    pub spawn_rule: Option<SpawnRule>,
     /// Opt into `VegetationBlock` survival and neighbour checks independently of the
     /// template. Templates that already inherit `VegetationBlock` keep their rules.
     /// Otherwise the default support is `minecraft:supports_vegetation`.
     pub vegetation: bool,
+}
+
+/// A block's mob spawn rule (`BlockBehaviour.Properties.isValidSpawn`), the answer of
+/// `BlockState.isValidSpawn` for every entity type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// exhaustive: these are vanilla's closed set of spawn predicates.
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum SpawnRule {
+    /// Vanilla's default: the top face is sturdy and the block's light emission is below 14.
+    /// The top face is the template's, and the emission is the declared `light` (or
+    /// `state_light`), else the template's.
+    Default,
+    /// Every mob spawns on the block (`Blocks::always`).
+    Always,
+    /// No mob spawns on the block (`Blocks::never`).
+    Never,
+    /// Only ocelots and parrots spawn on the block (`Blocks::ocelotOrParrot`).
+    OcelotOrParrot,
 }
 
 /// Vanilla's per-column offset mode (`BlockBehaviour.OffsetType`).

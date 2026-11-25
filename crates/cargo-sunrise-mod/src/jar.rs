@@ -1,19 +1,75 @@
-//! Add an exact, original Java jar as a passive asset/data source.
+//! Add an exact, original Java jar as a passive asset/data source, from a local file or from
+//! Modrinth by version URL or `<project> <version>`.
 use std::{
     collections::HashSet,
     fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
+use sunrise_jar_fetch::{Http, Modrinth, VersionRef, hash_reader};
 use sunrise_mod_package::{
     Manifest,
     manifest::{JarRef, MANIFEST, collect_jar_requirements},
     selection::{LaunchArguments, data_dir_with},
 };
-use sunrise_port_pack::fetch::hash_reader;
+
+const USER_AGENT: &str = "cargo-sunrise-mod";
+
+/// Modrinth endpoints from `sunrise-addresses`.
+pub(crate) const MODRINTH: Modrinth<'static> = Modrinth {
+    api: sunrise_addresses::MODRINTH_API,
+    cdn_host: sunrise_addresses::MODRINTH_CDN_HOST,
+};
+
+/// `sunrise-jar-fetch` HTTP transport backed by `sunrise-proxy`.
+pub(crate) struct ProxyHttp;
+
+impl Http for ProxyHttp {
+    fn get(&self, url: &str) -> Result<Option<Box<dyn Read>>, String> {
+        let requested = url::Url::parse(url).map_err(|e| format!("{url}: {e}"))?;
+        let host = requested
+            .host_str()
+            .ok_or_else(|| format!("{url}: missing host"))?;
+        let check = |hop: &url::Url| {
+            if hop.scheme() != "https"
+                || !hop.host_str().is_some_and(|h| h.eq_ignore_ascii_case(host))
+                || hop.port().is_some()
+                || !hop.username().is_empty()
+                || hop.password().is_some()
+            {
+                return Err(format!("refused redirect outside https://{host}"));
+            }
+            Ok(())
+        };
+        match sunrise_proxy::get(url, &[("User-Agent", USER_AGENT)], Some(&check)) {
+            Ok(response) => {
+                if response.status() >= 300 {
+                    return Err(format!("{url}: HTTP {}", response.status()));
+                }
+                Ok(Some(response.into_reader()))
+            }
+            Err(e) if e.status() == Some(404) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn post_json(&self, url: &str, body: &str) -> Result<Box<dyn Read>, String> {
+        let response = sunrise_proxy::agent("jar-fetch-post", url, |builder| builder.redirects(0))
+            .map_err(|e| format!("{url}: {e}"))?
+            .post(url)
+            .set("User-Agent", USER_AGENT)
+            .set("Content-Type", "application/json")
+            .send_string(body)
+            .map_err(|e| format!("{url}: {e}"))?;
+        if response.status() >= 300 {
+            return Err(format!("{url}: HTTP {}", response.status()));
+        }
+        Ok(response.into_reader())
+    }
+}
 
 /// The store the game would use with neither the tool nor a `--home` argument.
-fn default_store() -> PathBuf {
+pub(crate) fn default_store() -> PathBuf {
     std::env::var_os("SUNRISE_HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
@@ -186,17 +242,53 @@ pub(crate) fn stage_for_run<'a>(
     Ok(Some(home))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum UseJarSource<'a> {
+    Local(&'a Path),
+    ModrinthUrl(&'a str),
+    ModrinthVersion { project: &'a str, version: &'a str },
+}
+
+fn parse_use_jar_args(args: &[String]) -> Result<UseJarSource<'_>, String> {
+    match args {
+        [arg] if arg.starts_with("https://") => Ok(UseJarSource::ModrinthUrl(arg)),
+        [path] => Ok(UseJarSource::Local(Path::new(path))),
+        [project, version] => Ok(UseJarSource::ModrinthVersion { project, version }),
+        _ => Err(
+            "usage: cargo sunrise-mod use-jar <path | modrinth-url | <project> <version>>".into(),
+        ),
+    }
+}
+
+/// Adds an exact original Java jar to `sunrise-mod.toml` from a local file, a Modrinth version
+/// page URL, or a Modrinth `<project> <version>` pair, caching it in the local jar store.
 pub fn run(args: &[String]) -> Result<(), String> {
-    let [path] = args else {
-        return Err("usage: cargo sunrise-mod use-jar <path>".into());
-    };
+    let source = parse_use_jar_args(args)?;
     let manifest_path = Path::new(MANIFEST);
     let text = fs::read_to_string(manifest_path).map_err(|e| format!("{MANIFEST}: {e}"))?;
     let manifest = Manifest::parse(&text)?;
-    let path = Path::new(path);
-    let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let store = default_store();
     fs::create_dir_all(&store).map_err(|e| format!("{}: {e}", store.display()))?;
+    let path = match source {
+        UseJarSource::Local(path) => path.to_path_buf(),
+        UseJarSource::ModrinthUrl(url) => {
+            let file = sunrise_jar_fetch::version_file(&ProxyHttp, MODRINTH, VersionRef::Url(url))?;
+            let cached = store.join(format!("{}.jar", file.sha512));
+            sunrise_jar_fetch::download(&ProxyHttp, MODRINTH, &file.url, &file.sha512, &cached)?;
+            cached
+        }
+        UseJarSource::ModrinthVersion { project, version } => {
+            let file = sunrise_jar_fetch::version_file(
+                &ProxyHttp,
+                MODRINTH,
+                VersionRef::ProjectVersion { project, version },
+            )?;
+            let cached = store.join(format!("{}.jar", file.sha512));
+            sunrise_jar_fetch::download(&ProxyHttp, MODRINTH, &file.url, &file.sha512, &cached)?;
+            cached
+        }
+    };
+    let file = fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut original =
         tempfile::NamedTempFile::new_in(&store).map_err(|e| format!("{}: {e}", store.display()))?;
     let hash = hash_reader::<sha2::Sha512>(file, &mut original)
@@ -408,5 +500,32 @@ mod tests {
             assert_eq!(fs::read(&sentinel).unwrap(), b"player jar");
             assert_eq!(fs::read_dir(outside_jars).unwrap().count(), 1);
         }
+    }
+
+    #[test]
+    fn use_jar_parses_local_path_modrinth_url_and_project_version() {
+        let local = vec!["mods/bridges.jar".to_owned()];
+        assert_eq!(
+            parse_use_jar_args(&local).unwrap(),
+            UseJarSource::Local(Path::new("mods/bridges.jar"))
+        );
+
+        let url = vec!["https://modrinth.com/mod/macaws-bridges/version/3.0.0".to_owned()];
+        assert_eq!(
+            parse_use_jar_args(&url).unwrap(),
+            UseJarSource::ModrinthUrl("https://modrinth.com/mod/macaws-bridges/version/3.0.0")
+        );
+
+        let pair = vec!["macaws-bridges".to_owned(), "3.0.0".to_owned()];
+        assert_eq!(
+            parse_use_jar_args(&pair).unwrap(),
+            UseJarSource::ModrinthVersion {
+                project: "macaws-bridges",
+                version: "3.0.0",
+            }
+        );
+
+        assert!(parse_use_jar_args(&[]).is_err());
+        assert!(parse_use_jar_args(&["a".into(), "b".into(), "c".into()]).is_err());
     }
 }

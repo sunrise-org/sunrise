@@ -26,6 +26,7 @@
     "ignited_by_lava": true,
     "replaceable": true,
     "skip_same_block_faces": true,
+    "spawn_rule": "default",
     "vegetation": true
   },
   "state_properties": {

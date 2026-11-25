@@ -46,6 +46,13 @@ pub(super) fn load_world_rest(
         api_values::resolve_item_registry(&items)?;
         log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
         progress.set(7);
+        // The recipes and the stations see the tags the items just bound
+        // (`neoforge:tag_empty`), as a world's own load does.
+        let conditions = overlay.conditions.with_tags(items.bound_tags());
+        let overlay = &sunrise_world::loot::PackOverlay {
+            conditions: &conditions,
+            ..*overlay
+        };
         // The recipe tables, the stations and the recipe book read one folder:
         // hold its files so it is read once.
         let _recipe_files = sunrise_client::json_folder::read(&root.join("data/minecraft/recipe"));

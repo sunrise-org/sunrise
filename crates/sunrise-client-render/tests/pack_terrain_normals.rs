@@ -487,14 +487,14 @@ fn fixture_without_flat(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn s
 }
 
 /// Bytes of a section arena page as the renderer first makes it: 1 << 20 vertices of 24 bytes
-/// (`TerrainVertex`), with 8 bytes more a vertex (`pack_atlas::NORMAL_BYTES`) where it has a
+/// (`TerrainVertex`), with 16 bytes more a vertex (`pack_atlas::NORMAL_BYTES`) where it has a
 /// normal stream.
 const FIRST_PAGE: u64 = 25_165_824;
-const FIRST_PAGE_WITH_NORMALS: u64 = 33_554_432;
+const FIRST_PAGE_WITH_NORMALS: u64 = 41_943_040;
 
 /// Uploads the solid box on a settled frame, for the arenas' bytes.
 /// The bytes the upload copied (`Renderer::uploaded_bytes`, which counts toward the section
-/// copies' submission threshold as it goes): the box's 24 vertices of 24 bytes, and 8 bytes of
+/// copies' submission threshold as it goes): the box's 24 vertices of 24 bytes, and 16 bytes of
 /// normal stream each where the arena keeps one.
 fn upload_box(renderer: &mut Renderer, hud: &HudBatch, out: &Path, name: &str) -> u64 {
     shoot(renderer, hud, 0.0, 0.0, &out.join(format!("{name}.png")));
@@ -550,7 +550,7 @@ fn fixture_without_vertex_storage(
         assert!(section && translucent, "the pack reads the stream");
         assert_eq!(renderer.section_arena_pages(), (false, page_vertices));
     }
-    assert_eq!(upload_box(&mut renderer, &hud, out, "loaded"), 768);
+    assert_eq!(upload_box(&mut renderer, &hud, out, "loaded"), 960);
     assert_eq!(
         renderer.section_arena_normals(),
         (true, true, FIRST_PAGE_WITH_NORMALS)

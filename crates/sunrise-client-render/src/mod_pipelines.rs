@@ -1,12 +1,11 @@
 //! Render pipelines mods register (`Hooks::register_render_pipelines`, NeoForge's
 //! `RegisterRenderPipelinesEvent`): the registrations, kept once at start, and what each
-//! resource load makes of them. A load reads every registered pipeline's fragment file
-//! (`assets/<namespace>/shaders/pipeline/<path>.wgsl`), puts Sunrise's prelude before it and its
-//! entry points after it, and checks the whole shader, so the renderer (`gfx::mod_pipelines`) is
-//! only ever handed WGSL that compiles. A required pipeline the load cannot build fails the load;
-//! an optional one is logged and left out. A frame reads none of this by name.
-//! The shader's composition and checks live in `sunrise_mod_pipeline`, shared with
-//! `cargo sunrise-mod check`.
+//! resource load makes of them. A load reads every registered pipeline's GLSL core shader
+//! program (`assets/<namespace>/shaders/<path>.vsh` and `.fsh`, resolving `#include <ns:path>`,
+//! `#include "relative"` and `#moj_import` through the active resource stack), translates it
+//! through [`sunrise_mod_pipeline`] on top of [`sunrise_glsl`], and hands validated naga modules
+//! to the renderer (`gfx::mod_pipelines`). A required pipeline the load cannot build fails the
+//! load; an optional one is logged and left out. A frame reads none of this by name.
 use mod_api::{
     Identifier, PackGlslInput, PackPassSlot, PackUniformType, PackUniformValue, PipelineBlend,
     PipelineTexture, PipelineTextureError, RenderPipeline, RenderPipelineError, RenderPipelineRef,
@@ -14,8 +13,8 @@ use mod_api::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::OnceLock;
-use sunrise_mod_pipeline::{FOLDER, compose_with};
+use std::sync::{Arc, OnceLock};
+use sunrise_mod_pipeline::{Options as PipelineOptions, ProgramSources};
 
 static REGISTERED: OnceLock<Vec<RenderPipeline>> = OnceLock::new();
 static PACK_UNIFORMS: OnceLock<HashMap<&'static str, PackUniformType>> = OnceLock::new();
@@ -49,6 +48,7 @@ pub enum RegistrationError {
         id: Identifier,
     },
     InvalidPackBinding(String),
+    InvalidShaderDefine(String),
     AlreadyPublished,
 }
 
@@ -87,6 +87,7 @@ impl std::fmt::Display for RegistrationError {
                 "mod {owner}: pipeline {id} collides with earlier registration from mod {earlier}"
             ),
             Self::InvalidPackBinding(reason) => f.write_str(reason),
+            Self::InvalidShaderDefine(reason) => f.write_str(reason),
             Self::AlreadyPublished => f.write_str("pipeline registrations were already published"),
         }
     }
@@ -153,6 +154,13 @@ pub fn register(
                 owner: pipeline.owner().to_owned(),
                 id: pipeline.id.clone(),
             });
+        }
+        if let Err(reason) = pipeline.validate_defines() {
+            return Err(RegistrationError::InvalidShaderDefine(format!(
+                "mod {}: pipeline {}: {reason}",
+                pipeline.owner(),
+                pipeline.id
+            )));
         }
     }
     validate_pack_bindings(&pipelines).map_err(RegistrationError::InvalidPackBinding)?;
@@ -367,15 +375,22 @@ pub fn registered() -> &'static [RenderPipeline] {
     REGISTERED.get().map_or(&[], Vec::as_slice)
 }
 
-/// A registered pipeline one resource load built: a shader that compiles and its fixed state.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A registered pipeline one resource load built: validated GLSL naga modules (plus expanded
+/// source and defines for lazy linear-light fragment translation) and its fixed state.
+#[derive(Clone, Debug)]
 pub struct Built {
     /// The owning mod, not necessarily the pipeline namespace.
     pub owner: String,
     /// The pipeline's id, for the log.
     pub id: Identifier,
-    /// The whole shader: prelude, the mod's file, entry points.
-    pub shader: String,
+    /// The validated vertex and fragment naga modules and set-0 binding usage.
+    pub program: Arc<sunrise_glsl::Translated>,
+    /// Expanded vertex GLSL kept for lazy linear-light fragment re-translation.
+    pub vertex_expanded: Arc<str>,
+    /// Expanded fragment GLSL kept for lazy linear-light fragment re-translation.
+    pub fragment_expanded: Arc<str>,
+    /// Pipeline defines (`NAME` or `NAME value`) applied during translation.
+    pub defines: Arc<[String]>,
     pub blend: PipelineBlend,
     pub depth: WorldDepth,
     /// Whether the load may go on without it ([`RenderPipeline::optional()`]).
@@ -412,32 +427,79 @@ impl Pipelines {
         generation: u64,
     ) -> Result<Self, String> {
         Self::build(registered(), generation, |file| {
-            source.read_to_string(file).map_err(|e| e.to_string())
+            match source.read_to_string(file) {
+                Ok(text) => Ok(Some(text)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
         })
     }
 
-    /// Build every registered pipeline, reading fragment files with `read`. A pipeline's
-    /// texture is named here; its sprite is looked up when the renderer builds it.
+    /// Build every registered pipeline, reading `.vsh`, `.fsh`, and include files via `read`
+    /// (returning `Ok(None)` when absent, `Err(why)` when unreadable). A pipeline's texture is
+    /// named here; its sprite is looked up when the renderer builds it.
     pub(crate) fn build(
         registered: &[RenderPipeline],
         generation: u64,
-        read: impl Fn(&str) -> Result<String, String>,
+        read: impl Fn(&str) -> Result<Option<String>, String> + Sync,
     ) -> Result<Self, String> {
         let mut required = Vec::new();
+        let read_stage = |file: &str| -> Result<String, String> {
+            read(file)
+                .map_err(|cause| format!("{file}: {cause}"))?
+                .ok_or_else(|| format!("{file}: not found"))
+        };
+        let include = |id: &str| -> Result<Option<String>, String> {
+            let Some((ns, rest)) = id.split_once(':') else {
+                return Ok(None);
+            };
+            let asset = format!("assets/{ns}/{rest}");
+            read(&asset)
+        };
         let built = registered
             .iter()
             .map(|pipeline| {
-                let file = fragment_file(&pipeline.fragment);
-                // A refusal reads `<file>[:<line>:<column>]: <message>`, the shader's own
-                // `Problem`s printed as the pack checker prints them. The checks run contained:
-                // a panic in naga on a mod's shader refuses the pipeline, with no crash report.
-                let loaded = read(&file)
-                    .map_err(|cause| format!("{file}: {cause}"))
-                    .and_then(|text| {
+                let vertex_id = pipeline
+                    .vertex_shader
+                    .as_ref()
+                    .unwrap_or(&pipeline.fragment);
+                let vertex_file = shader_file(vertex_id, "vsh");
+                let vertex_dir = shader_dir(vertex_id);
+                let fragment_file = shader_file(&pipeline.fragment, "fsh");
+                let fragment_dir = shader_dir(&pipeline.fragment);
+                let defines_owned: Vec<String> = pipeline
+                    .defines
+                    .iter()
+                    .map(|(name, value)| match value {
+                        Some(v) => format!("{name} {v}"),
+                        None => name.clone(),
+                    })
+                    .collect();
+                let define_refs: Vec<&str> = defines_owned.iter().map(String::as_str).collect();
+                let loaded = pipeline
+                    .validate_defines()
+                    .and_then(|()| {
+                        let vertex = read_stage(&vertex_file)?;
+                        let fragment = read_stage(&fragment_file)?;
+                        let sources = ProgramSources {
+                            vertex_file: &vertex_file,
+                            vertex_dir: &vertex_dir,
+                            vertex: &vertex,
+                            fragment_file: &fragment_file,
+                            fragment_dir: &fragment_dir,
+                            fragment: &fragment,
+                        };
+                        let options = PipelineOptions {
+                            textured: pipeline.texture.is_some(),
+                            defines: &define_refs,
+                            linear_light: false,
+                            check_backends: false,
+                            interface: sunrise_mod_pipeline::DEVICELESS_INTERFACE_LIMITS,
+                        };
                         crate::crash::contain(|| {
-                            compose_with(&file, &text, pipeline.texture.is_some())
+                            sunrise_mod_pipeline::translate(&sources, &options, &include)
                         })
-                        .map_err(|panic| format!("{file}: checking it panicked: {panic}"))?
+                        .map_err(|panic| format!("{fragment_file}: checking it panicked: {panic}"))?
                         .map_err(|problems| {
                             problems
                                 .iter()
@@ -446,20 +508,23 @@ impl Pipelines {
                                 .join("; ")
                         })
                     })
-                    .and_then(|shader| {
+                    .and_then(|built_program| {
                         let texture = match &pipeline.texture {
                             None => None,
                             Some(texture) => Some(load_texture(texture).map_err(|cause| {
                                 format!("its texture: {}", texture_refusal(cause))
                             })?),
                         };
-                        Ok((shader, texture))
+                        Ok((built_program, texture))
                     });
                 match loaded {
-                    Ok((shader, texture)) => Some(Built {
+                    Ok((built_program, texture)) => Some(Built {
                         owner: pipeline.owner().to_owned(),
                         id: pipeline.id.clone(),
-                        shader,
+                        program: Arc::new(built_program.translated),
+                        vertex_expanded: Arc::from(built_program.vertex_expanded),
+                        fragment_expanded: Arc::from(built_program.fragment_expanded),
+                        defines: Arc::from(defines_owned),
                         blend: pipeline.blend,
                         depth: pipeline.depth,
                         optional: pipeline.optional,
@@ -565,13 +630,20 @@ impl Pipelines {
     }
 }
 
-/// `mymod:beam/glow` is `assets/mymod/shaders/pipeline/beam/glow.wgsl`.
-fn fragment_file(fragment: &Identifier) -> String {
+/// `mymod:core/beam/glow` is `assets/mymod/shaders/core/beam/glow.<ext>`.
+fn shader_file(shader: &Identifier, ext: &str) -> String {
     format!(
-        "assets/{}/{FOLDER}/{}.wgsl",
-        fragment.namespace(),
-        fragment.path()
+        "assets/{}/shaders/{}.{ext}",
+        shader.namespace(),
+        shader.path()
     )
+}
+
+/// Include base folder for `mymod:core/beam/glow`: `mymod:shaders/core/beam/`.
+fn shader_dir(shader: &Identifier) -> String {
+    let path = shader.path();
+    let folder = path.rfind('/').map_or("", |i| &path[..=i]);
+    format!("{}:shaders/{folder}", shader.namespace())
 }
 
 /// `texture` as a load finds it, or its named refusal.
@@ -899,16 +971,43 @@ pub(crate) fn lookup_pack_uniform_type_in(
 mod tests {
     use super::*;
 
-    const GLOW: &str = "\
-fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
-    return vec4<f32>(input.color.rgb * (1.0 + sin(frame.time)), input.color.a * input.uv.y);
+    const VSH: &str = "\
+#version 330
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:projection.glsl>
+in vec3 Position;
+in vec2 UV0;
+in vec4 Color;
+out vec2 texCoord0;
+out vec4 vertexColor;
+void main() {
+    gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
+    texCoord0 = UV0;
+    vertexColor = Color;
 }
 ";
 
-    fn pipeline(id: &str, fragment: &str) -> RenderPipeline {
+    const GLOW_FSH: &str = "\
+#version 330
+#include <minecraft:globals.glsl>
+in vec2 texCoord0;
+in vec4 vertexColor;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(vertexColor.rgb * (1.0 + sin(GameTime)), vertexColor.a * texCoord0.y);
+}
+";
+
+    fn stub_asset(file: &str) -> Option<String> {
+        let rest = file.strip_prefix("assets/")?;
+        let (ns, path) = rest.split_once('/')?;
+        sunrise_mod_pipeline::stubs::read(&format!("{ns}:{path}")).map(str::to_owned)
+    }
+
+    fn pipeline(id: &str, shader: &str) -> RenderPipeline {
         RenderPipeline::new(
             Identifier::parse(id).unwrap(),
-            Identifier::parse(fragment).unwrap(),
+            Identifier::parse(shader).unwrap(),
             PipelineBlend::Additive,
             WorldDepth::ThroughWalls,
         )
@@ -920,16 +1019,18 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
     #[test]
     fn an_optional_pipeline_that_fails_leaves_the_others_drawing_and_refuses_its_own_use() {
         let registered = [
-            pipeline("example:glow", "example:glow"),
-            pipeline("example:broken", "example:broken").optional(),
-            pipeline("example:missing", "example:nested/missing").optional(),
-            pipeline("example:driver", "example:glow").optional(),
+            pipeline("example:glow", "example:core/glow"),
+            pipeline("example:broken", "example:core/broken").optional(),
+            pipeline("example:missing", "example:core/nested/missing").optional(),
+            pipeline("example:driver", "example:core/glow").optional(),
         ];
         let read = |file: &str| match file {
-            "assets/example/shaders/pipeline/glow.wgsl" => Ok(GLOW.to_owned()),
-            "assets/example/shaders/pipeline/broken.wgsl" => Ok("fn nothing() {}".to_owned()),
-            "assets/example/shaders/pipeline/nested/missing.wgsl" => Err("not found".to_owned()),
-            other => panic!("read {other}"),
+            "assets/example/shaders/core/glow.vsh" => Ok(Some(VSH.to_owned())),
+            "assets/example/shaders/core/glow.fsh" => Ok(Some(GLOW_FSH.to_owned())),
+            "assets/example/shaders/core/broken.vsh" => Ok(Some(VSH.to_owned())),
+            "assets/example/shaders/core/broken.fsh" => Ok(Some("void nothing() {}".to_owned())),
+            "assets/example/shaders/core/nested/missing.vsh" => Ok(None),
+            other => Ok(stub_asset(other)),
         };
         let set = Pipelines::build(&registered, 7, read).unwrap();
 
@@ -969,23 +1070,38 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
     #[test]
     fn a_required_pipeline_that_fails_fails_the_load_by_name() {
         let registered = [
-            pipeline("example:glow", "example:glow"),
-            pipeline("example:beam", "example:beam"),
-            pipeline("example:extra", "example:extra").optional(),
+            pipeline("example:glow", "example:core/glow"),
+            pipeline("example:beam", "example:core/beam"),
+            pipeline("example:extra", "example:core/extra").optional(),
         ];
-        let before = Pipelines::build(&registered, 7, |_| Ok(GLOW.to_owned())).unwrap();
+        let all_good = |file: &str| {
+            if file.ends_with(".vsh") {
+                Ok(Some(VSH.to_owned()))
+            } else if file.ends_with(".fsh") {
+                Ok(Some(GLOW_FSH.to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        };
+        let before = Pipelines::build(&registered, 7, all_good).unwrap();
         let handle = before.resolve(&id("example:beam")).unwrap();
 
         // A pack broke the required beam and the optional extra: the load fails naming the
         // required one only, so nothing of it is published and the previous load still draws.
         let error = Pipelines::build(&registered, 8, |file| match file {
-            "assets/example/shaders/pipeline/glow.wgsl" => Ok(GLOW.to_owned()),
-            _ => Ok("garbage".to_owned()),
+            "assets/example/shaders/core/glow.vsh"
+            | "assets/example/shaders/core/beam.vsh"
+            | "assets/example/shaders/core/extra.vsh" => Ok(Some(VSH.to_owned())),
+            "assets/example/shaders/core/glow.fsh" => Ok(Some(GLOW_FSH.to_owned())),
+            "assets/example/shaders/core/beam.fsh" | "assets/example/shaders/core/extra.fsh" => {
+                Ok(Some("garbage".to_owned()))
+            }
+            other => Ok(stub_asset(other)),
         })
         .unwrap_err();
         assert!(
             error.starts_with(
-                "required render pipeline example:beam from mod  refused: assets/example/shaders/pipeline/beam.wgsl:1:1: "
+                "required render pipeline example:beam from mod  refused: assets/example/shaders/core/beam.fsh:"
             ),
             "{error}"
         );
@@ -996,33 +1112,92 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
 
     #[test]
     fn initial_required_failure_has_a_literal_message() {
-        let registered = [pipeline("example:glow", "example:glow")];
-        let error = Pipelines::build(&registered, 7, |_| Err("not found".to_owned())).unwrap_err();
+        let registered = [pipeline("example:glow", "example:core/glow")];
+        let error = Pipelines::build(&registered, 7, |_| Ok(None)).unwrap_err();
         assert_eq!(
             error,
-            "required render pipeline example:glow from mod  refused: assets/example/shaders/pipeline/glow.wgsl: not found"
+            "required render pipeline example:glow from mod  refused: assets/example/shaders/core/glow.vsh: not found"
         );
     }
 
     #[test]
     fn a_reload_makes_old_handles_stale_and_can_fix_or_break_a_pipeline() {
-        let registered = [pipeline("example:glow", "example:glow").optional()];
-        let before = Pipelines::build(&registered, 7, |_| Ok(GLOW.to_owned())).unwrap();
+        let registered = [pipeline("example:glow", "example:core/glow").optional()];
+        let good = |file: &str| {
+            if file.ends_with(".vsh") {
+                Ok(Some(VSH.to_owned()))
+            } else if file.ends_with(".fsh") {
+                Ok(Some(GLOW_FSH.to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        };
+        let before = Pipelines::build(&registered, 7, good).unwrap();
         let handle = before.resolve(&id("example:glow")).unwrap();
 
         // A pack replaced the file with one that doesn't compile: the pipeline is invalid in
         // the new load, and the old handle is stale there, not silently redirected.
-        let broken = Pipelines::build(&registered, 8, |_| Ok("garbage".to_owned())).unwrap();
+        let broken = Pipelines::build(&registered, 8, |file| {
+            if file.ends_with(".vsh") {
+                Ok(Some(VSH.to_owned()))
+            } else if file.ends_with(".fsh") {
+                Ok(Some("garbage".to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        })
+        .unwrap();
         assert_eq!(broken.slot(handle), Err(RenderPipelineError::Stale));
         assert_eq!(
             broken.resolve(&id("example:glow")),
             Err(RenderPipelineError::Invalid)
         );
 
-        let fixed = Pipelines::build(&registered, 9, |_| Ok(GLOW.to_owned())).unwrap();
+        let fixed = Pipelines::build(&registered, 9, good).unwrap();
         assert_eq!(fixed.slot(handle), Err(RenderPipelineError::Stale));
         let again = fixed.resolve(&id("example:glow")).unwrap();
         assert_eq!(fixed.slot(again), Ok(0));
+    }
+
+    /// Separate `.vertex_shader(...)`, custom defines, and shared `#include <ns:path>` /
+    /// `#moj_import` files all resolve through the resource stack.
+    #[test]
+    fn vertex_shader_reuse_defines_and_shared_includes_build() {
+        let shared_inc = "vec3 palette(float t) { return vec3(t, 1.0 - t, 0.5); }\n";
+        let fsh = "\
+#version 330
+#include <libmod:palette.glsl>
+in vec2 texCoord0;
+in vec4 vertexColor;
+out vec4 fragColor;
+void main() {
+#ifdef BRIGHT
+    fragColor = vec4(palette(texCoord0.x) * float(SCALE), vertexColor.a);
+#else
+    fragColor = vertexColor;
+#endif
+}
+";
+        let registered = [
+            pipeline("app:a", "app:core/fx")
+                .vertex_shader(id("minecraft:core/position_tex_color"))
+                .define("BRIGHT")
+                .define_value("SCALE", "2"),
+            pipeline("app:b", "app:core/fx").vertex_shader(id("minecraft:core/position_tex_color")),
+        ];
+        let set = Pipelines::build(&registered, 1, |file| match file {
+            "assets/app/shaders/core/fx.fsh" => Ok(Some(fsh.to_owned())),
+            "assets/libmod/shaders/include/palette.glsl" => Ok(Some(shared_inc.to_owned())),
+            other => Ok(stub_asset(other)),
+        })
+        .unwrap();
+        assert!(set.built()[0].is_some());
+        assert!(set.built()[1].is_some());
+        assert_eq!(
+            set.built()[0].as_ref().unwrap().defines.as_ref(),
+            ["BRIGHT", "SCALE 2"]
+        );
+        assert!(set.built()[1].as_ref().unwrap().defines.is_empty());
     }
 
     /// Sprites are named as the 2D atlas names them; an id naming a file is refused by name,
@@ -1031,16 +1206,24 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
     fn a_textured_pipeline_names_its_sprite_and_refuses_a_file_path() {
         use mod_api::PipelineTexture;
         let pipeline = |id: &str| {
-            let name = Identifier::parse("test:glow").unwrap();
+            let name = Identifier::parse("test:core/glow").unwrap();
             RenderPipeline::new(
-                name.clone(),
+                Identifier::parse("test:glow").unwrap(),
                 name,
                 PipelineBlend::Additive,
                 WorldDepth::Tested,
             )
             .textured(PipelineTexture::Sprite(Identifier::parse(id).unwrap()))
         };
-        let shader = |_: &str| Ok(GLOW.to_owned());
+        let shader = |file: &str| {
+            if file.ends_with(".vsh") {
+                Ok(Some(VSH.to_owned()))
+            } else if file.ends_with(".fsh") {
+                Ok(Some(GLOW_FSH.to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        };
         let built = |id| {
             Pipelines::build(&[pipeline(id)], 1, shader)
                 .map(|set| set.built()[0].as_ref().unwrap().texture.clone().unwrap())

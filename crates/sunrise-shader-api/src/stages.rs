@@ -8,8 +8,28 @@ use crate::inputs::{
 };
 use crate::manifest::Api;
 use crate::package::Pack;
-use sunrise_mod_pipeline::COLOR_HELPERS;
-use sunrise_mod_pipeline::check::Composed;
+use crate::wgsl_check::Composed;
+
+/// The colour boundary of WGSL pack 0.2 preludes: vanilla's 2.2 power both ways.
+pub const COLOR_HELPERS: &str = "\
+// Negatives and NaN made 0 (a comparison with NaN is false), so no `pow` sees them.
+fn sunrise_sanitize(c: vec3<f32>) -> vec3<f32> {
+    return select(vec3<f32>(0.0), c, c > vec3<f32>(0.0));
+}
+fn sunrise_decode(c: vec3<f32>) -> vec3<f32> {
+    return pow(sunrise_sanitize(c), vec3<f32>(2.2));
+}
+fn sunrise_encode(c: vec3<f32>) -> vec3<f32> {
+    return pow(sunrise_sanitize(c), vec3<f32>(1.0 / 2.2));
+}
+// Alpha is coverage: it stays as it is.
+fn sunrise_decode_rgba(c: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(sunrise_decode(c.rgb), c.a);
+}
+fn sunrise_encode_rgba(c: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(sunrise_encode(c.rgb), c.a);
+}
+";
 
 /// The bind group of a pack's resources; groups 0 to 2 are the renderer's.
 pub const GROUP: u32 = 3;

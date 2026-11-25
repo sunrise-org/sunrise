@@ -36,10 +36,14 @@ run-name: ${{ inputs.kind == 'dev' && format('dev build {0}', inputs.base) || in
 # Dry picks use only nightly/dry-run-<run>-<attempt>, removed by always-run cleanup; nightly-state and real build
 # numbering/quota stay untouched, including on a failed build. A hard-killed cleanup may leave only that isolated ref.
 # By dispatch only: the daily run starts it through release.yml when every leg is green (CI tiers, owner 2026-11-13).
-# kind=dev (release.yml kind dev, after it published the commit's SDK): the same build and signing for one
-# commit of main with the gate green, alone (no picks, no build branch, no nightly-state, no daily cap, no
-# release-blocker hold), signed for the `dev` channel and its version, and published as the pre-release
-# dev-<date>-<short> ("Dev <date> · <short>"); never the `nightly` tag, its rotation or nightly-source tags.
+# kind=dev (release.yml kind dev): the same build and signing for one commit of main with the gate green, alone (no
+# picks, no build branch, no nightly-state, no daily cap, no release-blocker hold), signed for the `dev` channel and
+# its version, and published as the pre-release dev-<date>-<short> ("Dev <date> · <short>"); never the `nightly` tag,
+# its rotation or nightly-source tags. Its run also builds the commit's SDK (`sdk`, prebuilt-game-build.yml) beside
+# the game legs, after the exporters like them, and publishes it (`sdk-publish`, sdk-publish.yml) as soon as its own
+# legs are done: the game's legs never read the SDK, only its signing does (sdk.json, `sdk-index`), so the game is
+# signed and published only after sdk-<sha>. Re-running a failed job reruns only it and what follows it: every leg
+# that built, the SDK's and the game's, stays built, and a published sdk-<sha> or dev tag is never built again.
 # The newest Dev build and all Dev builds from the last 7 days stay (nightly.py prune-dev).
 # kind=stable on release/26.3 publishes the full release 26.3-<semver>; only main and the two branches publish (docs/release-flow.md "Release branches").
 # With `break_glass` (why), a stable patch release ships on the daily legs its changes select instead of the full daily,
@@ -235,14 +239,19 @@ jobs:
             echo "$home/bin" >> "$GITHUB_PATH"
           fi
           bash tools/ci/rustup_install.sh --profile minimal
+      # A Dev build's SDK is built in this run, so its index comes once it is published (`sdk-index` below).
       - name: The SDK index the Nightly carries (sdk.json of sdk-<sha>)
-        if: steps.pick.outputs.build == 'true' && github.repository == 'sunrise-org/sunrise' && steps.pick.outputs.sdk != 'false'
+        if: >-
+          inputs.kind != 'dev' && steps.pick.outputs.build == 'true' && github.repository == 'sunrise-org/sunrise' &&
+          steps.pick.outputs.sdk != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.pick.outputs.sha }}
         run: python3 tools/ci/nightly.py sdk-index "$SHA" sdk.json
       - uses: actions/upload-artifact@v7
-        if: steps.pick.outputs.build == 'true' && github.repository == 'sunrise-org/sunrise' && steps.pick.outputs.sdk != 'false'
+        if: >-
+          inputs.kind != 'dev' && steps.pick.outputs.build == 'true' && github.repository == 'sunrise-org/sunrise' &&
+          steps.pick.outputs.sdk != 'false'
         with:
           name: sunrise-sdk-index
           path: sdk.json
@@ -319,18 +328,15 @@ jobs:
 
   exporters:
     needs: [pick, break-glass]
-    # A break-glass release only once `break-glass` found both approvals; build and so sign and publish all wait
-    # for this job.
+    # A break-glass release only once `break-glass` found both approvals; every build (a Dev build's SDK too) and so
+    # sign and publish wait for this job: its determinism check fails a release in minutes, before any platform leg.
     if: >-
       !cancelled() && needs.pick.result == 'success' && needs.pick.outputs.build == 'true' &&
       (needs.pick.outputs.break_glass == 'false' ||
       (needs.break-glass.result == 'success' && github.run_attempt == '1'))
-    uses: ./.github/workflows/game-build.yml
+    uses: ./.github/workflows/exporters.yml
     with:
-      part: exporters
-      ref: ${{ needs.pick.outputs.sha }}
-      version: ${{ needs.pick.outputs.version }}
-      developer_id: false
+      commit: ${{ needs.pick.outputs.sha }}
       trusted: false
 
   build:
@@ -343,12 +349,74 @@ jobs:
       (needs.pick.outputs.break_glass == 'false' || github.run_attempt == '1')
     uses: ./.github/workflows/game-build.yml
     with:
-      part: game
       ref: ${{ needs.pick.outputs.sha }}
       version: ${{ needs.pick.outputs.version }}
       nightly: ${{ needs.pick.outputs.nightly }}
       developer_id: false
       trusted: false  # it can hold unreviewed pull requests: their own cache key, never saved
+      dev: ${{ inputs.kind == 'dev' }}
+
+  # A Dev build's SDK, from the same commit, beside the game legs (which never read it). Its `fresh` job skips the
+  # legs when sdk-<sha> is already published. Only a Dev build: a gate-green commit of main alone, as release.yml
+  # built it before (a Nightly's or a stable release's SDK is published before its build starts).
+  sdk:
+    needs: [pick, exporters]
+    if: >-
+      !cancelled() && inputs.kind == 'dev' && needs.pick.outputs.build == 'true' && needs.exporters.result == 'success'
+    uses: ./.github/workflows/prebuilt-game-build.yml
+    with:
+      commit: ${{ needs.pick.outputs.sha }}
+      dev: true
+
+  # sdk-<sha> from the SDK legs' artifacts, as soon as they are done, while the game legs may still build. A dry run
+  # signs with a throwaway key and publishes nothing.
+  sdk-publish:
+    needs: [pick, sdk]
+    if: >-
+      !cancelled() && inputs.kind == 'dev' && needs.sdk.result == 'success' && needs.sdk.outputs.needed == 'true'
+    permissions:
+      contents: write  # the sdk-<sha> release (its publish job; a dry run writes nothing)
+    uses: ./.github/workflows/sdk-publish.yml
+    with:
+      commit: ${{ needs.pick.outputs.sha }}
+      publish: ${{ needs.pick.outputs.publish == 'true' }}
+    secrets: inherit
+
+  # The SDK index a Dev build carries in its signed sums (as `pick` fetches a Nightly's): sdk-<sha>'s sdk.json once
+  # it is published, checked against its SHA256SUMS. A dry run that built its own SDK publishes none: it carries
+  # that SDK's index.
+  sdk-index:
+    needs: [pick, sdk, sdk-publish]
+    if: >-
+      !cancelled() && inputs.kind == 'dev' && needs.sdk.result == 'success' &&
+      (needs.sdk-publish.result == 'success' || needs.sdk-publish.result == 'skipped')
+    runs-on: ${{ vars.DYNA_CI_SELF_HOSTED == 'true' && 'dyna-small' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        if: needs.pick.outputs.publish != 'true' && needs.sdk.outputs.needed == 'true'
+        with:
+          name: sdk-release
+          path: ${{ runner.temp }}/sdk-release
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          OWN: ${{ needs.pick.outputs.publish != 'true' && needs.sdk.outputs.needed == 'true' && 'yes' || '' }}
+        run: |
+          if [[ -n "$OWN" ]]; then
+            cp "$RUNNER_TEMP/sdk-release/sdk.json" sdk.json
+          else
+            python3 tools/ci/nightly.py sdk-index "$SHA" sdk.json
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sunrise-sdk-index
+          path: sdk.json
+          if-no-files-found: error
+          retention-days: 3
 
   # Whether every required leg built, from the `build-complete` marker game-build.yml's legs job uploads. build's
   # result is `failure` or `cancelled` whenever a leg failed, timed out or got no runner, and a reusable
@@ -369,9 +437,11 @@ jobs:
           path: ${{ runner.temp }}/build-complete
 
   sign:
-    needs: [pick, build, complete, break-glass]
+    needs: [pick, build, complete, break-glass, sdk-index]
+    # A Dev build's game is signed only with its SDK's index, so only once sdk-<sha> is published.
     if: >-
       !cancelled() && needs.complete.outputs.complete == 'true' &&
+      (inputs.kind != 'dev' || needs.sdk-index.result == 'success') &&
       (needs.pick.outputs.break_glass == 'false' ||
       (needs.break-glass.result == 'success' && github.run_attempt == '1'))
     runs-on: ubuntu-latest
@@ -421,9 +491,10 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: [pick, build, complete, sign, break-glass]
+    needs: [pick, build, complete, sign, break-glass, sdk-index]
     if: >-
       !cancelled() && needs.complete.outputs.complete == 'true' && needs.sign.result == 'success' &&
+      (inputs.kind != 'dev' || needs.sdk-index.result == 'success') &&
       (needs.pick.outputs.break_glass == 'false' ||
       (needs.break-glass.result == 'success' && github.run_attempt == '1'))
     runs-on: ubuntu-latest

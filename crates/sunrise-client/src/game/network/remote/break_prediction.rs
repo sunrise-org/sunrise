@@ -36,6 +36,7 @@ impl Game<'_> {
         // Keep every resulting write under the break's sequence, so packet reconciliation
         // can correct them without running the local rules again.
         let [x, y, z] = pos;
+        let broken = pos;
         let pos = BlockPos::new(x, y, z);
         let (mut changes, order) = self.with_level(|b, base, ticks| {
             let mut level = DryLevel::new(base);
@@ -55,16 +56,23 @@ impl Game<'_> {
         // Apply every final state before publishing anything. Emit one notice per net
         // change, in the simulation's after-shape order (the last notice for each position).
         let mut applied = Vec::with_capacity(changes.len());
+        let mut removed = false;
         for at in order.into_iter().rev() {
             if let Some(state) = changes.remove(&at) {
                 let pos = [at.x, at.y, at.z];
                 if let Some(previous) = self.predict_block(pos, state, sequence) {
+                    removed |= pos == broken && previous != state;
                     applied.push((pos, previous, state));
                 }
             }
         }
         for (pos, previous, state) in applied.into_iter().rev() {
             self.finish_client_block_write(pos, Some(previous), state, true);
+        }
+        // `Block.destroy` once `setBlock` changed the block: `state` is `oldState`, and the
+        // client holds no saved block entity data.
+        if removed && mod_api::__private::listened(mod_api::HookId::PlayerDestroyedBlock) {
+            self.native_player_destroyed_block(broken, state, None);
         }
         self.mining = None;
     }

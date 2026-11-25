@@ -55,9 +55,13 @@ cargo sunrise-mod check             # validate the project before release
   - Loot item entries' `name` and block-state conditions' `block` fields. Recipes, tags, loot tables and loot pools
     that `neoforge:conditions` may disable are left alone.
 
-  A missing reference is an **error** (exit 1) only when the tool has enough information to confirm it. Otherwise,
-  it can **warn** without failing: a `[[jar]]` layer, dependency or atlas source may supply the resource, an inline
-  composite child may override a texture, or a local recipe filter may remove the recipe or swap the reference.
+  A missing reference is an **error** (exit 1) only when the tool has enough information to confirm it. When a
+  manifest lists `[[jar]]`, `check` and `build` read each jar from the local jar store (fetching any missing jar
+  from Modrinth) and resolve references, blockstates, loot tables, item definitions and English names against the
+  mod and its jars together. If a jar cannot be fetched (for example offline), the tool prints a note and skips
+  the checks that jar could satisfy; `build` still succeeds offline. Otherwise, it can **warn** without failing: a
+  dependency's jar or atlas source may supply the resource, an inline composite child may override a texture, or a
+  local recipe filter may remove the recipe or swap the reference.
   The tool does not fetch dependencies or check registry entries declared in code.
   It also checks for blockstates on blocks with `render_shape` set to `MODEL` and warns about missing local loot
   tables, item definitions or English names, or registry content on a client-only package. Reference diagnostics name
@@ -65,8 +69,8 @@ cargo sunrise-mod check             # validate the project before release
 - `check <file>` reads `.smod`, `.spack`, resource pack `.zip` and `.sshader` files. A `.smod` also
   needs its [release attestation](../reference/sdk/05-commands.md#check-a-released-package).
 - To release a mod to the registry, follow [Publishing your mod](publish.md).
-- `use-jar <path>` records and caches an original Java jar as an external asset/data source, without copying it into the mod
-  ([Java jars as external assets](#java-jars-as-external-assets)).
+- `use-jar <path | modrinth-url | <project> <version>>` records and caches an original Java jar as an external
+  asset/data source, without copying it into the mod ([Java jars as external assets](#java-jars-as-external-assets)).
 
 ## Vegetation behaviour is independent of the template
 
@@ -166,12 +170,16 @@ From a content or native mod's project folder:
 
 ```sh
 cargo sunrise-mod use-jar /path/to/original-mod.jar
+cargo sunrise-mod use-jar https://modrinth.com/mod/<project>/version/<version>
+cargo sunrise-mod use-jar <project> <version>
 ```
 
-The command reads NeoForge or Fabric metadata and appends a `[[jar]]` table to `sunrise-mod.toml` with the original
-`id`, `version` and the exact file's `sha512` (128 lowercase hexadecimal characters). It does not infer identity
-from the filename, rename the Java mod to the Sunrise mod's namespace, or run Java code. An unknown jar, invalid
-identity, unresolved version or file larger than the shared 512 MiB hash limit is refused without changing the manifest.
+When given a Modrinth version page URL or a `<project> <version>` pair, `use-jar` downloads the verified jar from
+Modrinth's CDN into the local jar store before inspecting it. The command reads NeoForge or Fabric metadata and
+appends a `[[jar]]` table to `sunrise-mod.toml` with the original `id`, `version` and the exact file's `sha512`
+(128 lowercase hexadecimal characters). It does not infer identity from the filename, rename the Java mod to the
+Sunrise mod's namespace, or run Java code. An unknown jar, invalid identity, unresolved version or file larger than
+the shared 512 MiB hash limit is refused without changing the manifest.
 
 The original manifest text, comments and existing list order are preserved. Listing the same hash and identity again
 leaves the file byte-for-byte unchanged; a hash already listed with another ID or version is an error to correct,
@@ -179,14 +187,15 @@ not another entry. Use `[[jar]]` tables rather than an inline `jar = [...]` arra
 The list is ordered: new references are appended, not sorted.
 
 `use-jar` stores the exact file as `<sha512>.jar` in the usual game home's `jars/` directory (`SUNRISE_HOME` if set,
-otherwise `sunrise` in your platform's data folder). Run `cargo sunrise-mod run` after adding the jar; `run` verifies
+otherwise `sunrise` in your platform's data folder). `check` and `build` read cached jars from that store (fetching
+missing ones from Modrinth when online) so resource references resolve against the mod and its jars together. Run
+`cargo sunrise-mod run` after adding the jar; `run` verifies
 and stages only the jars in your manifest in `target/sunrise-mod/run/home/jars/` before building. The first run copies
 each original while checking its SHA-512, using space for one extra copy per jar. Later runs still verify the original.
 On Unix, `run` reuses a matching staged copy only after checking its link count to confirm it is independent.
 On other platforms, it writes a fresh copy. Editing or replacing the original cannot change the staged bytes.
 Leave the game's `--home` unset to use this development home; the staging path must not go through directory links.
 To read originals from a different folder, supply its `<sha512>.jar` files with `cargo sunrise-mod run --jars <dir>`.
-Neither command downloads jars.
 
 Jar bytes stay external. The original's `assets/` and `data/` are passive pack layers below the Sunrise mod's own
 files. Do not copy a jar or its extracted files into the mod's source or `.smod`. A jar reference supplies assets
@@ -343,6 +352,13 @@ the usual refusal when the hand holds the block's own item still applies. `skip_
 hides model faces against any state of this same block, as glass does; `false` disables the template's render
 definition skip rule. Leaf and ice graphics options can still hide faces based on the template class.
 Unset values inherit the template. These are load-time properties on both sides, with no new hook.
+
+`spawn_rule` sets which mobs spawn on the block (`BlockBehaviour.Properties.isValidSpawn`): `default` is vanilla's
+(a sturdy top face and light emission below 14), `always` and `never` answer for every mob, and `ocelot_or_parrot`
+only for those two. It is read once at load into the block's spawn tables, so it is one answer per state; `default`
+uses the template's top face and the declared `light` or `state_light` (the template's when none is declared), not a
+`dynamic_light` cell's (sunrise-org/sunrise#5518: a declared shape doesn't change the top face yet). Unset keeps
+the template's rule. In code, `BlockProperties::spawn_rule` takes the same rules as `SpawnRule`.
 
 `destroy_overlay: false` hides the breaking crack (`destroy_stage_0` to `9`) on the block, for one broken by use
 (a feast or a cake taken apart bite by bite). It is read once at load into the block's facts, and only the overlay

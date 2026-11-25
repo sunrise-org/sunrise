@@ -71,6 +71,19 @@ pub struct Clock {
     /// it modulo 24000 for the hour; `/time set` can make it negative.
     pub day_time: i64,
 }
+/// The client's tick rate state (`ClientLevel.tickRateManager()`), as the server last
+/// synchronised it (`ClientboundTickingStatePacket`, `ClientboundTickingStepPacket`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+// exhaustive: the game builds it with a literal; mods only read it
+#[derive(sunrise_mod_api_macros::Wire)]
+pub struct ClientTickRate {
+    /// Ticks a second (`TickRateManager.tickrate`): 20 unless `/tick rate` changed it.
+    pub tick_rate: f32,
+    /// Whether the game is frozen (`TickRateManager.isFrozen`, `/tick freeze`).
+    pub frozen: bool,
+    /// The steps left to run while frozen (`TickRateManager.frozenTicksToRun`, `/tick step`).
+    pub frozen_ticks_to_run: i32,
+}
 
 /// The generator's undecorated surface, without slope rules or chunk allocation.
 /// Created only by the game.

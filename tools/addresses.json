@@ -38,7 +38,8 @@
     "sunrise.app": "the macOS app bundle's name",
     "sunrise.mods.dev": "a translation key",
     "crates/sunrise-attestation/src/lib.rs github.com": "Fulcio repository and workflow URI prefix matched locally, never contacted",
-    "crates/sunrise-attestation/src/lib.rs token.actions.githubusercontent.com": "OIDC issuer identity matched in a certificate, never contacted"
+    "crates/sunrise-attestation/src/lib.rs token.actions.githubusercontent.com": "OIDC issuer identity matched in a certificate, never contacted",
+    "crates/sunrise-jar-fetch/src/lib.rs modrinth.com": "Modrinth version page URL prefix matched locally, never contacted"
   },
   "allowed": [
     "crates/sunrise-client-render/src/pack_browser.rs api.modrinth.com",

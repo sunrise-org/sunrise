@@ -302,6 +302,7 @@ struct MeshSettings {
     cutout_leaves: bool,
     opaque_ice: bool,
     translucent_layers: Arc<[bool]>,
+    layer_overrides: Arc<[Option<sunrise_shaders::RenderLayer>]>,
     leaf_culling: LeafCullingMode,
     /// The section's frozen `section_visibility` plan; `None` on the no-mod path.
     visibility: Option<Arc<section_visibility::FrozenPlan>>,
@@ -754,6 +755,9 @@ pub struct Streaming {
     /// Sprite layers a shader pack draws in the translucent pass (`[[materials]]
     /// translucent`), by layer; empty without one.
     pub translucent_layers: Arc<[bool]>,
+    /// By state id, the terrain layer a `shaders/` pack's `layer.*` rules move the state to
+    /// (`Mesher::layer_overrides`); empty without a pack or a state it moves.
+    pub layer_overrides: Arc<[Option<sunrise_shaders::RenderLayer>]>,
     /// What the mesher does with leaf faces inside a canopy (`LeafCullingMode`).
     pub leaf_culling: LeafCullingMode,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
@@ -1451,6 +1455,7 @@ impl Streaming {
             cutout_leaves: true,
             opaque_ice: false,
             translucent_layers: Arc::from([]),
+            layer_overrides: Arc::from([]),
             leaf_culling: LeafCullingMode::Off,
             light_tables,
             light_log: Vec::new(),

@@ -474,6 +474,74 @@ fn client_player_state_reads_its_own_copy_only() {
     });
 }
 
+/// `ClientLevel.tickRateManager()`: the rate, freeze and steps the ticking packets set
+/// (`handleTickingState` / `handleTickingStep`), from `Login` on, before any player is placed;
+/// none before a client level exists.
+#[test]
+#[ignore = "daily"]
+fn tick_rate_reads_the_clients_tick_rate_manager() {
+    use sunrise_protocol::{
+        connection::Pipe,
+        packets::play::{self, Clientbound as C},
+    };
+    mod_platform::testing::with_mods(Vec::<mod_api::ModEntry>::new().into(), || {
+        super::native_entity_refs::tests::with_client_game(|game| {
+            let read = |game: &Game<'_>| mod_api::prelude::ClientViewClientHost::tick_rate(game);
+            assert!(game.native_client_level().is_none());
+            assert_eq!(read(game), None);
+            let (client, _server) = Pipe::pair();
+            game.connect_local(client, "TickRateTest").unwrap();
+            assert_eq!(read(game), None, "connected, but no level before Login");
+            let spawn = play::SpawnInfo {
+                dimension_type: 0,
+                dimension: "minecraft:overworld".into(),
+                seed: 0,
+                game_type: 0,
+                previous_game_type: None,
+                debug: false,
+                flat: false,
+                last_death: None,
+                portal_cooldown: 0,
+                sea_level: 63,
+            };
+            game.handle_packet(C::Login(play::Login {
+                player_id: 7,
+                hardcore: false,
+                levels: vec![spawn.dimension.clone()],
+                max_players: 1,
+                chunk_radius: 2,
+                simulation_distance: 2,
+                reduced_debug_info: false,
+                show_death_screen: true,
+                limited_crafting: false,
+                spawn,
+                online_mode: false,
+                enforces_secure_chat: false,
+            }))
+            .unwrap();
+            game.player = None;
+            let before = read(game).expect("Login makes the client level");
+            assert_eq!(before.tick_rate, 20.0);
+            game.handle_packet(C::TickingState(play::TickingState {
+                rate: 5.0,
+                frozen: true,
+            }))
+            .unwrap();
+            game.handle_packet(C::TickingStep(play::TickingStep { steps: 7 }))
+                .unwrap();
+            assert_eq!(
+                read(game),
+                Some(mod_api::ClientTickRate {
+                    tick_rate: 5.0,
+                    frozen: true,
+                    frozen_ticks_to_run: 7,
+                }),
+                "read before the player is placed"
+            );
+        });
+    });
+}
+
 /// A client reads a tracked player's and a tracked mob's pose from the `DATA_POSE` the server
 /// sent, and has no jump cooldown for either.
 #[test]

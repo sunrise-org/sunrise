@@ -10,6 +10,7 @@ mod global_constant_division;
 mod layout_values_past_u32;
 mod legacy_texture_size;
 mod length_array_sizes;
+mod local_constant_sizes;
 mod local_constants;
 mod naga_glsl_atomics;
 mod naga_glsl_overloads;

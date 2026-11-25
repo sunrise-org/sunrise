@@ -16,6 +16,7 @@ from tests.test_ci_concurrency import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 GAME = ROOT / ".github/workflows/game-build.yml"
+EXPORTERS = ROOT / ".github/workflows/exporters.yml"
 NIGHTLY = ROOT / ".github/workflows/nightly-build.yml"
 SMOKE = ROOT / "tools/ci/game_smoke.sh"
 
@@ -32,7 +33,8 @@ class NightlyRoutingTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node evaluates GitHub's JavaScript-style expressions")
     def test_real_matrix_routes_both_trust_levels(self):
         game = yaml.safe_load(GAME.read_text())["jobs"]
-        expressions = {name: game[name]["runs-on"][3:-2] for name in ("exporters", "build", "linux-smoke")}
+        expressions = {name: game[name]["runs-on"][3:-2] for name in ("build", "linux-smoke")}
+        expressions["exporters"] = yaml.safe_load(EXPORTERS.read_text())["jobs"]["exporters"]["runs-on"][3:-2]
         smoke = game["linux-smoke"]
         smoke_if = smoke["if"][3:-2]
         rows = game["build"]["strategy"]["matrix"]["include"]
@@ -91,6 +93,29 @@ console.log(JSON.stringify(eval(expression)));
                     expected = 60 if row.get("mac") else 40
                 timeout = game["build"]["timeout-minutes"][3:-2]
                 self.assertEqual(evaluate(timeout, row, trusted, repository), expected)
+
+    @unittest.skipUnless(shutil.which("node"), "Node evaluates GitHub's JavaScript-style expressions")
+    def test_only_a_dev_releases_macos_legs_follow_the_owners_blacksmith_switch(self):
+        script = """const state = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const context = values => new Proxy(values, {get: (values, key) => values[key] ?? ''});
+const matrix = context(state.matrix), vars = context(state.vars), inputs = context(state.inputs);
+console.log(JSON.stringify(eval(state.expression)));
+"""
+        prebuilt = yaml.safe_load((ROOT / ".github/workflows/prebuilt-game-build.yml").read_text())
+        legs = json.loads(prebuilt["jobs"]["fresh"]["steps"][1]["env"]["ALL"])
+        game = yaml.safe_load(GAME.read_text())["jobs"]["build"]
+        builds = {"game": (game, game["strategy"]["matrix"]["include"]), "sdk": (prebuilt["jobs"]["build"], legs)}
+        for (what, (job, rows)), switch, dev in itertools.product(builds.items(), [None, "off", "on", "true"], [False, True]):
+            variables = {"BLACKSMITH": "off"}
+            if switch is not None:
+                variables["BLACKSMITH_DEV_MACOS"] = switch
+            for row in rows:
+                with self.subTest(build=what, switch=switch, dev=dev, leg=row["name"]):
+                    state = {"expression": job["runs-on"][3:-2], "matrix": row, "vars": variables, "inputs": {"dev": dev}}
+                    result = subprocess.run(["node", "-e", script], input=json.dumps(state), text=True,
+                                            capture_output=True, check=True)
+                    blacksmith = switch == "on" and dev and row["os"] == "macos-15"
+                    self.assertEqual(json.loads(result.stdout), row["blacksmith"] if blacksmith else row["os"])
 
     def test_any_missing_leg_holds_the_build(self):
         workflow_jobs = dict(jobs(GAME.read_text()))
@@ -161,9 +186,8 @@ console.log(JSON.stringify(eval(expression)));
 
     def test_hosted_runners_never_use_machine_specific_tool_setup(self):
         # Only the exporters can run on a self-hosted (Dyna) runner; the build legs are fresh machines and take none.
-        workflow_jobs = dict(jobs(GAME.read_text()))
-        self.assertNotIn("runner-env.sh", workflow_jobs["build"])
-        steps = [block for block in workflow_jobs["exporters"].split("\n      - ") if "bash tools/ci/runner-env.sh" in block]
+        self.assertNotIn("runner-env.sh", GAME.read_text())
+        steps = [block for block in dict(jobs(EXPORTERS.read_text()))["exporters"].split("\n      - ") if "bash tools/ci/runner-env.sh" in block]
         self.assertEqual(len(steps), 1)
         condition = re.search(r"^\s*if:\s*(.*)$", steps[0], re.M).group(1)
         for environment in ["github-hosted", "self-hosted"]:

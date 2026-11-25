@@ -4,7 +4,7 @@
 //! value/attribute effect components (`LevelBasedValue`, `EnchantmentValueEffect`
 //! and the loot-condition subset that enchantment requirements use).
 mod holder_sets;
-use crate::item_data::Levels;
+use crate::item_data::{CodecBool, Levels};
 use crate::items::{ItemStack, Items};
 pub use holder_sets::HolderSetBinding;
 use serde_json::Value;
@@ -647,7 +647,7 @@ impl Enchantments {
                 ItemProps {
                     enchantable: c["minecraft:enchantable"]["value"].as_u64().unwrap_or(0) as u32,
                     repairable: string_list(&c["minecraft:repairable"]["items"]),
-                    glint: c["minecraft:enchantment_glint_override"].as_bool(),
+                    glint: c["minecraft:enchantment_glint_override"].codec_bool(),
                     rarity: c["minecraft:rarity"]
                         .as_str()
                         .unwrap_or("common")

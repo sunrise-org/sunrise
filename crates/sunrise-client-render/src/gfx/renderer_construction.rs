@@ -2608,6 +2608,8 @@ impl Renderer {
             arena_storage,
             separate_ao: false,
             pack_pages: Vec::new(),
+            pack_block_ids: None,
+            pack_sources_on: false,
             outline_edges_scratch: Vec::new(),
             outline_lines_scratch: Vec::new(),
             debug_lines_scratch: Vec::new(),

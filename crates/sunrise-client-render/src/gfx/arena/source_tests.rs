@@ -49,7 +49,8 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         bytemuck::cast_slice(&geometry),
     );
     let source = TerrainSource::new(71, [2, 3, 4], 13, false);
-    arena.write_sources(
+    assert_eq!(arena.vertex_bytes(), 24, "no sidecar yet");
+    let written = arena.write_sources(
         &device,
         &mut encoder,
         &mut uploads,
@@ -57,6 +58,9 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
         QuadSlots::vertices(4),
         &[source],
     );
+    // The upload and the move budgets count the sidecar: 8 bytes a slot, 4 slots.
+    assert_eq!(written, 32);
+    assert_eq!(arena.vertex_bytes(), 24 + 8);
     let bytes_per_vertex = 24 + 8;
     assert_eq!(arena.bytes(), GRAIN * bytes_per_vertex);
     let second = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
@@ -268,4 +272,74 @@ fn terrain_sources_move_recycle_and_live_only_while_read() {
     assert_eq!(translucent.bytes(), GRAIN * 24);
     uploads.finish(&encoder);
     queue.submit([encoder.finish()]);
+}
+
+/// Compaction's and a shrink's moves (`move_off_page`) count the source sidecar, which
+/// `Arena::copy` moves with a range's vertices: once the pages have sidecars, 32 bytes a vertex
+/// (24 of the vertex, 8 of its slot's source), so two meshes of 256 vertices are 16384 bytes and
+/// a budget one byte short moves one of them, where 24 bytes a vertex would move both.
+#[test]
+#[ignore = "daily"]
+fn source_sidecar_counts_in_the_move_budget() {
+    use super::super::{Part, SectionGpu, move_off_page};
+    let _gpu = crate::gfx::test_gpu::lock();
+    let adapter = crate::gfx::test_gpu::adapter().expect("the source sidecar needs a GPU");
+    eprintln!("TERRAIN_SOURCE_ARENA_ADAPTER {:?}", adapter.get_info());
+    let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut arena = Arena::translucent(&device, 24, 4 * GRAIN);
+    arena.read_sources(true);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut uploads = super::super::upload::Uploads::new(&device);
+    let mesh = |at: (u32, u64)| SectionGpu {
+        page: 0,
+        start: 0,
+        translucent_at: at,
+        solid: 0,
+        solid_slots: 0,
+        packed: false,
+        packed_far: false,
+        sides: crate::mesher::Sides::unsorted(0),
+        translucent: 64,
+        sort: super::super::translucency::SortState::new(Vec::new()),
+        sorted_indices: Some((7, 7)),
+        flat_id: None,
+        gpu_id: None,
+        gpu_fading: false,
+        fading: None,
+        leaving: None,
+        animated_layers: Box::new([]),
+    };
+    let mut meshes: Vec<SectionGpu> = (0..3)
+        .map(|_| mesh(arena.alloc(&device, &mut encoder, GRAIN).unwrap()))
+        .collect();
+    assert_eq!(arena.vertex_bytes(), 24, "no sidecar yet");
+    // A mesh with sources gives the pages their sidecars.
+    let source = TerrainSource::new(71, [2, 3, 4], 13, false);
+    let sources = vec![source; (GRAIN / 4) as usize];
+    let first = meshes[0].translucent_at;
+    let names = QuadSlots::vertices(GRAIN);
+    let at = (first.0, first.1, GRAIN);
+    arena.write_sources(&device, &mut encoder, &mut uploads, at, names, &sources);
+    assert_eq!(arena.vertex_bytes(), 32);
+    assert!(meshes.iter().all(|s| s.translucent_at.0 == 0));
+    assert!(arena.open_page(&device, 4 * GRAIN));
+    arena.close(0);
+    let mut budget = 2 * GRAIN * 32 - 1;
+    assert!(move_off_page(
+        &mut arena,
+        &mut encoder,
+        None,
+        None,
+        None,
+        meshes.iter_mut().map(|s| (s, None)),
+        0,
+        Part::Translucent,
+        &mut budget,
+    ));
+    let moved = meshes.iter().filter(|s| s.translucent_at.0 == 1).count();
+    assert_eq!(
+        moved, 1,
+        "one mesh of 8192 bytes, then 8191 left for the next"
+    );
+    assert_eq!(budget, GRAIN * 32 - 1);
 }

@@ -4,10 +4,10 @@ name: release
 #   whenever a player-facing pull request merged since the published Nightly (no batch-size or age rule); by hand it
 #   defaults to `daily-green` and keeps the batch rules. It refuses any commit but the one `daily-green` points to.
 # - dev: root's dispatch on main, for main's head or an explicit commit of main; it needs only dyna-checks' gate
-#   (lint, verify, verify-static) passed on that exact commit (pending is not passed). It builds that
-#   commit's SDK (prebuilt-game-build.yml), publishes it as sdk-<sha> (sdk-publish.yml, skipped when it exists),
-#   then starts `nightly build` with kind=dev, which builds, signs and publishes the game as the pre-release
-#   dev-<date>-<short> on its own tag: never the `nightly` tag or channel, never `daily-green`, no daily tests.
+#   (lint, verify, verify-static) passed on that exact commit (pending is not passed). It starts `nightly build`
+#   with kind=dev at once, which builds that commit's SDK and game side by side in one run and publishes the SDK as
+#   sdk-<sha> first (skipped when it exists), then the game as the pre-release dev-<date>-<short> on its own tag:
+#   never the `nightly` tag or channel, never `daily-green`, no daily tests.
 # tools/release_train.py decides (`--channel`): a Nightly when a pull request merged since the published Nightly
 # changed what players run (and the batch rules below), and `nightly build` (nightly-build.yml) builds, signs and
 # publishes it under the `nightly` tag and channel. RELEASES_PAUSED=1 (repository variable) stops it; so does an
@@ -86,7 +86,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   decide:
-    runs-on: ubuntu-latest
+    # Every job waits for this one: on Dyna's small runner while the repository's switch is on, as nightly-build.yml's
+    # `pick`, so a release never queues behind GitHub's runners first.
+    runs-on: ${{ vars.DYNA_CI_SELF_HOSTED == 'true' && 'dyna-small' || 'ubuntu-latest' }}
     # A publishing run may wait for its commit's gate, run again when the next push cancelled it (GATE_RERUN).
     timeout-minutes: 170
     permissions:
@@ -157,38 +159,13 @@ jobs:
             -f exception="$EXCEPTION" -f daily_run="$DAILY_RUN"
           echo "### Started \`nightly build\` on $ref for ${HEAD_SHA:0:9}" >> "$GITHUB_STEP_SUMMARY"
 
-  # Dev: the commit's SDK, built in this run by prebuilt-game-build.yml's legs and signed and published as
-  # sdk-<sha> by sdk-publish.yml from their artifacts (a dry run: throwaway key, nothing published), then the game,
-  # built and published by `nightly build` (kind dev) once the SDK is out.
-  dev-sdk:
+  # Dev: `nightly build` (kind dev) builds the commit's SDK and game in one run, side by side, and publishes the SDK
+  # (sdk-<sha>) before the game; a dry run gets a dry run (throwaway key, nothing published).
+  dev:
     needs: decide
     if: inputs.kind == 'dev' && needs.decide.outputs.release == 'true'
-    uses: ./.github/workflows/prebuilt-game-build.yml
-    with:
-      commit: ${{ needs.decide.outputs.head }}
-
-  dev-sdk-publish:
-    needs: [decide, dev-sdk]
-    # Not when sdk-<sha> exists already: then the legs built nothing (output `needed` false).
-    if: >-
-      !cancelled() && inputs.kind == 'dev' && needs.decide.outputs.release == 'true' &&
-      needs.dev-sdk.result == 'success' && needs.dev-sdk.outputs.needed == 'true'
-    permissions:
-      contents: write  # the sdk-<sha> release (its publish job; a dry run writes nothing)
-    uses: ./.github/workflows/sdk-publish.yml
-    with:
-      commit: ${{ needs.decide.outputs.head }}
-      publish: ${{ needs.decide.outputs.publish == 'true' }}
-    secrets: inherit
-
-  dev:
-    needs: [decide, dev-sdk, dev-sdk-publish]
-    # The SDK built, and its publish (or dry run) passed, or was skipped because sdk-<sha> exists.
-    if: >-
-      always() && inputs.kind == 'dev' && needs.decide.outputs.release == 'true' &&
-      needs.dev-sdk.result == 'success' &&
-      (needs.dev-sdk-publish.result == 'success' || needs.dev-sdk-publish.result == 'skipped')
-    runs-on: ubuntu-latest
+    # The whole Dev build waits for this dispatch (4m51 queued on GitHub's runners in the Dev release of 2026-11-25).
+    runs-on: ${{ vars.DYNA_CI_SELF_HOSTED == 'true' && 'dyna-small' || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       actions: write  # starts `nightly build`
@@ -204,5 +181,5 @@ jobs:
           if [ "$DRY_RUN" = true ]; then
             echo "### Dry run: started \`nightly build\` (kind dev, dry run) on ${HEAD_SHA:0:9}; a real run would publish sdk-$HEAD_SHA (unless it exists) and the pre-release $TAG" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### Published sdk-$HEAD_SHA (or it existed); started \`nightly build\` (kind dev) for $TAG" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Started \`nightly build\` (kind dev) for sdk-$HEAD_SHA (unless it exists) and $TAG" >> "$GITHUB_STEP_SUMMARY"
           fi

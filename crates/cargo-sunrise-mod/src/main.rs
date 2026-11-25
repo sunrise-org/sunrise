@@ -13,6 +13,8 @@
 //!   and `data/`; a native mod is compiled first (`dev.rs`).
 //! - `release [<version>|patch|minor|major] [--check] [--pull-request]`, `release setup`: prepare or publish a tagged
 //!   release using the registry's shared workflow (`author_release.rs`).
+//! - `collection [--check]`: check a registry collection kept in this folder and propose it from the
+//!   author's fork of the registry (`collection.rs`).
 //! - `run [--game <sunrise-client>] [--resources <folder>] [--jars <dir>] [-- <game args>]`: build, then play with
 //!   the mod.
 //! - `check [--uses] [--release <tag>]` in a mod folder: the package rules, page and render pipeline
@@ -23,7 +25,7 @@
 //! - `sdk diff <build> <build>`: what changed in the surface between two builds.
 //! - `check [<file.smod>] --build <name> [--build <name>]…`: whether the mod fits each build; exit 0 when all
 //!   do, 1 when one does not, 2 when it cannot be told.
-//! - `use-jar <path>`: list an exact original Java jar as a passive asset/data source.
+//! - `use-jar <path | modrinth-url | <project> <version>>`: list an exact original Java jar as a passive asset/data source, downloading it from Modrinth when given a Modrinth reference.
 //! - `native-build < plan.json`: compile native mods against an unpacked SDK, as the launcher does
 //!   (docs/modding/src/reference/sdk/08-native-build.md).
 //! - `native-check < plan.json`: how native mods stand against one build before anything compiles (the same page).
@@ -33,6 +35,7 @@ use sunrise_mod_package::{Content, Manifest, Package, manifest::MANIFEST};
 mod author_release;
 mod bounded;
 mod check;
+mod collection;
 mod dev;
 mod help;
 mod internals;
@@ -102,6 +105,7 @@ fn main() -> ExitCode {
         }),
         Some("build") => build_command(entry, &args[1..]).map(drop),
         Some("release") => author_release::run(entry, Path::new("."), &args[1..]),
+        Some("collection") => collection::run(Path::new("."), &args[1..]),
         Some("run") => run(&args[1..]).map_err(|e| e.to_string()),
         Some("check") => match check_args(&args[1..]) {
             Ok(Check::Folder {

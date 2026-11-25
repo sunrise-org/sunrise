@@ -1,8 +1,8 @@
 //! The mod `tools/mod_pipeline_bench.py` measures: it registers [`PIPELINES`] render pipelines,
 //! half of them textured, and draws [`QUADS_PER_LAYER`] quads through them across four depth
 //! layers in `submit_custom_geometry`, every frame, in front of the camera. The driver writes the
-//! shaders (`assets/pipeline_bench/shaders/pipeline/pNN.wgsl`) when it stages the mod, and the
-//! benchmark's game (`crates/sunrise-mod-host/examples/mod_pipeline_bench.rs`) links it.
+//! GLSL core shaders (`assets/pipeline_bench/shaders/core/pNN.{vsh,fsh}`) when it stages the mod,
+//! and the benchmark's game (`crates/sunrise-mod-host/examples/mod_pipeline_bench.rs`) links it.
 use mod_api::{
     ClientHost, ClientReloadHost, ClientResourcesReloadedEvent, ClientSetupContext,
     ClientSetupEvent, Hooks, Identifier, PipelineBlend, PipelineQuad, PipelineTexture,
@@ -23,6 +23,10 @@ const PER_LAYER: usize = PIPELINES / LAYERS;
 
 fn id(index: usize) -> Identifier {
     Identifier::parse(&format!("{ID}:p{index:02}")).expect("bench pipeline id")
+}
+
+fn shader_id(index: usize) -> Identifier {
+    Identifier::parse(&format!("{ID}:core/p{index:02}")).expect("bench shader id")
 }
 
 #[derive(Default)]
@@ -60,7 +64,8 @@ impl Hooks for Bench {
             } else {
                 PipelineBlend::Additive
             };
-            let pipeline = RenderPipeline::new(id(index), id(index), blend, WorldDepth::Tested);
+            let pipeline =
+                RenderPipeline::new(id(index), shader_id(index), blend, WorldDepth::Tested);
             event.register(if index >= PIPELINES / 2 {
                 pipeline.textured(PipelineTexture::Sprite(stone.clone()))
             } else {

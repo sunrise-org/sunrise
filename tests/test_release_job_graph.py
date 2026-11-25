@@ -230,9 +230,9 @@ class NightlyBuildPathTests(unittest.TestCase):
     def setUp(self):
         self.workflow = load("nightly-build.yml")
 
-    def run_kind(self, kind, break_glass="false", attempt="1"):
+    def run_kind(self, kind, break_glass="false", attempt="1", sdk_needed="true"):
         outputs = {"pick": {"build": "true", "publish": "true", "break_glass": break_glass},
-                   "complete": {"complete": "true"}}
+                   "complete": {"complete": "true"}, "sdk": {"needed": sdk_needed}}
         return simulate(self.workflow, {"kind": kind, "dry_run": False, "issue": ""}, outputs,
                         {"run_attempt": attempt})
 
@@ -245,6 +245,16 @@ class NightlyBuildPathTests(unittest.TestCase):
                 for job in ("exporters", "build", "complete", "sign", "publish"):
                     self.assertEqual(results[job], "success", job)
                 self.assertEqual(results["full-daily"], "success" if kind == "stable" else "skipped")
+                for job in ("sdk", "sdk-publish", "sdk-index"):
+                    self.assertEqual(results[job], "success" if kind == "dev" else "skipped", job)
+
+    def test_a_dev_build_signs_and_publishes_whether_or_not_its_sdk_had_to_be_built(self):
+        for needed, publish in (("true", "success"), ("false", "skipped")):
+            with self.subTest(sdk_needed=needed):
+                results = self.run_kind("dev", sdk_needed=needed)
+                self.assertEqual(results["sdk-publish"], publish)
+                for job in ("sdk", "sdk-index", "build", "sign", "publish"):
+                    self.assertEqual(results[job], "success", job)
 
     def test_a_break_glass_release_publishes_after_both_approvals_in_its_first_attempt_only(self):
         results = self.run_kind("stable", break_glass="true")
@@ -256,15 +266,10 @@ class NightlyBuildPathTests(unittest.TestCase):
 
 
 class ReleasePathTests(unittest.TestCase):
-    def test_a_dev_build_starts_whether_or_not_its_sdk_had_to_be_built(self):
-        workflow = load("release.yml")
-        for needed, publish in (("true", "success"), ("false", "skipped")):
-            with self.subTest(sdk_needed=needed):
-                results = simulate(workflow, {"kind": "dev", "dry_run": False},
-                                   {"decide": {"release": "true", "publish": "true"}, "dev-sdk": {"needed": needed}})
-                self.assertEqual(results["dev-sdk-publish"], publish)
-                self.assertEqual(results["dev"], "success")
-                self.assertEqual(results["nightly"], "skipped")
+    def test_a_dev_build_starts_right_after_the_decision(self):
+        results = simulate(load("release.yml"), {"kind": "dev", "dry_run": False},
+                           {"decide": {"release": "true", "publish": "true"}})
+        self.assertEqual(results, {"decide": "success", "nightly": "skipped", "dev": "success"})
 
 
 class DailyPathTests(unittest.TestCase):

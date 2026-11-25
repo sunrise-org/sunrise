@@ -68,6 +68,7 @@ Content {
                 ignited_by_lava: None,
                 replaceable: None,
                 skip_same_block_faces: None,
+                spawn_rule: None,
                 vegetation: false,
             },
             shapes: None,

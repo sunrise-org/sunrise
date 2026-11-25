@@ -570,6 +570,106 @@ impl Game<'_> {
         Ok(true)
     }
 
+    /// Removes any resident block entity in place (`Level.removeBlockEntity`,
+    /// `LevelChunk.removeBlockEntity`, `BlockEntity.setRemoved`), without changing its
+    /// block or state and without running `pre_remove_side_effects`.
+    pub(super) fn block_entity_remove(
+        &mut self,
+        entity: BlockEntityRef,
+    ) -> Result<(), BlockEntityError> {
+        let key = self
+            .native_block_entity_write_key(entity)
+            .ok_or(BlockEntityError::Stale)?;
+        let state = self.world.block(key.0, key.1, key.2);
+        let current = self
+            .world
+            .block_entities
+            .get(&key)
+            .ok_or(BlockEntityError::Stale)?;
+        let effects = super::transactions::RemovedBlockEntityEffects {
+            pos: key,
+            state,
+            sculk: matches!(current, BlockEntity::Sculk(_)),
+            jukebox: matches!(current, BlockEntity::Jukebox(_)),
+            beacon: matches!(current, BlockEntity::Beacon(_)),
+            gateway: matches!(current, BlockEntity::EndGateway(_)),
+            had_shapes: matches!(current, BlockEntity::Mod(entity) if entity.shapes().is_some()),
+        };
+        let deferred = self.journal_explicit_remove_block_entity(key, effects);
+        // LevelChunk.removeBlockEntity (i) + (iv): remove from map, retire attachments and
+        // watches, invalidate generation, and free/remove the ticker.
+        self.world.block_entities.remove(&key);
+        self.world.block_names.remove(&key);
+        self.world.forget_block_entity_source_unmodified(key);
+        self.hoppers.remove(&key);
+        if !deferred {
+            self.apply_removed_block_entity_effects(effects);
+        }
+        Ok(())
+    }
+
+    /// Runs the `LevelChunk.removeBlockEntity` / `BlockEntity.setRemoved` effects
+    /// (steps ii and iii, plus gateway cache cleanup and neighbour updates when a mod
+    /// block entity's published shapes disappeared): immediately outside a transaction,
+    /// or at root commit when deferred.
+    pub(super) fn apply_removed_block_entity_effects(
+        &mut self,
+        effects: super::transactions::RemovedBlockEntityEffects,
+    ) {
+        // (ii) Server-side game-event listener unregister (LevelChunk.java:486-493).
+        if effects.sculk {
+            self.sculk_unregister_listener(effects.pos);
+        }
+        if effects.gateway {
+            self.be_anims
+                .gateway_servers
+                .remove(&[effects.pos.0, effects.pos.1, effects.pos.2]);
+        }
+        let at = BlockPos::new(effects.pos.0, effects.pos.1, effects.pos.2);
+        // (iii) BlockEntity.setRemoved subclass effects: JukeboxBlockEntity stops its
+        // song, BeaconBlockEntity plays its deactivation sound.
+        if effects.jukebox {
+            self.level_events
+                .push(sunrise_world::level::LevelEvent::GameEvent {
+                    pos: at,
+                    event: "minecraft:jukebox_stop_play",
+                    state: Some(effects.state),
+                });
+            self.level_events
+                .push(sunrise_world::level::LevelEvent::LevelEvent {
+                    id: 1011,
+                    pos: at,
+                    data: 0,
+                    source: None,
+                });
+        }
+        if effects.beacon {
+            self.level_events
+                .push(sunrise_world::level::LevelEvent::Sound {
+                    pos: at,
+                    sound: "minecraft:block.beacon.deactivate".into(),
+                    source: None,
+                    volume: 1.0,
+                    pitch: 1.0,
+                });
+        }
+        if effects.jukebox || effects.beacon {
+            let _ = self.process_level_events();
+        }
+        // Fluids and neighbours read published shapes; notify them when shapes disappear,
+        // matching `block_entity_set_shapes(..., None)`.
+        if effects.had_shapes {
+            let state = self
+                .world
+                .block(effects.pos.0, effects.pos.1, effects.pos.2);
+            self.with_level(|b, level, ticks| {
+                let block = b.block(state);
+                b.update_neighbors_at(level, ticks, at, block);
+            });
+            let _ = self.process_level_events();
+        }
+    }
+
     /// Register a generation-bound observer in its level's keyed contents index.
     pub(super) fn block_entity_watch_contents(
         &mut self,
@@ -2014,6 +2114,464 @@ mod tests {
             game.options.dedicated = None;
             assert!(!write(game, [0, 64, 0], api_stone, flags));
             assert_eq!(game.world.block(0, 64, 0), grown);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_entity_remove_mod_and_vanilla_and_stale_cases() {
+        use super::super::Dim;
+        use super::super::native_entity_refs::tests::with_game;
+        use mod_api::BlockUpdateFlags;
+
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = game.level("minecraft:overworld").unwrap();
+            let registry = game.pack.assets.registry;
+
+            // 1. Mod block entity: leaves block & state untouched, invalidates handle, clears
+            //    name/lock/watches, does not mark chunk unsaved, does not drop items.
+            let mod_key = (1, 64, 1);
+            let mod_pos = [1, 64, 1];
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            game.world.set(1, 64, 1, stone).unwrap();
+            let mut mod_be = ModBlockEntity::new(
+                "test:holder".into(),
+                ModBlockEntityFields {
+                    nbt: compound("{count:9}"),
+                    ..Default::default()
+                },
+            );
+            *mod_be.item_slot_mut(0) = Some(ItemStack::new("minecraft:diamond", 4));
+            game.world
+                .block_entities
+                .insert(mod_key, BlockEntity::Mod(Box::new(mod_be)));
+            let mod_ref = game.block_entity(level, mod_pos).unwrap();
+            game.world
+                .block_names
+                .insert(mod_key, Tag::String("Holder".into()));
+            assert_eq!(mod_ref.set_lock(game, Some(Compound::new())), Ok(true));
+            game.world.modified.clear();
+            game.dropped.clear();
+
+            assert_eq!(mod_ref.remove(game), Ok(()));
+            assert_eq!(game.world.block(1, 64, 1), stone);
+            assert!(game.block_entity(level, mod_pos).is_none());
+            assert_eq!(mod_ref.remove(game), Err(BlockEntityError::Stale));
+            assert_eq!(mod_ref.name(game), None);
+            assert_eq!(mod_ref.lock(game), None);
+            assert!(!game.world.block_names.contains_key(&mod_key));
+            assert!(game.world.block_lock(mod_key).is_none());
+            assert!(game.dropped.is_empty(), "preRemoveSideEffects must not run");
+            assert!(
+                !game.world.modified.contains(&(0, 0)),
+                "LevelChunk.removeBlockEntity does not mark the chunk unsaved"
+            );
+
+            // 2. Vanilla chest: leaves chest block untouched, does not drop contents, does not
+            //    mark chunk modified, and next container access creates a fresh empty entity.
+            let chest_key = (2, 64, 1);
+            let chest_pos = [2, 64, 1];
+            let chest_state = registry.default_state("minecraft:chest").unwrap();
+            game.world.set(2, 64, 1, chest_state).unwrap();
+            let mut chest_slots = vec![None; 27];
+            chest_slots[0] = Some(ItemStack::new("minecraft:diamond", 3));
+            game.world
+                .block_entities
+                .insert(chest_key, BlockEntity::Chest(chest_slots));
+            let chest_ref = game.block_entity(level, chest_pos).unwrap();
+            assert_eq!(chest_ref.set_name(game, Some("Stash")), Ok(true));
+            game.world.modified.clear();
+            game.dropped.clear();
+
+            assert_eq!(chest_ref.remove(game), Ok(()));
+            assert_eq!(game.world.block(2, 64, 1), chest_state);
+            assert!(game.block_entity(level, chest_pos).is_none());
+            assert_eq!(chest_ref.remove(game), Err(BlockEntityError::Stale));
+            assert!(game.dropped.is_empty(), "chest contents must not drop");
+            assert!(!game.world.modified.contains(&(0, 0)));
+
+            // Accessing the still-chest block recreates a fresh, empty block entity.
+            game.spectator_open_menu(chest_pos);
+            let fresh_chest = game
+                .block_entity(level, chest_pos)
+                .expect("accessing an entity-bearing chest creates a fresh entity");
+            assert_ne!(fresh_chest, chest_ref);
+            let fresh_data = fresh_chest.data(game).unwrap();
+            assert!(
+                match fresh_data.get(&"Items".into()) {
+                    None => true,
+                    Some(Tag::List(items)) => items.is_empty(),
+                    _ => false,
+                },
+                "freshly recreated chest must be empty, got {fresh_data:?}"
+            );
+
+            // 3. Same-block property change followed by remove keeps the new property state
+            //    while removing the kept block entity.
+            let prop_pos = [3, 64, 1];
+            game.world.set(3, 64, 1, chest_state).unwrap();
+            game.world
+                .block_entities
+                .insert((3, 64, 1), BlockEntity::Chest(vec![None; 27]));
+            assert_eq!(
+                level.set_block_property(game, prop_pos, "facing", "east", BlockUpdateFlags::NONE),
+                Ok(true)
+            );
+            let after_prop_state = game.world.block(3, 64, 1);
+            assert_ne!(after_prop_state, chest_state);
+            let prop_ref = game.block_entity(level, prop_pos).unwrap();
+            assert_eq!(prop_ref.remove(game), Ok(()));
+            assert_eq!(game.world.block(3, 64, 1), after_prop_state);
+            assert!(game.block_entity(level, prop_pos).is_none());
+
+            // 4. Jukebox setRemoved: posts jukebox_stop_play and emits level event 1011.
+            let jukebox_pos = [4, 64, 1];
+            let jukebox_state = registry.default_state("minecraft:jukebox").unwrap();
+            game.world.set(4, 64, 1, jukebox_state).unwrap();
+            game.world.block_entities.insert(
+                (4, 64, 1),
+                BlockEntity::Jukebox(sunrise_client::containers::Jukebox::default()),
+            );
+            let jukebox_ref = game.block_entity(level, jukebox_pos).unwrap();
+            game.audio.capture = Some(Vec::new());
+            game.lan_events.clear();
+            crate::game::sculk::TEST_POSTED_EVENTS.with(|e| *e.borrow_mut() = Some(Vec::new()));
+            assert_eq!(jukebox_ref.remove(game), Ok(()));
+            let posted = crate::game::sculk::TEST_POSTED_EVENTS
+                .with(|e| e.borrow_mut().take().unwrap_or_default());
+            assert!(
+                posted
+                    .iter()
+                    .any(|(ev, _, _)| *ev == "minecraft:jukebox_stop_play"),
+                "removing a jukebox must post jukebox_stop_play, got {posted:?}"
+            );
+            assert!(
+                game.lan_events
+                    .iter()
+                    .any(|e| e.kind == 1011 && e.pos == jukebox_pos),
+                "removing a jukebox must emit level event 1011, got {:?}",
+                game.lan_events
+            );
+
+            // 5. Beacon setRemoved: plays block.beacon.deactivate sound.
+            let beacon_pos = [5, 64, 1];
+            let beacon_state = registry.default_state("minecraft:beacon").unwrap();
+            game.world.set(5, 64, 1, beacon_state).unwrap();
+            game.world
+                .block_entities
+                .insert((5, 64, 1), BlockEntity::Beacon(Default::default()));
+            let beacon_ref = game.block_entity(level, beacon_pos).unwrap();
+            game.audio.capture = Some(Vec::new());
+            assert_eq!(beacon_ref.remove(game), Ok(()));
+            let sounds = game.audio.capture.take().unwrap_or_default();
+            assert!(
+                sounds
+                    .iter()
+                    .any(|s| s.event == "minecraft:block.beacon.deactivate"),
+                "removing a beacon must play block.beacon.deactivate, got {sounds:?}"
+            );
+
+            // 6. Stale, taken-out, unloaded, parked-level, and client-side refusals.
+            let refuse_key = (6, 64, 1);
+            let refuse_pos = [6, 64, 1];
+            game.world
+                .block_entities
+                .insert(refuse_key, BlockEntity::Chest(vec![None; 27]));
+            let refuse_ref = game.block_entity(level, refuse_pos).unwrap();
+            let (lease, taken) = game.world.block_entities.take(&refuse_key).unwrap();
+            assert_eq!(refuse_ref.remove(game), Err(BlockEntityError::Stale));
+            assert!(game.world.block_entities.put(lease, taken));
+
+            // Parked level is not writable in place -> Stale.
+            game.enter_command_level(Dim::Nether).unwrap();
+            assert_eq!(refuse_ref.remove(game), Err(BlockEntityError::Stale));
+            game.enter_command_level(Dim::Overworld).unwrap();
+
+            // Unloaded chunk -> Stale.
+            game.world.chunks.remove(&(0, 0));
+            assert_eq!(refuse_ref.remove(game), Err(BlockEntityError::Stale));
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+
+            // Client side -> Stale.
+            game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+            game.options.dedicated = None;
+            assert_eq!(refuse_ref.remove(game), Err(BlockEntityError::Stale));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_entity_remove_unregisters_sculk_sensor_listener() {
+        use super::super::native_entity_refs::tests::with_game;
+
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.build_registries();
+            game.set_allow_commands(true);
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.block_ticks
+                .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
+                .unwrap();
+            let level = game.level("minecraft:overworld").unwrap();
+
+            let active_pos = [4, 64, 4];
+            let removed_pos = [8, 64, 4];
+            assert!(game.run_command("setblock 4 64 4 sculk_sensor strict"));
+            assert!(game.run_command("setblock 8 64 4 sculk_sensor strict"));
+            game.sculk_prepare();
+            game.sculk_sync_index();
+
+            let removed_ref = game.block_entity(level, removed_pos).unwrap();
+            assert_eq!(removed_ref.remove(game), Ok(()));
+            assert!(game.block_entity(level, removed_pos).is_none());
+
+            // Post a vibration equidistant from both sensors: the live one hears it,
+            // while the sensor whose block entity was removed does not.
+            game.post_block_game_event("minecraft:block_place", [6, 64, 4], None, None);
+            let live_has_vibration = matches!(
+                game.world.block_entities.get(&(4, 64, 4)),
+                Some(BlockEntity::Sculk(s)) if s.vibration.selector.current.is_some()
+            );
+            assert!(
+                live_has_vibration,
+                "live sculk sensor must still receive game events"
+            );
+            assert!(
+                game.world.block_entities.get(&(8, 64, 4)).is_none(),
+                "removed sculk sensor must stay removed and not receive game events"
+            );
+            let phase = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(8, 64, 4))
+                .and_then(|s| s.properties.get("sculk_sensor_phase"))
+                .map(String::as_str);
+            assert_eq!(phase, Some("inactive"));
+            assert!(game.block_entity(level, active_pos).is_some());
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_entity_remove_transactions_and_self_removal_in_tick() {
+        use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
+        use crate::game::api_values::TryIntoApi;
+        use mod_api::{
+            self, BlockEntityPart, BlockEntityTickEvent, BlockPart, BlockUpdateFlags, Hooks,
+            ModEntry, Mods, Registrar, RegistrationContext,
+        };
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use sunrise_client::containers::PublishedShapes;
+
+        if run_fresh_cases(
+            "game::native_block_entity_refs::tests::block_entity_remove_transactions_and_self_removal_in_tick",
+            "SUNRISE_BLOCK_ENTITY_REMOVE_TX_CHILD",
+            &["tx_and_tick"],
+        ) {
+            return;
+        }
+
+        const BLOCK: &str = "be_remove_test:ticker";
+        #[derive(Clone, Default)]
+        struct SelfRemovingTicker {
+            ticks: Arc<AtomicU32>,
+            after_remove_stale: Arc<AtomicU32>,
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for SelfRemovingTicker {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                let kind = r.block_entity_type("ticker").blocks(&[BLOCK]).build();
+                r.block_entity_part(&kind, self.clone()).unwrap();
+            }
+            fn blocks(&self, _: &RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
+                event
+                    .register(mod_api::Block::new(BLOCK, "minecraft:stone"))
+                    .unwrap();
+            }
+        }
+        #[mod_api::sunrise_part]
+        impl BlockPart for SelfRemovingTicker {}
+        #[mod_api::sunrise_part]
+        impl BlockEntityPart for SelfRemovingTicker {
+            fn block_entity_tick(&self, event: &mut BlockEntityTickEvent<'_>) {
+                self.ticks.fetch_add(1, Ordering::Relaxed);
+                let handle = event.subject.with_view(|view| view.handle()).unwrap();
+                let host = event.subject.host();
+                handle.remove(host).unwrap();
+                if event.subject.with_view(|view| view.handle()).is_none() {
+                    self.after_remove_stale.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let part = SelfRemovingTicker::default();
+        let mods: Mods = vec![ModEntry::new("be_remove_test", Box::new(part.clone()))].into();
+        mod_platform::__private::install(mods.clone());
+        crate::game::api_values::install_parts(&mods).unwrap();
+        let base = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let root = crate::game::mods::content_root(&base, &Default::default()).unwrap();
+
+        with_game_at(root.prepared().to_path_buf(), |game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = game.level("minecraft:overworld").unwrap();
+            let registry = game.pack.assets.registry;
+            let chest = registry.default_state("minecraft:chest").unwrap();
+            let barrel = registry.default_state("minecraft:barrel").unwrap();
+            let air = registry.default_state("minecraft:air").unwrap();
+            let beacon = registry.default_state("minecraft:beacon").unwrap();
+            let api_air = air.try_into_api().unwrap();
+            let api_barrel = barrel.try_into_api().unwrap();
+
+            // 1. Transaction abort restores entity, generation, name, lock, published shapes,
+            //    and never runs deferred setRemoved effects (beacon sound).
+            let abort_key = (1, 64, 1);
+            let abort_pos = [1, 64, 1];
+            let mut mod_be = ModBlockEntity::new(
+                "be_remove_test:ticker".into(),
+                ModBlockEntityFields {
+                    nbt: compound("{kept:1}"),
+                    ..Default::default()
+                },
+            );
+            let published = PublishedShapes::new(BlockEntityShapes {
+                outline: vec![[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]],
+                collision: vec![[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]],
+            })
+            .unwrap();
+            mod_be.set_shapes(Some(Arc::new(published)));
+            game.world
+                .block_entities
+                .insert(abort_key, BlockEntity::Mod(Box::new(mod_be)));
+            let abort_ref = game.block_entity(level, abort_pos).unwrap();
+            game.world
+                .block_names
+                .insert(abort_key, Tag::String("KeepMe".into()));
+            assert_eq!(abort_ref.set_lock(game, Some(Compound::new())), Ok(true));
+
+            let beacon_pos = [2, 64, 1];
+            game.world.set(2, 64, 1, beacon).unwrap();
+            game.world
+                .block_entities
+                .insert((2, 64, 1), BlockEntity::Beacon(Default::default()));
+            let beacon_ref = game.block_entity(level, beacon_pos).unwrap();
+            game.audio.capture = Some(Vec::new());
+
+            let host: &mut dyn ServerHost = game;
+            let aborted: Result<(), TransactionError<()>> = host.transaction(|host, _| {
+                abort_ref.remove(host).unwrap();
+                beacon_ref.remove(host).unwrap();
+                assert!(host.block_entity(level, abort_pos).is_none());
+                assert_eq!(abort_ref.remove(host), Err(BlockEntityError::Stale));
+                Err(())
+            });
+            assert_eq!(aborted, Err(TransactionError::Aborted(())));
+            assert_eq!(game.block_entity(level, abort_pos), Some(abort_ref));
+            assert_eq!(abort_ref.name(game).as_deref(), Some("KeepMe"));
+            assert!(abort_ref.lock(game).is_some());
+            assert!(matches!(
+                game.world.block_entities.get(&abort_key),
+                Some(BlockEntity::Mod(m)) if m.shapes().is_some()
+            ));
+            assert_eq!(game.block_entity(level, beacon_pos), Some(beacon_ref));
+            let sounds = game.audio.capture.take().unwrap_or_default();
+            assert!(
+                sounds.is_empty(),
+                "aborted beacon removal must not emit deactivate sound, got {sounds:?}"
+            );
+
+            // 2. Transaction commit: remove followed by set_block(air) skips preRemoveSideEffects.
+            let suppress_pos = [3, 64, 1];
+            game.world.set(3, 64, 1, chest).unwrap();
+            let mut chest_slots = vec![None; 27];
+            chest_slots[0] = Some(ItemStack::new("minecraft:emerald", 5));
+            game.world
+                .block_entities
+                .insert((3, 64, 1), BlockEntity::Chest(chest_slots));
+            let suppress_ref = game.block_entity(level, suppress_pos).unwrap();
+            game.dropped.clear();
+
+            let host: &mut dyn ServerHost = game;
+            let committed: Result<(), TransactionError<()>> = host.transaction(|host, _| {
+                suppress_ref.remove(host).unwrap();
+                assert_eq!(
+                    level.set_block(host, suppress_pos, api_air, BlockUpdateFlags::NEIGHBORS),
+                    Ok(true)
+                );
+                Ok(())
+            });
+            assert_eq!(committed, Ok(()));
+            assert_eq!(game.world.block(3, 64, 1), air);
+            assert!(game.block_entity(level, suppress_pos).is_none());
+            assert!(
+                game.dropped.is_empty(),
+                "remove followed by set_block(air) in one tx must not drop chest items"
+            );
+
+            // 3. Transaction commit: set_block(barrel) followed by barrel.remove() still replays
+            //    the first block's (chest's) preRemoveSideEffects and leaves the barrel entity gone.
+            let replay_pos = [4, 64, 1];
+            game.world.set(4, 64, 1, chest).unwrap();
+            let mut replay_slots = vec![None; 27];
+            replay_slots[0] = Some(ItemStack::new("minecraft:gold_ingot", 2));
+            game.world
+                .block_entities
+                .insert((4, 64, 1), BlockEntity::Chest(replay_slots));
+            game.dropped.clear();
+
+            let host: &mut dyn ServerHost = game;
+            let committed: Result<(), TransactionError<()>> = host.transaction(|host, _| {
+                assert_eq!(
+                    level.set_block(host, replay_pos, api_barrel, BlockUpdateFlags::NEIGHBORS),
+                    Ok(true)
+                );
+                let barrel_ref = host
+                    .block_entity(level, replay_pos)
+                    .expect("set_block(barrel) must create barrel entity");
+                barrel_ref.remove(host).unwrap();
+                assert!(host.block_entity(level, replay_pos).is_none());
+                Ok(())
+            });
+            assert_eq!(committed, Ok(()));
+            assert_eq!(game.world.block(4, 64, 1), barrel);
+            assert!(
+                game.block_entity(level, replay_pos).is_none(),
+                "barrel block entity removed after set_block must remain removed at commit"
+            );
+            assert!(
+                game.dropped
+                    .iter()
+                    .any(|item| &*item.stack.item == "minecraft:gold_ingot"),
+                "first chest's preRemoveSideEffects must still replay at commit"
+            );
+
+            // 4. Self-removal inside block_entity_tick stops further loans and removes the ticker.
+            let tick_pos = [5, 64, 1];
+            let ticker_state = registry.default_state(BLOCK).unwrap();
+            let api_ticker = ticker_state.try_into_api().unwrap();
+            assert_eq!(
+                level.set_block(game, tick_pos, api_ticker, BlockUpdateFlags::NONE),
+                Ok(true)
+            );
+            assert!(game.block_entity(level, tick_pos).is_some());
+            game.tick_block_entities_with(&mut ()).unwrap();
+            assert_eq!(part.ticks.load(Ordering::Relaxed), 1);
+            assert_eq!(part.after_remove_stale.load(Ordering::Relaxed), 1);
+            assert!(game.block_entity(level, tick_pos).is_none());
+            // Subsequent ticks do not invoke the removed ticker again.
+            game.tick_block_entities_with(&mut ()).unwrap();
+            assert_eq!(part.ticks.load(Ordering::Relaxed), 1);
         });
     }
 }

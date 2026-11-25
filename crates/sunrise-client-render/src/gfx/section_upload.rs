@@ -161,6 +161,40 @@ pub struct BlockEntityInRange<'a> {
 }
 
 impl Renderer {
+    /// Whether `upload_mesh` puts `mesh`'s solid quads in the compact layout: where the
+    /// mesher made it and the passes read it (`packed_quads`).
+    fn uploads_packed(&self, mesh: &SectionMesh) -> bool {
+        self.packed_quads && !mesh.packed.is_empty() && mesh.solid.len() >= 4
+    }
+    /// The bytes `upload` copies for `mesh`, for the player's upload budget: its vertices at
+    /// their own size (`TerrainVertex`, as the budget has always counted them, compact records
+    /// included, though those copy about a quarter of it), and what the arenas keep beside them
+    /// as `upload_mesh` writes it: each
+    /// vertex's normal-stream entry where a pack's per-section draws read the stream
+    /// (`Arena::stream_bytes`), and each slot's source where draws read sources
+    /// (`Arena::source_bytes`).
+    pub fn mesh_upload_bytes(&self, mesh: &SectionMesh) -> u64 {
+        let stride = std::mem::size_of::<TerrainVertex>() as u64;
+        let (solid, translucent) = (mesh.solid.len() as u64, mesh.translucent.len() as u64);
+        let packed = self.uploads_packed(mesh);
+        let solid_slots = if packed {
+            mesh.packed.len() as u64
+        } else {
+            solid
+        };
+        let (names, sources) = solid_sources(mesh, packed);
+        let translucent_arena = self.translucent_arena.as_ref().unwrap_or(&self.arena);
+        let beside = self.arena.source_bytes(names, sources.len(), solid_slots)
+            + translucent_arena.source_bytes(
+                arena::QuadSlots::vertices(translucent),
+                mesh.translucent_sources.len(),
+                translucent,
+            )
+            // No stream beside compact records (`upload_mesh`).
+            + if packed { 0 } else { self.arena.stream_bytes(solid) }
+            + translucent_arena.stream_bytes(translucent);
+        (solid + translucent) * stride + beside
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         if let Some(copies) = &mut self.capture_copies {
             copies.section(key, mesh);
@@ -216,6 +250,7 @@ impl Renderer {
             self.index_quads = max.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
+        let packed = self.uploads_packed(mesh);
         let encoder = self.section_copies.get_or_insert_with(|| {
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -226,7 +261,6 @@ impl Renderer {
         // an arena of their own. With video and system memory both full, the
         // section is not drawn. The solid ones in the compact layout where the
         // mesher made it and the passes read it (`packed_quads`).
-        let packed = self.packed_quads && !mesh.packed.is_empty() && solid > 0;
         let solid_slots = if packed {
             mesh.packed.len() as u64
         } else {
@@ -297,9 +331,11 @@ impl Renderer {
             id
         });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
+        // The sources' bytes count toward the submission threshold as the vertices' do.
+        let mut source_bytes = 0;
         if solid_slots > 0 {
             let (names, sources) = solid_sources(mesh, packed);
-            self.arena.write_sources(
+            source_bytes += self.arena.write_sources(
                 &self.device,
                 encoder,
                 &mut self.section_uploads,
@@ -309,7 +345,8 @@ impl Renderer {
             );
         }
         if translucent_vertices > 0 {
-            self.translucent_arena
+            source_bytes += self
+                .translucent_arena
                 .as_mut()
                 .unwrap_or(&mut self.arena)
                 .write_sources(
@@ -321,15 +358,20 @@ impl Renderer {
                     &mesh.translucent_sources,
                 );
         }
+        self.uploaded_bytes += source_bytes;
+        self.section_copy_bytes += source_bytes;
         // The normal stream beside the vertices, where the pack's per-section draws read one.
         // Never beside compact records: no per-section pack draw reads them
         // (`follow_packed_layout`).
+        // With each quad's block id under the running pack's `block.properties`.
+        let ids = self.pack_block_ids.as_deref().map_or(&[][..], |ids| &ids.0);
         let mut normal_bytes = 0;
         if !packed {
             let uploads = &mut self.section_uploads;
-            normal_bytes += self
-                .arena
-                .write_normals(encoder, uploads, (page, start), &mesh.solid);
+            let (vertices, sources) = (&mesh.solid, &mesh.solid_sources);
+            normal_bytes +=
+                self.arena
+                    .write_normals(encoder, uploads, (page, start), vertices, sources, ids);
         }
         normal_bytes += self
             .translucent_arena
@@ -340,6 +382,8 @@ impl Renderer {
                 &mut self.section_uploads,
                 translucent_at,
                 &mesh.translucent,
+                &mesh.translucent_sources,
+                ids,
             );
         // The stream's bytes count toward the submission threshold as the vertices' do.
         self.uploaded_bytes += normal_bytes;
@@ -999,12 +1043,18 @@ impl Renderer {
         }
     }
     /// Keeps the section arena's quad sources while meshes carry them for a `shaders/` pack
-    /// (`on`, the game's `shader_pack` meshing switch) and flat draws can read them
+    /// (`on`, the game's `shader_pack` meshing switch) and flat draws, or the pack's
+    /// per-section draws that read the pages (`pack_reads_pages`), can read them
     /// (`pack_atlas`'s `hz_sources`); none otherwise. Switching off frees every sidecar, and
     /// meshes still carrying a dropped pack's sources are kept without them. The translucent
     /// arena, which no draw binds as storage, never keeps any.
     pub fn keep_pack_sources(&mut self, on: bool) {
-        let read = on && self.flat.is_some();
+        self.pack_sources_on = on;
+        self.follow_pack_sources();
+    }
+    /// Has the section arena keep its quad sources or not, as `keep_pack_sources` says.
+    fn follow_pack_sources(&mut self) {
+        let read = self.pack_sources_on && (self.flat.is_some() || self.pack_reads_pages());
         if read != self.arena.sources_read() {
             let released = self.arena.read_sources(read);
             self.graveyard.add(released);
@@ -1041,12 +1091,14 @@ impl Renderer {
     /// pack that runs, and gives its pages and the translucent arena's a normal stream while
     /// that pack's per-section draws read one (`pack_reads_normals`), before a world frame draws
     /// them. A change drops every section and far tile, as a new renderer has none: the game
-    /// meshes them again (`take_dropped_sections`).
+    /// meshes them again (`take_dropped_sections`). The arena keeps its quad sources as
+    /// `keep_pack_sources` says for that pack.
     pub(super) fn follow_arena_layout(&mut self) {
         let storage = arena_storage(self.flat.is_some(), self.pack_reads_pages());
         let normals = self.pack_reads_normals();
         let normals_changed = normals != self.arena.has_normals();
         if storage == self.arena_storage && !normals_changed {
+            self.follow_pack_sources();
             return;
         }
         log::info!(
@@ -1061,9 +1113,6 @@ impl Renderer {
         self.sections_dropped |=
             self.sections.len() > 0 || !self.lods.is_empty() || self.lod_pending.is_some();
         self.clear_sections(self.layout);
-        // Flat draws read the new arena's quad sources as they did the old one's
-        // (`keep_pack_sources`).
-        let sources_read = self.arena.sources_read();
         self.arena = arena::Arena::new(
             &self.device,
             std::mem::size_of::<TerrainVertex>() as u64,
@@ -1071,10 +1120,11 @@ impl Renderer {
             storage,
         )
         .with_normals(normals);
-        if sources_read {
-            self.arena.read_sources(true);
-        }
         self.arena_storage = storage;
+        // The new arena keeps quad sources from its first upload where draws read them, flat
+        // ones as they did the old arena's, or the pack's per-section ones reading the pages
+        // (`keep_pack_sources`).
+        self.follow_pack_sources();
         if normals_changed && self.translucent_arena.is_some() {
             (self.sorted_indices, self.translucent_arena) = arena::Arena::translucent_arenas(
                 &self.device,

@@ -141,3 +141,40 @@ the full list.
   `pack_entities::gpu_span_tests::an_entitys_native_terrain_quads_draw_in_the_entity_programs`
   (`sunrise-render-shaderpack`), and `pack_block_entity_runs` and
   `gfx::pack_post::block_atlas_group_tests::a_resize_drops_the_portal_and_block_atlas_groups` (`sunrise-client-render`).
+
+## D-5: which faces a `layer.*` rule moves, and what wins
+
+- **Open point:** spec rev 1, 4.2, lines 590-593 say `layer.solid`, `layer.cutout`, E `layer.cutout_mipped` and
+  `layer.translucent` in `block.properties` "move blocks to another terrain layer", and that full opaque cubes cannot
+  move `[OF-SH]` (followed as written: such a state keeps its layer, with a load note naming the rule and the states;
+  the issue's own control moves one, so that conflict is asked in `questions/Q-001.md`). 4.1, lines 575-579 give the
+  names, state filters and E `%<tag>` entries, and say that "individual entries win over tags when both match". The
+  spec doesn't say which rule wins when several match one state, what `cutout_mipped` is where the terrain has one
+  alpha-tested pass, whether a rule also moves the fluid a block holds, or whether it wins over the options that choose
+  a block's layer (`cutoutLeaves`, `opaqueIce`). None of these is one of section 9's open questions.
+- **Decision:**
+  - A rule naming the block wins over a rule naming its tag; then the rule with the most state filters that all match;
+    then the first in the file. This is the order 4.1 gives entries, and the one `block.<id>` lines already use.
+  - `layer.cutout_mipped` is `layer.cutout`: the terrain has one alpha-tested pass, the mesher's solid quads without
+    `OPAQUE_LAYER` (`Mesher::quad_as`).
+  - An unknown `layer.<name>` and a word that is no block name are skipped with a load note naming them.
+  - A rule moves the state's own model faces, with their connected-texture tiles and overlays, and wins over the
+    face's own sprite and over `cutoutLeaves` and `opaqueIce`. Fluid faces (a liquid block, the water of a waterlogged
+    block), the models a mod attaches to a block and a mod's section geometry keep their own layer.
+  - Solid draws with no alpha test and no blending; cutout keeps the alpha test even where every texel is opaque;
+    translucent blends and is drawn by `gbuffers_water` (and in the shadow pass by `shadow_water`).
+  - Without a pack, with a pack without `layer.*` rules, and with rules that move no state of the game, every state
+    keeps its own layer and the terrain meshes as without them.
+- **Reason:** the precedence is the one 4.1 states and the id rules use, so one file reads one way. The options and
+  the face's sprite are the game's own choices of a layer, which the pack's rule replaces. The fluid has a layer of its
+  own, the fluid's, which no rule names.
+- **Tests:** `block_ids::tests::layer_rules_move_named_states_and_tags` and `block_ids::tests::layer_rule_precedence`
+  (`sunrise-shaders`); the daily `mesher::layer_override_tests::translucent_moves_only_the_named_state`,
+  `mesher::layer_override_tests::cutout_clears_the_opaque_bit_of_the_named_state_only`,
+  `mesher::layer_override_tests::rules_win_over_the_sprite_and_the_options` and
+  `mesher::layer_override_tests::no_moved_state_meshes_to_the_byte`, and
+  `mesher::quarter_tests::a_tile_over_a_moved_face_takes_its_layer` (`sunrise-client-render`);
+  `game::pack_layers::tests::states_get_their_rules_layer_by_id`,
+  `game::pack_layers::tests::full_opaque_cubes_keep_their_layer_with_a_note` and the daily
+  `game::pack_layer_frame_tests::layer_rules_move_states_between_the_packs_terrain_programs` and
+  `game::pack_layer_frame_tests::layer_rules_move_states_between_the_packs_shadow_programs` (`sunrise-client`).

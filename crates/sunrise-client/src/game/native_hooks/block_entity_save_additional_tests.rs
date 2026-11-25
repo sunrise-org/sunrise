@@ -457,7 +457,7 @@ mod tests {
     impl Hooks for BreakObserver {
         fn player_destroyed_block(
             &self,
-            _: &mut dyn mod_api::ServerHost,
+            _: mod_api::HostSide<'_>,
             event: &mut mod_api::PlayerDestroyedBlockEvent,
         ) {
             let stored = event

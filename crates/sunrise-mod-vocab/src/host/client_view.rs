@@ -58,6 +58,13 @@ pub trait ClientViewClientHost {
     /// on the title screen.
     fn clock(&self) -> Option<Clock>;
     /// Side: client.
+    /// The tick rate state of the world this window shows (`ClientLevel.tickRateManager()`):
+    /// its rate, whether it is frozen and the frozen steps left to run, as the server last
+    /// sent them (`ClientPacketListener.handleTickingState` / `handleTickingStep`). It is there
+    /// from `Login`, when the client level is made, before the player is placed; none outside
+    /// a client world (the title screen, before login, or while reconfiguring).
+    fn tick_rate(&self) -> Option<ClientTickRate>;
+    /// Side: client.
     /// The first block along the view within `distance`, in loaded chunks only;
     /// `None` on a miss or a nonpositive or non-finite `distance`.
     fn raycast(&self, distance: f32) -> Option<Hit>;

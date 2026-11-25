@@ -336,6 +336,7 @@ mod is_piglin_currency;
 mod is_possible_to_respawn_in;
 mod is_primary_item_for;
 mod is_shearable;
+mod is_valid_book_shelf;
 mod item_after_vertical_collision;
 mod item_attack;
 mod item_container;

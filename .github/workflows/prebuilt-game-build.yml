@@ -11,6 +11,10 @@ on:
         description: Which legs to build, `all`, `linux` (both Linux legs) or `windows-macos`
         type: string
         default: all
+      dev:
+        description: A Dev release's build (nightly-build.yml kind dev), whose macOS leg BLACKSMITH_DEV_MACOS may move
+        type: boolean
+        default: false
     outputs:
       needed:
         description: Whether sdk-<sha> was missing, so this run built it
@@ -69,7 +73,12 @@ jobs:
       matrix: ${{ fromJSON(needs.fresh.outputs.matrix) }}
     # Blacksmith's machines (owner, 2026-11-18): 16 vCPUs for Linux and Windows, the M4 Mac, the same images as
     # GitHub's with the Rust cache beside them. The repository variable BLACKSMITH=off puts every leg back on `os`.
-    runs-on: ${{ vars.BLACKSMITH != 'off' && matrix.blacksmith || matrix.os }}
+    # BLACKSMITH_DEV_MACOS=on (the owner's switch; unset or anything else is off) puts a Dev release's macOS leg alone
+    # back on Blacksmith while BLACKSMITH stays off: the leg the whole Dev release waits for (88m36 on GitHub's
+    # macos-15 on 2026-11-25).
+    runs-on: >-
+      ${{ (vars.BLACKSMITH != 'off' || (inputs.dev && matrix.name == 'macos' && vars.BLACKSMITH_DEV_MACOS == 'on'))
+      && matrix.blacksmith || matrix.os }}
     # Hosted macOS runner speed varies: 41 to 90+ minutes observed. Windows without its build cache (the first run after
     # a lock or toolchain change saves it) takes over 85 minutes in "Build and collect" alone.
     timeout-minutes: ${{ (matrix.os == 'macos-15' && 120) || (matrix.os == 'windows-latest' && 180) || 90 }}
@@ -132,10 +141,13 @@ jobs:
         id: linkage
         if: matrix.linkage
         run: python tools/native_dylib_probe.py --sdk prebuilt --output "$RUNNER_TEMP/native-dylib-probe"
+      # The archive is the SDK's api-source.tar.xz: sdk-publish.yml's index takes it from here rather than building
+      # the same bytes again (same commit, same bytes: tools/sdk_api_source.py).
       - name: The starter mod checks against the API source alone
         if: matrix.name == 'linux'
         run: |
           python tools/sdk_api_source.py build "$RUNNER_TEMP/api-source"
+          python tools/sdk_api_source.py archive "$RUNNER_TEMP/api-source" "$RUNNER_TEMP/api-source.tar.xz"
           python tools/sdk_api_source.py check "$RUNNER_TEMP/api-source" --scratch "$RUNNER_TEMP/sdk-api-source-check"
       - name: Probe command log
         if: failure() && steps.linkage.outcome == 'failure'
@@ -171,6 +183,17 @@ jobs:
         with:
           name: sdk-stage-tool
           path: target/prebuilt/tools/release/sunrise-stage
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+      # The API source archive the check above built and checked, for sdk-publish.yml's index, which built it again
+      # (1m46 of the Dev release of 2026-11-25). Not a leg asset: its name is outside `sdk-leg-*`.
+      - name: The API source for the index
+        uses: actions/upload-artifact@v4
+        if: matrix.name == 'linux'
+        with:
+          name: sdk-api-source
+          path: ${{ runner.temp }}/api-source.tar.xz
           if-no-files-found: error
           retention-days: 1
           overwrite: true

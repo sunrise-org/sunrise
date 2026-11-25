@@ -17,7 +17,10 @@
 use crate::{
     Result,
     blocks::MAP_COLORS,
-    mobs::data::{PartAnswers, PathComputationType, VALID_EMPTY_SPAWN},
+    mobs::data::{
+        PartAnswers, PathComputationType, STURDY_TOP, VALID_EMPTY_SPAWN, VALID_SPAWN,
+        VALID_SPAWN_ICE, VALID_SPAWN_LEAVES,
+    },
 };
 use mod_api::{
     __private::{DeclarationKind, DeclarationRefusal},
@@ -37,7 +40,8 @@ use sunrise_core::{
 };
 use sunrise_mod_package::content::{
     Block, BlockEntityType, BlockShapes, Content, ContextCollision, CreativeTab, EntityType,
-    FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, StateProperty, StateValues,
+    FluidLook, Item, LocalDeclaration, MenuType, MobEffect, Rarity, SpawnRule, StateProperty,
+    StateValues,
 };
 use sunrise_mod_package::manifest::{
     JarInputsError, JarRef, collect_jar_requirements, missing_jars,
@@ -817,6 +821,9 @@ struct NewBlock<'a> {
     /// The template's `forceSolidOn` (`Some(true)`) or `forceSolidOff` (`Some(false)`), which keeps
     /// its answer over the declared shape's.
     force_solid: Option<bool>,
+    /// The template's light emission per state in registry order, read where a declared
+    /// `spawn_rule` of `default` needs it and the block declares no light of its own.
+    template_emission: Vec<u8>,
     context_shapes: BTreeMap<String, Vec<VoxelShape>>,
     state_light: Option<Vec<u8>>,
     default: u32,
@@ -1731,6 +1738,7 @@ impl<'a> Plan<'a> {
                         .unwrap_or(SkylightRule::Shape),
                     custom_dampening: custom_dampening.contains(&decl.template),
                     force_solid: force_solid.get(&decl.template).copied(),
+                    template_emission: Vec::new(),
                     context_shapes,
                     state_light,
                     default,
@@ -1816,6 +1824,18 @@ impl<'a> Plan<'a> {
                     })
                 })
                 .collect();
+            if p.spawn_rule == Some(SpawnRule::Default) {
+                b.template_emission = b
+                    .order
+                    .iter()
+                    .map(|(state, _)| {
+                        rows[(b.rename.states.start + state) as usize]
+                            .get("emission")
+                            .and_then(J::as_u32)
+                            .map_or(0, |light| light as u8)
+                    })
+                    .collect();
+            }
             let row = &rows[b.rename.states.start as usize];
             b.item = match row.get("item") {
                 Some(J::Str(i)) if i != "minecraft:air" => Some(i.clone()),
@@ -1981,6 +2001,36 @@ impl<'a> Plan<'a> {
                             .ok_or_else(|| format!("{name}: missing state fluid flag"))? =
                             J::Bool(true);
                     }
+                }
+                if name == "mob-data.json"
+                    && let Some(rule) = b.decl.properties.spawn_rule
+                {
+                    let J::Arr(columns) = &mut row else {
+                        return Err(format!("{name}: missing state row {id}").into());
+                    };
+                    let flags = columns
+                        .get_mut(1)
+                        .ok_or("mob-data.json: missing state flags")?;
+                    let mask = flags.as_u32().ok_or("mob-data.json: invalid state flags")?;
+                    let spawn = u32::from(VALID_SPAWN | VALID_SPAWN_LEAVES | VALID_SPAWN_ICE);
+                    let allowed = match rule {
+                        SpawnRule::Always => spawn,
+                        SpawnRule::Never => 0,
+                        SpawnRule::OcelotOrParrot => u32::from(VALID_SPAWN_LEAVES),
+                        SpawnRule::Default => {
+                            let light = match (&b.state_light, b.decl.properties.light) {
+                                (Some(values), _) => values[state_index],
+                                (None, Some(light)) => light,
+                                (None, None) => b.template_emission[state_index],
+                            };
+                            if mask & u32::from(STURDY_TOP) != 0 && light < 14 {
+                                spawn
+                            } else {
+                                0
+                            }
+                        }
+                    };
+                    *flags = J::Num(((mask & !spawn) | allowed).into());
                 }
                 if name == "gameplay-facts.json" {
                     row.set("id", J::Num(next.into()));

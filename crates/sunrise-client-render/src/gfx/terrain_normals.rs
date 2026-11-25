@@ -2,8 +2,10 @@
 //! normal and tangent, worked out at upload as `pack_atlas`'s `FACE` works them out in a vertex
 //! shader that reads the quad's corners, for per-section draws that read no arena page. Vanilla
 //! 26.3's block vertices have no normal (`DefaultVertexFormat.BLOCK`), so packs get one from the
-//! quad itself.
-use crate::mesher::TerrainVertex;
+//! quad itself. Beside them, each vertex's quad's block id and source word (`Entry::source`), for
+//! `mc_Entity` and `at_midBlock` (spec §5.1), which flat draws and per-section draws reading
+//! their page look up in storage.
+use crate::mesher::{TerrainSource, TerrainVertex};
 use glam::{Vec2, Vec3, Vec4};
 
 /// The normal and tangent a quad of no area, or whose UVs span none, keeps: `FACE`'s constants,
@@ -12,21 +14,48 @@ use glam::{Vec2, Vec3, Vec4};
 const NORMAL: Vec3 = Vec3::Y;
 const TANGENT: Vec4 = Vec4::new(1.0, 0.0, 0.0, 1.0);
 
+/// The source word of a quad with no known source (none recorded, or not one a quad): id -1 and
+/// no valid flag, as flat draws read an unknown source (`pack_atlas`'s `hz_known_source`).
+const UNKNOWN: [u32; 2] = [u32::MAX, 0];
+
+/// One vertex's entry in the stream, as `pack_atlas::NORMAL_ATTRIBUTES` reads it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct Entry {
+    /// The normal (w 0) and tangent (`pack`).
+    pub(super) normal: [i8; 8],
+    /// The quad's `mc_Entity` id under the pack's `block.properties`, and its source's word
+    /// with the block's cell, fluid and valid flags and emitted light
+    /// (`TerrainSource::with_id`); `UNKNOWN` without one.
+    pub(super) source: [u32; 2],
+}
+
 /// Vertices `stream` works out at a time: a whole number of quads, so a quad never straddles
-/// two of them; 8 KiB of entries.
+/// two of them; 16 KiB of entries.
 pub(super) const CHUNK: usize = 1024;
 
 /// `vertices`' normal stream into `out` (as many entries), one entry a vertex: each quad of
 /// four consecutive vertices (the mesher's quads, which per-section draws index as `FACE` does)
-/// its own (`quad`), and a last partial quad the constants.
-pub(super) fn stream(vertices: &[TerrainVertex], out: &mut [[i8; 8]]) {
+/// its own (`quad`) and its source's (`sources[i]` for quad `i`, its id under `ids`), and a last
+/// partial quad the constants and no source. `sources` holds one a quad or none (unknown).
+pub(super) fn stream(
+    vertices: &[TerrainVertex],
+    sources: &[TerrainSource],
+    ids: &[i32],
+    out: &mut [Entry],
+) {
     debug_assert_eq!(vertices.len(), out.len());
     let (quads, rest) = vertices.as_chunks::<4>();
     let (whole, partial) = out.as_chunks_mut::<4>();
-    for (corners, to) in quads.iter().zip(whole) {
-        *to = [quad(corners); 4];
+    for (i, (corners, to)) in quads.iter().zip(whole).enumerate() {
+        let source = sources.get(i).map_or(UNKNOWN, |s| s.with_id(ids));
+        let normal = quad(corners);
+        *to = [Entry { normal, source }; 4];
     }
-    partial.fill(pack(NORMAL, TANGENT));
+    partial.fill(Entry {
+        normal: pack(NORMAL, TANGENT),
+        source: UNKNOWN,
+    });
     debug_assert_eq!(partial.len(), rest.len());
 }
 
@@ -156,10 +185,50 @@ mod tests {
         );
         let mut vertices = east.to_vec();
         vertices.push(east[0]);
-        let mut out = [[9; 8]; 5];
-        stream(&vertices, &mut out);
-        // Facing east, U growing along +y.
-        assert_eq!(out[..4], [[127, 0, 0, 0, 0, 127, 0, 127]; 4]);
-        assert_eq!(out[4], [0, 127, 0, 0, 127, 0, 0, 127]);
+        let mut out = [Entry {
+            normal: [9; 8],
+            source: [9; 2],
+        }; 5];
+        stream(&vertices, &[], &[], &mut out);
+        // Facing east, U growing along +y; no source.
+        let east = Entry {
+            normal: [127, 0, 0, 0, 0, 127, 0, 127],
+            source: UNKNOWN,
+        };
+        assert_eq!(out[..4], [east; 4]);
+        let partial = Entry {
+            normal: [0, 127, 0, 0, 127, 0, 0, 127],
+            source: UNKNOWN,
+        };
+        assert_eq!(out[4], partial);
+    }
+
+    /// Each quad's entry holds its own source's id under the pack's ids and its word: a block's
+    /// model id, a fluid's fluid id (the second of its state's two), -1 for a state past the
+    /// table, and the cell, fluid flag, valid flag (1 << 13) and emitted light as recorded.
+    #[test]
+    fn each_quad_streams_its_source() {
+        let east = quad_of(
+            [[1., 0., 0.], [1., 1., 0.], [1., 1., 1.], [1., 0., 1.]],
+            UVS,
+        );
+        let vertices: Vec<_> = (0..3).flat_map(|_| east).collect();
+        // States 0 and 1: ids 5 and 50, then 6 and 60.
+        let ids = [5, 50, 6, 60];
+        let sources = [
+            TerrainSource::new(1, [2, 3, 4], 7, false),
+            TerrainSource::new(0, [15, 0, 9], 15, true),
+            TerrainSource::new(2, [0, 0, 0], 0, false),
+        ];
+        let mut out = [Entry::default(); 12];
+        stream(&vertices, &sources, &ids, &mut out);
+        let words = [
+            [6, 2 | 3 << 4 | 4 << 8 | 1 << 13 | 7 << 14],
+            [50, 15 | 9 << 8 | 1 << 12 | 1 << 13 | 15 << 14],
+            [u32::MAX, 1 << 13],
+        ];
+        for (quad, word) in out.chunks(4).zip(words) {
+            assert_eq!(quad.iter().map(|e| e.source).collect::<Vec<_>>(), [word; 4]);
+        }
     }
 }

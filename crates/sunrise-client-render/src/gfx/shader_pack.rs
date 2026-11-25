@@ -72,15 +72,31 @@ impl Renderer {
             )
         });
         self.pack_loading = None;
-        self.install_shader_pack(dimension, post.transpose())
+        self.install_shader_pack(dimension, post.transpose(), block_ids.to_vec())
     }
     /// Runs the pack `set_shader_pack` or `load_shader_pack` built (`None`: no pack), or none when
     /// it can't run, for the dimension `dimension`; the programs that run and their notes.
+    /// `block_ids` are the pack's, as `set_shader_pack` takes them.
     fn install_shader_pack(
         &mut self,
         dimension: i32,
         post: std::result::Result<Option<pack_post::PackPost>, pack_post::Refused>,
+        block_ids: Vec<i32>,
     ) -> std::result::Result<Option<(Vec<String>, Vec<String>)>, pack_post::Refused> {
+        let runs = post.as_ref().is_ok_and(Option::is_some);
+        let block_ids = if runs { block_ids } else { Vec::new() };
+        let old = self.pack_block_ids.as_deref().map_or(&[][..], |ids| &ids.0);
+        if block_ids != old {
+            // The normal stream holds each quad's id under the ids it was uploaded with: the
+            // game meshes every section again for this pack's.
+            if runs && self.arena.has_normals() {
+                self.sections_dropped |=
+                    self.sections.len() > 0 || !self.lods.is_empty() || self.lod_pending.is_some();
+                self.clear_sections(self.layout);
+            }
+            self.pack_block_ids =
+                (!block_ids.is_empty()).then(|| Box::new(PackBlockIds(block_ids)));
+        }
         let mut post = match post {
             Ok(post) => post,
             Err(e) => {
@@ -231,14 +247,16 @@ impl Renderer {
                 weather: true,
                 hand: true,
             };
-            pack_post::PackPost::new_with_mods(
+            let post = pack_post::PackPost::new_with_mods(
                 (&device, &queue, &adapter),
                 pack,
                 format,
                 world,
                 mod_runtime.as_runtime(&mod_vertex_buffers),
                 &cancelled,
-            )
+            );
+            // The ids come back with it, for `install_shader_pack`.
+            (post, block_ids)
         };
         // A pack is not the game's code: a panic building it turns the pack off (#3525).
         let thread = std::thread::Builder::new()
@@ -281,18 +299,25 @@ impl Renderer {
             return None;
         }
         let loading = self.pack_loading.take()?;
-        let built = match loading.thread.join() {
+        let (built, block_ids) = match loading.thread.join() {
             Ok(Ok(built)) => built,
-            Ok(Err(panic)) => Err(pack_post::Refused {
-                reason: format!("building it panicked: {panic}"),
-                notes: Vec::new(),
-            }),
-            Err(_) => Err(pack_post::Refused {
-                reason: "its thread panicked".into(),
-                notes: Vec::new(),
-            }),
+            // A pack that doesn't run keeps no ids.
+            Ok(Err(panic)) => (
+                Err(pack_post::Refused {
+                    reason: format!("building it panicked: {panic}"),
+                    notes: Vec::new(),
+                }),
+                Vec::new(),
+            ),
+            Err(_) => (
+                Err(pack_post::Refused {
+                    reason: "its thread panicked".into(),
+                    notes: Vec::new(),
+                }),
+                Vec::new(),
+            ),
         };
-        let report = self.install_shader_pack(loading.dimension, built.map(Some));
+        let report = self.install_shader_pack(loading.dimension, built.map(Some), block_ids);
         Some((loading.dimension, loading.label, loading.started, report))
     }
     /// Drops the running shader pack, of either kind.
@@ -302,6 +327,7 @@ impl Renderer {
         self.native = None;
         self.pack_atlas = None;
         self.separate_ao = false;
+        self.pack_block_ids = None;
     }
     /// Sets whether shader pack terrain inputs pass vertex alpha to `hz_Color.a` (`separateAo=true`).
     pub fn set_separate_ao(&mut self, separate_ao: bool) {
@@ -461,7 +487,8 @@ impl Renderer {
         if !flat && !self.pack_terrain_pages && !stream {
             log::warn!(
                 "shader pack terrain: {:?} fit the vertex stage's buffers with neither set 3 \
-                 nor the normal stream; per-section draws give the constant normal and tangent",
+                 nor the normal stream; per-section draws give the constant normal and tangent, \
+                 mc_Entity -1 and at_midBlock 0",
                 self.pack_terrain_bindings
             );
         }

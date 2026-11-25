@@ -53,6 +53,12 @@ const COMMANDS: &[Command] = &[
         summary: "Checks a registered mod, commits the version bump (patch by default), and pushes the release tag and branch to origin. --check previews without changing your checkout; --pull-request commits on a new release/<tag> branch for a default branch that takes only pull requests. release setup only refreshes the shared workflow caller and removes old release files.",
     },
     Command {
+        name: "collection",
+        everyday: false,
+        usage: crate::collection::USAGE,
+        summary: "Checks the registry collection kept in this folder (collection.toml and icon.png) with the registry's rules, then pushes it from your fork of sunrise-org/sunrise-mods and prints the link that opens its pull request. Without collection.toml it writes one listing the projects registered from this repository; without an id it gives the collection a permanent one. --check stops after the checks. The registry publishes a collection only once at least 2 members, including a default, have a release.",
+    },
+    Command {
         name: "internals",
         everyday: false,
         usage: "internals sync | internals add <path>… [--kind <kind>]",
@@ -67,8 +73,8 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "use-jar",
         everyday: false,
-        usage: "use-jar <path>",
-        summary: "Lists an exact original Java jar as a passive asset and data source and caches it for runs.",
+        usage: "use-jar <path | modrinth-url | <project> <version>>",
+        summary: "Lists an exact original Java jar as a passive asset and data source from a local file, a Modrinth version URL, or a Modrinth project and version, and caches it for runs.",
     },
     Command {
         name: "self-update",

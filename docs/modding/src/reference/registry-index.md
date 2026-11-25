@@ -221,7 +221,7 @@ it. The hash still pins the file; the game loader checks the manifest. When the 
 
 ## Collections
 
-A collection is one publisher's set of listed mods, shown as one card. How to make one, and what players see:
+A collection is one publisher's set of listed mods under one name and icon. How to make one:
 [Group your mods into a collection](../how-to/collections.md). Its files are described in the registry's
 [reference](https://github.com/sunrise-org/sunrise-mods/blob/main/docs/registry-v2.md).
 

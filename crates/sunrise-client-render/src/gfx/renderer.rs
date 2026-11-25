@@ -498,6 +498,14 @@ pub struct Renderer {
     pub(crate) pack_terrain_bindings: pack_atlas::TerrainBindings,
     /// The section arena's pages are storage too (`arena_storage`, `follow_arena_layout`).
     pub(crate) arena_storage: bool,
+    /// The running `shaders/` pack's block ids, two a state (`set_shader_pack`'s `block_ids`):
+    /// the normal stream holds each quad's id under them (`terrain_normals`). None without any:
+    /// no pack, or one that lists no block.
+    /// Boxed: `Game` holds the `Renderer` inline, and its tests that build a `Game` on their
+    /// thread's stack have little room left.
+    pub(crate) pack_block_ids: Option<Box<PackBlockIds>>,
+    /// The game's meshes carry a `shaders/` pack's quad sources (`keep_pack_sources`).
+    pub(crate) pack_sources_on: bool,
     /// OptiFine/Iris separate ambient occlusion: pass vertex alpha to hz_Color.a.
     pub separate_ao: bool,
     /// Shader-pack terrain pages used by post processing, retained between frames.

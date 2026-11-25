@@ -264,6 +264,7 @@ fn relit_columns_keep_every_mesh_current() {
             cutout_leaves: true,
             opaque_ice: false,
             translucent_layers: &[],
+            layer_overrides: &[],
             leaf_culling: LeafCullingMode::Off,
             assets: &context.assets,
             render: &context.render,

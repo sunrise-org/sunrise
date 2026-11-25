@@ -19,7 +19,7 @@ class SdkPublishTests(unittest.TestCase):
             for name, job in load(path.name)["jobs"].items():
                 if job.get("uses") == "./.github/workflows/sdk-publish.yml":
                     callers[path.name] = job
-        self.assertEqual(sorted(callers), ["daily.yml", "prebuilt-game.yml", "release.yml"])
+        self.assertEqual(sorted(callers), ["daily.yml", "nightly-build.yml", "prebuilt-game.yml"])
         for name, job in callers.items():
             with self.subTest(caller=name):
                 self.assertEqual(job["secrets"], "inherit")
@@ -27,9 +27,10 @@ class SdkPublishTests(unittest.TestCase):
                 self.assertEqual(set(job["with"]), {"commit", "publish"})
 
     def test_a_dev_build_publishes_its_sdk_only_when_it_is_no_dry_run(self):
-        job = load("release.yml")["jobs"]["dev-sdk-publish"]
-        self.assertEqual(job["with"]["publish"], "${{ needs.decide.outputs.publish == 'true' }}")
-        self.assertIn("needs.dev-sdk.outputs.needed == 'true'", job["if"])
+        job = load("nightly-build.yml")["jobs"]["sdk-publish"]
+        self.assertEqual(job["with"]["publish"], "${{ needs.pick.outputs.publish == 'true' }}")
+        self.assertIn("needs.sdk.outputs.needed == 'true'", job["if"])
+        self.assertIn("inputs.kind == 'dev'", job["if"])
 
     def test_sdk_publish_exports_and_publishes_generated_book_bundle_for_exact_commit(self):
         jobs = load("sdk-publish.yml")["jobs"]

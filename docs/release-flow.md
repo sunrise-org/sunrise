@@ -113,26 +113,39 @@ commit on main. In order:
    newest dyna-checks main-push run did not pass every gate job (a pending job is not passed). It also refuses
    commits whose source predates the Dev version label. It does not wait for daily tests, `daily-green`,
    batch rules, a daily cap, a pause or a release-blocker.
-2. `dev-sdk` builds the commit's prebuilt SDK on every OS (`prebuilt-game-build.yml`; skipped when
-   `sdk-<sha>` already exists). A build it makes runs the SDK's own checks too, as the daily run's does: the native
-   linkage probe on the Linux and Windows client legs, and the API-source check and the source stage
-   (`tools/ci/test_stage_catalog.py`) on Linux; an `sdk-<sha>` that already exists is reused as it is, and no check
-   runs again. `dev-sdk-publish` signs and publishes it as `sdk-<sha>` from this run's
-   artifacts through `sdk-publish.yml`, the one workflow that publishes an SDK (the daily run and `prebuilt-game.yml` call it too).
-3. `dev` starts `nightly build` with `kind=dev` and that commit. It re-checks the gate and the SDK, builds
-   the commit alone (no picked pull requests, no build branch, no nightly-state), as `SUNRISE_VERSION`
-   `dev-<date>` so the game calls itself "Dev <date> · <short>", signs it for the `dev` channel and
-   for `dev-<date>-<short>` (`SHA256SUMS.sig`, `SHA256SUMS.v2.sig`, the Nightly's key), checks the smoke test
-   and publishes the pre-release `dev-<date>-<short>` titled "Dev <date> · <short>". A commit already published
-   that day is skipped. Dev builds older than 7 days are deleted, never the newest one,
-   and never an `sdk-<sha>` SDK. The Dev build carries its SDK's `sdk.json` in its signed sums, as the Nightly does,
-   so the launcher reads its build id from it and builds native mods against `sdk-<sha>`.
+2. `dev` starts `nightly build` with `kind=dev` and that commit at once. Its `pick` re-checks the gate. Then
+   `exporters` compiles the Java exporters and checks that they write the same bytes every time
+   (`exporters.yml`, `tools/check_prepare_exporters.py`), before any platform leg: a release-failing exporter stops
+   the build in minutes. The daily run runs the same check on main's head, so it is usually caught there first.
+3. Two builds of the commit then run side by side in that one run, neither waiting for the other:
+   - `sdk` builds its prebuilt SDK on every OS (`prebuilt-game-build.yml`; skipped when `sdk-<sha>` already
+     exists). A build it makes runs the SDK's own checks too, as the daily run's does: the native linkage probe on
+     the Linux and Windows client legs, and the API-source check and the source stage
+     (`tools/ci/test_stage_catalog.py`) on Linux. `sdk-publish` signs and publishes it as `sdk-<sha>` from this run's
+     artifacts as soon as those legs are done, through `sdk-publish.yml`, the one workflow that publishes an SDK (the
+     daily run and `prebuilt-game.yml` call it too).
+   - `build` builds the game alone (no picked pull requests, no build branch, no nightly-state), as
+     `SUNRISE_VERSION` `dev-<date>` so the game calls itself "Dev <date> · <short>". The game's legs read nothing of
+     the SDK.
+4. `sdk-index` takes the published `sdk-<sha>`'s `sdk.json`; only then does `sign` sign the game for the `dev`
+   channel and for `dev-<date>-<short>` (`SHA256SUMS.sig`, `SHA256SUMS.v2.sig`, the Nightly's key), with that
+   `sdk.json` in its signed sums as the Nightly carries its own, so the launcher reads its build id from it and
+   builds native mods against `sdk-<sha>`. `publish` checks the smoke test and that `sdk-<sha>` is out, and
+   publishes the pre-release `dev-<date>-<short>` titled "Dev <date> · <short>": the SDK always first. A commit
+   already published that day is skipped. Dev builds older than 7 days are deleted, never the newest one, and never
+   an `sdk-<sha>` SDK.
+
+A failed Dev build is retried with **Re-run failed jobs** on its `nightly build` run: only the failed jobs and those
+after them run again, every SDK or game leg that built is kept, and a published `sdk-<sha>` is never rebuilt (a new
+dispatch of the same commit reuses it too, and skips a commit already published that day). Only a new commit, a fix,
+builds everything again. `BLACKSMITH_DEV_MACOS=on` (a repository variable the owner sets; unset is off) moves the
+macOS legs of a Dev build, the SDK's and the game's, to Blacksmith while `BLACKSMITH` stays `off` for everything else.
 
 It never touches the `nightly` tag or channel, its rotation, its `nightly-source/` tags or `daily-green`. A dry run
-(the default for a dispatch, and any run off main) builds, indexes and signs the SDK with a throwaway key
-(`sdk-publish.yml` with `publish: false`, run only when `sdk-<sha>` does not exist yet), builds the game (a
-`nightly build` dry run, signed with a throwaway key) and publishes nothing; its summary names what a real run would
-publish. Starting with Sunrise Launcher 1.1.3, install Dev builds by exact tag (`sunrise-launcher install <tag>`);
+(the default for a dispatch, and any run off main) starts a `nightly build` dry run, which builds, indexes and
+signs the SDK with a throwaway key (`sdk-publish.yml` with `publish: false`, run only when `sdk-<sha>` does not exist
+yet), builds the game, signs it with a throwaway key and that SDK's index, and publishes nothing; its summary names
+what a real run would publish. Starting with Sunrise Launcher 1.1.3, install Dev builds by exact tag (`sunrise-launcher install <tag>`);
 until then, download the assets from GitHub and verify the files for the exact tag:
 
 ```sh
@@ -150,7 +163,8 @@ the ignored-tests data shards (`ignored-tests.yml`),
 `cargo-sunrise-mod` binstall archive built from the commit and published nowhere (`cargo-sunrise-mod-build.yml`; a pull
 request's check builds only the Linux x86_64 archive, and only a `cargo-sunrise-mod-v*` tag's push publishes, from
 `cargo-sunrise-mod.yml`), the machine sample built against the commit's mod API (`machine-sample.yml`), the modding book's start pages
-(`book-quickstart.yml`, below) and the
+(`book-quickstart.yml`, below), the Java exporters' determinism check every release build runs first (`exporters.yml`)
+and the
 prebuilt SDK of the commit
 (`prebuilt-game-build.yml`; each leg packs its slices after the checks, including the [native linkage probe](native-dylib-probe.md)
 on the Linux and Windows client builds. `sdk-publish` signs and publishes the slices as the mod SDK's
@@ -917,7 +931,8 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
 
 - **Jobs.** `pick` assembles the commit and writes the notes: what reached main since the previous Nightly (New and
   Fixed, as a release's notes), then each picked pull request with its title, author and who picked it, the known
-  issues and the thanks. `exporters` prepares the shared Java exporter classes once via `game-build.yml`.
+  issues and the thanks. `exporters` prepares the shared Java exporter classes once and checks they are
+  deterministic (`exporters.yml`).
   After that, `build` runs the launcher platform builds and Linux smoke test. They use the version `nightly-<date>` and
   `SUNRISE_NIGHTLY="<date> <short sha>"` built in, macOS signed ad hoc. `sign` signs SHA256SUMS for the channel
   (the message says `horizon release nightly`, so a nightly's signature never passes for a release's). `publish`

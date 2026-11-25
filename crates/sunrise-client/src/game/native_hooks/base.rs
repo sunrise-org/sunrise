@@ -4180,6 +4180,17 @@ impl Game<'_> {
             day_time: self.world.day_time,
         })
     }
+    /// `ClientLevel.tickRateManager()`: the rate, freeze and steps the server last sent, while a
+    /// client level exists (from `Login`, as the ticking packets apply only then).
+    pub(in crate::game) fn tick_rate(&self) -> Option<mod_api::ClientTickRate> {
+        self.native_client_level()
+            .is_some()
+            .then(|| mod_api::ClientTickRate {
+                tick_rate: self.clock.rate(),
+                frozen: self.clock.frozen(),
+                frozen_ticks_to_run: self.clock.step_state().remaining,
+            })
+    }
     /// `native_text` scaled by `scale` about `at`, its top-left corner (a GUI pose's scale).
     pub(in crate::game) fn native_text_scaled(
         &self,

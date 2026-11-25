@@ -840,7 +840,8 @@ pub struct Graphics {
     pub cache_copper_golem_statues: bool,
     /// Meshed sections uploaded per frame; 0 uploads all that are ready.
     pub chunk_updates: u32,
-    /// Section mesh bytes uploaded per frame, in KiB; 0 is unlimited.
+    /// Section mesh bytes uploaded per frame (`Renderer::mesh_upload_bytes`), in KiB; 0 is
+    /// unlimited.
     pub upload_budget_kib: u32,
     /// The block textures' video memory (their top mip level), in MiB; 0 leaves it to
     /// Sunrise (`sprites::DEFAULT_TEXTURE_BUDGET`). Applies when resources next load.

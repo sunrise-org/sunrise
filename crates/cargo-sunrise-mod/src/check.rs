@@ -291,11 +291,61 @@ fn uses_list(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Loads every listed `[[jar]]` from the local jar store, fetching a missing or changed jar from
+/// Modrinth.
+/// Returns `None` when the manifest lists no jars or when any jar cannot be fetched or read,
+/// printing one note so `check` and `build` still succeed offline.
+fn load_jar_layer(
+    manifest: &sunrise_mod_package::Manifest,
+) -> Option<sunrise_mod_package::content::JarLayer> {
+    if manifest.jar.is_empty() {
+        return None;
+    }
+    let store = crate::jar::default_store();
+    let mut layer = sunrise_mod_package::content::JarLayer::new();
+    for jar in &manifest.jar {
+        let cached = jar.cache_path(&store);
+        // A cached file is used only when its bytes still match the listed SHA-512, as `run`
+        // checks before staging; otherwise it is fetched again, which replaces it.
+        let verified = std::fs::File::open(&cached)
+            .and_then(|file| sunrise_jar_fetch::hash_reader::<sha2::Sha512>(file, std::io::sink()))
+            .is_ok_and(|hash| format!("{hash:x}") == jar.sha512());
+        if !verified
+            && let Err(error) = sunrise_jar_fetch::fetch(
+                &crate::jar::ProxyHttp,
+                crate::jar::MODRINTH,
+                jar.sha512(),
+                &cached,
+            )
+        {
+            eprintln!(
+                "note: could not fetch jar {} {} ({error}); its resources were not checked",
+                jar.id(),
+                jar.version()
+            );
+            return None;
+        }
+        if let Err(error) = layer.add_archive(&cached) {
+            eprintln!(
+                "note: could not read jar {} {} ({error}); its resources were not checked",
+                jar.id(),
+                jar.version()
+            );
+            return None;
+        }
+    }
+    Some(layer)
+}
+
 /// The references among a project's content files ([`sunrise_mod_package::content::check_references`]):
-/// warnings are printed, errors fail with one line each.
+/// warnings are printed, errors fail with one line each. When the manifest lists `[[jar]]`, each
+/// jar is read from the local jar store (fetched from Modrinth if missing) so references resolve
+/// against the mod and its jars together.
 pub fn references(root: &Path, manifest: &sunrise_mod_package::Manifest) -> Result<(), String> {
     let content = sunrise_mod_package::Content::read(root, manifest)?;
-    let findings = sunrise_mod_package::content::check_references(&content, manifest)?;
+    let jars = load_jar_layer(manifest);
+    let findings =
+        sunrise_mod_package::content::check_references(&content, manifest, jars.as_ref())?;
     for warning in findings
         .warnings
         .iter()
@@ -310,36 +360,186 @@ pub fn references(root: &Path, manifest: &sunrise_mod_package::Manifest) -> Resu
     }
 }
 
-/// Composes and validates every render pipeline fragment file in a mod's `files`
-/// (`assets/<namespace>/shaders/pipeline/<path>.wgsl`) with the game's own code
-/// (`sunrise_mod_pipeline`), returning how many there are and each refusal as
-/// `<file>:<line>:<column>: <message>` (`<file>: <message>` where it has no span), the text the game logs after the pipeline's id. Whether a pipeline is
-/// textured is in the mod's code, which this cannot see: a file that calls `pipeline_texture`
-/// is composed as textured, any other as untextured.
-pub fn pipeline_shaders(files: &BTreeMap<String, Vec<u8>>) -> (usize, Vec<String>) {
+/// Translates and validates every GLSL core shader program in a mod's `files`
+/// (`assets/<namespace>/shaders/core/<path>.vsh` and `.fsh`) through `sunrise_mod_pipeline`
+/// (the same code the game uses), returning how many programs were checked and each refusal as
+/// `<file>[:<line>:<column>]: <message>`.
+///
+/// Includes resolve from the mod's own `files`, then from `resources` (prepared vanilla 26.3
+/// resources, when available), and finally from Sunrise's interface-only stubs for `minecraft:*`
+/// (§6 & §13 Q3: nothing from Mojang's files is shipped in the SDK). When a `.fsh` has no
+/// matching `.vsh` beside it in `files`, `minecraft:shaders/core/position_tex_color.vsh` is used
+/// as the default vertex stage (matching the common `.vertex_shader("minecraft:core/position_tex_color")`
+/// case). Whether a pipeline is textured is in the mod's Rust code, so a program that references
+/// `sampleSprite`, `pipeline_sprite.glsl`, `SpriteRect`, or `Sampler0` is checked as textured.
+pub fn pipeline_shaders(
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Option<&Path>,
+) -> (usize, Vec<String>) {
+    let mut stems: BTreeMap<(String, String), (Option<String>, Option<String>)> = BTreeMap::new();
+    let folder = sunrise_mod_pipeline::CORE_FOLDER;
+    for name in files.keys() {
+        let mut parts = name.splitn(3, '/');
+        let (Some("assets"), Some(ns), Some(rest)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let Some(after_folder) = rest.strip_prefix(folder).and_then(|r| r.strip_prefix('/')) else {
+            continue;
+        };
+        if let Some(stem) = after_folder.strip_suffix(".vsh") {
+            stems.entry((ns.to_owned(), stem.to_owned())).or_default().0 = Some(name.clone());
+        } else if let Some(stem) = after_folder.strip_suffix(".fsh") {
+            stems.entry((ns.to_owned(), stem.to_owned())).or_default().1 = Some(name.clone());
+        }
+    }
+
+    let read_asset = |asset: &str| -> Result<Option<String>, String> {
+        if let Some(bytes) = files.get(asset) {
+            return std::str::from_utf8(bytes)
+                .map(|s| Some(s.to_owned()))
+                .map_err(|e| format!("{asset}: {e}"));
+        }
+        if let Some(dir) = resources {
+            let path = dir.join(asset);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => return Ok(Some(text)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("{}: {e}", path.display())),
+            }
+        }
+        if let Some(rest) = asset.strip_prefix("assets/")
+            && let Some((ns, path)) = rest.split_once('/')
+            && let Some(stub) = sunrise_mod_pipeline::stubs::read(&format!("{ns}:{path}"))
+        {
+            return Ok(Some(stub.to_owned()));
+        }
+        Ok(None)
+    };
+
+    let include = |id: &str| -> Result<Option<String>, String> {
+        let Some((ns, rest)) = id.split_once(':') else {
+            return Ok(None);
+        };
+        read_asset(&format!("assets/{ns}/{rest}"))
+    };
+
     let mut count = 0;
     let mut refused = Vec::new();
-    for (name, bytes) in files {
-        let mut parts = name.splitn(3, '/');
-        let in_folder = parts.next() == Some("assets")
-            && parts.next().is_some()
-            && parts.next().is_some_and(|rest| {
-                rest.strip_prefix(sunrise_mod_pipeline::FOLDER)
-                    .is_some_and(|rest| rest.starts_with('/') && rest.ends_with(".wgsl"))
-            });
-        if !in_folder {
+    for ((ns, stem), (vsh_file, fsh_file)) in stems {
+        let Some(fsh_file) = fsh_file else {
+            // Vertex-only files may be shared across pipelines via `.vertex_shader(...)`;
+            // pair with a trivial fragment shader so the vertex stage is still validated.
+            let vsh_file = vsh_file.expect("stem has at least one stage");
+            count += 1;
+            let vsh_text = match read_asset(&vsh_file) {
+                Ok(Some(t)) => t,
+                Ok(None) => {
+                    refused.push(format!("{vsh_file}: not found"));
+                    continue;
+                }
+                Err(e) => {
+                    refused.push(e);
+                    continue;
+                }
+            };
+            let folder_part = stem.rfind('/').map_or("", |i| &stem[..=i]);
+            let dir = format!("{ns}:{folder}/{folder_part}");
+            let dummy_fsh =
+                "#version 330\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
+            let textured = vsh_text.contains("Sampler0")
+                || vsh_text.contains("SpriteRect")
+                || vsh_text.contains("sampleSprite")
+                || vsh_text.contains("pipeline_sprite.glsl");
+            let sources = sunrise_mod_pipeline::ProgramSources {
+                vertex_file: &vsh_file,
+                vertex_dir: &dir,
+                vertex: &vsh_text,
+                fragment_file: &vsh_file,
+                fragment_dir: &dir,
+                fragment: dummy_fsh,
+            };
+            let options = sunrise_mod_pipeline::Options {
+                textured,
+                check_backends: true,
+                ..Default::default()
+            };
+            if let Err(problems) = sunrise_mod_pipeline::translate(&sources, &options, &include) {
+                refused.extend(problems.into_iter().map(|p| p.to_string()));
+            }
             continue;
-        }
+        };
+
         count += 1;
-        let composed = std::str::from_utf8(bytes)
-            .map_err(|e| e.to_string())
-            .map_err(|e| vec![format!("{name}: {e}")])
-            .and_then(|text| {
-                sunrise_mod_pipeline::compose_with(name, text, text.contains("pipeline_texture"))
-                    .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-            });
-        if let Err(reasons) = composed {
-            refused.extend(reasons);
+        let fsh_text = match read_asset(&fsh_file) {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                refused.push(format!("{fsh_file}: not found"));
+                continue;
+            }
+            Err(e) => {
+                refused.push(e);
+                continue;
+            }
+        };
+        let (vertex_file, vertex_dir, vsh_text) = match vsh_file {
+            Some(vsh_path) => {
+                let text = match read_asset(&vsh_path) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        refused.push(format!("{vsh_path}: not found"));
+                        continue;
+                    }
+                    Err(e) => {
+                        refused.push(e);
+                        continue;
+                    }
+                };
+                let folder_part = stem.rfind('/').map_or("", |i| &stem[..=i]);
+                (vsh_path, format!("{ns}:{folder}/{folder_part}"), text)
+            }
+            None => {
+                let default_vsh = "assets/minecraft/shaders/core/position_tex_color.vsh";
+                let text = match read_asset(default_vsh) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        refused.push(format!("{default_vsh}: not found"));
+                        continue;
+                    }
+                    Err(e) => {
+                        refused.push(e);
+                        continue;
+                    }
+                };
+                (
+                    default_vsh.to_owned(),
+                    "minecraft:shaders/core/".to_owned(),
+                    text,
+                )
+            }
+        };
+        let folder_part = stem.rfind('/').map_or("", |i| &stem[..=i]);
+        let fragment_dir = format!("{ns}:{folder}/{folder_part}");
+        let textured = fsh_text.contains("sampleSprite")
+            || fsh_text.contains("pipeline_sprite.glsl")
+            || fsh_text.contains("SpriteRect")
+            || fsh_text.contains("Sampler0")
+            || vsh_text.contains("Sampler0");
+        let sources = sunrise_mod_pipeline::ProgramSources {
+            vertex_file: &vertex_file,
+            vertex_dir: &vertex_dir,
+            vertex: &vsh_text,
+            fragment_file: &fsh_file,
+            fragment_dir: &fragment_dir,
+            fragment: &fsh_text,
+        };
+        let options = sunrise_mod_pipeline::Options {
+            textured,
+            check_backends: true,
+            ..Default::default()
+        };
+        if let Err(problems) = sunrise_mod_pipeline::translate(&sources, &options, &include) {
+            refused.extend(problems.into_iter().map(|p| p.to_string()));
         }
     }
     (count, refused)
@@ -401,33 +601,44 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_files_are_composed_as_the_game_does() {
-        let glow =
-            "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return input.color; }";
-        let sample = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_texture(input.uv); }";
+    fn pipeline_files_are_translated_as_the_game_does() {
+        let vsh = "#version 330\n#include <minecraft:dynamictransforms.glsl>\n\
+            #include <minecraft:projection.glsl>\n\
+            in vec3 Position;\nin vec2 UV0;\nin vec4 Color;\n\
+            out vec2 texCoord0;\nout vec4 vertexColor;\n\
+            void main() { gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0); texCoord0 = UV0; vertexColor = Color; }\n";
+        let glow_fsh = "#version 330\n#include <m:helper.glsl>\n\
+            in vec2 texCoord0;\nin vec4 vertexColor;\nout vec4 fragColor;\n\
+            void main() { fragColor = tint(vertexColor); }\n";
+        let sample_fsh = "#version 330\n#include <sunrise:pipeline_sprite.glsl>\n\
+            in vec2 texCoord0;\nin vec4 vertexColor;\nout vec4 fragColor;\n\
+            void main() { fragColor = sampleSprite(texCoord0) * vertexColor; }\n";
+        let broken_fsh =
+            "#version 330\nout vec4 fragColor;\nvoid main() { fragColor = unknown_var; }\n";
         let files: BTreeMap<String, Vec<u8>> = [
-            ("assets/m/shaders/pipeline/glow.wgsl", glow),
-            ("assets/m/shaders/pipeline/deep/sample.wgsl", sample),
-            ("assets/m/shaders/pipeline/broken.wgsl", "fn nothing() {}"),
             (
-                "assets/m/shaders/pipeline/typo.wgsl",
-                "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {\n    let x: f32 = input.uv;\n    return vec4<f32>(x);\n}",
+                "assets/m/shaders/include/helper.glsl",
+                "vec4 tint(vec4 c) { return c * 0.5; }\n",
             ),
-            // Not a pipeline file: other shaders are not this check's.
-            ("assets/m/shaders/post/other.wgsl", "garbage"),
+            ("assets/m/shaders/core/glow.vsh", vsh),
+            ("assets/m/shaders/core/glow.fsh", glow_fsh),
+            // Fragment-only program reusing default minecraft:core/position_tex_color.vsh stub:
+            ("assets/m/shaders/core/deep/sample.fsh", sample_fsh),
+            ("assets/m/shaders/core/broken.vsh", vsh),
+            ("assets/m/shaders/core/broken.fsh", broken_fsh),
+            // Old WGSL pipeline files and post shaders are not checked by the GLSL core rule.
+            ("assets/m/shaders/pipeline/legacy.wgsl", "garbage"),
+            ("assets/m/shaders/post/other.fsh", "garbage"),
             ("assets/m/lang/en_us.json", "{}"),
         ]
         .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()))
         .into();
-        let (count, refused) = pipeline_shaders(&files);
-        assert_eq!(count, 4);
-        assert_eq!(
-            refused,
-            [
-                "assets/m/shaders/pipeline/broken.wgsl: no function `pipeline_fragment`: expected `fn pipeline_fragment(input: PipelineInput) -> vec4<f32>`",
-                // The binding `x` is at line 2, column 9 of the mod's own file.
-                "assets/m/shaders/pipeline/typo.wgsl:2:9: the type of `x` is expected to be `f32`, but got `vec2<f32>`",
-            ]
+        let (count, refused) = pipeline_shaders(&files, None);
+        assert_eq!(count, 3);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with("assets/m/shaders/core/broken.fsh:3:"),
+            "{refused:?}"
         );
     }
 

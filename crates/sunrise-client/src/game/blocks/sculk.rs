@@ -500,6 +500,12 @@ impl Game<'_> {
         true
     }
 
+    /// `LevelChunk.removeGameEventListener`: unregister a sculk block entity's
+    /// game-event listener when its block entity is removed.
+    pub(super) fn sculk_unregister_listener(&mut self, key: (i32, i32, i32)) {
+        self.sculk.index.remove(&key);
+    }
+
     fn sculk_sync_writes(&mut self) {
         let writes = std::mem::take(&mut self.world.watched_writes);
         for (key, old, new) in writes {

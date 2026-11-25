@@ -11,9 +11,7 @@ tools/addresses.json says where each host may be:
 - `not_addresses`: strings that look like hosts but are not contacted (a suffix matcher, a translation key);
 - `renamed_hosts`: a host's old name to its new one, so renaming a domain doesn't count as adding a host;
 - `allowed`: today's addresses outside a home, "path host". They only go away: with --base, a branch may move
-  an entry to another file but may not add a host nor grow the list. A changed sync-baseline declaration,
-  verified by merge_base.sync_provenance, may restore exact rows from that upstream commit's inventory;
-  only those newly restored rows are excluded from the growth comparison.
+  an entry to another file but may not add a host nor grow the list.
 
     python3 tools/check_addresses.py                     # the check
     python3 tools/check_addresses.py --base origin/main  # and nothing added since the base
@@ -226,7 +224,7 @@ def scan(files=None):
     return found
 
 
-def check(config, found, base=None, upstream_rows=frozenset()):
+def check(config, found, base=None):
     """(problems, notes)."""
     homes = set(config.get("homes", []))
     vanilla = set(config.get("vanilla", []))
@@ -247,12 +245,10 @@ def check(config, found, base=None, upstream_rows=frozenset()):
         renamed = config.get("renamed_hosts", {})
         before = {(rel, renamed.get(host, host)) for rel, host in
                   (tuple(entry.split(" ", 1)) for entry in base.get("allowed", []))}
-        restored = (allowed - before) & upstream_rows
-        effective = allowed - restored
-        new_hosts = {host for _, host in effective} - {host for _, host in before}
+        new_hosts = {host for _, host in allowed} - {host for _, host in before}
         for host in sorted(new_hosts):
             problems.append(f"{host}: added to 'allowed' in {CONFIG_PATH}; new addresses go in a home ({DOC})")
-        if len(effective) > len(before):
+        if len(allowed) > len(before):
             problems.append(f"'allowed' in {CONFIG_PATH} grew from {len(before)} to {len(allowed)} entries; it only "
                             f"shrinks ({DOC})")
     notes = [f"{rel} {host}: no longer there; you can remove it from 'allowed' in {CONFIG_PATH}"
@@ -278,13 +274,6 @@ def _merge_base():
     return merge_base
 
 
-def restored_upstream_rows(base):
-    """Allow exact upstream rows only for a changed, verified sync declaration."""
-    config, errors = _merge_base().verified_sync_config(base, CONFIG_PATH)
-    rows = {tuple(row.split(" ", 1)) for row in config.get("allowed", [])} if config is not None else set()
-    return rows, errors
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="refuse addresses added to 'allowed' since the branch left this git ref")
@@ -307,13 +296,6 @@ def main(argv=None):
         return 0
     base = base_config(args.base) if args.base else None
     problems, notes = check(config, found, base)
-    if args.base and (problems or config != base):
-        # Only a violation, or an inventory that differs from the base's, can need rows a verified sync restored:
-        # every other run stays off the network.
-        upstream_rows, provenance = restored_upstream_rows(args.base)
-        if upstream_rows or provenance:
-            problems, notes = check(config, found, base, upstream_rows)
-        problems = provenance + problems
     for note in notes:
         print(f"note: {note}")
     if problems:

@@ -6,7 +6,7 @@ pub use crate::game::{
     Hit, MapDecoration, MapInfo, MobRender, ModMismatch, ModMismatchResolution, PhantomSpawnResult,
     PlayerRender, SleepProblem,
 };
-pub use crate::game::{NbtDataType, NbtUpgradeError, TerrainColumn};
+pub use crate::game::{ClientTickRate, NbtDataType, NbtUpgradeError, TerrainColumn};
 mod __private {
     mod built {
         pub use crate::game::built::TerrainColumn;

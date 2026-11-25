@@ -183,8 +183,9 @@ impl Renderer {
             self.arena.bytes(),
         )
     }
-    /// Whether the section arena keeps its quads' sources for a `shaders/` pack's flat terrain
-    /// (`keep_pack_sources`): with none, its pages have no sidecars.
+    /// Whether the section arena keeps its quads' sources for a `shaders/` pack's terrain drawn
+    /// flat or per section reading the pages (`keep_pack_sources`): with none, its pages have no
+    /// sidecars.
     pub fn keeps_pack_sources(&self) -> bool {
         self.arena.sources_read()
     }

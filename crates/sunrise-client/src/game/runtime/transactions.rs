@@ -720,8 +720,24 @@ struct KeptMenus {
     craft_grid: [Option<ItemStack>; 4],
 }
 
+/// Deferred `LevelChunk.removeBlockEntity` / `BlockEntity.setRemoved` effects
+/// for an explicit `BlockEntityRef::remove`.
+#[derive(Clone, Copy)]
+pub(super) struct RemovedBlockEntityEffects {
+    pub(super) pos: Pos,
+    pub(super) state: BlockStateId,
+    pub(super) sculk: bool,
+    pub(super) jukebox: bool,
+    pub(super) beacon: bool,
+    pub(super) gateway: bool,
+    pub(super) had_shapes: bool,
+}
+
 /// What a write tells the world, at the root commit.
 pub(super) enum After {
+    /// Deferred `LevelChunk.removeBlockEntity` / `BlockEntity.setRemoved` effects
+    /// (listener unregister, jukebox stop, beacon sound, gateway cleanup, shape updates).
+    BlockEntityRemoved(RemovedBlockEntityEffects),
     /// Reserved raw bytes publish only when their connection incarnation is still live.
     Payload(super::payload_transport::Deferred),
     /// A mod's validated vanilla packet, bound to its physical protocol incarnation,
@@ -1759,6 +1775,25 @@ impl<'g> Game<'g> {
             entities.reattach_retired(pos, generation);
         }
     }
+    /// Records an explicit `BlockEntityRef::remove` inside an open transaction: captures the
+    /// original row in `block_entities`, marks `removed_block_entities` with a `None` sentinel
+    /// without overwriting any earlier `Some(row)` queued for `preRemoveSideEffects` replay,
+    /// and queues the deferred `setRemoved` effects to run at root commit.
+    /// Returns `true` if a transaction is open in the current dimension (effects deferred),
+    /// or `false` if outside a transaction (caller runs effects immediately).
+    pub(super) fn journal_explicit_remove_block_entity(
+        &mut self,
+        pos: Pos,
+        effects: RemovedBlockEntityEffects,
+    ) -> bool {
+        self.journal_block_entity(pos);
+        let Some(level) = entities::open_in(&mut self.transactions, self.dim) else {
+            return false;
+        };
+        level.removed_block_entities.entry(pos).or_insert(None);
+        level.after.push(After::BlockEntityRemoved(effects));
+        true
+    }
     /// Hides the block entity from tentative reads. The first-write journal can undo all edits;
     /// the removed row itself still contains the edits that matter to removal at commit.
     pub(super) fn journal_remove_block_entity(&mut self, pos: Pos) {
@@ -2639,6 +2674,7 @@ impl<'g> Game<'g> {
     }
     fn run_after(&mut self, after: After) {
         match after {
+            After::BlockEntityRemoved(effects) => self.apply_removed_block_entity_effects(effects),
             After::PlayerRespawn(conn) => self.commit_player_respawn(conn),
             After::Trade(effect) => self.commit_merchant_effect(*effect),
             After::Payload(payload) => payload.publish(),
@@ -3146,8 +3182,15 @@ impl<'g> Game<'g> {
                     // LevelChunk.setBlockState runs preRemoveSideEffects on the resident row
                     // before removeBlockEntity and neighbor effects. Replay with the row as it
                     // stood at removal, or leave it in place if the old block kind survived.
+                    let absent_after_writes = self.world.block_entities.get(&pos).is_none()
+                        && level.removed_block_entities.contains_key(&pos);
                     let b = self.res.behaviours();
                     let net_keeps_group = b.keeps_block_entity(was, now);
+                    let surviving = if now != was && !net_keeps_group {
+                        take_replay_row(&mut self.world, pos)
+                    } else {
+                        None
+                    };
                     if (replay_removal || b.block(now) == b.block(was))
                         && let Some((entity, generation)) =
                             level.removed_block_entities.remove(&pos).flatten()
@@ -3170,6 +3213,20 @@ impl<'g> Game<'g> {
                             let _ = self.process_level_events();
                         } else {
                             let _ = self.level_set_with_flags(pos, now, flags);
+                        }
+                        if self.world.block(pos[0], pos[1], pos[2]) == now {
+                            let key = (pos[0], pos[1], pos[2]);
+                            if let Some((entity, generation)) = surviving {
+                                self.world.block_entities.remove(&key);
+                                self.restore_removed_block_entity(key, *entity, generation);
+                            } else if absent_after_writes {
+                                // If the transaction ended with `BlockEntityRef::remove` at `pos`
+                                // after replacing the block (e.g. `set_block(barrel); barrel.remove()`),
+                                // the replay above replayed the first block's `preRemoveSideEffects`
+                                // and created a fresh entity for `now`; strip that recreated entity
+                                // while the final block state still matches `now`.
+                                self.world.block_entities.remove(&key);
+                            }
                         }
                     } else if clear_connection_group {
                         // A round trip that preserves the block state can still end the
@@ -3347,6 +3404,9 @@ impl<'g> Game<'g> {
                 (Some(entity), None)
                     if replaced || level.removed_block_entities.contains_key(&pos) =>
                 {
+                    if matches!(&entity, BlockEntity::Mod(entity) if entity.shapes().is_some()) {
+                        reshaped.push(pos);
+                    }
                     self.restore_removed_block_entity(pos, entity, kept.generation.unwrap());
                 }
                 (None, None) if replaced && let Some(taken) = kept.taken => {

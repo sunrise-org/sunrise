@@ -1834,6 +1834,11 @@ mod pack_clouds_frame_tests;
 #[path = "game/modding/pack_finders/mod.rs"]
 mod pack_finders;
 #[cfg(test)]
+#[path = "game/interface/pack_layer_frame_tests.rs"]
+mod pack_layer_frame_tests;
+#[path = "game/interface/pack_layers.rs"]
+mod pack_layers;
+#[cfg(test)]
 #[path = "game/interface/pack_sources_tests.rs"]
 mod pack_sources_tests;
 #[path = "game/world/packs/mod.rs"]

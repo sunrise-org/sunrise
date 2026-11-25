@@ -11,7 +11,9 @@ use sunrise_client::mod_list::ModList;
 use sunrise_client::shader_options::ShaderOptions;
 use sunrise_client::text::Text;
 use sunrise_shader_api::Api;
-use sunrise_shaders::{BlockIds, Macros, Pack, Properties, dimension_folder_named, load_post};
+use sunrise_shaders::{
+    BlockIds, BlockLayers, Macros, Pack, Properties, dimension_folder_named, load_post,
+};
 
 use super::native_shaders::{fingerprint, outcome, refused, remember};
 use super::{Dim, Game, Screen};
@@ -261,6 +263,8 @@ pub(super) fn picks_material_pack(settings: &sunrise_client::settings::Settings)
 pub(super) struct PackIds {
     entities: HashMap<String, i32>,
     blocks: BlockIds,
+    /// `block.properties`' `layer.*` rules (4.2), as the terrain meshes them.
+    pub(super) layers: super::pack_layers::PackLayers,
     /// `blockEntityId` by block state, filled as states are drawn.
     block_states: RefCell<HashMap<u32, i32>>,
     /// The id of a name the file lacks: 65535, or 0 without the file.
@@ -330,6 +334,9 @@ impl Game<'_> {
             self.streaming.separate_ao = separate_ao;
             self.all_sections_changed();
         }
+        // Its `layer.*` rules (4.2), none without a pack: in the frame after it loads or drops, as
+        // the flags above, so one meshing of every section takes them all.
+        self.sync_pack_layers();
         let selected = picked_pack(&self.settings).to_owned();
         let path = self.native_shaders.resolve_path(
             &Self::shader_packs_dir(),
@@ -457,8 +464,10 @@ impl Game<'_> {
                             biomes.list.iter().map(|b| b.name.as_str()).collect();
                         post.custom.set_biomes(&names);
                         let text = pack.read_text("block.properties").unwrap_or_default();
-                        let ids = BlockIds::parse(&Properties::parse(&text, &macros));
-                        for note in &ids.notes {
+                        let block_properties = Properties::parse(&text, &macros);
+                        let ids = BlockIds::parse(&block_properties);
+                        let layers = BlockLayers::parse(&block_properties);
+                        for note in ids.notes.iter().chain(&layers.notes) {
                             log::warn!("shader pack {name}: block.properties: {note}");
                         }
                         let text = pack.read_text("entity.properties");
@@ -495,6 +504,7 @@ impl Game<'_> {
                             missing_entity: if text.is_some() { 65535 } else { 0 },
                             missing_block: if ids.is_empty() { 0 } else { 65535 },
                             blocks: ids.clone(),
+                            layers: super::pack_layers::PackLayers::new(name, layers),
                             block_states: RefCell::default(),
                         });
                         let started_ids = std::time::Instant::now();

@@ -105,6 +105,18 @@ pub const BOOKSHELF_OFFSETS: [[i32; 3]; 32] = {
     }
     v
 };
+
+/// The positions an enchanting table scans: [`BOOKSHELF_OFFSETS`], then the offsets mods
+/// added with `add_enchanting_table_offsets`, in load order, one of vanilla's dropped.
+pub fn bookshelf_offsets() -> impl Iterator<Item = [i32; 3]> {
+    let declared = mod_api::__private::enchanting_table_offset_declarations();
+    BOOKSHELF_OFFSETS.into_iter().chain(
+        declared
+            .iter()
+            .copied()
+            .filter(|offset| !BOOKSHELF_OFFSETS.contains(offset)),
+    )
+}
 /// The three offers of `EnchantmentMenu.slotsChanged`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EnchantOffers {
@@ -1591,6 +1603,13 @@ mod tests {
         assert_eq!(o[5], [-2, 1, -2]);
         assert_eq!(o[10..12], [[-2, 0, -1], [2, 0, -1]]);
         assert_eq!(o[31], [2, 1, 2]);
+    }
+
+    /// With no mod installed the scan list is vanilla's 32.
+    #[test]
+    fn no_declared_offsets_leave_the_scan_list_vanillas() {
+        assert!(mod_api::__private::enchanting_table_offset_declarations().is_empty());
+        assert!(bookshelf_offsets().eq(BOOKSHELF_OFFSETS));
     }
 
     /// `EnchantmentLevelSetEvent`: each row is asked once, in order, with the

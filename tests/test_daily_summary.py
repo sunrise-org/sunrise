@@ -36,7 +36,7 @@ GREEN_JOBS = [job("shards / plan"), job("shards / ignored-tests-shards (sunrise-
               job("windows-runtime-leases / test"),
               job("windows-runtime-leases / runtime-leases"), job("windows-runtime-leases / launcher-processes"),
               job("cargo-sunrise-mod / plan"),
-              job("machine-sample / route"), job("machine-sample / build"),
+              job("machine-sample / route"), job("machine-sample / build"), job("exporters / exporters"),
               job("sdk / fresh"), job("sdk / build linux"), job("sdk / build linux-server"),
               job("sdk / fresh"), job("sdk / build windows"), job("sdk / build macos"), job(PARITY_JOB)]
 # Every binstall archive the daily builds (cargo-sunrise-mod-build.yml), with no publish job: it never publishes.

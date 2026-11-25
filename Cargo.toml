@@ -69,6 +69,7 @@ members = [
     "crates/sunrise-native-build",
     "crates/sunrise-mod-api-gen/dispatch-tests",
     "crates/cargo-sunrise-mod",
+    "crates/sunrise-jar-fetch",
     "crates/sunrise-port-pack",
     "crates/sunrise-proxy",
     "crates/sunrise-glsl",
@@ -80,6 +81,7 @@ members = [
     "crates/sunrise-mod-pipeline",
     "crates/sunrise-release-sign",
     "crates/sunrise-mod-deps",
+    "crates/sunrise-dependency-rule",
     "xtask",
 ]
 resolver = "2"

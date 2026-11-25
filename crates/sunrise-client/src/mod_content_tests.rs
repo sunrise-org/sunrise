@@ -8709,3 +8709,41 @@ fn accept_declared_refuses_host_duplicates_of_served_content_and_keeps_served_re
         );
     }
 }
+
+#[test]
+fn spawn_rule_sets_the_valid_spawn_flags_of_every_declared_state() {
+    use crate::mobs::data::{STURDY_TOP, VALID_SPAWN, VALID_SPAWN_ICE, VALID_SPAWN_LEAVES};
+    let all = u32::from(VALID_SPAWN | VALID_SPAWN_LEAVES | VALID_SPAWN_ICE);
+    let leaves = u32::from(VALID_SPAWN_LEAVES);
+    let sturdy = u32::from(STURDY_TOP);
+    // (properties, template flags, expected spawn bits): a template that refuses everything
+    // still takes `always`, a light-15 block refuses under the default rule, and an unset
+    // rule keeps the template's flags.
+    let cases = [
+        (r#""spawn_rule":"default","light":15"#, all | sturdy, 0),
+        (r#""spawn_rule":"default","light":13"#, sturdy, all),
+        (r#""spawn_rule":"default","light":13"#, all, 0),
+        (r#""spawn_rule":"default""#, all, 0),
+        (r#""spawn_rule":"always","light":15"#, sturdy, all),
+        (r#""spawn_rule":"never""#, all | sturdy, 0),
+        (r#""spawn_rule":"ocelot_or_parrot""#, all | sturdy, leaves),
+        (r#""light":15"#, all | sturdy, all),
+    ];
+    for (i, (properties, template_flags, expected)) in cases.iter().enumerate() {
+        let declaration = format!(
+            r#"{{"template":"minecraft:test","item":false,"properties":{{{properties}}}}}"#
+        );
+        let (base, mods) = block_base(&format!("spawn-rule-{i}"), &[&declaration]);
+        let plan = Plan::new(&base, &mods).unwrap();
+        let row = format!(r#"["OPEN",{template_flags},1.0]"#);
+        let mut doc: J = serde_json::from_str(&format!(r#"{{"states":[{row},{row}]}}"#)).unwrap();
+        plan.json("mob-data.json", &mut doc).unwrap();
+        let doc = serde_json::to_value(doc).unwrap();
+        for state in [2, 3] {
+            let flags = doc["states"][state][1].as_u64().unwrap() as u32;
+            assert_eq!(flags & all, *expected, "{properties}: {flags}");
+            assert_eq!(flags & !all, template_flags & !all, "{properties}");
+        }
+        fs::remove_dir_all(base.parent().unwrap()).unwrap();
+    }
+}

@@ -1100,14 +1100,18 @@ def pack(out: Path, dist: Path, stage_tool: Path | None = None, with_tool: bool 
     jobs = {dist / f"{kind}-{identity['target']}{suffix}.tar.xz": (out, names)
             for kind, names in archives(out, identity["slices"]).items()}
     jobs[dist / BUILD_DATA_ARCHIVE] = (out, [".", *BUILD_DATA])
-    if identity["side"] == "client" or with_tool:
-        jobs[dist / f"tool-{identity['target']}.tar.xz"] = (tool(identity["target"]), [".", TOOL_PROGRAM])
     if with_programs:
         folder = programs(identity, out.parent / f"{PROGRAMS}-{identity['target']}{suffix}")
         jobs[dist / f"{folder.name}.tar.xz"] = (folder, tree(folder))
+    packs_tool = identity["side"] == "client" or with_tool
     # Each archive keeps its single xz stream; only independent archives run concurrently.
-    with ProcessPoolExecutor(max_workers=len(jobs)) as pool:
+    with ProcessPoolExecutor(max_workers=len(jobs) + packs_tool) as pool:
         pending = {archive: pool.submit(tar_xz, folder, names, archive) for archive, (folder, names) in jobs.items()}
+        # The tool compiles while the package's archives compress, then joins them: compressing the engine archive
+        # leaves cores idle for minutes, which the tool's build took after it (macOS, 2026-11-25: 5m52 then 7m04).
+        if packs_tool:
+            archive = dist / f"tool-{identity['target']}.tar.xz"
+            pending[archive] = pool.submit(tar_xz, tool(identity["target"]), [".", TOOL_PROGRAM], archive)
         failures = [f"{archive.name}: {error}" for archive, future in pending.items()
                     if (error := future.exception()) is not None]
     if failures:

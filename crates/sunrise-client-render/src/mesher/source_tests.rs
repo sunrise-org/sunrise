@@ -184,6 +184,7 @@ pub(crate) fn shaped_mesh(compact: bool) -> SectionMesh {
         cutout_leaves: true,
         opaque_ice: false,
         translucent_layers: &[],
+        layer_overrides: &[],
         leaf_culling: LeafCullingMode::Off,
     };
     let mut mesh = mesher.mesh(&region, 0);
@@ -389,6 +390,7 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
         cutout_leaves: true,
         opaque_ice: false,
         translucent_layers: &[],
+        layer_overrides: &[],
         leaf_culling: LeafCullingMode::Off,
     };
     let mut mesh = mesher.mesh(&region, 0);
@@ -479,6 +481,7 @@ fn a_folder_without_connected_texture_rules_meshes_exactly_as_before() {
             cutout_leaves: true,
             opaque_ice: false,
             translucent_layers: &[],
+            layer_overrides: &[],
             leaf_culling: LeafCullingMode::Off,
         };
         let mesh = mesher.mesh(&region, 0);

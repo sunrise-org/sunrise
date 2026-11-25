@@ -203,6 +203,7 @@ class UntrustedBuildTests(unittest.TestCase):
 
     def setUp(self):
         self.game = (WORKFLOWS / "game-build.yml").read_text()
+        self.exporters = (WORKFLOWS / "exporters.yml").read_text()
 
     def test_no_nightly_build_is_trusted(self):
         # The train only starts `nightly build` (Nightly only since 2026-10-28); it builds nothing itself.
@@ -224,12 +225,14 @@ class UntrustedBuildTests(unittest.TestCase):
         # run on Dyna's runner for an untrusted build only, never sharing a trusted build with pull requests' jobs.
         self.assertNotIn("MAC_RUNNER", self.game)
         self.assertNotIn('"macOS"', self.game)
-        exporters = next(line for line in self.game.splitlines() if "runs-on:" in line and "NIGHTLY_EXPORTERS_RUNNER" in line)
+        self.assertNotIn('"macOS"', self.exporters)
+        exporters = next(line for line in self.exporters.splitlines() if "runs-on:" in line and "NIGHTLY_EXPORTERS_RUNNER" in line)
         self.assertIn("!inputs.trusted && vars.DYNA_CI_SELF_HOSTED == 'true' && vars.NIGHTLY_EXPORTERS_RUNNER", exporters)
 
     def test_a_trusted_build_never_reads_the_shared_sccache(self):
-        calls = self.game.count("bash tools/ci/runner-env.sh")
-        self.assertEqual(self.game.count("SUNRISE_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}"), calls)
+        both = self.game + self.exporters
+        calls = both.count("bash tools/ci/runner-env.sh")
+        self.assertEqual(both.count("SUNRISE_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}"), calls)
         env = (Path(__file__).resolve().parents[1] / "tools/ci/runner-env.sh").read_text()
         self.assertEqual(env.count('-z "${SUNRISE_NO_SCCACHE:-}"'), 2)
 

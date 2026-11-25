@@ -4,6 +4,8 @@
 use super::{Kind, MAX_FILE};
 use serde::{Deserialize, Deserializer};
 
+pub mod collection;
+
 /// The only schema served at the v2 address; a breaking change raises it and moves the index.
 pub const SCHEMA: u64 = 2;
 

@@ -1090,6 +1090,18 @@ pub fn destroyed_container(stack: &mut ItemStack) -> Vec<ItemStack> {
     held.into_iter().map(|(_, stack)| stack).collect()
 }
 
+/// [`component_bool`] for a component held as JSON, as the item table reads its defaults: a
+/// mod's declared patch reaches them from NBT, where a boolean is a byte, so a number is a
+/// boolean too (`NbtOps.getBooleanValue`: true unless its double value is zero).
+pub(crate) trait CodecBool {
+    fn codec_bool(&self) -> Option<bool>;
+}
+impl CodecBool for serde_json::Value {
+    fn codec_bool(&self) -> Option<bool> {
+        self.as_bool().or_else(|| self.as_f64().map(|d| d != 0.0))
+    }
+}
+
 /// `NbtOps.getBooleanValue`, used by boolean component codecs: every numeric tag
 /// is true unless its double value is zero. In particular, fractions stay true.
 pub fn component_bool(value: &Tag) -> Option<bool> {

@@ -373,20 +373,17 @@ impl Game<'_> {
             let g = &self.settings.sunrise;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
             let mut raw_flight = self.flight.as_mut().filter(|flight| flight.raw);
-            let vertex_bytes = |mesh: &sunrise_client::mesher::SectionMesh| {
-                ((mesh.solid.len() + mesh.translucent.len())
-                    * std::mem::size_of::<sunrise_client::mesher::TerrainVertex>())
-                    as u64
-            };
             // The meshes, once copied, are freed by a worker (`Streaming::free`).
             if !budgeted && self.pending_uploads.is_empty() && uploads.len() <= AUTO_UPLOADS_AT_ONCE
             {
                 sunrise_client::spans::time("upload", || {
                     for upload in &uploads {
                         if self.streaming.can_publish_mesh(&self.world, upload) {
+                            // What the renderer copies for it, a pack's beside the vertices.
+                            let bytes = renderer.mesh_upload_bytes(&upload.mesh);
                             renderer.upload(upload.key, &upload.mesh);
                             if let Some(flight) = raw_flight.as_deref_mut() {
-                                flight.note_mesh_uploads(1, vertex_bytes(&upload.mesh));
+                                flight.note_mesh_uploads(1, bytes);
                             }
                         }
                     }
@@ -451,7 +448,8 @@ impl Game<'_> {
                     if auto.is_some_and(|time| count > 0 && started.elapsed() >= time) {
                         break;
                     }
-                    let size = vertex_bytes(mesh);
+                    // What the renderer copies for it, a pack's beside the vertices.
+                    let size = renderer.mesh_upload_bytes(mesh);
                     if (limit > 0 && count >= limit)
                         || (budget > 0 && bytes > 0 && bytes + size > budget)
                     {

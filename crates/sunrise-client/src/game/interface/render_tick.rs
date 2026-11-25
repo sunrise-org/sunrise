@@ -932,6 +932,23 @@ impl Game<'_> {
                     match step {
                         AnimateStep::BlockPart(state, pos) => self.mod_animate_tick(state, pos),
                         AnimateStep::Ambient(options, at) => self.emit_model_ambient(&options, at),
+                        AnimateStep::BookShelf {
+                            table,
+                            offset,
+                            mut valid,
+                        } => {
+                            if let Some(level) = self.native_client_level() {
+                                let [x, y, z] = table;
+                                let [ox, oy, oz] = offset;
+                                self.native_is_valid_book_shelf(
+                                    level,
+                                    BlockPos::new(x, y, z),
+                                    BlockPos::new(ox, oy, oz),
+                                    &mut valid,
+                                );
+                            }
+                            sampling.answer_book_shelf(valid);
+                        }
                     }
                     continue;
                 }

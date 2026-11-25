@@ -674,9 +674,31 @@ const FACE: &str = "    vec3 hz_p0 = uintBitsToFloat(hz_cp0);\n    \
 
 /// GLSL: the face normal and tangent of a terrain vertex from the normal stream
 /// ([`TerrainDraws::Normals`]), which holds `FACE`'s, constants included, in signed normalized
-/// bytes: made unit length again.
+/// bytes: made unit length again. And its quad's source as `SOURCE` works it out, its id looked
+/// up at upload (`hz_v_source`, [`NORMAL_ATTRIBUTES`]).
 const NORMALS: &str = "    hz_Normal = normalize(hz_v_normal.xyz);\n    \
-    hz_tangent = vec4(normalize(hz_v_tangent.xyz), hz_v_tangent.w);\n";
+    hz_tangent = vec4(normalize(hz_v_tangent.xyz), hz_v_tangent.w);\n    \
+    uvec2 hz_source = hz_v_source;\n    \
+    bool hz_known_source = (hz_source.y & 8192u) != 0u;\n    \
+    int hz_material = int(hz_source.x);\n";
+
+/// GLSL: set 3, in terrain programs that read their arena page (flat draws, and per-section ones
+/// of [`TerrainDraws::Pages`]): each slot's quad source (`hz_sources`, a page's sidecar or one
+/// unknown source), the page's vertices, and the immutable table of sprite rectangles and the
+/// running pack's ids of source states (`pack_post::terrain_tables`).
+const PAGES: &str = "layout(set = 3, binding = 0) readonly buffer HzQuadSources { uvec2 hz_sources[]; };\n\
+layout(set = 3, binding = 1) readonly buffer HzVertices { uint hz_vertices[]; };\n\
+layout(set = 3, binding = 2) readonly buffer HzTerrainTables { int hz_tables[]; };\n";
+
+/// GLSL: a terrain vertex's quad's source (`hz_source`: its state, and its cell, fluid and valid
+/// flags and emitted light), read at the slot naming the quad (`PULL_CORNERS`' `hz_slot`), and
+/// its `mc_Entity` id (`hz_material`): the state's model or fluid id from the table, -1 for an
+/// unknown source or a state past the table.
+const SOURCE: &str = "    uvec2 hz_source = uvec2(0u);\n    \
+    if (hz_slot < uint(hz_sources.length())) hz_source = hz_sources[hz_slot];\n    \
+    bool hz_known_source = (hz_source.y & 8192u) != 0u;\n    \
+    int hz_material = -1;\n    \
+    if (hz_known_source && hz_source.x < uint(hz_tables[1])) hz_material = hz_tables[2u + uint(hz_tables[0]) + 2u * hz_source.x + ((hz_source.y >> 12u) & 1u)];\n";
 
 /// GLSL: a flat-drawn vertex's quad's middle in its sprite (`mc_midTexCoord`), from its four
 /// corners' UVs, after `FACE`.
@@ -788,20 +810,22 @@ pub fn deviceless_game_inputs(
 /// How the game's terrain draws give a pack's terrain program its vertices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerrainDraws {
-    /// Per-section draws: each vertex as its attributes alone, its quad's other corners out of
-    /// reach, so its normal and tangent are the constant ones. Where the pack's programs fit
-    /// the vertex stage neither with the pages ([`TerrainBindings::pages_fit`]) nor with the
-    /// normal stream ([`TerrainBindings::normals_fit`]).
+    /// Per-section draws: each vertex as its attributes alone, its quad's other corners and
+    /// source out of reach, so its normal and tangent are the constant ones, its `mc_Entity`
+    /// (-1, 0) and its `at_midBlock` zero. Where the pack's programs fit the vertex stage
+    /// neither with the pages ([`TerrainBindings::pages_fit`]) nor with the normal stream
+    /// ([`TerrainBindings::normals_fit`]).
     Attributes,
-    /// Per-section draws whose program also reads its quad's corners from the arena page (set
-    /// 3's `hz_vertices`, `PULL_CORNERS`): the face normal and tangent as flat draws give them
-    /// (`FACE`).
+    /// Per-section draws whose program also reads its quad's corners and source from the arena
+    /// page (set 3's `hz_vertices` and `hz_sources`, `PULL_CORNERS`): the face normal and
+    /// tangent (`FACE`), and `mc_Entity` and `at_midBlock` (`SOURCE`), as flat draws give them.
     Pages,
     /// Flat draws: each vertex pulled from the arena page (`PULL_CORNERS`, `PULL_FLAT`).
     Flat,
-    /// Per-section draws whose vertices also carry their quad's normal and tangent, in a vertex
-    /// buffer of their own beside the arena's vertices ([`NORMAL_ATTRIBUTES`], `NORMALS`): worked
-    /// out at upload as `FACE` works them out. Where per-section draws read no pages.
+    /// Per-section draws whose vertices also carry their quad's normal and tangent, and its
+    /// source with its block id, in a vertex buffer of their own beside the arena's vertices
+    /// ([`NORMAL_ATTRIBUTES`], `NORMALS`): worked out at upload as `FACE` and `SOURCE` work them
+    /// out. Where per-section draws read no pages.
     Normals,
 }
 
@@ -817,19 +841,22 @@ impl TerrainDraws {
     }
 }
 
-/// Bytes a vertex has in the normal stream ([`TerrainDraws::Normals`]): its normal and its
-/// tangent as [`NORMAL_ATTRIBUTES`] read them.
-pub const NORMAL_BYTES: u64 = 8;
+/// Bytes a vertex has in the normal stream ([`TerrainDraws::Normals`]): its normal, its
+/// tangent and its quad's source as [`NORMAL_ATTRIBUTES`] read them.
+pub const NORMAL_BYTES: u64 = 16;
 
 /// The normal stream's vertex attributes ([`TerrainDraws::Normals`]), the third vertex buffer of
 /// a per-section terrain draw: the normal (w 0) and the tangent (w its handedness, -1 or 1), each
 /// as four signed normalized bytes, the format of vanilla 26.3's own vertex normals
-/// (`DefaultVertexFormat`'s `Normal` element is `GpuFormat.RGBA8_SNORM`).
-pub const NORMAL_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-    wgpu::vertex_attr_array![6 => Snorm8x4, 7 => Snorm8x4];
+/// (`DefaultVertexFormat`'s `Normal` element is `GpuFormat.RGBA8_SNORM`); then the quad's source
+/// as `SOURCE` reads it: its `mc_Entity` id under the pack's `block.properties` (-1 for none) and
+/// the word flat draws read in `hz_sources` (cell, fluid and valid flags, emitted light; 0 for
+/// none).
+pub const NORMAL_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![6 => Snorm8x4, 7 => Snorm8x4, 8 => Uint32x2];
 
 /// Storage buffers a terrain program reading its page binds in its vertex stage for it: set 3's
-/// three (`pack_post::block_ids`'s layout), of which the program reads `hz_vertices`.
+/// three (`pack_post::block_ids`'s layout), which the program reads (`PAGES`).
 const PAGES_STORAGE: u32 = 3;
 /// Uniform buffers every terrain program's vertex stage binds: set 0's binding 0 (the pack's
 /// uniforms, `pack_post::entry`'s visibility) and set 2's draw uniform (`pack_draw`).
@@ -900,7 +927,7 @@ impl TerrainBindings {
     /// `max_buffers_and_acceleration_structures_per_shader_stage`; with every bind group, under
     /// `max_bind_groups_plus_vertex_buffers`; and under `max_vertex_buffers` (wgpu-core checks
     /// each when it makes the pipeline). wgpu-core also checks the attributes against
-    /// `max_vertex_attributes`: 8 here (5 of the vertices, 1 of the origin, 2 of the stream),
+    /// `max_vertex_attributes`: 9 here (5 of the vertices, 1 of the origin, 3 of the stream),
     /// under the 16 of every wgpu limits tier (`Limits::downlevel_webgl2_defaults` too), so that
     /// check can't fail. Where they don't fit, per-section draws take
     /// [`TerrainDraws::Attributes`], as a pack whose programs load without the stream must not
@@ -967,27 +994,20 @@ impl PackAtlas {
                 "layout(set = 1, binding = 0) readonly buffer HzBlockSlots { uint hz_block_slots[]; };\n\
                  layout(set = 1, binding = 1) readonly buffer HzSlotOrigins { vec4 hz_slot_origins[]; };\n",
             );
-            // Source metadata follows each quad in its arena page. The immutable table
-            // holds sprite rectangles and the current pack's ids of source states.
-            declarations.push_str(
-                "layout(set = 3, binding = 0) readonly buffer HzQuadSources { uvec2 hz_sources[]; };\n\
-                 layout(set = 3, binding = 1) readonly buffer HzVertices { uint hz_vertices[]; };\n\
-                 layout(set = 3, binding = 2) readonly buffer HzTerrainTables { int hz_tables[]; };\n",
-            );
+            declarations.push_str(PAGES);
             declarations.push_str(CORNER_FN);
             "hz_slot_origins[hz_block_slots[hz_slot >> 8u]]"
         } else {
             declarations.push_str("layout(location = 5) in vec4 hz_v_origin;\n");
             if draws == TerrainDraws::Pages {
-                // Only its quad's corners, by the same binding as flat draws.
-                declarations.push_str(
-                    "layout(set = 3, binding = 1) readonly buffer HzVertices { uint hz_vertices[]; };\n",
-                );
+                // Its quad's corners and source, by the same bindings as flat draws.
+                declarations.push_str(PAGES);
                 declarations.push_str(CORNER_FN);
             }
             if draws == TerrainDraws::Normals {
                 declarations.push_str(
-                    "layout(location = 6) in vec4 hz_v_normal;\nlayout(location = 7) in vec4 hz_v_tangent;\n",
+                    "layout(location = 6) in vec4 hz_v_normal;\nlayout(location = 7) in vec4 hz_v_tangent;\n\
+                     layout(location = 8) in uvec2 hz_v_source;\n",
                 );
             }
             "hz_v_origin"
@@ -1044,6 +1064,7 @@ impl PackAtlas {
         if draws == TerrainDraws::Pages {
             body.insert_str(0, PULL_CORNERS);
             body.push_str(FACE);
+            body.push_str(SOURCE);
         }
         if draws == TerrainDraws::Normals {
             body.push_str(NORMALS);
@@ -1052,25 +1073,21 @@ impl PackAtlas {
             body.insert_str(0, &format!("{PULL_CORNERS}{PULL_FLAT}"));
             body.push_str(FACE);
             body.push_str(MID);
-            body.push_str(
-                "    uvec2 hz_source = uvec2(0u);\n    \
-                 if (hz_slot < uint(hz_sources.length())) hz_source = hz_sources[hz_slot];\n    \
-                 bool hz_known_source = (hz_source.y & 8192u) != 0u;\n    \
-                 int hz_material = -1;\n    \
-                 if (hz_known_source && hz_source.x < uint(hz_tables[1])) hz_material = hz_tables[2u + uint(hz_tables[0]) + 2u * hz_source.x + ((hz_source.y >> 12u) & 1u)];\n",
-            );
+            body.push_str(SOURCE);
         }
         declarations.push_str(
             "vec2 hz_cell; vec2 hz_scale; vec2 hz_mid; float hz_uv_scale; vec4 hz_tangent;\n",
         );
-        let entity = if flat {
+        // Every draw that reaches its quad's source (`SOURCE`, `NORMALS`).
+        let sourced = draws != TerrainDraws::Attributes;
+        let entity = if sourced {
             "vec4(float(hz_material), hz_known_source ? float((hz_source.y >> 12u) & 1u) : 0.0, 0.0, 0.0)"
         } else {
             "vec4(-1.0, 0.0, 0.0, 0.0)"
         };
         // The mesher's owning cell, even for inset, offset, multipart or extended faces;
         // w is the source's emitted light, independent of sprite and smooth light.
-        let mid_block = if flat {
+        let mid_block = if sourced {
             "(hz_known_source ? vec4((vec3(float(hz_source.y & 15u), float((hz_source.y >> 4u) & 15u), float((hz_source.y >> 8u) & 15u)) + 0.5 - hz_v_pos) * 64.0, float((hz_source.y >> 14u) & 15u)) : vec4(0.0))"
         } else {
             "vec4(0.0)"
@@ -1584,8 +1601,9 @@ mod tests {
         assert!(!crowded.normals_fit(&limits(u32::MAX, u32::MAX, 8), gpu(true)));
     }
 
-    /// Only the normal stream's programs read locations 6 and 7, and they take the stream's
-    /// normal and tangent where the others keep the constants or work them out from the page.
+    /// Only the normal stream's programs read locations 6 to 8, and they take the stream's
+    /// normal, tangent and source where the others keep the constants or work them out from
+    /// the page.
     #[test]
     fn normal_stream_inputs_read_the_stream() {
         let inputs = |draws| PackAtlas::terrain_inputs_sized([64, 32], 4, 16, false, draws);
@@ -1600,6 +1618,11 @@ mod tests {
                 .declarations
                 .contains("layout(location = 7) in vec4 hz_v_tangent;")
         );
+        assert!(
+            normals
+                .declarations
+                .contains("layout(location = 8) in uvec2 hz_v_source;")
+        );
         assert!(normals.body.ends_with(NORMALS));
         assert!(!normals.declarations.contains("hz_vertices"));
         assert!(!TerrainDraws::Normals.reads_pages());
@@ -1610,6 +1633,7 @@ mod tests {
         ] {
             let inputs = inputs(other);
             assert!(!inputs.declarations.contains("hz_v_normal"), "{other:?}");
+            assert!(!inputs.declarations.contains("hz_v_source"), "{other:?}");
             assert!(!inputs.body.contains(NORMALS), "{other:?}");
         }
     }

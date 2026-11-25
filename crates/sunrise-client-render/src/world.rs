@@ -1093,6 +1093,36 @@ impl World {
             extras.pending_loot.remove(&key);
         });
     }
+    /// Drops the live block entity's auxiliary fields (`block_entity_sources`, `pending_loot`,
+    /// `container_stack_limits`) without marking the chunk unsaved and without touching
+    /// unmodelled `saved.block_entities`.
+    ///
+    /// Vanilla's `LevelChunk.removeBlockEntity` does not call `markUnsaved()` and does not
+    /// touch `pendingBlockEntities` (only `ProtoChunk.removeBlockEntity` clears those); in
+    /// Sunrise, `block_entity_sources` and `pending_loot` hold fields of the already-loaded
+    /// block entity (such as `lock` and `LootTable`) that live on the `BlockEntity` instance
+    /// itself in vanilla, so they leave with it without dirtying the chunk.
+    pub fn forget_block_entity_source_unmodified(&mut self, key: (i32, i32, i32)) {
+        let chunk_key = (key.0 >> 4, key.2 >> 4);
+        let Some(chunk) = self.chunks.get_mut(&chunk_key) else {
+            return;
+        };
+        let has_extras = chunk.saved.as_ref().is_some_and(|extras| {
+            extras.block_entity_sources.iter().any(|(p, _)| *p == key)
+                || extras.pending_loot.contains_key(&key)
+        });
+        let has_limit = chunk.container_stack_limits.contains_key(&key);
+        if !has_extras && !has_limit {
+            return;
+        }
+        let chunk = Arc::make_mut(chunk);
+        if has_extras && let Some(saved) = chunk.saved.as_mut() {
+            let extras = Arc::make_mut(saved);
+            extras.block_entity_sources.retain(|(p, _)| *p != key);
+            extras.pending_loot.remove(&key);
+        }
+        chunk.container_stack_limits.remove(&key);
+    }
     /// Run `f` on the keep-as-loaded data of the chunk holding `key`, put back
     /// for the next save (`block_entity_sources` is where Sunrise restores the
     /// block entity fields its model does not hold).

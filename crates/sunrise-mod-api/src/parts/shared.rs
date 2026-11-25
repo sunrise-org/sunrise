@@ -105,6 +105,7 @@ pub struct PartRegistrar {
         HashMap<&'static str, HashMap<&'static str, crate::RegisteredAttachment>>,
     pub(crate) custom_stats: Vec<String>,
     pub(crate) custom_stat_owners: Vec<&'static str>,
+    pub(crate) enchanting_table_offsets: Vec<[i32; 3]>,
     pub(crate) mod_id: &'static str,
     pub(crate) mod_index: usize,
     /// Parts registered so far, by every mod: the next part's `order`.
@@ -170,6 +171,7 @@ impl PartRegistrar {
             attachment_types: HashMap::new(),
             custom_stats: Vec::new(),
             custom_stat_owners: Vec::new(),
+            enchanting_table_offsets: Vec::new(),
             mod_id,
             mod_index: 0,
             registered: 0,
@@ -409,6 +411,7 @@ pub(crate) fn install_registrar(
         attachment_types: registrar.attachment_types,
         custom_stats: registrar.custom_stats,
         custom_stat_owners: registrar.custom_stat_owners,
+        enchanting_table_offsets: registrar.enchanting_table_offsets,
         keys: registrar.parts,
         tags: registrar.tags,
         block_entity_types: registrar.block_entity_types,

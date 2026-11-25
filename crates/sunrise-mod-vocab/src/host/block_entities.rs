@@ -221,4 +221,30 @@ pub trait BlockEntitiesBackendMut {
         slot: u32,
         stack: Option<ItemStack>,
     ) -> Result<bool, BlockEntityItemError>;
+    /// Side: server.
+    /// Removes this block entity from its level without changing its block or state and
+    /// without running `pre_remove_side_effects` (`Level.removeBlockEntity`,
+    /// `LevelChunk.removeBlockEntity`, `BlockEntity.setRemoved`).
+    ///
+    /// Accepts any resident block entity (vanilla or mod) in a writable server level.
+    /// Unregisters its game-event listener (sculk sensors, calibrated sensors, shriekers,
+    /// catalysts), runs its `setRemoved` effects (a jukebox stops playing; a beacon plays
+    /// its deactivation sound), retires its ticker, attachments, custom name, lock, and
+    /// contents watches, and notifies neighbours if a mod block entity's published shapes
+    /// disappeared. Sends no network packet and does not mark the chunk unsaved.
+    ///
+    /// Change the block after removing if it still carries a block entity type; otherwise
+    /// a fresh, empty entity is created on the next access or reload.
+    ///
+    /// Inside a transaction, tentative reads immediately see the entity as gone and this
+    /// handle as stale; `setRemoved` effects (listener unregister, jukebox stop, beacon
+    /// sound, neighbour updates) are deferred to root commit and never happen on abort,
+    /// which restores the entity, generation, attachments, custom name, lock, watches,
+    /// and published shapes. A subsequent `set_block` at the same position in the same
+    /// transaction does not run `pre_remove_side_effects` for the already-removed entity.
+    ///
+    /// Returns `Err(BlockEntityError::Stale)` when this handle is stale, unloaded,
+    /// temporarily taken out by an engine operation, on a client, or in a level not
+    /// writable here.
+    fn block_entity_remove(&mut self, entity: BlockEntityRef) -> Result<(), BlockEntityError>;
 }

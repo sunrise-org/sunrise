@@ -25,11 +25,12 @@ pub const LARGE_PAGE_BYTES: u64 = (1 << 31) - (1 << 20);
 
 /// Bytes of a slot's source in a page's sidecar (`Page::sources`).
 const SOURCE_BYTES: u64 = std::mem::size_of::<crate::mesher::TerrainSource>() as u64;
-/// Bytes of a vertex's normal and tangent in a page's normal stream (`Page::normals`).
+/// Bytes of a vertex's entry in a page's normal stream (`Page::normals`): its normal, its
+/// tangent, and its quad's block id and source word (`terrain_normals::Entry`).
 const NORMAL_BYTES: u64 = sunrise_render_shaderpack::pack_atlas::NORMAL_BYTES;
 
 /// Where a range names its quads, for their sources (`Arena::write_sources`): quad `i` by the
-/// slot `step * i` of the range. A flat draw finds a quad's source at that slot
+/// slot `step * i` of the range. A draw that reads the page finds a quad's source at that slot
 /// (`pack_atlas`'s `hz_slot`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuadSlots {
@@ -59,16 +60,25 @@ impl QuadSlots {
         slots: u64,
         out: &mut Vec<crate::mesher::TerrainSource>,
     ) -> bool {
-        let quads = sources.len() as u64;
-        if quads == 0 || quads != self.quads || quads * self.step > slots {
+        let Some(len) = self.laid_out(sources.len(), slots) else {
             return false;
-        }
+        };
         out.clear();
-        out.resize((self.quads * self.step) as usize, Default::default());
+        out.resize(len as usize, Default::default());
         for (to, source) in out.iter_mut().step_by(self.step as usize).zip(sources) {
             *to = *source;
         }
         true
+    }
+}
+
+impl QuadSlots {
+    /// The slots `lay_out` fills for `sources` sources in a range of `slots`, or none where it
+    /// lays out nothing.
+    fn laid_out(self, sources: usize, slots: u64) -> Option<u64> {
+        let quads = sources as u64;
+        (quads > 0 && quads == self.quads && quads * self.step <= slots)
+            .then_some(quads * self.step)
     }
 }
 
@@ -140,8 +150,9 @@ struct Page {
     /// Optional shader-pack source records, one per vertex slot: a quad's sits at the slot
     /// that names it (`QuadSlots`), the others are zero.
     sources: Option<wgpu::Buffer>,
-    /// The normal stream: each vertex slot's normal and tangent (`NORMAL_BYTES`), where the
-    /// arena keeps one (`Arena::normals`); made, grown and dropped with the page.
+    /// The normal stream: each vertex slot's normal, tangent, block id and source word
+    /// (`NORMAL_BYTES`), where the arena keeps one (`Arena::normals`); made, grown and dropped
+    /// with the page.
     normals: Option<wgpu::Buffer>,
     /// Capacity in vertices.
     capacity: u64,
@@ -201,7 +212,8 @@ pub struct Arena {
     closing: Option<u32>,
     /// A page had to go to system memory (logged once).
     spilled: bool,
-    /// Flat draws read its sources (`read_sources`): a `shaders/` pack draws terrain from it.
+    /// Draws read its sources (`read_sources`): a `shaders/` pack draws terrain from it, flat or
+    /// per section reading its pages.
     sources_read: bool,
     /// Its pages have sidecars: a mesh with sources came while they are read.
     sources_enabled: bool,
@@ -467,7 +479,7 @@ impl Arena {
     }
 
     fn source_buffer(device: &wgpu::Device, capacity: u64) -> Option<wgpu::Buffer> {
-        // Flat draws bind it whole (`pack_atlas`'s `hz_sources`).
+        // Draws that read the page bind it whole (`pack_atlas`'s `hz_sources`).
         if capacity * SOURCE_BYTES > device.limits().max_storage_buffer_binding_size {
             return None;
         }
@@ -481,12 +493,12 @@ impl Arena {
         )
     }
 
-    /// Whether flat draws read its sources (`read_sources`).
+    /// Whether draws read its sources (`read_sources`).
     pub(crate) fn sources_read(&self) -> bool {
         self.sources_read
     }
 
-    /// Whether flat draws read its sources from now on: while they don't, sources are not kept
+    /// Whether draws read its sources from now on: while they don't, sources are not kept
     /// and its pages have no sidecars. Turning it off gives back their buffers, for a
     /// [`Graveyard`].
     pub fn read_sources(&mut self, on: bool) -> Vec<wgpu::Buffer> {
@@ -507,10 +519,10 @@ impl Arena {
     }
 
     /// The sources of the range of `slots` at `start` of `page`, one per quad as `names` says
-    /// where each quad is named, kept only while flat draws read them (`read_sources`).
+    /// where each quad is named, kept only while draws read them (`read_sources`).
     /// Native meshes allocate no sidecar. Once needed, existing pages also get a zeroed
     /// sidecar so moves can retain sources. Failure leaves geometry intact and attributes
-    /// unknown; a later source upload may retry its page.
+    /// unknown; a later source upload may retry its page. The bytes it uploaded.
     pub(crate) fn write_sources(
         &mut self,
         device: &wgpu::Device,
@@ -519,9 +531,9 @@ impl Arena {
         (page, start, slots): (u32, u64, u64),
         names: QuadSlots,
         sources: &[crate::mesher::TerrainSource],
-    ) {
+    ) -> u64 {
         if !self.sources_read {
-            return;
+            return 0;
         }
         if !sources.is_empty() && !self.sources_enabled {
             self.sources_enabled = true;
@@ -548,32 +560,45 @@ impl Arena {
                         start * SOURCE_BYTES,
                         bytemuck::cast_slice(&self.source_slots),
                     );
+                    return self.source_bytes(names, sources.len(), slots);
                 }
             }
         }
+        0
     }
     /// The normal stream of `vertices`, written at `start` of `page` (`terrain_normals::stream`),
-    /// where the arena keeps one (`with_normals`): the bytes it wrote.
+    /// where the arena keeps one (`with_normals`): with each quad's source and its id under
+    /// `ids` where `sources` has one a quad, as `write_sources` keeps them, else none. The bytes
+    /// it wrote.
     pub(crate) fn write_normals(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         uploads: &mut super::upload::Uploads,
         (page, start): (u32, u64),
         vertices: &[crate::mesher::TerrainVertex],
+        sources: &[crate::mesher::TerrainSource],
+        ids: &[i32],
     ) -> u64 {
+        use super::terrain_normals::{CHUNK, Entry, stream};
         if !self.normals || vertices.is_empty() {
             return 0;
         }
         let p = self.pages[page as usize].as_ref().expect("live arena page");
         let buffer = p.normals.as_ref().expect("every page has a normal stream");
+        let sources = if sources.len() == vertices.len() / 4 {
+            sources
+        } else {
+            &[]
+        };
         // A chunk at a time, on the stack: the arena keeps no buffer of its own for it, nor
         // grows the `Renderer` the game holds inline.
-        let mut entries = [[0i8; 8]; super::terrain_normals::CHUNK];
-        let chunks = vertices.chunks(super::terrain_normals::CHUNK);
+        let mut entries = [Entry::default(); CHUNK];
+        let chunks = vertices.chunks(CHUNK);
         for (i, chunk) in chunks.enumerate() {
             let entries = &mut entries[..chunk.len()];
-            super::terrain_normals::stream(chunk, entries);
-            let at = start + (i * super::terrain_normals::CHUNK) as u64;
+            let quads = sources.get(i * CHUNK / 4..).unwrap_or(&[]);
+            stream(chunk, quads, ids, entries);
+            let at = start + (i * CHUNK) as u64;
             uploads.buffer(
                 encoder,
                 buffer,
@@ -581,12 +606,33 @@ impl Arena {
                 bytemuck::cast_slice(entries),
             );
         }
-        vertices.len() as u64 * NORMAL_BYTES
+        self.stream_bytes(vertices.len() as u64)
+    }
+    /// Bytes `write_sources` uploads for `sources` sources of a range of `slots` named as
+    /// `names` says: a source a slot it lays out while sources are read, else none.
+    pub(crate) fn source_bytes(&self, names: QuadSlots, sources: usize, slots: u64) -> u64 {
+        let laid_out = names.laid_out(sources, slots).filter(|_| self.sources_read);
+        laid_out.map_or(0, |slots| slots * SOURCE_BYTES)
+    }
+    /// Bytes `write_normals` uploads for `vertices` vertices: an entry each where the arena
+    /// keeps a normal stream (`with_normals`), else none.
+    pub(crate) fn stream_bytes(&self, vertices: u64) -> u64 {
+        if self.normals {
+            vertices * NORMAL_BYTES
+        } else {
+            0
+        }
     }
     /// Bytes a vertex (or index) takes in the arena's pages: its own (`stride`) and, where the arena keeps
-    /// a normal stream, its entry there. What moving or uploading a vertex copies.
+    /// a normal stream, its entry there, and where its pages have source sidecars, its slot's
+    /// source. What moving or uploading a vertex copies.
     pub fn vertex_bytes(&self) -> u64 {
-        self.stride + if self.normals { NORMAL_BYTES } else { 0 }
+        let sources = if self.sources_enabled {
+            SOURCE_BYTES
+        } else {
+            0
+        };
+        self.stride + if self.normals { NORMAL_BYTES } else { 0 } + sources
     }
     /// Vertices in `page`'s ranges in use (as `span` rounds them).
     pub fn used(&self, page: u32) -> u64 {
