@@ -662,10 +662,12 @@ was made: `entity()` (the entity's id, `None` for the empty, position and cache 
   paths, on the thread that owns the level: the server tick, and the client's own prediction. A
   guest's move is checked by the server with the same entity id. Fluid passage and face-support
   checks never ask. Another thread (the mesher, world generation) reads the normal shape.
-- **Once a tick.** A part is asked once for each distinct question in a tick: the state, the
-  position and every input of the query (entity, kind, height, descending, placement, held item)
-  make one question. A step-up retry or a second sweep reads the first answer, so the shape cannot change
-  in the middle of a move.
+- **Every query.** A part is asked for every query that meets an opted-in state, as vanilla asks
+  `getCollisionShape` for every block of every sweep. A step-up retry or a second sweep asks
+  again, and a change to the mod's own state inside a tick is seen by the next query.
+- **Not the selection shape.** The outline a player targets is the declared shape or the one the
+  block entity publishes; this part is never asked for it, so a block can be solid and
+  unselectable, or passable and selectable.
 - **No re-entry.** The query holds the entity's state from before the move, and a collision query
   made inside the callback gets the empty-context answer, never a nested call.
 - **No `Host`.** A move holds the level's collision data and cannot lend a `Host`, as for
@@ -683,7 +685,7 @@ was made: `entity()` (the entity's id, `None` for the empty, position and cache 
   the previous answer, or `None` if no earlier Part answered. A failed shape construction
   returns an error to its caller without changing the answer.
 - **Cost.** Nothing for a block without such a part. An opted-in block costs one call per
-  distinct question in a tick.
+  query that meets it.
 
 #### Items
 

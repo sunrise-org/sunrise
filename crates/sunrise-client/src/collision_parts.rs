@@ -2,8 +2,8 @@
 //! (`BlockPart::collision_shape`, vanilla's `getCollisionShape` with its `CollisionContext`).
 //!
 //! The game installs [`ModParts`] around a level's tick ([`sunrise_world::part_collision`]); a
-//! collision query that meets a state whose parts opt in asks it, once for each entity,
-//! position and tick. It runs on the thread that ticks the level and nowhere else, so a worker
+//! collision query that meets a state whose parts opt in asks it, every time, as vanilla asks
+//! `getCollisionShape` for every block of every sweep. It runs on the thread that ticks the level and nowhere else, so a worker
 //! reads the normal shape. The part holds no `Host`: it answers from the query.
 use mod_api::{CollisionEntityKind, CollisionQuery};
 use std::{
@@ -22,8 +22,9 @@ use sunrise_world::{
 /// The collision shape of a block state is being read for the query `query`
 /// (`BlockBehaviour.getCollisionShape`). `shape` starts as `None`, which keeps the shape the block
 /// would otherwise have, and the block's parts may lend a replacement shape for this query.
-/// Fires on the side that ticks the entity, once for each distinct question in a tick, so a listener
-/// must be a pure function of its inputs and the state it keeps itself.
+/// Fires on the side that ticks the entity, for every query that meets an opted-in state: a
+/// step-up retry or a second sweep asks again, and a change to the mod's own state is seen by the
+/// next query.
 #[inline(never)]
 pub fn native_collision_shape(
     context: &LoopContext,
@@ -47,33 +48,10 @@ fn entity_of(context: &CollisionContext<'_>) -> u32 {
     }) as u32
 }
 
-/// What tells one question to a part from another: the block state at a position and every input
-/// of the [`CollisionQuery`]. The held item is the shared name's address, so a key owns nothing.
-#[derive(PartialEq, Eq, Hash)]
-struct AnswerKey {
-    state: BlockStateId,
-    position: [i32; 3],
-    /// The entity, 0 for none.
-    entity: u32,
-    /// The standing height the query is above or below blocks by, as bits.
-    bottom: Option<u64>,
-    kind: EntityContextKind,
-    /// The fluids a living entity can stand on, `None` for one that is not living.
-    standable: Option<&'static [&'static str]>,
-    descending: bool,
-    placement: bool,
-    always_collide_with_fluid: bool,
-    held_item: Option<usize>,
-}
-
-/// The parts of one level's tick: answers collision queries from the mods, remembering each
-/// answer for the rest of the tick. One value serves every tick: [`Self::begin_tick`] empties the
-/// answers and keeps their storage and the shared names.
+/// The parts of one level's tick: answers collision queries from the mods. One value serves every
+/// tick: [`Self::begin_tick`] points it at the tick's level and keeps the shared names.
 pub struct ModParts {
     context: RefCell<Arc<LoopContext>>,
-    /// The answer for each distinct question: the state, the position and everything of the
-    /// query that a part can read.
-    cache: RefCell<HashMap<AnswerKey, Option<VoxelShape>>>,
     /// Whether a part is running: a query made inside it gets the normal shape, never a nested
     /// call.
     busy: Cell<bool>,
@@ -87,19 +65,17 @@ impl ModParts {
     pub fn new(context: Arc<LoopContext>) -> Self {
         Self {
             context: RefCell::new(context),
-            cache: RefCell::default(),
             busy: Cell::new(false),
             items: RefCell::default(),
             fluids: RefCell::default(),
         }
     }
 
-    /// Starts a tick of the level `context` belongs to: nothing is remembered from the last.
+    /// Starts a tick of the level `context` belongs to.
     pub fn begin_tick(&self, context: &Arc<LoopContext>) {
         if !Arc::ptr_eq(&self.context.borrow(), context) {
             *self.context.borrow_mut() = Arc::clone(context);
         }
-        self.cache.borrow_mut().clear();
     }
 
     /// The shared name of an item id.
@@ -163,23 +139,6 @@ impl PartShapes for ModParts {
         let entity = entity_of(context);
         let held_item = context.held_item().map(|item| self.shared_item(item));
         let standable = context.living_entity().is_some().then(standable);
-        let key = AnswerKey {
-            state,
-            position: [position.x, position.y, position.z],
-            entity,
-            bottom: context.bottom().map(f64::to_bits),
-            kind: context.entity_kind(),
-            standable,
-            descending: context.is_descending(),
-            placement: context.is_placement(),
-            always_collide_with_fluid: context.always_collide_with_fluid(),
-            held_item: held_item
-                .as_ref()
-                .map(|item| Arc::as_ptr(item).cast::<u8>() as usize),
-        };
-        if let Some(answer) = self.cache.borrow().get(&key) {
-            return answer.clone();
-        }
         let query = self.query(context, entity, held_item, standable);
         struct Running<'a>(&'a Cell<bool>);
         impl Drop for Running<'_> {
@@ -192,7 +151,6 @@ impl PartShapes for ModParts {
         let mut answer = None;
         native_collision_shape(&self.context.borrow(), position, state, &query, &mut answer);
         drop(running);
-        self.cache.borrow_mut().insert(key, answer.clone());
         answer
     }
 }
@@ -234,114 +192,34 @@ mod tests {
         )
     }
 
+    /// #5459: a part solid for an entity until its own flag flips answers the flip at the next
+    /// query of the same tick, and a repeated question is asked again (vanilla keeps no memo).
     #[test]
-    fn a_part_is_asked_once_for_each_entity_position_and_tick() {
+    fn a_part_is_asked_for_every_query_and_sees_its_state_change_within_a_tick() {
         let parts = parts();
+        let open = Rc::new(Cell::new(false));
+        let flag = Rc::clone(&open);
         COLLISION_ANSWER.with_borrow_mut(|answer| {
-            *answer = Some(Box::new(|query| {
-                query.entity().map(|_| vec![[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]])
+            *answer = Some(Box::new(move |query| {
+                query.entity().map(|_| {
+                    if flag.get() {
+                        Vec::new()
+                    } else {
+                        vec![[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]
+                    }
+                })
             }));
         });
+        let solid = |shape: Option<VoxelShape>| shape.is_some_and(|shape| !shape.is_empty());
+        assert!(solid(ask(&parts, 7, [1, 64, 1])));
+        open.set(true);
+        assert!(
+            !solid(ask(&parts, 7, [1, 64, 1])),
+            "the same tick sees the flip"
+        );
         // A step-up retry and a second sweep ask the same question again.
-        for _ in 0..3 {
-            assert!(ask(&parts, 7, [1, 64, 1]).is_some());
-        }
-        assert_eq!(COLLISION_ASKS.get(), 1);
-        // Another entity, or another position, is another question.
-        ask(&parts, 8, [1, 64, 1]);
-        ask(&parts, 7, [2, 64, 1]);
-        assert_eq!(COLLISION_ASKS.get(), 3);
-        // A placement query is its own too.
-        let placing = CollisionContext::with_position(
-            Some(CollisionEntity {
-                identity: EntityIdentity(7),
-                kind: EntityContextKind::Player,
-                y: 65.0,
-                descending: false,
-                main_hand: None,
-            }),
-            65.0,
-        );
-        parts.shape(
-            BlockStateId(1),
-            BlockPos::new(1, 64, 1),
-            &placing,
-            &mut || &[],
-        );
-        assert_eq!(COLLISION_ASKS.get(), 4);
-        // The next tick starts over: the question is asked again.
-        parts.begin_tick(&Arc::new(loop_context()));
         ask(&parts, 7, [1, 64, 1]);
-        assert_eq!(COLLISION_ASKS.get(), 5);
-    }
-
-    #[test]
-    fn queries_that_differ_in_any_input_get_their_own_answer() {
-        let parts = parts();
-        COLLISION_ANSWER.with_borrow_mut(|answer| {
-            *answer = Some(Box::new(|query| {
-                Some(vec![[
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    if query.is_descending() { 0.5 } else { 1.0 },
-                    1.0,
-                ]])
-            }));
-        });
-        let at = BlockPos::new(1, 64, 1);
-        let ask = |context: &CollisionContext<'_>, state: u32| {
-            parts.shape(BlockStateId(state), at, context, &mut || &[])
-        };
-        // Unnamed position queries that differ in height, descending or held item.
-        ask(&CollisionContext::position(65.0), 1);
-        ask(&CollisionContext::position(66.0), 1);
-        ask(&CollisionContext::position(66.0).with_descending(true), 1);
         assert_eq!(COLLISION_ASKS.get(), 3);
-        // The same question again, and the same block at the same place in another state.
-        ask(&CollisionContext::position(65.0), 1);
-        assert_eq!(COLLISION_ASKS.get(), 3);
-        ask(&CollisionContext::position(65.0), 2);
-        assert_eq!(COLLISION_ASKS.get(), 4);
-        // A different held item.
-        let holding = |item| {
-            CollisionContext::for_entity(
-                CollisionEntity {
-                    identity: EntityIdentity(7),
-                    kind: EntityContextKind::Player,
-                    y: 65.0,
-                    descending: false,
-                    main_hand: Some(sunrise_world::collision_context::CollisionItem {
-                        item,
-                        count: 1,
-                    }),
-                },
-                false,
-            )
-        };
-        ask(&holding("minecraft:stick"), 1);
-        ask(&holding("minecraft:stick"), 1);
-        ask(&holding("minecraft:bone"), 1);
-        assert_eq!(COLLISION_ASKS.get(), 6);
-        // The same living query with other standable fluids is another question.
-        let living = CollisionContext::for_entity(
-            CollisionEntity {
-                identity: EntityIdentity(7),
-                kind: EntityContextKind::Living,
-                y: 65.0,
-                descending: false,
-                main_hand: Some(sunrise_world::collision_context::CollisionItem::EMPTY),
-            },
-            false,
-        );
-        let on = |fluids: &'static [&'static str]| {
-            parts.shape(BlockStateId(1), at, &living, &mut || fluids)
-        };
-        on(&[]);
-        on(&[]);
-        on(&["minecraft:lava"]);
-        assert_eq!(COLLISION_ASKS.get(), 8);
     }
 
     #[test]
@@ -565,7 +443,7 @@ mod collision_parts_bench {
         COLLISION_ASKS.set(0);
         let on = per_move(&world, &binding, true);
         println!(
-            "  parts installed, belts opted in, cache on:   {on:8.0}  ({} calls per tick)",
+            "  parts installed, belts opted in:             {on:8.0}  ({} calls per tick)",
             COLLISION_ASKS.get() / TICKS as usize
         );
     }
