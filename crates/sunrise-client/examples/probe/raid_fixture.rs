@@ -487,7 +487,7 @@ pub fn main() -> sunrise_client::Result<()> {
     )?;
     let defaults = sunrise_world::item_defaults::read(root)?;
     let items = Items::tags_only(root, &PackOverlay::NONE, &defaults)?;
-    let attributes = GameplayAttributes::load(root);
+    let attributes = GameplayAttributes::load(root, &PackOverlay::NONE)?;
     let types = MobTypes::load(root)?;
     let pillager = &types.types["minecraft:pillager"];
     let shared = Shared {

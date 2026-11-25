@@ -244,7 +244,7 @@ pub fn main() -> sunrise_client::Result<()> {
     let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     let enchantments = Enchantments::load(root, &defaults)?;
     let names = sunrise_client::creative::Names::default();
-    let trades = Trades::load(root, &PackOverlay::NONE);
+    let trades = Trades::load(root, &PackOverlay::NONE)?;
     let recipes = sunrise_client::crafting::Recipes::load(
         root,
         &items,

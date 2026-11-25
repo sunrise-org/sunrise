@@ -3204,6 +3204,9 @@ struct WorldTables {
     /// Pack tags used by advancement predicates and built-in data maps
     /// (`TagLoader.loadTagsForExistingRegistries`). Damage tags live in the catalog.
     pack_tags: HashMap<&'static str, HashMap<String, HashSet<String>>>,
+    /// The gameplay attributes of the dimension types, biomes and timelines (with the
+    /// packs' timeline tags) that the raid code reads.
+    gameplay: Arc<sunrise_client::patrol::GameplayAttributes>,
 }
 
 struct PreparedParts {

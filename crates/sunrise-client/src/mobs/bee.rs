@@ -1023,6 +1023,17 @@ impl Goal for LocateHive {
     }
 }
 
+/// `PoiTypeTags.BEE_HOME`: whether the block at `p` is a point of interest of that tag.
+fn is_bee_home(w: &MobWorld, p: [i32; 3]) -> bool {
+    w.registry
+        .state(w.world.block(p[0], p[1], p[2]))
+        .and_then(sunrise_world::poi::saved_poi)
+        .is_some_and(|poi| {
+            w.professions
+                .poi_in_tag(super::villager::professions::BEE_HOME, poi.into())
+        })
+}
+
 /// `findNearbyHivesWithSpace`: the bee homes (`PoiTypeTags.BEE_HOME`)
 /// within 20 blocks whose hive has room, nearest first.
 fn hives_with_space(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
@@ -1039,9 +1050,7 @@ fn hives_with_space(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
             crate::containers::BlockEntity::Beehive(h) if !h.full() => Some([x, y, z]),
             _ => None,
         })
-        .filter(|p| {
-            dist(p) <= 20 * 20 && w.has_tag("minecraft:beehives", w.block_name(p[0], p[1], p[2]))
-        })
+        .filter(|p| dist(p) <= 20 * 20 && is_bee_home(w, *p))
         .collect();
     hives.sort_by_key(|p| (dist(p), *p));
     hives

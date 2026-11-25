@@ -74,7 +74,7 @@ pub(super) fn load_world_rest(
                 sunrise_client::banner::Banners::load(root, resources.item_defaults()),
                 (&sources, &recipes),
             )
-        });
+        })?;
         Ok((items, recipes, stations))
     };
     let load_behaviours = || {

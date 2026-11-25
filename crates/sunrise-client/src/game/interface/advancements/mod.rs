@@ -1319,10 +1319,8 @@ impl Game<'_> {
         let tree = self.adv.tree.clone();
         for r in &allowed {
             let list = tree.recipe_criteria(r);
-            self.trigger_criteria(&tree, &list, |c, _| {
-                c["recipes"]
-                    .as_str()
-                    .is_some_and(|id| adv::full(id) == r.as_str())
+            self.trigger_criteria(&tree, &list, |c, w| {
+                adv::id_matches(&c["recipes"], "recipe", r, w)
             });
         }
         taken_back
@@ -1486,7 +1484,25 @@ impl Game<'_> {
             .level
             .recipe_book
             .add_recipes(&world_stations!(self).recipe_index, &rewards);
-        for table in &a.rewards.loot {
+        // `AdvancementRewards.loot` is a `HolderSet<LootTable>`: ids, or a tag's members in order
+        // (a tag that is not bound refused the advancement when the tree loaded).
+        let loot = self.server_loot.get();
+        let tables: Vec<String> = a
+            .rewards
+            .loot
+            .iter()
+            .flat_map(|entry| match entry.strip_prefix('#') {
+                Some(tag) => loot
+                    .as_ref()
+                    .and_then(|loot| loot.registry_tags("loot_table")?.get(&*adv::full(tag)))
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+                    .collect::<Vec<String>>(),
+                None => vec![entry.clone()],
+            })
+            .collect();
+        for table in &tables {
             // `LootContextParamSets.ADVANCEMENT_REWARD`: the rewarded player is
             // THIS_ENTITY and their position the ORIGIN.
             let player = self.killer_loot_entity(None);

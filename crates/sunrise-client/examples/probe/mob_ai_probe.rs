@@ -1456,7 +1456,13 @@ pub fn main() -> sunrise_client::Result<()> {
                     s.time,
                     test_level.random(),
                 );
-                sunrise_client::mobs::warden::hear_mob_events(&mut mobs, &events, from, &w);
+                sunrise_client::mobs::warden::hear_mob_events(
+                    &mut mobs,
+                    &events,
+                    from,
+                    &w,
+                    &items.game_event_tags,
+                );
                 // Melee hits on other mobs land during the attacker's tick
                 // (LivingEntity.hurtServer), with the sounds they raise.
                 let mut k = from;

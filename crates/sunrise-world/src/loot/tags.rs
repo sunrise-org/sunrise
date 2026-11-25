@@ -50,6 +50,13 @@ pub trait LootTags {
     }
 }
 
+impl super::LootData {
+    /// One registry's bound tags in their resolved order (`TagLoader.build`), if it was bound.
+    pub fn registry_tags(&self, registry: &str) -> Option<&super::RegistryTags> {
+        self.tags.get(registry)
+    }
+}
+
 impl LootTags for super::LootData {
     fn members(&self, registry: &str, tag: &str) -> Option<Vec<String>> {
         self.tags.get(registry)?.get(tag).cloned()

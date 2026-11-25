@@ -433,6 +433,7 @@ pub fn listen(
     event: &'static str,
     pos: [f64; 3],
     ctx: &Context,
+    tags: &sculk::EventTags,
     dimension: &str,
     occluded: impl Fn([f64; 3], [f64; 3]) -> bool,
 ) {
@@ -449,7 +450,7 @@ pub fn listen(
     if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > LISTENER_RADIUS * LISTENER_RADIUS {
         return;
     }
-    if !sculk::valid_vibration(sculk::allay_can_listen(event), event, ctx)
+    if !sculk::valid_vibration(tags, sculk::allay_can_listen(tags, event), event, ctx)
         || !can_receive_vibration(m, dimension, block(pos).map(|v| v as i32))
         || occluded(pos, eye)
     {

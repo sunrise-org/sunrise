@@ -43,6 +43,11 @@ impl Hooks for Engineer {
     }
     fn data_pack_files(&self, _: &mut dyn ServerHost, event: &mut DataPackFilesEvent<'_>) {
         if self.valid.load(Ordering::SeqCst) {
+            // `PoiTypeTagsProvider`'s tag is data: a mod's POI type is a job site once tagged.
+            event.files.push((
+                "tags/minecraft:point_of_interest_type/acquirable_job_site".into(),
+                br#"{"values":["test:assembler"]}"#.to_vec(),
+            ));
             event.files.push((
                 "trade_set/test:engineer".into(),
                 br#"{"amount":1,"trades":["test:engineer_offer"],"random_sequence":"test:engineer"}"#.to_vec(),
@@ -321,6 +326,9 @@ fn assert_engineer_acquisition(game: &mut Game<'_>) {
     );
     assert!(engineer_seen && farmer_seen);
     assert_eq!(table.acquiring("test:assembler"), Some(15));
+    // A jobless villager takes the job site because the tag lists it (`ALL_ACQUIRABLE_JOBS`).
+    let assembler = table.pois.resolve("test:assembler").unwrap();
+    assert!(table.accepts(0, assembler, false));
     assert_eq!(table.trade_key("test:engineer", 1), Some("test:engineer"));
     assert_eq!(table.trade_key("test:engineer", 2), None);
     let registry = game.pack.assets.registry;

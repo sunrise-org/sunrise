@@ -42,13 +42,13 @@ impl StationData {
         let sources =
             crate::crafting::ResolvedSources::load_collecting(root, items, overlay, context)?;
         let recipes = crate::crafting::Recipes::from_resolved(root, items, overlay, &sources)?;
-        Ok(Self::from_sources(
+        Self::from_sources(
             root,
             items,
             overlay,
             crate::banner::Banners::load(root, defaults),
             (&sources, &recipes),
-        ))
+        )
     }
     /// The tables of one load whose recipes are `sources`.
     pub fn from_sources(
@@ -57,8 +57,8 @@ impl StationData {
         overlay: &PackOverlay,
         banners: crate::banner::Banners,
         (sources, recipes): (&crate::crafting::ResolvedSources, &crate::crafting::Recipes),
-    ) -> Self {
-        Self {
+    ) -> crate::Result<Self> {
+        Ok(Self {
             enchantments: std::sync::Arc::clone(&items.enchantments),
             recipes: StationRecipes::from_sources(items, sources),
             brewing: {
@@ -70,11 +70,11 @@ impl StationData {
                 brewing.inputs.extend(added("brewing_input").cloned());
                 brewing
             },
-            trades: crate::merchant::Trades::load(root, overlay),
+            trades: crate::merchant::Trades::load(root, overlay)?,
             professions: Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
             banners,
             recipe_index: crate::recipe_book::RecipeIndex::from_recipes(recipes),
-        }
+        })
     }
 }
 

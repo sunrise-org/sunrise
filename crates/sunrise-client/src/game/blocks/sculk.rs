@@ -981,9 +981,10 @@ impl Game<'_> {
         if dist_sqr(source_block, key) > i64::from(radius * radius) {
             return;
         }
+        let tags = self.items().game_event_tags.clone();
         let listens = match kind {
-            SculkKind::Shrieker => sculk::shrieker_can_listen(event),
-            _ => sculk::is_vibration(event),
+            SculkKind::Shrieker => sculk::shrieker_can_listen(&tags, event),
+            _ => sculk::is_vibration(&tags, event),
         };
         // VibrationSystem.User.isValidVibration: a player sneaking past a
         // sensor, whose step it ignores, is AVOID_VIBRATION (sensors only;
@@ -993,11 +994,11 @@ impl Game<'_> {
             && ctx.source == Some(Who::Player.into())
             && !ctx.spectator
             && ctx.stepping_carefully
-            && sculk::ignored_when_sneaking(event)
+            && sculk::ignored_when_sneaking(&tags, event)
         {
             self.trigger_player("minecraft:avoid_vibration");
         }
-        if !sculk::valid_vibration(listens, event, ctx) {
+        if !sculk::valid_vibration(&tags, listens, event, ctx) {
             return;
         }
         let state = self.world.block(key.0, key.1, key.2);
@@ -1070,12 +1071,21 @@ impl Game<'_> {
         let now = self.world.game_time;
         let ctx = warden::heard_by(*ctx, &self.mob_teams(), self.mobs[index].id);
         let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
-        let avoided = warden::listen(&mut self.mobs[index], now, event, pos, &ctx, |a, b| {
-            sculk::is_occluded(a, b, |p| {
-                let state = world.block(p.x, p.y, p.z);
-                occludes.get(state.0 as usize).copied().unwrap_or(false)
-            })
-        });
+        let tags = self.items().game_event_tags.clone();
+        let avoided = warden::listen(
+            &mut self.mobs[index],
+            now,
+            event,
+            pos,
+            &ctx,
+            &tags,
+            |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let state = world.block(p.x, p.y, p.z);
+                    occludes.get(state.0 as usize).copied().unwrap_or(false)
+                })
+            },
+        );
         if avoided {
             self.trigger_player("minecraft:avoid_vibration");
         }
@@ -1087,12 +1097,14 @@ impl Game<'_> {
         let now = self.world.game_time;
         let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
         let dimension = self.dim.id();
+        let tags = self.items().game_event_tags.clone();
         allay::listen(
             &mut self.mobs[index],
             now,
             event,
             pos,
             ctx,
+            &tags,
             dimension,
             |a, b| {
                 sculk::is_occluded(a, b, |p| {

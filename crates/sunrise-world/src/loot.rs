@@ -978,6 +978,8 @@ impl LootData {
             "entity_type",
             "predicate",
             "item_modifier",
+            // `LootTable.LIST_CODEC`'s tags: advancement rewards and the loot table trigger.
+            "loot_table",
             // What `location_check`'s `biomes` names.
             "worldgen/biome",
         ] {
@@ -995,6 +997,7 @@ impl LootData {
                     || crate::fluid::FluidKind::from_name(id).is_some(),
                     |ids| ids.contains(id),
                 ),
+                "loot_table" => tables.contains_key(id),
                 "predicate" => predicates.contains_key(id),
                 "item_modifier" => modifiers.contains_key(id),
                 _ => binding.ids(registry).map_or_else(

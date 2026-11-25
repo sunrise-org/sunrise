@@ -2978,7 +2978,8 @@ mod tests {
             &PackOverlay::NONE,
             crate::banner::Banners::load(root.path(), &defaults),
             (&sources, &recipes),
-        );
+        )
+        .unwrap();
         assert_eq!(stations.brewing.recipes.len(), 1);
         assert_eq!(stations.brewing.recipes[0].id, "example:custom_elixir");
         assert!(stations.brewing.reagents.contains("minecraft:blaze_powder"));
