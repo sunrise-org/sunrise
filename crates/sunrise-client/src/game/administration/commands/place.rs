@@ -58,7 +58,7 @@ impl Game<'_> {
     }
     /// A saved world template, or the winning passive/world-pack resource.
     pub(in crate::game) fn read_template_tag(&self, id: &str) -> Option<Tag> {
-        use sunrise_assets::resource_source::{Resource, stays_inside};
+        use sunrise_assets::resource_source::stays_inside;
         let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
         if !stays_inside(ns) || !stays_inside(path) {
             return None;
@@ -76,12 +76,9 @@ impl Game<'_> {
             .join(ns)
             .join(format!("{path}.nbt"));
         let name = format!("data/{ns}/structure/{path}.nbt");
-        let resource = self.fns.data_resource(&name).or_else(|| {
-            self.pack
-                .data_source
-                .contains(&name)
-                .then(|| Resource::file(self.pack.data_source.clone(), name))
-        });
+        let vanilla = (!sunrise_client::datapack::vanilla_disabled(self.level.data_packs.as_ref()))
+            .then_some(&self.pack.data_source);
+        let resource = self.fns.data_resource(&name, vanilla);
         read_template_data(&saved, &prepared, resource)
     }
     /// `BlockPosArgument.getLoadedBlockPos(pos)`, or the source's block.

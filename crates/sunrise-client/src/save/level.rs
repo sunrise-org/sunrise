@@ -289,7 +289,7 @@ impl Level {
             level.data_packs = Some((ids("Enabled"), ids("Disabled")));
         }
         // remove in the first release after 26.3-0.1.0: a selection the launcher or an
-        // older game left in `datapacks.json` wins over level.dat's; the next save
+        // older game left in `datapacks.json` (vanilla was implicit there) wins over level.dat's; the next save
         // writes it to level.dat and deletes the file.
         if let Some(saved) = fs::read(dir.join("datapacks.json"))
             .ok()
@@ -303,7 +303,14 @@ impl Level {
                     .filter_map(|id| id.as_str().map(str::to_owned))
                     .collect()
             };
-            level.data_packs = Some((ids("enabled"), ids("disabled")));
+            let mut enabled = ids("enabled");
+            let disabled = ids("disabled");
+            // Before vanilla was an entry of the selection it was implicit: a selection that
+            // neither lists nor disables it had it on, at the bottom of the stack.
+            if !enabled.iter().chain(&disabled).any(|id| id == "vanilla") {
+                enabled.insert(0, "vanilla".to_owned());
+            }
+            level.data_packs = Some((enabled, disabled));
         }
         let registry = level.rule_registry.clone();
         let mut rules: BTreeMap<String, i32> = registry

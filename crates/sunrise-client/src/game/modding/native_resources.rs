@@ -21,18 +21,22 @@ impl Game<'_> {
                 self.pack.source.raw_pack_files().open_resource(path)
             }
             PackType::ServerData => {
-                let world = self
-                    .options
-                    .execution_role
-                    .is_logical_server()
-                    .then(|| self.fns.enabled_packs_highest_first())
-                    .into_iter()
-                    .flatten();
-                let lower = std::iter::once(&self.pack.data_changes).chain(
-                    (!sunrise_client::datapack::vanilla_disabled(self.level.data_packs.as_ref()))
+                // Highest first: the packs above `vanilla`'s entry, the game's own data
+                // (unless `vanilla` is not selected), then the packs below it.
+                let (below, above) = if self.options.execution_role.is_logical_server() {
+                    super::functions::split_at_vanilla(&self.fns.enabled, &self.fns.packs)
+                } else {
+                    Default::default()
+                };
+                let lower = std::iter::once(&self.pack.data_changes)
+                    .chain(
+                        (!sunrise_client::datapack::vanilla_disabled(
+                            self.level.data_packs.as_ref(),
+                        ))
                         .then_some(&self.pack.data_source),
-                );
-                sunrise_client::datapack::open_resource(world, lower, identifier)
+                    )
+                    .chain(below.into_iter().rev().map(DataPack::source));
+                sunrise_client::datapack::open_resource(above.into_iter().rev(), lower, identifier)
             }
             _ => return Ok(None),
         }
@@ -56,14 +60,18 @@ impl Game<'_> {
             }
             ("assets", vec![&self.pack.source])
         } else {
-            let mut sources = Vec::new();
+            let (below, above) = if self.options.execution_role.is_logical_server() {
+                super::functions::split_at_vanilla(&self.fns.enabled, &self.fns.packs)
+            } else {
+                Default::default()
+            };
+            let mut sources: Vec<&ResourceSource> =
+                below.into_iter().map(DataPack::source).collect();
             if !sunrise_client::datapack::vanilla_disabled(self.level.data_packs.as_ref()) {
                 sources.push(&self.pack.data_source);
             }
             sources.push(&self.pack.data_changes);
-            if self.options.execution_role.is_logical_server() {
-                sources.extend(self.fns.enabled_packs().map(DataPack::source));
-            }
+            sources.extend(above.into_iter().map(DataPack::source));
             ("data", sources)
         })
     }

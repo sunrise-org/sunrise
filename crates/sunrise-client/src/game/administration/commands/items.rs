@@ -2808,7 +2808,7 @@ mod registered_slot_source_read_tests {
         game.ensure_datapacks();
         assert_eq!(
             game.fns
-                .data_resource("data/parity/slot_source/first_three.json")
+                .data_resource("data/parity/slot_source/first_three.json", None)
                 .unwrap()
                 .read()
                 .unwrap(),

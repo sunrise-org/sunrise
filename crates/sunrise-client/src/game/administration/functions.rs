@@ -29,11 +29,11 @@ pub(super) struct Scheduled {
 #[derive(Default)]
 pub(super) struct FnState {
     pub store: DataStore,
-    packs: Vec<Arc<DataPack>>,
+    pub(in crate::game) packs: Vec<Arc<DataPack>>,
     /// The merged view of the packs' `data/` this load's tables were built from.
     pub(in crate::game) data: Arc<DataPacks>,
     /// Enabled pack ids, in load order (later overrides earlier).
-    enabled: Vec<String>,
+    pub(in crate::game) enabled: Vec<String>,
     loaded: bool,
     /// Run the `minecraft:load` tag on the next tick.
     load_pending: bool,
@@ -95,13 +95,40 @@ pub(super) struct PackStack {
     pub(super) features: Vec<String>,
 }
 impl PackStack {
-    /// The enabled packs in `enabled` (the selected) order, later overriding
-    /// earlier: `PackRepository.openAllSelected` keeps the selected order.
+    /// The enabled world and contributed packs in `enabled` (the selected) order, later
+    /// overriding earlier; `vanilla`'s entry is not among them (see `selected_packs`).
     pub(super) fn enabled_packs(&self) -> impl Iterator<Item = &DataPack> {
         self.enabled
             .iter()
             .filter_map(|id| self.packs.iter().find(|p| &p.id == id).map(Arc::as_ref))
     }
+    /// Every selected pack in `enabled` order, the built-in one at its own entry:
+    /// `PackRepository.openAllSelected` keeps the selected order.
+    pub(super) fn selected_packs(&self) -> impl Iterator<Item = &DataPack> {
+        self.enabled.iter().filter_map(|id| {
+            if id == "vanilla" {
+                self.builtin.as_ref()
+            } else {
+                self.packs.iter().find(|p| &p.id == id).map(Arc::as_ref)
+            }
+        })
+    }
+}
+
+/// The packs of `enabled` below `vanilla`'s entry and those above it, each lowest first;
+/// none are below when `vanilla` is not selected. A pack below vanilla is overridden by it.
+pub(in crate::game) fn split_at_vanilla<'a>(
+    enabled: &'a [String],
+    packs: &'a [Arc<DataPack>],
+) -> (Vec<&'a DataPack>, Vec<&'a DataPack>) {
+    let (below, above) =
+        enabled.split_at(enabled.iter().position(|id| id == "vanilla").unwrap_or(0));
+    let find = |ids: &'a [String]| {
+        ids.iter()
+            .filter_map(|id| packs.iter().find(|p| &p.id == id).map(Arc::as_ref))
+            .collect()
+    };
+    (find(below), find(above))
 }
 pub(super) fn pack_stack(
     world_root: &std::path::Path,
@@ -117,7 +144,6 @@ pub(super) fn pack_stack(
     PackStack::new(
         builtin_source,
         content_source,
-        datapack::vanilla_disabled(selection),
         packs,
         enabled,
         enabled_features,
@@ -142,10 +168,10 @@ pub(super) fn creation_stack(
     );
     let enabled = selected
         .iter()
-        .filter(|id| packs.iter().any(|pack| &pack.id == *id))
+        .filter(|id| *id == "vanilla" || packs.iter().any(|pack| &pack.id == *id))
         .cloned()
         .collect();
-    PackStack::new(builtin_source, content_source, false, packs, enabled, &[])
+    PackStack::new(builtin_source, content_source, packs, enabled, &[])
 }
 
 impl PackStack {
@@ -154,21 +180,19 @@ impl PackStack {
     /// packs that are on, and nothing disabled, so the next ordinary open selects the world's
     /// other packs again.
     pub(super) fn safe_mode_selection(&self) -> (Vec<String>, Vec<String>) {
-        let enabled = std::iter::once("vanilla".to_owned())
-            .chain(self.enabled.iter().cloned())
-            .collect();
-        (enabled, Vec::new())
+        (self.enabled.clone(), Vec::new())
     }
 
     fn new(
         builtin_source: &sunrise_assets::resource_source::ResourceSource,
         content_source: &sunrise_assets::resource_source::ResourceSource,
-        vanilla_disabled: bool,
         packs: Vec<DataPack>,
         enabled: Vec<String>,
         enabled_features: &[String],
     ) -> Self {
-        let builtin = (!vanilla_disabled)
+        let builtin = enabled
+            .iter()
+            .any(|id| id == "vanilla")
             .then(|| DataPack::from_source("vanilla".into(), builtin_source.clone()));
         Self {
             content: DataPack::from_source("sunrise-content".into(), content_source.clone()),
@@ -187,14 +211,16 @@ pub(super) struct OverlayFiles {
 }
 
 impl PackStack {
-    /// The merged view of this load's data, lowest layer first: the prepared root (unless
-    /// disabled), each content mod, what native mods contribute (`native_data_pack_files`, as
-    /// the layer `mod_files`), then the selected packs in selection order. A pack's file
-    /// overrides a mod's for the same path, and a later contribution overrides an earlier one,
+    /// The merged view of this load's data, lowest layer first: the selected packs below
+    /// `vanilla`'s entry, the prepared root (when selected), each content mod, what native mods
+    /// contribute (`native_data_pack_files`, as the layer `mod_files`), then the selected packs
+    /// above it in selection order. A pack's file overrides a mod's for the same path, and a later contribution overrides an earlier one,
     /// as packs do. `Game` builds it on a world's first open and on `/reload`, so the mods are
     /// asked once per load.
     pub(super) fn data_packs(&self, contributed: Vec<(String, Vec<u8>)>) -> DataPacks {
-        let mut layers: Vec<DataPack> = self.builtin.iter().cloned().collect();
+        let (below, above) = split_at_vanilla(&self.enabled, &self.packs);
+        let mut layers: Vec<DataPack> = below.into_iter().cloned().collect();
+        layers.extend(self.builtin.iter().cloned());
         let mods = self.content.source().named_sources();
         if mods.is_empty() {
             layers.push(self.content.clone());
@@ -234,7 +260,7 @@ impl PackStack {
             "mod_files".into(),
             sunrise_assets::resource_source::ResourceSource::indexed(files),
         ));
-        layers.extend(self.enabled_packs().cloned());
+        layers.extend(above.into_iter().cloned());
         DataPacks::new(&layers.iter().collect::<Vec<_>>())
     }
 }
@@ -251,33 +277,20 @@ pub(super) fn overlay_files(data: &DataPacks) -> OverlayFiles {
 }
 
 impl FnState {
-    pub(super) fn enabled_packs(&self) -> impl DoubleEndedIterator<Item = &DataPack> {
-        self.enabled.iter().filter_map(|id| {
-            self.packs
-                .iter()
-                .find(|pack| &pack.id == id)
-                .map(Arc::as_ref)
-        })
-    }
-
-    /// The enabled world packs in resource priority order, highest first: a
-    /// later selected pack overrides an earlier one (`PackRepository` order).
-    pub(in crate::game) fn enabled_packs_highest_first(&self) -> impl Iterator<Item = &DataPack> {
-        self.enabled.iter().rev().filter_map(|id| {
-            self.packs
-                .iter()
-                .find(|pack| &pack.id == id)
-                .map(Arc::as_ref)
-        })
-    }
-
-    /// The highest enabled world pack providing this data resource.
+    /// The highest selected pack providing this data resource; `vanilla` is the built-in
+    /// source (`None` when it is not selected), and a pack below its entry loses to it.
     pub(super) fn data_resource(
         &self,
         name: &str,
+        vanilla: Option<&sunrise_assets::resource_source::ResourceSource>,
     ) -> Option<sunrise_assets::resource_source::Resource> {
-        self.enabled_packs_highest_first()
+        let (below, above) = split_at_vanilla(&self.enabled, &self.packs);
+        above
+            .into_iter()
+            .rev()
             .map(DataPack::source)
+            .chain(vanilla)
+            .chain(below.into_iter().rev().map(DataPack::source))
             .find(|source| source.contains(name))
             .map(|source| {
                 sunrise_assets::resource_source::Resource::file(source.clone(), name.to_owned())
@@ -455,7 +468,7 @@ impl Game<'_> {
         }
         self.fns.packs = stack.packs.clone();
         self.fns.enabled = stack.enabled.clone();
-        self.commit_pack_selection(stack.builtin.is_none());
+        self.commit_pack_selection();
         self.pack.additional_data = additional.into();
         self.fns.loaded = true;
         self.fns.load_pending = true;
@@ -594,15 +607,12 @@ impl Game<'_> {
     /// `MinecraftServer.reloadResources`' `setDataConfiguration(getSelectedPacks(..))`: the
     /// selection the pack stack just loaded becomes the world's `DataPacks`, for the next
     /// level save.
-    fn commit_pack_selection(&mut self, vanilla_disabled: bool) {
-        let mut enabled: Vec<String> = (!vanilla_disabled)
-            .then(|| "vanilla".to_owned())
+    fn commit_pack_selection(&mut self) {
+        let enabled = self.fns.enabled.clone();
+        let mut disabled: Vec<String> = ["vanilla"]
             .into_iter()
-            .collect();
-        enabled.extend(self.fns.enabled.iter().cloned());
-        let mut disabled: Vec<String> = vanilla_disabled
-            .then(|| "vanilla".to_owned())
-            .into_iter()
+            .filter(|id| !enabled.iter().any(|e| e == id))
+            .map(str::to_owned)
             .collect();
         disabled.extend(
             self.fns
@@ -636,15 +646,18 @@ impl Game<'_> {
             .collect();
         reg.schedules = self.fns.schedule.iter().map(|s| s.id.clone()).collect();
 
-        reg.datapacks_enabled = std::iter::once("vanilla".to_owned())
-            .chain(self.fns.enabled.iter().cloned())
-            .collect();
-        reg.datapacks_disabled = self
-            .fns
-            .packs
-            .iter()
-            .filter(|p| !self.fns.enabled.contains(&p.id))
-            .map(|p| p.id.clone())
+        reg.datapacks_enabled = self.fns.enabled.clone();
+        reg.datapacks_disabled = ["vanilla"]
+            .into_iter()
+            .filter(|id| !self.fns.enabled.iter().any(|e| e == id))
+            .map(str::to_owned)
+            .chain(
+                self.fns
+                    .packs
+                    .iter()
+                    .filter(|p| !self.fns.enabled.contains(&p.id))
+                    .map(|p| p.id.clone()),
+            )
             .collect();
         // A pack's worldgen ids join the completion registries
         // (`command-registries.json` lists only the game's own), and so do
@@ -1346,15 +1359,6 @@ impl Game<'_> {
         .with_color(text::GRAY);
         bracketed(name).with_style(&style)
     }
-    /// The selected packs, lowest priority first.
-    fn selected_packs(&self) -> Vec<String> {
-        let vanilla = (!datapack::vanilla_disabled(self.level.data_packs.as_ref()))
-            .then(|| "vanilla".to_owned());
-        vanilla
-            .into_iter()
-            .chain(self.fns.enabled.iter().cloned())
-            .collect()
-    }
     /// `FileUtil.isPathPartPortable`: no trailing dot and no Windows device
     /// name (CON, PRN, AUX, NUL, COM and LPT with a digit from 1 to 9).
     fn is_portable_name(name: &str) -> bool {
@@ -1492,8 +1496,9 @@ impl Game<'_> {
         if id == "datapack.list" {
             self.reload_pack_repository();
         }
-        let selected = self.selected_packs();
-        let mut enabled = self.fns.enabled.clone();
+        // The selected list, lowest priority first, `vanilla` an entry like any pack.
+        let selected = self.fns.enabled.clone();
+        let mut enabled = selected.clone();
         // `DataPackCommand.listAvailablePacks`: a feature pack the world's
         // features do not cover is not available.
         let mut available: Vec<String> = std::iter::once("vanilla".to_owned())
@@ -1548,8 +1553,6 @@ impl Game<'_> {
             "datapack.enable" => {
                 let name = name.unwrap_or_default();
                 self.get_pack(&name, true, &selected)?;
-                let vanilla_disabled =
-                    name != "vanilla" && datapack::vanilla_disabled(self.level.data_packs.as_ref());
                 {
                     let existing = match ctx.get("existing") {
                         Some(Arg::Str(e)) => Some(e.clone()),
@@ -1561,15 +1564,12 @@ impl Game<'_> {
                     let position = if ctx.has("first") {
                         0
                     } else if let Some(e) = &existing {
-                        // `l.indexOf(existing)` over the selected list, which
-                        // starts with vanilla; `enabled` does not hold it.
+                        // `l.indexOf(existing)` over the selected list.
                         let i = selected
                             .iter()
                             .position(|p| p == e)
                             .expect("get_pack checked that existing is selected");
-                        let i = if ctx.has("before") { i } else { i + 1 };
-                        // `before` vanilla is the bottom of `enabled`.
-                        i.saturating_sub(selected.len() - enabled.len())
+                        if ctx.has("before") { i } else { i + 1 }
                     } else if !ctx.has("last")
                         && self
                             .fns
@@ -1585,16 +1585,14 @@ impl Game<'_> {
                     } else {
                         enabled.len()
                     };
-                    if name != "vanilla" {
-                        enabled.insert(position, name.clone());
-                    }
+                    enabled.insert(position, name.clone());
                 }
                 self.feedback(Text::translate(
                     "commands.datapack.modify.enable",
                     &[self.pack_link(&name, true)],
                 ));
-                self.apply_pack_change(&enabled, vanilla_disabled)?;
-                Ok(self.selected_packs().len() as i32)
+                self.apply_pack_change(&enabled)?;
+                Ok(self.fns.enabled.len() as i32)
             }
             _ => {
                 let name = name.unwrap_or_default();
@@ -1609,34 +1607,26 @@ impl Game<'_> {
                 {
                     return Err(err("sunrise.datapack.required", &[&name]));
                 }
-                let vanilla_disabled =
-                    name == "vanilla" || datapack::vanilla_disabled(self.level.data_packs.as_ref());
                 enabled.retain(|p| p != &name);
                 self.feedback(Text::translate(
                     "commands.datapack.modify.disable",
                     &[self.pack_link(&name, true)],
                 ));
-                self.apply_pack_change(&enabled, vanilla_disabled)?;
-                Ok(self.selected_packs().len() as i32)
+                self.apply_pack_change(&enabled)?;
+                Ok(self.fns.enabled.len() as i32)
             }
         }
     }
     /// `ReloadCommand.reloadPacks`: no message of its own. It reloads the
     /// server's data as `/reload` does (`reload_datapacks`), the content
     /// tables with the functions.
-    fn apply_pack_change(&mut self, enabled: &[String], vanilla_disabled: bool) -> R<()> {
+    fn apply_pack_change(&mut self, enabled: &[String]) -> R<()> {
         // One resolve for the store and the tables, as `/reload`'s is: the
         // timers already in memory stay, and none come back from disk
         // (`ServerFunctionManager` keeps its queue over a pack change).
         let additional = super::pack_finders::data_packs(&self.mods);
         // The selection this change makes; `stack.enabled` below is its order.
-        let trial = (
-            enabled.to_vec(),
-            vanilla_disabled
-                .then(|| "vanilla".to_owned())
-                .into_iter()
-                .collect(),
-        );
+        let trial = (enabled.to_vec(), Vec::new());
         let mut stack = pack_stack(
             &self.world_root,
             &self.options.resources,
@@ -1647,6 +1637,10 @@ impl Game<'_> {
             &additional,
         );
         stack.enabled = datapack::selected_ids(stack.packs.iter().map(Arc::as_ref), enabled);
+        // `MinecraftServer.reloadResources` opens exactly the packs it is given.
+        if !stack.enabled.iter().any(|id| id == "vanilla") {
+            stack.builtin = None;
+        }
         let prepared = self
             .prepare_pack_condition_reload(&stack)
             .map_err(Self::reload_failure)?;
@@ -1662,7 +1656,7 @@ impl Game<'_> {
         self.install_loop_context(context);
         self.fns.packs = stack.packs.clone();
         self.fns.enabled = stack.enabled.clone();
-        self.commit_pack_selection(vanilla_disabled);
+        self.commit_pack_selection();
         self.pack.additional_data = additional.into();
         self.fns.load_pending = true;
         self.install_world_tables(world);
@@ -2868,7 +2862,7 @@ mod tests {
             assert!(!datapack::vanilla_disabled(game.level.data_packs.as_ref()));
             open_datapack_world(game, &root);
             assert!(datapack::vanilla_disabled(game.level.data_packs.as_ref()));
-            assert!(!game.selected_packs().contains(&"vanilla".to_owned()));
+            assert!(!game.fns.enabled.iter().any(|id| id == "vanilla"));
         });
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2883,10 +2877,11 @@ mod tests {
             open_datapack_world(game, &root);
             assert!(game.run_command("datapack disable \"file/b\""));
             assert!(game.run_command("datapack enable \"file/b\" after \"vanilla\""));
-            assert_eq!(game.fns.enabled, ["file/b", "file/a"]);
+            assert_eq!(game.fns.enabled, ["vanilla", "file/b", "file/a"]);
             assert!(game.run_command("datapack disable \"file/b\""));
+            // `before vanilla` puts the pack below it, as `l.indexOf(vanilla)` does.
             assert!(game.run_command("datapack enable \"file/b\" before \"vanilla\""));
-            assert_eq!(game.fns.enabled, ["file/b", "file/a"]);
+            assert_eq!(game.fns.enabled, ["file/b", "vanilla", "file/a"]);
             // `getPack(existing, false)` runs whatever the name is.
             assert!(game.run_command("datapack disable vanilla"));
             assert!(!game.run_command("datapack enable vanilla after \"nosuchpack\""));
@@ -2896,6 +2891,41 @@ mod tests {
             assert!(!datapack::vanilla_disabled(game.level.data_packs.as_ref()));
         });
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_pack_below_vanilla_in_the_selection_is_overridden_by_vanilla() {
+        use sunrise_assets::resource_source::{Resource, ResourceSource};
+        let source = |text: &str| {
+            let files = [(
+                "data/test/function/f.mcfunction".to_owned(),
+                Resource::bytes(text.as_bytes().to_vec()),
+            )]
+            .into_iter()
+            .collect();
+            ResourceSource::indexed(files)
+        };
+        let winner = |enabled: [&str; 2]| {
+            let stack = PackStack {
+                builtin: Some(DataPack::from_source("vanilla".into(), source("vanilla"))),
+                content: DataPack::from_source(
+                    "sunrise-content".into(),
+                    ResourceSource::indexed(Default::default()),
+                ),
+                packs: vec![Arc::new(DataPack::from_source(
+                    "file/x".into(),
+                    source("file/x"),
+                ))],
+                enabled: enabled.map(str::to_owned).into(),
+                features: Vec::new(),
+            };
+            let name =
+                sunrise_core::identifier::Identifier::from_parts("test", "function/f.mcfunction")
+                    .unwrap();
+            String::from_utf8(stack.data_packs(Vec::new()).read(&name).unwrap()).unwrap()
+        };
+        assert_eq!(winner(["file/x", "vanilla"]), "vanilla");
+        assert_eq!(winner(["vanilla", "file/x"]), "file/x");
     }
 
     #[test]
