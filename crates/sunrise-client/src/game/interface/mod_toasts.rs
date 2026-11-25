@@ -28,6 +28,12 @@ enum Icon {
 }
 
 impl Game<'_> {
+    /// The calling mod holds new toasts back, or lets them go (`ToastManager.freeSlotCount`).
+    pub(in crate::game) fn set_toasts_held(&self, held: bool) -> bool {
+        self.toast_manager
+            .hold(mod_api::content::crash::current_native_mod(), held)
+    }
+
     /// Queue from a shared ClientHost without dispatching back into a running hook.
     pub(in crate::game) fn add_toast(&self, request: ModToast) -> Result<(), AddToastError> {
         let title = to_engine(&request.title).map_err(AddToastError::Text)?;

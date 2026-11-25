@@ -10,6 +10,14 @@ pub trait ScreensClientHost {
     /// existing toast untouched. Calls from `toast_add` itself wait for the following update.
     /// Refuses the whole request if its text or item icon cannot be represented.
     fn add_toast(&self, toast: ModToast) -> Result<(), AddToastError>;
+    /// Side: client.
+    /// Holds new toasts back while `held`, or lets them go: they wait in the toast queue, as
+    /// vanilla's do while no slot is free (`ToastManager.freeSlotCount`), and show once no
+    /// enabled mod holds them, instead of being dropped as a canceled `toast_add` drops them.
+    /// Toasts already on screen go on and leave as usual. Dynamic FPS holds them while the
+    /// window is in the background. Each mod's hold is its own; a disabled mod's holds
+    /// nothing. False, changing nothing, outside a mod's call.
+    fn set_toasts_held(&self, held: bool) -> bool;
     /// A copy of the open `world_preset_editor` screen's working dimension stems.
     /// Stays available to screen hooks while `world_preset_editor` is open alongside the bound
     /// [`PresetEditor`].

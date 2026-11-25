@@ -36,9 +36,32 @@ pub(super) struct ToastManager {
     pub(super) pending_mod: RefCell<Vec<mod_toasts::Pending>>,
     pub(super) queued: VecDeque<Toast>,
     pub(super) visible: Vec<VisibleToast>,
+    /// The mods holding new toasts back (`set_toasts_held`), as Dynamic FPS makes
+    /// `ToastManager.freeSlotCount` 0 while the window is in the background.
+    holders: RefCell<Vec<&'static str>>,
 }
 
 impl ToastManager {
+    /// Mod `id` holds new toasts back, or lets them go. False, changing nothing, with no mod.
+    pub(super) fn hold(&self, id: Option<&'static str>, held: bool) -> bool {
+        let Some(id) = id else {
+            return false;
+        };
+        let mut holders = self.holders.borrow_mut();
+        holders.retain(|holder| *holder != id);
+        if held {
+            holders.push(id);
+        }
+        true
+    }
+
+    /// Whether an enabled mod holds new toasts back.
+    fn held(&self) -> bool {
+        self.holders.borrow().iter().any(|id| {
+            mod_api::__private::mod_index(id).is_some_and(mod_api::__private::mod_index_on)
+        })
+    }
+
     pub(super) fn all_mut(&mut self) -> impl Iterator<Item = &mut Toast> {
         self.visible
             .iter_mut()
@@ -84,7 +107,8 @@ impl ToastManager {
             .iter()
             .fold(0u32, |used, entry| used | entry.slots);
         let mut challenge_sound = false;
-        if used.count_ones() < SLOT_COUNT as u32 {
+        // A held queue admits nothing: its toasts wait, as they do for a free slot.
+        if !self.held() && used.count_ones() < SLOT_COUNT as u32 {
             for _ in 0..self.queued.len() {
                 let Some(toast) = self.queued.pop_front() else {
                     break;
@@ -187,5 +211,56 @@ impl Game<'_> {
         }
         self.draw_controller_notice(batch);
         self.draw_music_toast(batch, hidden);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn notice(manager: &mut ToastManager, title: &str) {
+        manager
+            .queued
+            .push_back(Toast::System(None, SystemToast::new(title.into(), None)));
+    }
+
+    /// While an enabled mod holds them, new toasts wait in the queue, those already shown go on,
+    /// and they show once the last holder lets go; a call with no mod holds nothing.
+    #[test]
+    fn held_toasts_wait_in_the_queue_until_released() {
+        struct Quiet;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Quiet {}
+        let mods = vec![
+            mod_api::ModEntry::new("first", Box::new(Quiet)),
+            mod_api::ModEntry::new("second", Box::new(Quiet)),
+        ];
+        mod_platform::testing::with_mods(mods.into(), || {
+            let mut manager = ToastManager::default();
+            notice(&mut manager, "shown");
+            manager.update(1.0);
+            assert_eq!(manager.visible.len(), 1);
+
+            assert!(!manager.hold(None, true));
+            assert!(manager.hold(Some("first"), true));
+            assert!(manager.hold(Some("second"), true));
+            notice(&mut manager, "waits");
+            manager.update(1.0);
+            assert_eq!((manager.visible.len(), manager.queued.len()), (1, 1));
+
+            assert!(manager.hold(Some("first"), false));
+            manager.update(1.0);
+            assert_eq!((manager.visible.len(), manager.queued.len()), (1, 1));
+
+            assert!(manager.hold(Some("second"), false));
+            manager.update(1.0);
+            assert_eq!((manager.visible.len(), manager.queued.len()), (2, 0));
+
+            // An unknown (or disabled) mod's hold holds nothing.
+            assert!(manager.hold(Some("gone"), true));
+            notice(&mut manager, "unheld");
+            manager.update(1.0);
+            assert_eq!((manager.visible.len(), manager.queued.len()), (3, 0));
+        });
     }
 }
