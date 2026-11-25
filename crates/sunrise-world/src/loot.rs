@@ -13,7 +13,7 @@ mod fill;
 pub mod global_modifiers;
 pub mod number;
 pub mod query;
-use component_validation::retain_valid;
+use component_validation::{refuse, refused_entries};
 pub use component_validation::{
     validate_entity_predicate, validate_item_modifier, validate_item_predicate,
     validate_loot_condition, validate_loot_table, validate_slot_source,
@@ -686,8 +686,8 @@ pub fn shared_tables(root: &Path, overlay: &PackOverlay) -> io::Result<Arc<LootT
     if let Some(tables) = held(&mut LOADED.lock().unwrap_or_else(|e| e.into_inner())) {
         return Ok(tables);
     }
-    let mut tables = load_resources::load_ordered_kind(root, overlay, "loot_table")?;
-    tables.retain(|id, table| retain_valid("loot table", id, validate_loot_table(table)));
+    let tables = load_resources::load_ordered_kind(root, overlay, "loot_table")?;
+    refuse(refused_entries("loot table", &tables, validate_loot_table))?;
     let tables: LootTables = tables.into_iter().collect();
     let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
     // Another thread may have loaded the same tables meanwhile: keep one.
@@ -817,14 +817,13 @@ impl LootData {
         let mut recipes = HashMap::new();
         load_kind(&root.join("data"), "recipe", &mut recipes)?;
         overlay_map(overlay, "recipe", &mut recipes);
-        recipes.retain(|id, value| {
-            value["type"] != "minecraft:smelting"
-                || retain_valid(
-                    "recipe",
-                    id,
-                    crate::item_defaults::validate_stack(&value["result"]),
-                )
-        });
+        refuse(refused_entries(
+            "recipe",
+            recipes
+                .iter()
+                .filter(|(_, value)| value["type"] == "minecraft:smelting"),
+            |value| crate::item_defaults::validate_stack(&value["result"]),
+        ))?;
         let mut ids: Vec<&String> = recipes.keys().collect();
         ids.sort();
         loaded.smelting = ids
@@ -876,12 +875,15 @@ impl LootData {
     ) -> io::Result<Self> {
         let all = root.join("data");
         let tables = shared_tables(root, overlay)?;
-        let mut modifiers = load_resources::load_ordered_kind(root, overlay, "item_modifier")?;
-        modifiers
-            .retain(|id, value| retain_valid("item modifier", id, validate_item_modifier(value)));
-        let mut predicates = load_predicates(root, overlay)?;
-        predicates
-            .retain(|id, value| retain_valid("predicate", id, validate_loot_condition(value)));
+        let modifiers = load_resources::load_ordered_kind(root, overlay, "item_modifier")?;
+        let predicates = load_predicates(root, overlay)?;
+        let mut refused = refused_entries("item modifier", &modifiers, validate_item_modifier);
+        refused.extend(refused_entries(
+            "predicate",
+            &predicates,
+            validate_loot_condition,
+        ));
+        refuse(refused)?;
         let items = defaults
             .entries()
             .iter()

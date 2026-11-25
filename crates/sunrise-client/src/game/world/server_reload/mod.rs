@@ -32,14 +32,26 @@ impl PreparedServerReload {
     }
 }
 
-/// Loads the vanilla function library from `stack`, logging per-file failures.
-fn functions_store(stack: &PackStack) -> DataStore {
+/// Loads the vanilla function library from `stack`, logging per-file failures
+/// (`ServerFunctionLibrary`). A predicate, item modifier or slot source its codec
+/// refuses fails the load, every one listed (`RegistryDataLoader.logErrors`).
+fn functions_store(stack: &PackStack) -> Result<DataStore, ReloadStageError> {
     let packs: Vec<_> = stack.builtin.iter().chain(stack.enabled_packs()).collect();
     let store = DataStore::load(&DataPacks::new(&packs));
     for (id, e) in &store.errors {
         log::warn!("Sunrise: failed to load function {id}: {e}");
     }
-    store
+    if !store.refused.is_empty() {
+        return Err(ReloadStageError::DataSource(
+            store
+                .refused
+                .iter()
+                .map(|(entry, error)| format!("{entry}: {error}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    Ok(store)
 }
 
 impl PackStack {
@@ -76,7 +88,7 @@ impl Game<'_> {
             ordered.listeners,
             HookId::AddServerReloadListeners,
             "server_reload_prepare",
-            || Ok::<_, ReloadStageError>(Box::new(functions_store(stack))),
+            || functions_store(stack).map(Box::new),
             |id, converter| stack.reload_context(id, converter),
             ServerReloadListener::prepare,
         )?;

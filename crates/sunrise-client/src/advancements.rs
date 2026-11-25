@@ -303,6 +303,9 @@ pub struct Advancement {
 #[derive(Default)]
 pub struct Tree {
     pub list: Vec<Advancement>,
+    /// The files `Advancement.CODEC` refuses, as `advancement <id>: <reason>`. Any entry
+    /// fails the load (`RegistryDataLoader.logErrors`).
+    pub refused: Vec<String>,
     pub by_id: BTreeMap<String, usize>,
     /// trigger id -> (advancement index, criterion index).
     pub by_trigger: HashMap<String, Vec<(usize, usize)>>,
@@ -418,16 +421,6 @@ fn frame(v: &Value) -> Frame {
     }
 }
 impl Tree {
-    /// `PlayerAdvancements.checkForAutomaticTriggers`: the advancements that
-    /// have no criteria at all, so nothing can ever grant them a criterion and
-    /// vanilla hands them over (and grants their rewards) as the player's
-    /// progress loads.
-    pub fn automatic(&self) -> Vec<usize> {
-        (0..self.list.len())
-            .filter(|&i| self.list[i].criteria.is_empty())
-            .collect()
-    }
-
     /// [`Tree::load`], shared while anyone holds it: a server's advancement
     /// packets (`ServerAdvancements`) and its game's criteria read the same
     /// files, and each kept its own copy (7 MB). A world whose data packs bring
@@ -492,10 +485,17 @@ impl Tree {
             };
             let ns = ns.file_name().to_string_lossy().into_owned();
             for file in &folder.files {
-                if sunrise_world::json_folder::valid_resource_path(&ns, &file.name)
-                    && let Ok(v) = serde_json::from_slice::<Value>(file.bytes().unwrap_or_default())
-                {
-                    json.insert(format!("{ns}:{}", file.name), v);
+                if sunrise_world::json_folder::valid_resource_path(&ns, &file.name) {
+                    let id = format!("{ns}:{}", file.name);
+                    match serde_json::from_slice::<Value>(file.bytes().unwrap_or_default()) {
+                        Ok(v) => {
+                            json.insert(id, v);
+                        }
+                        Err(e) => {
+                            json.remove(&id);
+                            tree.refused.push(format!("advancement {id}: {e}"));
+                        }
+                    }
                 }
             }
         }
@@ -504,23 +504,29 @@ impl Tree {
                 Ok(v) => {
                     json.insert(id.to_owned(), v);
                 }
-                Err(e) => log::warn!("Sunrise: pack advancement {id} not loaded: {e}"),
+                Err(e) => {
+                    json.remove(id);
+                    tree.refused.push(format!("advancement {id}: {e}"));
+                }
             }
         }
         for (id, v) in json {
             if !overlay.conditions.allows_id(&v, "advancement", &id) {
                 continue;
             }
-            if let Some(a) = parse_with(&id, &v, &mut source) {
-                let index = tree.list.len();
-                for (ci, c) in a.criteria.iter().enumerate() {
-                    tree.by_trigger
-                        .entry(c.trigger.clone())
-                        .or_default()
-                        .push((index, ci));
+            match parse_with(&id, &v, &mut source) {
+                Err(error) => tree.refused.push(format!("advancement {id}: {error}")),
+                Ok(a) => {
+                    let index = tree.list.len();
+                    for (ci, c) in a.criteria.iter().enumerate() {
+                        tree.by_trigger
+                            .entry(c.trigger.clone())
+                            .or_default()
+                            .push((index, ci));
+                    }
+                    tree.by_id.insert(id, index);
+                    tree.list.push(a);
                 }
-                tree.by_id.insert(id, index);
-                tree.list.push(a);
             }
         }
         tree.index_recipes();
@@ -3821,6 +3827,7 @@ mod tests {
             "minecraft:t",
             &serde_json::json!({
                 "display": {
+                    "background": "minecraft:gui/advancements/backgrounds/stone",
                     "icon": {
                         "id": "minecraft:wooden_pickaxe",
                         "components": {"minecraft:enchantment_glint_override": true}
@@ -3836,27 +3843,41 @@ mod tests {
         assert_eq!(&*icon.item, "minecraft:wooden_pickaxe");
         assert!(icon.has_foil(None), "the glint override survives the load");
     }
-    /// `AdvancementRequirements.test` answers false with no requirement groups, so an advancement
-    /// without criteria is never done by `isDone`; `PlayerAdvancements.checkForAutomaticTriggers`
-    /// still grants its rewards as progress loads, and `Tree::automatic` is the list it walks.
+    /// `Advancement.CODEC`: no criteria, and requirements that name a criterion the
+    /// advancement lacks or leave one of its own out, refuse the file.
     #[test]
-    fn an_advancement_without_criteria_is_not_done_but_granted_automatically() {
-        let empty = parse("minecraft:free", &serde_json::json!({"criteria": {}})).unwrap();
-        assert!(!Progress::default().done(&empty), "no groups: not done");
-        let waiting = parse(
-            "minecraft:waits",
-            &serde_json::json!({"criteria": {"a": {"trigger": "minecraft:tick"}}}),
-        )
-        .unwrap();
-        assert!(!Progress::default().done(&waiting));
-        let tree = tree_of(&[
-            (
-                "minecraft:waits",
-                serde_json::json!({"criteria": {"a": {"trigger": "minecraft:tick"}}}),
-            ),
-            ("minecraft:free", serde_json::json!({"criteria": {}})),
-        ]);
-        assert_eq!(tree.automatic(), vec![1]);
+    fn criteria_and_requirements_must_match_as_the_codec_demands() {
+        let tick = serde_json::json!({"trigger": "minecraft:tick"});
+        assert!(parse("minecraft:free", &serde_json::json!({"criteria": {}})).is_none());
+        let unknown = serde_json::json!({"criteria": {"a": tick}, "requirements": [["b"]]});
+        assert!(parse("minecraft:t", &unknown).is_none());
+        let missing = serde_json::json!({"criteria": {"a": tick, "b": tick},
+            "requirements": [["a"]]});
+        assert!(parse("minecraft:t", &missing).is_none());
+        let exact = serde_json::json!({"criteria": {"a": tick}, "requirements": [["a"]]});
+        assert!(parse("minecraft:t", &exact).is_some());
+    }
+    /// `Advancement.validate`: a visible root needs a background, and only a root may have one.
+    #[test]
+    fn backgrounds_belong_to_visible_roots_only() {
+        let display = |background: Option<&str>| {
+            serde_json::json!({"icon": {"id": "minecraft:stone"}, "title": "t",
+                "description": "d", "background": background})
+        };
+        let criteria = serde_json::json!({"a": {"trigger": "minecraft:tick"}});
+        let stone = "minecraft:gui/advancements/backgrounds/stone";
+        let load = |parent: Option<&str>, display: serde_json::Value| {
+            parse(
+                "minecraft:t",
+                &serde_json::json!({"parent": parent, "display": display, "criteria": criteria}),
+            )
+        };
+        assert!(load(None, display(None)).is_none());
+        assert!(load(None, display(Some(stone))).is_some());
+        assert!(load(Some("minecraft:r"), display(Some(stone))).is_none());
+        assert!(load(Some("minecraft:r"), display(None)).is_some());
+        let hidden_root = serde_json::json!({"criteria": criteria});
+        assert!(parse("minecraft:t", &hidden_root).is_some());
     }
     #[test]
     fn layout_spreads_children_like_tree_node_position() {
@@ -4369,7 +4390,8 @@ mod tests {
                 &serde_json::json!({
                     "parent": parent,
                     "criteria": {"crit": {"trigger": "minecraft:tick"}},
-                    "display": {"icon": {"id": "minecraft:stone"}, "title": "t", "description": "d"}
+                    "display": {"icon": {"id": "minecraft:stone"}, "title": "t", "description": "d",
+                        "background": parent.is_none().then_some("minecraft:gui/advancements/backgrounds/stone")}
                 }),
             )
             .unwrap();
@@ -4382,7 +4404,8 @@ mod tests {
                 &id,
                 &serde_json::json!({
                     "criteria": {"crit": {"trigger": "minecraft:tick"}},
-                    "display": {"icon": {"id": "minecraft:stone"}, "title": "t", "description": "d"}
+                    "display": {"icon": {"id": "minecraft:stone"}, "title": "t", "description": "d",
+                        "background": "minecraft:gui/advancements/backgrounds/stone"}
                 }),
             )
             .unwrap();

@@ -930,6 +930,45 @@ pub struct DataStore {
     pub file_errors: BTreeMap<String, String>,
     /// Functions that failed to parse (id, message), for logging.
     pub errors: Vec<(String, String)>,
+    /// Predicates, item modifiers and slot sources whose codec refuses the winning
+    /// file, keyed `<kind> <id>` with the reason. Any entry fails the load
+    /// (`RegistryDataLoader.logErrors`); functions only log (`ServerFunctionLibrary`).
+    pub refused: BTreeMap<String, String>,
+}
+/// Decode a winning JSON file of a registry the loads refuse on: a higher pack's
+/// file replaces a lower pack's, refused or not.
+fn insert_json(
+    refused: &mut BTreeMap<String, String>,
+    entries: &mut BTreeMap<String, serde_json::Value>,
+    label: &str,
+    id: String,
+    bytes: &[u8],
+) {
+    let key = format!("{label} {id}");
+    match serde_json::from_slice(bytes) {
+        Ok(value) => {
+            refused.remove(&key);
+            entries.insert(id, value);
+        }
+        Err(error) => {
+            entries.remove(&id);
+            refused.insert(key, error.to_string());
+        }
+    }
+}
+fn refuse_invalid(
+    refused: &mut BTreeMap<String, String>,
+    entries: &mut BTreeMap<String, serde_json::Value>,
+    label: &str,
+    validate: fn(&serde_json::Value) -> Result<(), String>,
+) {
+    entries.retain(|id, value| match validate(value) {
+        Ok(()) => true,
+        Err(error) => {
+            refused.insert(format!("{label} {id}"), error);
+            false
+        }
+    });
 }
 /// `<kind-dir>/<ns>:<path>` for a pack file the content tables read:
 /// `recipe/`, `recipe_filter/`, `loot_table/`, `advancement/`, `trade_set/`,
@@ -1164,14 +1203,18 @@ impl DataStore {
                     slot.extend(entries);
                 } else if let Some(id) = resource_id(&f, "predicate", ".json")
                     && let Some(bytes) = resource.read().ok()
-                    && let Ok(v) = serde_json::from_slice(&bytes)
                 {
-                    s.predicates.insert(id, v);
+                    insert_json(&mut s.refused, &mut s.predicates, "predicate", id, &bytes);
                 } else if let Some(id) = resource_id(&f, "item_modifier", ".json")
                     && let Some(bytes) = resource.read().ok()
-                    && let Ok(v) = serde_json::from_slice(&bytes)
                 {
-                    s.item_modifiers.insert(id, v);
+                    insert_json(
+                        &mut s.refused,
+                        &mut s.item_modifiers,
+                        "item modifier",
+                        id,
+                        &bytes,
+                    );
                 } else if let Some(id) = resource_id(&f, "tags/slot_source", ".json")
                     && let Some(bytes) = resource.read().ok()
                     && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -1191,38 +1234,34 @@ impl DataStore {
                     slot.extend(entries);
                 } else if let Some(id) = resource_id(&f, "slot_source", ".json")
                     && let Some(bytes) = resource.read().ok()
-                    && let Ok(v) = serde_json::from_slice(&bytes)
                 {
-                    s.slot_sources.insert(id, v);
+                    insert_json(
+                        &mut s.refused,
+                        &mut s.slot_sources,
+                        "slot source",
+                        id,
+                        &bytes,
+                    );
                 }
             }
         }
-        s.predicates.retain(|id, value| {
-            match sunrise_world::loot::validate_loot_condition(value) {
-                Ok(()) => true,
-                Err(error) => {
-                    log::warn!("predicate {id} rejected: {error}");
-                    false
-                }
-            }
-        });
-        s.item_modifiers.retain(|id, value| {
-            match sunrise_world::loot::validate_item_modifier(value) {
-                Ok(()) => true,
-                Err(error) => {
-                    log::warn!("item modifier {id} rejected: {error}");
-                    false
-                }
-            }
-        });
-        s.slot_sources.retain(
-            |id, value| match sunrise_world::loot::validate_slot_source(value) {
-                Ok(()) => true,
-                Err(error) => {
-                    log::warn!("slot source {id} rejected: {error}");
-                    false
-                }
-            },
+        refuse_invalid(
+            &mut s.refused,
+            &mut s.predicates,
+            "predicate",
+            sunrise_world::loot::validate_loot_condition,
+        );
+        refuse_invalid(
+            &mut s.refused,
+            &mut s.item_modifiers,
+            "item modifier",
+            sunrise_world::loot::validate_item_modifier,
+        );
+        refuse_invalid(
+            &mut s.refused,
+            &mut s.slot_sources,
+            "slot source",
+            sunrise_world::loot::validate_slot_source,
         );
         s
     }

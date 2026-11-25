@@ -2100,7 +2100,10 @@ mod tests {
                     br#"{"type":"minecraft:block","pools":[]}"#,
                 ),
                 ("data/example/structures/hut.nbt", b"\x0a\0\0\0"),
-                ("data/example/advancements/root.json", br#"{"criteria":{}}"#),
+                (
+                    "data/example/advancements/root.json",
+                    br#"{"criteria":{"never":{"trigger":"minecraft:impossible"}}}"#,
+                ),
                 ("data/minecraft/tags/blocks/mineable/pickaxe.json", tag_1_20),
                 // The same tag under 1.21's name too: that copy is the one the game reads.
                 ("data/minecraft/tags/block/mineable/pickaxe.json", tag_1_21),

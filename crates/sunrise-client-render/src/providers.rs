@@ -9,6 +9,83 @@ use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 pub(crate) const NUMBER_PROVIDER_KINDS: [&str; 2] =
     ["context_int_provider", "context_float_provider"];
 
+/// `ContextIntProviderTypes.bootstrap`.
+const INT_PROVIDER_TYPES: &[&str] = &[
+    "abs",
+    "avg",
+    "binomial",
+    "conditional",
+    "constant",
+    "sub",
+    "environment_attribute",
+    "from_float",
+    "max",
+    "min",
+    "floor_mod",
+    "floor_div",
+    "mod",
+    "div",
+    "negate",
+    "number_dispatcher",
+    "pow",
+    "mul",
+    "score",
+    "storage",
+    "add",
+    "uniform",
+    "weighted_list",
+];
+/// `ContextFloatProviderTypes.bootstrap`.
+const FLOAT_PROVIDER_TYPES: &[&str] = &[
+    "abs",
+    "avg",
+    "ceil",
+    "conditional",
+    "constant",
+    "cos",
+    "sub",
+    "enchantment_level",
+    "environment_attribute",
+    "floor",
+    "from_int",
+    "length",
+    "max",
+    "min",
+    "mod",
+    "negate",
+    "number_dispatcher",
+    "pow",
+    "mul",
+    "div",
+    "round",
+    "sin",
+    "sqrt",
+    "storage",
+    "add",
+    "truncate",
+    "uniform",
+    "weighted_list",
+];
+
+/// `ContextIntProviders.DIRECT_CODEC` / `ContextFloatProviders.DIRECT_CODEC`, the
+/// registry file codecs: an inline number, or an object of a registered provider
+/// type. A reference by id exists only in the holder `CODEC`.
+fn validate(value: &Value, types: &[&str]) -> Result<(), String> {
+    match value {
+        Value::Number(_) => Ok(()),
+        Value::Object(fields) => {
+            let kind = fields.get("type").and_then(Value::as_str).unwrap_or("");
+            let name = kind.strip_prefix("minecraft:").unwrap_or(kind);
+            if types.contains(&name) {
+                Ok(())
+            } else {
+                Err(format!("unknown provider type {kind:?}"))
+            }
+        }
+        _ => Err("expected a number or a typed object".into()),
+    }
+}
+
 /// Evaluator for `context_int_provider` / `context_float_provider` values.
 #[derive(Clone)]
 pub struct Providers(Arc<Definitions>);
@@ -84,6 +161,27 @@ impl Providers {
                     table.remove(id);
                 }
             }
+        }
+        let mut errors: Vec<String> = [
+            ("context_int_provider", INT_PROVIDER_TYPES, &providers.ints),
+            (
+                "context_float_provider",
+                FLOAT_PROVIDER_TYPES,
+                &providers.floats,
+            ),
+        ]
+        .into_iter()
+        .flat_map(|(kind, types, table)| {
+            table.iter().filter_map(move |(id, value)| {
+                validate(value, types)
+                    .err()
+                    .map(|error| format!("{kind} {id}: {error}"))
+            })
+        })
+        .collect();
+        if !errors.is_empty() {
+            errors.sort();
+            return Err(errors.join("\n"));
         }
         Ok(Self(Arc::new(providers)))
     }
@@ -206,6 +304,59 @@ mod tests {
         assert_eq!(providers.int_value(&json!(200)), 200);
         let sum = json!({"type": "minecraft:add", "left": 100, "right": 50});
         assert_eq!(providers.int_value(&sum), 150);
+    }
+
+    #[test]
+    fn an_unregistered_provider_type_refuses_the_load() {
+        let root = std::env::temp_dir().join(format!(
+            "sunrise-provider-types-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let ints = root.join("data/example/context_int_provider");
+        let floats = root.join("data/example/context_float_provider");
+        std::fs::create_dir_all(&ints).unwrap();
+        std::fs::create_dir_all(&floats).unwrap();
+        std::fs::write(
+            ints.join("ok.json"),
+            r#"{"type":"minecraft:add","left":1,"right":2}"#,
+        )
+        .unwrap();
+        std::fs::write(ints.join("bad.json"), r#"{"type":"example:nope"}"#).unwrap();
+        // `from_float` is an int provider type only.
+        std::fs::write(
+            floats.join("bad.json"),
+            r#"{"type":"minecraft:from_float"}"#,
+        )
+        .unwrap();
+        // A reference by id is only in the holder codec, not the file codec.
+        std::fs::write(ints.join("reference.json"), r#""example:ok""#).unwrap();
+        std::fs::write(floats.join("reference.json"), r#""example:ok""#).unwrap();
+        let Err(error) = Providers::load_with(&root, &sunrise_world::loot::PackOverlay::NONE)
+        else {
+            panic!("unregistered provider types loaded")
+        };
+        assert_eq!(error.lines().count(), 4, "{error}");
+        assert!(
+            error.contains("context_int_provider example:reference"),
+            "{error}"
+        );
+        assert!(
+            error.contains("context_float_provider example:reference"),
+            "{error}"
+        );
+        assert!(
+            error.contains("context_int_provider example:bad"),
+            "{error}"
+        );
+        assert!(
+            error.contains("context_float_provider example:bad"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

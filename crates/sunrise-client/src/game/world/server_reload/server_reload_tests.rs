@@ -1344,3 +1344,5 @@ mod villager_secondary_reload_tests;
 
 #[path = "datapack_publication_tests.rs"]
 mod datapack_publication_tests;
+#[path = "refused_entry_tests.rs"]
+mod refused_entry_tests;

@@ -111,30 +111,32 @@ fn load_data_predicates(
 
 #[cfg(test)]
 pub(super) fn parse(id: &str, v: &Value) -> Option<Advancement> {
-    parse_with(id, v, &mut PredicateSource::empty())
+    parse_with(id, v, &mut PredicateSource::empty()).ok()
 }
 
+/// `Advancement.CODEC`: the reason a file is refused, which fails the load.
 pub(super) fn parse_with(
     id: &str,
     v: &Value,
     source: &mut PredicateSource<'_, '_>,
-) -> Option<Advancement> {
-    if let Err(error) = sunrise_world::item_defaults::validate_stack(&v["display"]["icon"])
+) -> Result<Advancement, String> {
+    sunrise_world::item_defaults::validate_stack(&v["display"]["icon"])
         .and_then(|()| sunrise_world::item_defaults::validate_text(&v["display"]["title"]))
-        .and_then(|()| sunrise_world::item_defaults::validate_text(&v["display"]["description"]))
-    {
-        log::warn!("advancement {id} rejected: {error}");
-        return None;
+        .and_then(|()| sunrise_world::item_defaults::validate_text(&v["display"]["description"]))?;
+    let criterion_map = v["criteria"]
+        .as_object()
+        .ok_or("criteria: expected an object")?;
+    if criterion_map.is_empty() {
+        return Err("Advancement criteria cannot be empty".into());
     }
     let mut criteria = Vec::new();
-    for (name, criterion) in v["criteria"].as_object()? {
+    for (name, criterion) in criterion_map {
         let Some(trigger) = criterion["trigger"]
             .as_str()
             .and_then(|key| sunrise_core::identifier::Identifier::parse(key).ok())
             .filter(|key| !key.path().is_empty())
         else {
-            log::warn!("advancement {id} rejected: criterion {name} has an invalid trigger id");
-            return None;
+            return Err(format!("criterion {name} has an invalid trigger id"));
         };
         let builtin = is_builtin_trigger(trigger.as_str());
         let conditions = &criterion["conditions"];
@@ -151,13 +153,7 @@ pub(super) fn parse_with(
         } else {
             Err("conditions: expected an object".into())
         };
-        let player = match player {
-            Ok(player) => player,
-            Err(error) => {
-                log::warn!("advancement {id} rejected: criterion {name}: {error}");
-                return None;
-            }
-        };
+        let player = player.map_err(|error| format!("criterion {name}: {error}"))?;
         criteria.push(Criterion {
             name: name.clone(),
             trigger: trigger.as_str().to_owned(),
@@ -169,20 +165,24 @@ pub(super) fn parse_with(
             player,
         });
     }
-    let requirements = match v["requirements"].as_array() {
-        Some(r) => r
-            .iter()
-            .map(|group| {
-                group
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|s| s.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .collect(),
+    let requirements = if v["requirements"].is_null() {
         // AdvancementRequirements.allOf: every criterion.
-        None => criteria.iter().map(|c| vec![c.name.clone()]).collect(),
+        criteria.iter().map(|c| vec![c.name.clone()]).collect()
+    } else {
+        // AdvancementRequirements.CODEC: a list of lists of strings, which
+        // `AdvancementRequirements.validate` matches exactly to the criteria.
+        let groups: Vec<Vec<String>> = serde_json::from_value(v["requirements"].clone())
+            .map_err(|error| format!("requirements: {error}"))?;
+        let named: BTreeSet<&str> = groups.iter().flatten().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = criteria.iter().map(|c| c.name.as_str()).collect();
+        if named != expected {
+            return Err(format!(
+                "Advancement completion requirements did not exactly match specified criteria. Missing: {:?}. Unknown: {:?}",
+                expected.difference(&named).collect::<Vec<_>>(),
+                named.difference(&expected).collect::<Vec<_>>(),
+            ));
+        }
+        groups
     };
     let d = &v["display"];
     let display = d.is_object().then(|| Display {
@@ -196,6 +196,15 @@ pub(super) fn parse_with(
         announce: d["announce_to_chat"].as_bool().unwrap_or(true),
         hidden: d["hidden"].as_bool().unwrap_or(false),
     });
+    // `Advancement.validate`.
+    let parent = v["parent"].as_str().map(|p| full(p).into_owned());
+    let has_background = display.as_ref().is_some_and(|d| d.background.is_some());
+    if parent.is_none() && display.is_some() && !has_background {
+        return Err("Visible advancement roots must have background".into());
+    }
+    if parent.is_some() && has_background {
+        return Err("Only advancement roots can have background".into());
+    }
     let r = &v["rewards"];
     let strings = |v: &Value| -> Vec<String> {
         v.as_array()
@@ -204,9 +213,9 @@ pub(super) fn parse_with(
             .filter_map(|s| s.as_str().map(str::to_owned))
             .collect()
     };
-    Some(Advancement {
+    Ok(Advancement {
         id: id.to_owned(),
-        parent: v["parent"].as_str().map(|p| full(p).into_owned()),
+        parent,
         display,
         criteria,
         requirements,

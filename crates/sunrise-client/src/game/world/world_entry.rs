@@ -691,6 +691,7 @@ impl Game<'_> {
             providers.as_ref().err().cloned(),
             install_items_result.err().map(|error| error.to_string()),
             conditions.check_errors().err(),
+            (!advancements.refused.is_empty()).then(|| advancements.refused.join("\n")),
             loot.as_ref().err().map(ToString::to_string),
             datapack_candidate.as_ref().err().cloned(),
             sources.as_ref().err().map(ToString::to_string),
