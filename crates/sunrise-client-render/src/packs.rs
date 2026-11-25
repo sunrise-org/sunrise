@@ -260,6 +260,16 @@ fn format_text(f: Format) -> String {
         format!("{}.{}", f.0, f.1)
     }
 }
+/// How `PackFormat.IntermediaryFormat.validate` is called: for a pack's `pack` section
+/// (`hasPackFormatField`, no `requireOldField`) or for an overlay entry (neither flag set by
+/// the entry, `requireOldField` from the whole list).
+struct FormatRules<'a> {
+    last_pre_minor: i64,
+    has_pack_format: bool,
+    require_old: bool,
+    context: &'a str,
+    old: &'a str,
+}
 /// `PackFormat.IntermediaryFormat.validate` for a pack's `pack` section
 /// (`hasPackFormatField`, no `requireOldField`): the supported range, or why
 /// vanilla refuses the metadata (it then falls back to a pack of unknown
@@ -282,24 +292,128 @@ pub fn validate_pack_range(
     })
     .map_err(|()| bad("pack_format"))?;
     let supported = optional(&pack[OLD], int_range_codec).map_err(|()| bad(OLD))?;
+    validate_format(
+        min,
+        max,
+        format,
+        supported,
+        &FormatRules {
+            last_pre_minor,
+            has_pack_format: true,
+            require_old: false,
+            context: CONTEXT,
+            old: OLD,
+        },
+    )
+}
+/// `OverlayMetadataSection.codecForPackType`: whether a pack's `overlays` section, when it has
+/// one, is accepted. `Pack.readPackMetadata` refuses the pack when the codec fails: `entries`
+/// missing or not a list, an entry whose `directory` fails `DIR_VALIDATOR` or whose formats
+/// do not parse or validate (`PackFormat.validateHolderList`).
+pub(crate) fn validate_overlays(meta: &serde_json::Value, current: Format) -> Result<(), String> {
+    let last_pre_minor = last_pre_minor(current);
+    let section = &meta["overlays"];
+    if section.is_null() {
+        return Ok(());
+    }
+    let entries = section["entries"]
+        .as_array()
+        .ok_or("overlays field entries does not parse")?;
+    struct Entry<'a> {
+        directory: &'a str,
+        min: Option<Format>,
+        max: Option<Format>,
+        supported: Option<(i64, i64)>,
+    }
+    let mut parsed = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let directory = entry["directory"]
+            .as_str()
+            .filter(|d| is_overlay_directory(d))
+            .ok_or("overlay directory is not accepted directory name")?;
+        let bad = |field: &str| format!("Overlay \"{directory}\" field {field} does not parse");
+        parsed.push(Entry {
+            directory,
+            min: optional(&entry["min_format"], |v| format_codec(v, 0))
+                .map_err(|()| bad("min_format"))?,
+            max: optional(&entry["max_format"], |v| {
+                format_codec(v, i64::from(i32::MAX))
+            })
+            .map_err(|()| bad("max_format"))?,
+            supported: optional(&entry["formats"], int_range_codec).map_err(|()| bad("formats"))?,
+        });
+    }
+    // `IntermediaryFormat.effectiveMinMajorVersion`, minimum over the list.
+    let min_version = parsed
+        .iter()
+        .map(|e| match (e.min, e.supported) {
+            (Some(min), Some(s)) => min.0.min(s.0),
+            (Some(min), None) => min.0,
+            (None, Some(s)) => s.0,
+            (None, None) => i64::from(i32::MAX),
+        })
+        .min()
+        .unwrap_or(i64::from(i32::MAX));
+    for e in &parsed {
+        // An entry naming no format at all is only logged and skipped.
+        if e.min.is_none() && e.max.is_none() && e.supported.is_none() {
+            continue;
+        }
+        let context = format!("Overlay \"{}\"", e.directory);
+        validate_format(
+            e.min,
+            e.max,
+            e.min.map(|m| m.0),
+            e.supported,
+            &FormatRules {
+                last_pre_minor,
+                has_pack_format: false,
+                require_old: min_version <= last_pre_minor,
+                context: &context,
+                old: "formats",
+            },
+        )?;
+    }
+    Ok(())
+}
+/// `PackFormat.IntermediaryFormat.validate`.
+fn validate_format(
+    min: Option<Format>,
+    max: Option<Format>,
+    format: Option<i64>,
+    supported: Option<(i64, i64)>,
+    rules: &FormatRules,
+) -> Result<(Format, Format), String> {
+    let FormatRules {
+        last_pre_minor,
+        has_pack_format,
+        require_old,
+        context,
+        old,
+    } = *rules;
     if min.is_some() != max.is_some() {
         return Err(format!(
-            "{CONTEXT} missing field, must declare both min_format and max_format"
+            "{context} missing field, must declare both min_format and max_format"
+        ));
+    }
+    if require_old && supported.is_none() {
+        return Err(format!(
+            "{context} missing required field {old}, must be present in all overlays for any overlays to work across game versions"
         ));
     }
     if let (Some(min), Some(max)) = (min, max) {
-        return validate_new_format(min, max, format, supported, last_pre_minor);
+        return validate_new_format(min, max, format, supported, rules);
     }
     if let Some(supported) = supported {
-        return validate_old_format(supported, format, last_pre_minor);
+        return validate_old_format(supported, format, rules);
     }
     match format {
-        Some(main) if main > last_pre_minor => Err(format!(
-            "{CONTEXT} declares support for version newer than {last_pre_minor}, but is missing mandatory fields min_format and max_format"
+        Some(main) if has_pack_format && main > last_pre_minor => Err(format!(
+            "{context} declares support for version newer than {last_pre_minor}, but is missing mandatory fields min_format and max_format"
         )),
-        Some(main) => Ok(((main, 0), (main, 0))),
-        None => Err(format!(
-            "{CONTEXT} could not be parsed, missing format version information"
+        Some(main) if has_pack_format => Ok(((main, 0), (main, 0))),
+        _ => Err(format!(
+            "{context} could not be parsed, missing format version information"
         )),
     }
 }
@@ -309,58 +423,67 @@ fn validate_new_format(
     max: Format,
     format: Option<i64>,
     supported: Option<(i64, i64)>,
-    last_pre_minor: i64,
+    rules: &FormatRules,
 ) -> Result<(Format, Format), String> {
-    const OLD: &str = "supported_formats";
+    let FormatRules {
+        last_pre_minor,
+        has_pack_format,
+        require_old,
+        context,
+        old,
+    } = *rules;
     let (major_min, major_max) = (min.0, max.0);
     if min > max {
         return Err(format!(
-            "Pack min_format ({}) is greater than max_format ({})",
+            "{context} min_format ({}) is greater than max_format ({})",
             format_text(min),
             format_text(max)
         ));
     }
-    if major_min > last_pre_minor {
+    if major_min > last_pre_minor && !require_old {
         if supported.is_some() {
             return Err(format!(
-                "Pack key {OLD} is deprecated starting from pack format {}. Remove {OLD} from your pack.mcmeta.",
+                "{context} key {old} is deprecated starting from pack format {}. Remove {old} from your pack.mcmeta.",
                 last_pre_minor + 1
             ));
         }
-        if let Some(main) = format
+        if has_pack_format
+            && let Some(main) = format
             && let Some(error) = validate_pack_format_for_range(main, major_min, major_max)
         {
             return Err(error);
         }
     } else {
-        let Some(old) = supported else {
+        let Some(declared) = supported else {
             return Err(format!(
-                "Pack declares support for format {major_min}, but game versions supporting formats 15 to {last_pre_minor} require a {OLD} field. Add \"{OLD}\": [{major_min}, {last_pre_minor}] or require a version greater or equal to {}.0.",
+                "{context} declares support for format {major_min}, but game versions supporting formats 15 to {last_pre_minor} require a {old} field. Add \"{old}\": [{major_min}, {last_pre_minor}] or require a version greater or equal to {}.0.",
                 last_pre_minor + 1
             ));
         };
-        if old.0 != major_min {
+        if declared.0 != major_min {
             return Err(format!(
-                "Pack version declaration mismatch between {OLD} (from {}) and min_format ({})",
-                old.0,
+                "{context} version declaration mismatch between {old} (from {}) and min_format ({})",
+                declared.0,
                 format_text(min)
             ));
         }
-        if old.1 != major_max && old.1 != last_pre_minor {
+        if declared.1 != major_max && declared.1 != last_pre_minor {
             return Err(format!(
-                "Pack version declaration mismatch between {OLD} (up to {}) and max_format ({})",
-                old.1,
+                "{context} version declaration mismatch between {old} (up to {}) and max_format ({})",
+                declared.1,
                 format_text(max)
             ));
         }
-        let Some(main) = format else {
-            return Err(format!(
-                "Pack declares support for formats up to {last_pre_minor}, but game versions supporting formats 15 to {last_pre_minor} require a pack_format field. Add \"pack_format\": {major_min} or require a version greater or equal to {}.0.",
-                last_pre_minor + 1
-            ));
-        };
-        if let Some(error) = validate_pack_format_for_range(main, major_min, major_max) {
-            return Err(error);
+        if has_pack_format {
+            let Some(main) = format else {
+                return Err(format!(
+                    "{context} declares support for formats up to {last_pre_minor}, but game versions supporting formats 15 to {last_pre_minor} require a pack_format field. Add \"pack_format\": {major_min} or require a version greater or equal to {}.0.",
+                    last_pre_minor + 1
+                ));
+            };
+            if let Some(error) = validate_pack_format_for_range(main, major_min, major_max) {
+                return Err(error);
+            }
         }
     }
     Ok((min, max))
@@ -369,22 +492,30 @@ fn validate_new_format(
 fn validate_old_format(
     supported: (i64, i64),
     format: Option<i64>,
-    last_pre_minor: i64,
+    rules: &FormatRules,
 ) -> Result<(Format, Format), String> {
+    let FormatRules {
+        last_pre_minor,
+        has_pack_format,
+        context,
+        ..
+    } = *rules;
     let (min, max) = supported;
     if max > last_pre_minor {
         return Err(format!(
-            "Pack declares support for version newer than {last_pre_minor}, but is missing mandatory fields min_format and max_format"
+            "{context} declares support for version newer than {last_pre_minor}, but is missing mandatory fields min_format and max_format"
         ));
     }
-    let Some(main) = format else {
-        return Err(format!(
-            "Pack declares support for formats up to {last_pre_minor}, but game versions supporting formats 15 to {last_pre_minor} require a pack_format field. Add \"pack_format\": {min} or require a version greater or equal to {}.0.",
-            last_pre_minor + 1
-        ));
-    };
-    if let Some(error) = validate_pack_format_for_range(main, min, max) {
-        return Err(error);
+    if has_pack_format {
+        let Some(main) = format else {
+            return Err(format!(
+                "{context} declares support for formats up to {last_pre_minor}, but game versions supporting formats 15 to {last_pre_minor} require a pack_format field. Add \"pack_format\": {min} or require a version greater or equal to {}.0.",
+                last_pre_minor + 1
+            ));
+        };
+        if let Some(error) = validate_pack_format_for_range(main, min, max) {
+            return Err(error);
+        }
     }
     Ok(((min, 0), (max, 0)))
 }
@@ -462,13 +593,14 @@ fn overlay_directories(
         .filter(|e| active(e))
         .filter_map(|e| e["directory"].as_str().map(str::to_owned))
         // OverlayMetadataSection's DIR_VALIDATOR: one folder of the pack, `[-_a-zA-Z0-9.]+`.
-        .filter(|d| {
-            stays_inside(d)
-                && !d.contains('/')
-                && d.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
-        })
+        .filter(|d| stays_inside(d) && is_overlay_directory(d))
         .collect()
+}
+/// `OverlayMetadataSection.DIR_VALIDATOR`: `[-_a-zA-Z0-9.]+`, so one folder of the pack.
+fn is_overlay_directory(d: &str) -> bool {
+    !d.is_empty()
+        && d.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 pub(crate) fn filter_of(meta: &serde_json::Value) -> Vec<Filter> {
     meta["filter"]["block"]
