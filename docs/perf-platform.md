@@ -147,7 +147,7 @@ known to build for wasm32. A dev-dependency test checks that a report written by
 | `sunrise-client-lib`, `sunrise-client` (game, dedicated server) | `sunrise-perf-format` | triggers, the writer, the remote channel (§4.2) |
 | `sunrise-threads` | nothing new | stays free of internal dependencies; it keeps producing its in-memory `Profile` |
 | `sunrise-perf` | `sunrise-perf-format` | never a dependency of another shipped program; its own program ships beside the game |
-| web UI (`horizon-rust/horizon-site`) | `sunrise_perf.wasm`, a build artifact of this repo | draws only |
+| web UI (`sunrise-org/sunny`) | `sunrise_perf.wasm`, a build artifact of this repo | draws only |
 
 The conversion from `sunrise_threads::Profile` to the `samples` message lives in sunrise-client-render. It replaces
 `profile/viewer.rs`, which today builds the same columnar data inside sunrise-threads
@@ -908,11 +908,11 @@ the load settle before stopping it.
 - Spec B's nightly regression rule (permutation test, MAD history) stays in its own tool. It is a CI policy over a
   history, not a question about two captures.
 
-## 7. The web UI (`horizon-rust/horizon-site`)
+## 7. The web UI (`sunrise-org/sunny`)
 
 ### 7.1 What it is and where it lives
 
-- **Location and stack.** The browser UI and upload API live in horizon-rust/horizon-site, the Next.js App Router website behind playsunrise.net. The UI has its own root layout under `app/perf/`; helpers live under `lib/perf/`, translations under `messages/perf/`, and static assets under `public/perf/`. The routes are `/perf`, `/perf/c/<id>` and `/api/perf/captures`; configuration stays in environment variables. The game's defaults are playsunrise.net's (`PERF_VIEWER` and `PERF_CAPTURES` in `sunrise-addresses`), and `SUNRISE_PERF_VIEWER` and `SUNRISE_PERF_CAPTURES` point a build elsewhere.
+- **Location and stack.** The browser UI and upload API live in `sunrise-org/sunny`, the website repository behind playsunrise.net. The UI has its own root layout under `app/perf/`; helpers live under `lib/perf/`, translations under `messages/perf/`, and static assets under `public/perf/`. The routes are `/perf`, `/perf/c/<id>` and `/api/perf/captures`; configuration stays in environment variables. The game's defaults are playsunrise.net's (`PERF_VIEWER` and `PERF_CAPTURES` in `sunrise-addresses`), and `SUNRISE_PERF_VIEWER` and `SUNRISE_PERF_CAPTURES` point a build elsewhere.
 - **The wasm does the computing.** The page loads `sunrise_perf.wasm`, the `sunrise-perf` library built for
   `wasm32-unknown-unknown` with feature `wasm`, for reading, queries and statistics. The UI only draws, and every
   number it shows comes from a wasm call. So the web UI and the CLI cannot disagree, and no second implementation

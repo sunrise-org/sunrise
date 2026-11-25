@@ -162,7 +162,7 @@ Sunrise's own extras and its product, and every built-in address of an outside s
 - **Rules:**
   - It uses the platform's public API only, never the engine.
   - Until it moves, every Sunrise feature in the game sits behind the `sunrise-extras` feature
-    ([forking.md](forking.md)), so [sunrise-plain](https://github.com/horizon-rust/horizon-plain) builds without it.
+    ([forking.md](forking.md)), so a plain build compiles without it.
 
 ## Tools
 
@@ -249,7 +249,7 @@ it.
 |---|---|
 | The launcher's release builds, every platform and format: Linux `.tar.gz` and AppImage, macOS `.zip` and signed `.dmg`, Windows `.zip` and `sunrise-launcher-setup*.exe` | sunrise-org/sunrise-launcher's release workflow |
 | GitHub releases (`launcher@X.Y.Z`) | `.github/workflows/launcher-bridge.yml` (signed here, published there and here) |
-| playsunrise.net's download page | horizon-rust/horizon-site, reading `https://github.com/sunrise-org/sunrise-launcher/blob/main/links.json` and the releases |
+| playsunrise.net's download page | `sunrise-org/sunny`, reading `https://github.com/sunrise-org/sunrise-launcher/blob/main/links.json` and the releases |
 | The launcher's self-update | `https://github.com/sunrise-org/sunrise-launcher/blob/main/src/backend.rs` (`stage_update`), `https://github.com/sunrise-org/sunrise-launcher/blob/main/src/update_handoff.rs`, `https://github.com/sunrise-org/sunrise-launcher/blob/main/src/nightly.rs` |
 | The game builds the launcher installs, so the in-game part reaches every player | `.github/workflows/nightly-build.yml`, `release.yml`, `game-build.yml` |
 | The links the launcher and the site read (Discord, website) | `https://github.com/sunrise-org/sunrise-launcher/blob/main/links.json` |

@@ -4,8 +4,9 @@ Thanks for helping. Sunrise is Minecraft: Java Edition 26.3 rewritten in Rust, a
 everything is that **it plays exactly like vanilla**. This page is the short version of how we work; questions are
 welcome on [Discord](https://discord.gg/playsunrise).
 
-This repository holds the game and the launcher, plus the tools, tests and docs that build, check and release them.
-The website (playsunrise.net) is built in a separate repository from this one's README, `docs/api/` and roadmap. Anything
+This repository holds the game, server and mod tools, plus the tests and docs that build, check and release them.
+The launcher lives in [sunrise-org/sunrise-launcher](https://github.com/sunrise-org/sunrise-launcher), and the website
+(playsunrise.net) is built in `sunrise-org/sunny` from this repository's README, `docs/api/`, modding book and roadmap. Anything
 else (videos, Discord and other community material) lives elsewhere.
 
 **Where to start: [playsunrise.net/hub](https://playsunrise.net/hub).** It shows what is being done now and next
@@ -80,7 +81,7 @@ by area. A pull request never adds one, and isn't held back by one it didn't add
 - **No workarounds.** When a harness differs, fix the cause until it matches bit for bit. Never add a tolerance,
   rounding, a special case or a compensating patch to make it pass. Removing a workaround, or a tolerance from a
   harness, is welcome when the harnesses stay bit-exact: smaller code is a goal.
-- **Sunrise's own features** (the launcher, the new menus) follow [the design system](docs/design-system.md) and are
+- **Sunrise's own features** (the new menus and overlays) follow [the design system](docs/design-system.md) and are
   off by default wherever they would change the vanilla look.
 - **Three layers: engine, platform, Sunrise.** Vanilla code never depends on the platform (mods, shader packs,
   Sunrise-only settings) or on Sunrise (Discord, Play with Friends, telemetry), and the platform never
@@ -142,7 +143,7 @@ python3 tools/pr_ready.py --base upstream/main   # or origin/main if you work on
 ```
 
 It looks at what your branch changes and runs what matters: rustfmt, clippy with warnings denied, the tests of the
-crates you touched (and the launcher's), generated files, `Cargo.lock` and the Python tests (one test file per
+crates you touched, generated files, `Cargo.lock` and the Python tests (one test file per
 worker; `--serial-python` runs them in one process, as CI does). It runs the
 vanilla harnesses locally only when your branch changes a harness, an oracle, a probe or the runner; otherwise it
 lists the ones your change can affect. The daily checks the automatic harnesses after the merge. `--harnesses` runs them on your

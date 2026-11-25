@@ -994,4 +994,4 @@ Releases ship often, so nothing they leave behind may grow without bound.
   pile up (1051 of them, 111 GB, in one desktop checkout on 2026-11-09). git-slim removes the leftovers of cut-short
   fetches, collects a `.git` over 5 GB (`MAX_GIT_MB`) with `git gc --prune=now` and folds more than 40 packs
   (`MAX_PACKS`) into few. Update the copies after changing the scripts (git-slim.sh goes beside runner-gc.sh):
-  `ssh macmini 'cd ~/.actions-runners && for f in runner-gc.sh git-slim.sh; do curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/tools/ci/$f -o $f; done'`.
+  `ssh macmini 'cd ~/.actions-runners && for f in runner-gc.sh git-slim.sh; do curl -fsSL https://raw.githubusercontent.com/sunrise-org/sunrise/main/tools/ci/$f -o $f; done'`.
