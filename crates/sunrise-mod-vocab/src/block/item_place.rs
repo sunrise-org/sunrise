@@ -663,7 +663,8 @@ impl ItemPlace {
         )
     }
 
-    /// What is here, with its components but without its count (`ItemAccess.getResource`).
+    /// What is here, with its live components but without its count (`ItemAccess.getResource`).
+    /// This includes a map's pending lock or scale even though it is not saved.
     pub fn resource(&self, host: &mut dyn ServerHost) -> Option<ItemResource> {
         self.with_stack(host, |stack| {
             stack.project().map(|stack| ItemResource::of(&stack))
@@ -702,9 +703,10 @@ impl ItemPlace {
     }
 
     /// Takes up to `amount` from here, in transaction `tx`, when the item and components
-    /// match `resource` (`ItemAccess.extract`). In places the game handles directly, an
-    /// override equal to the item's default does not change the match, and the resource
-    /// need not be valid for insertion. A creative player's hand gives without losing any.
+    /// match `resource` (`ItemAccess.extract`). Places the game handles directly compare
+    /// decoded live components: an override equal to the item's default does not change
+    /// the match, but a pending map lock or scale does. The resource need not be valid for
+    /// insertion. A creative player's hand gives without losing any.
     /// A mismatched `tx` returns `Err(TransactionError::InvalidContext)`.
     pub fn extract(
         &self,

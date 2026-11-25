@@ -889,7 +889,7 @@ pub(in crate::game) fn project_stack(
 ) -> Result<ApiStack, StackReadError> {
     #[cfg(test)]
     STACK_PROJECTIONS.set(STACK_PROJECTIONS.get() + 1);
-    let patch = sunrise_items::item_data::encode_extra_components(stack);
+    let patch = sunrise_items::item_data::live_component_patch(stack, false);
     projected_stack(metadata, patch)
 }
 

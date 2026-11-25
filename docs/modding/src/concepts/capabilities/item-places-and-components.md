@@ -66,9 +66,12 @@ Keep the contents in the stack and use these methods to access it:
 | `place.extract(host, tx, &resource, amount)` | `Result<u32, TransactionError<Overanswered>>`: how much was taken from a stack matching the resource's item and components |
 | `place.exchange(host, tx, &resource, amount)` | `Result<u32, TransactionError<Overanswered>>`: how much was exchanged, or `Ok(0)` if the exchange could not run |
 
-Where the game handles extraction directly, an override equal to the item's default does not
-change what matches. The resource need not be valid for insertion: for example, a damage
-component already on a stack can match even when that stack has no maximum damage.
+Where the game handles extraction directly, it matches decoded component values rather than
+raw tag spellings. An override equal to the item's default does not change what matches. A
+resident filled map's resource includes any pending lock or scale even though saves omit it;
+its resource matches the live map without processing that operation. The resource need not be
+valid for insertion: for example, a damage component already on a stack can match even when
+that stack has no maximum damage.
 
 Pass the innermost `&TransactionContext` to every write, including writes to lent scratch places.
 A foreign or ancestor context refuses without calling the provider: `insert`, `extract`, and

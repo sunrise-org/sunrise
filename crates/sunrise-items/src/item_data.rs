@@ -15,7 +15,7 @@ pub mod ingredient_components;
 mod persistence;
 use crate::banner_layer::BannerLayer;
 use crate::items::{ItemInfo, ItemStack};
-use persistence::encode_stack_components;
+use persistence::encode_persistent_components;
 use sunrise_core::nbt::{Compound, JavaString, Tag};
 
 /// One item attribute modifier, as `ItemAttributeModifiers.Entry` holds it.
@@ -1559,11 +1559,28 @@ impl ItemStack {
         if self.same_item_same_components(other) {
             return true;
         }
+        let prototype = items
+            .get(&self.item)
+            .filter(|_| items.component_defaults.contains_key(self.item.as_ref()));
         let matches_patch = |stack: &Self, other: &Self| {
-            let keep = component_patch_filter(stack, items);
+            let keep = |id: &str, removed| {
+                prototype.is_none_or(|info| {
+                    keep_component_patch_entry(
+                        removed,
+                        info.components.iter().any(|key| key == id),
+                        || {
+                            ingredient_components::component_equal(
+                                id,
+                                stack,
+                                &info.component_prototype,
+                            )
+                        },
+                    )
+                })
+            };
             let mut matches = true;
             ingredient_components::visit_components(stack, |id| {
-                if matches && keep(&JavaString::from(id), false) {
+                if matches && keep(id, false) {
                     matches = other.carries_component(None, id)
                         && ingredient_components::component_equal(id, stack, other);
                 }
@@ -1574,10 +1591,7 @@ impl ItemStack {
                     .into_iter()
                     .flat_map(StackData::preserved_components)
                     .filter_map(|(id, _)| id.strip_prefix('!'))
-                    .all(|id| {
-                        !keep(&JavaString::from(id), true)
-                            || ingredient_components::removed(other, id)
-                    })
+                    .all(|id| !keep(id, true) || ingredient_components::removed(other, id))
         };
         matches_patch(self, other) && matches_patch(other, self)
     }
@@ -2085,26 +2099,52 @@ fn canonical_other_component(id: &str, tag: &Tag) -> Tag {
     }
     value
 }
-/// An explicit component snapshot, preserving live presence even at an item's default.
-/// Persistent stacks use [`encode_components`] with the loaded catalog instead.
-pub fn component_snapshot(stack: &ItemStack) -> Option<Tag> {
-    encode_stack_components(stack, true, &|_| true, &raw_template_tag)
+/// The live component patch, including transient components and explicit defaults.
+/// Omit the top-level damage field when the caller already carries it as a scalar.
+pub fn live_component_patch(stack: &ItemStack, include_damage: bool) -> Option<Tag> {
+    let mut components = components_tag_inner(
+        stack.damage,
+        stack.data(),
+        include_damage,
+        true,
+        &|_| true,
+        &|nested| template_tag(nested, live_component_patch(nested, true)),
+    )?;
+    canonicalize_component_patch(&mut components);
+    Some(components)
 }
 
-/// Encode the extra patch for a snapshot whose typed scalar already carries damage.
-/// This uses the same component codec and canonicalization as persistent stacks.
+/// An explicit snapshot of persistable components, including overrides equal to the item's default.
+/// Persistent stacks use [`encode_components`] with the loaded catalog instead.
+pub fn component_snapshot(stack: &ItemStack) -> Option<Tag> {
+    encode_persistent_components(stack, true, &|_| true)
+}
+
+/// Encode the persistable extra patch for a snapshot whose typed scalar already carries damage.
 pub fn encode_extra_components(stack: &ItemStack) -> Option<Tag> {
     encode_extra_components_matching(stack, |_| true)
 }
 
-/// Engine-only projection of the extra patch, excluding the typed damage scalar.
+/// Engine-only projection of the persistable extra patch, excluding the typed damage scalar.
 /// The selector sees the component ID without `!` for removals. Selected nested
-/// stacks keep their full patches.
+/// stacks keep their full persistable patches.
 pub fn encode_extra_components_matching(
     stack: &ItemStack,
     selector: impl Fn(&str) -> bool,
 ) -> Option<Tag> {
-    encode_stack_components(stack, false, &selector, &raw_template_tag)
+    encode_persistent_components(stack, false, &selector)
+}
+
+fn keep_component_patch_entry(
+    removed: bool,
+    present_by_default: bool,
+    equals_default: impl FnOnce() -> bool,
+) -> bool {
+    if removed {
+        present_by_default
+    } else {
+        !present_by_default || !equals_default()
+    }
 }
 
 /// `PatchedDataComponentMap`: retain sets that differ from the item's prototype and
@@ -2121,25 +2161,20 @@ pub fn component_patch_filter<'a>(
         let Some((keys, info)) = prototype else {
             return true;
         };
-        let present = keys.contains_key(id);
-        if removed {
-            present
-        } else {
-            // Equality belongs to the component codec, not its saved NBT numeric width.
-            !present
-                || !ingredient_components::component_equal(
-                    &id.to_string_lossy(),
-                    stack,
-                    &info.component_prototype,
-                )
-        }
+        keep_component_patch_entry(removed, keys.contains_key(id), || {
+            ingredient_components::component_equal(
+                &id.to_string_lossy(),
+                stack,
+                &info.component_prototype,
+            )
+        })
     }
 }
 
 /// The saved `DataComponentPatch.CODEC`, compared against the loaded prototype.
 /// Nested templates retain their raw patches, including redundant entries and removals.
 pub fn encode_components(stack: &ItemStack, items: &crate::items::Items) -> Option<Tag> {
-    let mut components = encode_stack_components(stack, true, &|_| true, &raw_template_tag)?;
+    let mut components = encode_persistent_components(stack, true, &|_| true)?;
     if let Tag::Compound(entries) = &mut components {
         let keep = component_patch_filter(stack, items);
         entries.retain(|id, _| {
@@ -2155,15 +2190,17 @@ pub fn encode_components(stack: &ItemStack, items: &crate::items::Items) -> Opti
     }
     Some(components)
 }
-/// Live component fields from damage and extras, without item-prototype elision.
+/// Component fields from damage and extras, without item-prototype elision or the
+/// typed map post-processing directive.
 pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
-    components_tag_inner(damage, data, true, &|_| true, &raw_template_tag)
+    components_tag_inner(damage, data, true, false, &|_| true, &raw_template_tag)
 }
 
 fn components_tag_inner(
     damage: u32,
     data: Option<&StackData>,
     include_damage: bool,
+    include_map_post_processing: bool,
     selector: &impl Fn(&str) -> bool,
     template_tag: &impl Fn(&ItemStack) -> Tag,
 ) -> Option<Tag> {
@@ -2334,8 +2371,16 @@ fn components_tag_inner(
                 ),
             ));
         }
-        // minecraft:map_post_processing is transient: ItemStack.CODEC never
-        // saves it (only the network carries it).
+        // MapPostProcessing.id: this is part of the live patch, not ItemStack.CODEC.
+        if include_map_post_processing
+            && let Some(directive) = d.map_post_processing
+            && selector("minecraft:map_post_processing")
+        {
+            entries.push((
+                "minecraft:map_post_processing",
+                Tag::Int(i32::from(directive)),
+            ));
+        }
         if !d.charged.is_empty() && selector("minecraft:charged_projectiles") {
             entries.push((
                 "minecraft:charged_projectiles",
@@ -2376,6 +2421,31 @@ fn components_tag_inner(
     }
     (!out.is_empty()).then_some(Tag::Compound(out))
 }
+
+fn canonicalize_component_patch(components: &mut Tag) {
+    // MobEffectInstance.Details' codec always saves the resolved icon flag.
+    // An omitted icon follows show_particles, whose default is true.
+    if let Some(Tag::List(effects)) = components
+        .get_mut("minecraft:potion_contents")
+        .and_then(|potion| potion.get_mut("custom_effects"))
+    {
+        for effect in effects {
+            let shown = effect.get("show_particles").and_then(int).unwrap_or(1) != 0;
+            if let Tag::Compound(fields) = effect {
+                fields
+                    .entry(JavaString::from("show_icon"))
+                    .or_insert(Tag::Byte(i8::from(shown)));
+            }
+        }
+    }
+    // LodestoneTracker.CODEC: optionalFieldOf("tracked", true).
+    if let Some(Tag::Compound(tracker)) = components.get_mut("minecraft:lodestone_tracker")
+        && tracker.get(&JavaString::from("tracked")) == Some(&Tag::Byte(1))
+    {
+        tracker.remove(&JavaString::from("tracked"));
+    }
+}
+
 /// Borrow an ASCII component key in `buf` without allocating. Every modeled ID
 /// is ASCII and fits; other spellings are preserved in the raw patch.
 fn ascii_key<'a>(key: &JavaString, buf: &'a mut [u8; 64]) -> Option<&'a str> {
@@ -2561,9 +2631,11 @@ fn decode_components_inner(
         writable_pages: writable_raw(seen.writable_book_content),
         writable_filtered: writable_filtered(seen.writable_book_content),
         written: seen.written_book_content.map(written_book_from_tag),
+        // Fireworks.CODEC decodes an empty explosion list regardless of the item's prototype.
         fireworks: seen
             .fireworks
-            .map(|f| {
+            .filter(|f| matches!(f, Tag::Compound(_)))
+            .and_then(|f| {
                 let flight = f
                     .get("flight_duration")
                     .and_then(int)
@@ -2571,11 +2643,11 @@ fn decode_components_inner(
                     .clamp(0, 255) as u8;
                 let explosions = match f.get("explosions") {
                     Some(Tag::List(list)) => list.iter().map(explosion_from).collect(),
-                    _ => Vec::new(),
+                    None => Vec::new(),
+                    Some(_) => return None,
                 };
-                (flight, explosions)
-            })
-            .filter(|(flight, explosions)| !(*flight == 1 && explosions.is_empty())),
+                Some((flight, explosions))
+            }),
         firework_explosion: seen.firework_explosion.map(explosion_from),
         dyed_color: seen
             .dyed_color
@@ -2869,6 +2941,34 @@ mod tests {
         let mut other = half.clone();
         other.fireworks = Some((3, Vec::new()));
         assert_ne!(hasher.hash_one(full), hasher.hash_one(&other));
+    }
+
+    #[test]
+    fn prototype_match_uses_decoded_fireworks() {
+        let paper = |count, fields| {
+            let patch = Tag::compound([("minecraft:fireworks", Tag::compound(fields))]);
+            let (damage, extra) = decode_components(Some(&patch));
+            ItemStack {
+                damage,
+                extra,
+                ..ItemStack::new("minecraft:paper", count)
+            }
+        };
+        let implicit = paper(1, vec![("flight_duration", Tag::Byte(1))]);
+        let explicit = paper(
+            2,
+            vec![
+                ("flight_duration", Tag::Byte(1)),
+                ("explosions", Tag::List(Vec::new())),
+            ],
+        );
+        let different = paper(1, vec![("flight_duration", Tag::Byte(2))]);
+        let absent = ItemStack::new("minecraft:paper", 1);
+        let items = crate::items::Items::empty();
+        assert!(implicit.same_item_same_components_with_prototype(&explicit, &items));
+        assert!(explicit.same_item_same_components_with_prototype(&implicit, &items));
+        assert!(!implicit.same_item_same_components_with_prototype(&different, &items));
+        assert!(!implicit.same_item_same_components_with_prototype(&absent, &items));
     }
 
     #[test]

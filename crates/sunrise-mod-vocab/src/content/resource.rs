@@ -206,8 +206,10 @@ impl ItemResource {
             && self.0.damage_component() == stack.damage_component()
             && stack.project().is_some_and(|stack| self.matches(&stack))
     }
-    /// This item's own value of component `id` in its patch, as saved (`minecraft:damage` on a
-    /// worn sword); none where it keeps the item's default or has the component removed.
+    /// This item's own value of component `id` in its patch as an API tag; none where it keeps
+    /// the item's default or has the component removed. A live patch can include unsaved
+    /// components, such as a pending `minecraft:map_post_processing` (`Tag::Int(0)` for lock,
+    /// `Tag::Int(1)` for scale).
     pub fn component(&self, id: &ComponentId) -> Option<Tag> {
         if id.as_str() == "minecraft:damage" {
             return self

@@ -570,7 +570,7 @@ impl Game<'_> {
         let mut held = if let Some(stack) = &handler_stack {
             super::api_values::stack_value(stack).map_err(|_| CraftedByError::Unavailable)?
         } else {
-            // Read engine storage directly: its API snapshot omits the transient directive.
+            // Read an engine stack directly when the menu owns the slot.
             match slot {
                 Some(slot) => self.menu_slot(menu, slot),
                 None => self.menu_carried(menu),
@@ -2989,6 +2989,53 @@ pub(super) mod tests {
                 });
             },
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_slot_extracts_a_map_by_its_pending_lock_resource() {
+        use mod_api::{ComponentId, Tag};
+
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::native_item_places::tests::player_slot_extracts_a_map_by_its_pending_lock_resource",
+            "SUNRISE_ITEM_RESOURCE_MAP_LOCK_CASE",
+            &["run"],
+        ) {
+            return;
+        }
+
+        with_game(|game| {
+            open_to_lan(game);
+            let slot = ItemPlace::PlayerSlot {
+                player: 123,
+                slot: 3,
+            };
+            let mut map = ItemStack::new("minecraft:filled_map", 1);
+            map.data_mut().map_id = Some(7);
+            let no_directive = ItemResource::of(&map.try_into_api().unwrap());
+            map.data_mut().map_post_processing = Some(0);
+            let mut player = guest(1);
+            player.inventory[3] = Some(map.clone());
+            game.lan.as_mut().unwrap().hub.guests.push(player);
+
+            assert_eq!(
+                game.transaction(|host, tx| slot.extract(host, tx, &no_directive, 1)),
+                Ok(0)
+            );
+            assert_eq!(
+                game.lan.as_ref().unwrap().hub.guests[0].inventory[3],
+                Some(map)
+            );
+
+            let resource = slot.resource(game).unwrap();
+            let post_processing = ComponentId::new("minecraft:map_post_processing").unwrap();
+            assert_eq!(resource.component(&post_processing), Some(Tag::Int(0)));
+            assert_eq!(
+                game.transaction(|host, tx| slot.extract(host, tx, &resource, 1)),
+                Ok(1)
+            );
+            assert!(game.lan.as_ref().unwrap().hub.guests[0].inventory[3].is_none());
+        });
     }
 
     #[test]

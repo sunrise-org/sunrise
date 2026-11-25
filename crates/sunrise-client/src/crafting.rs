@@ -184,17 +184,8 @@ impl Template {
 /// Assembly also carries the transient map postprocess component; the saved
 /// ItemStack codec deliberately omits it. Do not turn it into saved data.
 fn assembly_components(stack: &ItemStack) -> Tag {
-    let mut components = match crate::item_data::component_snapshot(stack) {
-        Some(Tag::Compound(map)) => map,
-        _ => Default::default(),
-    };
-    if let Some(postprocess) = stack.data().and_then(|d| d.map_post_processing) {
-        components.insert(
-            "minecraft:map_post_processing".into(),
-            Tag::Int(i32::from(postprocess)),
-        );
-    }
-    Tag::Compound(components)
+    crate::item_data::live_component_patch(stack, true)
+        .unwrap_or_else(|| Tag::Compound(Default::default()))
 }
 /// A JSON recipe value as the NBT a component codec reads.
 pub(crate) fn json_tag(v: &Value) -> Tag {
