@@ -48,6 +48,14 @@ macro_rules! world_paintings {
         }
     };
 }
+macro_rules! world_providers {
+    ($s:ident) => {
+        match &$s.world_tables {
+            Some(t) => &t.providers,
+            None => $s.res.providers(),
+        }
+    };
+}
 macro_rules! world_stations {
     ($s:ident) => {
         match &$s.world_tables {
