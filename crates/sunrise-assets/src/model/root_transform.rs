@@ -248,10 +248,13 @@ mod tests {
         // Three numbers are XYZ degrees: a quarter turn about Y, the same quaternion bit for bit.
         let xyz = decode(r#"{"rotation":[0,90,0],"origin":"center"}"#).unwrap();
         assert_eq!(xyz, turn);
+        // JOML 1.10.9 (`Matrix4f.rotate`, `applyOrigin` twice, `transformPosition`) gives this
+        // point for both spellings, bit for bit.
         let m = turn.block_centred().unwrap();
+        assert_eq!(point(&m, [0.5, 0.0, 0.0]), [0.0, 0.0, -0.49999994]);
         assert_eq!(
             point(&xyz.block_centred().unwrap(), [0.5, 0.0, 0.0]),
-            point(&m, [0.5, 0.0, 0.0])
+            [0.0, 0.0, -0.49999994]
         );
     }
 
