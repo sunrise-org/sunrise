@@ -20,7 +20,7 @@ pub(super) struct ExtrasState {
     fps: FpsCounter,
     /// Attack and use click rates.
     cps: [Cps; 2],
-    /// Captured before pre listeners; shared by the draw and post listeners.
+    /// Captured once a frame before it is extracted; shared by the draw and both frame moments.
     pub(super) frame_partial_ticks: Option<(f32, f32)>,
 }
 
@@ -48,8 +48,7 @@ impl Game<'_> {
         self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
         let (world_partial_tick, partial_tick) = self.frame_partial_ticks();
         self.extras.frame_partial_ticks = Some((world_partial_tick, partial_tick));
-        self.native_render_frame_pre(elapsed, world_partial_tick, partial_tick);
-        // A clear a mod asked for (in this frame's `RenderFrameEvent.Pre`, or after the last
+        // A clear a mod asked for (in the last frame's `RenderFrameEvent.Pre`, or after that
         // frame was drawn) lands before this frame's particles are drawn, paused or not.
         self.apply_mod_particle_clear();
         self.pvp_frame();

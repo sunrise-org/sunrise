@@ -405,6 +405,9 @@ impl FixedStep {
     pub fn advance(&mut self, elapsed: std::time::Duration, target_millis: f32) -> u32 {
         self.now += elapsed;
         let now_ms = self.now_ms();
+        // `Timer.advanceTime` reads the real-time delta first, so it moves on every frame,
+        // sprinting or running no game tick at all.
+        self.timer.advance_real_time(now_ms);
         if self.manager.is_sprinting() {
             // Keep the timer current so leaving the sprint does not replay it.
             self.timer.advance_game_time(now_ms, |d| d);
@@ -414,6 +417,11 @@ impl FixedStep {
         }
         let ticks = self.timer.advance_game_time(now_ms, |_| target_millis);
         ticks.clamp(0, 10) as u32
+    }
+    /// `DeltaTracker.getRealtimeDeltaTicks`: the last frame's real time in ticks of the timer's
+    /// default length, 0.5 when it is over 7.
+    pub fn realtime_delta_ticks(&self) -> f32 {
+        self.timer.realtime_delta_ticks()
     }
     /// A replacement ClientLevel starts with a fresh TickRateManager. Keep the window's timer.
     pub fn reset_client_level_tick_state(&mut self) {
@@ -643,6 +651,24 @@ mod tests {
         assert_eq!(t.advance_game_time(49, |d| d), 0);
         assert_eq!(t.advance_game_time(50, |d| d), 1);
         assert_eq!(t.advance_game_time(1050, |d| d), 20);
+    }
+    #[test]
+    fn realtime_delta_ticks_follow_every_frame_and_clamp_above_seven() {
+        let mut clock = FixedStep::new(false);
+        // 16 ms and 10 ms are under a 50 ms tick: no game tick runs, the real-time delta still moves.
+        assert_eq!(clock.advance(std::time::Duration::from_millis(16), 50.0), 0);
+        assert_eq!(clock.realtime_delta_ticks(), 0.32);
+        assert_eq!(clock.advance(std::time::Duration::from_millis(10), 50.0), 0);
+        assert_eq!(clock.realtime_delta_ticks(), 0.2);
+        // Exactly 7 ticks of real time is kept; anything above 7 reads 0.5.
+        clock.advance(std::time::Duration::from_millis(350), 50.0);
+        assert_eq!(clock.realtime_delta_ticks(), 7.0);
+        clock.advance(std::time::Duration::from_millis(351), 50.0);
+        assert_eq!(clock.realtime_delta_ticks(), 0.5);
+        // A sprinting frame advances it too.
+        clock.start_sprint(5);
+        clock.advance(std::time::Duration::from_millis(20), 50.0);
+        assert_eq!(clock.realtime_delta_ticks(), 0.4);
     }
     #[test]
     fn pause_restores_the_residual() {

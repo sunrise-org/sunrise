@@ -1,0 +1,10 @@
+ids = [
+    "hook:render_frame_pre",
+    "hook:render_frame_pre.realtime_delta_ticks",
+    "type:RenderFramePreEvent.realtime_delta_ticks",
+    "hook:render_frame_post",
+    "hook:render_frame_post.realtime_delta_ticks",
+    "type:RenderFramePostEvent.realtime_delta_ticks",
+]
+why = "render_frame_pre and render_frame_post version 3 bracket the render call of the extracted frame, as NeoForge fires RenderFrameEvent.Pre and .Post around GameRenderer.render: Pre runs after the frame's extraction has finished and just before it is rendered, so a listener's writes reach the next frame, and Post runs right after it was rendered and before flip_frame, only on a frame that reached the render call (no longer a callback of skipped frames). Both events carry realtime_delta_ticks, the real time of the last frame in ticks of the default length, 0.5 when it is over 7 (DeltaTracker.getRealtimeDeltaTicks)."
+migrate = "Rebuild against this SDK. A listener that set a clear, a camera or a setting in render_frame_pre for the frame about to be drawn now sees it on the next frame; do that work in a hook that runs earlier in the frame. Do not rely on render_frame_post for a frame that was skipped; use realtime_delta_ticks for animation that must not depend on the game tick rate."

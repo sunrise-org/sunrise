@@ -55,12 +55,40 @@ mod tests {
                 frame(game, true, &["pre", "post", "flip"]);
 
                 game.title = Some(game.new_title(game.save.root.clone()));
+                // The bracket sits around the render call of the extracted frame: a frame
+                // drawn and then not presented still fires Pre and Post, and never a flip.
                 game.render_with(|_, frame| {
                     assert!(frame.title);
+                    heard.lock().unwrap().push("draw");
                     Ok(false)
                 })
                 .unwrap();
+                assert_eq!(*heard.lock().unwrap(), ["pre", "draw", "post"]);
+                heard.lock().unwrap().clear();
                 frame(game, true, &["pre", "post", "flip"]);
+
+                // A level-loading frame draws too: the pair fires once around it.
+                use crate::game::{PendingWorldEntry, Progress, WorldRestLoader};
+                let (release, wait) = std::sync::mpsc::channel::<()>();
+                game.rest_loader = Some(WorldRestLoader {
+                    progress: Progress::new(),
+                    handle: std::thread::spawn(move || wait.recv().map_err(|e| e.to_string())),
+                });
+                game.pending_entry = Some(PendingWorldEntry::StudioReplay(Default::default()));
+                game.extras_frame(elapsed);
+                let presented = game.render_and_flip(elapsed).unwrap();
+                game.pending_entry = None;
+                drop(release);
+                game.rest_loader = None;
+                let mut loading = heard.lock().unwrap();
+                let expected: &[&str] = if presented {
+                    &["pre", "post", "flip"]
+                } else {
+                    &["pre", "post"]
+                };
+                assert_eq!(*loading, expected);
+                loading.clear();
+                drop(loading);
 
                 // A minimized window: the frame is prepared, never drawn.
                 game.renderer.as_mut().unwrap().suspended = true;

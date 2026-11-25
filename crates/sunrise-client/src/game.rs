@@ -10938,22 +10938,21 @@ impl Game<'_> {
         }
         inventory
     }
-    fn render(&mut self) -> Result<bool> {
+    fn render(&mut self, elapsed: Duration) -> Result<bool> {
         if self.screenshot_sequence.is_some() {
-            return self.render_sequence_frame();
+            return self.render_sequence_frame(elapsed);
         }
-        self.render_frame()
+        self.render_frame(elapsed)
     }
-    /// Render the frame, then its two moments after that: `render_frame_post` whatever
-    /// became of it, `flip_frame` once it was presented.
+    /// Render the frame (`render_frame_pre` and `render_frame_post` bracket its draw), then
+    /// `flip_frame` once it was presented.
     fn render_and_flip(&mut self, elapsed: Duration) -> Result<bool> {
-        let rendered = match self.render() {
+        let rendered = match self.render(elapsed) {
             // The callback can fire during this frame; rebuild on
             // the next redraw rather than exiting on its error.
             Err(_) if self.renderer.as_ref().is_some_and(Renderer::device_lost) => false,
             result => result?,
         };
-        self.finish_render_frame(elapsed);
         if rendered {
             // The submit thread may still hold the frame: a listener hears it after the
             // present, and with none the next frame keeps overlapping it.
@@ -10969,8 +10968,8 @@ impl Game<'_> {
         }
         Ok(rendered)
     }
-    fn render_frame(&mut self) -> Result<bool> {
-        self.render_with_hooks(|renderer, frame, hooks| {
+    fn render_frame(&mut self, elapsed: Duration) -> Result<bool> {
+        self.render_with_hooks(elapsed, |renderer, frame, hooks| {
             sunrise_client::spans::time("renderer", || renderer.render(frame, hooks))
         })
     }
@@ -10982,11 +10981,38 @@ impl Game<'_> {
         &mut self,
         consume: impl FnOnce(&mut Renderer, &Frame<'_>) -> Result<bool>,
     ) -> Result<bool> {
-        self.render_with_hooks(|renderer, frame, _| consume(renderer, frame))
+        self.render_with_hooks(Duration::ZERO, |renderer, frame, _| {
+            consume(renderer, frame)
+        })
+    }
+
+    /// Fire `render_frame_pre`, draw with the renderer, then fire `render_frame_post`, for a
+    /// draw that needs nothing of `self` beyond the renderer. The normal frame holds borrows
+    /// of `self` while it draws, so it fires the same two moments around its own draw.
+    fn bracket_frame(
+        &mut self,
+        elapsed: Duration,
+        draw: impl FnOnce(&mut Renderer) -> Result<bool>,
+    ) -> Result<bool> {
+        if self.renderer.is_none() {
+            return Ok(false);
+        }
+        let moments = self.begin_render_frame(elapsed);
+        let drawn = match self.renderer.take() {
+            Some(mut renderer) => {
+                let drawn = draw(&mut renderer);
+                self.renderer = Some(renderer);
+                drawn
+            }
+            None => Ok(false),
+        };
+        self.finish_render_frame(elapsed, moments);
+        drawn
     }
 
     fn render_with_hooks(
         &mut self,
+        elapsed: Duration,
         consume: impl FnOnce(
             &mut Renderer,
             &Frame<'_>,
@@ -11035,8 +11061,11 @@ impl Game<'_> {
                     .as_ref()
                     .and_then(|r| self.project_window_cursor([r.config.width, r.config.height]))
                     .map_or(self.cursor, |p| p.pixel());
-                if let Some(renderer) = &mut self.renderer {
-                    let size = [renderer.config.width, renderer.config.height];
+                if let Some(size) = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| [r.config.width, r.config.height])
+                {
                     let mut hud = HudBatch::new(size, self.settings.gui_scale_inputs());
                     sunrise_client::level_loading::draw_file_fixer(
                         &mut hud,
@@ -11046,7 +11075,9 @@ impl Game<'_> {
                     );
                     pr.lap("pr_loading");
                     drop(prepare);
-                    return renderer.render(&loading_frame(&hud), None);
+                    return self.bracket_frame(elapsed, |renderer| {
+                        renderer.render(&loading_frame(&hud), None)
+                    });
                 }
                 return Ok(false);
             }
@@ -11057,11 +11088,12 @@ impl Game<'_> {
             sunrise_client::widgets::begin_screen(|| {
                 screen_info::level_loading(progress, &screen_info::tr)
             });
-            if let Some(renderer) = &mut self.renderer {
-                let mut hud = HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.settings.gui_scale_inputs(),
-                );
+            if let Some(size) = self
+                .renderer
+                .as_ref()
+                .map(|r| [r.config.width, r.config.height])
+            {
+                let mut hud = HudBatch::new(size, self.settings.gui_scale_inputs());
                 let (w, h) = (hud.width, hud.height);
                 sunrise_client::ui::menu_background(
                     &mut hud,
@@ -11090,19 +11122,23 @@ impl Game<'_> {
                 );
                 pr.lap("pr_loading");
                 drop(prepare);
-                return renderer.render(&loading_frame(&hud), None);
+                return self.bracket_frame(elapsed, |renderer| {
+                    renderer.render(&loading_frame(&hud), None)
+                });
             }
             return Ok(false);
         }
         if self.pending_entry.is_some() {
-            if let (Some(renderer), Some(loader)) = (&mut self.renderer, &self.rest_loader) {
+            if let (Some(size), Some(loader)) = (
+                self.renderer
+                    .as_ref()
+                    .map(|r| [r.config.width, r.config.height]),
+                &self.rest_loader,
+            ) {
                 sunrise_client::widgets::begin_screen(|| {
                     screen_info::level_loading(Some(loader.progress.fraction()), &screen_info::tr)
                 });
-                let mut hud = HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.settings.gui_scale_inputs(),
-                );
+                let mut hud = HudBatch::new(size, self.settings.gui_scale_inputs());
                 sunrise_client::level_loading::draw_progress(
                     &mut hud,
                     &self.gui.atlas,
@@ -11111,7 +11147,9 @@ impl Game<'_> {
                 );
                 pr.lap("pr_loading");
                 drop(prepare);
-                return renderer.render(&loading_frame(&hud), None);
+                return self.bracket_frame(elapsed, |renderer| {
+                    renderer.render(&loading_frame(&hud), None)
+                });
             }
             return Ok(false);
         }
@@ -11132,11 +11170,9 @@ impl Game<'_> {
             self.pack.item_renderer.end_gui_frame();
             pr.lap("pr_loading");
             drop(prepare);
-            return self
-                .renderer
-                .as_mut()
-                .expect("renderer sized above")
-                .render(&loading_frame(&hud), None);
+            return self.bracket_frame(elapsed, |renderer| {
+                renderer.render(&loading_frame(&hud), None)
+            });
         }
         pr.lap("pr_setup");
         let alpha = self.frame_world_partial_tick();
@@ -11763,10 +11799,69 @@ impl Game<'_> {
         let skybox = self.dimension_type().skybox;
         let camera_fog = self.camera_fog_type(camera.to_array());
         let boss_world_fog = self.boss_overlay.should_create_world_fog();
+        // Everything the frame still reads from `self`, apart from the four static borrows
+        // below, so `render_frame_pre` can take `&mut self` right before the frame is built.
+        let world_game_time = self.world.game_time;
+        let nether_lighting = self.nether_lighting();
+        let shadow_scene_revision = (self.world.revision, self.world.chunks.membership_revision());
+        let shadow_cache = self.settings.sunrise.shadow_cache;
+        let sky_setting = self.settings.sunrise.sky;
+        let water_plane = if title
+            || underwater
+            || !self
+                .renderer
+                .as_ref()
+                .is_some_and(|r| r.wants_water_plane())
+        {
+            None
+        } else {
+            self.water_plane(camera)
+        };
+        let end_sky_sprite = self
+            .gui
+            .atlas
+            .sprites
+            .get("environment/end_sky")
+            .map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let environment_fog = (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end));
+        let dark_disc = self.dark_disc(camera);
+        let outline_high_contrast = self.settings.file.bool("highContrastBlockOutline");
+        let pvp = self.pvp_render_frame();
+        let (glint_alpha, glint_ticks) = (self.glint_frame.alpha, self.glint_frame.scroll_ticks());
+        let cloud_uv = self.frame_cloud_uv(title, &sky);
+        let cloud_range = self.settings.cloud_range;
+        let fast_clouds = self.settings.clouds == "fast";
+        let lightning_uv = sunrise_client::gfx::lightning::white_uv(&self.gui.atlas.font.white());
+        let shader_game_time = ((world_game_time % 24000) as f32 + alpha as f32) / 24000.0;
+        let crumbling_sprite = frame_geometry::crumbling_sprite(
+            &self.gui.atlas.sprites,
+            self.settings.improved_transparency,
+        );
+        let end_portal_sprites = ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
+            self.gui
+                .atlas
+                .sprites
+                .get(n)
+                .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
+        });
+        let texture_ticks = self.texture_clock();
+        let darkness = self.darkness_lighting(alpha as f32);
+        let night_vision = self.night_vision_intensity(alpha as f32);
+        let block_flicker = self.fog.block_light_flicker;
+        let boss_darken = self
+            .boss_overlay
+            .darken_amount(self.clock.fraction() as f32);
+        let menu_blur = self.menu_blur();
+        let menu_blur_radius = self.settings.menu_blur as f32;
+        let chunk_fade = self.settings.chunk_fade as f32;
+        let first_person = eye.is_none() || title || !self.view.detached;
+        // `RenderFrameEvent.Pre`: the frame is extracted, so a listener's writes reach the next
+        // frame. `render_frame_post` follows the draw of this frame, below.
+        let moments = self.begin_render_frame(elapsed);
         let frame = Frame {
             weather: &weather,
-            weather_time: sunrise_client::weather::Time::new(self.world.game_time, alpha as f32),
-            nether_lighting: self.nether_lighting(),
+            weather_time: sunrise_client::weather::Time::new(world_game_time, alpha as f32),
+            nether_lighting,
             camera,
             yaw,
             pitch,
@@ -11774,28 +11869,18 @@ impl Game<'_> {
             cull_fov_degrees,
             eye: eye.filter(|_| !title).map_or(camera, |e| e.0),
             eye_rotation: eye.filter(|_| !title).map_or([yaw, pitch], |e| e.1),
-            first_person: eye.is_none() || title || !self.view.detached,
+            first_person,
             bob,
             spin,
             sky,
-            shadow_scene_revision: (self.world.revision, self.world.chunks.membership_revision()),
-            shadow_cache: self.settings.sunrise.shadow_cache,
+            shadow_scene_revision,
+            shadow_cache,
             distance,
             detail_distance: effective_detail_distance,
             shadow_distance: Some(effective_detail_distance),
             depth_far,
             underwater,
-            water_plane: if title
-                || underwater
-                || !self
-                    .renderer
-                    .as_ref()
-                    .is_some_and(|r| r.wants_water_plane())
-            {
-                None
-            } else {
-                self.water_plane(camera)
-            },
+            water_plane,
             title,
             sky_pass: !title
                 && sunrise_client::fog::sky_pass_present(camera_fog, sky_effect_blocked, skybox),
@@ -11804,43 +11889,36 @@ impl Game<'_> {
                 sky_effect_blocked,
                 boss_world_fog,
             ),
-            skybox: skybox == Skybox::Overworld && self.settings.sunrise.sky,
-            end_sky: skybox == Skybox::End && self.settings.sunrise.sky,
-            end_sky_sprite: self
-                .gui
-                .atlas
-                .sprites
-                .get("environment/end_sky")
-                .map(|r| [r.u0, r.v0, r.u1, r.v1]),
+            skybox: skybox == Skybox::Overworld && sky_setting,
+            end_sky: skybox == Skybox::End && sky_setting,
+            end_sky_sprite,
             boss_world_fog,
-            environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
+            environment_fog,
             cave_culling,
             water_fog,
             fog: Some(fog),
-            dark_disc: self.dark_disc(camera),
+            dark_disc,
             outline,
             outline_after_terrain,
-            outline_high_contrast: self.settings.file.bool("highContrastBlockOutline"),
-            pvp: self.pvp_render_frame(),
+            outline_high_contrast,
+            pvp,
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
             hud: &hud,
-            glint_alpha: self.glint_frame.alpha,
-            glint_ticks: self.glint_frame.scroll_ticks(),
-            clouds: self
-                .frame_cloud_uv(title, &sky)
-                .map(|uv| sunrise_client::clouds::Input {
-                    texture: &self.pack.clouds,
-                    uv,
-                    camera,
-                    time: self.world.game_time,
-                    partial_tick: alpha,
-                    range: self.settings.cloud_range,
-                    fast: self.settings.clouds == "fast",
-                    color: sky.cloud_color,
-                    height: sky.cloud_height,
-                }),
+            glint_alpha,
+            glint_ticks,
+            clouds: cloud_uv.map(|uv| sunrise_client::clouds::Input {
+                texture: &self.pack.clouds,
+                uv,
+                camera,
+                time: world_game_time,
+                partial_tick: alpha,
+                range: cloud_range,
+                fast: fast_clouds,
+                color: sky.cloud_color,
+                height: sky.cloud_height,
+            }),
             entities: &entities,
             explicit_particles: Some(&explicit_particle_quads),
             static_block_entities: &static_block_entities,
@@ -11856,53 +11934,42 @@ impl Game<'_> {
             emissive_layers: &emissive_layers,
             lightning: sunrise_client::gfx::lightning::Input {
                 bolts: &bolts,
-                uv: sunrise_client::gfx::lightning::white_uv(&self.gui.atlas.font.white()),
+                uv: lightning_uv,
             },
             additive: &additive,
             see_through: &see_through,
             world_primitives: Default::default(),
             shadow_only: &shadow_only,
-            celestial: if self.settings.sunrise.sky || title {
+            celestial: if sky_setting || title {
                 &celestial
             } else {
                 &[]
             },
             // With `celestial` left empty, these have no quad to draw.
             celestial_bodies: &celestial_bodies,
-            stars: stars.filter(|_| self.settings.sunrise.sky || title),
+            stars: stars.filter(|_| sky_setting || title),
             hand: &hand,
             hand_items: &hand_items,
             hand_fov_degrees: hud_fov,
             screen: &screen,
             pack: pack_inputs,
             border,
-            game_time: self.world.game_time as f32,
-            shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
-            crumbling_sprite: frame_geometry::crumbling_sprite(
-                &self.gui.atlas.sprites,
-                self.settings.improved_transparency,
-            ),
-            end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
-                self.gui
-                    .atlas
-                    .sprites
-                    .get(n)
-                    .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
-            }),
-            ticks: self.texture_clock(),
-            darkness: self.darkness_lighting(alpha as f32),
-            night_vision: self.night_vision_intensity(alpha as f32),
-            block_flicker: self.fog.block_light_flicker,
-            boss_darken: self
-                .boss_overlay
-                .darken_amount(self.clock.fraction() as f32),
-            menu_blur: self.menu_blur(),
+            game_time: world_game_time as f32,
+            shader_game_time,
+            crumbling_sprite,
+            end_portal_sprites,
+            ticks: texture_ticks,
+            darkness,
+            night_vision,
+            block_flicker,
+            boss_darken,
+            menu_blur,
             post_effects: sunrise_client::post_chain::Request {
                 effects: &requested_post_effects,
                 root: &self.pack.source,
                 extras: polytone_extras.as_ref(),
                 poly_globals: Some(&post_globals),
-                menu_blur_radius: self.settings.menu_blur as f32,
+                menu_blur_radius,
                 // GlobalSettingsUniform.update.
                 globals: sunrise_client::post_chain::Globals {
                     camera_block_pos: [
@@ -11915,11 +11982,11 @@ impl Game<'_> {
                         (camera.y.floor() - camera.y) as f32,
                         (camera.z.floor() - camera.z) as f32,
                     ],
-                    game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+                    game_time: shader_game_time,
                     ..Default::default()
                 },
             },
-            chunk_fade: self.settings.chunk_fade as f32,
+            chunk_fade,
         };
         pr.lap("pr_frame");
         // Renderer encoding and GPU waiting belong to render, not prepare.
@@ -11976,6 +12043,9 @@ impl Game<'_> {
         };
         drop(frame);
         self.renderer = renderer_slot;
+        // `RenderFrameEvent.Post`: paired with the Pre above, right after the draw and before
+        // `flip_frame`.
+        self.finish_render_frame(elapsed, moments);
         self.requested_post_effects_buf = requested_post_effects;
         prepared_draws.clear();
         *self.prepared_model_draws.borrow_mut() = prepared_draws;

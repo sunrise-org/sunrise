@@ -204,7 +204,7 @@ impl Game<'_> {
 
     /// One frame of the running sequence: the next one, on its clock. A frame the surface
     /// refused is drawn again; the last is saved, and the reply sent.
-    pub(super) fn render_sequence_frame(&mut self) -> Result<bool> {
+    pub(super) fn render_sequence_frame(&mut self, elapsed: std::time::Duration) -> Result<bool> {
         let sequence = self
             .screenshot_sequence
             .as_ref()
@@ -222,7 +222,7 @@ impl Game<'_> {
                     "the camera, world, settings, shader pack or window size changed while it ran",
                 );
                 self.end_screenshot_sequence(Err(reason.into()));
-                return self.render_frame();
+                return self.render_frame(elapsed);
             }
         }
         if last && let Some(renderer) = &mut self.renderer {
@@ -234,7 +234,7 @@ impl Game<'_> {
             });
             renderer.screenshot_result = None;
         }
-        let drawn = self.render_frame();
+        let drawn = self.render_frame(elapsed);
         let renderer = self.renderer.as_mut().ok_or("no renderer")?;
         // Still queued when the frame wasn't drawn, or when the PNG is to be taken
         // again smaller (out of memory): not this sequence's frame.
