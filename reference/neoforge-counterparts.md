@@ -6,7 +6,7 @@ The book build renders it directly from those declarations; there is no generate
 A key names the event class (`PlayerEvent.Clone`) or runtime callback (`IPayloadHandler.handle`);
 notes about cancelling or the event bus belong in the hook's `///` doc, not in the key.
 
-747 hooks: 451 name a counterpart, 291 say they have none.
+752 hooks: 453 name a counterpart, 294 say they have none.
 This is a declaration reference, not an independent verification of every mapping. Registration events and the
 callbacks they register are different moments: packet receipt names `IPayloadHandler.handle`, and per-draw item
 decoration names `IItemDecorator.render`, not their registration events. A `none` explains why no event or method
@@ -288,6 +288,7 @@ matches that hook's runtime contract.
 | `piston_post` | server | `PistonEvent.Post` |
 | `piston_pre` | server | `PistonEvent.Pre` |
 | `piston_push_reaction` | both | `IBlockExtension.getPistonPushReaction` |
+| `play_break_sound` | client | `IClientBlockExtensions.playBreakSound` |
 | `play_hit_sound` | client | `IClientBlockExtensions.playHitSound` |
 | `play_level_sound_at_entity` | both | `PlayLevelSoundEvent.AtEntity` |
 | `play_level_sound_at_position` | both | `PlayLevelSoundEvent.AtPosition` |
@@ -390,7 +391,8 @@ matches that hook's runtime contract.
 | `render_level_stage` | client | `RenderLevelStageEvent` |
 | `render_living_post` | client | `RenderLivingEvent.Post` |
 | `render_living_pre` | client | `RenderLivingEvent.Pre` |
-| `render_name_tag` | client | `RenderNameTagEvent` |
+| `render_name_tag_can_render` | client | `RenderNameTagEvent.CanRender` |
+| `render_name_tag_do_render` | client | `RenderNameTagEvent.DoRender` |
 | `render_player_post` | client | `RenderPlayerEvent.Post` |
 | `render_player_pre` | client | `RenderPlayerEvent.Pre` |
 | `render_tooltip_gather_components` | client | `RenderTooltipEvent.GatherComponents` |
@@ -580,6 +582,7 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `fishing_medium` | both | NeoForge's ItemFishedEvent fires after the loot roll, in FishingHook.retrieve |
 | `fluid_flow` | both | vanilla FlowingFluid.getFlow; NeoForge adds no event or extension for it |
 | `fluid_level_change` | server | NeoForge has no such event |
+| `fluid_passage` | server | NeoForge has no such event |
 | `fluid_rules` | server | BaseFlowingFluid.getTickDelay, getDropOff, getSlopeFindDistance and FluidType.canConvertToSource are overrides; NeoForge adds no event |
 | `fluid_tick` | server | NeoForge has no such event |
 | `food_level_changed` | server | vanilla: FoodData; Bukkit's FoodLevelChangeEvent |
@@ -604,6 +607,7 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `is_possible_to_respawn_in` | server | vanilla Block.isPossibleToRespawnInThis |
 | `is_signal_source` | server | vanilla BlockBehaviour.isSignalSource; NeoForge adds no event or extension for it |
 | `is_valid_bonemeal_target` | both | vanilla BonemealableBlock.isValidBonemealTarget; NeoForge adds no event or extension for it); BonemealEvent fires when meal is used, before the block's contract |
+| `is_valid_book_shelf` | both | EnchantingTableBlock.isValidBookShelf; NeoForge's extension is the per-block IBlockExtension.getEnchantPowerBonus and it has no hook here |
 | `item_after_vertical_collision` | both | Block.updateEntityAfterFallOn; dropped-item contact |
 | `item_bar` | client | vanilla Item.isBarVisible/getBarWidth/getBarColor; RegisterItemDecorationsEvent registers decorators, not bar queries |
 | `item_interact_mob` | both | Item.interactLivingEntity |
@@ -635,6 +639,7 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `must_survive` | both | vanilla BlockItem.mustSurvive |
 | `neighbor_changed` | server | vanilla Block.neighborChanged; NeoForge adds no event or extension for it); BlockEvent.NeighborNotifyEvent is the neighbour broadcast, a different point |
 | `on_effect_added` | server | vanilla MobEffect.onEffectAdded; NeoForge adds no event or extension for it |
+| `on_place` | server | vanilla BlockBehaviour.onPlace; NeoForge adds no event or extension for it |
 | `panel_event` | client | Sunrise-only; NeoForge has no counterpart |
 | `perform_bonemeal` | server | vanilla BonemealableBlock.performBonemeal; NeoForge adds no event or extension for it |
 | `piston_carries_block_entity` | both | NeoForge has no counterpart; IBlockExtension.getRelocability is unrelated |
@@ -649,7 +654,7 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `player_client_loaded_world` | server | NeoForge has no such event; Bukkit's PlayerClientLoadedWorld |
 | `player_commands_sent` | server | NeoForge 26.3 has no send-time filter event |
 | `player_deep_sleep` | server | NeoForge has no such event |
-| `player_destroyed_block` | server | NeoForge has no event for Block.destroy; BreakEvent fires before the removal |
+| `player_destroyed_block` | both | NeoForge has no event for Block.destroy; BreakEvent fires before the removal |
 | `player_edit_book` | server | NeoForge has no such event; Bukkit's PlayerEditBookEvent |
 | `player_egg_throw` | server | NeoForge has no such event |
 | `player_elytra_boost` | server | NeoForge has no such event |
