@@ -401,10 +401,8 @@ impl Game<'_> {
                     .map(|(key, _)| key.as_str())
             }))
             .filter(|&key| {
-                !matches!(
-                    key,
-                    BIOME_REGISTRY | "minecraft:damage_type" | "minecraft:jukebox_song"
-                ) && !REGISTRY_KINDS.iter().any(|table| table.key == key)
+                !matches!(key, BIOME_REGISTRY | "minecraft:damage_type")
+                    && !REGISTRY_KINDS.iter().any(|table| table.key == key)
                     && !view.tags.contains_key(key)
             })
             .map(str::to_owned)
@@ -415,10 +413,7 @@ impl Game<'_> {
         // WORLD_REGISTRIES codecs see static holders (not their own pending entries)
         // and NeoForge's ResourceManagerRegistryLoadTask uses VANILLA_SET.
         let frozen = self.world_tables.as_ref().filter(|_| reload);
-        let fixed = REGISTRY_KINDS
-            .iter()
-            .map(|table| table.key)
-            .chain(["minecraft:jukebox_song"]);
+        let fixed = REGISTRY_KINDS.iter().map(|table| table.key);
         for registry in fixed
             .clone()
             .chain(["minecraft:damage_type", BIOME_REGISTRY])
@@ -439,36 +434,9 @@ impl Game<'_> {
             &self.res.motion().health
         };
         let health = base.with_packs(root, &registry_overlay, reload)?;
-        let mut songs_admission: std::result::Result<(), String> = Ok(());
         let (packed_registry_definitions, packed_admission) = if let Some(tables) = frozen {
-            items.songs.clone_from(&tables.items.songs);
             (tables.packed_registries.clone(), Ok(()))
         } else {
-            // JukeboxSong.DIRECT_CODEC: a definition that fails refuses the load,
-            // its description decoded as ComponentSerialization.CODEC does.
-            songs_admission = items.load_songs(root, &registry_overlay).and_then(|()| {
-                let mut errors: Vec<_> = items
-                    .songs
-                    .iter()
-                    .filter(|(_, song)| {
-                        sunrise_client::text_grammar::build(
-                            &song.description,
-                            &items.component_registry,
-                            false,
-                        )
-                        .is_none()
-                    })
-                    .map(|(id, _)| {
-                        format!("jukebox_song {id}: description: invalid JSON text component")
-                    })
-                    .collect();
-                errors.sort();
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(errors.join("; "))
-                }
-            });
             let (packed, admission) = SyncData::stage_registry_definitions(
                 root,
                 self.res.item_defaults(),
@@ -524,10 +492,6 @@ impl Game<'_> {
                 ids.remove(&id);
             }
         }
-        view.ids.insert(
-            "minecraft:jukebox_song".into(),
-            items.songs.keys().cloned().collect(),
-        );
         view.ids.insert(
             "minecraft:damage_type".into(),
             health
@@ -716,7 +680,6 @@ impl Game<'_> {
         // No table is installed, even if another owning loader succeeded.
         let errors = [
             packed_admission.err(),
-            songs_admission.err(),
             providers.as_ref().err().cloned(),
             install_items_result.err().map(|error| error.to_string()),
             transformers.as_ref().err().cloned(),

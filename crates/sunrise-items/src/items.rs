@@ -1106,15 +1106,15 @@ fn load_instruments(root: &Path, overlay: &PackOverlay) -> HashMap<String, Instr
         })
         .collect()
 }
-/// `RegistryDataLoader`: one definition that fails its `DIRECT_CODEC` fails the
+/// The jukebox songs of the root's own files: the built-ins a client holds itself. A
+/// client of a server resolves a known-pack entry the server sent without data against
+/// them (`RegistryDataLoader` on the client's known packs); the world's table is installed
+/// from the staged registry definitions. One definition that fails `DIRECT_CODEC` fails the
 /// whole load, and every failure is reported.
-fn load_songs(
-    root: &Path,
-    overlay: &PackOverlay,
-) -> std::result::Result<HashMap<String, Song>, String> {
+fn load_songs(root: &Path) -> std::result::Result<HashMap<String, Song>, String> {
     let mut songs = HashMap::new();
     let mut errors = Vec::new();
-    for (id, v) in data_files(root, "jukebox_song", overlay) {
+    for (id, v) in data_files(root, "jukebox_song", &PackOverlay::NONE) {
         match Song::decode(&v) {
             Ok(song) => {
                 songs.insert(id, song);
@@ -1243,7 +1243,7 @@ impl Items {
             defaults,
             LoadEntityTags::Prepared,
         )?;
-        items.load_songs(root, overlay)?;
+        items.songs = load_songs(root)?;
         items.load_resource_registries(root, overlay, defaults)?;
         items.load_table_loot(root, overlay, defaults)?;
         Ok(items)
@@ -1365,7 +1365,7 @@ impl Items {
             LoadEntityTags::Prepared,
             |id| block_items.contains_key(id),
         )?;
-        items.load_songs(root, overlay)?;
+        items.songs = load_songs(root)?;
         load_registries(&mut items)?;
         items.block_items = Arc::new(block_items);
         Ok(items)
@@ -1707,16 +1707,6 @@ impl Items {
             .collect();
         let tags = tag_layers::load(root, "enchantment", overlay, |id| known.contains(id))?;
         self.set_tags(TagRegistry::Enchantment, tags);
-        Ok(())
-    }
-
-    /// Install jukebox definitions with the owning load's condition context.
-    pub fn load_songs(
-        &mut self,
-        root: &Path,
-        overlay: &PackOverlay<'_>,
-    ) -> std::result::Result<(), String> {
-        self.songs = load_songs(root, overlay)?;
         Ok(())
     }
 
@@ -4387,77 +4377,10 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// Songs load under their own namespace beside vanilla's through the resource overlay.
-    #[test]
-    fn content_mod_songs_load_under_their_namespace() {
-        let root = std::env::temp_dir().join(format!("sunrise-songs-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        for ns in ["minecraft", "mymod"] {
-            fs::create_dir_all(root.join(format!("data/{ns}/jukebox_song"))).unwrap();
-        }
-        fs::write(root.join("items.json"), "{}").unwrap();
-        let song = json!({"sound_event": "mymod:music_disc.tune", "length_in_seconds": 5.0, "comparator_output": 3, "description": "tune"});
-        fs::write(
-            root.join("data/mymod/jukebox_song/tune.json"),
-            song.to_string(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("data/minecraft/jukebox_song/cat.json"),
-            json!({"sound_event": "minecraft:music_disc.cat", "length_in_seconds": 185.0, "comparator_output": 2, "description": "cat"}).to_string(),
-        )
-        .unwrap();
-
-        let songs = load_songs(&root, &PackOverlay::NONE).unwrap();
-        assert!(songs.contains_key("minecraft:cat"));
-        assert!(songs.contains_key("mymod:tune"));
-        let tune = &songs["mymod:tune"];
-        assert_eq!(tune.sound, "mymod:music_disc.tune");
-        assert_eq!((tune.length_ticks, tune.comparator), (100, 3));
-        assert!(songs.contains_key("minecraft:cat"));
-        assert!(!songs.contains_key("minecraft:tune"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    /// `JukeboxSong.DIRECT_CODEC` requires every field: a definition missing
-    /// one is refused, not filled with a default.
-    #[test]
-    fn load_songs_refuses_a_definition_missing_a_required_field() {
-        let root = std::env::temp_dir().join(format!("sunrise-songs-bad-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("data/demo/jukebox_song")).unwrap();
-        fs::write(root.join("items.json"), "{}").unwrap();
-        let whole = json!({"sound_event": "demo:tune", "length_in_seconds": 5.0, "comparator_output": 3, "description": "tune"});
-        for missing in [
-            None,
-            Some("sound_event"),
-            Some("description"),
-            Some("length_in_seconds"),
-            Some("comparator_output"),
-        ] {
-            let mut song = whole.clone();
-            if let Some(field) = missing {
-                song.as_object_mut().unwrap().remove(field);
-            }
-            fs::write(
-                root.join("data/demo/jukebox_song/tune.json"),
-                song.to_string(),
-            )
-            .unwrap();
-            let songs = load_songs(&root, &PackOverlay::NONE);
-            assert_eq!(songs.is_ok(), missing.is_none(), "{missing:?}");
-            if missing.is_none() {
-                assert!(songs.unwrap().contains_key("demo:tune"));
-            }
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
     /// `ExtraCodecs.POSITIVE_FLOAT` is exclusive of 0 and takes any float above
-    /// it; `intRange(0, 15)` reads `Number.intValue`, which truncates; one bad
-    /// definition refuses the whole load and the message names it.
+    /// it; `intRange(0, 15)` reads `Number.intValue`, which truncates.
     #[test]
-    fn song_numbers_decode_like_the_codec_and_a_bad_one_refuses_the_load() {
+    fn song_numbers_decode_like_the_codec() {
         let song = |length: f64, comparator: f64| {
             Song::decode(
                 &json!({"sound_event": "demo:tune", "length_in_seconds": length,
@@ -4471,29 +4394,14 @@ mod tests {
         assert_eq!(song(5.0, 15.0).unwrap().comparator, 15);
         assert!(song(5.0, 16.0).is_err());
         assert!(song(5.0, -1.0).is_err());
-
-        let root = std::env::temp_dir().join(format!("sunrise-songs-all-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("data/demo/jukebox_song")).unwrap();
-        fs::write(root.join("items.json"), "{}").unwrap();
-        let good = json!({"sound_event": "demo:tune", "length_in_seconds": 5.0, "comparator_output": 3, "description": "tune"});
-        fs::write(
-            root.join("data/demo/jukebox_song/good.json"),
-            good.to_string(),
-        )
-        .unwrap();
-        fs::write(root.join("data/demo/jukebox_song/bad.json"), "{}").unwrap();
-        let error = load_songs(&root, &PackOverlay::NONE).unwrap_err();
-        assert!(error.starts_with("jukebox_song demo:bad: "), "{error}");
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn server_json_conditions_filter_selected_songs_instruments_and_enchantments() {
+    fn server_json_conditions_filter_selected_instruments_and_enchantments() {
         let root = std::env::temp_dir().join(format!("sunrise-server-json-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let mut files = Vec::new();
-        for kind in ["jukebox_song", "instrument", "enchantment"] {
+        for kind in ["instrument", "enchantment"] {
             let dir = root.join("data/demo").join(kind);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("entry.json"), "{}").unwrap();
@@ -4520,17 +4428,12 @@ mod tests {
             conditions: &enabled,
             ..PackOverlay::default()
         };
-        for kind in ["jukebox_song", "instrument", "enchantment"] {
+        for kind in ["instrument", "enchantment"] {
             assert!(data_files(&root, kind, &off).is_empty());
             let selected = data_files(&root, kind, &on);
             assert_eq!(selected.len(), 1);
             assert_eq!(selected["demo:entry"]["description"], "winning");
         }
-        assert!(load_songs(&root, &off).unwrap().is_empty());
-        assert_eq!(
-            load_songs(&root, &on).unwrap()["demo:entry"].description,
-            json!("winning")
-        );
         assert!(load_instruments(&root, &off).is_empty());
         assert!(load_instruments(&root, &on).contains_key("demo:entry"));
         fs::write(root.join("items.json"), "{}").unwrap();

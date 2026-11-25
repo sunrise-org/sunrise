@@ -592,6 +592,26 @@ mod tests {
             assert!(!game.jukebox_sounds.contains_key(&(1, 64, 0)));
         });
     }
+
+    /// A known-pack entry the server sent without data plays the client's built-in song.
+    #[test]
+    #[ignore = "daily"]
+    fn level_event_1010_plays_a_data_less_entry_from_the_clients_built_in_song() {
+        with_client_game(|game| {
+            let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+            game.connect_local(client, "jukebox-built-in-client")
+                .unwrap();
+            let mut registries = Dynamic::default();
+            registries.registries.insert(
+                "minecraft:jukebox_song".into(),
+                vec![("minecraft:cat".to_owned(), None)],
+            );
+            game.remote.as_mut().unwrap().registries = std::sync::Arc::new(registries);
+            assert!(game.items().songs.contains_key("minecraft:cat"));
+            game.jukebox_song_event([0, 64, 0], 0);
+            assert!(game.jukebox_sounds.contains_key(&(0, 64, 0)));
+        });
+    }
 }
 
 #[cfg(test)]

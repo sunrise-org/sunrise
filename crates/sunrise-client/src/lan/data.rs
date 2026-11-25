@@ -296,7 +296,6 @@ fn synchronized_entries(
     root: &Path,
     resources: &Path,
     key: &str,
-    overlay: &sunrise_world::loot::PackOverlay<'_>,
 ) -> Vec<((String, String), Value, bool)> {
     let path = key.trim_start_matches("minecraft:");
     let enchantments = key == "minecraft:enchantment";
@@ -347,44 +346,7 @@ fn synchronized_entries(
             &mut entries,
         );
     }
-
-    // The gameplay table already selects the pack's song. Validate that
-    // winner, not a losing bootstrap definition.
-    if path == "jukebox_song" {
-        pack_entries(path, overlay, &mut entries);
-    }
     entries
-}
-
-/// A synchronized registry's entries from the world's data packs (`<dir>/`
-/// files, the top pack's for each id) over the game's own. Each entry is
-/// ((namespace, path), JSON, from a pack); `file_order` sorts them.
-fn pack_entries(
-    dir: &str,
-    overlay: &sunrise_world::loot::PackOverlay,
-    entries: &mut Vec<((String, String), Value, bool)>,
-) {
-    for (id, files) in overlay.kind(dir) {
-        let Some((ns, path)) = id.split_once(':') else {
-            continue;
-        };
-        let top = sunrise_world::loot::PackOverlay::top(files);
-        let value = match serde_json::from_slice::<Value>(top) {
-            Ok(value) => value,
-            Err(e) => {
-                log::warn!("Sunrise: data pack {dir} {id} is not read: {e}");
-                continue;
-            }
-        };
-        let key = (ns.to_owned(), path.to_owned());
-        match entries.iter_mut().find(|(k, ..)| *k == key) {
-            Some(entry) => {
-                entry.1 = value;
-                entry.2 = true;
-            }
-            None => entries.push((key, value, true)),
-        }
-    }
 }
 
 /// The mods' dimension types, below the packs': the overworld's with the
@@ -491,7 +453,7 @@ impl SyncData {
                 continue;
             }
             let path = key.trim_start_matches("minecraft:");
-            let mut entries = synchronized_entries(&root, resources, key, overlay);
+            let mut entries = synchronized_entries(&root, resources, key);
             // Admission already checked the typed winners' conditions.
             packed.discard_replaced(key, &mut entries);
             condition_filter::filter(&mut entries, false, overlay.conditions, path);
@@ -787,7 +749,7 @@ impl SyncData {
             let mut entries = if PackRegistryDefinitions::includes_prepared_entries(key) {
                 Vec::new()
             } else {
-                synchronized_entries(&root, resources, key, overlay)
+                synchronized_entries(&root, resources, key)
             };
             let mut damage_entries = None;
             if *key == "minecraft:damage_type" {

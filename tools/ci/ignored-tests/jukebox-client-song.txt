@@ -1,2 +1,3 @@
 # A client plays the jukebox song the server synchronized (#5561).
 sunrise-client game::jukebox::tests::level_event_1010_plays_the_servers_synchronized_song lib daily resources
+sunrise-client game::jukebox::tests::level_event_1010_plays_a_data_less_entry_from_the_clients_built_in_song lib daily resources

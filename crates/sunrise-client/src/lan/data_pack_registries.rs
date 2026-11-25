@@ -14,7 +14,7 @@ use sunrise_core::{
 };
 use sunrise_items::{
     enchant::{EnchantmentProvider, Enchantments, HolderSetBinding},
-    items::{Instrument, Items},
+    items::{Instrument, Items, Song},
 };
 use sunrise_world::{
     environment_timeline::Timeline, item_defaults::ItemDefaults, loot::PackOverlay,
@@ -131,6 +131,10 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
         decode: decode_enchantment_provider,
     },
     RegistryKind {
+        key: "minecraft:jukebox_song",
+        decode: decode_jukebox_song,
+    },
+    RegistryKind {
         key: "minecraft:instrument",
         decode: decode_instrument,
     },
@@ -221,6 +225,7 @@ enum Definition {
     Enchantment(Value),
     EnchantmentProvider(EnchantmentProvider),
     Instrument(Instrument, Tag),
+    JukeboxSong(Song, Tag),
     Painting(crate::entities::PaintingVariant, Tag),
     BannerPattern(crate::banner::Pattern, Tag),
     /// A definition whose codec ran and whose gameplay reads the JSON itself, with its wire
@@ -350,12 +355,8 @@ impl PackRegistryDefinitions {
                 }
             }
             if Self::includes_prepared_entries(registry) {
-                let mut prepared = synchronized_entries(
-                    &resources.join("data/minecraft"),
-                    resources,
-                    registry,
-                    overlay,
-                );
+                let mut prepared =
+                    synchronized_entries(&resources.join("data/minecraft"), resources, registry);
                 let had_candidates = !entries.is_empty() || !prepared.is_empty();
                 // The pack winner (even if refused or skipped) hides resources below it.
                 prepared.retain(|(key, _, _)| !entries.contains_key(key));
@@ -532,7 +533,7 @@ impl PackRegistryDefinitions {
         // RegistryDataLoader.validateRegistry: every dialog a winner names is bound.
         let dialogs = definitions.entries.get("minecraft:dialog");
         let root = resources.join("data/minecraft");
-        let mut prepared = synchronized_entries(&root, resources, "minecraft:dialog", overlay);
+        let mut prepared = synchronized_entries(&root, resources, "minecraft:dialog");
         prepared.retain(|(key, ..)| !dialogs.is_some_and(|d| d.contains_key(key)));
         condition_filter::filter(&mut prepared, false, overlay.conditions, "dialog");
         let held: BTreeSet<String> = dialogs
@@ -565,8 +566,7 @@ impl PackRegistryDefinitions {
         }
         // WorldClock.CODEC holder binding and Timeline.validateRegistry.
         let clocks = definitions.entries.get("minecraft:world_clock");
-        let mut prepared_clocks =
-            synchronized_entries(&root, resources, "minecraft:world_clock", overlay);
+        let mut prepared_clocks = synchronized_entries(&root, resources, "minecraft:world_clock");
         prepared_clocks.retain(|(key, ..)| !clocks.is_some_and(|c| c.contains_key(key)));
         condition_filter::filter(
             &mut prepared_clocks,
@@ -684,6 +684,7 @@ impl PackRegistryDefinitions {
             "minecraft:enchantment"
                 | "minecraft:enchantment_provider"
                 | "minecraft:instrument"
+                | "minecraft:jukebox_song"
                 | "minecraft:trial_spawner"
                 | "minecraft:sulfur_cube_archetype"
                 | "minecraft:decorated_pot_pattern"
@@ -742,6 +743,7 @@ impl PackRegistryDefinitions {
                 let tag = match definition {
                     Definition::Encoded(tag)
                     | Definition::Instrument(_, tag)
+                    | Definition::JukeboxSong(_, tag)
                     | Definition::Painting(_, tag)
                     | Definition::BannerPattern(_, tag)
                     | Definition::WolfVariant(_, tag)
@@ -855,9 +857,7 @@ impl PackRegistryDefinitions {
             ("minecraft:test_instance", decode_test_instance),
         ] {
             let entries = definitions.entries.entry(registry).or_default();
-            for (key, value, from_pack) in
-                synchronized_entries(&root, resources, registry, &PackOverlay::NONE)
-            {
+            for (key, value, from_pack) in synchronized_entries(&root, resources, registry) {
                 let id = format!("{}:{}", key.0, key.1);
                 if let Ok(definition) = decode(&mut decoder, &id, value) {
                     entries.insert(key, Some((definition, from_pack)));
@@ -1003,6 +1003,18 @@ impl PackRegistryDefinitions {
             })
             .collect();
         items.install_registries(enchantments, instruments);
+        items.songs = self
+            .entries
+            .get("minecraft:jukebox_song")
+            .into_iter()
+            .flatten()
+            .filter_map(|((namespace, path), entry)| match entry {
+                Some((Definition::JukeboxSong(song, _), _)) => {
+                    Some((format!("{namespace}:{path}"), song.clone()))
+                }
+                _ => None,
+            })
+            .collect();
         Ok(())
     }
 }
@@ -1360,6 +1372,19 @@ fn decode_instrument(
     let tag = Tag::Compound(fields);
     check_network_nbt(&tag)?;
     Ok(Definition::Instrument(instrument, tag))
+}
+
+/// `JukeboxSong.DIRECT_CODEC`: its description is a text component, and the wire keeps the
+/// file's own fields.
+fn decode_jukebox_song(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let song = Song::decode(&value)?;
+    decoder.text("description", &song.description)?;
+    let wire = json_to_nbt(&value);
+    Ok(Definition::JukeboxSong(song, wire))
 }
 
 /// `TestEnvironmentDefinition.DIRECT_CODEC`.
@@ -3165,5 +3190,123 @@ mod tests {
             err.contains("minecraft:timeline") && err.contains("defined multiple times"),
             "{err}"
         );
+    }
+
+    fn song(sound: &str, length: f64, description: &str) -> Vec<u8> {
+        json!({"sound_event": sound, "length_in_seconds": length, "comparator_output": 3,
+            "description": description})
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn jukebox_songs_of_the_root_mods_and_packs_load_with_a_packs_winner_over_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        for (namespace, name, bytes) in [
+            (
+                "minecraft",
+                "cat",
+                song("minecraft:music_disc.cat", 185.0, "cat"),
+            ),
+            ("mymod", "tune", song("mymod:music_disc.tune", 5.0, "tune")),
+        ] {
+            let dir = root.path().join(format!("data/{namespace}/jukebox_song"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{name}.json")), bytes).unwrap();
+        }
+        let files = [
+            (
+                "jukebox_song/minecraft:cat".into(),
+                vec![song("minecraft:music_disc.cat", 7.0, "replaced")],
+            ),
+            (
+                "jukebox_song/demo:pack".into(),
+                vec![song("demo:note", 2.0, "pack")],
+            ),
+        ];
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let overlay = PackOverlay::new(&files);
+        let (packed, admitted) = super::super::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &overlay,
+            &BTreeMap::new(),
+            &Default::default(),
+            |_| true,
+        );
+        admitted.unwrap();
+        let mut held: Vec<_> = packed
+            .entries()
+            .filter(|(registry, ..)| *registry == "minecraft:jukebox_song")
+            .map(|(_, id, admitted)| (id, admitted))
+            .collect();
+        held.sort();
+        assert_eq!(
+            held,
+            [
+                ("demo:pack".to_owned(), true),
+                ("minecraft:cat".to_owned(), true),
+                ("mymod:tune".to_owned(), true),
+            ]
+        );
+        let mut wire = Vec::new();
+        packed.append_encoded("minecraft:jukebox_song", &mut wire);
+        let replaced = wire
+            .iter()
+            .find(|((namespace, path), ..)| {
+                (namespace.as_str(), path.as_str()) == ("minecraft", "cat")
+            })
+            .unwrap();
+        assert_eq!(
+            replaced.1.get("description"),
+            Some(&Tag::String("replaced".into()))
+        );
+        assert!(replaced.2, "a pack's winner is always sent");
+    }
+
+    #[test]
+    fn a_jukebox_song_failing_its_codec_refuses_the_load_and_names_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        let files = [
+            (
+                "jukebox_song/demo:good".into(),
+                vec![song("demo:note", 5.0, "good")],
+            ),
+            ("jukebox_song/demo:bad".into(), vec![b"{}".to_vec()]),
+            (
+                "jukebox_song/demo:badtext".into(),
+                vec![
+                    json!({"sound_event": "demo:note", "length_in_seconds": 5.0,
+                        "comparator_output": 3,
+                        "description": {"text": "x", "color": "not a color"}})
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+        ];
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let (_, Err(error)) = super::super::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &PackOverlay::new(&files),
+            &BTreeMap::new(),
+            &Default::default(),
+            |_| true,
+        ) else {
+            panic!("a bad song was accepted");
+        };
+        assert!(
+            error.contains("demo:bad: data/demo/jukebox_song/bad.json: "),
+            "{error}"
+        );
+        assert!(
+            error.contains(
+                "demo:badtext: data/demo/jukebox_song/badtext.json: description: invalid JSON text component"
+            ),
+            "{error}"
+        );
+        assert!(!error.contains("demo:good:"), "{error}");
     }
 }
