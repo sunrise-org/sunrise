@@ -16,6 +16,26 @@ pub trait LevelBlocksBackend {
         visit: &mut dyn FnMut(&dyn LevelHost, BlockCapabilitySite),
     ) -> Result<(), LevelReadError>;
     /// Side: both.
+    /// Whether the supplied candidate state can survive at `pos` (`BlockState.canSurvive`),
+    /// evaluated with the level's normal block rules and survival Parts. `state` need not be
+    /// placed there. Vegetation checks the soil's `can_sustain_plant` Part before the plant's
+    /// own `may_place_on` Part. This does not run placement, obstruction, permission, or
+    /// `must_survive` checks. On a client, this is a prediction from its loaded local level.
+    /// On a server, this reads any open level named by the handle, including one that is parked
+    /// while another dimension is in play. On a client, it predicts only from its loaded local
+    /// level. `pos` must be in bounds and loaded; unknown states, unavailable hosts or phases,
+    /// and recursive queries return `Err(LevelReadError::Unavailable)`. A dead handle returns
+    /// `Err(LevelReadError::Stale)`. It reads without loading, placing, scheduling ticks, or
+    /// changing the level.
+    #[access(WorldOnly)]
+    #[game_method(native_level_can_survive)]
+    fn level_can_survive(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockState,
+    ) -> Result<bool, LevelReadError>;
+    /// Side: both.
     /// The contextual friction of `state` at `pos` (`IBlockExtension.getFriction`).
     /// The state need not occupy the position. `entity` is the optional live handle passed to the block's part. A stale entity
     /// is refused. Returns `Ok(None)` for a nested query that repeats

@@ -193,7 +193,7 @@ impl sunrise_world::level::LevelAccess for DryLevel<'_> {
         odds: &mut Option<(i32, i32)>,
     ) {
         if let Some(level) = self.base.fire_odds_level(self) {
-            level.native_fire_odds(level.base.dimension, state, pos, face, odds);
+            level.native_fire_odds(level.base.dimension(), state, pos, face, odds);
         }
     }
     #[inline]

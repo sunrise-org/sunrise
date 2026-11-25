@@ -1869,6 +1869,21 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).can_survive(state, pos)
     }
+    /// Read `BlockState.canSurvive` without retaining any tick or wire-cache changes. The live
+    /// signal inputs are read from `signal_reads`; effects requested by the evaluator stay in a
+    /// fresh scratch queue that is dropped before returning.
+    pub fn can_survive_read_only<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        signal_reads: &Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> bool {
+        let mut ticks = Ticks::default();
+        let mut sim = self.sim(level, &mut ticks);
+        sim.signal_reads = Some(signal_reads);
+        sim.can_survive(state, pos)
+    }
     /// `BlockState.updateShape(level, ticks, pos, direction, neighbourPos,
     /// neighbourState, random)`: the state `state` at `pos` would take after its
     /// neighbour in `direction` became `neighbour` (ticks it requests are queued).

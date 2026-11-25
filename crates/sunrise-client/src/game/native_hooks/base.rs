@@ -1,5 +1,5 @@
 use super::*;
-use mod_api::BlockEntityDataView;
+use mod_api::{BlockEntityDataView, ModBlockEntity};
 impl GameLevel<'_> {
     /// Initial saved data for a declared block entity (`EntityBlock.newBlockEntity`),
     /// fired inside the write that creates it (`LevelChunk.setBlockState`), on
@@ -4363,11 +4363,26 @@ impl Game<'_> {
 /// (a client's guess at a click), it reads over the blocks the preview set. A read goes only
 /// through `Signals`, which asks the signal hooks and never `state_for_placement` or
 /// `can_survive`: a listener cannot re-enter itself through it.
-pub(in crate::game) type LevelView<'a> =
-    super::super::mod_api_host::LevelTicks<'a, &'a GameLevel<'a>, &'a Ticks>;
+pub(in crate::game) struct LevelView<'a> {
+    pub(in crate::game) level: &'a dyn super::super::mod_api_host::SidedLevel,
+    pub(in crate::game) world: *const sunrise_client::world::World,
+}
+
+impl<'a> LevelView<'a> {
+    pub(in crate::game) fn new(
+        level: &'a dyn super::super::mod_api_host::SidedLevel,
+        world: &sunrise_client::world::World,
+    ) -> Self {
+        Self { level, world }
+    }
+}
+
 impl GameLevel<'_> {
     /// This level as a placement or survival question sees it, with the simulation's `ticks`.
-    pub(in crate::game) fn view<'a>(&'a self, ticks: &'a Ticks) -> LevelView<'a> {
+    pub(in crate::game) fn view<'a>(
+        &'a self,
+        ticks: &'a Ticks,
+    ) -> super::super::mod_api_host::LevelTicks<'a, &'a GameLevel<'a>, &'a Ticks> {
         super::super::mod_api_host::LevelTicks::new(self, ticks)
     }
 }
@@ -4388,6 +4403,15 @@ impl LevelView<'_> {
         may: &mut Option<bool>,
         inert: &mut bool,
     ) {
+        let pos = BlockPos::new(ground_pos.x, ground_pos.y.saturating_add(1), ground_pos.z);
+        let Some(_active) = super::survival_query_guard::enter_part(
+            self.world,
+            pos,
+            state,
+            super::survival_query_guard::PartHook::MayPlaceOn,
+        ) else {
+            return;
+        };
         self.fire_may_place_on(dimension, state, ground, ground_pos, may, inert);
     }
 
@@ -4410,6 +4434,14 @@ impl LevelView<'_> {
         survives: &mut Option<bool>,
         inert: &mut bool,
     ) {
+        let Some(_active) = super::survival_query_guard::enter_part(
+            self.world,
+            pos,
+            state,
+            super::survival_query_guard::PartHook::CanSurvive,
+        ) else {
+            return;
+        };
         self.fire_can_survive(dimension, pos, state, survives, inert);
     }
 

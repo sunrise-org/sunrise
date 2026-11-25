@@ -62,7 +62,7 @@ impl Game<'_> {
         ) else {
             return vanilla;
         };
-        let read = ReadLevel { game: self, level };
+        let read = ReadLevel::new(self, level, &self.world);
         let side = if self.is_logical_server() {
             mod_api::LevelSide::Server(&read)
         } else {

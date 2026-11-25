@@ -591,6 +591,16 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         format!("self, {args}")
                     };
                     let sig = entry.sig.to_token_stream();
+                    let game_method = entry
+                        .attrs
+                        .iter()
+                        .find(|attr| attr.path().is_ident("game_method"))
+                        .map(|attr| {
+                            attr.parse_args::<syn::Ident>()
+                                .map(|method| method.to_string())
+                        })
+                        .transpose()
+                        .map_err(|error| format!("{name}: {error}"))?;
                     let is_service = entry.attrs.iter().any(|a| a.path().is_ident("service"));
                     let call = if is_service {
                         "self".into()
@@ -598,7 +608,12 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                         let table = table.unwrap_or_default();
                         format!("{table}::of(self).{name}({view_args})")
                     } else {
-                        format!("{target}::{name}({args})")
+                        let method = if target == "Game" {
+                            game_method.as_deref().unwrap_or(name)
+                        } else {
+                            name
+                        };
+                        format!("{target}::{method}({args})")
                     };
                     let keeps_api_output = entry
                         .attrs
@@ -1381,6 +1396,53 @@ mod state_write_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A marked error is refusal-shaped as a `Result`'s error and an unmarked one is not; the
+    /// marker is the `AccessRefusal` impl.
+    #[test]
+    fn a_result_is_refusal_shaped_by_its_errors_access_refusal_impl() {
+        let source = "impl crate::AccessRefusal for Marked { fn unavailable() -> Self { Self } }\n\
+                      impl mod_api::AccessRefusal for other::Path { fn unavailable() -> Self { Self } }\n\
+                      impl NoBackend for Unmarked { fn no_backend() -> Self { Self } }";
+        let marked: std::collections::BTreeSet<_> =
+            access_refusal_impls(source).unwrap().into_iter().collect();
+        assert_eq!(marked, ["Marked".to_owned(), "Path".to_owned()].into());
+        let output = |ty: &str| syn::parse_str::<syn::ReturnType>(&format!("-> {ty}")).unwrap();
+        assert!(refusal_shaped(&output("Result<u32, Marked>"), &marked).is_some());
+        assert!(refusal_shaped(&output("Result<u32, Unmarked>"), &marked).is_none());
+        assert!(refusal_shaped(&output("u32"), &marked).is_none());
+    }
+
+    /// The vocabulary's own refusal errors are found from their impls.
+    #[test]
+    fn the_vocabulary_marks_its_refusal_errors() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let found = refusal_errors(&root).unwrap();
+        for name in ["LevelReadError", "LevelWriteError", "AudioRefusal"] {
+            assert!(found.contains(name), "{name} in {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_backend_can_forward_to_a_distinct_game_method() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let generated = game_forwarders(&root).unwrap();
+        assert!(generated.contains("Game::native_level_can_survive(self, level, pos, state)"));
+    }
+
+    /// A gated method outside the list that has no refusal-shaped `Result` is refused, and one
+    /// inside it passes.
+    #[test]
+    fn an_unmarked_gated_method_must_be_listed_to_pass() {
+        let root = std::env::temp_dir().join(format!("sunrise-unwinding-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("crates/sunrise-mod-api-gen")).unwrap();
+        std::fs::write(root.join(UNWINDING_METHODS), "# listed\narea::listed\n").unwrap();
+        let methods = |names: &[&str]| names.iter().map(|n| n.to_string()).collect();
+        assert!(check_unwinding(&root, &methods(&["area::listed"])).is_ok());
+        let refused = check_unwinding(&root, &methods(&["area::listed", "area::new"]));
+        assert!(refused.unwrap_err().contains("area::new"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn entry(source: &str) -> Entry {
         let method: syn::TraitItemFn = syn::parse_str(source).unwrap();

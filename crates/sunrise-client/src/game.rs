@@ -4583,6 +4583,10 @@ struct Game<'a> {
 /// and its server thread name the same dimensions.
 static EXTRA_DIMS: std::sync::RwLock<Vec<mod_api::DimensionKey>> =
     std::sync::RwLock::new(Vec::new());
+/// Custom level keys parsed when the world registers its dimensions, not on each block query.
+static EXTRA_LEVELS: std::sync::RwLock<
+    Vec<(mod_api::DimensionKey, sunrise_core::dimension::Dimension)>,
+> = std::sync::RwLock::new(Vec::new());
 
 /// An active player break waiting on `break_block` listeners. When a nested
 /// player break completes removal at the same `(dim, pos)`, `removed_by_nested`
@@ -4620,10 +4624,17 @@ impl Dim {
             Self::Overworld => LevelDimension::Overworld,
             Self::Nether => LevelDimension::Nether,
             Self::End => LevelDimension::End,
-            Self::Extra(_) => LevelDimension::of_level(
-                sunrise_core::LevelKey::parse(self.id())
-                    .unwrap_or(sunrise_core::LevelKey::OVERWORLD),
-            ),
+            Self::Extra(key) => EXTRA_LEVELS
+                .read()
+                .unwrap()
+                .iter()
+                .find_map(|(candidate, level)| (*candidate == key).then_some(*level))
+                .unwrap_or_else(|| {
+                    LevelDimension::of_level(
+                        sunrise_core::LevelKey::parse(self.id())
+                            .unwrap_or(sunrise_core::LevelKey::OVERWORLD),
+                    )
+                }),
         }
     }
     fn id(self) -> &'static str {
@@ -4684,17 +4695,42 @@ impl Dim {
     }
     /// The dimensions past vanilla's three of the world being opened.
     fn set_extra<'a>(ids: impl Iterator<Item = &'a str>) {
-        *EXTRA_DIMS.write().unwrap() = ids.map(mod_api::__private::dimension_key).collect();
+        let extra: Vec<_> = ids
+            .map(|id| {
+                (
+                    mod_api::__private::dimension_key(id),
+                    LevelDimension::of_level(
+                        sunrise_core::LevelKey::parse(id)
+                            .unwrap_or(sunrise_core::LevelKey::OVERWORLD),
+                    ),
+                )
+            })
+            .collect();
+        *EXTRA_DIMS.write().unwrap() = extra.iter().map(|(key, _)| *key).collect();
+        *EXTRA_LEVELS.write().unwrap() = extra;
     }
     /// Adds the dimension `id` a remote server sent, which no local world told of, so that
     /// [`Self::from_id`] finds it.
     fn add_extra(id: &str) {
         if !Self::exists(id) {
-            EXTRA_DIMS
-                .write()
-                .unwrap()
-                .push(mod_api::__private::dimension_key(id));
+            let key = mod_api::__private::dimension_key(id);
+            let level = LevelDimension::of_level(
+                sunrise_core::LevelKey::parse(id).unwrap_or(sunrise_core::LevelKey::OVERWORLD),
+            );
+            EXTRA_DIMS.write().unwrap().push(key);
+            EXTRA_LEVELS.write().unwrap().push((key, level));
         }
+    }
+    /// Drops a remote or runtime dimension that is no longer part of the open world.
+    pub(in crate::game) fn remove_extra(id: &str) {
+        EXTRA_DIMS
+            .write()
+            .unwrap()
+            .retain(|key| mod_api::__private::dimension_id(*key) != Some(id));
+        EXTRA_LEVELS
+            .write()
+            .unwrap()
+            .retain(|(key, _)| mod_api::__private::dimension_id(*key) != Some(id));
     }
     /// The dimension as mods' level handles name it.
     fn key(self) -> mod_api::DimensionKey {

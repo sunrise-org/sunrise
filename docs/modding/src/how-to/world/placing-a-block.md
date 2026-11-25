@@ -27,8 +27,20 @@ levels, except inside an open Host transaction (`LevelWriteError::InTransaction`
 
 ```rust,ignore
 let fitted = level.update_from_neighbour_shapes(host, pos, door)?;
+if !level.can_survive(host, pos, fitted)? {
+    return Ok(false);
+}
 level.place_block(host, pos, fitted, true)?;
 ```
+
+`can_survive` evaluates the supplied state even when it is not placed yet. Block parts answer in
+dispatch order: the first explicit `Some(true)` or `Some(false)` wins, and `None` defers to the next
+part. The block's survival rule runs only when every part defers. Vegetation also asks the soil's
+`can_sustain_plant` hook before the plant's `may_place_on` hook. It answers only survival: it does
+not run `must_survive`, placement-context, obstruction, or permission checks. A client reads its
+loaded copy as a prediction. The destination must be in bounds and loaded. `Ok(false)` means the
+read succeeded and the state failed the survival check; an unavailable read returns
+`Err(LevelReadError)` instead.
 
 `level.place_block` is playerless: it does not fire `entity_place`, and `setPlacedBy` gets no placer or
 item. Use `player.place_block(host, level, pos, state, face, update_neighbour_shapes)` to let placement
@@ -36,9 +48,9 @@ listeners veto a chosen state attributed to a real player. The face tells the ho
 it was placed against. The hook reads that neighbour after staging, and sees the states and block
 entities of every cell written by `setPlacedBy`. A veto restores them. If a listener panics, only
 that listener's tentative writes roll back; later eligible listeners still run. The block callback
-still gets no placer or item.
-
-Neither handle runs an item use. Nothing else of `BlockItem.place` runs: no survival or obstruction check, item placement sound, placement
+still gets no placer or item. Neither handle runs an item use. Nothing else of `BlockItem.place` runs:
+no survival or obstruction check, item placement sound, placement game event or advancement.
+`place_block` and `update_from_neighbour_shapes` refuse with `LevelWriteError`:
 game event or advancement. `place_block` and `update_from_neighbour_shapes` refuse with `LevelWriteError`:
 `Stale` for a dead handle, `Unavailable` on a client or for a level that is not the one in place, and
 `InvalidState` for a state the world lacks.

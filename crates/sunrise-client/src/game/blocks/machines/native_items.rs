@@ -3,7 +3,8 @@
 //! Side-local slots are numbered from zero. It acts where the world is simulated, never on
 //! a client's copy, and only on the level in place.
 use super::{
-    Game, Insertion, Kind, MoveIn, PlacementAttempt, Pos, Slots, TakeAsk, TakeAttempt, View,
+    Containers, Game, Insertion, Kind, Mob, MoveIn, PlacementAttempt, Pos, Slots, TakeAsk,
+    TakeAttempt, View, World,
 };
 use crate::game::{
     api_values::{project_stack, stack_read_metadata},
@@ -369,6 +370,41 @@ impl Game<'_> {
     ) -> Option<StorageSlot> {
         self.level_in_place(at.level).then_some(())?;
         self.containers().capability_slot_backing(at, slot)
+    }
+    pub(in crate::game) fn level_containers<'a>(
+        &'a self,
+        world: &'a World,
+        mobs: &'a [Mob],
+    ) -> Containers<'a> {
+        Containers {
+            world,
+            behaviours: self.res.behaviours(),
+            items: self.items(),
+            registry: self.pack.assets.registry,
+            brewing: None,
+            mobs,
+        }
+    }
+    /// The item capability read used by a level-bound Part, including parked levels.
+    pub(in crate::game) fn level_container_size(
+        &self,
+        world: &World,
+        mobs: &[Mob],
+        at: BlockSide,
+    ) -> Option<usize> {
+        self.level_containers(world, mobs).capability_size(at)
+    }
+    /// Lend a resident stack from a level-bound Part's addressed world, including parked levels.
+    pub(in crate::game) fn level_lend_container_stack(
+        &self,
+        world: &World,
+        mobs: &[Mob],
+        at: BlockSide,
+        slot: usize,
+        read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
+    ) {
+        self.level_containers(world, mobs)
+            .lend_capability_stack(at, slot, read);
     }
     /// Keeps what a capability write to slot `slot` of `view` changes: that slot alone where a
     /// write there changes nothing else, else each block entity of the view whole.

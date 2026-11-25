@@ -51,4 +51,3 @@ def pull_request_base(base, merged):
                                            cwd=ROOT).returncode != 0:
         return base, "--pull-request-merge needs HEAD to merge the pull request into a descendant of --base."
     return parents[0], None
-

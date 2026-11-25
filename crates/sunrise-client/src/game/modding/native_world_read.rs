@@ -240,7 +240,7 @@ impl Game<'_> {
             return None;
         }
         let kind = engine_fluid_kind(fluid)?;
-        let view = ReadLevel { game: self, level };
+        let view = ReadLevel::new(self, level, &self.world);
         Some(fluid_tick_delay(kind, self.world.fast_lava, || {
             let fluid = kind.mod_fluid()?;
             Some(super::GameLevel::answered_fluid_rules(

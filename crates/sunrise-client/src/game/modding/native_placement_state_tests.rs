@@ -4,9 +4,10 @@ use super::{
     native_entity_refs::tests::{run_fresh_cases, with_game_at},
 };
 use mod_api::{
-    Block, BlockPart, BlockState, BlocksEvent, FenceGateInWallEvent, Hooks, LevelRef, LevelSide,
-    ModEntry, Mods, PlacementContext, PlacementSource, PlacementStateError, Registrar,
-    RegistrationContext, StateForPlacementEvent, WorldEpoch,
+    Block, BlockPart, BlockState, BlockStateRecord, BlocksEvent, CanSurviveEvent,
+    FenceGateInWallEvent, Hooks, LevelReadError, LevelRef, LevelSide, ModEntry, Mods,
+    PlacementContext, PlacementSource, PlacementStateError, Registrar, RegistrationContext,
+    StateForPlacementEvent, WorldEpoch,
 };
 use std::sync::Arc;
 use sunrise_client::chunk::Chunk;
@@ -17,10 +18,26 @@ use sunrise_core::{
 
 const BLOCK: &str = "placement_read:camouflage";
 const POS: BlockPos = BlockPos::new(8, 70, 8);
+thread_local! {
+    static CAN_SURVIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn can_survive_calls() -> usize {
+    CAN_SURVIVE_CALLS.with(std::cell::Cell::get)
+}
 
 struct PlacementPart;
 #[mod_api::sunrise_part]
 impl BlockPart for PlacementPart {
+    fn can_survive(&self, host: LevelSide<'_>, _: &mut CanSurviveEvent) -> Option<bool> {
+        CAN_SURVIVE_CALLS.with(|calls| calls.set(calls.get() + 1));
+        let level = match host {
+            LevelSide::Client(level) | LevelSide::Server(level) => level,
+        };
+        let dirt = level.block_state_id("minecraft:dirt")?;
+        Some(level.block_state([POS.x + 1, POS.y, POS.z]) == Some(dirt))
+    }
+
     fn state_for_placement(
         &self,
         level: LevelSide<'_>,
@@ -73,6 +90,54 @@ impl BlockPart for PlacementPart {
     fn fence_gate_in_wall(&self, _: LevelSide<'_>, _: &mut FenceGateInWallEvent) -> Option<bool> {
         Some(true)
     }
+}
+
+#[test]
+#[ignore = "daily"]
+fn can_survive_handle_refuses_reentry_and_full_guard_without_dispatching_parts() {
+    with_game(
+        "can_survive_handle_refuses_reentry_and_full_guard_without_dispatching_parts",
+        |game| {
+            use super::api_values::TryIntoApi;
+
+            let level = game.level(game.dim.id()).unwrap();
+            let candidate = game
+                .block_state_default(game.block_key(BLOCK).unwrap())
+                .unwrap();
+            let candidate_api = candidate.try_into_api().unwrap();
+            let before = can_survive_calls();
+
+            let same_query = super::native_hooks::enter_survival_query(&game.world, POS, candidate)
+                .expect("outer query guard");
+            assert_eq!(
+                level.can_survive(game, [POS.x, POS.y, POS.z], candidate_api),
+                Err(LevelReadError::Unavailable),
+                "same handle query cannot re-enter its active candidate"
+            );
+            assert_eq!(can_survive_calls(), before);
+            drop(same_query);
+
+            let mut nested = Vec::new();
+            for x in 1_000..1_100 {
+                let Some(guard) = super::native_hooks::enter_survival_query(
+                    &game.world,
+                    BlockPos::new(x, 64, 0),
+                    candidate,
+                ) else {
+                    break;
+                };
+                nested.push(guard);
+            }
+            assert!(!nested.is_empty());
+            assert_eq!(
+                level.can_survive(game, [POS.x, POS.y, POS.z], candidate_api),
+                Err(LevelReadError::Unavailable),
+                "the API refuses a query when no callback frame remains"
+            );
+            assert_eq!(can_survive_calls(), before);
+            while nested.pop().is_some() {}
+        },
+    );
 }
 
 struct PlacementReadMod;
@@ -294,6 +359,282 @@ fn placement_refusals_are_typed() {
             Ok(Some(_))
         ));
     });
+}
+
+#[test]
+#[ignore = "daily"]
+fn can_survive_reads_unplaced_states_and_dispatches_parts_without_writing() {
+    with_game(
+        "can_survive_reads_unplaced_states_and_dispatches_parts_without_writing",
+        |game| {
+            use super::api_values::TryIntoApi;
+
+            let level = game.level(game.dim.id()).unwrap();
+            let registry = game.pack.assets.registry;
+            let sapling = game
+                .block_state_default(game.block_key("minecraft:oak_sapling").unwrap())
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+            let camouflage = game
+                .block_state_default(game.block_key(BLOCK).unwrap())
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+            let support = POS.offset(0, -1, 0);
+            let snapshot = |game: &Game<'_>| {
+                (
+                    game.world.block(POS.x, POS.y, POS.z),
+                    game.world.block(support.x, support.y, support.z),
+                    game.world.random.state(),
+                    game.block_ticks.blocks.count(),
+                )
+            };
+
+            for (support_block, expected) in [("minecraft:dirt", true), ("minecraft:stone", false)]
+            {
+                game.world
+                    .set(
+                        support.x,
+                        support.y,
+                        support.z,
+                        registry.default_state(support_block).unwrap(),
+                    )
+                    .unwrap();
+                let before = snapshot(game);
+                assert_eq!(
+                    level.can_survive(game, [POS.x, POS.y, POS.z], sapling),
+                    Ok(expected),
+                    "support: {support_block}"
+                );
+                assert_eq!(snapshot(game), before, "support: {support_block}");
+            }
+
+            // This block inherits stone's vanilla rule, but its Part can replace that answer.
+            assert_eq!(
+                level.can_survive(game, [POS.x, POS.y, POS.z], camouflage),
+                Ok(false)
+            );
+            assert!(
+                game.res
+                    .behaviours()
+                    .is_air(game.world.block(POS.x, POS.y, POS.z))
+            );
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn can_survive_uses_the_parked_level_for_vanilla_and_part_reads() {
+    with_game(
+        "can_survive_uses_the_parked_level_for_vanilla_and_part_reads",
+        |game| {
+            use super::api_values::TryIntoApi;
+            use sunrise_client::{containers::BlockEntity, items::ItemStack};
+
+            let overworld = game.level("minecraft:overworld").unwrap();
+            let registry = game.pack.assets.registry;
+            let dirt = registry.default_state("minecraft:dirt").unwrap();
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            let chest = registry.default_state("minecraft:chest").unwrap();
+            let sapling = game
+                .block_state_default(game.block_key("minecraft:oak_sapling").unwrap())
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+            let camouflage = game
+                .block_state_default(game.block_key(BLOCK).unwrap())
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+
+            game.world.set(POS.x, POS.y - 1, POS.z, dirt).unwrap();
+            game.world.set(POS.x + 1, POS.y, POS.z, stone).unwrap();
+            game.enter_level(Dim::Nether).unwrap();
+            let nether = game.level("minecraft:the_nether").unwrap();
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.block_ticks
+                .add_empty_chunk(ChunkPos::new(0, 0))
+                .unwrap();
+            game.world.set(POS.x, POS.y - 1, POS.z, stone).unwrap();
+            game.world.set(POS.x + 1, POS.y, POS.z, dirt).unwrap();
+            let chest_pos = (POS.x + 2, POS.y, POS.z);
+            game.world
+                .set(chest_pos.0, chest_pos.1, chest_pos.2, chest)
+                .unwrap();
+            let mut chest_slots = vec![None; 27];
+            chest_slots[0] = Some(ItemStack::new("minecraft:stone", 3));
+            game.world
+                .block_entities
+                .insert(chest_pos, BlockEntity::Chest(chest_slots));
+            game.enter_level(Dim::Overworld).unwrap();
+
+            assert_eq!(
+                nether.can_survive(game, [POS.x, POS.y, POS.z], sapling),
+                Ok(false),
+                "vanilla support comes from the parked Nether"
+            );
+            assert_eq!(
+                nether.can_survive(game, [POS.x, POS.y, POS.z], camouflage),
+                Ok(true),
+                "the Part reads its neighbour from the parked Nether"
+            );
+            assert_eq!(game.dim, Dim::Overworld, "the query does not switch levels");
+            assert_eq!(
+                game.world.block(POS.x, POS.y - 1, POS.z),
+                dirt,
+                "the active Overworld remains unchanged"
+            );
+            assert_eq!(overworld.dimension_id(), "minecraft:overworld");
+            assert_eq!(nether.dimension_id(), "minecraft:the_nether");
+            let parked = game.levels.parked_world(Dim::Nether).unwrap();
+            let read = super::native_level_signals::ReadLevel::new(game, nether, parked);
+            let side = mod_api::BlockSide {
+                level: nether,
+                pos: [chest_pos.0, chest_pos.1, chest_pos.2],
+                side: None,
+            };
+            assert_eq!(
+                mod_api::LevelHost::container_size(&read, side),
+                Some(27),
+                "container size follows the parked level handle"
+            );
+            let mut stack_available = false;
+            mod_api::LevelHost::lend_container_stack(&read, side, 0, &mut |_| {
+                stack_available = true;
+            });
+            assert!(
+                stack_available,
+                "container stacks follow the parked level handle"
+            );
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn crop_survival_uses_block_light_when_sky_light_is_zero() {
+    with_game(
+        "crop_survival_uses_block_light_when_sky_light_is_zero",
+        |game| {
+            use super::api_values::TryIntoApi;
+            use sunrise_client::chunk::Light;
+
+            let level = game.level(game.dim.id()).unwrap();
+            let wheat = game
+                .block_state_default(game.block_key("minecraft:wheat").unwrap())
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+            let farmland = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:farmland")
+                .unwrap();
+            game.world.set(POS.x, POS.y - 1, POS.z, farmland).unwrap();
+            let section = ((POS.y - game.world.shape.min_y) >> 4) as usize;
+            let chunk = Arc::make_mut(game.world.chunks.get_mut(&(0, 0)).unwrap());
+            Arc::make_mut(&mut chunk.sections[section]).light = Light::Uniform(0x08);
+
+            assert_eq!(game.world.light(POS.x, POS.y, POS.z) >> 4, 0);
+            assert_eq!(game.world.light(POS.x, POS.y, POS.z) & 15, 8);
+            assert_eq!(
+                level.can_survive(game, [POS.x, POS.y, POS.z], wheat),
+                Ok(true),
+                "crop survival uses max(sky light, block light)"
+            );
+            assert_eq!(level.dimension_id(), game.dim.id());
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn can_survive_refuses_invalid_reads_and_preserves_transaction_writes() {
+    with_game(
+        "can_survive_refuses_invalid_reads_and_preserves_transaction_writes",
+        |game| {
+            use super::api_values::TryIntoApi;
+
+            let level = game.level(game.dim.id()).unwrap();
+            let registry = game.pack.assets.registry;
+            let sapling_block = game.block_key("minecraft:oak_sapling").unwrap();
+            let sapling = game
+                .block_state_default(sapling_block)
+                .unwrap()
+                .try_into_api()
+                .unwrap();
+            let invalid = BlockStateRecord::new(sapling.block(), u16::MAX).into();
+            assert_eq!(
+                level.can_survive(game, [POS.x, POS.y, POS.z], invalid),
+                Err(LevelReadError::Unavailable)
+            );
+            let stale = LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
+            assert_eq!(
+                stale.can_survive(game, [POS.x, POS.y, POS.z], sapling),
+                Err(LevelReadError::Stale)
+            );
+            for pos in [
+                [16, POS.y, POS.z],
+                [30_000_000, POS.y, POS.z],
+                [POS.x, i32::MAX, POS.z],
+            ] {
+                assert_eq!(
+                    level.can_survive(game, pos, sapling),
+                    Err(LevelReadError::Unavailable),
+                    "position {pos:?}"
+                );
+            }
+            {
+                use mod_api::__private::{ModPhase, PhaseOwner};
+                let _setup = PhaseOwner::scope(ModPhase::Setup);
+                assert_eq!(
+                    level.can_survive(game, [POS.x, POS.y, POS.z], sapling),
+                    Err(LevelReadError::Unavailable)
+                );
+            }
+
+            let support = POS.offset(0, -1, 0);
+            let old_support = game.world.block(support.x, support.y, support.z);
+            let dirt = registry.default_state("minecraft:dirt").unwrap();
+            let dirt = dirt.try_into_api().unwrap();
+            let seal = game.transaction_open();
+            assert_eq!(
+                level.set_block(
+                    game,
+                    [support.x, support.y, support.z],
+                    dirt,
+                    mod_api::BlockUpdateFlags::NONE,
+                ),
+                Ok(true)
+            );
+            let (writes, tick_count, random) = (
+                game.transactions.writes(),
+                game.block_ticks.blocks.count(),
+                game.world.random.state(),
+            );
+            let candidate_before = game.world.block(POS.x, POS.y, POS.z);
+            assert_eq!(
+                level.can_survive(game, [POS.x, POS.y, POS.z], sapling),
+                Ok(true),
+                "the query sees the caller's tentative support block"
+            );
+            assert_eq!(game.transactions.writes(), writes);
+            assert_eq!(game.block_ticks.blocks.count(), tick_count);
+            assert_eq!(game.world.random.state(), random);
+            assert_eq!(game.world.block(POS.x, POS.y, POS.z), candidate_before);
+            game.transaction_close(&seal, false);
+            assert_eq!(
+                game.world.block(support.x, support.y, support.z),
+                old_support
+            );
+            assert_eq!(game.transactions.writes(), writes);
+        },
+    );
 }
 
 #[test]

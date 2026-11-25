@@ -238,14 +238,25 @@ fn part_state_is_per_block_entity_through_ticks_transactions_and_replacement() {
         });
         game.world.chunks.insert((0, 0), chunk);
         let level = game.level(game.dim.id()).unwrap();
+        game.world.weather.rain_level = (1.0, 1.0);
+        let rain_pos = [1, 64, 1];
+        let server_rain = game
+            .level_is_raining_at(level, rain_pos)
+            .expect("server weather read");
+        assert!(server_rain, "the fixture position is exposed to rain");
         let dedicated = game.options.dedicated.take();
         let role = game.options.execution_role;
         game.options.execution_role = super::execution_role::ExecutionRole::Client;
-        let client_view = super::native_level_signals::ReadLevel { game, level };
+        let client_view = super::native_level_signals::ReadLevel::new(game, level, &game.world);
         assert_eq!(press_part.state_in(&client_view, a, Clone::clone), Ok(0));
         assert_eq!(
             press_part.state_existing_in(&client_view, a, |value| value.cloned()),
             Ok(None)
+        );
+        assert_eq!(
+            mod_api::LevelHost::is_raining_at(&client_view, rain_pos),
+            server_rain,
+            "a client Part reads weather from its bound world"
         );
         game.options.dedicated = dedicated;
         game.options.execution_role = role;

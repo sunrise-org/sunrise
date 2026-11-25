@@ -648,6 +648,24 @@ impl Levels {
             .map(|(_, level)| &level.world)
     }
 
+    /// Block ticks belonging to an open level that is not currently in place.
+    pub(in crate::game) fn parked_block_ticks_of(&self, dimension: &str) -> Option<&Ticks> {
+        self.parked
+            .iter()
+            .find(|(dim, _)| dim.id() == dimension)
+            .map(|(_, level)| &level.block_ticks)
+    }
+
+    pub(in crate::game) fn parked_lid_openers_of(
+        &self,
+        dimension: &str,
+    ) -> Option<&HashMap<(i32, i32, i32), i32>> {
+        self.parked
+            .iter()
+            .find(|(dim, _)| dim.id() == dimension)
+            .map(|(_, level)| &level.lid_openers)
+    }
+
     /// The world of the level not in place whose dimension is `dimension`, to
     /// change.
     pub(super) fn parked_world_mut_of(&mut self, dimension: &str) -> Option<&mut World> {
@@ -655,11 +673,6 @@ impl Levels {
             .iter_mut()
             .find(|(dim, _)| dim.id() == dimension)
             .map(|(_, level)| &mut level.world)
-    }
-
-    /// The block ticks of the level not in place whose dimension is `dimension`.
-    pub(super) fn parked_block_ticks_of(&self, dimension: &str) -> Option<&Ticks> {
-        self.parked_of(dimension).map(|level| &level.block_ticks)
     }
 
     /// The streaming of the level not in place whose dimension is `dimension`.
@@ -812,7 +825,7 @@ impl Levels {
     }
 
     /// The mobs of a parked level.
-    pub(super) fn parked_mobs(&self, dim: Dim) -> Option<&[Mob]> {
+    pub(in crate::game) fn parked_mobs(&self, dim: Dim) -> Option<&[Mob]> {
         self.parked.get(&dim).map(|level| &*level.mobs)
     }
 

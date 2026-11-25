@@ -212,4 +212,3 @@ def record_oxygen_bonus_witness(reference, version, destination):
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(witness, indent=2) + '\n', encoding='utf-8')
-

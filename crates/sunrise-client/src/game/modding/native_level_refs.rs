@@ -677,10 +677,7 @@ impl Game<'_> {
         if !self.level_in_place(at.level) {
             return Err(mod_api::LevelReadError::Unavailable);
         }
-        let view = super::native_level_signals::ReadLevel {
-            game: self,
-            level: at.level,
-        };
+        let view = super::native_level_signals::ReadLevel::new(self, at.level, &self.world);
         let Some(site) = view.capability_site(at) else {
             return Err(mod_api::LevelReadError::Unavailable);
         };
@@ -868,7 +865,7 @@ impl Game<'_> {
         if !self.level_in_place(level) {
             return None;
         }
-        let view = super::native_level_signals::ReadLevel { game: self, level };
+        let view = super::native_level_signals::ReadLevel::new(self, level, &self.world);
         Some(f(&self.res.behaviours().signals(&view, &self.block_ticks)))
     }
     /// How strongly the block at `pos` powers the block on its `direction` side, power it
@@ -3705,7 +3702,7 @@ mod tests {
                 None
             );
             // The level view a block part's callback gets (`ReadLevel`), on the server.
-            let view = crate::game::native_level_signals::ReadLevel { game, level };
+            let view = crate::game::native_level_signals::ReadLevel::new(game, level, &game.world);
             assert_eq!(LevelHost::sky_darken(&view), Some(darken));
             let stale = LevelRef::new(WorldEpoch::new(u64::MAX), game.dim.key());
             assert_eq!(game.level_brightness(stale, LightLayer::Sky, lit), None);
@@ -3722,10 +3719,7 @@ mod tests {
             game.world.day_time = 18000;
             let darken = game.sky_darken();
             assert!(darken > 0, "night darkens the client's sky");
-            let view = crate::game::native_level_signals::ReadLevel {
-                game,
-                level: client,
-            };
+            let view = crate::game::native_level_signals::ReadLevel::new(game, client, &game.world);
             assert_eq!(LevelHost::sky_darken(&view), Some(darken));
         });
     }

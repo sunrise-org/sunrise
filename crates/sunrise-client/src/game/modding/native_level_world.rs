@@ -588,7 +588,8 @@ mod tests {
             }
 
             let server_view = |game: &super::Game<'_>| {
-                let view = super::super::native_level_signals::ReadLevel { game, level };
+                let view =
+                    super::super::native_level_signals::ReadLevel::new(game, level, &game.world);
                 mod_api::LevelHost::is_raining(&view)
             };
             // The level view a block part's callback gets (`ReadLevel`) answers too.
@@ -611,10 +612,8 @@ mod tests {
             game.remote.as_mut().unwrap().logged_in = true;
             let client = game.level("minecraft:overworld").unwrap();
             let client_view = |game: &super::Game<'_>| {
-                let view = super::super::native_level_signals::ReadLevel {
-                    game,
-                    level: client,
-                };
+                let view =
+                    super::super::native_level_signals::ReadLevel::new(game, client, &game.world);
                 mod_api::LevelHost::is_raining(&view)
             };
             game.world.weather.rain_level = (1.0, 1.0);

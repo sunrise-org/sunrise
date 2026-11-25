@@ -612,17 +612,6 @@ pub(in crate::game) enum Generate {
     Stem(ModStem),
 }
 
-impl Dim {
-    /// Drops the dimension `id` that [`Self::add_extra`] added: its level is closed, or a remote
-    /// server's level that its client left.
-    pub(in crate::game) fn remove_extra(id: &str) {
-        super::EXTRA_DIMS
-            .write()
-            .unwrap()
-            .retain(|key| mod_api::__private::dimension_id(*key) != Some(id));
-    }
-}
-
 impl Game<'_> {
     /// Require an open logical server world for runtime level operations and return the current
     /// mod name (or `"?"` outside a hook) for logging.

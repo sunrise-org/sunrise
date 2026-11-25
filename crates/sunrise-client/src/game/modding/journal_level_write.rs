@@ -30,10 +30,7 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
     }
 
     fn read(&self) -> ReadLevel<'_, 'a> {
-        ReadLevel {
-            game: self.game,
-            level: self.level,
-        }
+        ReadLevel::new(self.game, self.level, &self.game.world)
     }
 
     pub(super) fn write_block(&mut self, pos: [i32; 3], state: BlockStateId, flags: i32) -> bool {
