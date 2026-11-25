@@ -311,7 +311,7 @@ impl Game<'_> {
                 .map(|(registry, tags)| (registry.to_owned(), tags.map(str::to_owned).collect()))
                 .collect(),
         };
-        use sunrise_client::lan::data::{BIOME_REGISTRY, PACK_REGISTRIES, SyncData};
+        use sunrise_client::lan::data::{BIOME_REGISTRY, REGISTRY_KINDS, SyncData};
         let builtin = sunrise_protocol::registry::Builtin::find(root)
             .map(|path| sunrise_protocol::registry::Builtin::load(&path))
             .transpose()?
@@ -394,7 +394,7 @@ impl Game<'_> {
                 !matches!(
                     key,
                     BIOME_REGISTRY | "minecraft:damage_type" | "minecraft:jukebox_song"
-                ) && !PACK_REGISTRIES.contains(&key)
+                ) && !REGISTRY_KINDS.iter().any(|table| table.key == key)
                     && !view.tags.contains_key(key)
             })
             .map(str::to_owned)
@@ -405,9 +405,9 @@ impl Game<'_> {
         // WORLD_REGISTRIES codecs see static holders (not their own pending entries)
         // and NeoForge's ResourceManagerRegistryLoadTask uses VANILLA_SET.
         let frozen = self.world_tables.as_ref().filter(|_| reload);
-        let fixed = PACK_REGISTRIES
+        let fixed = REGISTRY_KINDS
             .iter()
-            .copied()
+            .map(|table| table.key)
             .chain(["minecraft:jukebox_song"]);
         for registry in fixed
             .clone()

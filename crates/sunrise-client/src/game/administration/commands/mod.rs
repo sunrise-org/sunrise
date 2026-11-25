@@ -4302,7 +4302,10 @@ impl Game<'_> {
                             // The target's copy is private chat with the incoming whisper
                             // type, shown only to players who show chat (`Hub::whisper`).
                             let bound = sunrise_protocol::packets::play::ChatTypeBound {
-                                chat_type: host.hub.chat_type_id("msg_command_incoming"),
+                                chat_type: host
+                                    .hub
+                                    .chat_type_id("msg_command_incoming")
+                                    .network_id() as i32,
                                 name: sunrise_client::lan::data::component_nbt(&name.component()),
                                 target: None,
                             };

@@ -315,7 +315,7 @@ impl Game<'_> {
             return;
         };
         let bound = play::ChatTypeBound {
-            chat_type: host.hub.chat_type_id(chat_type),
+            chat_type: host.hub.chat_type_id(chat_type).network_id() as i32,
             name: component_nbt(&name.component()),
             target: None,
         };

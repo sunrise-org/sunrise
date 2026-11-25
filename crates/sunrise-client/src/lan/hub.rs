@@ -476,7 +476,6 @@ pub struct Hub {
     /// the other operators get a command's `[name: ...]` line (vanilla's
     /// broadcastToAdmins). False keeps it to the console's log.
     pub admin_feedback_to_ops: bool,
-    chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
     /// The total and rate the guests are told of every clock but the Overworld's and the one
@@ -774,9 +773,6 @@ impl Hub {
         config: HubConfig,
         loop_context: Arc<LoopContext>,
     ) -> Self {
-        let chat_type = sync
-            .id("minecraft:chat_type", "minecraft:chat")
-            .unwrap_or(0);
         let dimension_type = sync
             .id(
                 "minecraft:dimension_type",
@@ -823,7 +819,6 @@ impl Hub {
             admin_feedback_to_ops: true,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
-            chat_type,
             dimension_type,
             clock_ids,
             clock_states: Default::default(),
@@ -1172,7 +1167,7 @@ impl Hub {
         self.broadcast(&C::DisguisedChat(play::DisguisedChat {
             message: literal(text),
             chat_type: play::ChatTypeBound {
-                chat_type: self.chat_type,
+                chat_type: self.chat_type_id("chat").network_id() as i32,
                 name: literal(sender),
                 target: None,
             },

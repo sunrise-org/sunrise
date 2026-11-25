@@ -3,6 +3,7 @@
 //! messages checked link by link, the acknowledged window, and messages
 //! relayed with each connection's numbering and signature cache.
 use super::{HostEvent, Hub, string};
+use crate::lan::data::{ChatType, RegistryRef};
 use crate::text::Text;
 use sunrise_core::nbt::{JavaString, Tag};
 use sunrise_protocol::{
@@ -232,7 +233,7 @@ impl Hub {
             )));
         }
         let bound = play::ChatTypeBound {
-            chat_type: self.chat_type,
+            chat_type: self.chat_type_id("chat").network_id() as i32,
             name: self.player_display_name(uuid, &name),
             target: None,
         };
@@ -489,12 +490,12 @@ impl Hub {
         for &t in targets {
             let target = self.player_display_name(self.guests[t].uuid, &self.guests[t].name);
             let out = play::ChatTypeBound {
-                chat_type: outgoing,
+                chat_type: outgoing.network_id() as i32,
                 name: self.player_display_name(uuid, &name),
                 target: Some(target),
             };
             let inc = play::ChatTypeBound {
-                chat_type: incoming,
+                chat_type: incoming.network_id() as i32,
                 name: self.player_display_name(uuid, &name),
                 target: None,
             };
@@ -511,11 +512,15 @@ impl Hub {
         }
     }
 
-    /// A chat type's registry id.
-    pub fn chat_type_id(&self, name: &str) -> i32 {
-        self.sync
-            .id("minecraft:chat_type", &format!("minecraft:{name}"))
-            .unwrap_or(self.chat_type)
+    /// `ChatType.bind`'s lookup: a `ChatType` key's entry in the world's registry, by the
+    /// network id the clients were sent (`SyncData::id`, the order of the sync), so a pack's
+    /// replacement of the entry is the one they decorate with.
+    pub fn chat_type_id(&self, name: &str) -> RegistryRef<ChatType> {
+        RegistryRef::new(
+            self.sync
+                .id("minecraft:chat_type", &format!("minecraft:{name}"))
+                .map_or(0, |id| id as u32),
+        )
     }
 }
 

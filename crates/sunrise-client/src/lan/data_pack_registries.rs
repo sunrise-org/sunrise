@@ -1,9 +1,10 @@
 //! Winning definitions for the synchronized registries that read world packs.
-use super::{PACK_REGISTRIES, condition_filter, json_to_nbt, synchronized_entries};
+use super::{condition_filter, json_to_nbt, synchronized_entries};
 use crate::dialog::Reference;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
     path::Path,
 };
 use sunrise_core::{
@@ -15,6 +16,95 @@ use sunrise_items::{
     items::{Instrument, Items},
 };
 use sunrise_world::{item_defaults::ItemDefaults, loot::PackOverlay};
+
+/// One data-driven registry kind: `RegistryDataLoader.WORLD_REGISTRIES`'s entry for a
+/// registry a world's packs add to or replace, with the typed decode of its codec.
+/// Every row is synchronized; a decode error of any row refuses the whole load.
+pub struct RegistryKind {
+    pub key: &'static str,
+    decode: fn(&mut Decoder<'_>, &str, Value) -> Result<Definition, String>,
+}
+
+/// The registry kinds, in `WORLD_REGISTRIES` order. The others stay the game's own: Sunrise's
+/// gameplay reads them from the prepared resources only.
+/// Enchantments are among them: the items' enchantment catalog reads a
+/// world's pack definitions too, so their ids must reach clients.
+/// World clocks are too: a dimension type's `default_clock` must name a
+/// clock the client was sent, or it reads that dimension's time as zero.
+pub const REGISTRY_KINDS: &[RegistryKind] = &[
+    RegistryKind {
+        key: "minecraft:dimension_type",
+        decode: decode_dimension_type,
+    },
+    RegistryKind {
+        key: "minecraft:chat_type",
+        decode: decode_chat_type,
+    },
+    RegistryKind {
+        key: "minecraft:painting_variant",
+        decode: decode_painting_variant,
+    },
+    RegistryKind {
+        key: "minecraft:banner_pattern",
+        decode: decode_banner_pattern,
+    },
+    RegistryKind {
+        key: "minecraft:enchantment",
+        decode: decode_enchantment,
+    },
+    RegistryKind {
+        key: "minecraft:instrument",
+        decode: decode_instrument,
+    },
+    RegistryKind {
+        key: "minecraft:dialog",
+        decode: decode_dialog,
+    },
+    RegistryKind {
+        key: "minecraft:world_clock",
+        decode: decode_world_clock,
+    },
+];
+
+/// The registry `ChatType` entries live in (`RegistryRef<ChatType>`).
+pub enum ChatType {}
+
+/// An entry of the server's registry `K`, held by its network id: the entry's index in the
+/// server's sync order. Engine-internal: a client resolves it through the ids the server
+/// sent, in the server's order, and `mod_api` exposes no raw index.
+pub struct RegistryRef<K>(u32, PhantomData<fn() -> K>);
+
+impl<K> RegistryRef<K> {
+    pub fn new(id: u32) -> Self {
+        Self(id, PhantomData)
+    }
+
+    pub fn network_id(&self) -> u32 {
+        self.0
+    }
+}
+
+impl<K> Clone for RegistryRef<K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<K> Copy for RegistryRef<K> {}
+
+impl<K> PartialEq for RegistryRef<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<K> Eq for RegistryRef<K> {}
+
+impl<K> std::fmt::Debug for RegistryRef<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RegistryRef({})", self.0)
+    }
+}
 
 type Registry = BTreeMap<(String, String), Option<(Definition, bool)>>;
 
@@ -86,8 +176,14 @@ impl PackRegistryDefinitions {
     ) -> (Self, Result<(), String>) {
         let mut definitions = Self::default();
         let mut errors = BTreeMap::<_, BTreeMap<_, _>>::new();
-        let mut dialog_references = Vec::new();
-        for &registry in PACK_REGISTRIES {
+        let mut decoder = Decoder {
+            registries: text_registries,
+            defaults,
+            sound_exists: &sound_exists,
+            dialog_references: Vec::new(),
+        };
+        for table in REGISTRY_KINDS {
+            let registry = table.key;
             let kind = registry.trim_start_matches("minecraft:");
             let entries = definitions.entries.entry(registry).or_default();
             for (key, error) in read_errors {
@@ -117,21 +213,8 @@ impl PackRegistryDefinitions {
                         .map_err(|error| error.to_string())?;
                     let file = format!("data/{}/{kind}/{}.json", id.namespace(), id.path());
                     if overlay.conditions.allows_file_isolated(&value, &file)? {
-                        let decoded = if registry == "minecraft:dialog" {
-                            let (decoded, references) =
-                                decode_dialog(value, text_registries, defaults)?;
-                            dialog_references.push(references);
-                            decoded
-                        } else {
-                            decode_definition(
-                                registry,
-                                &id.to_string(),
-                                value,
-                                text_registries,
-                                &sound_exists,
-                            )?
-                        };
-                        *definition = Some((decoded, true));
+                        *definition =
+                            Some(((table.decode)(&mut decoder, &id.to_string(), value)?, true));
                     }
                     Ok(())
                 };
@@ -163,13 +246,7 @@ impl PackRegistryDefinitions {
                         Definition::Enchantment(value)
                     } else if from_pack {
                         let id = format!("{}:{}", key.0, key.1);
-                        match decode_definition(
-                            registry,
-                            &id,
-                            value,
-                            text_registries,
-                            &sound_exists,
-                        ) {
+                        match (table.decode)(&mut decoder, &id, value) {
                             Ok(definition) => definition,
                             Err(error) => {
                                 errors.entry(registry).or_default().insert(id, error);
@@ -264,7 +341,7 @@ impl PackRegistryDefinitions {
             .collect();
         let (tags, mut unbound) = bind_dialog_tags(&root, overlay, |id| held.contains(id));
         let mut unbound_tags = BTreeSet::new();
-        for reference in dialog_references.into_iter().flatten() {
+        for reference in decoder.dialog_references.into_iter().flatten() {
             match reference {
                 Reference::Id(id) if !held.contains(&id) => unbound.insert(id),
                 Reference::Tag(tag) if !tags.contains_key(&tag) => unbound_tags.insert(tag),
@@ -306,11 +383,7 @@ impl PackRegistryDefinitions {
         matches!(registry, "minecraft:enchantment" | "minecraft:instrument")
     }
 
-    pub(super) fn append_encoded(
-        &self,
-        registry: &str,
-        entries: &mut Vec<((String, String), Tag, bool)>,
-    ) {
+    pub fn append_encoded(&self, registry: &str, entries: &mut Vec<((String, String), Tag, bool)>) {
         if let Some(pack) = self.entries.get(registry) {
             entries.extend(pack.iter().filter_map(|(key, value)| {
                 let (definition, from_pack) = value.as_ref()?;
@@ -482,127 +555,232 @@ fn check_network_nbt(tag: &Tag) -> Result<(), String> {
     sunrise_protocol::buf::check_network_nbt(tag).map_err(|error| format!("network {error}"))
 }
 
-/// A winning dialog definition: `Dialog.DIRECT_CODEC` over the file, and the
-/// dialogs it names, which the registry must hold (`decode_pack`).
-fn decode_dialog(
-    value: Value,
-    text_registries: &crate::command::Registries,
-    defaults: &ItemDefaults,
-) -> Result<(Definition, Vec<crate::dialog::Reference>), String> {
-    // Transient components are excluded from persisted world definitions.
-    sunrise_world::item_defaults::validate_dialog(&value)?;
-    let (encoded, references) =
-        crate::dialog::Dialog::decode_pack(&value, text_registries, &|id| {
-            defaults.entries().contains_key(id)
-        })
-        .map_err(|field| format!("invalid dialog field {field}"))?;
-    check_network_nbt(&encoded)?;
-    Ok((Definition::Encoded(encoded), references))
+/// What a kind's decode function reads besides the file: the text registries and sound
+/// holders its codec checks, and the dialogs a winning dialog names, which the registry must hold.
+struct Decoder<'a> {
+    registries: &'a crate::command::Registries,
+    defaults: &'a ItemDefaults,
+    sound_exists: &'a dyn Fn(&str) -> bool,
+    dialog_references: Vec<Vec<Reference>>,
 }
 
-fn decode_definition(
-    registry: &str,
+impl Decoder<'_> {
+    fn text(&self, field: &str, value: &Value) -> Result<Value, String> {
+        crate::text_grammar::build(value, self.registries, false)
+            .ok_or_else(|| format!("{field}: invalid JSON text component"))
+    }
+}
+
+fn string(value: &str) -> Tag {
+    Tag::String(value.into())
+}
+
+fn asset_id(asset: &str) -> Tag {
+    // The render readers store the default namespace as a path only.
+    if asset.contains(':') {
+        string(asset)
+    } else {
+        string(&format!("minecraft:{asset}"))
+    }
+}
+
+fn encoded(tag: Tag) -> Result<Definition, String> {
+    check_network_nbt(&tag)?;
+    Ok(Definition::Encoded(tag))
+}
+
+fn decode_dimension_type(
+    _: &mut Decoder<'_>,
     id: &str,
     value: Value,
-    text_registries: &crate::command::Registries,
-    sound_exists: &dyn Fn(&str) -> bool,
 ) -> Result<Definition, String> {
-    let decode_text = |field: &str, value: &Value| {
-        crate::text_grammar::build(value, text_registries, false)
-            .ok_or_else(|| format!("{field}: invalid JSON text component"))
-    };
-    let string = |value: &str| Tag::String(value.into());
-    let asset_id = |asset: &str| {
-        // The render readers store the default namespace as a path only.
-        if asset.contains(':') {
-            string(asset)
-        } else {
-            string(&format!("minecraft:{asset}"))
+    encoded(sunrise_world::dimension_type::DimensionFacts::decode_pack_definition(id, &value)?)
+}
+
+/// `ChatType.DIRECT_CODEC`: the `chat` and `narration` decorations.
+fn decode_chat_type(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let fields = value.as_object().ok_or("not a map")?;
+    let mut chat_type = Compound::new();
+    for field in ["chat", "narration"] {
+        let decoration = fields.get(field).ok_or(format!("{field} is required"))?;
+        chat_type.insert(
+            field.into(),
+            decode_chat_decoration(decoder, field, decoration)?,
+        );
+    }
+    encoded(Tag::Compound(chat_type))
+}
+
+/// `ChatTypeDecoration.CODEC`: `translation_key`, the `parameters` among sender, target and
+/// content, and an optional `style`.
+fn decode_chat_decoration(
+    decoder: &Decoder<'_>,
+    field: &str,
+    value: &Value,
+) -> Result<Tag, String> {
+    const STYLE_FIELDS: [&str; 11] = [
+        "color",
+        "shadow_color",
+        "bold",
+        "italic",
+        "underlined",
+        "strikethrough",
+        "obfuscated",
+        "click_event",
+        "hover_event",
+        "insertion",
+        "font",
+    ];
+    let fields = value.as_object().ok_or(format!("{field}: not a map"))?;
+    let key = fields
+        .get("translation_key")
+        .and_then(Value::as_str)
+        .ok_or(format!("{field}.translation_key: a string is required"))?;
+    let parameters = fields
+        .get("parameters")
+        .and_then(Value::as_array)
+        .ok_or(format!("{field}.parameters: a list is required"))?
+        .iter()
+        .map(|parameter| match parameter.as_str() {
+            Some(name @ ("sender" | "target" | "content")) => Ok(string(name)),
+            _ => Err(format!("{field}.parameters: unknown parameter {parameter}")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut decoration = Compound::from([
+        ("translation_key".into(), string(key)),
+        ("parameters".into(), Tag::List(parameters)),
+    ]);
+    if let Some(style) = fields.get("style") {
+        let style = style
+            .as_object()
+            .ok_or(format!("{field}.style: not a map"))?;
+        // Style.Serializer.CODEC is the style fields of a component, read through the same grammar.
+        let mut component: serde_json::Map<String, Value> = style
+            .iter()
+            .filter(|(name, _)| STYLE_FIELDS.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        component.insert("text".into(), Value::String(String::new()));
+        let mut built = decoder.text(&format!("{field}.style"), &Value::Object(component))?;
+        if let Some(built) = built.as_object_mut() {
+            built.remove("text");
         }
-    };
-    let encoded = match registry {
-        "minecraft:dimension_type" => {
-            sunrise_world::dimension_type::DimensionFacts::decode_pack_definition(id, &value)?
+        decoration.insert("style".into(), json_to_nbt(&built));
+    }
+    Ok(Tag::Compound(decoration))
+}
+
+fn decode_painting_variant(
+    decoder: &mut Decoder<'_>,
+    id: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let variant = crate::entities::PaintingVariant::decode(id, &value)?;
+    let painting = &variant;
+    let mut fields = Compound::from([
+        ("asset_id".into(), asset_id(&painting.asset)),
+        ("width".into(), Tag::Int(painting.width)),
+        ("height".into(), Tag::Int(painting.height)),
+    ]);
+    for (field, text) in [
+        ("title", painting.title.clone()),
+        ("author", painting.author.clone()),
+    ] {
+        if let Some(text) = text.filter(|value| !value.is_null()) {
+            fields.insert(field.into(), json_to_nbt(&decoder.text(field, &text)?));
         }
-        "minecraft:enchantment" => {
-            let mut value = sunrise_items::enchant::decode_pack_definition(value)?;
-            value["description"] = decode_text("description", &value["description"])?;
-            return Ok(Definition::Enchantment(value));
+    }
+    let tag = Tag::Compound(fields);
+    check_network_nbt(&tag)?;
+    Ok(Definition::Painting(variant, tag))
+}
+
+fn decode_banner_pattern(
+    _: &mut Decoder<'_>,
+    id: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let pattern = crate::banner::Pattern::decode(id, &value)?;
+    encoded(Tag::compound([
+        ("asset_id", asset_id(&pattern.asset)),
+        ("translation_key", string(&pattern.translation_key)),
+    ]))
+}
+
+fn decode_enchantment(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let mut value = sunrise_items::enchant::decode_pack_definition(value)?;
+    value["description"] = decoder.text("description", &value["description"])?;
+    Ok(Definition::Enchantment(value))
+}
+
+fn decode_instrument(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let instrument = Instrument::decode(&value)?;
+    let float = |v: f32| Tag::Float(v.to_bits());
+    let sound = match instrument.inline_sound_range {
+        None if !(decoder.sound_exists)(&instrument.sound) => {
+            return Err(format!("sound_event: unknown holder {}", instrument.sound));
         }
-        "minecraft:painting_variant" => {
-            let painting_variant = crate::entities::PaintingVariant::decode(id, &value)?;
-            let painting = &painting_variant;
-            let mut fields = Compound::from([
-                ("asset_id".into(), asset_id(&painting.asset)),
-                ("width".into(), Tag::Int(painting.width)),
-                ("height".into(), Tag::Int(painting.height)),
-            ]);
-            for (field, text) in [
-                ("title", painting.title.clone()),
-                ("author", painting.author.clone()),
-            ] {
-                if let Some(text) = text.filter(|value| !value.is_null()) {
-                    fields.insert(field.into(), json_to_nbt(&decode_text(field, &text)?));
-                }
+        None => string(&instrument.sound),
+        Some(fixed) => {
+            let mut fields = Compound::from([("sound_id".into(), string(&instrument.sound))]);
+            if let Some(range) = fixed {
+                fields.insert("range".into(), float(range));
             }
-            let tag = Tag::Compound(fields);
-            check_network_nbt(&tag)?;
-            return Ok(Definition::Painting(painting_variant, tag));
+            Tag::Compound(fields)
         }
-        "minecraft:instrument" => {
-            let instrument = Instrument::decode(&value)?;
-            let float = |v: f32| Tag::Float(v.to_bits());
-            let sound = match instrument.inline_sound_range {
-                None if !sound_exists(&instrument.sound) => {
-                    return Err(format!("sound_event: unknown holder {}", instrument.sound));
-                }
-                None => string(&instrument.sound),
-                Some(fixed) => {
-                    let mut fields =
-                        Compound::from([("sound_id".into(), string(&instrument.sound))]);
-                    if let Some(range) = fixed {
-                        fields.insert("range".into(), float(range));
-                    }
-                    Tag::Compound(fields)
-                }
-            };
-            let mut fields = Compound::from([
-                ("sound_event".into(), sound),
-                ("use_duration".into(), float(instrument.use_duration)),
-                ("range".into(), float(instrument.range)),
-                (
-                    "description".into(),
-                    json_to_nbt(&decode_text("description", &value["description"])?),
-                ),
-            ]);
-            if instrument.durability_damage != 0 {
-                fields.insert(
-                    "durability_damage".into(),
-                    Tag::Int(instrument.durability_damage),
-                );
-            }
-            let tag = Tag::Compound(fields);
-            check_network_nbt(&tag)?;
-            return Ok(Definition::Instrument(instrument, tag));
-        }
-        "minecraft:banner_pattern" => {
-            let pattern = crate::banner::Pattern::decode(id, &value)?;
-            Tag::compound([
-                ("asset_id", asset_id(&pattern.asset)),
-                ("translation_key", string(&pattern.translation_key)),
-            ])
-        }
-        // WorldClock.DIRECT_CODEC is a unit map codec: extra keys are permitted.
-        "minecraft:world_clock" => {
-            if !value.is_object() {
-                return Err("not a map".into());
-            }
-            json_to_nbt(&value)
-        }
-        _ => unreachable!("only selected registry families are decoded"),
     };
-    check_network_nbt(&encoded)?;
-    Ok(Definition::Encoded(encoded))
+    let mut fields = Compound::from([
+        ("sound_event".into(), sound),
+        ("use_duration".into(), float(instrument.use_duration)),
+        ("range".into(), float(instrument.range)),
+        (
+            "description".into(),
+            json_to_nbt(&decoder.text("description", &value["description"])?),
+        ),
+    ]);
+    if instrument.durability_damage != 0 {
+        fields.insert(
+            "durability_damage".into(),
+            Tag::Int(instrument.durability_damage),
+        );
+    }
+    let tag = Tag::Compound(fields);
+    check_network_nbt(&tag)?;
+    Ok(Definition::Instrument(instrument, tag))
+}
+
+/// A winning dialog definition: `Dialog.DIRECT_CODEC` over the file, and the
+/// dialogs it names, which the registry must hold (`decode_pack`).
+fn decode_dialog(decoder: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definition, String> {
+    // Transient components are excluded from persisted world definitions.
+    sunrise_world::item_defaults::validate_dialog(&value)?;
+    let (tag, references) = crate::dialog::Dialog::decode_pack(&value, decoder.registries, &|id| {
+        decoder.defaults.entries().contains_key(id)
+    })
+    .map_err(|field| format!("invalid dialog field {field}"))?;
+    check_network_nbt(&tag)?;
+    decoder.dialog_references.push(references);
+    Ok(Definition::Encoded(tag))
+}
+
+// WorldClock.DIRECT_CODEC is a unit map codec: extra keys are permitted.
+fn decode_world_clock(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definition, String> {
+    if !value.is_object() {
+        return Err("not a map".into());
+    }
+    encoded(json_to_nbt(&value))
 }
 
 #[cfg(test)]
@@ -1121,6 +1299,59 @@ mod tests {
             "{} cases differ:\n{}",
             wrong.len(),
             wrong.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_bad_chat_type_and_a_bad_painting_variant_refuse_the_load_together() {
+        let files = [
+            (
+                "chat_type/test:bad".into(),
+                vec![
+                    json!({
+                        "chat": {"translation_key": "x", "parameters": ["nobody"]},
+                        "narration": {"translation_key": "y", "parameters": []}
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+            (
+                "painting_variant/test:bad".into(),
+                vec![br#"{"asset_id":"test:mural","width":17,"height":1}"#.to_vec()],
+            ),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let (_, Err(error)) = super::super::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &PackOverlay::new(&files),
+            &Default::default(),
+            &Default::default(),
+            |_| true,
+        ) else {
+            panic!("world registry load accepted invalid entries");
+        };
+        let group = |registry: &str| {
+            error
+                .split_once(&format!("\nminecraft:{registry}:\n"))
+                .unwrap()
+                .1
+                .split("\nminecraft:")
+                .next()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(
+            group("chat_type").contains("test:bad: chat.parameters: unknown parameter"),
+            "{error}"
+        );
+        assert!(
+            group("painting_variant").contains("test:bad:")
+                && group("painting_variant").contains("width"),
+            "{error}"
         );
     }
 

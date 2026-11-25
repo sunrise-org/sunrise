@@ -118,27 +118,12 @@ pub fn client_biomes(
 /// KnownPack.vanilla("core") for this version.
 pub const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", sunrise_protocol::GAME_VERSION);
 
-/// Synchronized registries a world's data packs add entries to (or replace
-/// them in). The others stay the game's own: Sunrise's gameplay reads them
-/// from the prepared resources only.
-/// Enchantments are among them: the items' enchantment catalog reads a
-/// world's pack definitions too, so their ids must reach clients.
-/// World clocks are too: a dimension type's `default_clock` must name a
-/// clock the client was sent, or it reads that dimension's time as zero.
-pub const PACK_REGISTRIES: &[&str] = &[
-    "minecraft:banner_pattern",
-    "minecraft:instrument",
-    "minecraft:painting_variant",
-    "minecraft:dialog",
-    "minecraft:dimension_type",
-    "minecraft:enchantment",
-    "minecraft:world_clock",
-];
-
 #[path = "data_pack_registries.rs"]
 mod pack_registries;
-pub use pack_registries::PackRegistryDefinitions;
 use pack_registries::bind_dialog_tags;
+pub use pack_registries::{
+    ChatType, PackRegistryDefinitions, REGISTRY_KINDS, RegistryKind, RegistryRef,
+};
 
 /// Bind one registry's resource and pack tags to its actual holders. Shared by
 /// WorldLoader's pending condition context and the configuration tag snapshot.
@@ -162,9 +147,9 @@ pub fn registry_tag_bindings(
 pub fn is_pack_registry_file(key: &str) -> bool {
     key.starts_with("worldgen/biome/")
         || key.split_once('/').is_some_and(|(kind, _)| {
-            PACK_REGISTRIES
+            REGISTRY_KINDS
                 .iter()
-                .any(|registry| registry.strip_prefix("minecraft:") == Some(kind))
+                .any(|table| table.key.strip_prefix("minecraft:") == Some(kind))
         })
 }
 
