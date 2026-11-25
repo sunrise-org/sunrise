@@ -2,9 +2,10 @@
 //! which the rail's parts may answer (`rail_direction`).
 use super::Game;
 use super::api_values::TryIntoApi;
-use super::minecarts::{Rail, Shape};
+use super::minecarts::{Minecart, Rail, Shape};
 use super::native_level_signals::ReadLevel;
 use mod_api::RailShape;
+use sunrise_core::geometry::Vec3;
 use sunrise_core::position::BlockPos;
 use sunrise_world::{level::classes::Class, registry::BlockStateId};
 
@@ -37,10 +38,42 @@ impl Game<'_> {
         let powered = s.properties.get("powered").is_some_and(|v| v == "true");
         let shape = self.cart_rail_direction(cart, state, BlockPos::new(x, y, z), text);
         Some(Rail {
+            state,
             name,
             shape,
             powered,
         })
+    }
+
+    /// `rail_step`: the parts of `rail` at `pos` may change the velocity `v` that cart `c`
+    /// takes from it, where `moveAlongTrack` applies a powered rail's halt and boost.
+    pub(super) fn cart_rail_step(&self, c: &Minecart, pos: [i32; 3], rail: &Rail, v: &mut Vec3) {
+        if !super::api_values::block_state::block_listens(mod_api::HookId::RailStep, rail.state) {
+            return;
+        }
+        let shape = match rail.shape {
+            Shape::NorthSouth => RailShape::NorthSouth,
+            Shape::EastWest => RailShape::EastWest,
+            Shape::AscendingEast => RailShape::AscendingEast,
+            Shape::AscendingWest => RailShape::AscendingWest,
+            Shape::AscendingNorth => RailShape::AscendingNorth,
+            Shape::AscendingSouth => RailShape::AscendingSouth,
+            Shape::SouthEast => RailShape::SouthEast,
+            Shape::SouthWest => RailShape::SouthWest,
+            Shape::NorthWest => RailShape::NorthWest,
+            Shape::NorthEast => RailShape::NorthEast,
+        };
+        let mut velocity = v.components();
+        Self::native_rail_step(
+            &sunrise_client_render::api_context::LoopReader(&self.loop_context).context(),
+            c.id,
+            rail.state,
+            BlockPos::new(pos[0], pos[1], pos[2]),
+            shape,
+            self.cart_max_speed(c),
+            &mut velocity,
+        );
+        *v = Vec3::new(velocity[0], velocity[1], velocity[2]);
     }
 
     /// The shape named `text` of the rail `state` at `pos`, after the parts of the state.

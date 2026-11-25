@@ -658,3 +658,63 @@ fn an_old_behaviour_cart_writes_is_on_rails_each_tick() {
         assert!(!off.on_rails);
     });
 }
+
+/// `rail_step`: a rail's part sets the speed a resting cart moves with, under both physics,
+/// and a part's non-finite answer leaves the cart at rest.
+#[test]
+#[ignore = "daily"]
+fn a_rail_part_sets_the_speed_a_cart_moves_with() {
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+    const CASE: &str = "SUNRISE_RAIL_STEP_CASE";
+    if run_fresh_cases(
+        "game::minecarts::tests::a_rail_part_sets_the_speed_a_cart_moves_with",
+        CASE,
+        &["old", "new"],
+    ) {
+        return;
+    }
+    let improved = std::env::var(CASE).unwrap() == "new";
+    mod_platform::__private::part_tests::rail_step_game_thread();
+    with_game(|game| {
+        let scratch = crate::game::rail_parts_tests::rail_world(game);
+        if improved {
+            let mut features = game.level.enabled_features.to_vec();
+            features.push("minecraft:minecart_improvements".into());
+            game.level.enabled_features = features.into();
+            game.ui.rules =
+                sunrise_client::gamerules::GameRules::with_features(&game.level.enabled_features);
+        }
+        let registry = game.pack.assets.registry;
+        let east_west = |block: &str| {
+            let id = registry.default_state(block).unwrap();
+            let mut state = registry.state(id).unwrap().clone();
+            state.properties.insert("shape".into(), "east_west".into());
+            registry.id(&state).unwrap()
+        };
+        let (rail, detector) = (
+            east_west("minecraft:rail"),
+            east_west("minecraft:detector_rail"),
+        );
+        for x in 1..8 {
+            game.world.set(x, 64, 4, rail).unwrap();
+            game.world.set(x, 64, 10, detector).unwrap();
+        }
+        let tick_at_rest = |game: &mut Game<'_>, z: f64| {
+            let mut cart = Minecart::new(1, CartKind::Rideable, Vec3::new(3.5, 64.0625, z));
+            cart.first_tick = false;
+            game.tick_cart(&mut cart, [0.0; 2], 0, &mut CartIndex::default());
+            cart
+        };
+        // The plain rail's part sends the cart east at its top speed; without it a resting
+        // cart stays put.
+        let boosted = tick_at_rest(game, 4.5);
+        assert!(boosted.position.x > 3.5, "{:?}", boosted.position);
+        assert!(boosted.velocity.x > 0.0, "{:?}", boosted.velocity);
+        // The detector rail's part answers NaN: the cart keeps vanilla's speed.
+        let kept = tick_at_rest(game, 10.5);
+        assert_eq!(kept.position.x, 3.5);
+        assert_eq!(kept.velocity.x, 0.0);
+        assert!(kept.velocity.components().iter().all(|v| v.is_finite()));
+        std::fs::remove_dir_all(scratch).ok();
+    });
+}

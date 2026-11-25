@@ -1,0 +1,3 @@
+ids = ["hook:rail_step", "method:BlockPart::rail_step", "type:RailStepEvent"]
+why = "BlockPart::rail_step sets the speed a minecart takes from a rail, where vanilla's moveAlongTrack applies the powered rail's halt and boost: after the slope, rider input and halt, before the speed cap and boost. It takes the loop context and no Host; a non-finite answer leaves the velocity as it was."
+migrate = "Nothing to change: a rail with no part that answers it moves carts as before. A rail that changed a cart's speed from minecart_pass through the cart handle can answer rail_step instead, before the cart moves."

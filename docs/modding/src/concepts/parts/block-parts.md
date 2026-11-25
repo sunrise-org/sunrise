@@ -204,6 +204,19 @@ refuses that Part's outputs. Other Parts' accepted writes and movement edits rem
 Boats, minecarts, armor stands and projectiles ignore `EntityWrite::Hurt` from both `step_on`
 and `fall_on`. Experience orbs accept it only from `step_on`.
 
+## Rail speed
+
+`BlockPart::rail_step` sets the speed a minecart takes from a rail, as vanilla's powered rail
+halts and boosts a cart in `moveAlongTrack`: a booster, brake or station rail. `RailStepEvent`
+carries the cart's id, the rail's `state` and `pos`, the `shape` it lays for the cart (after
+`rail_direction`), the cart's `max_speed` and its `velocity` after vanilla's slope, rider input and
+halt. Edit `velocity`; vanilla's speed cap and powered-rail boost still follow. The old minecart
+physics asks once per tick, `minecart_improvements` once per rail the cart crosses.
+
+The method takes the loop context and no `Host`, and fires on the side that moves the cart. Keep it
+a pure function of the event. A non-finite answer leaves the cart's velocity as it was.
+`minecart_pass` is the notice that a cart went over the rail.
+
 ## Landing writes
 
 `BlockPart::bounce_restitution` answers the block's coefficient for a qualifying downward collision,

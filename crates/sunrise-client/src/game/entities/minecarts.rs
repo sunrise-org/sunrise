@@ -460,6 +460,7 @@ impl Shape {
     }
 }
 pub(super) struct Rail {
+    pub(super) state: BlockStateId,
     pub(super) name: Arc<str>,
     pub(super) shape: Shape,
     pub(super) powered: bool,
@@ -793,6 +794,9 @@ impl Game<'_> {
                 c.velocity = Vec3::new(c.velocity.x * 0.5, 0.0, c.velocity.z * 0.5);
             }
         }
+        let mut v = c.velocity;
+        self.cart_rail_step(c, pos, rail, &mut v);
+        c.velocity = v;
         let (fx, fz) = (f64::from(pos[0]), f64::from(pos[2]));
         let x0 = fx + 0.5 + f64::from(e0[0]) * 0.5;
         let z0 = fz + 0.5 + f64::from(e0[2]) * 0.5;
@@ -1140,6 +1144,7 @@ impl Game<'_> {
                 }
                 halted = sunrise_core::geometry::length(v.x, v.z) != before;
             }
+            self.cart_rail_step(c, pos, &rail, &mut v);
             // applyNaturalSlowdown and the speed cap (first iteration).
             if first {
                 c.velocity = v;

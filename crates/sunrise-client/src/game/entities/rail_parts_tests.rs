@@ -9,7 +9,7 @@ use sunrise_core::{geometry::Vec3, position::ChunkPos};
 
 /// A serving world with commands, a stone floor at y 63 and its chunk ticking. Returns the
 /// scratch world folder to remove.
-fn rail_world(game: &mut Game<'_>) -> std::path::PathBuf {
+pub(in crate::game) fn rail_world(game: &mut Game<'_>) -> std::path::PathBuf {
     game.options.dedicated = Some(Vec::new());
     let scratch = std::env::temp_dir().join(format!(
         "sunrise-rail-parts-{}-{:?}",
