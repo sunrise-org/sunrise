@@ -44,12 +44,46 @@ pub const DIMENSIONS: [(&str, i32); 3] = [
     ("minecraft:the_end", 1),
 ];
 
-/// A pack of the corpus as the run indexes it: its name and where it is. Nothing of the pack is
-/// read until a case process samples it (`sample`).
+/// What a run fuzzes: shader packs through `load_post`, or vanilla's core programs through
+/// `sunrise_glsl::translate` (`--core`, see `core_shader.rs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Pack,
+    Core,
+}
+
+impl Mode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Pack => "pack",
+            Mode::Core => "core",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Mode> {
+        [Mode::Pack, Mode::Core]
+            .into_iter()
+            .find(|m| m.name() == name)
+    }
+}
+
+/// A pack of the corpus as the run indexes it: its name and where it is (for `Mode::Core`, the
+/// prepared resources). Nothing of the pack is read until a case process samples it (`sample`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub name: String,
     pub path: PathBuf,
+    pub mode: Mode,
+}
+
+/// The one entry of a `--core` run: vanilla's core programs under the resources `root`.
+pub fn core_entry(root: &Path) -> Entry {
+    Entry {
+        name: "core".to_owned(),
+        path: root.to_owned(),
+        mode: Mode::Core,
+    }
 }
 
 /// The committed seed pack, which `--smoke` runs.
@@ -65,27 +99,50 @@ pub fn index(seeds: &Path, corpus: Option<&Path>) -> Vec<Entry> {
             .file_name()
             .map_or_else(|| "seeds".to_owned(), |n| n.to_string_lossy().into_owned()),
         path: seeds.to_owned(),
+        mode: Mode::Pack,
     }];
     if let Some(dir) = corpus {
         out.extend(
             sunrise_shaders::candidates(dir)
                 .into_iter()
-                .map(|(name, path)| Entry { name, path }),
+                .map(|(name, path)| Entry {
+                    name,
+                    path,
+                    mode: Mode::Pack,
+                }),
         );
     }
     out
 }
 
 /// A pack opened in a case process: its files by path inside `shaders`, and per dimension the
-/// folder the game loads and the programs in it: both stages there, or compute shaders only.
+/// folder the game loads and the programs in it: both stages there, or compute shaders only. For
+/// vanilla's core programs only the first dimension has a folder (`core_shader::open`).
 pub struct Source {
     pub name: String,
-    pub pack: Pack,
+    /// The pack, none for vanilla's core programs (`core_shader::open`).
+    pub pack: Option<Pack>,
     pub files: BTreeMap<String, Vec<u8>>,
     pub folders: [(String, Vec<String>); 3],
 }
 
 impl Source {
+    pub fn mode(&self) -> Mode {
+        if self.pack.is_some() {
+            Mode::Pack
+        } else {
+            Mode::Core
+        }
+    }
+
+    /// `entry` opened as its mode says, or why it doesn't open.
+    pub fn of(entry: &Entry) -> Result<Source, String> {
+        match entry.mode {
+            Mode::Pack => Source::open(&entry.path),
+            Mode::Core => crate::core_shader::open(entry),
+        }
+    }
+
     /// Why a pack doesn't open, as the game refuses it.
     pub fn open(path: &Path) -> Result<Source, String> {
         let pack = Pack::open(path).map_err(|e| e.to_string())?;
@@ -120,7 +177,7 @@ impl Source {
         });
         Ok(Source {
             name: pack.name().to_owned(),
-            pack,
+            pack: Some(pack),
             files,
             folders,
         })
@@ -287,13 +344,18 @@ pub fn sample(index: &[Entry], id: CaseId) -> Result<Case, NoCase> {
 /// Fixed cases that must hold every invariant: each seed program alone, unmutated, in flat and
 /// grid terrain, and all of them together.
 pub fn smoke(index: &[Entry]) -> Result<Vec<Case>, NoCase> {
-    let seeds = Source::open(&index[0].path)
-        .map_err(|e| NoCase::Unopened(format!("{}: {e}", index[0].name)))?;
+    let seeds =
+        Source::of(&index[0]).map_err(|e| NoCase::Unopened(format!("{}: {e}", index[0].name)))?;
     let programs = &seeds.folders[0].1;
     let mut sets: Vec<Vec<String>> = programs.iter().map(|p| vec![p.clone()]).collect();
     sets.push(programs.clone());
     let mut out = Vec::new();
-    for flat in [true, false] {
+    // Terrain draws are the packs': a core program has one way to load.
+    let terrains: &[bool] = match seeds.mode() {
+        Mode::Pack => &[true, false],
+        Mode::Core => &[true],
+    };
+    for &flat in terrains {
         for set in &sets {
             out.push(Case::unmutated(&seeds, 0, 0, flat, set.clone()));
         }
@@ -314,6 +376,7 @@ pub enum Kind {
     Duplicate,
     Reorder,
     Properties,
+    CoreInclude,
 }
 
 pub const KINDS: [Kind; 11] = [
@@ -330,6 +393,21 @@ pub const KINDS: [Kind; 11] = [
     Kind::Properties,
 ];
 
+/// The steps of a `--core` case: the pack steps that mean something to a core program, and its
+/// own includes (`core_shader::include`) in place of the pack's.
+pub const CORE_KINDS: [Kind; 10] = [
+    Kind::Declaration,
+    Kind::CoreInclude,
+    Kind::Preprocessor,
+    Kind::ArraySize,
+    Kind::Collide,
+    Kind::Numeric,
+    Kind::Truncate,
+    Kind::Encoding,
+    Kind::Duplicate,
+    Kind::Reorder,
+];
+
 impl Kind {
     pub fn name(self) -> &'static str {
         match self {
@@ -344,6 +422,7 @@ impl Kind {
             Kind::Duplicate => "duplicate",
             Kind::Reorder => "reorder",
             Kind::Properties => "properties",
+            Kind::CoreInclude => "core_include",
         }
     }
 }
@@ -360,6 +439,7 @@ pub struct Step {
 pub struct Case {
     pub seed: u64,
     pub pack: String,
+    pub mode: Mode,
     /// Index into [`DIMENSIONS`].
     pub dim: usize,
     /// Terrain as flat draws give it (vertices pulled) or as grid draws do (attributes).
@@ -387,6 +467,7 @@ impl Case {
         Self {
             seed,
             pack: source.name.clone(),
+            mode: source.mode(),
             dim,
             flat,
             reach: reach(source, &folder, &programs),
@@ -430,14 +511,17 @@ fn is_source(path: &str) -> bool {
 /// as the loader's own preprocessor finds it (`Preprocessed::files`) with the macros the load
 /// uses. These are what a case's steps edit.
 pub fn reach(source: &Source, folder: &str, programs: &[String]) -> BTreeSet<String> {
-    let (_, macros) = crate::check::pack_macros(&source.pack);
+    let Some(pack) = &source.pack else {
+        return crate::core_shader::reach(&source.files, programs);
+    };
+    let (_, macros) = crate::check::pack_macros(pack);
     let mut reach = BTreeSet::new();
     let owned = source
         .files
         .keys()
         .filter(|p| programs.iter().any(|program| owns_in(folder, program, p)));
     for path in owned {
-        reach.extend(sunrise_shaders::preprocess(&source.pack, path, &macros).files);
+        reach.extend(sunrise_shaders::preprocess(pack, path, &macros).files);
     }
     reach
 }
@@ -448,9 +532,10 @@ pub fn reach(source: &Source, folder: &str, programs: &[String]) -> BTreeSet<Str
 pub fn generate(index: &[Entry], seed: u64, steps: bool) -> Result<Case, NoCase> {
     let mut s = Stream(seed);
     let entry = &index[s.below(index.len())];
-    let source =
-        Source::open(&entry.path).map_err(|e| NoCase::Unopened(format!("{}: {e}", entry.name)))?;
-    let dim = s.below(DIMENSIONS.len());
+    let source = Source::of(entry).map_err(|e| NoCase::Unopened(format!("{}: {e}", entry.name)))?;
+    let core = source.mode() == Mode::Core;
+    // A core program has no dimension or terrain: the draws stay in the stream, as a pack's.
+    let dim = if core { 0 } else { s.below(DIMENSIONS.len()) };
     let programs = &source.folders[dim].1;
     if programs.is_empty() {
         return Err(NoCase::NoPrograms(entry.name.clone()));
@@ -463,14 +548,15 @@ pub fn generate(index: &[Entry], seed: u64, steps: bool) -> Result<Case, NoCase>
         }
     }
     chosen.sort();
-    let flat = s.chance(2);
+    let flat = s.chance(2) || core;
     let mut case = Case::unmutated(&source, seed, dim, flat, chosen);
+    let kinds: &[Kind] = if core { &CORE_KINDS } else { &KINDS };
     if steps {
         let most = if s.chance(4) { 6 } else { 2 };
         let count = 1 + s.below(most);
         let mut current = case.files.clone();
         for _ in 0..count {
-            let kind = *s.pick(&KINDS);
+            let kind = *s.pick(kinds);
             let file = if kind == Kind::Properties {
                 "shaders.properties".to_owned()
             } else {
@@ -543,21 +629,24 @@ pub fn apply(step: &Step, files: &mut BTreeMap<String, Vec<u8>>) {
         Kind::Duplicate => duplicate(&mut s, &text).into_bytes(),
         Kind::Reorder => reorder(&mut s, &text).into_bytes(),
         Kind::Properties => properties(&mut s, &text).into_bytes(),
+        Kind::CoreInclude => {
+            crate::core_shader::include(&mut s, &step.file, &text, files).into_bytes()
+        }
     };
     files.insert(step.file.clone(), out);
 }
 
-fn lines(text: &str) -> Vec<String> {
+pub fn lines(text: &str) -> Vec<String> {
     text.split('\n').map(str::to_owned).collect()
 }
 
-fn join(lines: &[String]) -> String {
+pub fn join(lines: &[String]) -> String {
     lines.join("\n")
 }
 
 /// Lines at global scope (brace depth 0 before them, after the leading directives), where a
 /// declaration can go.
-fn global_points(lines: &[String]) -> Vec<usize> {
+pub fn global_points(lines: &[String]) -> Vec<usize> {
     let mut depth = 0i32;
     let mut points = Vec::new();
     let mut header = true;
@@ -761,7 +850,7 @@ fn globals(text: &str) -> Vec<(usize, String, String)> {
     out
 }
 
-fn is_ident(w: &str) -> bool {
+pub fn is_ident(w: &str) -> bool {
     w.chars()
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
@@ -1468,7 +1557,7 @@ mod tests {
     }
 
     fn seed_source() -> Source {
-        Source::open(&seeds()[0].path).unwrap()
+        Source::of(&seeds()[0]).unwrap()
     }
 
     #[test]
@@ -1615,6 +1704,7 @@ mod tests {
         let case = Case {
             seed: 0,
             pack: String::new(),
+            mode: Mode::Pack,
             dim: 0,
             flat: true,
             programs: vec!["composite".into()],

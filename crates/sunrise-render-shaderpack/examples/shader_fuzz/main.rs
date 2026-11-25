@@ -7,6 +7,7 @@
 //!     shader_fuzz [--seed N] [--count N] [--budget SECONDS] [--corpus DIR] [--jobs N]
 //!                 [--replay SEED|smoke:N] [--smoke] [--time-limit SECONDS] [--memory-limit MIB]
 //!                 [--size-limit MIB] [--shrink-seconds N] [--work-dir DIR] [--seed-pack DIR]
+//!                 [--core]
 //!
 //! Every case keeps these invariants: no panic; done within `--time-limit`; within
 //! `--memory-limit` (the worker's allocator refuses past it, which aborts it); every stage file
@@ -27,9 +28,15 @@
 //! that many, both until the first is reached, neither 200. Exits 1 when any case fails, or
 //! when no case ran. `--seed-pack` replaces the committed seed pack
 //! (`examples/shader_fuzz/seeds`).
+//!
+//! `--core` fuzzes the core programs of vanilla's `assets/minecraft/shaders/core/` instead, read
+//! from `SUNRISE_TEST_RESOURCES` (never committed) and run through `sunrise_glsl::translate` as
+//! the game translates a resource pack's core shaders (`core_shader.rs`), with the same
+//! invariants; it takes no `--corpus` or `--seed-pack`.
 
 mod cases;
 mod check;
+mod core_shader;
 mod process;
 mod shrink;
 
@@ -42,7 +49,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
-use cases::{Case, CaseId, Entry};
+use cases::{Case, CaseId, Entry, Mode};
 use check::{Failure, Outcome, Request};
 use process::Process;
 use shrink::{Budget, Evaluate, Files, Found, Info};
@@ -128,6 +135,8 @@ struct Options {
     jobs: usize,
     replay: Option<CaseId>,
     smoke: bool,
+    /// The prepared resources whose core programs the run fuzzes (`--core`).
+    core: Option<PathBuf>,
     time_limit: Duration,
     memory_mib: usize,
     size_limit: usize,
@@ -148,6 +157,7 @@ fn options(args: &[String]) -> Result<Options, String> {
         jobs: 1,
         replay: None,
         smoke: false,
+        core: None,
         time_limit: Duration::from_secs(20),
         memory_mib: 2048,
         size_limit: 16 << 20,
@@ -174,6 +184,12 @@ fn options(args: &[String]) -> Result<Options, String> {
                 o.replay = Some(parsed);
             }
             "--smoke" => o.smoke = true,
+            "--core" => {
+                let root = std::env::var_os("SUNRISE_TEST_RESOURCES");
+                o.core = Some(PathBuf::from(
+                    root.ok_or("--core needs SUNRISE_TEST_RESOURCES")?,
+                ));
+            }
             "--time-limit" => o.time_limit = Duration::from_secs(number(value()?)?),
             "--memory-limit" => o.memory_mib = number(value()?)? as usize,
             "--size-limit" => o.size_limit = (number(value()?)? as usize) << 20,
@@ -182,6 +198,9 @@ fn options(args: &[String]) -> Result<Options, String> {
             "--seed-pack" => o.seeds = PathBuf::from(value()?),
             _ => return Err(format!("unknown argument {arg}")),
         }
+    }
+    if o.core.is_some() && (o.corpus.is_some() || args.iter().any(|a| a == "--seed-pack")) {
+        return Err("--core takes no --corpus or --seed-pack".to_owned());
     }
     if o.count.is_none() && o.budget.is_none() {
         o.count = Some(200);
@@ -193,9 +212,12 @@ fn options(args: &[String]) -> Result<Options, String> {
 /// its failures: the seed pack when the run had its own (`--seed-pack`: the smoke cases are its
 /// programs, and it is the first pack a generated case draws from), the corpus a generated case
 /// draws its pack from (the smoke cases take the seed pack only), and the run's time, memory and
-/// size limits.
+/// size limits. A `--core` run's cases are vanilla's, from `SUNRISE_TEST_RESOURCES` again.
 fn replay_args(o: &Options, id: CaseId) -> Vec<String> {
     let mut out = vec!["--replay".to_owned(), id.to_string()];
+    if o.core.is_some() {
+        out.push("--core".to_owned());
+    }
     if o.seeds != cases::seed_pack() {
         out.push("--seed-pack".to_owned());
         out.push(o.seeds.to_string_lossy().into_owned());
@@ -349,7 +371,10 @@ impl Evaluate for InProcess {
 }
 
 fn request_value(r: &Request) -> serde_json::Value {
-    serde_json::json!({"dim": r.dim, "flat": r.flat, "expect": r.expect, "size_limit": r.size_limit})
+    serde_json::json!({
+        "dim": r.dim, "flat": r.flat, "mode": r.mode.name(), "programs": r.programs,
+        "expect": r.expect, "size_limit": r.size_limit,
+    })
 }
 
 fn strings(v: &serde_json::Value) -> Vec<String> {
@@ -364,6 +389,11 @@ fn parse_request(v: &serde_json::Value) -> Request {
     Request {
         dim: v["dim"].as_u64().unwrap_or(0) as usize,
         flat: v["flat"].as_bool().unwrap_or(true),
+        mode: v["mode"]
+            .as_str()
+            .and_then(Mode::from_name)
+            .unwrap_or_default(),
+        programs: strings(&v["programs"]),
         expect: strings(&v["expect"]),
         size_limit: v["size_limit"].as_u64().unwrap_or(u64::MAX) as usize,
     }
@@ -571,8 +601,8 @@ fn expect(case: &Case, base: &Outcome, files: &Files) -> Vec<String> {
 }
 
 /// A case's pack, dimension and terrain: its unmutated load (the pack is whole whatever programs
-/// the steps edit).
-type BaseKey = (String, usize, bool);
+/// the steps edit), and for core programs, which of them (each is its own load).
+type BaseKey = (String, usize, bool, Vec<String>);
 
 /// Runs made cases through `ev`, keeping each unmutated case's outcome.
 struct Runner<E> {
@@ -594,6 +624,11 @@ impl<E: Evaluate> Runner<E> {
         Request {
             dim: case.dim,
             flat: case.flat,
+            mode: case.mode,
+            programs: match case.mode {
+                Mode::Pack => Vec::new(),
+                Mode::Core => case.programs.clone(),
+            },
             expect,
             size_limit: self.size_limit,
         }
@@ -601,11 +636,17 @@ impl<E: Evaluate> Runner<E> {
 
     /// Case `id` (`case`)'s failures, each with its first failing step.
     fn run(&mut self, id: CaseId, case: &Case) -> Vec<Found> {
-        let key = (case.pack.clone(), case.dim, case.flat);
+        let unmutated = self.request(case, Vec::new());
+        let key = (
+            case.pack.clone(),
+            case.dim,
+            case.flat,
+            unmutated.programs.clone(),
+        );
         let base = match self.bases.get(&key) {
             Some(base) => base.clone(),
             None => {
-                let base = self.ev.eval(&case.files, &self.request(case, Vec::new()));
+                let base = self.ev.eval(&case.files, &unmutated);
                 self.bases.insert(key, base.clone());
                 base
             }
@@ -735,6 +776,7 @@ fn case_process() {
             Some(Entry {
                 name: e[0].as_str()?.to_owned(),
                 path: PathBuf::from(e[1].as_str()?),
+                mode: Mode::from_name(e[2].as_str()?)?,
             })
         })
         .collect();
@@ -817,7 +859,7 @@ struct Remote<'a> {
 impl<'a> Remote<'a> {
     fn new(index: &'a [Entry], o: &'a Options, n: usize) -> Self {
         let config = serde_json::json!({
-            "index": index.iter().map(|e| (&e.name, &e.path)).collect::<Vec<_>>(),
+            "index": index.iter().map(|e| (&e.name, &e.path, e.mode.name())).collect::<Vec<_>>(),
             "memory_mib": o.memory_mib,
             "time_limit": o.time_limit.as_secs(),
             "size_limit": o.size_limit,
@@ -854,6 +896,8 @@ impl<'a> Remote<'a> {
             request: Request {
                 dim: case.dim.unwrap_or(0),
                 flat: case.flat.unwrap_or(true),
+                mode: self.index[0].mode,
+                programs: Vec::new(),
                 expect: Vec::new(),
                 size_limit: self.o.size_limit,
             },
@@ -1033,8 +1077,18 @@ fn write_group(
         Some(s) => (s.steps.clone(), s.files.clone(), s.lines),
         None => (Vec::new(), Vec::new(), 0),
     };
-    let dimension = first.case.dim.map(|d| cases::DIMENSIONS[d].0);
-    let terrain = first.case.flat.map(|f| if f { "flat" } else { "grid" });
+    // A core program has neither: its case is the same in every dimension and terrain.
+    let packs = o.core.is_none();
+    let dimension = first
+        .case
+        .dim
+        .filter(|_| packs)
+        .map(|d| cases::DIMENSIONS[d].0);
+    let terrain = first
+        .case
+        .flat
+        .filter(|_| packs)
+        .map(|f| if f { "flat" } else { "grid" });
     let summary = format!(
         "group: {name}\nreplay: {}\npack: {}\nprograms: {}\ndimension: {}\nterrain: {}\nsteps: {}\n",
         shell_line(&replay),
@@ -1062,7 +1116,7 @@ fn write_group(
         "pack": first.case.pack,
         "programs": first.case.programs,
         "dimension": dimension,
-        "flat": first.case.flat,
+        "flat": first.case.flat.filter(|_| packs),
         "steps": steps,
         "files": files,
         "lines": lines,
@@ -1072,7 +1126,10 @@ fn write_group(
 
 /// The run `o` asks for, its report written: the exit code, 1 when any case fails.
 fn fuzz(o: &Options) -> i32 {
-    let mut index = cases::index(&o.seeds, o.corpus.as_deref());
+    let mut index = match &o.core {
+        Some(root) => vec![cases::core_entry(root)],
+        None => cases::index(&o.seeds, o.corpus.as_deref()),
+    };
     // A case process is told its packs' paths as text.
     index.retain(|e| {
         let text = e.path.to_str().is_some();
@@ -1202,6 +1259,7 @@ fn main() {
         _ => path,
     };
     o.corpus = o.corpus.map(full);
+    o.core = o.core.map(full);
     if args.iter().any(|arg| arg == "--seed-pack") {
         o.seeds = full(o.seeds);
     }
@@ -1308,6 +1366,8 @@ mod tests {
             &Request {
                 dim: 0,
                 flat: true,
+                mode: Mode::Pack,
+                programs: Vec::new(),
                 expect: together.programs.clone(),
                 size_limit: 16 << 20,
             },
@@ -1650,6 +1710,8 @@ mod tests {
         let request = Request {
             dim: 0,
             flat: true,
+            mode: Mode::Pack,
+            programs: Vec::new(),
             expect: Vec::new(),
             size_limit: 16 << 20,
         };
@@ -1822,6 +1884,8 @@ void main() {
         let request = Request {
             dim: 0,
             flat: false,
+            mode: Mode::Pack,
+            programs: Vec::new(),
             expect: Vec::new(),
             size_limit: 16 << 20,
         };
@@ -2028,6 +2092,8 @@ void main() {
                 request: Request {
                     dim: 2,
                     flat: false,
+                    mode: Mode::Pack,
+                    programs: Vec::new(),
                     expect: vec!["final".into()],
                     size_limit: 16 << 20,
                 },

@@ -103,6 +103,13 @@ class DriverTests(unittest.TestCase):
         _, _, args = self.run_driver(clean)
         self.assertEqual((option(args, '--budget'), option(args, '--count')), (None, None))
 
+    def test_core_is_passed_to_the_fuzzer(self):
+        clean = {'cases': 1, 'failing': 0, 'corpus_dir': None, 'groups': []}
+        _, _, args = self.run_driver(clean, ['--core', '--smoke'])
+        self.assertIn('--core', args)
+        _, _, args = self.run_driver(clean, ['--smoke'])
+        self.assertNotIn('--core', args)
+
     def test_replay_takes_a_seed_or_a_smoke_case(self):
         clean = {'cases': 1, 'failing': 0, 'corpus_dir': None, 'groups': []}
         for case in ['0', '18446744073709551615', 'smoke:0', 'smoke:12']:

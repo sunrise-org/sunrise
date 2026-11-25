@@ -5,6 +5,7 @@
     python3 tools/shader_fuzz.py --seed 1 --count 500        # 500 cases from the committed seed pack
     python3 tools/shader_fuzz.py --corpus ~/shaderpacks --budget 1200 --jobs 4   # as many cases as 20 minutes make
     python3 tools/shader_fuzz.py --replay 1234567 --corpus ~/shaderpacks ...      # a group's case again, as printed
+    SUNRISE_TEST_RESOURCES=.local/sunrise-client/26.3 python3 tools/shader_fuzz.py --core --count 200   # vanilla's core programs
 
 crates/sunrise-render-shaderpack/examples/shader_fuzz/ does the work. A case is a pack of the corpus (the seed pack
 under examples/shader_fuzz/seeds/, and each zip or folder of --corpus, which is read and never copied into the
@@ -17,6 +18,11 @@ worker of its case process, and must keep every invariant: no panic, within --ti
 stage file of the dimension's folder within --size-limit once preprocessed, every loaded program valid in naga,
 every note starting with a subject (a `key` or a word before its first ": ") and a program the unmutated case loaded
 loaded or named by a note, the same output twice.
+
+--core fuzzes vanilla's core/ programs (assets/minecraft/shaders/core and their includes, read from
+SUNRISE_TEST_RESOURCES, never committed) instead of packs: the same steps, with `include` replaced by one that
+writes vanilla-style includes, through sunrise_glsl::translate as the game translates a resource pack's core
+shaders, with the same invariants. It takes no --corpus or --seed-pack, and replays with --core again.
 
 Failures are grouped by invariant, first failing step and detail. Each group's smallest case is shrunk while the
 same failure stays (steps, then files, then runs of lines) and written as a pack folder under
@@ -71,6 +77,8 @@ def arguments(args):
         out += ["--replay", str(args.replay)]
     if args.smoke:
         out.append("--smoke")
+    if args.core:
+        out.append("--core")
     return out
 
 
@@ -105,6 +113,8 @@ def main(argv=None):
                         help="case processes, each with its own eval worker")
     parser.add_argument("--seed-pack", type=Path,
                         help="a pack folder in place of the committed seed pack (the first pack, and --smoke's)")
+    parser.add_argument("--core", action="store_true",
+                        help="fuzz vanilla's core programs from SUNRISE_TEST_RESOURCES instead of packs")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--replay", type=case_id, metavar="SEED|smoke:N",
                         help="run this one case (from a report's replay command)")
