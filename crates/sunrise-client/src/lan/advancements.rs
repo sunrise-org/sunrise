@@ -1714,7 +1714,7 @@ mod tests {
             let sync = SyncData::load(&root, &PackOverlay::NONE, &defaults, &sources).unwrap();
             let recipes =
                 Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &sources).unwrap();
-            let stations = StationRecipes::from_sources(&root, &items, &sources);
+            let stations = StationRecipes::from_sources(&items, &sources);
             let env = Env {
                 crafting_remainder: None,
                 player: None,

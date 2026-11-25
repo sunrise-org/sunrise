@@ -16,7 +16,7 @@ mod grindstone_part_tests;
 mod models;
 pub use models::{AnvilResult, EnchantmentRow};
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 /// Everything the workstation menus read, loaded once with the resources.
 pub struct StationData {
@@ -60,7 +60,7 @@ impl StationData {
     ) -> Self {
         Self {
             enchantments: std::sync::Arc::clone(&items.enchantments),
-            recipes: StationRecipes::from_sources(root, items, sources),
+            recipes: StationRecipes::from_sources(items, sources),
             brewing: {
                 let mut brewing = crate::brewing::Brewing::from_recipes(
                     sources.brewing_recipes().cloned().collect(),
@@ -929,8 +929,6 @@ pub struct StationRecipes {
     pub smithing: Vec<Smithing>,
     /// Descending recipe priority, then vanilla's registration order.
     pub stonecutting: Vec<Stonecutting>,
-    /// `trim_material` registry: id -> (asset name, description).
-    pub trim_materials: Vec<(String, String)>,
     /// What mods added to the smithing slots' property sets (template, base,
     /// addition).
     smithing_additions: [HashSet<String>; 3],
@@ -954,14 +952,10 @@ impl StationRecipes {
         let sources =
             crate::crafting::ResolvedSources::load_collecting(root, items, overlay, context)?;
         crate::crafting::Recipes::from_resolved(root, items, overlay, &sources)?;
-        Ok(Self::from_sources(root, items, &sources))
+        Ok(Self::from_sources(items, &sources))
     }
     /// The station tables of `sources`, the recipes one load resolved.
-    pub fn from_sources(
-        root: &Path,
-        items: &Items,
-        sources: &crate::crafting::ResolvedSources,
-    ) -> Self {
+    pub fn from_sources(items: &Items, sources: &crate::crafting::ResolvedSources) -> Self {
         let mut smithing = Vec::new();
         let mut stonecutting = Vec::new();
         for recipe in sources.station_recipes() {
@@ -971,31 +965,6 @@ impl StationRecipes {
                     stonecutting.push(recipe.clone())
                 }
                 ParsedStationRecipe::Stonecutting(_) => {}
-            }
-        }
-        let mut trim_materials = Vec::new();
-        let mut tm: Vec<_> = fs::read_dir(root.join("data/minecraft/trim_material"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        tm.sort();
-        for p in tm {
-            if let Ok(bytes) = fs::read(&p)
-                && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
-            {
-                let id = format!(
-                    "minecraft:{}",
-                    p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
-                );
-                trim_materials.push((
-                    id,
-                    v["description"]["translate"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_owned(),
-                ));
             }
         }
         let added = |key| {
@@ -1008,7 +977,6 @@ impl StationRecipes {
         Self {
             smithing,
             stonecutting,
-            trim_materials,
             item_limits: items
                 .items
                 .iter()
@@ -1246,6 +1214,7 @@ pub fn apply_trim(
 mod tests {
     use super::*;
     use crate::enchant::tests::{sample, sample_items};
+    use std::fs;
     use sunrise_core::nbt::Tag;
 
     /// The loop a menu under test runs in: no mods, so every part keeps vanilla's answer.
@@ -1405,6 +1374,43 @@ mod tests {
             out.data().and_then(|d| d.trim.as_ref()).map(|t| &t.0),
             Some(crate::item_data::trim::Holder::Direct(_))
         ));
+    }
+
+    /// Smithing with a pack's pattern (`test:zigzag`, template stone) and material
+    /// (`test:jade`, provided by an emerald block): the iron chestplate's trim names both.
+    #[test]
+    fn smithing_trim_names_a_packs_pattern_and_material() {
+        let e = sample();
+        let recipes = StationRecipes {
+            smithing: vec![Smithing::Trim {
+                id: "test:zigzag".into(),
+                template: Ingredient::of(vec!["minecraft:stone".into()]),
+                base: Ingredient::of(vec!["minecraft:iron_chestplate".into()]),
+                addition: Ingredient::of(vec!["minecraft:emerald_block".into()]),
+                pattern: crate::crafting::RecipeTrimPattern::Reference("test:zigzag".into()),
+            }],
+            ..Default::default()
+        };
+        let template = ItemStack::new("minecraft:stone", 1);
+        let base = ItemStack::new("minecraft:iron_chestplate", 1);
+        let mut emerald = ItemStack::new("minecraft:emerald_block", 1);
+        emerald.data_mut().set_other(
+            "minecraft:provides_trim_material",
+            Some(Tag::String("test:jade".into())),
+        );
+        let out = recipes
+            .smithing_result(
+                crate::test_resources::server_loop_context(),
+                &e,
+                Some(&template),
+                Some(&base),
+                Some(&emerald),
+            )
+            .expect("the emerald block provides a trim material");
+        assert_eq!(
+            crate::item_data::trim::named(out.data().and_then(|d| d.trim.as_ref()).unwrap()),
+            Some(("test:jade", "test:zigzag"))
+        );
     }
 
     /// Enchanting: `ItemStack.isEnchantable` and `selectEnchantment` read the

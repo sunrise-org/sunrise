@@ -2116,6 +2116,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn world_pack_trims_reach_clients() {
+        use serde_json::json;
+        assert_pack_holder_sync(
+            "trim_pattern",
+            "test_patterns",
+            json!({"asset_id":"demo:zigzag","description":{"translate":"trim_pattern.demo.zigzag"}}),
+            "asset_id",
+            json!("demo:lower"),
+            json!("demo:winner"),
+            Tag::String("demo:winner".into()),
+        );
+        assert_pack_holder_sync(
+            "trim_material",
+            "test_materials",
+            json!({"palette_id":"demo:trim/jade","description":{"translate":"trim_material.demo.jade"}}),
+            "palette_id",
+            json!("demo:trim/lower"),
+            json!("demo:trim/winner"),
+            Tag::String("demo:trim/winner".into()),
+        );
+    }
+
     /// #2506: a world pack's clocks reach the clients from the pack's own files, so a dimension
     /// type that names one as `default_clock` resolves on their side. Under known-pack
     /// negotiation a clock the pack replaces goes with its data, one it leaves does not.

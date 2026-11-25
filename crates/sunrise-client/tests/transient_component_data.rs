@@ -141,8 +141,7 @@ fn component_ingredient_removal_is_rejected_before_station_publication() {
     });
     assert_eq!(sources.recipes.len(), 1);
     diagnostic(&messages, "a_bad", "minecraft:creative_slot_lock");
-    let stations =
-        sunrise_client::stations::StationRecipes::from_sources(root.path(), &items, &sources);
+    let stations = sunrise_client::stations::StationRecipes::from_sources(&items, &sources);
     assert_eq!(stations.stonecutting.len(), 1);
     assert_eq!(stations.stonecutting[0].id, "minecraft:z_good");
 }

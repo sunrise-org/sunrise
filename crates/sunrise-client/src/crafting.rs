@@ -3074,7 +3074,7 @@ mod tests {
             let sources = ResolvedSources::resolve(raw, &items, &load).unwrap();
             let recipes =
                 Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &sources).unwrap();
-            let stations = crate::stations::StationRecipes::from_sources(&root, &items, &sources);
+            let stations = crate::stations::StationRecipes::from_sources(&items, &sources);
             let cuts = &recipes.by_type["minecraft:stonecutting"];
             assert_eq!(cuts.len(), 1);
             let Some(crate::crafting::RecipeRule::Stonecutting { input, result }) = &cuts[0].rule

@@ -112,7 +112,7 @@ fn empty_ingredient_recipes_retain_predicates_but_not_placement() {
     let resolved = ResolvedSources::resolve(sources, &items, &load).unwrap();
     let root = std::env::temp_dir();
     let recipes = Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &resolved).unwrap();
-    let stations = crate::stations::StationRecipes::from_sources(&root, &items, &resolved);
+    let stations = crate::stations::StationRecipes::from_sources(&items, &resolved);
     let mut accepted = ItemStack::new("minecraft:stone", 1);
     accepted.damage = 7;
     let book = crate::recipe_book::Book::build(&recipes, &items);

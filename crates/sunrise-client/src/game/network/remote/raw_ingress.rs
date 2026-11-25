@@ -995,11 +995,11 @@ mod tests {
     fn assert_disconnected_with_generic_reason(game: &Game<'_>) {
         assert!(
             game.remote.is_none(),
-            "client must disconnect on invalid biome registry"
+            "client must disconnect on invalid registry"
         );
         assert!(
             !game.connection_open,
-            "connection must close on invalid biome registry"
+            "connection must close on invalid registry"
         );
         let mode = &game.title.as_ref().expect("the disconnect screen").mode;
         assert!(matches!(
@@ -1081,6 +1081,45 @@ mod tests {
                     Event::Reconfigured {
                         registries: invalid,
                         datapacks: Default::default(),
+                    },
+                    Event::Packet(Box::new(login_packet())),
+                ],
+            );
+            game.poll_remote_events(true).unwrap();
+            assert_disconnected_with_generic_reason(game);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn malformed_trim_material_registry_disconnects_before_join() {
+        with_client_game(|game| {
+            // A malformed synced trim_material entry must fail the registry load and disconnect
+            // instead of falling back to the client's own file for minecraft:gold.
+            game.title = None;
+            let (pipe, _server) = Pipe::pair();
+            game.connect_local(pipe, "MalformedTrimJoin").unwrap();
+            game.connection_starts("example.invalid:25565", "MalformedTrimJoin", false);
+            let mut registries = (*game.remote.as_ref().unwrap().registries).clone();
+            registries.registries.insert(
+                "minecraft:dimension_type".into(),
+                vec![("minecraft:overworld".into(), None)],
+            );
+            registries.registries.insert(
+                "minecraft:trim_material".into(),
+                vec![(
+                    "minecraft:gold".into(),
+                    Some(Tag::Compound(sunrise_core::nbt::Compound::new())),
+                )],
+            );
+            push_events(
+                game,
+                [
+                    Event::Joined {
+                        registries: Arc::new(registries),
+                        datapacks: Default::default(),
+                        uuid: 1,
+                        name: "Alex".into(),
                     },
                     Event::Packet(Box::new(login_packet())),
                 ],

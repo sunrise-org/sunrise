@@ -265,7 +265,7 @@ fn projections_follow_one_order() {
             .checked()
             .unwrap();
     let recipes = Recipes::from_resolved(&root.0, &items, &overlay, &resolved).unwrap();
-    let stations = StationRecipes::from_sources(&root.0, &items, &resolved);
+    let stations = StationRecipes::from_sources(&items, &resolved);
     let context = crate::test_resources::server_loop_context();
     let stone = ItemStack::new("minecraft:stone", 1);
     for kind in ["smelting", "blasting", "smoking", "campfire_cooking"] {

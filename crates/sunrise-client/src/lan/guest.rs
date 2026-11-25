@@ -2862,6 +2862,26 @@ mod tests {
         assert_eq!(stack.component(component::TRIM), None);
     }
 
+    /// A pack's pattern and material go to a client by the ids of the server's sync order.
+    #[test]
+    fn a_packs_trim_goes_by_its_synced_ids() {
+        let mut chestplate = ItemStack::new("minecraft:iron_chestplate", 1);
+        chestplate.data_mut().trim = Some(("test:jade".into(), "test:zigzag".into()));
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:trim_material", "test:jade") => Some(11),
+            ("minecraft:trim_pattern", "test:zigzag") => Some(20),
+            _ => None,
+        };
+        let stack = stack_to_network(|_| 7, synced_id, &Some(chestplate)).unwrap();
+        assert_eq!(
+            stack.component(component::TRIM),
+            Some(&Component::Trim {
+                material: 11,
+                pattern: 20
+            })
+        );
+    }
+
     #[test]
     fn goat_horns_send_their_instrument_by_registry_id() {
         let mut horn = ItemStack::new("minecraft:goat_horn", 1);

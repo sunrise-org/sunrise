@@ -1023,8 +1023,9 @@ fn content_id(file: &str) -> Option<String> {
     let kind = match kind {
         "recipe" | "recipe_filter" | "loot_table" | "advancement" | "trade_set"
         | "villager_trade" | "dialog" | "damage_type" | "dimension_type" | "chat_type"
-        | "data_maps" | "enchantment" | "jukebox_song" | "instrument" | "painting_variant"
-        | "banner_pattern" | "predicate" | "item_modifier" | "world_clock" => kind,
+        | "trim_pattern" | "trim_material" | "data_maps" | "enchantment" | "jukebox_song"
+        | "instrument" | "painting_variant" | "banner_pattern" | "predicate" | "item_modifier"
+        | "world_clock" => kind,
         "worldgen" => {
             return resource_id(file, "worldgen/biome", ".json")
                 .map(|id| format!("worldgen/biome/{id}"));
@@ -1170,6 +1171,8 @@ impl DataStore {
             "slot_source",
             "tags",
             "trade_set",
+            "trim_material",
+            "trim_pattern",
             "villager_trade",
             "world_clock",
             "worldgen/biome",

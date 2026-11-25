@@ -41,6 +41,14 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
         decode: decode_chat_type,
     },
     RegistryKind {
+        key: "minecraft:trim_pattern",
+        decode: decode_trim_pattern,
+    },
+    RegistryKind {
+        key: "minecraft:trim_material",
+        decode: decode_trim_material,
+    },
+    RegistryKind {
         key: "minecraft:painting_variant",
         decode: decode_painting_variant,
     },
@@ -672,6 +680,57 @@ fn decode_chat_decoration(
         decoration.insert("style".into(), json_to_nbt(&built));
     }
     Ok(Tag::Compound(decoration))
+}
+
+/// `Identifier.CODEC` of a record field, as the wire's string.
+fn identifier(fields: &serde_json::Map<String, Value>, field: &str) -> Result<Tag, String> {
+    let id = fields
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or(format!("{field}: an identifier is required"))?;
+    Identifier::parse(id)
+        .map(|id| string(&id.to_string()))
+        .map_err(|error| format!("{field}: {error}"))
+}
+
+/// `ComponentSerialization.CODEC` of a record's required `description` field.
+fn description(
+    decoder: &Decoder<'_>,
+    fields: &serde_json::Map<String, Value>,
+) -> Result<Tag, String> {
+    let text = fields.get("description").ok_or("description is required")?;
+    Ok(json_to_nbt(&decoder.text("description", text)?))
+}
+
+/// `TrimPattern.DIRECT_CODEC`: `asset_id`, `description` and `decal` (default false).
+fn decode_trim_pattern(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let fields = value.as_object().ok_or("not a map")?;
+    let decal = match fields.get("decal") {
+        None => false,
+        Some(decal) => decal.as_bool().ok_or("decal: a boolean is required")?,
+    };
+    encoded(Tag::compound([
+        ("asset_id", identifier(fields, "asset_id")?),
+        ("description", description(decoder, fields)?),
+        ("decal", Tag::Byte(i8::from(decal))),
+    ]))
+}
+
+/// `TrimMaterial.DIRECT_CODEC`: `palette_id` and `description`.
+fn decode_trim_material(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let fields = value.as_object().ok_or("not a map")?;
+    encoded(Tag::compound([
+        ("palette_id", identifier(fields, "palette_id")?),
+        ("description", description(decoder, fields)?),
+    ]))
 }
 
 fn decode_painting_variant(

@@ -284,7 +284,7 @@ impl ArmorStandAssets {
         self.equipment = fresh.equipment;
         self.extensions = fresh.extensions;
         self.trim_overrides = fresh.trim_overrides;
-        self.trims = fresh.trims;
+        self.trims.reloaded(fresh.trims);
         self.root = fresh.root;
     }
     /// `TrimTextureKey`: the trim texture on the given humanoid layer.

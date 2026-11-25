@@ -1359,7 +1359,7 @@ mod content_tests {
                 &resolved,
             )
             .unwrap();
-            let _ = crate::stations::StationRecipes::from_sources(root.path(), &items, &resolved);
+            let _ = crate::stations::StationRecipes::from_sources(&items, &resolved);
             let types = [
                 "minecraft:crafting",
                 "minecraft:smelting",
