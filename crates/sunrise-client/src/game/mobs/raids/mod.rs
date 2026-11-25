@@ -1430,6 +1430,19 @@ impl Game<'_> {
     fn is_village(centers: &HashSet<(i32, i32, i32)>, pos: [i32; 3]) -> bool {
         sunrise_gameplay::village_siege::is_village(centers, pos)
     }
+    pub(super) fn level_is_village(
+        &self,
+        level: mod_api::LevelRef,
+        pos: [i32; 3],
+    ) -> Result<bool, mod_api::LevelReadError> {
+        let world = self.native_level_world_result(level)?;
+        let [x, y, z] = pos;
+        if level.dimension() != self.dim.key() || !world.loaded(x, z) || !world.shape.contains_y(y)
+        {
+            return Err(mod_api::LevelReadError::Unavailable);
+        }
+        Ok(Self::is_village(&self.village_centers(), pos))
+    }
     /// A raider's ominous banner (drop chance 2.0: always dropped) and a
     /// patrol captain's ominous bottle (`entities/pillager`).
     /// `OminousBottleAmplifier.onConsume`: Bad Omen for 100 minutes at the

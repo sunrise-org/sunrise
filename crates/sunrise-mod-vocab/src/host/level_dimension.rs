@@ -46,6 +46,13 @@ pub trait LevelDimensionBackend {
     /// and snow, and maps. None for a stale handle and on a client.
     fn level_sea_level(&self, level: LevelRef) -> Option<i32>;
     /// Side: server.
+    /// `ServerLevel.isVillage`: whether `pos` is within one section of a section
+    /// with an occupied village point of interest. Uses the same village centers
+    /// as raids. Returns `Stale` for a stale level, or `Unavailable` if the level
+    /// is not in place or the position is unloaded or outside build height.
+    /// Does not open levels, load chunks, or take tickets.
+    fn level_is_village(&self, level: LevelRef, pos: [i32; 3]) -> Result<bool, LevelReadError>;
+    /// Side: server.
     /// Where an entity of box `size` (width, height), not a player, centred in the portal block
     /// at `portal_pos` of this level arrives through it
     /// (`getPortalDestination`), changing nothing. Nether portals search the closest portal
