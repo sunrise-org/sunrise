@@ -217,7 +217,7 @@ impl Game<'_> {
             return;
         }
         // A goat horn is held up for its instrument's use duration.
-        if self.res.items().instrument(&stack).is_some() {
+        if self.items().instrument(&stack).is_some() {
             self.using = Some((hand_slot, ticks + 1));
             return;
         }

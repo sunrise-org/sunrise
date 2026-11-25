@@ -570,7 +570,7 @@ impl Game<'_> {
     /// `InstrumentItem.use` on this client: unless the horn is on cooldown,
     /// it is held up, plays its sound at the player and starts its cooldown.
     pub(in crate::game) fn remote_use_instrument(&mut self, held: &ItemStack) {
-        let Some(instrument) = self.res.items().instrument(held) else {
+        let Some(instrument) = self.items().instrument(held) else {
             return;
         };
         let group = sunrise_client::cooldowns::group(held, None);

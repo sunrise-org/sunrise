@@ -57,7 +57,7 @@ impl Game<'_> {
     /// posted, the used statistic counts and the horn is on cooldown as long.
     /// A horn whose instrument is unknown fails, which still ends the click.
     pub(super) fn use_instrument(&mut self, stack: &ItemStack) {
-        let Some(instrument) = self.res.items().instrument(stack) else {
+        let Some(instrument) = self.items().instrument(stack) else {
             return;
         };
         self.start_using_item();
@@ -199,7 +199,7 @@ impl Game<'_> {
             }
             return;
         }
-        if self.res.items().instrument(stack).is_some() {
+        if self.items().instrument(stack).is_some() {
             // The shared updateUsingItem countdown, including a mod's replacement.
             self.using = Some((slot, ticks + 1));
             return;

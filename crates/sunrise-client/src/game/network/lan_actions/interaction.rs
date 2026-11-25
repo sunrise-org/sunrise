@@ -479,7 +479,7 @@ impl Game<'_> {
                 // A horn's sound, inline instruments included.
                 let horn = g.with_hand(hand, |g| {
                     let held = g.held()?;
-                    g.res.items().instrument(held).map(|i| i.sound)
+                    g.items().instrument(held).map(|i| i.sound)
                 });
                 let saved = g.guest_use;
                 g.guest_use = Some(GuestUse::Item(hand));
