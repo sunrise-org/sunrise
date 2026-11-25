@@ -49,25 +49,30 @@ A native mod gives an entity boxes that every other entity collides with:
 {{#include ../../../examples/src/entity_and_native.rs:custom_collider}}
 ```
 
-The boxes are in the entity's own frame (its position is the origin), turned by `rotation`, a unit
-quaternion with any yaw, pitch and roll. Other entities collide with them as solid ground and walls:
-the entity's box is swept against each turned box (a separating-axis test with the time of impact), it
-steps up onto a top within its step height, and standing on a tilted top follows the surface. The
-collider is solid to every mover except spectators, entities with no physics and the entities in its
-own vehicle stack (the root vehicle and every passenger, at any depth, the collider's entity among them).
-Collider boxes are solid but do not supply block contact effects such as step sounds, sprint particles,
+The boxes are in the entity's own frame, placed in the world by `ColliderPose` (`rotation` about
+`pivot`: `entity_position + pivot + rotation * (local - pivot)`). `rotation` is a quaternion
+`[x, y, z, w]` normalized when set, and `pivot` is `[x, y, z]` in blocks from the entity's
+position. Other entities collide with the boxes as solid ground and walls: the entity's box is
+swept against each turned box (a separating-axis test with the time of impact), it steps up onto a
+top within its step height, and standing on a tilted top follows the surface. The collider is solid
+to every mover except spectators, entities with no physics and the entities in its own vehicle stack
+(the root vehicle and every passenger, at any depth, the collider's entity among them). Collider
+boxes are solid but do not supply block contact effects such as step sounds, sprint particles,
 friction or bounce.
 
 The game checks a collider when it is set and refuses by name (`ColliderError`), keeping the old one:
-every value finite, the rotation a unit quaternion within 1e-3, at most `Collider::MAX_BOXES` (32,768)
-boxes, and every box within `Collider::MAX_REACH` (512) blocks of the entity on each axis. Boxes are kept
-as `f32`; read back, they are the rounded values both sides collide with. A box whose minimum is above
-its maximum is read with the corners swapped, and a box with no volume (zero thickness on an axis)
-collides with nothing.
+every box and pivot coordinate must be finite, the rotation must be a finite, non-zero quaternion
+(normalized when set; zero, NaN or infinite quaternions are refused with `NonFinite`), and the
+collider's wire encoding must fit within one clientbound custom payload
+(`ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE`, 1,048,576 bytes, refused with `TooLarge`). Boxes
+are kept as `f32`; read back, they are the rounded values both sides collide with. A box whose
+minimum is above its maximum is read with the corners swapped, and a box with no volume (zero
+thickness on an axis) collides with nothing.
 
 A collider is saved with the entity. The server sends it only to Sunrise clients that track the entity:
 the whole collider when they start to (in messages of at most 64 KiB), then only what changed, by box
-index, and the rotation alone for `set_collider_transform`. **A vanilla client does not see a collider**:
+index, and the pose alone for `set_collider_pose`. Clients interpolate between two poses by moving
+the pivot linearly and turning by the shortest arc about it. **A vanilla client does not see a collider**:
 it sees the entity and walks through it. A mod that needs players to stand on one requires the Sunrise
 client at join.
 
@@ -83,12 +88,12 @@ under its feet with the highest top (a tie goes to the lower entity id). A colli
 collider is carried first, and the bodies on it take its whole displacement. A body that rides something is not carried itself; it
 follows its vehicle. The server carries the entities it simulates, and each Sunrise client its own player.
 
-After carrying, a collider that translated without turning shoves bodies in the path of its boxes,
-in its direction of travel. This also uses `MoveCause::Carried`. Changing a box's bounds does not
-sweep that box between the old and new shape. Turning colliders carry bodies but do not shove them.
-A shove does not cancel velocity into the collider; the ordinary entity move handles velocity when
-the body hits an obstacle. The client predicts a shove for its own player, and ordinary server movement
-checks still apply.
+After carrying, a collider that moved or turned shoves bodies in the simultaneous swept path of its
+boxes (conservative advancement over linear pivot motion and shortest-arc rotation together). This
+also uses `MoveCause::Carried`. Changing a box's bounds does not sweep that box between the old and
+new shape. A shove does not cancel velocity into the collider; the ordinary entity move handles
+velocity when the body hits an obstacle. The client predicts a shove for its own player, and ordinary
+server movement checks still apply.
 
 Neither carrying nor shoving pushes through a wall, and the collider is never stopped by a body in
 its way. A squeezed body stays where the collision leaves it. A living body still takes `in_wall`

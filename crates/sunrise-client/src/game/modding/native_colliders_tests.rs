@@ -1,7 +1,7 @@
 //! Moving colliders on a real game: set, read, refused, saved and loaded back, and solid to a
 //! falling item.
 use super::{Dim, Game, native_colliders::SAVE_KEY};
-use mod_api::{Collider, ColliderBox, ColliderError, EntityRef};
+use mod_api::{Collider, ColliderBox, ColliderError, ColliderPose, EntityRef};
 use std::sync::Arc;
 use sunrise_client::chunk::Chunk;
 use sunrise_client::{entities::ItemEntity, items::ItemStack};
@@ -11,13 +11,10 @@ use sunrise_core::{
 };
 
 fn deck() -> Collider {
-    Collider {
-        boxes: vec![ColliderBox {
-            min: [-1.5, -1.0, -1.5],
-            max: [1.5, 0.0, 1.5],
-        }],
-        rotation: [0.0, 0.0, 0.0, 1.0],
-    }
+    Collider::new(vec![ColliderBox {
+        min: [-1.5, -1.0, -1.5],
+        max: [1.5, 0.0, 1.5],
+    }])
 }
 
 /// A pig with no AI and no gravity at `at`: it stays where it is put.
@@ -57,25 +54,24 @@ fn a_collider_is_set_read_refused_saved_and_loaded() {
             entity.set_collider(game, Some(bad)),
             Err(ColliderError::NonFinite { index: Some(0) })
         );
-        let mut far = deck();
-        far.boxes[0].max[0] = Collider::MAX_REACH + 1.0;
-        assert_eq!(
-            entity.set_collider(game, Some(far)),
-            Err(ColliderError::OutOfRange { index: 0 })
-        );
+        let over_boxes = sunrise_protocol::collider_sync::MAX_BOXES_IN_PAYLOAD + 1;
         let mut many = deck();
-        many.boxes = vec![many.boxes[0]; Collider::MAX_BOXES + 1];
+        many.boxes = vec![many.boxes[0]; over_boxes];
         assert_eq!(
             entity.set_collider(game, Some(many)),
-            Err(ColliderError::TooManyBoxes {
-                count: Collider::MAX_BOXES as u64 + 1,
-                limit: Collider::MAX_BOXES as u64
+            Err(ColliderError::TooLarge {
+                bytes: sunrise_protocol::collider_sync::encoded_bytes(over_boxes) as u64,
+                limit: sunrise_protocol::collider_sync::MAX_PAYLOAD_BYTES as u64,
             })
         );
-        let mut turned = deck();
-        turned.rotation = [0.0, 0.0, 0.0, 3.0];
+        let zero_q = deck().with_rotation([0.0, 0.0, 0.0, 0.0]);
         assert_eq!(
-            entity.set_collider(game, Some(turned)),
+            entity.set_collider(game, Some(zero_q)),
+            Err(ColliderError::NonFinite { index: None })
+        );
+        let nan_pivot = deck().with_pivot([f64::NAN, 0.0, 0.0]);
+        assert_eq!(
+            entity.set_collider(game, Some(nan_pivot)),
             Err(ColliderError::NonFinite { index: None })
         );
         assert_eq!(entity.collider(game), Some(deck()));
@@ -85,23 +81,31 @@ fn a_collider_is_set_read_refused_saved_and_loaded() {
             Err(ColliderError::StaleEntity)
         );
 
-        // The rotation alone.
+        // The pose alone (rotation normalized when set, plus pivot).
         let half = std::f32::consts::FRAC_1_SQRT_2;
+        let pose = ColliderPose::new([0.0, 2.0 * half, 0.0, 2.0 * half], [1.5, 0.0, -0.5]);
+        assert_eq!(entity.set_collider_pose(game, pose), Ok(()));
+        let got_pose = entity.collider(game).unwrap().pose;
+        assert!((got_pose.rotation[1] - half).abs() < 1.0e-6);
+        assert!((got_pose.rotation[3] - half).abs() < 1.0e-6);
+        assert_eq!(got_pose.pivot, [1.5, 0.0, -0.5]);
         assert_eq!(
-            entity.set_collider_transform(game, [0.0, half, 0.0, half]),
-            Ok(())
+            entity.set_collider_pose(
+                game,
+                ColliderPose::default().with_rotation([f32::NAN, 0.0, 0.0, 1.0]),
+            ),
+            Err(ColliderError::NonFinite { index: None })
         );
         assert_eq!(
-            entity.collider(game).unwrap().rotation,
-            [0.0, half, 0.0, half]
-        );
-        assert_eq!(
-            entity.set_collider_transform(game, [f32::NAN, 0.0, 0.0, 1.0]),
+            entity.set_collider_pose(
+                game,
+                ColliderPose::default().with_rotation([0.0, 0.0, 0.0, 0.0]),
+            ),
             Err(ColliderError::NonFinite { index: None })
         );
         let other = stand(game, [10.5, 70.0, 10.5]);
         assert_eq!(
-            other.set_collider_transform(game, [0.0, 0.0, 0.0, 1.0]),
+            other.set_collider_pose(game, ColliderPose::default()),
             Err(ColliderError::NoCollider)
         );
 
@@ -395,12 +399,11 @@ fn a_collider_is_not_solid_to_its_own_vehicle_stack() {
 #[test]
 #[ignore = "daily"]
 fn an_item_falls_through_its_own_collider_and_a_stranger_lands_on_it() {
-    let deck_under = || Collider {
-        boxes: vec![ColliderBox {
+    let deck_under = || {
+        Collider::new(vec![ColliderBox {
             min: [-1.0, -2.5, -1.0],
             max: [1.0, -2.0, 1.0],
-        }],
-        rotation: [0.0, 0.0, 0.0, 1.0],
+        }])
     };
     with_world(|game| {
         // A holder that stays where it is, with the deck's top at y = 70, and a stranger over it.
@@ -519,7 +522,7 @@ fn two_hundred_items_over_a_capped_collider_rest_and_the_tick_is_timed() {
         for id in &before {
             game.dropped.retain(|i| i.id != *id);
         }
-        // The cap: a 32 x 32 x 32 lump, its top at the holder's feet.
+        // A large collider: a 32 x 32 x 32 lump, its top at the holder's feet.
         let boxes = (0..SIDE * SIDE * SIDE)
             .map(|i| {
                 let (x, y, z) = (i % SIDE, i / SIDE % SIDE, i / SIDE / SIDE);
@@ -529,15 +532,8 @@ fn two_hundred_items_over_a_capped_collider_rest_and_the_tick_is_timed() {
                 }
             })
             .collect::<Vec<_>>();
-        assert_eq!(boxes.len(), Collider::MAX_BOXES);
         holder_ref
-            .set_collider(
-                game,
-                Some(Collider {
-                    boxes,
-                    rotation: [0.0, 0.0, 0.0, 1.0],
-                }),
-            )
+            .set_collider(game, Some(Collider::new(boxes)))
             .unwrap();
         let on = items(game);
         for _ in 0..20 {
@@ -688,7 +684,10 @@ fn a_turning_collider_carries_the_body_along_the_arc() {
         for step in 1..=9 {
             tick_level_moving(game, |g| {
                 holder_ref
-                    .set_collider_transform(g, yaw(10.0 * step as f32))
+                    .set_collider_pose(
+                        g,
+                        ColliderPose::default().with_rotation(yaw(10.0 * step as f32)),
+                    )
                     .unwrap()
             });
         }
@@ -733,7 +732,10 @@ fn a_tilting_collider_lifts_the_body_by_its_contact_point() {
         let roll = 15.0_f32.to_radians() / 2.0;
         tick_level_moving(game, |g| {
             holder_ref
-                .set_collider_transform(g, [0.0, 0.0, roll.sin(), roll.cos()])
+                .set_collider_pose(
+                    g,
+                    ColliderPose::default().with_rotation([0.0, 0.0, roll.sin(), roll.cos()]),
+                )
                 .unwrap()
         });
         // The contact point 1 block out along local x rises by sin 15 and moves out by cos 15.
@@ -805,13 +807,10 @@ fn a_collider_on_a_collider_passes_the_displacement_on() {
                     .unwrap()
                     .set_collider(
                         game,
-                        Some(Collider {
-                            boxes: vec![ColliderBox {
-                                min: [-0.5, 0.0, -0.5],
-                                max: [0.5, 0.2, 0.5],
-                            }],
-                            rotation: [0.0, 0.0, 0.0, 1.0],
-                        }),
+                        Some(Collider::new(vec![ColliderBox {
+                            min: [-0.5, 0.0, -0.5],
+                            max: [0.5, 0.2, 0.5],
+                        }])),
                     )
                     .unwrap();
                 // And a body on that.
@@ -1003,6 +1002,179 @@ fn the_level_records_its_colliders_as_each_tick_begins() {
     });
 }
 
+/// A body standing on a collider turning about a far pivot is carried along the arc around
+/// that pivot.
+#[test]
+#[ignore = "daily"]
+fn a_body_standing_on_a_collider_turning_about_a_far_pivot_is_carried_along_the_arc() {
+    with_world(|game| {
+        let pivot = [6.0, 0.0, 0.0];
+        let (holder, holder_ref) = stand_with_id(game, [2.0, 70.0, 2.0]);
+        holder_ref
+            .set_collider(game, Some(deck().with_pivot(pivot)))
+            .unwrap();
+        let rider = drop_item(game, [2.5, 70.0, 2.0]);
+        settle(game);
+        let yaw = |degrees: f32| {
+            let half = degrees.to_radians() / 2.0;
+            [0.0, half.sin(), 0.0, half.cos()]
+        };
+        // Nine 10-degree yaw steps about world pivot (8, 70, 2): local (0.5, 0, 0) is (-5.5, 0, 0)
+        // from the pivot, so 90 degrees (+x -> -z) sends it to (0, 0, +5.5) -> world (8, 70, 7.5).
+        for step in 1..=9 {
+            tick_level_moving(game, |g| {
+                holder_ref
+                    .set_collider_pose(g, ColliderPose::new(yaw(10.0 * step as f32), pivot))
+                    .unwrap();
+            });
+        }
+        let item = game.dropped.iter().find(|i| i.id == rider).unwrap();
+        let item_bounds = item.bounds();
+        assert!(
+            near(item.position, Vec3::new(8.0, 70.0, 7.5), 0.1),
+            "carried along the arc about the far pivot: {:?}",
+            item.position
+        );
+        let placed = game.placed_moving_colliders();
+        let collider = &placed.placed().find(|p| p.id == holder).unwrap().collider;
+        assert!(
+            !collider.intersects(item_bounds),
+            "rider must not be embedded after turning about a far pivot"
+        );
+    });
+}
+
+/// A tilting collider carrying a body with step height 0 (an item entity) never embeds it.
+#[test]
+#[ignore = "daily"]
+fn a_tilting_collider_with_a_step_height_zero_body_does_not_embed_it() {
+    with_world(|game| {
+        let (holder, holder_ref) = stand_with_id(game, [8.0, 70.0, 8.0]);
+        holder_ref.set_collider(game, Some(deck())).unwrap();
+        let on_edge = drop_item(game, [9.0, 70.0, 8.0]);
+        let at_pivot = drop_dirt(game, [8.0, 70.0, 8.0]);
+        settle(game);
+        let roll = 15.0_f32.to_radians() / 2.0;
+        tick_level_moving(game, |g| {
+            holder_ref
+                .set_collider_pose(
+                    g,
+                    ColliderPose::default().with_rotation([0.0, 0.0, roll.sin(), roll.cos()]),
+                )
+                .unwrap();
+        });
+        let placed = game.placed_moving_colliders();
+        let collider = &placed.placed().find(|p| p.id == holder).unwrap().collider;
+        for id in [on_edge, at_pivot] {
+            let item = game.dropped.iter().find(|i| i.id == id).unwrap();
+            assert!(
+                !collider.intersects(item.bounds()),
+                "step-height-0 item {id} must not be embedded: {:?}",
+                item.position
+            );
+            assert!(
+                item.ground.on_ground,
+                "step-height-0 item {id} stays grounded on the tilted deck"
+            );
+        }
+    });
+}
+
+/// `teleport_to` and `set_collider_pose` on the same entity in one tick, in either order,
+/// sweep and carry standing bodies identically at high speed (76.8 deg/tick and >1.4 blocks/tick)
+/// with no body left inside a box.
+#[test]
+#[ignore = "daily"]
+fn teleport_to_and_set_collider_pose_in_one_tick_sweep_and_carry_in_either_order_at_high_speed() {
+    let run = |teleport_first: bool| -> (Vec3, Vec3) {
+        let mut out = (Vec3::ZERO, Vec3::ZERO);
+        with_world(|game| {
+            let pivot = [1.0, 0.0, 0.5];
+            let start_pos = [4.0, 70.0, 4.0];
+            // > 1.4 blocks/tick linear shift (sqrt(1.6^2 + 0.8^2) ~= 1.79 blocks/tick)
+            let end_pos = [5.6, 70.0, 4.8];
+            // 76.8 deg/tick (a 256 RPM bearing)
+            let half = 76.8_f32.to_radians() / 2.0;
+            let end_pose = ColliderPose::new([0.0, half.sin(), 0.0, half.cos()], pivot);
+
+            let (holder, holder_ref) = stand_with_id(game, start_pos);
+            holder_ref
+                .set_collider(game, Some(deck().with_pivot(pivot)))
+                .unwrap();
+            // Standing rider on top of the deck.
+            let rider = drop_item(game, [4.5, 70.0, 4.0]);
+            settle(game);
+            let before_rider = item_at(game, rider);
+
+            // Bystander sitting in the swept volume of the shifting + turning deck (not on top).
+            let bystander = game.next_entity + 1;
+            game.next_entity = bystander;
+            game.dropped.push(ItemEntity::new(
+                bystander,
+                ItemStack::new("minecraft:dirt", 1),
+                Vec3::new(5.6, 69.5, 4.8),
+                Vec3::ZERO,
+                0.0,
+            ));
+            game.dropped
+                .iter_mut()
+                .find(|i| i.id == bystander)
+                .unwrap()
+                .no_gravity = true;
+
+            tick_level_moving(game, |g| {
+                if teleport_first {
+                    assert!(holder_ref.teleport_to(g, end_pos, None));
+                    holder_ref.set_collider_pose(g, end_pose).unwrap();
+                } else {
+                    holder_ref.set_collider_pose(g, end_pose).unwrap();
+                    assert!(holder_ref.teleport_to(g, end_pos, None));
+                }
+            });
+
+            let placed = game.placed_moving_colliders();
+            let collider = &placed.placed().find(|p| p.id == holder).unwrap().collider;
+            let after_rider = game.dropped.iter().find(|i| i.id == rider).unwrap();
+            let after_bystander = game.dropped.iter().find(|i| i.id == bystander).unwrap();
+
+            // Expected rider contact position from the exact combined frame transform.
+            let before_frame = sunrise_core::geometry::oriented::Frame::from_pose(
+                Vec3::new(start_pos[0], start_pos[1], start_pos[2]),
+                Vec3::new(pivot[0], pivot[1], pivot[2]),
+                [0.0, 0.0, 0.0, 1.0],
+            );
+            let expected_rider = collider.frame.to_world(before_frame.to_local(before_rider));
+            assert!(
+                near(after_rider.position, expected_rider, 0.05),
+                "teleport_first={teleport_first}: {:?} vs {:?}",
+                after_rider.position,
+                expected_rider
+            );
+            assert!(
+                !collider.intersects(after_rider.bounds()),
+                "teleport_first={teleport_first}: rider left inside a box"
+            );
+            assert!(
+                !collider.intersects(after_bystander.bounds()),
+                "teleport_first={teleport_first}: bystander left inside a box"
+            );
+            out = (after_rider.position, after_bystander.position);
+        });
+        out
+    };
+
+    let (rider_a, bystander_a) = run(true);
+    let (rider_b, bystander_b) = run(false);
+    assert!(
+        rider_a.distance(rider_b) < 1.0e-9,
+        "rider differs by call order: {rider_a:?} vs {rider_b:?}"
+    );
+    assert!(
+        bystander_a.distance(bystander_b) < 1.0e-9,
+        "bystander differs by call order: {bystander_a:?} vs {bystander_b:?}"
+    );
+}
+
 /// Steps one client tick and drains its packets up to `ClientTickEnd`.
 fn tick_client(game: &mut Game<'_>, wire: &mut sunrise_protocol::connection::Connection) {
     use sunrise_protocol::packets::play::Serverbound;
@@ -1018,7 +1190,7 @@ fn tick_client(game: &mut Game<'_>, wire: &mut sunrise_protocol::connection::Con
     }
 }
 
-/// A collider that turns in place via `collider_sync::Message::Rotation` arriving before each
+/// A collider that turns in place via `collider_sync::Message::Pose` arriving before each
 /// client tick carries the local player standing 1.2 blocks off its axis around it (#5584).
 #[test]
 #[ignore = "daily"]
@@ -1063,6 +1235,7 @@ fn a_client_collider_turning_before_the_tick_carries_the_local_player() {
                         data: collider_sync::encode(&ColliderMessage::Boxes {
                             entity: SOURCE as u32,
                             rotation: [0.0, 0.0, 0.0, 1.0],
+                            pivot: [0.0; 3],
                             total: 1,
                             first: 0,
                             boxes: vec![WireBox {
@@ -1090,9 +1263,10 @@ fn a_client_collider_turning_before_the_tick_carries_the_local_player() {
                     for step in 1..=STEPS {
                         game.handle_packet(Clientbound::CustomPayload(CustomPayload {
                             channel: collider_sync::CHANNEL.into(),
-                            data: collider_sync::encode(&ColliderMessage::Rotation {
+                            data: collider_sync::encode(&ColliderMessage::Pose {
                                 entity: SOURCE as u32,
                                 rotation: yaw(deg_per_tick * step as f32),
+                                pivot: [0.0; 3],
                             }),
                         }))
                         .unwrap();
@@ -1198,6 +1372,7 @@ fn a_client_descending_collider_carries_the_local_player_without_sideways_drift(
                             data: collider_sync::encode(&ColliderMessage::Boxes {
                                 entity: SOURCE as u32,
                                 rotation: [0.0, 0.0, 0.0, 1.0],
+                                pivot: [0.0; 3],
                                 total: 1,
                                 first: 0,
                                 boxes: vec![WireBox {

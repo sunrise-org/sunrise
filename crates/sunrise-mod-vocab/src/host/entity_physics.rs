@@ -102,33 +102,33 @@ pub trait EntityPhysicsBackendMut {
     ) -> Result<(), CollisionExclusionsError>;
     /// Side: server.
     /// Gives the entity boxes that every other entity collides with, or removes them with None.
-    /// The boxes are in the entity's frame (its position is the origin), turned by the
-    /// collider's rotation; see [`Collider`] for what collides, who is exempt, the limits and
-    /// that a vanilla client does not see them. Contact effects (step sounds, sprint particles,
-    /// friction, bounce) are not applied yet: a box is solid ground and walls only
-    /// (sunrise-org/sunrise#1909). The collider is saved with the entity, sent to
-    /// the Sunrise clients that track it when they start to (and then only what changed), and
-    /// dropped with the entity. Replacing a collider sends the boxes that were added or removed
-    /// by index. A body the boxes overlap is not pushed out: vanilla pushes a player only out of
-    /// suffocating blocks (`LocalPlayer.suffocatesAt`), never out of another entity's box.
-    /// Refused by name, with the old collider kept, when
-    /// the handle is stale, a value is not finite, the rotation is not a unit quaternion,
-    /// there are too many boxes, or a box lies too far from the entity (see
-    /// [`ColliderError`]).
+    /// The boxes are in the entity's frame, positioned and turned by [`ColliderPose`]
+    /// (`entity_position + pivot + rotation * (local - pivot)`); see [`Collider`] for what
+    /// collides, who is exempt, the payload limit and that a vanilla client does not see them.
+    /// Contact effects (step sounds, sprint particles, friction, bounce) are not applied yet: a
+    /// box is solid ground and walls only (sunrise-org/sunrise#1909). The collider is saved with
+    /// the entity, sent to the Sunrise clients that track it when they start to (and then only
+    /// what changed), and dropped with the entity. Replacing a collider sends the boxes that were
+    /// added or removed by index. A body the boxes overlap is not pushed out: vanilla pushes a
+    /// player only out of suffocating blocks (`LocalPlayer.suffocatesAt`), never out of another
+    /// entity's box. Refused by name, with the old collider kept, when the handle is stale, a box
+    /// or pivot coordinate is not finite, the rotation is zero, NaN or infinite, or the collider's
+    /// wire encoding exceeds one clientbound custom payload
+    /// (`ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE`, 1,048,576 bytes; see [`ColliderError`]).
     fn entity_set_collider(
         &mut self,
         entity: EntityRef,
         collider: Option<Collider>,
     ) -> Result<(), ColliderError>;
     /// Side: server.
-    /// Turns the entity's collider (a unit quaternion `[x, y, z, w]`) without sending its boxes
-    /// again: only the rotation reaches the clients that track it. Refused by name for a stale
-    /// handle, a rotation that is not finite or not a unit quaternion, or an entity with no
-    /// collider.
-    fn entity_set_collider_transform(
+    /// Updates the entity's collider pose (rotation quaternion `[x, y, z, w]` normalized when set,
+    /// and local pivot `[x, y, z]` in blocks from the entity's position) without sending its boxes
+    /// again: only the pose reaches the clients that track it. Refused by name for a stale handle,
+    /// a non-finite pivot, a zero, NaN or infinite rotation, or an entity with no collider.
+    fn entity_set_collider_pose(
         &mut self,
         entity: EntityRef,
-        rotation: [f32; 4],
+        pose: ColliderPose,
     ) -> Result<(), ColliderError>;
     /// Side: server.
     /// Sets the entity's no-physics flag (`Entity.noPhysics`), the value

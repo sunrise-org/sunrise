@@ -10,11 +10,11 @@ use super::{
     commands::Target,
     remote_vehicles::{PassengerSeat, passenger_root},
 };
-use mod_api::{Collider, ColliderError, EntityRef};
+use mod_api::{Collider, ColliderError, ColliderPose, EntityRef};
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use sunrise_client::{
-    colliders::{ColliderState, valid_rotation},
+    colliders::{ColliderState, normalize_pose},
     fast_hash::FxHashMap,
 };
 use sunrise_core::{
@@ -170,7 +170,7 @@ enum ColliderUpdate {
         previous: Option<ColliderState>,
         state: ColliderState,
     },
-    Rotation([f32; 4]),
+    Pose(ColliderPose),
     Clear,
 }
 
@@ -221,25 +221,23 @@ impl Game<'_> {
         Ok(())
     }
 
-    pub(super) fn entity_set_collider_transform(
+    pub(super) fn entity_set_collider_pose(
         &mut self,
         entity: EntityRef,
-        rotation: [f32; 4],
+        pose: ColliderPose,
     ) -> Result<(), ColliderError> {
         let id = self.collider_holder(entity)?;
-        if !valid_rotation(rotation) {
-            return Err(ColliderError::NonFinite { index: None });
-        }
+        let pose = normalize_pose(pose)?;
         let Some(entry) = self.entity_attachments.collider_mut(id) else {
             return Err(ColliderError::NoCollider);
         };
-        if entry.rotation() == rotation {
+        if entry.pose() == pose {
             return Ok(());
         }
-        entry.set_rotation(rotation);
+        entry.set_pose(pose);
         self.collider_changes.push(ColliderChange {
             entity: id,
-            update: ColliderUpdate::Rotation(rotation),
+            update: ColliderUpdate::Pose(pose),
         });
         Ok(())
     }
@@ -525,18 +523,26 @@ impl Game<'_> {
                     for message in &messages {
                         self.send_collider_sync(&senders, message);
                     }
-                    if previous.is_some_and(|old| old.rotation() != state.rotation()) {
+                    if previous.is_some_and(|old| old.pose() != state.pose()) {
                         self.send_collider_sync(
                             &senders,
-                            &Message::Rotation {
+                            &Message::Pose {
                                 entity,
                                 rotation: state.rotation(),
+                                pivot: state.pivot(),
                             },
                         );
                     }
                 }
-                ColliderUpdate::Rotation(rotation) => {
-                    self.send_collider_sync(&senders, &Message::Rotation { entity, rotation });
+                ColliderUpdate::Pose(pose) => {
+                    self.send_collider_sync(
+                        &senders,
+                        &Message::Pose {
+                            entity,
+                            rotation: pose.rotation,
+                            pivot: pose.pivot,
+                        },
+                    );
                 }
                 ColliderUpdate::Clear => {
                     self.send_collider_sync(&senders, &Message::Clear { entity })
@@ -603,7 +609,7 @@ impl Game<'_> {
         let entity = match message {
             Message::Boxes { entity, .. }
             | Message::Patch { entity, .. }
-            | Message::Rotation { entity, .. }
+            | Message::Pose { entity, .. }
             | Message::Clear { entity } => entity,
         };
         let mut held = remote.colliders.remove(&entity);

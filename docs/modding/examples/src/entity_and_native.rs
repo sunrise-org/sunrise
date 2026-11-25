@@ -14,7 +14,7 @@ pub mod living_flags {
 }
 
 pub mod custom_collider {
-    use mod_api::{Collider, ColliderBox, ColliderError, EntityRef, ServerHost};
+    use mod_api::{Collider, ColliderBox, ColliderError, ColliderPose, EntityRef, ServerHost};
 
     pub fn configure_collider(
         entity: EntityRef,
@@ -22,17 +22,19 @@ pub mod custom_collider {
         turned: [f32; 4],
     ) -> Result<(), ColliderError> {
         // ANCHOR: custom_collider
+        let pivot = [0.0, 0.0, 0.0];
         entity.set_collider(
             host,
-            Some(Collider {
-                boxes: vec![ColliderBox {
+            Some(
+                Collider::new(vec![ColliderBox {
                     min: [-1.5, -1.0, -10.0],
                     max: [1.5, 0.0, 10.0],
-                }],
-                rotation: [0.0, 0.0, 0.0, 1.0],
-            }),
+                }])
+                .with_pivot(pivot),
+            ),
         )?;
-        entity.set_collider_transform(host, turned)?; // the rotation alone, as the entity turns
+        // Update the pose (rotation + pivot) without resending the boxes:
+        entity.set_collider_pose(host, ColliderPose::new(turned, pivot))?;
         // ANCHOR_END: custom_collider
         Ok(())
     }

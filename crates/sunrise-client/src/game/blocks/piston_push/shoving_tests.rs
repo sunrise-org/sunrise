@@ -19,13 +19,10 @@ fn empty_chunk(game: &mut Game<'_>) {
 }
 
 fn shape() -> Collider {
-    Collider {
-        boxes: vec![ColliderBox {
-            min: [-0.25, -3.0, -0.75],
-            max: [0.25, -1.0, 0.75],
-        }],
-        ..Collider::default()
-    }
+    Collider::new(vec![ColliderBox {
+        min: [-0.25, -3.0, -0.75],
+        max: [0.25, -1.0, 0.75],
+    }])
 }
 
 fn holder(game: &mut Game<'_>, x: f64) -> u32 {
@@ -139,13 +136,10 @@ fn a_later_shove_collides_with_a_holder_already_displaced() {
                     .unwrap()
                     .set_collider(
                         game,
-                        Some(Collider {
-                            boxes: vec![ColliderBox {
-                                min: [-1.0, -0.25, 0.5],
-                                max: [-0.75, 0.75, 1.0],
-                            }],
-                            ..Collider::default()
-                        }),
+                        Some(Collider::new(vec![ColliderBox {
+                            min: [-1.0, -0.25, 0.5],
+                            max: [-0.75, 0.75, 1.0],
+                        }])),
                     )
                     .unwrap();
                 shove(game, source, 6.5);
