@@ -99,6 +99,7 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
         pos: [i32; 3],
         drop: bool,
         tool: Option<&sunrise_client::items::ItemStack>,
+        breaker: Option<mod_api::EntityRef>,
         collect: bool,
     ) -> Option<Vec<sunrise_client::items::ItemStack>> {
         let [x, y, z] = pos;
@@ -135,17 +136,15 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
                 );
             }
             self.game.ensure_stateful_entity_table();
+            let at = sunrise_core::position::BlockPos::new(x, y, z);
             let (kept, items, orbs) = self.game.with_level_access(false, |b, level, ticks| {
                 let items = level.spill.spawns.len();
                 let orbs = level.spill.orbs.len();
                 level.drop_tool = Some((key, tool.cloned()));
+                level.drop_entity = breaker;
+                level.drop_breaker_at = breaker.map(|_| at);
                 level.drop_into = collect.then(Vec::new);
-                b.drop_resources(
-                    level,
-                    ticks,
-                    sunrise_core::position::BlockPos::new(x, y, z),
-                    old,
-                );
+                b.drop_resources(level, ticks, at, old);
                 (
                     level.drop_into.take().unwrap_or_default(),
                     level.spill.spawns.split_off(items),
@@ -161,12 +160,11 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
         if !self.replace_block(pos, old, replacement, flags::UPDATE_ALL) {
             return None;
         }
-        self.game.after_commit(After::BlockGameEvent(
-            "minecraft:block_destroy",
+        self.game.after_commit(After::DestroyBlockGameEvent {
             pos,
-            None,
-            old,
-        ));
+            state: old,
+            breaker,
+        });
         Some(collected)
     }
 

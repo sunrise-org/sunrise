@@ -2038,7 +2038,7 @@ impl Game<'_> {
                 let _ = self.level_set_block(level, at, state, flags);
             }
             sunrise_world::level::LandingWrite::DestroyBlock { drop } => {
-                self.level_destroy_block(level, at, drop, None, false);
+                self.level_destroy_block(level, at, drop, None, None, false);
             }
             // A write a later API adds that this game does not know is not applied.
             _ => {}

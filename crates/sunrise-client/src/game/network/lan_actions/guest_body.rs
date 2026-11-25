@@ -1001,7 +1001,7 @@ impl mod_api::InsideEntityAccess for GamePlayerInsideAccess<'_, '_> {
             return false;
         };
         self.game
-            .level_destroy_block(level, pos, drop, None, false)
+            .level_destroy_block(level, pos, drop, None, None, false)
             .is_some()
     }
 

@@ -979,7 +979,7 @@ impl mod_api::InsideEntityAccess for ItemInsideAccess<'_, '_> {
             return false;
         };
         self.game
-            .level_destroy_block(level, pos, drop, None, false)
+            .level_destroy_block(level, pos, drop, None, None, false)
             .is_some()
     }
 
@@ -1018,7 +1018,7 @@ impl mod_api::InsideEntityAccess for ItemInsideAccess<'_, '_> {
                     && let Some(level) = self.game.level(self.game.dim.id())
                 {
                     self.game
-                        .level_destroy_block(level, pos, false, None, false);
+                        .level_destroy_block(level, pos, false, None, None, false);
                 }
             }
             Action::LayeredCauldronExtinguish {
@@ -1233,7 +1233,7 @@ impl mod_api::InsideEntityAccess for ProjectileInsideAccess<'_, '_> {
             return false;
         };
         self.game
-            .level_destroy_block(level, pos, drop, None, false)
+            .level_destroy_block(level, pos, drop, None, None, false)
             .is_some()
     }
 
@@ -1273,7 +1273,7 @@ impl mod_api::InsideEntityAccess for ProjectileInsideAccess<'_, '_> {
                     && let Some(level) = self.game.level(self.game.dim.id())
                 {
                     self.game
-                        .level_destroy_block(level, [x, y, z], false, None, false);
+                        .level_destroy_block(level, [x, y, z], false, None, None, false);
                 }
             }
             Action::LayeredCauldronExtinguish {

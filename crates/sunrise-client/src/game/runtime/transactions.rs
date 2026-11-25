@@ -823,6 +823,11 @@ pub(super) enum After {
         Option<sunrise_client::mobs::Who>,
         BlockStateId,
     ),
+    DestroyBlockGameEvent {
+        pos: [i32; 3],
+        state: BlockStateId,
+        breaker: Option<mod_api::EntityRef>,
+    },
     BlockDropSpawns(Vec<super::spill::Spawn>, Vec<([f64; 3], u32, i32)>),
     /// Save, remesh and resend a changed biome column.
     Biome((i32, i32)),
@@ -902,6 +907,7 @@ impl After {
                 | Self::DispenserDrop { .. }
                 | Self::DispenserFeedback { .. }
                 | Self::BlockGameEvent(..)
+                | Self::DestroyBlockGameEvent { .. }
                 | Self::BlockDropSpawns(..)
                 | Self::Biome(_)
                 | Self::Drop(..)
@@ -2720,6 +2726,13 @@ impl<'g> Game<'g> {
             }
             After::BlockGameEvent(id, pos, who, state) => {
                 self.post_block_game_event(id, pos, who, Some(state));
+            }
+            After::DestroyBlockGameEvent {
+                pos,
+                state,
+                breaker,
+            } => {
+                self.post_destroy_block_game_event(pos, state, breaker);
             }
             After::BlockDropSpawns(items, orbs) => self.publish_block_spawns(items, orbs),
             After::Changed(pos) => self.container_changed(pos),

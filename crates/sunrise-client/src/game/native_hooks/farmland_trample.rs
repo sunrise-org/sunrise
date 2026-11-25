@@ -52,16 +52,24 @@ impl Game<'_> {
             let Some(living) = self.entity(entity).and_then(|e| self.living(e)) else {
                 return;
             };
-            self.storage_transaction(|game, _| {
+            self.storage_transaction_settled(|game, _| {
                 let mut cancel = false;
                 game.native_farmland_trample(living, pos, state, distance, &mut cancel);
+                if cancel {
+                    return Ok::<bool, ()>(false);
+                }
                 let valid =
                     |game: &Self| game.entity(entity) == Some(living.entity()) && still(game);
-                (!cancel && game.apply_farmland_trample(trample, valid, true))
-                    .then_some(())
-                    .ok_or(())
+                let applied = game
+                    .storage_transaction(|game, _| {
+                        game.apply_farmland_trample(trample, valid, true)
+                            .then_some(())
+                            .ok_or(())
+                    })
+                    .is_ok();
+                Ok(applied)
             })
-            .is_ok()
+            .unwrap_or(false)
         } else {
             self.apply_farmland_trample(trample, still, false)
         };
@@ -135,6 +143,7 @@ mod tests {
         Allow,
         Trap,
         Cancel,
+        CancelAndBreakCrop,
         AvoidSneak,
         Replace,
         ReplaceDuringLift,
@@ -155,6 +164,7 @@ mod tests {
         Lift(u32, f64, Option<mod_api::BlockState>),
         Write(mod_api::BlockState),
         GameEvent([f64; 3], Option<u32>, Option<mod_api::BlockState>),
+        DestroyGameEvent([f64; 3], Option<u32>, Option<mod_api::BlockState>),
         Fall(f32, f64, mod_api::BlockState),
     }
 
@@ -225,6 +235,14 @@ mod tests {
                     event.cause,
                     event.affected_state,
                 ));
+            } else if event.event == "minecraft:block_destroy"
+                && self.1 == Choice::CancelAndBreakCrop
+            {
+                self.0.lock().unwrap().push(Moment::DestroyGameEvent(
+                    event.pos,
+                    event.cause,
+                    event.affected_state,
+                ));
             }
             Flow::Continue
         }
@@ -261,7 +279,10 @@ mod tests {
                 y: entity.position(host).unwrap()[1],
                 health: event.entity.health(host).unwrap(),
             });
-            if matches!(self.0, Choice::Cancel | Choice::Trap | Choice::Replace) {
+            if matches!(
+                self.0,
+                Choice::CancelAndBreakCrop | Choice::Trap | Choice::Replace
+            ) {
                 let key = host.block_key("minecraft:stone").unwrap();
                 let stone = mod_api::BlockState::of(&host.block_states(), key, &[]).unwrap();
                 assert_eq!(
@@ -271,12 +292,13 @@ mod tests {
                 assert_eq!(level.block_state(host, LISTENER_WRITE), Some(stone));
             }
             match self.0 {
-                Choice::Cancel => {
+                Choice::Cancel => Flow::Cancel,
+                Choice::CancelAndBreakCrop => {
                     let crop = [FIELD[0], FIELD[1] + 1, FIELD[2]];
-                    assert!(matches!(
-                        level.destroy_block(host, crop, true, None, false),
-                        Ok(Some(stacks)) if stacks.is_empty()
-                    ));
+                    assert_eq!(
+                        level.destroy_block(host, crop, true, None, Some(entity), false),
+                        Ok(Some(Vec::new()))
+                    );
                     let state = level.block_state(host, crop).unwrap();
                     // The outer trace assertion distinguishes cancellation from a trapped assertion.
                     self.1.lock().unwrap().push(Moment::CropRemoved(state));
@@ -338,7 +360,7 @@ mod tests {
 
     fn land_with_later_packet(body: Body, choice: Choice, later: Option<S>) -> Vec<Moment> {
         let player = matches!(body, Body::Guest { .. });
-        let cancelled = choice == Choice::Cancel
+        let cancelled = matches!(choice, Choice::Cancel | Choice::CancelAndBreakCrop)
             || (choice == Choice::AvoidSneak
                 && matches!(
                     body,
@@ -492,6 +514,16 @@ mod tests {
                 }
                 if choice == Choice::Cancel {
                     assert_eq!(game.dropped.len(), drops);
+                } else if choice == Choice::CancelAndBreakCrop {
+                    assert!(
+                        game.dropped.len() > drops,
+                        "destroying the crop in a cancelling trample listener spawns its drops"
+                    );
+                    assert!(
+                        game.dropped[drops..]
+                            .iter()
+                            .any(|item| item.stack.item.as_ref() == "minecraft:wheat_seeds")
+                    );
                 }
                 let (landing_y, health) = if player {
                     let g = game.lan.as_ref().unwrap().hub.guest(1).unwrap();
@@ -500,23 +532,38 @@ mod tests {
                     let m = game.mob_object(LANDING).unwrap();
                     (m.position.y, m.health)
                 };
-                let floor = if converted { dirt } else { farmland };
+                let stone = reg.default_state("minecraft:stone").unwrap();
+                let floor = if converted {
+                    dirt
+                } else if choice == Choice::Replace {
+                    stone
+                } else {
+                    farmland
+                };
                 let y_after = if converted { 64.0 } else { LANDING_Y };
                 assert_eq!(game.world.block(x, y, z), floor);
-                if !converted {
+                if choice == Choice::CancelAndBreakCrop {
+                    assert_eq!(game.world.block(x, y + 1, z), air);
+                } else if !converted {
                     assert_eq!(game.world.block(x, y + 1, z), wheat);
                 }
                 let [wx, wy, wz] = LISTENER_WRITE;
+                let expected_write =
+                    if matches!(choice, Choice::CancelAndBreakCrop | Choice::Replace) {
+                        stone
+                    } else {
+                        air
+                    };
                 assert_eq!(
                     game.world.block(wx, wy, wz),
-                    air,
-                    "listener writes rolled back"
+                    expected_write,
+                    "completed listener writes stay; trapped writes roll back"
                 );
                 if choice == Choice::Trap {
                     let [wx, wy, wz] = HEALTHY_WRITE;
                     assert_eq!(
                         game.world.block(wx, wy, wz),
-                        reg.default_state("minecraft:stone").unwrap(),
+                        stone,
                         "the later listener's successful write still commits"
                     );
                 }
@@ -545,12 +592,17 @@ mod tests {
                         health: initial_health,
                     });
                 }
-                if choice == Choice::Cancel {
+                if choice == Choice::CancelAndBreakCrop {
                     expected.push(Moment::CropRemoved(api_state(air)));
+                    expected.push(Moment::DestroyGameEvent(
+                        [1.5, 64.5, 1.5],
+                        Some(LANDING),
+                        Some(api_state(wheat)),
+                    ));
                 }
                 if converted || choice == Choice::ReplaceDuringLift {
                     let following = if choice == Choice::ReplaceDuringLift {
-                        reg.default_state("minecraft:stone").unwrap()
+                        stone
                     } else {
                         farmland
                     };
@@ -559,8 +611,10 @@ mod tests {
                         Moment::Lift(OTHER, 64.0, Some(api_state(following))),
                     ]);
                 }
-                if converted {
+                if converted || choice == Choice::Replace {
                     expected.push(Moment::Write(api_state(floor)));
+                }
+                if converted {
                     expected.push(Moment::GameEvent(
                         [1.5, 63.5, 1.5],
                         Some(LANDING),
@@ -636,6 +690,19 @@ mod tests {
             || {
                 for body in [WALKING, Body::Pig] {
                     land(body, Choice::Cancel);
+                }
+            },
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn cancelling_listener_keeps_writes_and_destroys_crop() {
+        crate::game::in_own_process(
+            "game::native_hooks::farmland_trample::tests::cancelling_listener_keeps_writes_and_destroys_crop",
+            || {
+                for body in [WALKING, Body::Pig] {
+                    land(body, Choice::CancelAndBreakCrop);
                 }
             },
         );
