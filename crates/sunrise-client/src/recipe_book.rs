@@ -1339,10 +1339,7 @@ impl RecipeIndex {
     fn from_source_refs<'a>(
         sources: impl IntoIterator<Item = (String, &'a serde_json::Value)>,
     ) -> Self {
-        Self::from_known_entries(sources.into_iter().filter_map(|(id, v)| {
-            if !Ingredient::validate_persistence(v, &id) {
-                return None;
-            }
+        Self::from_known_entries(sources.into_iter().map(|(id, v)| {
             let kind = v["type"].as_str().unwrap_or_default();
             let special = mod_api::__private::parts_installation::recipe_serializer(kind)
                 .is_some_and(|(recipe_type, _)| recipe_type == "minecraft:crafting")
@@ -1361,7 +1358,7 @@ impl RecipeIndex {
             } else {
                 1
             };
-            Some((
+            (
                 id,
                 KnownEntry {
                     special,
@@ -1370,7 +1367,7 @@ impl RecipeIndex {
                     notify: v["show_notification"].as_bool().unwrap_or(true),
                     result: sunrise_world::loot::recipe_result_id(&v["result"]).map(str::to_owned),
                 },
-            ))
+            )
         }))
     }
     pub fn contains(&self, id: &str) -> bool {

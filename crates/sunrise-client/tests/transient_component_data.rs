@@ -1,4 +1,4 @@
-//! Isolated real data loaders: a refused loot table, predicate, modifier or advancement fails its load, every one listed; a refused recipe file is skipped.
+//! Isolated real data loaders: a refused loot table, predicate, modifier or advancement fails its load, every one listed; a refused recipe fails its load too.
 extern crate sunrise_client_lib as sunrise_client;
 use serde_json::{Value, json};
 use std::{
@@ -49,18 +49,6 @@ fn context() -> LoadContext {
         [],
     )
 }
-fn diagnostic(messages: &[String], owner: &str, component: &str) {
-    let matching: Vec<_> = messages
-        .iter()
-        .filter(|message| message.contains(owner))
-        .collect();
-    assert_eq!(matching.len(), 1, "{messages:?}");
-    assert!(matching[0].contains(component), "{matching:?}");
-    assert!(
-        matching[0].contains("not a persistent component"),
-        "{matching:?}"
-    );
-}
 fn rejects_recipe(input: Value, component: &str) {
     let root = tempfile::tempdir().unwrap();
     write(root.path(), "recipe", "a_bad", &input);
@@ -72,20 +60,19 @@ fn rejects_recipe(input: Value, component: &str) {
         "ingredients":["minecraft:stone"],"result":{"id":"minecraft:stick"}}),
     );
     let items = Items::empty();
-    let (recipes, messages) =
-        capture(|| Recipes::load(root.path(), &items, &PackOverlay::NONE, &context()).unwrap());
-    assert_eq!(recipes.crafting.len(), 1);
-    assert_eq!(recipes.by_type["minecraft:crafting"].len(), 1);
-    assert_eq!(
-        recipes.by_type["minecraft:crafting"][0].id,
-        "minecraft:z_good"
+    let (result, _) =
+        capture(|| Recipes::load(root.path(), &items, &PackOverlay::NONE, &context()));
+    let error = result
+        .err()
+        .expect("a refused recipe fails the load")
+        .to_string();
+    assert!(
+        error.contains("data/minecraft/recipe/a_bad.json"),
+        "{error}"
     );
-    diagnostic(&messages, "a_bad", component);
-    let (book, messages) =
-        capture(|| sunrise_client::recipe_book::RecipeIndex::load(root.path(), &PackOverlay::NONE));
-    assert!(!book.contains("minecraft:a_bad"));
-    assert!(book.contains("minecraft:z_good"));
-    diagnostic(&messages, "a_bad", component);
+    assert!(error.contains(component), "{error}");
+    assert!(error.contains("not a persistent component"), "{error}");
+    assert!(!error.contains("z_good"), "{error}");
 }
 #[test]
 fn creative_slot_lock_result_refuses_the_file() {
@@ -112,7 +99,7 @@ fn map_post_processing_removal_refuses_the_file() {
     );
 }
 #[test]
-fn component_ingredient_removal_is_rejected_before_station_publication() {
+fn component_ingredient_removal_refuses_the_load_before_station_publication() {
     let root = tempfile::tempdir().unwrap();
     write(
         root.path(),
@@ -130,20 +117,20 @@ fn component_ingredient_removal_is_rejected_before_station_publication() {
         "ingredient":"minecraft:stone","result":{"id":"minecraft:stick"}}),
     );
     let items = Items::empty();
-    let (sources, messages) = capture(|| {
-        sunrise_client::crafting::ResolvedSources::load(
-            root.path(),
-            &items,
-            &PackOverlay::NONE,
-            &context(),
-        )
-        .unwrap()
-    });
-    assert_eq!(sources.recipes.len(), 1);
-    diagnostic(&messages, "a_bad", "minecraft:creative_slot_lock");
-    let stations = sunrise_client::stations::StationRecipes::from_sources(&items, &sources);
-    assert_eq!(stations.stonecutting.len(), 1);
-    assert_eq!(stations.stonecutting[0].id, "minecraft:z_good");
+    let error = sunrise_client::crafting::ResolvedSources::load(
+        root.path(),
+        &items,
+        &PackOverlay::NONE,
+        &context(),
+    )
+    .err()
+    .expect("a refused recipe fails the load")
+    .to_string();
+    assert!(
+        error.contains("data/minecraft/recipe/a_bad.json"),
+        "{error}"
+    );
+    assert!(error.contains("minecraft:creative_slot_lock"), "{error}");
 }
 #[test]
 fn type_only_displays_and_opaque_data_survive_recipe_loading() {

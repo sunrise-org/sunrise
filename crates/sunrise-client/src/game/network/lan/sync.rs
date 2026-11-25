@@ -97,8 +97,9 @@ fn collect(
     context: &sunrise_world::native_load_context::LoadContext,
     collecting: bool,
 ) -> std::io::Result<Arc<ResolvedSources>> {
-    let loaded = ResolvedSources::load_collecting(root, items, overlay, context)
+    let mut loaded = ResolvedSources::load_collecting(root, items, overlay, context)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
+    loaded.refuse_unknown_items(items);
     if !collecting {
         loaded
             .check()

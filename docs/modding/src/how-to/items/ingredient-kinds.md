@@ -52,6 +52,7 @@ The predicate itself reads just the borrowed stack and the parsed minimum.
 - Return a consistent answer for the same input. If no mod answers for the kind, a recipe file naming a custom kind fails whole at load with an error naming the file and the kind, and the recipe is absent everywhere. If a mod returns a definition with an empty list, the recipe and its match-time predicate are retained, with a warning naming the file and the kind that the recipe cannot be placed. It is excluded from recipe-book learning/displays, recipe property sets and stonecutter selections; the server also refuses recipe-book placement. The effective recipe map and manual matcher still retain it.
 - An existing empty item tag likewise retains an unplaceable recipe, but never matches a stack. An undefined tag fails the recipe with an error. A direct empty list (`[]`) remains invalid and fails the recipe with an error.
 - A non-string entry (a number, an object, or `null`) in an ingredient list fails the whole recipe file, logged at error level naming the file; nothing is dropped. A directly named `minecraft:air` (alone or in a list) fails the file the same way, while a tag that holds air is taken as the tag holds it.
+- A recipe that names an item that does not exist, as a result or as an ingredient's id, fails the whole load the same way (a world refuses to open, `/reload` fails and keeps the old recipes), and so does a recipe whose result carries a component that is not persistent. Every such recipe is listed.
 
 ## Testing stacks
 

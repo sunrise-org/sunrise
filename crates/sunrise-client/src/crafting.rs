@@ -1688,6 +1688,9 @@ struct PropertySetAddition {
 #[cfg(test)]
 #[path = "crafting/property_sets_tests.rs"]
 mod property_sets_tests;
+#[cfg(test)]
+#[path = "crafting/unknown_item_tests.rs"]
+mod unknown_item_tests;
 impl PropertyAdditions {
     /// Asks the `recipe_property_sets` hook once. An unknown set key and an
     /// item that is air are logged and skipped.
@@ -1795,6 +1798,20 @@ impl ResolvedSources {
         resolved.failures.extend(refused);
         Ok(resolved)
     }
+    /// Fails every recipe that names an item `items` lacks, as `Item.CODEC` does
+    /// for a recipe's ingredients and results. The decode also runs against
+    /// partial item tables (unit tests, network copies), so the owning load,
+    /// which holds the complete item registry (`lan::sync::collect`, the one
+    /// funnel of world open, reload and sync), calls this once after
+    /// `load_collecting`; the other `load_collecting` callers are tests and probes.
+    pub fn refuse_unknown_items(&mut self, items: &Items) {
+        for recipe in &self.recipes {
+            if let Some(reason) = unknown_item(&recipe.file, items) {
+                self.failures
+                    .push((recipe.name.clone(), recipe_refused(&recipe.name, &reason)));
+            }
+        }
+    }
     /// Whether every recipe resolved; sources with failures are never shared.
     pub fn is_complete(&self) -> bool {
         self.failures.is_empty()
@@ -1832,9 +1849,19 @@ impl ResolvedSources {
         items: &Items,
         context: &sunrise_world::native_load_context::LoadContext,
     ) -> Result<Self> {
-        sources.retain(|(name, value)| Ingredient::validate_persistence(value, name));
+        let mut refused = Vec::new();
+        sources.retain(
+            |(name, value)| match Ingredient::validate_persistence(value) {
+                Ok(()) => true,
+                Err(reason) => {
+                    refused.push((name.clone(), recipe_refused(name, &reason)));
+                    false
+                }
+            },
+        );
         let listener = mod_api::__private::listened(mod_api::HookId::Ingredient).then_some(context);
         let mut resolved = Self::decode(sources, items, IngredientInput::File(listener));
+        resolved.failures.extend(refused);
         resolved.property_additions = PropertyAdditions::ask(context);
         Ok(resolved)
     }
@@ -1886,6 +1913,74 @@ impl ResolvedSources {
             }));
         }
         resolved
+    }
+}
+
+/// The item ids a minecraft-typed recipe file names directly: its results and
+/// the ids of its ingredients (a tag's members are not checked, as in vanilla).
+fn unknown_item(file: &Value, items: &Items) -> Option<String> {
+    if !file["type"]
+        .as_str()
+        .is_some_and(|kind| kind.starts_with("minecraft:"))
+    {
+        return None;
+    }
+    let mut named = Vec::new();
+    for key in INGREDIENT_KEYS {
+        named_items(&file[key], &mut named);
+    }
+    for key in INGREDIENT_MAPS {
+        for ingredient in file[key]
+            .as_object()
+            .into_iter()
+            .flat_map(|map| map.values())
+        {
+            named_items(ingredient, &mut named);
+        }
+    }
+    // A brewing recipe's input and reagent wrap their ingredient in `item`.
+    for key in ["input", "reagent"] {
+        named_items(&file[key]["item"], &mut named);
+    }
+    for key in ["result", "output"] {
+        named.extend(sunrise_world::loot::recipe_result_id(&file[key]));
+    }
+    named.into_iter().find_map(|id| {
+        let known = Identifier::parse(id).is_ok_and(|parsed| {
+            let canonical = format!("{}:{}", parsed.namespace(), parsed.path());
+            canonical != "minecraft:air" && items.get(&canonical).is_some()
+        });
+        (!known).then(|| format!("unknown item {id}"))
+    })
+}
+
+fn named_items<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    match value {
+        Value::String(id) => {
+            if !id.starts_with('#') {
+                out.push(id);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                named_items(value, out);
+            }
+        }
+        Value::Object(object) => match ingredient::ingredient_kind(object) {
+            Some("neoforge:components") => named_items(&value["items"], out),
+            Some("neoforge:compound" | "neoforge:intersection") => {
+                for key in ["children", "ingredients"] {
+                    named_items(&value[key], out);
+                }
+            }
+            Some("neoforge:difference") => {
+                named_items(&value["base"], out);
+                named_items(&value["subtracted"], out);
+            }
+            Some("neoforge:custom_display") => named_items(&value["base"], out),
+            _ => {}
+        },
+        _ => {}
     }
 }
 

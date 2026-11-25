@@ -5,6 +5,8 @@ use mod_api::{DataPackFilesEvent, ServerHost};
 
 const GOOD_TABLE: &str = r#"{"pools":[]}"#;
 const UNKNOWN_FUNCTION: &str = r#"{"modifier":{"type":"minecraft:no_such_function"},"pools":[]}"#;
+const GOOD_RECIPE: &str = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:stick"}}"#;
+const UNKNOWN_RESULT: &str = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"refused_test:no_such_item"}}"#;
 const MISSING_CRITERION: &str =
     r#"{"criteria":{"a":{"trigger":"minecraft:tick"}},"requirements":[["ghost"]]}"#;
 
@@ -15,6 +17,10 @@ impl Hooks for Files {
         event.files.push((
             "loot_table/refused_test:good".into(),
             GOOD_TABLE.as_bytes().to_vec(),
+        ));
+        event.files.push((
+            "recipe/refused_test:good".into(),
+            GOOD_RECIPE.as_bytes().to_vec(),
         ));
         if self.0.load(Ordering::SeqCst) {
             event
@@ -88,6 +94,41 @@ fn an_advancement_requiring_a_missing_criterion_refuses_the_load() {
             game.load_world(request(scratch.path())).unwrap();
             enabled.store(true, Ordering::SeqCst);
             assert!(!game.run_command("reload"));
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_recipe_with_an_unknown_result_item_refuses_world_open() {
+    with_bad_file(
+        true,
+        "recipe/refused_test:bad",
+        UNKNOWN_RESULT,
+        |game, _| {
+            let scratch = tempfile::tempdir().unwrap();
+            assert!(game.load_world(request(scratch.path())).is_err());
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_recipe_with_an_unknown_result_item_fails_reload_and_keeps_the_old_recipes() {
+    with_bad_file(
+        false,
+        "recipe/refused_test:bad",
+        UNKNOWN_RESULT,
+        |game, enabled| {
+            let scratch = tempfile::tempdir().unwrap();
+            game.load_world(request(scratch.path())).unwrap();
+            let old = game.world_tables.as_ref().map(|tables| tables as *const _);
+            enabled.store(true, Ordering::SeqCst);
+            assert!(!game.run_command("reload"));
+            assert_eq!(
+                old,
+                game.world_tables.as_ref().map(|tables| tables as *const _)
+            );
         },
     );
 }
