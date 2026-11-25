@@ -835,8 +835,12 @@ impl Game<'_> {
             let world = &self.world;
             let facts = self.res.facts();
             let biomes = world_biomes!(self);
-            let environment =
-                Self::level_environment(self.remote.as_ref(), &self.res, &self.dimension_type().id);
+            let environment = Self::level_environment(
+                self.remote.as_ref(),
+                &self.res,
+                self.dim.id(),
+                &self.dimension_type().id,
+            );
             let ui = &self.ui;
             let remote = self.remote.as_ref();
             let clock = |name: &str| {

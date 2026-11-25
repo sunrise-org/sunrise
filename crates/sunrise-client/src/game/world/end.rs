@@ -463,19 +463,27 @@ impl Game<'_> {
 
     /// The environment attributes of the current dimension.
     pub(super) fn dim_environment(&self) -> &Environment {
-        Self::level_environment(self.remote.as_ref(), &self.res, &self.dimension_type().id)
+        Self::level_environment(
+            self.remote.as_ref(),
+            &self.res,
+            self.dim.id(),
+            &self.dimension_type().id,
+        )
     }
 
     /// A field-level borrow for the client tick, which also mutably borrows its particles.
     pub(super) fn level_environment<'a>(
         remote: Option<&'a Remote>,
         resources: &'a Resources,
+        level: &str,
         dimension_type: &str,
     ) -> &'a Environment {
         // A client of a server takes the type the server sent, built-in levels included.
         remote
             .and_then(|r| r.level_environment.as_deref())
-            .unwrap_or_else(|| resources.environment_of(dimension_type))
+            .unwrap_or_else(|| {
+                Environment::for_level(level, resources.environment_of(dimension_type))
+            })
     }
 
     /// SkyRenderer.renderEndFlash, drawn after the renderer's resident sky mesh: its quad, if

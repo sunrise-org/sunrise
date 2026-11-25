@@ -61,6 +61,43 @@ impl Remote {
         self.clock_time(self.overworld_clock)
     }
 
+    /// The server's synchronized `minecraft:timeline` registry and bound `minecraft:timeline`
+    /// tags, decoded for client `Environment` construction.
+    pub(in crate::game) fn synced_timelines(&self) -> sunrise_client::environment::TimelineTable {
+        let mut timelines = std::collections::BTreeMap::new();
+        if let Some(entries) = self.registries.registries.get("minecraft:timeline") {
+            for (name, data) in entries {
+                let Some(tag) = data else {
+                    continue;
+                };
+                let json = sunrise_client::scoreboard::tag_to_json(tag);
+                match sunrise_world::environment_timeline::Timeline::parse(&json) {
+                    Ok(timeline) => {
+                        timelines.insert(name.clone(), Arc::new(timeline));
+                    }
+                    Err(error) => {
+                        log::warn!("synced timeline {name}: {error}");
+                    }
+                }
+            }
+        }
+        let mut tags = std::collections::BTreeMap::new();
+        if let Some(tag_map) = self.registries.tags.get("minecraft:timeline") {
+            for (tag, ids) in tag_map {
+                let members = ids
+                    .iter()
+                    .filter_map(|&id| {
+                        self.registries
+                            .name("minecraft:timeline", id)
+                            .map(str::to_owned)
+                    })
+                    .collect();
+                tags.insert(tag.clone(), members);
+            }
+        }
+        sunrise_client::environment::TimelineTable { timelines, tags }
+    }
+
     /// `Minecraft.level != null`: from `handleLogin` until the next
     /// `handleConfigurationStart` (`clearClientLevel`). Minecraft.tick sends
     /// CLIENT_TICK_END only then, so a client waiting for the server's Login

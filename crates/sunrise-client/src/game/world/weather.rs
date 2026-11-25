@@ -151,11 +151,18 @@ impl Game<'_> {
             return 11;
         }
         if self.dim == Dim::End {
-            return sunrise_client::environment::sky_darken(
-                self.res.end_environment(),
-                self.world.day_time,
+            let clock = |name: &str| {
+                if let Some(remote) = self.remote.as_ref() {
+                    remote.named_clock_time(name)
+                } else {
+                    self.command_clock_time(name)
+                }
+            };
+            return sunrise_client::environment::sky_darken_with_clock(
+                self.dim_environment(),
                 0.0,
                 0.0,
+                &clock,
             );
         }
         let (rain, thunder) = self.weather_levels(1.0);

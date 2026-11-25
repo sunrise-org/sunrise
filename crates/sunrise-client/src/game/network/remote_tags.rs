@@ -39,6 +39,17 @@ impl Game<'_> {
         {
             self.refresh_remote_stonecutter();
         }
+        if tags
+            .registries
+            .iter()
+            .any(|tags| tags.registry == "minecraft:timeline")
+        {
+            if let Some(r) = self.remote.as_mut() {
+                r.level_environments.clear();
+            }
+            self.build_level_environments();
+            self.sync_timeline_registries();
+        }
     }
 
     pub(super) fn refresh_creative_search_tags(&mut self) {

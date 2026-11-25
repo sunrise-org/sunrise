@@ -2126,9 +2126,11 @@ impl Game<'_> {
                 let Some(Arg::Resource(marker)) = ctx.get("timemarker").cloned() else {
                     return Ok(0);
                 };
-                let Some((m, target)) = (clock == "minecraft:overworld")
-                    .then(|| self.ui.markers.get(&marker).copied())
-                    .flatten()
+                let Some((m, target)) = self
+                    .ui
+                    .markers
+                    .get(&(clock.clone(), marker.clone()))
+                    .copied()
                     .and_then(|m| Some((m, m.resolve(total)?)))
                 else {
                     return Err(err(
@@ -2218,9 +2220,12 @@ impl Game<'_> {
                 let Some(Arg::Resource(timeline)) = ctx.get("timeline").cloned() else {
                     return Ok(0);
                 };
-                let Some(period) = (clock == "minecraft:overworld")
-                    .then(|| self.ui.timelines.get(&timeline).copied())
-                    .flatten()
+                let Some(period) = self
+                    .ui
+                    .timelines
+                    .get(&timeline)
+                    .filter(|(c, _)| c == &clock)
+                    .map(|(_, period)| *period)
                 else {
                     return Err(err(
                         "commands.time.wrong_timeline_for_clock",

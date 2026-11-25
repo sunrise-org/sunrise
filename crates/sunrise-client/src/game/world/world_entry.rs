@@ -351,6 +351,7 @@ impl Game<'_> {
             .chain(sunrise_client::neoforge_mob_maps::MAPS.map(|definition| definition.directory))
             .filter(|directory| !matches!(*directory, "item" | "entity_type" | "damage_type"))
             .collect::<std::collections::BTreeSet<_>>();
+        let mut timeline_tags = std::collections::BTreeMap::new();
         let mut bind_tags = |registry: &str,
                              view: &mut load_conditions::RegistryView|
          -> Result<()> {
@@ -361,6 +362,9 @@ impl Game<'_> {
                 registry,
                 |id| ids.is_some_and(|ids| ids.contains(id)),
             )?;
+            if registry == "minecraft:timeline" {
+                timeline_tags = tags.clone();
+            }
             view.tags.insert(
                 registry.to_owned(),
                 tags.iter()
@@ -867,6 +871,10 @@ impl Game<'_> {
                 files,
                 priority_layers,
                 items: Arc::new(items),
+                timelines: sunrise_client::environment::TimelineTable {
+                    timelines: packed_registry_definitions.timelines(),
+                    tags: timeline_tags,
+                },
                 packed_registries: packed_registry_definitions,
                 painting_variants,
                 transformers,
@@ -914,6 +922,8 @@ impl Game<'_> {
         self.install_registry_snapshots();
         self.install_fluid_interactions()?;
         self.install_profession_save_snapshots();
+        self.install_level_environments();
+        self.sync_timeline_registries();
         self.share_mob_maps();
         self.share_biome_keys();
         sunrise_client::datapack_net::serve(self.mods.datapack_registries.clone());
@@ -993,6 +1003,35 @@ impl Game<'_> {
             ),
         );
     }
+
+    /// Publishes every level's dimension type overrides and the world's `minecraft:timeline`
+    /// table to `Environment::set_level_attributes` so `EnvironmentAttributeSystem` reads
+    /// pack timelines for built-in and custom levels alike.
+    pub(super) fn install_level_environments(&self) {
+        let Some(tables) = self.world_tables.as_ref() else {
+            return;
+        };
+        let overrides = &tables.biomes.overrides;
+        let levels = [
+            "minecraft:overworld",
+            "minecraft:the_nether",
+            "minecraft:the_end",
+        ]
+        .into_iter()
+        .chain(self.level_shapes.extra.iter().map(|level| level.id));
+        let attributes = levels
+            .map(|level| {
+                let json = overrides
+                    .level_type_json(level)
+                    .map_or(serde_json::Value::Null, |(_, json)| json);
+                (level.to_owned(), json)
+            })
+            .collect();
+        sunrise_client::environment::Environment::set_level_attributes(
+            attributes,
+            tables.timelines.clone(),
+        );
+    }
     /// Sends each joined Sunrise client the snapshot of the set just published, built from the
     /// offer owned by its connection. A refused replacement ends that connection with its reason.
     pub(super) fn send_datapack_snapshots(&mut self) {
@@ -1059,6 +1098,8 @@ impl Game<'_> {
             log::error!("Sunrise: {error}");
         }
         self.install_profession_save_snapshots();
+        self.install_level_environments();
+        self.sync_timeline_registries();
         self.share_mob_maps();
         self.share_biome_keys();
         self.world.pois.clear();

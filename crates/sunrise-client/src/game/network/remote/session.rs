@@ -1020,6 +1020,7 @@ impl Game<'_> {
         self.set_local_mode_with_previous(mode, previous);
         self.dim = Dim::from_id(&spawn.dimension);
         self.build_level_environments();
+        self.sync_timeline_registries();
         // ClientPacketListener.handleLogin / handleRespawn: the server's
         // Player.getLastDeathLocation, for the recovery compass.
         self.level.last_death = spawn

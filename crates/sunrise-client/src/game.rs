@@ -3203,6 +3203,9 @@ struct WorldTables {
     painting_variants: paintings::PaintingVariants,
     /// `block_transformer`, bound to the block registry.
     transformers: Arc<sunrise_client::block_transform::Transformers>,
+    /// Frozen `minecraft:timeline` entries and their bound tags, read by `Environment` and
+    /// `/time`.
+    timelines: sunrise_client::environment::TimelineTable,
     providers: Providers,
     biomes: Arc<world_loading::WorldBiomeRegistry>,
     loot: Arc<sunrise_world::loot::LootData>,
@@ -5779,7 +5782,12 @@ impl Game<'_> {
         let rules = self.level_rules();
         let native_authoritative = self.native_authoritative();
         let liquid_transaction_open = self.has_level_transaction();
-        let environment = self.res.environment_of(&self.dimension_type().id);
+        let environment = Self::level_environment(
+            self.remote.as_ref(),
+            &self.res,
+            self.dim.id(),
+            &self.dimension_type().id,
+        );
         let other_entities = entity::entity_lists_of!(self, without_carts);
         let loot_clocks = self.loot_clock_ticks();
         let mut level = GameLevel {
@@ -11645,15 +11653,35 @@ impl Game<'_> {
             environment.set_frame(&frame);
             polytone_frame = Some(&frame);
         }
-        let mut sky = environment.sample(&sunrise_client::environment::Sample {
-            day_time: self.view_day_time(),
-            rain,
-            thunder,
-            blend: Some(&blend),
-            biome: Some(attributes_of(biome)),
-            post_blend: Some(&post_blend),
-            post_biome: Some(post_of(biome)),
-        });
+        let fixed_time = self
+            .settings
+            .extras
+            .pvp
+            .tweaks
+            .time
+            .filter(|_| self.own_view())
+            .map(|_| self.view_day_time());
+        let sample_clock = |clock: &str| {
+            if let Some(t) = fixed_time {
+                t
+            } else if let Some(remote) = self.remote.as_ref() {
+                remote.named_clock_time(clock)
+            } else {
+                self.command_clock_time(clock)
+            }
+        };
+        let mut sky = environment.sample_with_clock(
+            &sunrise_client::environment::Sample {
+                day_time: self.view_day_time(),
+                rain,
+                thunder,
+                blend: Some(&blend),
+                biome: Some(attributes_of(biome)),
+                post_blend: Some(&post_blend),
+                post_biome: Some(post_of(biome)),
+            },
+            &sample_clock,
+        );
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 && !self.settings.file.bool("hideLightningFlashes") {
             // ClientLevel's flash layer while skyFlashTime > 0: the sky colour

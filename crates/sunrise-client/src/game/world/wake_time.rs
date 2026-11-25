@@ -2,7 +2,7 @@
 //! `ClockAdjustment` from `sleep_finished_time` (NeoForge's `SleepFinishedTimeEvent`), and the
 //! clock time markers both read.
 use super::{Dim, Game};
-use crate::game::chat::{OVERWORLD_CLOCK, TimeMarker};
+use crate::game::chat::TimeMarker;
 use mod_api::{ClockAdjustment, Identifier, LevelRef};
 
 /// Vanilla's wake-up time marker, where sleeping through the night moves the clock
@@ -23,14 +23,10 @@ enum Refused {
 }
 
 impl Game<'_> {
-    /// The time marker `id` of `clock`. The timelines' markers belong to the Overworld's clock:
-    /// no other clock defines one today, as `/time set <marker>` reads them.
+    /// The time marker `id` of `clock`, from the world's `minecraft:timeline` registry.
     fn clock_marker(&self, clock: &str, id: &Identifier) -> Option<TimeMarker> {
-        if clock != OVERWORLD_CLOCK {
-            return None;
-        }
         let id = format!("{}:{}", id.namespace(), id.path());
-        self.ui.markers.get(&id).copied()
+        self.ui.markers.get(&(clock.to_owned(), id)).copied()
     }
 
     /// The host read `level_clock_marker_time`: when the level's own clock next reaches `marker`
@@ -277,7 +273,9 @@ mod tests {
                 period: Some(24_000),
                 show: false,
             };
-            game.ui.markers.insert("minecraft:noon".into(), noon);
+            game.ui
+                .markers
+                .insert((OVERWORLD_CLOCK.into(), "minecraft:noon".into()), noon);
             let clock = game.level_clock_name(game.dim);
             assert_eq!(clock, OVERWORLD_CLOCK);
             game.set_command_clock_time(&clock, NOW);

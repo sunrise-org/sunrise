@@ -6,6 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     path::Path,
+    sync::Arc,
 };
 use sunrise_core::{
     identifier::Identifier,
@@ -15,7 +16,9 @@ use sunrise_items::{
     enchant::{Enchantments, HolderSetBinding},
     items::{Instrument, Items},
 };
-use sunrise_world::{item_defaults::ItemDefaults, loot::PackOverlay};
+use sunrise_world::{
+    environment_timeline::Timeline, item_defaults::ItemDefaults, loot::PackOverlay,
+};
 
 /// One data-driven registry kind: `RegistryDataLoader.WORLD_REGISTRIES`'s entry for a
 /// registry a world's packs add to or replace, with the typed decode of its codec.
@@ -93,6 +96,10 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
         key: "minecraft:block_transformer",
         decode: decode_block_transformer,
     },
+    RegistryKind {
+        key: "minecraft:timeline",
+        decode: decode_timeline,
+    },
 ];
 
 /// The registry `ChatType` entries live in (`RegistryRef<ChatType>`).
@@ -156,6 +163,7 @@ enum Definition {
     /// A definition whose codec ran and whose gameplay reads the JSON itself, with its wire
     /// encoding when the registry is synchronized.
     Validated(Value, Option<Tag>),
+    Timeline(Arc<Timeline>, Tag),
 }
 
 impl PackRegistryDefinitions {
@@ -389,6 +397,68 @@ impl PackRegistryDefinitions {
                 );
             }
         }
+        // WorldClock.CODEC holder binding and Timeline.validateRegistry.
+        if definitions.entries.contains_key("minecraft:timeline") {
+            let clocks = definitions.entries.get("minecraft:world_clock");
+            let mut prepared_clocks =
+                synchronized_entries(&root, resources, "minecraft:world_clock", overlay);
+            prepared_clocks.retain(|(key, ..)| !clocks.is_some_and(|c| c.contains_key(key)));
+            condition_filter::filter(
+                &mut prepared_clocks,
+                false,
+                overlay.conditions,
+                "world_clock",
+            );
+            let held_clocks: BTreeSet<String> = clocks
+                .into_iter()
+                .flatten()
+                .filter(|(_, entry)| entry.is_some())
+                .map(|((namespace, path), _)| format!("{namespace}:{path}"))
+                .chain(
+                    prepared_clocks
+                        .into_iter()
+                        .map(|((namespace, path), ..)| format!("{namespace}:{path}")),
+                )
+                .collect();
+            if let Some(entries) = definitions.entries.get_mut("minecraft:timeline") {
+                let mut rejected = Vec::new();
+                let mut valid_timelines: Vec<(String, (String, String), Arc<Timeline>)> =
+                    Vec::new();
+                for (key, entry) in entries.iter() {
+                    let Some((Definition::Timeline(timeline, _), _)) = entry.as_ref() else {
+                        continue;
+                    };
+                    let id = format!("{}:{}", key.0, key.1);
+                    if !held_clocks.contains(&timeline.clock) {
+                        errors
+                            .entry("minecraft:timeline")
+                            .or_default()
+                            .insert(id, format!("unknown world_clock {}", timeline.clock));
+                        rejected.push(key.clone());
+                    } else {
+                        valid_timelines.push((id, key.clone(), Arc::clone(timeline)));
+                    }
+                }
+                let duplicate_errors = Timeline::validate_registry(
+                    valid_timelines
+                        .iter()
+                        .map(|(id, _, timeline)| (id.as_str(), timeline.as_ref())),
+                );
+                for (id, error) in duplicate_errors {
+                    errors
+                        .entry("minecraft:timeline")
+                        .or_default()
+                        .insert(id.clone(), error);
+                    if let Some((_, key, _)) = valid_timelines.iter().find(|(tid, _, _)| *tid == id)
+                    {
+                        rejected.push(key.clone());
+                    }
+                }
+                for key in rejected {
+                    entries.insert(key, None);
+                }
+            }
+        }
         if errors.is_empty() {
             return (definitions, Ok(()));
         }
@@ -421,6 +491,7 @@ impl PackRegistryDefinitions {
                 | "minecraft:sulfur_cube_archetype"
                 | "minecraft:decorated_pot_pattern"
                 | "minecraft:block_transformer"
+                | "minecraft:timeline"
         )
     }
 
@@ -461,7 +532,8 @@ impl PackRegistryDefinitions {
                     Definition::Encoded(tag)
                     | Definition::Instrument(_, tag)
                     | Definition::Painting(_, tag)
-                    | Definition::BannerPattern(_, tag) => tag.clone(),
+                    | Definition::BannerPattern(_, tag)
+                    | Definition::Timeline(_, tag) => tag.clone(),
                     Definition::Validated(_, tag) => tag.clone()?,
                     Definition::Enchantment(json) => json_to_nbt(json),
                 };
@@ -519,6 +591,21 @@ impl PackRegistryDefinitions {
                 Some((Definition::BannerPattern(pattern, _), _)) => Some(pattern),
                 _ => None,
             })
+    }
+
+    /// Every admitted `minecraft:timeline` definition of this world, keyed by canonical id.
+    pub fn timelines(&self) -> BTreeMap<String, Arc<Timeline>> {
+        self.entries
+            .get("minecraft:timeline")
+            .into_iter()
+            .flatten()
+            .filter_map(|((namespace, path), entry)| match entry {
+                Some((Definition::Timeline(timeline, _), _)) => {
+                    Some((format!("{namespace}:{path}"), Arc::clone(timeline)))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Use the same selected definitions as the synchronized registry packets.
@@ -971,6 +1058,16 @@ fn decode_world_clock(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Defi
         return Err("not a map".into());
     }
     encoded(json_to_nbt(&value))
+}
+
+/// `Timeline.DIRECT_CODEC` (full validation) and `Timeline.NETWORK_CODEC` (syncable tracks
+/// only on the wire).
+fn decode_timeline(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definition, String> {
+    let timeline = Timeline::parse(&value)?;
+    let network = Timeline::filter_syncable_json(&value);
+    let wire = json_to_nbt(&network);
+    check_network_nbt(&wire)?;
+    Ok(Definition::Timeline(Arc::new(timeline), wire))
 }
 
 #[cfg(test)]
@@ -1927,5 +2024,277 @@ mod tests {
         );
         let (_, refused) = stage(&files, |sound| !sound.ends_with(".push"));
         assert!(refused.unwrap_err().contains("push_sound: unknown holder"));
+    }
+
+    #[test]
+    fn a_pack_overriding_an_overworld_timeline_changes_server_and_synced_client_sky() {
+        use crate::environment::{Environment, Sample, TimelineTable, sky_darken};
+        use sunrise_assets::resource_source::ResourceSource;
+
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data/minecraft");
+        std::fs::create_dir_all(data.join("world_clock")).unwrap();
+        std::fs::create_dir_all(data.join("timeline")).unwrap();
+        std::fs::create_dir_all(data.join("tags/timeline")).unwrap();
+        std::fs::create_dir_all(data.join("dimension_type")).unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        std::fs::write(data.join("world_clock/overworld.json"), b"{}").unwrap();
+        std::fs::write(
+            data.join("timeline/day.json"),
+            json!({
+                "clock": "minecraft:overworld",
+                "period_ticks": 24000,
+                "tracks": {
+                    "minecraft:gameplay/sky_light_level": {
+                        "keyframes": [
+                            {"ticks": 0, "value": 15.0},
+                            {"ticks": 12000, "value": 15.0}
+                        ]
+                    },
+                    "minecraft:visual/sky_color": {
+                        "keyframes": [
+                            {"ticks": 0, "value": "#0000ff"}
+                        ]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            data.join("tags/timeline/in_overworld.json"),
+            json!({"values": ["minecraft:day"]}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            data.join("dimension_type/overworld.json"),
+            json!({
+                "timelines": "#minecraft:in_overworld",
+                "attributes": {
+                    "minecraft:gameplay/sky_light_level": 15.0,
+                    "minecraft:visual/sky_color": "#000000"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let pack_day = json!({
+            "clock": "minecraft:overworld",
+            "period_ticks": 24000,
+            "tracks": {
+                "minecraft:gameplay/sky_light_level": {
+                    "keyframes": [
+                        {"ticks": 0, "value": 6.0},
+                        {"ticks": 12000, "value": 6.0}
+                    ]
+                },
+                "minecraft:visual/sky_color": {
+                    "keyframes": [
+                        {"ticks": 0, "value": "#ff0000"}
+                    ]
+                },
+                "minecraft:gameplay/monsters_burn": {
+                    "keyframes": [
+                        {"ticks": 0, "value": true}
+                    ]
+                }
+            }
+        });
+        let files = [(
+            "timeline/minecraft:day".into(),
+            vec![pack_day.to_string().into_bytes()],
+        )];
+        let overlay = PackOverlay::new(&files);
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let packed = PackRegistryDefinitions::load(
+            root.path(),
+            &defaults,
+            &overlay,
+            &Default::default(),
+            &Default::default(),
+            |_| true,
+        )
+        .unwrap();
+
+        let server_timelines = packed.timelines();
+        let tags = super::super::registry_tag_bindings(
+            root.path(),
+            &overlay,
+            "minecraft:timeline",
+            |id| server_timelines.contains_key(id),
+        )
+        .unwrap();
+        let server_table = TimelineTable {
+            timelines: server_timelines,
+            tags: tags.clone(),
+        };
+
+        let base =
+            Environment::load(&ResourceSource::directory(root.path().to_path_buf())).unwrap();
+        let server_env = Environment::with_type(&base, &Value::Null, &server_table).unwrap();
+        let sample = Sample {
+            day_time: 6000,
+            ..Sample::default()
+        };
+        let vanilla_sky = base.sample(&sample);
+        let server_sky = server_env.sample(&sample);
+        assert_eq!(vanilla_sky.sky_light_level, 15.0);
+        assert_eq!(vanilla_sky.sky_color, [0.0, 0.0, 1.0]);
+        assert_eq!(sky_darken(&base, 6000, 0.0, 0.0), 0);
+        assert_eq!(server_sky.sky_light_level, 6.0);
+        assert_eq!(server_sky.sky_color, [1.0, 0.0, 0.0]);
+        assert_eq!(sky_darken(&server_env, 6000, 0.0, 0.0), 9);
+
+        // Sync to a client: non-syncable tracks are stripped (`Timeline.NETWORK_CODEC`),
+        // and decoding the synced entries reproduces the exact sky value.
+        let mut wire = Vec::new();
+        packed.append_encoded("minecraft:timeline", &mut wire);
+        assert_eq!(wire.len(), 1);
+        assert_eq!(wire[0].0, ("minecraft".into(), "day".into()));
+        assert!(wire[0].2, "pack override must be marked from_pack");
+        let wire_json = crate::scoreboard::tag_to_json(&wire[0].1);
+        assert!(
+            wire_json["tracks"]
+                .as_object()
+                .is_some_and(|t| !t.contains_key("minecraft:gameplay/monsters_burn")),
+            "non-syncable track leaked into wire NBT: {wire_json}"
+        );
+        let mut client_timelines = BTreeMap::new();
+        for ((ns, path), tag, _) in wire {
+            let decoded = Timeline::parse(&crate::scoreboard::tag_to_json(&tag)).unwrap();
+            client_timelines.insert(format!("{ns}:{path}"), Arc::new(decoded));
+        }
+        let client_table = TimelineTable {
+            timelines: client_timelines,
+            tags,
+        };
+        let client_env = Environment::with_type(&base, &Value::Null, &client_table).unwrap();
+        let client_sky = client_env.sample(&sample);
+        assert_eq!(client_sky.sky_color, server_sky.sky_color);
+        assert_eq!(client_sky.sky_light_level, server_sky.sky_light_level);
+    }
+
+    #[test]
+    fn a_malformed_timeline_refuses_the_world_load() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data/minecraft");
+        std::fs::create_dir_all(data.join("world_clock")).unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        std::fs::write(data.join("world_clock/overworld.json"), b"{}").unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+
+        let load_err = |files: &[(String, Vec<Vec<u8>>)]| -> String {
+            PackRegistryDefinitions::load(
+                root.path(),
+                &defaults,
+                &PackOverlay::new(files),
+                &Default::default(),
+                &Default::default(),
+                |_| true,
+            )
+            .err()
+            .expect("malformed timeline must refuse world load")
+        };
+
+        // Non-positive period_ticks.
+        let err = load_err(&[(
+            "timeline/demo:bad_period".into(),
+            vec![
+                json!({"clock": "minecraft:overworld", "period_ticks": 0})
+                    .to_string()
+                    .into_bytes(),
+            ],
+        )]);
+        assert!(
+            err.contains("minecraft:timeline") && err.contains("demo:bad_period"),
+            "{err}"
+        );
+
+        // Keyframe outside [0; period_ticks].
+        let err = load_err(&[(
+            "timeline/demo:out_of_period".into(),
+            vec![
+                json!({
+                    "clock": "minecraft:overworld",
+                    "period_ticks": 100,
+                    "tracks": {
+                        "minecraft:gameplay/sky_light_level": {
+                            "keyframes": [{"ticks": 101, "value": 10.0}]
+                        }
+                    }
+                })
+                .to_string()
+                .into_bytes(),
+            ],
+        )]);
+        assert!(
+            err.contains("minecraft:timeline") && err.contains("demo:out_of_period"),
+            "{err}"
+        );
+
+        // Time marker outside [0; period_ticks).
+        let err = load_err(&[(
+            "timeline/demo:bad_marker".into(),
+            vec![
+                json!({
+                    "clock": "minecraft:overworld",
+                    "period_ticks": 100,
+                    "time_markers": {"demo:end": 100}
+                })
+                .to_string()
+                .into_bytes(),
+            ],
+        )]);
+        assert!(
+            err.contains("minecraft:timeline") && err.contains("demo:bad_marker"),
+            "{err}"
+        );
+
+        // Unknown world_clock reference.
+        let err = load_err(&[(
+            "timeline/demo:missing_clock_tl".into(),
+            vec![
+                json!({"clock": "demo:no_such_clock"})
+                    .to_string()
+                    .into_bytes(),
+            ],
+        )]);
+        assert!(
+            err.contains("minecraft:timeline") && err.contains("demo:missing_clock_tl"),
+            "{err}"
+        );
+
+        // Duplicate time marker across two timelines sharing a clock (`Timeline.validateRegistry`).
+        let err = load_err(&[
+            (
+                "timeline/demo:first".into(),
+                vec![
+                    json!({
+                        "clock": "minecraft:overworld",
+                        "period_ticks": 24000,
+                        "time_markers": {"demo:shared": 1000}
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+            (
+                "timeline/demo:second".into(),
+                vec![
+                    json!({
+                        "clock": "minecraft:overworld",
+                        "period_ticks": 24000,
+                        "time_markers": {"demo:shared": 2000}
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+        ]);
+        assert!(
+            err.contains("minecraft:timeline") && err.contains("defined multiple times"),
+            "{err}"
+        );
     }
 }

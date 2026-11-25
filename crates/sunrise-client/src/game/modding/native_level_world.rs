@@ -119,23 +119,28 @@ impl Game<'_> {
             .filter(|_| dimension == self.dim)
         {
             Some(own) => own,
-            None => match dimension {
-                Dim::Overworld => self.res.environment(),
-                Dim::Extra(_) => sunrise_client::environment::Environment::for_level(
-                    dimension.id(),
-                    self.res.environment(),
-                ),
-                Dim::Nether => self.res.nether_environment(),
-                Dim::End => self.res.end_environment(),
-            },
+            None => {
+                let base = match dimension {
+                    Dim::Overworld | Dim::Extra(_) => self.res.environment(),
+                    Dim::Nether => self.res.nether_environment(),
+                    Dim::End => self.res.end_environment(),
+                };
+                sunrise_client::environment::Environment::for_level(dimension.id(), base)
+            }
         };
         let (rain, thunder) = weather_for_level(
             world.shape,
             dimension == Dim::End,
             self.world.weather.levels(1.0),
         );
-        let day_time = self.command_clock_time(&self.level_clock_name(dimension));
-        sunrise_client::environment::sky_darken(environment, day_time, rain, thunder)
+        let clock = |name: &str| {
+            if let Some(remote) = self.remote.as_ref().filter(|_| dimension == self.dim) {
+                remote.named_clock_time(name)
+            } else {
+                self.command_clock_time(name)
+            }
+        };
+        sunrise_client::environment::sky_darken_with_clock(environment, rain, thunder, &clock)
     }
 
     /// `Level.getSkyDarken` for an active or parked level, without switching dimensions.

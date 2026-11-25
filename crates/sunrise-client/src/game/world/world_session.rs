@@ -274,6 +274,11 @@ impl Game<'_> {
         // title screen is nonsense.
         self.repro_world_closed();
         self.clear_waypoints();
+        // The closed world's timelines must not reach the next world's levels.
+        sunrise_client::environment::Environment::set_level_attributes(
+            Vec::new(),
+            Default::default(),
+        );
         self.post_effects.clear();
         self.clear_spectated_entity_post_effect();
         // Mod screens' living scenes go with the world their entities were copied from.

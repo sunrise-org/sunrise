@@ -1049,18 +1049,6 @@ fn set_level_types(
         }
     }
     sunrise_world::dimension_type::DimensionFacts::set_levels(facts);
-    // The attributes and timelines (the sky, fog and cloud over the day) of the levels a mod or a
-    // pack added.
-    let attributes = shapes
-        .extra
-        .iter()
-        .filter_map(|level| {
-            let (_, json) = overrides.level_type_json(level.id)?;
-            let named = json.get("attributes").is_some() || json.get("timelines").is_some();
-            named.then(|| (level.id.to_owned(), json))
-        })
-        .collect();
-    sunrise_client::environment::Environment::set_level_attributes(attributes);
 }
 
 /// A registered generator paired with a biome source bound to the world's registries.
