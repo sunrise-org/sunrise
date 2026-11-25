@@ -224,29 +224,64 @@ pub struct ItemTransforms {
     pub contexts: [DisplayTransform; 9],
 }
 
+/// Evaluates a model file's `neoforge:conditions` list (`ICondition.IContext.EMPTY`).
+///
+/// Returns `Ok(true)` when every condition holds, `Ok(false)` when any fails, and
+/// `Err(reason)` when decoding or testing the condition list fails.
+pub type ConditionTest<'a> =
+    dyn Fn(&serde_json::Value, &str) -> std::result::Result<bool, String> + 'a;
+
+struct DecodeContext<'a, 'l, 'c> {
+    name: &'a str,
+    loaders: &'a (dyn Fn(&str) -> Option<LoaderProvider> + 'l),
+    conditions: &'a ConditionTest<'c>,
+}
+impl DecodeContext<'_, '_, '_> {
+    fn error(&self, message: impl std::fmt::Display) -> DecodeError {
+        if self.name.is_empty() {
+            error(&message.to_string())
+        } else {
+            error(&format!("model {}: {message}", self.name))
+        }
+    }
+}
+
 impl CuboidModel {
     /// Decode strict JSON, preserving the native parser's primitive coercions,
     /// optional inheritance fields, nullable children and f32 conversion.
     /// Like the native stream entry point, this reads one value and leaves
     /// trailing input unread. The pinned native entry point uses strict JSON.
     pub fn from_json(json: &str) -> Result<Self> {
-        Self::from_json_with_loaders(json, &|_| None)
+        Self::from_json_with_loaders_and_conditions(json, "", &|_| None, &|_, _| {
+            Err("neoforge:conditional requires a load-condition evaluator".to_owned())
+        })
     }
 
-    /// Select native loaders at the resource boundary, including for inline composite children.
-    pub fn from_json_with_loaders(
+    /// Decode a model file with registered native loaders, selected at the resource boundary
+    /// (including for inline composite children), and a load-condition evaluator for
+    /// `neoforge:conditional` (`ConditionalModelLoader`).
+    ///
+    /// `name` identifies the model in condition diagnostics and decode errors.
+    pub fn from_json_with_loaders_and_conditions(
         json: &str,
+        name: &str,
         loaders: &dyn Fn(&str) -> Option<LoaderProvider>,
+        conditions: &ConditionTest<'_>,
     ) -> Result<Self> {
         let raw = serde_json::Deserializer::from_str(json.strip_prefix('\u{feff}').unwrap_or(json))
             .into_iter::<&RawValue>()
             .next()
             .ok_or_else(|| error("empty model input"))??;
         validate_number_tokens(raw)?;
-        Self::decode(raw, loaders)
+        let context = DecodeContext {
+            name,
+            loaders,
+            conditions,
+        };
+        Self::decode(raw, &context)
     }
 
-    fn decode(raw: &RawValue, loaders: &dyn Fn(&str) -> Option<LoaderProvider>) -> Result<Self> {
+    fn decode(raw: &RawValue, context: &DecodeContext<'_, '_, '_>) -> Result<Self> {
         let obj = object(raw)?;
         let loader = match obj.get("loader").filter(|raw| raw.get() != "null") {
             Some(declaration) => {
@@ -259,10 +294,82 @@ impl CuboidModel {
                         ..Self::default()
                     });
                 }
-                Loader::decode(id, optional, raw, &obj, loaders)?
+                if id == "neoforge:conditional" {
+                    return Self::decode_conditional(&obj, context);
+                }
+                Loader::decode(id, optional, raw, &obj, context)?
             }
             None => None,
         };
+        Self::decode_cuboid(&obj, loader)
+    }
+
+    /// `ConditionalModelLoader.read`: evaluate `neoforge:conditions` under
+    /// `ICondition.IContext.EMPTY`; on pass decode inline `model` or this file as a
+    /// plain cuboid model without `loader`; on fail decode inline `fallback` or
+    /// reference the fallback model id (`minecraft:builtin/missing` maps to the
+    /// synthetic missing model).
+    fn decode_conditional(obj: &Object<'_>, context: &DecodeContext<'_, '_, '_>) -> Result<Self> {
+        let conditions_raw = obj
+            .get("neoforge:conditions")
+            .ok_or_else(|| context.error("neoforge:conditional: missing neoforge:conditions"))?;
+        let conditions_value: serde_json::Value = serde_json::from_str(conditions_raw.get())
+            .map_err(|err| {
+                context.error(format!(
+                    "neoforge:conditional: invalid neoforge:conditions: {err}"
+                ))
+            })?;
+        if !conditions_value.is_array() {
+            return Err(context
+                .error("neoforge:conditional: expected neoforge:conditions to be a JSON array"));
+        }
+        let wrapper = serde_json::Value::Object(serde_json::Map::from_iter([(
+            "neoforge:conditions".to_owned(),
+            conditions_value,
+        )]));
+        let passed = (context.conditions)(&wrapper, context.name).map_err(|err| {
+            context.error(format!(
+                "neoforge:conditional: failed to parse conditions: {err}"
+            ))
+        })?;
+        if passed {
+            if let Some(inline) = obj.get("model") {
+                if !inline.get().starts_with('{') {
+                    return Err(
+                        context.error("neoforge:conditional: expected model to be a JSON object")
+                    );
+                }
+                return Self::decode(inline, context);
+            }
+            return Self::decode_cuboid(obj, None);
+        }
+        let fallback = obj
+            .get("fallback")
+            .filter(|raw| raw.get() != "null")
+            .ok_or_else(|| context.error("neoforge:conditional: missing fallback"))?;
+        if fallback.get().starts_with('{') {
+            return Self::decode(fallback, context);
+        }
+        if !fallback.get().starts_with('"') {
+            return Err(
+                context.error("neoforge:conditional: expected fallback to be a string or object")
+            );
+        }
+        let id = string(fallback)
+            .and_then(|raw| identifier(&raw))
+            .map_err(|err| {
+                context.error(format!("neoforge:conditional: invalid fallback: {err}"))
+            })?;
+        if id == crate::resolve::MISSING_MODEL {
+            return Ok(crate::resolve::missing_model());
+        }
+        Ok(Self {
+            parent: Some(id),
+            ..Self::default()
+        })
+    }
+
+    fn decode_cuboid(obj: &Object<'_>, loader: Option<Loader>) -> Result<Self> {
         let schema = match &loader {
             Some(Loader::Registered(registered)) => registered.schema(),
             _ => LoaderSchema::Cuboids,
@@ -332,7 +439,7 @@ impl CuboidModel {
             elements,
             display,
             render_type,
-            visibility: visibility(&obj)?,
+            visibility: visibility(obj)?,
             root_transform: obj
                 .get("transform")
                 .filter(|raw| raw.get() != "null")
@@ -382,14 +489,14 @@ impl Loader {
         optional: bool,
         model: &RawValue,
         obj: &Object<'_>,
-        loaders: &dyn Fn(&str) -> Option<LoaderProvider>,
+        context: &DecodeContext<'_, '_, '_>,
     ) -> Result<Option<Self>> {
         let loader = match canonical.as_str() {
             "neoforge:composite" => {
                 let mut children = Vec::new();
                 if let Some(raw) = obj.get("children") {
                     for (name, raw) in ordered_object(raw)? {
-                        children.push((name, Arc::new(CuboidModel::decode(raw, loaders)?)));
+                        children.push((name, Arc::new(CuboidModel::decode(raw, context)?)));
                     }
                 }
                 Self::Composite {
@@ -418,7 +525,7 @@ impl Loader {
                 }
             }
             "fusion:model" => Self::Fusion,
-            _ => match loaders(&canonical) {
+            _ => match (context.loaders)(&canonical) {
                 Some(provider) => Self::Registered(Arc::new(RegisteredLoader::new(
                     canonical,
                     model.get().to_owned(),

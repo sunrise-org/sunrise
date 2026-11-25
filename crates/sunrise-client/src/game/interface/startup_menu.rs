@@ -1575,6 +1575,7 @@ mod tests {
             ])),
             splashes: Arc::from(""),
             plain_texts: Default::default(),
+            model_conditions: sunrise_world::conditions::LoadConditions::vanilla(),
         }
     }
 

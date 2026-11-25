@@ -34,7 +34,10 @@ fn library(models: &[(&str, &str)], providers: &[(&str, LoaderProvider)]) -> Mod
         .map(|(name, json)| {
             (
                 (*name).to_owned(),
-                CuboidModel::from_json_with_loaders(json, &find).unwrap(),
+                CuboidModel::from_json_with_loaders_and_conditions(json, "", &find, &|_, _| {
+                    Ok(true)
+                })
+                .unwrap(),
             )
         })
         .collect();
@@ -60,13 +63,18 @@ fn loader_ids_are_canonicalized_before_binding() {
         ("asmtest:", "asmtest:"),
     ] {
         let json = format!(r#"{{"loader":"{id}","width":3}}"#);
-        let kept = CuboidModel::from_json_with_loaders(&json, &|found| {
-            assert_eq!(found, expected);
-            Some(LoaderProvider {
-                schema: LoaderSchema::Custom,
-                bake: Arc::new(|_, _, _| Ok(Vec::new())),
-            })
-        })
+        let kept = CuboidModel::from_json_with_loaders_and_conditions(
+            &json,
+            "",
+            &|found| {
+                assert_eq!(found, expected);
+                Some(LoaderProvider {
+                    schema: LoaderSchema::Custom,
+                    bake: Arc::new(|_, _, _| Ok(Vec::new())),
+                })
+            },
+            &|_, _| Ok(true),
+        )
         .unwrap();
         assert!(matches!(kept.loader, Some(Loader::Registered(_))));
     }

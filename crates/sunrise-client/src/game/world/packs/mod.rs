@@ -811,6 +811,9 @@ pub(super) fn stage_pack_with_emissive(
     let resource_root = super::client_reload::stage_texture_atlases(resource_root, texture_atlases);
     let root = resource_root.prepared().to_path_buf();
     let source = resource_root.source().clone();
+    let inventory = sunrise_mod_package::enabled::EnabledMods::read(&root)?;
+    let model_conditions = super::load_conditions::conditions_for_mods(mod_sources, &inventory)?
+        .with_mod_inventory(inventory.client_ids());
     progress.set(1);
     let (staged, client_applies) = super::client_reload::stage_client_reload(
         &source,
@@ -832,6 +835,7 @@ pub(super) fn stage_pack_with_emissive(
                         &game,
                         pool,
                         max_atlas_size,
+                        &model_conditions,
                     )
                     .map_err(|e| e.to_string())
                 });
@@ -845,7 +849,18 @@ pub(super) fn stage_pack_with_emissive(
                     )
                 });
                 (
-                    assets.reload_with_emissive(&resource_root, emissive_sprites),
+                    {
+                        let parsed =
+                            sunrise_client::model_library::ParsedModels::load_with_conditions(
+                                &source,
+                                &model_conditions,
+                            );
+                        assets.reload_with_models_and_emissive(
+                            &resource_root,
+                            parsed,
+                            emissive_sprites,
+                        )
+                    },
                     atlas.join(),
                     panorama.join(),
                     small
@@ -863,6 +878,7 @@ pub(super) fn stage_pack_with_emissive(
                 // `Game::apply_staged_pack` fills it with the client's setting.
                 splashes: Arc::from(""),
                 plain_texts: Default::default(),
+                model_conditions: model_conditions.clone(),
             };
             progress.set(2);
             let mut pack = PackResources::load(
@@ -873,6 +889,7 @@ pub(super) fn stage_pack_with_emissive(
                 context.biomes.clone(),
                 context.light.clone(),
                 &res.core.item_data,
+                &model_conditions,
             )?;
             pack.additional_data = super::pack_finders::data_packs(mod_sources).into();
             let textures = prepare_renderer_textures(&pack);

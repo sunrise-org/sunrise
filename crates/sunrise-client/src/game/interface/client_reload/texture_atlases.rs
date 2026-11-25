@@ -487,8 +487,13 @@ mod tests {
             &[answered("demo", "demo:icons", "demo:icons")],
         );
         let source = staged.source();
-        let mut ui =
-            crate::game::UiResources::load_with_limit(source, staged.prepared(), 4096).unwrap();
+        let mut ui = crate::game::UiResources::load_with_limit(
+            source,
+            staged.prepared(),
+            4096,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
+        )
+        .unwrap();
         let sprite = "demo:gui/atlases/icons/demo/wide";
         assert!(ui.atlas.width.max(ui.atlas.height) <= 4096);
         assert!(ui.atlas.gui_rect(sprite).is_none());

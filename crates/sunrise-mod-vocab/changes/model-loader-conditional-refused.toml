@@ -1,0 +1,3 @@
+ids = ["hook:register_model_loaders"]
+why = "Registering a model loader under `neoforge:conditional` (the loader that picks a primary or a fallback model by NeoForge's load conditions, ConditionalModelLoader) is now a registration error, as `neoforge:composite`, `neoforge:obj`, `neoforge:empty` and `fusion:model` already were: the engine reads those model files itself. The signature is unchanged. Version 4."
+migrate = "A native mod that registered `neoforge:conditional` drops that registration and writes the model file with the built-in loader."

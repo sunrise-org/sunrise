@@ -25,7 +25,11 @@ fn freeze(loaders: Vec<Answered<ModelLoaderRegistration>>) -> (ModelLoaderTable,
         let key = answer.id.to_string();
         let owner = if matches!(
             key.as_str(),
-            "neoforge:composite" | "neoforge:obj" | "neoforge:empty" | "fusion:model"
+            "neoforge:composite"
+                | "neoforge:obj"
+                | "neoforge:empty"
+                | "neoforge:conditional"
+                | "fusion:model"
         ) {
             log::error!("Mod {mod_id}: model loader {key} collides with a built-in model loader");
             None
@@ -78,7 +82,8 @@ fn freeze(loaders: Vec<Answered<ModelLoaderRegistration>>) -> (ModelLoaderTable,
 
 /// Binds the model loaders native mods registered once at start, before resources load. Any valid
 /// `Identifier` (including `minecraft:` and empty-path ids) is accepted; built-in loader
-/// collisions (`neoforge:composite`, `neoforge:obj`, `neoforge:empty`, `fusion:model`) and duplicates are logged as errors and left
+/// collisions (`neoforge:composite`, `neoforge:obj`, `neoforge:empty`, `neoforge:conditional`,
+/// `fusion:model`) and duplicates are logged as errors and left
 /// out. Returns the ids kept, in registration order.
 pub fn register(loaders: Vec<Answered<ModelLoaderRegistration>>) -> Vec<String> {
     let (bound, kept) = freeze(loaders);
@@ -94,15 +99,25 @@ pub(crate) fn installed_loaders() -> Option<&'static ModelLoaderTable> {
 }
 
 /// The client selects a provider before decoding the model's fields.
-pub(crate) fn decode_model(text: &str) -> Result<CuboidModel, sunrise_assets::DecodeError> {
-    decode_model_with_loaders(text, installed_loaders())
+pub(crate) fn decode_model(
+    text: &str,
+    conditions: &sunrise_world::conditions::LoadConditions,
+) -> Result<CuboidModel, sunrise_assets::DecodeError> {
+    decode_model_with_loaders_and_conditions(text, "", installed_loaders(), conditions)
 }
 
-pub(crate) fn decode_model_with_loaders(
+pub(crate) fn decode_model_with_loaders_and_conditions(
     text: &str,
+    name: &str,
     loaders: Option<&ModelLoaderTable>,
+    conditions: &sunrise_world::conditions::LoadConditions,
 ) -> Result<CuboidModel, sunrise_assets::DecodeError> {
-    CuboidModel::from_json_with_loaders(text, &|id| loaders?.get(id).cloned())
+    CuboidModel::from_json_with_loaders_and_conditions(
+        text,
+        name,
+        &|id| loaders?.get(id).cloned(),
+        &|file, path| conditions.allows_file_isolated(file, path),
+    )
 }
 
 /// The quads a mod answered, as the baker takes them: a quad with a position or UV that isn't
@@ -325,16 +340,18 @@ mod tests {
                     ModelLoaderSchema::ModelProperties,
                     |_| Ok(vec![quad("side", 1.0)]),
                 );
-                event.register(
-                    Identifier::parse("neoforge:obj").unwrap(),
-                    ModelLoaderSchema::ModelProperties,
-                    |_| Ok(vec![quad("side", 1.0)]),
-                );
-                event.register(
-                    Identifier::parse("neoforge:empty").unwrap(),
-                    ModelLoaderSchema::ModelProperties,
-                    |_| Ok(vec![quad("side", 1.0)]),
-                );
+                for builtin in [
+                    "neoforge:obj",
+                    "neoforge:empty",
+                    "neoforge:conditional",
+                    "fusion:model",
+                ] {
+                    event.register(
+                        Identifier::parse(builtin).unwrap(),
+                        ModelLoaderSchema::ModelProperties,
+                        |_| Ok(vec![quad("side", 1.0)]),
+                    );
+                }
             }
         }
         struct Second;

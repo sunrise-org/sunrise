@@ -71,6 +71,7 @@ fn main() -> sunrise_client::Result<()> {
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
         render.model_library.clone(),
         &item_data,
+        &sunrise_world::conditions::LoadConditions::vanilla(),
     )?;
     let item_ms = start_items.elapsed().as_secs_f64() * 1000.;
     let total_ms = start.elapsed().as_secs_f64() * 1000.;

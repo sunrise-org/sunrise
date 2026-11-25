@@ -1,7 +1,9 @@
 //! Parsed resource models for one startup or resource-pack reload.
 use crate::{
     Result,
-    mod_model_loaders::{ModelLoaderTable, decode_model_with_loaders, installed_loaders},
+    mod_model_loaders::{
+        ModelLoaderTable, decode_model_with_loaders_and_conditions, installed_loaders,
+    },
     resource_source::ResourceSource,
 };
 use std::{
@@ -12,6 +14,7 @@ use sunrise_assets::{
     model::CuboidModel,
     resolve::{AssetReader, ModelLibrary},
 };
+use sunrise_world::conditions::LoadConditions;
 
 #[derive(Default)]
 pub struct ParsedModels {
@@ -20,17 +23,20 @@ pub struct ParsedModels {
     rejected: BTreeSet<String>,
     /// `None` is an unscanned source, used by callers that only read selected models.
     source: Option<ResourceSource>,
+    conditions: LoadConditions,
 }
 
 fn read_model(
     source: &ResourceSource,
+    id: &str,
     path: &str,
     loaders: Option<&ModelLoaderTable>,
+    conditions: &LoadConditions,
 ) -> std::result::Result<Arc<CuboidModel>, String> {
     let text = source
         .read_to_string(path)
         .map_err(|error| error.to_string())?;
-    decode_model_with_loaders(&text, loaders)
+    decode_model_with_loaders_and_conditions(&text, id, loaders, conditions)
         .map(Arc::new)
         .map_err(|error| error.to_string())
 }
@@ -58,13 +64,29 @@ impl AssetReader for RootAssets {
 impl ParsedModels {
     /// Every `models/**.json` of a namespace directory, by identifier.
     pub fn load(source: &ResourceSource) -> Self {
-        Self::load_with_loaders(source, installed_loaders())
+        Self::load_with_conditions(source, &LoadConditions::vanilla())
+    }
+
+    /// Every `models/**.json` of a namespace directory, evaluating `neoforge:conditional`
+    /// models against `conditions` (the client's loaded mods, with empty context).
+    pub fn load_with_conditions(source: &ResourceSource, conditions: &LoadConditions) -> Self {
+        Self::load_with_loaders_and_conditions(source, installed_loaders(), conditions)
     }
 
     /// Scan this source with exactly the supplied table, including on the parsing workers.
+    #[cfg(test)]
     pub(crate) fn load_with_loaders(
         source: &ResourceSource,
         loaders: Option<&ModelLoaderTable>,
+    ) -> Self {
+        Self::load_with_loaders_and_conditions(source, loaders, &LoadConditions::vanilla())
+    }
+
+    /// Scan this source with the supplied loader table and load conditions.
+    pub(crate) fn load_with_loaders_and_conditions(
+        source: &ResourceSource,
+        loaders: Option<&ModelLoaderTable>,
+        conditions: &LoadConditions,
     ) -> Self {
         let files: Vec<_> = source
             .list_under("assets", &["models"])
@@ -75,7 +97,9 @@ impl ParsedModels {
                 Some((format!("{namespace}:{path}"), name))
             })
             .collect();
-        let parsed = crate::par::par_map(&files, |(_, path)| read_model(source, path, loaders));
+        let parsed = crate::par::par_map(&files, |(id, path)| {
+            read_model(source, id, path, loaders, conditions)
+        });
         let mut models = BTreeMap::new();
         let mut rejected = BTreeSet::new();
         for ((id, _), result) in files.into_iter().zip(parsed) {
@@ -93,6 +117,7 @@ impl ParsedModels {
             models,
             rejected,
             source: Some(source.clone()),
+            conditions: conditions.clone(),
         }
     }
 
@@ -136,8 +161,10 @@ impl ParsedModels {
                     .and_then(|(namespace, path)| {
                         read_model(
                             source,
+                            &name,
                             &format!("assets/{namespace}/models/{path}.json"),
                             installed_loaders(),
+                            &self.conditions,
                         )
                     }),
             };
@@ -384,5 +411,48 @@ mod tests {
             assert_eq!(assets.read_text(escape), None, "{escape}");
         }
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn conditional_loader_picks_fallback_when_mod_is_absent_and_primary_when_present() -> Result<()>
+    {
+        use sunrise_assets::bake::{BlockModelTransform, bake_block_model};
+
+        let fixture = Fixture(
+            std::env::temp_dir().join(format!("sunrise-conditional-model-{}", std::process::id())),
+        );
+        fixture.write(
+            "demo:block/cube",
+            r##"{"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}"##,
+        );
+        fixture.write(
+            "demo:block/fallback",
+            r#"{"parent":"demo:block/cube","textures":{"all":"demo:block/fallback_tex"}}"#,
+        );
+        fixture.write(
+            "demo:block/conditional",
+            r#"{"loader":"neoforge:conditional",
+                "neoforge:conditions":[{"type":"neoforge:mod_loaded","modid":"compat_mod"}],
+                "model":{"parent":"demo:block/cube","textures":{"all":"demo:block/compat_tex"}},
+                "fallback":"demo:block/fallback"}"#,
+        );
+        let source = ResourceSource::directory(fixture.0.clone());
+        let transform = BlockModelTransform::new([0; 3], false);
+
+        let absent = ParsedModels::load_with_conditions(&source, &LoadConditions::new([]));
+        let absent_lib = absent.block_library(&source, vec!["demo:block/conditional".into()])?;
+        let absent_quads =
+            bake_block_model(&absent_lib.resolve("demo:block/conditional")?, transform)?;
+        assert_eq!(absent_quads.len(), 1);
+        assert_eq!(absent_quads[0].material.sprite, "demo:block/fallback_tex");
+
+        let present =
+            ParsedModels::load_with_conditions(&source, &LoadConditions::new(["compat_mod"]));
+        let present_lib = present.block_library(&source, vec!["demo:block/conditional".into()])?;
+        let present_quads =
+            bake_block_model(&present_lib.resolve("demo:block/conditional")?, transform)?;
+        assert_eq!(present_quads.len(), 1);
+        assert_eq!(present_quads[0].material.sprite, "demo:block/compat_tex");
+        Ok(())
     }
 }

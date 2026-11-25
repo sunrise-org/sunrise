@@ -7,12 +7,13 @@ use super::*;
 pub(super) fn cit_sprites(
     root: &ResourceSource,
     packed: &[PackedImage],
+    conditions: &sunrise_world::conditions::LoadConditions,
 ) -> Vec<(PackedImage, Option<TextureFlags>, bool)> {
     let have: HashSet<&str> = packed.iter().map(|i| i.0.as_str()).collect();
     let rules = crate::cit::load_rules(root);
     let mut ids = crate::cit_assets::item_sprites(&rules);
     if !rules.is_empty() {
-        let models = crate::cit_assets::load_models(root, &rules);
+        let models = crate::cit_assets::load_models(root, &rules, conditions);
         ids.extend(crate::cit_assets::model_sprites(&models));
         ids.extend(crate::cit_armor::armor_sprites(&rules));
     }

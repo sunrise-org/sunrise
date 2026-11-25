@@ -104,6 +104,7 @@ fn default_components_reader_baseline() -> client::Result<()> {
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
         library.clone(),
         &item_data,
+        &sunrise_world::conditions::LoadConditions::vanilla(),
     )?;
     let server = ItemRenderer::load_for_server(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),

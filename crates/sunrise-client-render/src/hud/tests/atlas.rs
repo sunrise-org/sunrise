@@ -1564,7 +1564,11 @@ texture=wide",
     write_strip(&cit.join("wide.png"), 1025, 513, &[[1, 1, 1, 255]], None);
     // Vanilla's stick is already packed when the CIT pass runs.
     let stick = ("item/stick".to_owned(), 16, 16, vec![0; 16 * 16 * 4]);
-    let added = cit_sprites(&ResourceSource::directory(root.clone()), &[stick]);
+    let added = cit_sprites(
+        &ResourceSource::directory(root.clone()),
+        &[stick],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+    );
     let names: Vec<_> = added.iter().map(|(image, _, _)| image.0.as_str()).collect();
     assert_eq!(names, ["sunrise_cit:minecraft/optifine/cit/b"]);
     // And the atlas still builds around the broken and the too-wide texture.
@@ -1598,7 +1602,11 @@ fn one_oversized_texture_leaves_the_others_in() {
     header.extend(20000u32.to_be_bytes());
     fs::write(cit.join("a.png"), header).unwrap();
     write_strip(&cit.join("b.png"), 2, 2, &[[4, 5, 6, 255]], None);
-    let added = cit_sprites(&ResourceSource::directory(root.clone()), &[]);
+    let added = cit_sprites(
+        &ResourceSource::directory(root.clone()),
+        &[],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+    );
     let _ = fs::remove_dir_all(&root);
     let names: Vec<_> = added.iter().map(|(i, _, _)| i.0.as_str()).collect();
     assert_eq!(names, ["sunrise_cit:minecraft/optifine/cit/b"]);
@@ -1612,7 +1620,11 @@ fn a_wide_grid_animation_packs_its_frame() {
     write_strip(&cit.join("a.png"), 1104, 16, &[[9, 9, 9, 255]], None);
     let mcmeta = r#"{"animation":{"width":16,"height":16}}"#;
     fs::write(cit.join("a.png.mcmeta"), mcmeta).unwrap();
-    let added = cit_sprites(&ResourceSource::directory(root.clone()), &[]);
+    let added = cit_sprites(
+        &ResourceSource::directory(root.clone()),
+        &[],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+    );
     let _ = fs::remove_dir_all(&root);
     let sizes: Vec<_> = added.iter().map(|(i, _, _)| (i.1, i.2)).collect();
     assert_eq!(sizes, [(16, 16)]);

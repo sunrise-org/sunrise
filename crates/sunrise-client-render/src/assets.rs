@@ -475,14 +475,6 @@ impl Assets {
     pub fn reload(&self, root: &crate::resource_source::ResourceRoot) -> Result<RenderAssets> {
         RenderAssets::load(root, self)
     }
-    /// [`Assets::reload`] with mod-registered emissive overlays collected for this reload.
-    pub fn reload_with_emissive(
-        &self,
-        root: &crate::resource_source::ResourceRoot,
-        emissive_sprites: &[mod_api::Answered<mod_api::EmissiveSpriteRegistration>],
-    ) -> Result<RenderAssets> {
-        RenderAssets::load_with_parsed(root, self, true, None, emissive_sprites)
-    }
     /// [`Assets::reload`] with the model library already parsed.
     ///
     /// Parsing it reads every model file under `assets/`, which needs no
@@ -495,7 +487,7 @@ impl Assets {
         root: &crate::resource_source::ResourceRoot,
         parsed: crate::model_library::ParsedModels,
     ) -> Result<RenderAssets> {
-        RenderAssets::load_with_parsed(root, self, true, Some(parsed), &[])
+        RenderAssets::load_with_parsed(root, self, true, parsed, &[])
     }
     /// [`Assets::reload_with_models`] with mod-registered emissive overlays collected for this
     /// resource load.
@@ -505,7 +497,7 @@ impl Assets {
         parsed: crate::model_library::ParsedModels,
         emissive_sprites: &[mod_api::Answered<mod_api::EmissiveSpriteRegistration>],
     ) -> Result<RenderAssets> {
-        RenderAssets::load_with_parsed(root, self, true, Some(parsed), emissive_sprites)
+        RenderAssets::load_with_parsed(root, self, true, parsed, emissive_sprites)
     }
     /// [`Assets::reload`] for a server, which has no sprites or baked models.
     pub fn reload_for_server(
@@ -525,15 +517,23 @@ impl RenderAssets {
         assets: &Assets,
         draws: bool,
     ) -> Result<Self> {
-        Self::load_with_parsed(root, assets, draws, None, &[])
+        // A server draws no block and no item: its block models (about 24 MB
+        // baked) and item model library (7 MB) stay empty.
+        let parsed = if draws {
+            let _step = crate::spans::startup::step("core.models_parse");
+            crate::model_library::ParsedModels::load(root.source())
+        } else {
+            crate::model_library::ParsedModels::default()
+        };
+        Self::load_with_parsed(root, assets, draws, parsed, &[])
     }
-    /// `parsed`: the model library when a caller parsed it ahead of this
-    /// (see [`Assets::reload_with_models`]); otherwise it is parsed here.
+    /// `parsed`: the model library, parsed by the caller with the load's conditions
+    /// (see [`Assets::reload_with_models`]). [`Self::load`] parses it with no mod loaded.
     fn load_with_parsed(
         root: &crate::resource_source::ResourceRoot,
         assets: &Assets,
         draws: bool,
-        parsed: Option<crate::model_library::ParsedModels>,
+        parsed: crate::model_library::ParsedModels,
         emissive_sprites: &[mod_api::Answered<mod_api::EmissiveSpriteRegistration>],
     ) -> Result<Self> {
         let registry = assets.registry;
@@ -547,16 +547,6 @@ impl RenderAssets {
                 sprites.insert(&format!("minecraft:block/{name}"))?;
             }
         }
-        // A server draws no block and no item: its block models (about 24 MB
-        // baked) and item model library (7 MB) stay empty.
-        let parsed = match parsed {
-            Some(parsed) => parsed,
-            None if draws => {
-                let _step = crate::spans::startup::step("core.models_parse");
-                crate::model_library::ParsedModels::load(root.source())
-            }
-            None => crate::model_library::ParsedModels::default(),
-        };
         // Connected-texture rules find their faces by sprite layer: what they match by name keeps a
         // layer of its own, decided before the models insert their textures.
         let ctm_rules = if draws {

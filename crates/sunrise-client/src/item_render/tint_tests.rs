@@ -95,6 +95,7 @@ fn renderer(root: &std::path::Path, providers: ItemProviderTables<'_>) -> ItemRe
         crate::model_library::ParsedModels::load(root.source()).into_item_library(),
         true,
         &data,
+        &sunrise_world::conditions::LoadConditions::vanilla(),
         None,
         providers,
     )

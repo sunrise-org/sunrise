@@ -945,6 +945,7 @@ mod tests {
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
             library,
             &data,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
         )
         .unwrap();
         let _ = std::fs::remove_dir_all(&root);

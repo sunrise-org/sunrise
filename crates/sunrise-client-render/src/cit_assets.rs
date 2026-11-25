@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use sunrise_assets::model::{CuboidModel, TextureSlot};
 use sunrise_optifine::cit::{Kind, Rule};
+use sunrise_world::conditions::LoadConditions;
 
 /// The namespace of CIT files outside `textures/` and `models/`.
 pub const NAMESPACE: &str = "sunrise_cit";
@@ -125,14 +126,19 @@ const MAX_PARENTS: usize = 16;
 /// with the parents they reach by relative path. Their `./x` texture and parent values become
 /// the ids of the files beside them. Only `sunrise_cit` models: the others are in the model
 /// library already. A file that does not read or parse is left out, and a rule's layer that
-/// names it (or a model whose parents reach it) keeps its vanilla model.
-pub fn load_models(root: &ResourceSource, rules: &[Rule]) -> BTreeMap<String, CuboidModel> {
+/// names it (or a model whose parents reach it) keeps its vanilla model. `neoforge:conditional`
+/// models resolve against `conditions`, the load's, as the models under `models/` do.
+pub fn load_models(
+    root: &ResourceSource,
+    rules: &[Rule],
+    conditions: &LoadConditions,
+) -> BTreeMap<String, CuboidModel> {
     let mut out = BTreeMap::new();
     let mut seen = BTreeSet::new();
     for rule in rules.iter().filter(|r| r.kind == Kind::Item) {
         let named = rule.models.iter().map(|(_, path)| path);
         for path in rule.model.iter().chain(named) {
-            load_model(root, path, 0, &mut seen, &mut out);
+            load_model(root, path, conditions, 0, &mut seen, &mut out);
         }
     }
     out
@@ -141,6 +147,7 @@ pub fn load_models(root: &ResourceSource, rules: &[Rule]) -> BTreeMap<String, Cu
 fn load_model(
     root: &ResourceSource,
     resource: &str,
+    conditions: &LoadConditions,
     depth: usize,
     seen: &mut BTreeSet<String>,
     out: &mut BTreeMap<String, CuboidModel>,
@@ -158,7 +165,9 @@ fn load_model(
     let model = root
         .read_to_string(resource)
         .map_err(|e| e.to_string())
-        .and_then(|text| crate::mod_model_loaders::decode_model(&text).map_err(|e| e.to_string()));
+        .and_then(|text| {
+            crate::mod_model_loaders::decode_model(&text, conditions).map_err(|e| e.to_string())
+        });
     let mut model = match model {
         Ok(model) => model,
         Err(e) => {
@@ -179,7 +188,7 @@ fn load_model(
         .and_then(|p| rebase(resource, p, "json"));
     if let Some((id, path)) = parent {
         model.parent = Some(id);
-        load_model(root, &path, depth + 1, seen, out);
+        load_model(root, &path, conditions, depth + 1, seen, out);
     }
     out.insert(id, model);
 }
@@ -302,7 +311,11 @@ mod tests {
             root.join(p).is_file()
         })
         .unwrap();
-        let models = load_models(&ResourceSource::directory(root.clone()), &[rule]);
+        let models = load_models(
+            &ResourceSource::directory(root.clone()),
+            &[rule],
+            &LoadConditions::vanilla(),
+        );
         let _ = fs::remove_dir_all(&root);
         let cit = |p: &str| format!("sunrise_cit:minecraft/optifine/cit/{p}");
         assert_eq!(
@@ -319,6 +332,41 @@ mod tests {
             model_sprites(&models).into_iter().collect::<Vec<_>>(),
             [cit("glow"), cit("swords/flame")]
         );
+    }
+
+    #[test]
+    fn conditional_model_resolves_to_its_primary_when_its_condition_holds() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-cit-conditional-{}", std::process::id()));
+        let cit = root.join("assets/minecraft/optifine/cit");
+        fs::create_dir_all(&cit).unwrap();
+        fs::write(
+            cit.join("pick.json"),
+            r#"{"loader":"neoforge:conditional",
+                "neoforge:conditions":[{"type":"neoforge:mod_loaded","modid":"compat_mod"}],
+                "model":{"parent":"item/handheld","textures":{"layer0":"./primary"}},
+                "fallback":"minecraft:item/stick"}"#,
+        )
+        .unwrap();
+        let props = sunrise_optifine::Properties::parse_equals_first("items=stick\nmodel=./pick");
+        let rule = Rule::parse("assets/minecraft/optifine/cit/a.properties", &props, |p| {
+            root.join(p).is_file()
+        })
+        .unwrap();
+        let source = ResourceSource::directory(root.clone());
+        let present = load_models(
+            &source,
+            std::slice::from_ref(&rule),
+            &LoadConditions::new(["compat_mod"]),
+        );
+        let absent = load_models(&source, &[rule], &LoadConditions::new([]));
+        let _ = fs::remove_dir_all(&root);
+        let primary = "sunrise_cit:minecraft/optifine/cit/primary";
+        assert_eq!(
+            model_sprites(&present).into_iter().collect::<Vec<_>>(),
+            [primary]
+        );
+        assert!(model_sprites(&absent).is_empty());
     }
 
     #[test]

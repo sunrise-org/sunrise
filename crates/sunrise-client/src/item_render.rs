@@ -1413,6 +1413,7 @@ impl ItemRenderer {
             root,
             crate::model_library::ParsedModels::load(root.source()).into_item_library(),
             item_data,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
         )
     }
     /// Reuse the immutable models prepared with the block resources at `root`.
@@ -1421,12 +1422,14 @@ impl ItemRenderer {
         root: &ResourceRoot,
         library: std::result::Result<Arc<ModelLibrary>, String>,
         item_data: &sunrise_world::item_defaults::ItemData,
+        conditions: &sunrise_world::conditions::LoadConditions,
     ) -> crate::Result<Self> {
         Self::load_tables(
             root,
             library,
             true,
             item_data,
+            conditions,
             None,
             ItemProviderTables::installed(FACTORIES.get()),
         )
@@ -1445,6 +1448,7 @@ impl ItemRenderer {
             library,
             false,
             item_data,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
             None,
             ItemProviderTables::default(),
         )
@@ -1454,12 +1458,14 @@ impl ItemRenderer {
         library: std::result::Result<Arc<ModelLibrary>, String>,
         document: &crate::mobs::EntityModelDocument,
         item_data: &sunrise_world::item_defaults::ItemData,
+        conditions: &sunrise_world::conditions::LoadConditions,
     ) -> crate::Result<Self> {
         Self::load_tables(
             root,
             library,
             true,
             item_data,
+            conditions,
             Some(document),
             ItemProviderTables::installed(FACTORIES.get()),
         )
@@ -1469,6 +1475,7 @@ impl ItemRenderer {
         library: std::result::Result<Arc<ModelLibrary>, String>,
         drawn: bool,
         item_data: &sunrise_world::item_defaults::ItemData,
+        conditions: &sunrise_world::conditions::LoadConditions,
         entity_models: Option<&crate::mobs::EntityModelDocument>,
         providers: ItemProviderTables<'_>,
     ) -> crate::Result<Self> {
@@ -1476,7 +1483,7 @@ impl ItemRenderer {
         // CIT models and glint textures only affect drawing. A server still
         // needs item prototypes and ids, but never these resource-pack assets.
         let (library, cit) = if drawn {
-            cit::load(root.source(), library?)
+            cit::load(root.source(), library?, conditions)
         } else {
             (library?, None)
         };
@@ -2680,6 +2687,7 @@ mod tests {
                         ),
                         library.clone(),
                         &data,
+                        &sunrise_world::conditions::LoadConditions::vanilla(),
                     )
                 })
                 .err()
@@ -2693,6 +2701,7 @@ mod tests {
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
             library.clone(),
             &data,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
         )
         .err()
         .unwrap()
@@ -2756,6 +2765,7 @@ mod tests {
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
             library.clone(),
             &data,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
         )?;
         let server = ItemRenderer::load_for_server(
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),

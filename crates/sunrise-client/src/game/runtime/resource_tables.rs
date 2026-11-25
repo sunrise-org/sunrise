@@ -168,6 +168,9 @@ pub struct UiResources {
     pub splashes: Arc<str>,
     /// The `Text` of each plain string mods draw (`DrawContext::text`).
     pub plain_texts: PlainTexts,
+    /// The load's conditions, which Custom Item Textures' `neoforge:conditional` models resolve
+    /// against whenever the atlas is stitched again.
+    pub model_conditions: sunrise_world::conditions::LoadConditions,
 }
 
 /// The `Text` of each plain string a mod draws by `&str` (`DrawContext::text`), kept so drawing
@@ -221,13 +224,19 @@ impl UiResources {
         root: &sunrise_assets::resource_source::ResourceSource,
         vanilla: &Path,
     ) -> Result<Self> {
-        Self::load_with_limit(root, vanilla, sunrise_client::hud::MAX_ATLAS_SIZE)
+        Self::load_with_limit(
+            root,
+            vanilla,
+            sunrise_client::hud::MAX_ATLAS_SIZE,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
+        )
     }
     /// Build the title resources within the supplied device texture dimension.
     pub fn load_with_limit(
         root: &sunrise_assets::resource_source::ResourceSource,
         vanilla: &Path,
         max_atlas_size: u32,
+        model_conditions: &sunrise_world::conditions::LoadConditions,
     ) -> Result<Self> {
         // The title screen waits for both: the panorama's six faces decode
         // beside the atlas.
@@ -246,6 +255,7 @@ impl UiResources {
                     &game,
                     pool,
                     max_atlas_size,
+                    model_conditions,
                 )
             });
             let panorama = panorama
@@ -256,6 +266,7 @@ impl UiResources {
                 panorama: Arc::new(panorama),
                 splashes: Arc::from(""),
                 plain_texts: PlainTexts::default(),
+                model_conditions: model_conditions.clone(),
             })
         })
     }
@@ -278,6 +289,7 @@ impl UiResources {
             &game,
             self.atlas.dynamic_texture_pool.is_some(),
             limit,
+            &self.model_conditions,
         )?;
         atlas.font.uniform = self.atlas.font.uniform;
         atlas.font.japanese = self.atlas.font.japanese;
@@ -303,6 +315,7 @@ impl UiResources {
             panorama: Arc::new(sunrise_client::gfx::panorama::Faces::colour([0; 4])),
             splashes: Arc::from(""),
             plain_texts: PlainTexts::default(),
+            model_conditions: sunrise_world::conditions::LoadConditions::vanilla(),
         })
     }
 }
@@ -327,6 +340,7 @@ impl PackResources {
         biomes: Arc<Biomes>,
         light: Arc<LightTables>,
         item_data: &sunrise_world::item_defaults::ItemData,
+        model_conditions: &sunrise_world::conditions::LoadConditions,
     ) -> Result<Self> {
         let visibility = models::load_visibility(root.prepared(), assets.registry)?;
         api_values::resolve_block_definitions(assets.registry)?;
@@ -346,6 +360,7 @@ impl PackResources {
             root,
             render.model_library.clone(),
             item_data,
+            model_conditions,
         )?;
         Self::assemble(
             root,

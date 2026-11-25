@@ -102,13 +102,14 @@ pub fn worn_rule(rules: &CitRules, kind: Kind, stack: &ItemStack, item_max: u32)
 pub(super) fn load(
     root: &ResourceSource,
     library: Arc<ModelLibrary>,
+    conditions: &sunrise_world::conditions::LoadConditions,
 ) -> (Arc<ModelLibrary>, Option<CitModels>) {
     let rules = CitRules::load(root);
     // A `cit.properties` alone can still turn vanilla's glint off.
     if rules.is_empty() && rules.global.use_glint {
         return (library, None);
     }
-    let extra = cit_assets::load_models(root, &rules.rules);
+    let extra = cit_assets::load_models(root, &rules.rules, conditions);
     let library = if extra.is_empty() {
         library
     } else {
@@ -530,6 +531,7 @@ mod tests {
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
             library,
             &data,
+            &sunrise_world::conditions::LoadConditions::vanilla(),
         )
         .unwrap()
     }

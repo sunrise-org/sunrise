@@ -90,6 +90,7 @@ impl HudAtlas {
         full: bool,
         pool: bool,
         max_atlas_size: u32,
+        conditions: &sunrise_world::conditions::LoadConditions,
     ) -> Result<Self> {
         let textures = "assets/minecraft/textures";
         let mut files = Vec::new();
@@ -359,7 +360,7 @@ impl HudAtlas {
             gui_files = found.gui_files;
             gui_names = found.gui;
             non_gui = found.non_gui;
-            for (image, image_flags, is_animated) in cit_sprites(root, &images) {
+            for (image, image_flags, is_animated) in cit_sprites(root, &images, conditions) {
                 cit_names.insert(image.0.clone());
                 if let Some(f) = image_flags {
                     flags.insert(image.0.clone(), f);

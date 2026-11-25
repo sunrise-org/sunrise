@@ -798,4 +798,125 @@ mod loader_tests {
         assert_eq!(quads[0].facing, Direction::Down);
         assert_eq!(bake(&library, "t:restoring").len(), 2);
     }
+
+    fn conditional_library(
+        models: &[(&str, &str)],
+        conditions: &ConditionTest<'_>,
+    ) -> ModelLibrary {
+        let models = models
+            .iter()
+            .map(|(name, json)| {
+                (
+                    (*name).to_owned(),
+                    CuboidModel::from_json_with_loaders_and_conditions(
+                        json,
+                        name,
+                        &|_| None,
+                        conditions,
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect();
+        ModelLibrary::new(models).unwrap()
+    }
+
+    #[test]
+    fn conditional_passing_with_inline_model_bakes_it() {
+        let cond = r#"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"neoforge:always"}],
+            "model":{"parent":"t:cube","textures":{"all":"block/primary"}},
+            "fallback":{"parent":"t:cube","textures":{"all":"block/fallback"}}}"#;
+        let library = conditional_library(&[("t:cube", CUBE), ("t:cond", cond)], &|_, _| Ok(true));
+        assert_eq!(
+            sprites(&bake(&library, "t:cond")),
+            ["minecraft:block/primary"]
+        );
+    }
+
+    #[test]
+    fn conditional_passing_without_model_bakes_own_elements() {
+        let cond = r##"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"neoforge:always"}],
+            "textures":{"all":"block/self"},
+            "elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}],
+            "fallback":"t:other"}"##;
+        let library = conditional_library(&[("t:cond", cond)], &|_, _| Ok(true));
+        assert_eq!(sprites(&bake(&library, "t:cond")), ["minecraft:block/self"]);
+    }
+
+    #[test]
+    fn conditional_failing_bakes_inline_fallback() {
+        let cond = r#"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"neoforge:never"}],
+            "model":{"parent":"t:cube","textures":{"all":"block/primary"}},
+            "fallback":{"parent":"t:cube","textures":{"all":"block/inline_fallback"}}}"#;
+        let library = conditional_library(&[("t:cube", CUBE), ("t:cond", cond)], &|_, _| Ok(false));
+        assert_eq!(
+            sprites(&bake(&library, "t:cond")),
+            ["minecraft:block/inline_fallback"]
+        );
+    }
+
+    #[test]
+    fn conditional_failing_bakes_fallback_by_id() {
+        let alt = r#"{"parent":"t:cube","textures":{"all":"block/by_id"}}"#;
+        let cond = r#"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"neoforge:never"}],
+            "model":{"parent":"t:cube","textures":{"all":"block/primary"}},
+            "fallback":"t:alt"}"#;
+        let library = conditional_library(
+            &[("t:cube", CUBE), ("t:alt", alt), ("t:cond", cond)],
+            &|_, _| Ok(false),
+        );
+        assert_eq!(
+            sprites(&bake(&library, "t:cond")),
+            ["minecraft:block/by_id"]
+        );
+    }
+
+    #[test]
+    fn conditional_failing_builtin_missing_bakes_missing_model() {
+        let cond = r#"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"neoforge:never"}],
+            "model":{"parent":"t:cube","textures":{"all":"block/primary"}},
+            "fallback":"builtin/missing"}"#;
+        let library = conditional_library(&[("t:cond", cond)], &|_, _| Ok(false));
+        let quads = bake(&library, "t:cond");
+        assert_eq!(quads.len(), 6);
+        assert!(
+            quads
+                .iter()
+                .all(|q| q.material.sprite == "minecraft:missingno")
+        );
+    }
+
+    #[test]
+    fn conditional_missing_fallback_and_bad_conditions_are_refused_by_name() {
+        let missing_fallback = r#"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"neoforge:never"}],
+            "model":{"parent":"t:cube"}}"#;
+        let err = CuboidModel::from_json_with_loaders_and_conditions(
+            missing_fallback,
+            "t:block/no_fallback",
+            &|_| None,
+            &|_, _| Ok(false),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("t:block/no_fallback"), "{err}");
+
+        let bad_conditions = r#"{"loader":"neoforge:conditional",
+            "neoforge:conditions":[{"type":"demo:unknown"}],
+            "fallback":"builtin/missing"}"#;
+        let err = CuboidModel::from_json_with_loaders_and_conditions(
+            bad_conditions,
+            "t:block/bad_cond",
+            &|_| None,
+            &|_, _| Err("unknown load condition".to_owned()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("t:block/bad_cond"), "{err}");
+    }
 }

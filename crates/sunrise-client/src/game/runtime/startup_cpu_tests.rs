@@ -97,8 +97,9 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
         resource_source::ResourceRoot,
     };
     let models = |sprite: &str| {
-        let frame = CuboidModel::from_json_with_loaders(
+        let frame = CuboidModel::from_json_with_loaders_and_conditions(
             &format!(r#"{{"loader":"example:frame_loader","textures":{{"frame":"{sprite}"}}}}"#),
+            "",
             &|loader| {
                 assert_eq!(loader, "example:frame_loader");
                 Some(LoaderProvider {
@@ -120,6 +121,7 @@ fn worker_prepares_owned_models_and_inventory_before_handoff() {
                     }),
                 })
             },
+            &|_, _| Ok(true),
         )
         .unwrap();
         let item_frame = CuboidModel::from_json(r#"{"parent":"example:block/frame"}"#).unwrap();
