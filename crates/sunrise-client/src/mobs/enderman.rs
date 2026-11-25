@@ -9,7 +9,10 @@ use super::{
         RandomLookAround, Stroll, TARGET, goal_clone, reduced,
     },
 };
-use crate::items::{BlockLootRoll, ItemStack};
+use crate::{
+    enchant::Enchantments,
+    items::{BlockLootRoll, ItemStack, Items},
+};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -597,11 +600,23 @@ impl Goal for LeaveBlock {
 
 /// The tool `Enderman.dropCustomDeathLoot` rolls the carried block's drops
 /// with: a diamond axe enchanted by `VanillaEnchantmentProviders.ENDERMAN_LOOT_DROP`
-/// (`enchantment_provider/enderman_loot_drop.json`, a single Silk Touch I),
-/// so the block itself comes back.
-pub fn carried_block_tool() -> ItemStack {
+/// (`minecraft:enderman_loot_drop`).
+pub fn carried_block_tool<R: RandomSource>(
+    enchantments: &Enchantments,
+    items: &Items,
+    random: &mut R,
+    special: f32,
+) -> ItemStack {
     let mut axe = ItemStack::new("minecraft:diamond_axe", 1);
-    axe.enchant("minecraft:silk_touch", 1);
+    for (id, level) in enchantments.enchant_from_provider(
+        "minecraft:enderman_loot_drop",
+        items,
+        random,
+        &axe,
+        special,
+    ) {
+        axe.enchant(&id, level);
+    }
     axe
 }
 
@@ -837,7 +852,8 @@ mod tests {
                 .into_iter()
                 .flat_map(|d| match d {
                     drops::Drop::CarriedBlock(state) => {
-                        let tool = carried_block_tool();
+                        let tool =
+                            carried_block_tool(&items.enchantments, &items, &mut m.random, 0.0);
                         let roll = carried_block_roll(&tool);
                         let stacks = Some((&mut sequences, 0));
                         let stacks = items.block_drops(registry, state, roll, &mut random, stacks);
@@ -914,6 +930,67 @@ mod tests {
             vec![true, false],
             "a survival player's stare angers it; a spectator's does not"
         );
+    }
+
+    #[test]
+    fn carried_block_tool_uses_pack_enderman_loot_drop_provider() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("items.json"),
+            serde_json::json!({"minecraft:diamond_axe": {}}).to_string(),
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let files = [
+            (
+                "enchantment/minecraft:fortune".into(),
+                vec![
+                    serde_json::json!({
+                        "description": "Fortune",
+                        "weight": 2,
+                        "max_level": 3,
+                        "anvil_cost": 4,
+                        "min_cost": {"base": 15, "per_level_above_first": 9},
+                        "max_cost": {"base": 65, "per_level_above_first": 9},
+                        "supported_items": "minecraft:diamond_axe",
+                        "slots": ["mainhand"]
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+            (
+                "enchantment_provider/minecraft:enderman_loot_drop".into(),
+                vec![
+                    serde_json::json!({
+                        "type": "minecraft:single",
+                        "enchantment": "minecraft:fortune",
+                        "level": 3
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+        ];
+        let overlay = sunrise_world::loot::PackOverlay::new(&files);
+        let (packed, admitted) = crate::lan::data::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &overlay,
+            &Default::default(),
+            &Default::default(),
+            |_| true,
+        );
+        admitted.unwrap();
+        let mut items = Items::tags_only(root.path(), &overlay, &defaults).unwrap();
+        packed
+            .install_items(&mut items, root.path(), &overlay, &defaults)
+            .unwrap();
+        let mut rng = sunrise_core::random::LegacyRandom::new(0);
+        let tool = carried_block_tool(&items.enchantments, &items, &mut rng, 0.0);
+        assert_eq!(&*tool.item, "minecraft:diamond_axe");
+        assert_eq!(tool.enchantment_level("minecraft:fortune"), 3);
+        assert_eq!(tool.enchantment_level("minecraft:silk_touch"), 0);
     }
 }
 #[cfg(test)]

@@ -782,11 +782,15 @@ impl Game<'_> {
             );
         }
         let special = self.local_difficulty(at).special();
-        // `SkeletonTrapGoal.enchant`: the weapon and the helmet, always.
+        // `SkeletonTrapGoal.enchant`: clear existing enchantments on the weapon
+        // and the helmet, then apply `mob_spawn_equipment`, always.
         for slot in [
             sunrise_client::mobs::finalize::MAINHAND,
             sunrise_client::mobs::finalize::HEAD,
         ] {
+            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                sunrise_client::mobs::finalize::set_slot_enchantments(m, slot, Vec::new());
+            }
             self.enchant_item(id, slot, special);
         }
         Some(id)
@@ -2888,8 +2892,8 @@ mod trap_scatter_tests {
         }
     }
 
-    /// `EnchantmentsByCostWithDifficulty.enchant` reads the stack the mob
-    /// holds: an empty slot draws nothing from the world's random.
+    /// `SkeletonTrapGoal.enchant` draws from `skeleton.getRandom()`, and an
+    /// empty slot draws nothing.
     #[test]
     #[ignore = "daily"]
     fn enchant_item_on_an_empty_slot_draws_nothing() {
@@ -2898,11 +2902,10 @@ mod trap_scatter_tests {
         let id = game
             .spawn_mob_raw("minecraft:skeleton_horse", [8.5, 64.0, 8.5], false)
             .unwrap();
-        let seeded = || {
-            sunrise_core::random::LevelRandom::for_level(sunrise_core::random::LegacyRandom::new(5))
-        };
-        game.world.random = seeded();
+        let seeded = || LegacyRandom::new(5);
+        game.mobs.iter_mut().find(|m| m.id == id).unwrap().random = seeded();
         game.enchant_item(id, sunrise_client::mobs::finalize::MAINHAND, 0.5);
-        assert_eq!(game.world.random.next_long(), seeded().next_long());
+        let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+        assert_eq!(m.random.next_long(), seeded().next_long());
     }
 }

@@ -305,7 +305,12 @@ pub fn main() -> sunrise_client::Result<()> {
                     // The fixture's mobs keep no whole stacks.
                     drops::Drop::Stack(s) => writeln!(out, "drop {} {}", s.item, s.count),
                     drops::Drop::CarriedBlock(state) => {
-                        let tool = enderman::carried_block_tool();
+                        let tool = enderman::carried_block_tool(
+                            &block_items.enchantments,
+                            &block_items,
+                            &mut m.random,
+                            0.0,
+                        );
                         let stacks = block_items.block_drops(
                             registry,
                             state,

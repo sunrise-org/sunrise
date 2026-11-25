@@ -1823,7 +1823,12 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             && self.int(300) == 0
             && item(m, MAINHAND).as_deref() == Some("minecraft:crossbow")
         {
-            gear::upgrade(m, gear::MAIN, "minecraft:piercing", 1);
+            self.enchant_from_provider(
+                m,
+                MAINHAND,
+                "minecraft:crossbow",
+                "minecraft:pillager_spawn_crossbow",
+            );
         }
         // EquipmentSlot.VALUES order: feet, legs, chest, head.
         for slot in [FEET, LEGS, CHEST, HEAD] {
@@ -1835,23 +1840,16 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         if self.float() >= chance * self.special() {
             return;
         }
-        self.enchant_by_cost(m, slot, &id);
+        self.enchant_from_provider(m, slot, &id, "minecraft:mob_spawn_equipment");
     }
-    /// `EnchantmentsByCostWithDifficulty.enchant` (`mob_spawn_equipment`:
-    /// cost 5 to 5 + 17 x the special multiplier, `#on_mob_spawn_equipment`).
-    fn enchant_by_cost(&mut self, m: &mut Mob, slot: usize, id: &str) {
-        let top = 5 + (self.special() * 17.0) as i32;
-        let cost = self.random.next_int_between_inclusive(5, top).unwrap_or(5);
+    /// `EnchantmentHelper.enchantItemFromProvider`: apply `provider` to `slot`.
+    fn enchant_from_provider(&mut self, m: &mut Mob, slot: usize, id: &str, provider: &str) {
+        let special = self.special();
+        let stack = item_stack(m, slot).unwrap_or_else(|| crate::items::ItemStack::new(id, 1));
         let d = self.level.spawn_data();
-        let e = d.enchantments;
-        let pool = e.tag("minecraft:on_mob_spawn_equipment");
-        let picked = e.select(
-            d.items,
-            self.random,
-            &item_stack(m, slot).unwrap_or_else(|| crate::items::ItemStack::new(id, 1)),
-            cost,
-            pool,
-        );
+        let picked =
+            d.enchantments
+                .enchant_from_provider(provider, d.items, self.random, &stack, special);
         for (enchantment, level) in picked {
             gear::upgrade(m, gear_slot(slot), &enchantment, level);
         }
@@ -3242,6 +3240,235 @@ mod tests {
         let mut unenchanted = ItemStack::new("minecraft:iron_chestplate", 1);
         unenchanted.damage = 2;
         assert!(!read.matches_stack(&unenchanted));
+    }
+
+    struct ProviderTestLevel {
+        registries: SpawnRegistries,
+        items: Items,
+    }
+    impl FinalizeLevel for ProviderTestLevel {
+        fn biome(&self, _: [i32; 3]) -> String {
+            "minecraft:plains".into()
+        }
+        fn biome_tag(&self, _: &str, _: [i32; 3]) -> bool {
+            false
+        }
+        fn structures_with_piece_at(&self, _: [i32; 3]) -> Vec<String> {
+            Vec::new()
+        }
+        fn moon_phase(&self, _: [i32; 3]) -> usize {
+            0
+        }
+        fn spawning_monsters(&self) -> bool {
+            true
+        }
+        fn no_collision(&self, _: Aabb) -> bool {
+            true
+        }
+        fn free_chicken(&self, _: Aabb) -> Option<u32> {
+            None
+        }
+        fn ride_chicken(&mut self, _: u32, _: u32) {}
+        fn game_time(&self) -> i64 {
+            0
+        }
+        fn halloween(&self) -> bool {
+            false
+        }
+        fn create(&mut self, _: &str, _: Reason) -> Option<Mob> {
+            None
+        }
+        fn spawn_data(&self) -> SpawnData<'_> {
+            SpawnData {
+                registries: &self.registries,
+                enchantments: &self.items.enchantments,
+                items: &self.items,
+                camel_husk_size: (1.7, 2.375),
+            }
+        }
+    }
+
+    fn provider_test_level(files: &[(String, Vec<Vec<u8>>)]) -> ProviderTestLevel {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("items.json"),
+            serde_json::json!({
+                "minecraft:iron_sword": {},
+                "minecraft:iron_shovel": {},
+                "minecraft:crossbow": {},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        let overlay = sunrise_world::loot::PackOverlay::new(files);
+        let (packed, admitted) = crate::lan::data::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &overlay,
+            &Default::default(),
+            &Default::default(),
+            |_| true,
+        );
+        admitted.unwrap();
+        let mut items = Items::tags_only(root.path(), &overlay, &defaults).unwrap();
+        packed
+            .install_items(&mut items, root.path(), &overlay, &defaults)
+            .unwrap();
+        ProviderTestLevel {
+            registries: SpawnRegistries::load(root.path()),
+            items,
+        }
+    }
+
+    #[test]
+    fn mob_spawn_equipment_provider_override_enchants_zombie_sword_with_pack_sharpness() {
+        let files = [
+            (
+                "enchantment/minecraft:sharpness".into(),
+                vec![
+                    serde_json::json!({
+                        "description": "Sharpness",
+                        "weight": 10,
+                        "max_level": 5,
+                        "anvil_cost": 1,
+                        "min_cost": {"base": 1, "per_level_above_first": 11},
+                        "max_cost": {"base": 21, "per_level_above_first": 11},
+                        "supported_items": "minecraft:iron_sword",
+                        "slots": ["mainhand"]
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+            (
+                "enchantment_provider/minecraft:mob_spawn_equipment".into(),
+                vec![
+                    serde_json::json!({
+                        "type": "minecraft:single",
+                        "enchantment": "minecraft:sharpness",
+                        "level": 5
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+        ];
+        let mut level = provider_test_level(&files);
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::Zombie;
+        let kind = Arc::new(kind);
+        let difficulty = LocalDifficulty {
+            base: 3,
+            effective: 6.75,
+            normal: false,
+            hard: true,
+            id: 3,
+        };
+        let mut found = false;
+        for seed in 0..5000_i64 {
+            let mut m = Mob::new(
+                1,
+                Arc::clone(&kind),
+                sunrise_core::geometry::Vec3::ZERO,
+                0.0,
+            );
+            let mut rng = sunrise_core::random::LegacyRandom::new(seed);
+            let mut cx = Ctx {
+                level: &mut level,
+                random: &mut rng,
+                difficulty,
+                created: Vec::new(),
+                jockey_rider: None,
+            };
+            finalize(&mut cx, &mut m, Reason::Natural, None);
+            if item(&m, MAINHAND).as_deref() == Some("minecraft:iron_sword")
+                && gear::enchanted(&m, gear::MAIN)
+            {
+                assert_eq!(gear::level(&m, gear::MAIN, "minecraft:sharpness"), 5);
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "expected a seeded zombie with an enchanted iron sword"
+        );
+    }
+
+    #[test]
+    fn pillager_spawn_crossbow_provider_override_changes_spawned_pillager_crossbow() {
+        let files = [
+            (
+                "enchantment/minecraft:multishot".into(),
+                vec![
+                    serde_json::json!({
+                        "description": "Multishot",
+                        "weight": 2,
+                        "max_level": 1,
+                        "anvil_cost": 4,
+                        "min_cost": {"base": 20, "per_level_above_first": 0},
+                        "max_cost": {"base": 50, "per_level_above_first": 0},
+                        "supported_items": "minecraft:crossbow",
+                        "slots": ["mainhand"]
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+            (
+                "enchantment_provider/minecraft:pillager_spawn_crossbow".into(),
+                vec![
+                    serde_json::json!({
+                        "type": "minecraft:single",
+                        "enchantment": "minecraft:multishot",
+                        "level": 1
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ],
+            ),
+        ];
+        let mut level = provider_test_level(&files);
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::Pillager;
+        let kind = Arc::new(kind);
+        // special == 0.0 so only the 1-in-300 `pillager_spawn_crossbow` roll fires.
+        let difficulty = LocalDifficulty {
+            base: 2,
+            effective: 1.0,
+            normal: true,
+            hard: false,
+            id: 2,
+        };
+        let mut found = false;
+        for seed in 0..5000_i64 {
+            let mut m = Mob::new(
+                1,
+                Arc::clone(&kind),
+                sunrise_core::geometry::Vec3::ZERO,
+                0.0,
+            );
+            let mut rng = sunrise_core::random::LegacyRandom::new(seed);
+            let mut cx = Ctx {
+                level: &mut level,
+                random: &mut rng,
+                difficulty,
+                created: Vec::new(),
+                jockey_rider: None,
+            };
+            finalize(&mut cx, &mut m, Reason::Natural, None);
+            if gear::enchanted(&m, gear::MAIN) {
+                assert_eq!(gear::level(&m, gear::MAIN, "minecraft:multishot"), 1);
+                assert_eq!(gear::level(&m, gear::MAIN, "minecraft:piercing"), 0);
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "expected a seeded pillager to hit the 1-in-300 spawn crossbow roll"
+        );
     }
 }
 

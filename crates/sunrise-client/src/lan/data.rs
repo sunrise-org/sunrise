@@ -306,7 +306,12 @@ fn synchronized_entries(
         .into_iter()
         .map(|(id, value)| (("minecraft".to_owned(), id), value, false))
         .collect();
-    if enchantments || matches!(path, "instrument" | "jukebox_song" | "timeline") {
+    if enchantments
+        || matches!(
+            path,
+            "enchantment_provider" | "instrument" | "jukebox_song" | "timeline"
+        )
+    {
         mod_entries(resources, path, &mut entries);
     }
     if key == "minecraft:world_clock" {
@@ -1337,9 +1342,9 @@ mod tests {
             panic!("staged malformed typed registries")
         };
         for diagnostic in [
-            "minecraft:dialog:\n  test:bad: unknown load conditions [absent:dialog]",
-            "minecraft:dimension_type:\n  test:bad: unknown load conditions [minecraft:unknown]",
-            "minecraft:world_clock:\n  test:bad: not a map",
+            "minecraft:dialog:\n  test:bad: data/test/dialog/bad.json: unknown load conditions [absent:dialog]",
+            "minecraft:dimension_type:\n  test:bad: data/test/dimension_type/bad.json: unknown load conditions [minecraft:unknown]",
+            "minecraft:world_clock:\n  test:bad: data/test/world_clock/bad.json: not a map",
         ] {
             assert!(typed.contains(diagnostic), "{typed}");
         }

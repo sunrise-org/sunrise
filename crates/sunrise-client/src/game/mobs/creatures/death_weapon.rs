@@ -534,10 +534,16 @@ impl Game<'_> {
             match d {
                 drops::Drop::CarriedBlock(state) => {
                     // Enderman.dropCustomDeathLoot: spawnAtLocation for each
-                    // of the carried block's silk-touch drops.
+                    // of the carried block's drops using `enderman_loot_drop`.
                     use sunrise_client::mobs::enderman;
-                    let tool = enderman::carried_block_tool();
                     let at = [m.position.x, m.position.y, m.position.z];
+                    let special = self.local_difficulty(at).special();
+                    let tool = enderman::carried_block_tool(
+                        &world_stations!(self).enchantments,
+                        world_items!(self),
+                        &mut m.random,
+                        special,
+                    );
                     let drops = self.roll_block_loot(
                         at.map(|c| c.floor() as i32),
                         state,
