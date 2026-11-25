@@ -88,6 +88,12 @@ impl Resources {
     pub(super) fn providers(&self) -> &Providers {
         &self.rest().providers
     }
+    pub(super) fn test_environments(&self) -> &HashMap<String, test_environments::Environment> {
+        &self.rest().test_environments
+    }
+    pub(super) fn test_instances(&self) -> &HashMap<String, test_instances::TestDef> {
+        &self.rest().test_instances
+    }
     pub(super) fn block_entity_render(&self) -> &BlockEntityRenderer {
         &self.rest().block_entity_render
     }

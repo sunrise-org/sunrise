@@ -893,6 +893,7 @@ impl Game<'_> {
         // After the export, which keys the registry with vanilla's tags.
         self.sync_stat_registries();
         self.sync_pack_tag_ids();
+        self.sync_test_registry_ids();
     }
     /// The block the player is looking at, for coordinate suggestions, and
     /// the entity, for entity arguments (ClientSuggestionProvider).
@@ -2213,8 +2214,6 @@ impl Game<'_> {
         self.world.day_time = self.switch_clock(&clock);
         self.ui.chat.clear();
         self.build_registries();
-        // The world opens with its test instances (`Registries.TEST_INSTANCE`).
-        self.snapshot_test_defs();
         self.sync_rules();
         self.carrier_world_opened()
     }

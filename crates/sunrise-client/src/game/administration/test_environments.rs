@@ -3,35 +3,23 @@
 //! all of them), set up when the batch starts and torn down after it. The
 //! definitions are the data pack's `test_environment` entries, or inline.
 use super::{Dim, Game, native_level_world::weather_for_world};
-use serde_json::Value as Json;
 use sunrise_client::world::weather_flags;
 use sunrise_client_core::gamerules::Value;
-pub(super) use sunrise_gameplay::test_environments::{
-    Activation, Environment, Saved, WeatherType, parse,
-};
+pub(super) use sunrise_gameplay::test_environments::{Activation, Environment, Saved, WeatherType};
 
 impl Game<'_> {
-    /// The data pack entry `data/<ns>/test_environment/<path>.json`.
-    fn read_test_environment_json(&self, id: &str) -> Option<Json> {
-        let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-        let file = self
-            .options
-            .resources
-            .join("data")
-            .join(ns)
-            .join("test_environment")
-            .join(format!("{path}.json"));
-        serde_json::from_slice(&std::fs::read(file).ok()?).ok()
-    }
-
-    /// The definition of a batch's environment (`batch()` of its tests).
+    /// The definition of a batch's environment (`batch()` of its tests),
+    /// from the world's frozen `Registries.TEST_ENVIRONMENT` table.
     pub(super) fn test_environment(&self, id: &str) -> Option<Environment> {
-        parse(
-            &Json::String(id.to_owned()),
-            &|i| self.read_test_environment_json(i),
-            0,
-            &self.ui.rules,
-        )
+        let table = match &self.world_tables {
+            Some(tables) => &tables.test_environments,
+            None => self.res.test_environments(),
+        };
+        if id.contains(':') {
+            table.get(id).cloned()
+        } else {
+            table.get(&format!("minecraft:{id}")).cloned()
+        }
     }
 
     /// `TestEnvironmentDefinition.activate`.

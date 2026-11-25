@@ -358,7 +358,7 @@ fn native_console_delivers_delayed_game_test_summary_and_closes() {
         || {
             with_guests(|game| {
                 game.build_registries();
-                game.snapshot_test_defs();
+                game.reload_datapacks(false, &[]).unwrap();
                 let layout = game.world.layout();
                 for cx in -2..=2 {
                     for cz in -2..=2 {

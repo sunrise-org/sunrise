@@ -179,6 +179,7 @@ impl Info {
 pub(super) struct Batch {
     pub(super) index: i32,
     pub(super) environment: String,
+    inline_environment: Option<super::test_environments::Environment>,
     dimension: Dim,
     pub(super) infos: Vec<Info>,
 }
@@ -239,6 +240,7 @@ fn batch_infos(infos: Vec<Info>, size: usize) -> Vec<Batch> {
     for info in infos {
         let index = match batches.iter_mut().rev().find(|batch| {
             batch.environment == info.def.environment
+                && batch.inline_environment == info.def.inline_environment
                 && batch.dimension == info.dim
                 && batch.infos[0].def.dimension == info.def.dimension
         }) {
@@ -252,6 +254,7 @@ fn batch_infos(infos: Vec<Info>, size: usize) -> Vec<Batch> {
         batches.push(Batch {
             index,
             environment: info.def.environment.clone(),
+            inline_environment: info.def.inline_environment.clone(),
             dimension: info.dim,
             infos: vec![info],
         });
@@ -283,6 +286,7 @@ pub(super) fn verify_batches(infos: &[Info], mut next_id: impl FnMut() -> u32) -
             batches.push(Batch {
                 index: ordinal as i32,
                 environment: info.def.environment.clone(),
+                inline_environment: info.def.inline_environment.clone(),
                 dimension: info.dim,
                 infos: copies,
             });
@@ -650,8 +654,12 @@ impl Game<'_> {
             return;
         };
         let mut infos = std::mem::take(&mut batch.infos);
-        let (environment, batch_number, dimension) =
-            (batch.environment.clone(), batch.index, batch.dimension);
+        let (environment, inline_environment, batch_number, dimension) = (
+            batch.environment.clone(),
+            batch.inline_environment.clone(),
+            batch.index,
+            batch.dimension,
+        );
         // createStructuresForBatch: `StructureSpawner.IN_PLACE`.
         let mut spawned = Vec::new();
         for mut info in infos.drain(..) {
@@ -665,7 +673,7 @@ impl Game<'_> {
         );
         // endCurrentEnvironment, then TestEnvironmentDefinition.activate.
         self.end_test_environment();
-        match self.test_environment(&environment) {
+        match inline_environment.or_else(|| self.test_environment(&environment)) {
             Some(definition) => {
                 let activation = self.activate_test_environment(definition, dimension);
                 self.game_tests.environment = Some((dimension, activation));
@@ -1845,21 +1853,30 @@ pub(in crate::game) mod tests {
                         game.world_root = game.options.game_dir.clone().unwrap();
                         game.enter_level(Dim::Nether).unwrap();
                         game.enter_level(Dim::Overworld).unwrap();
-                        let root = tempfile::tempdir().unwrap();
-                        game.options.resources = root.path().to_path_buf();
-                        let environments = root.path().join("data/example/test_environment");
+                        let pack = game.world_root.join("datapacks/fixture");
+                        let environments = pack.join("data/example/test_environment");
                         std::fs::create_dir_all(&environments).unwrap();
+                        std::fs::write(
+                            pack.join("pack.mcmeta"),
+                            r#"{"pack":{"description":"weather veto fixture","pack_format":100}}"#,
+                        )
+                        .unwrap();
                         for weather in ["rain", "thunder"] {
-                            std::fs::write(environments.join(format!("{weather}.json")),
-                                serde_json::json!({"type": "minecraft:weather", "weather": weather}).to_string(),
-                            ).unwrap();
+                            std::fs::write(
+                                environments.join(format!("{weather}.json")),
+                                serde_json::json!({"type": "minecraft:weather", "weather": weather})
+                                    .to_string(),
+                            )
+                            .unwrap();
                         }
+                        game.reload_datapacks(false, &[]).unwrap();
                         // Exercise the real runner's environment lifecycle without spawning a structure.
                         let run_batch = |game: &mut Game<'_>, dimension, name: &str| {
                             game.track_and_start_batches(
                                 vec![Batch {
                                     index: 0,
                                     environment: format!("example:{name}"),
+                                    inline_environment: None,
                                     dimension,
                                     infos: Vec::new(),
                                 }],
@@ -2212,7 +2229,7 @@ mod registered_game_test_tests {
             let mods = vec![mod_api::ModEntry::new("example", hooks)];
             mod_platform::testing::with_mods(mods.into(), || {
                 game.native_register_game_tests(&mut functions);
-                game.snapshot_test_defs();
+                game.reload_datapacks(false, &[]).unwrap();
                 let registered = game.test_def("example:passing").unwrap();
                 assert!(registered.callback.is_some());
                 assert_eq!(registered.max_ticks, 100);

@@ -81,6 +81,14 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
         decode: decode_instrument,
     },
     RegistryKind {
+        key: "minecraft:test_environment",
+        decode: decode_test_environment,
+    },
+    RegistryKind {
+        key: "minecraft:test_instance",
+        decode: decode_test_instance,
+    },
+    RegistryKind {
         key: "minecraft:dialog",
         decode: decode_dialog,
     },
@@ -222,6 +230,7 @@ impl PackRegistryDefinitions {
             defaults,
             sound_exists: &sound_exists,
             dialog_references: Vec::new(),
+            holder_references: Vec::new(),
         };
         for table in REGISTRY_KINDS {
             let registry = table.key;
@@ -250,12 +259,15 @@ impl PackRegistryDefinitions {
                     let key = (id.namespace().to_owned(), id.path().to_owned());
                     // Reserve the winner even if it fails admission or its condition is false.
                     let definition = entries.entry(key).or_insert(None);
-                    let value: Value = serde_json::from_slice(PackOverlay::top(files))
-                        .map_err(|error| error.to_string())?;
                     let file = format!("data/{}/{kind}/{}.json", id.namespace(), id.path());
+                    let value: Value = serde_json::from_slice(PackOverlay::top(files))
+                        .map_err(|error| format!("{file}: {error}"))?;
                     if overlay.conditions.allows_file_isolated(&value, &file)? {
-                        *definition =
-                            Some(((table.decode)(&mut decoder, &id.to_string(), value)?, true));
+                        *definition = Some((
+                            (table.decode)(&mut decoder, &id.to_string(), value)
+                                .map_err(|error| format!("{file}: {error}"))?,
+                            true,
+                        ));
                     }
                     Ok(())
                 };
@@ -287,10 +299,14 @@ impl PackRegistryDefinitions {
                         Definition::Enchantment(value)
                     } else if from_pack || Self::decodes_prepared(registry) {
                         let id = format!("{}:{}", key.0, key.1);
+                        let file = format!("data/{}/{kind}/{}.json", key.0, key.1);
                         match (table.decode)(&mut decoder, &id, value) {
                             Ok(definition) => definition,
                             Err(error) => {
-                                errors.entry(registry).or_default().insert(id, error);
+                                errors
+                                    .entry(registry)
+                                    .or_default()
+                                    .insert(id, format!("{file}: {error}"));
                                 entries.insert(key, None);
                                 continue;
                             }
@@ -398,28 +414,28 @@ impl PackRegistryDefinitions {
             }
         }
         // WorldClock.CODEC holder binding and Timeline.validateRegistry.
+        let clocks = definitions.entries.get("minecraft:world_clock");
+        let mut prepared_clocks =
+            synchronized_entries(&root, resources, "minecraft:world_clock", overlay);
+        prepared_clocks.retain(|(key, ..)| !clocks.is_some_and(|c| c.contains_key(key)));
+        condition_filter::filter(
+            &mut prepared_clocks,
+            false,
+            overlay.conditions,
+            "world_clock",
+        );
+        let held_clocks: BTreeSet<String> = clocks
+            .into_iter()
+            .flatten()
+            .filter(|(_, entry)| entry.is_some())
+            .map(|((namespace, path), _)| format!("{namespace}:{path}"))
+            .chain(
+                prepared_clocks
+                    .into_iter()
+                    .map(|((namespace, path), ..)| format!("{namespace}:{path}")),
+            )
+            .collect();
         if definitions.entries.contains_key("minecraft:timeline") {
-            let clocks = definitions.entries.get("minecraft:world_clock");
-            let mut prepared_clocks =
-                synchronized_entries(&root, resources, "minecraft:world_clock", overlay);
-            prepared_clocks.retain(|(key, ..)| !clocks.is_some_and(|c| c.contains_key(key)));
-            condition_filter::filter(
-                &mut prepared_clocks,
-                false,
-                overlay.conditions,
-                "world_clock",
-            );
-            let held_clocks: BTreeSet<String> = clocks
-                .into_iter()
-                .flatten()
-                .filter(|(_, entry)| entry.is_some())
-                .map(|((namespace, path), _)| format!("{namespace}:{path}"))
-                .chain(
-                    prepared_clocks
-                        .into_iter()
-                        .map(|((namespace, path), ..)| format!("{namespace}:{path}")),
-                )
-                .collect();
             if let Some(entries) = definitions.entries.get_mut("minecraft:timeline") {
                 let mut rejected = Vec::new();
                 let mut valid_timelines: Vec<(String, (String, String), Arc<Timeline>)> =
@@ -459,6 +475,40 @@ impl PackRegistryDefinitions {
                 }
             }
         }
+        // RegistryDataLoader.validateRegistry: every test_environment, world_clock and timeline
+        // holder a winning test_environment or test_instance names is bound.
+        let held = |registry: &str| -> BTreeSet<String> {
+            definitions
+                .entries
+                .get(registry)
+                .into_iter()
+                .flatten()
+                .filter(|(_, entry)| entry.is_some())
+                .map(|((namespace, path), _)| format!("{namespace}:{path}"))
+                .collect()
+        };
+        let held_environments = held("minecraft:test_environment");
+        let held_timelines = held("minecraft:timeline");
+        for reference in decoder.holder_references {
+            let bound = match reference.target_registry {
+                "minecraft:test_environment" => &held_environments,
+                "minecraft:world_clock" => &held_clocks,
+                _ => &held_timelines,
+            };
+            if !bound.contains(&reference.target_id) {
+                let kind = reference.target_registry.trim_start_matches("minecraft:");
+                errors
+                    .entry(reference.referring_registry)
+                    .or_default()
+                    .insert(
+                        reference.referring_id,
+                        format!(
+                            "{}: unknown {kind} {}",
+                            reference.referring_file, reference.target_id
+                        ),
+                    );
+            }
+        }
         if errors.is_empty() {
             return (definitions, Ok(()));
         }
@@ -491,6 +541,8 @@ impl PackRegistryDefinitions {
                 | "minecraft:sulfur_cube_archetype"
                 | "minecraft:decorated_pot_pattern"
                 | "minecraft:block_transformer"
+                | "minecraft:test_environment"
+                | "minecraft:test_instance"
                 | "minecraft:timeline"
         )
     }
@@ -606,6 +658,41 @@ impl PackRegistryDefinitions {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Prepared-resource `test_environment` and `test_instance` entries for a game before a
+    /// world opens (`WorldRest`), decoded through the same codecs as world open.
+    pub fn load_prepared_game_tests(resources: &Path, defaults: &ItemDefaults) -> Self {
+        let mut definitions = Self::default();
+        let registries = crate::command::Registries::default();
+        let sound_exists = |_: &str| true;
+        let mut decoder = Decoder {
+            registries: &registries,
+            defaults,
+            sound_exists: &sound_exists,
+            dialog_references: Vec::new(),
+            holder_references: Vec::new(),
+        };
+        let root = resources.join("data/minecraft");
+        for (registry, decode) in [
+            (
+                "minecraft:test_environment",
+                decode_test_environment
+                    as fn(&mut Decoder<'_>, &str, Value) -> Result<Definition, String>,
+            ),
+            ("minecraft:test_instance", decode_test_instance),
+        ] {
+            let entries = definitions.entries.entry(registry).or_default();
+            for (key, value, from_pack) in
+                synchronized_entries(&root, resources, registry, &PackOverlay::NONE)
+            {
+                let id = format!("{}:{}", key.0, key.1);
+                if let Ok(definition) = decode(&mut decoder, &id, value) {
+                    entries.insert(key, Some((definition, from_pack)));
+                }
+            }
+        }
+        definitions
     }
 
     /// Use the same selected definitions as the synchronized registry packets.
@@ -734,6 +821,18 @@ struct Decoder<'a> {
     defaults: &'a ItemDefaults,
     sound_exists: &'a dyn Fn(&str) -> bool,
     dialog_references: Vec<Vec<Reference>>,
+    /// The registry holders `test_environment` and `test_instance` entries name, which their
+    /// registries (and `world_clock` and `timeline`) must hold.
+    holder_references: Vec<HolderReference>,
+}
+
+/// A `RegistryCodecs.holder` reference decoded from a winning entry.
+struct HolderReference {
+    referring_registry: &'static str,
+    referring_id: String,
+    referring_file: String,
+    target_registry: &'static str,
+    target_id: String,
 }
 
 impl Decoder<'_> {
@@ -986,6 +1085,297 @@ fn decode_instrument(
     Ok(Definition::Instrument(instrument, tag))
 }
 
+/// `TestEnvironmentDefinition.DIRECT_CODEC`.
+fn decode_test_environment(
+    decoder: &mut Decoder<'_>,
+    id: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let file = registry_file_path("test_environment", id);
+    let tag =
+        decode_test_environment_value(decoder, "minecraft:test_environment", id, &file, &value)?;
+    check_network_nbt(&tag)?;
+    Ok(Definition::Validated(value, Some(tag)))
+}
+
+fn registry_file_path(kind: &str, id: &str) -> String {
+    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    format!("data/{ns}/{kind}/{path}.json")
+}
+
+fn parse_identifier_field(field: &str, value: &Value) -> Result<Identifier, String> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| format!("{field}: a string is required"))?;
+    Identifier::parse(raw).map_err(|error| format!("{field}: {error}"))
+}
+
+fn parse_int_range(field: &str, value: &Value, min: i32, max: i32) -> Result<i32, String> {
+    let number = value
+        .as_i64()
+        .and_then(|n| i32::try_from(n).ok())
+        .ok_or_else(|| format!("{field}: an integer is required"))?;
+    if !(min..=max).contains(&number) {
+        return Err(format!("{field}: {number} outside {min}..={max}"));
+    }
+    Ok(number)
+}
+
+/// `TestEnvironmentDefinition.CODEC`: either a registry id string or an inline definition.
+fn decode_test_environment_holder(
+    decoder: &mut Decoder<'_>,
+    referring_registry: &'static str,
+    referring_id: &str,
+    referring_file: &str,
+    field: &str,
+    value: &Value,
+) -> Result<Tag, String> {
+    if let Some(raw) = value.as_str() {
+        let env_id = Identifier::parse(raw).map_err(|error| format!("{field}: {error}"))?;
+        let canonical = env_id.to_string();
+        decoder.holder_references.push(HolderReference {
+            referring_registry,
+            referring_id: referring_id.to_owned(),
+            referring_file: referring_file.to_owned(),
+            target_registry: "minecraft:test_environment",
+            target_id: canonical.clone(),
+        });
+        return Ok(string(&canonical));
+    }
+    if value.is_object() {
+        return decode_test_environment_value(
+            decoder,
+            referring_registry,
+            referring_id,
+            referring_file,
+            value,
+        )
+        .map_err(|error| format!("{field}: {error}"));
+    }
+    Err(format!("{field}: a string or object is required"))
+}
+
+fn decode_test_environment_value(
+    decoder: &mut Decoder<'_>,
+    referring_registry: &'static str,
+    referring_id: &str,
+    referring_file: &str,
+    value: &Value,
+) -> Result<Tag, String> {
+    let fields = value.as_object().ok_or("not a map")?;
+    let kind_value = fields.get("type").ok_or("type is required")?;
+    let kind = parse_identifier_field("type", kind_value)?;
+    if kind.namespace() != "minecraft" {
+        return Err(format!("type: unknown test_environment type {kind}"));
+    }
+    let mut tag = Compound::from([("type".into(), string(&kind.to_string()))]);
+    match kind.path() {
+        "all_of" => {
+            let list = fields
+                .get("definitions")
+                .and_then(Value::as_array)
+                .ok_or("definitions: a list is required")?;
+            let encoded = list
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    decode_test_environment_holder(
+                        decoder,
+                        referring_registry,
+                        referring_id,
+                        referring_file,
+                        &format!("definitions[{index}]"),
+                        entry,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            tag.insert("definitions".into(), Tag::List(encoded));
+        }
+        "clock_time" => {
+            let clock =
+                parse_identifier_field("clock", fields.get("clock").ok_or("clock is required")?)?;
+            let time = parse_int_range(
+                "time",
+                fields.get("time").ok_or("time is required")?,
+                0,
+                i32::MAX,
+            )?;
+            decoder.holder_references.push(HolderReference {
+                referring_registry,
+                referring_id: referring_id.to_owned(),
+                referring_file: referring_file.to_owned(),
+                target_registry: "minecraft:world_clock",
+                target_id: clock.to_string(),
+            });
+            tag.insert("clock".into(), string(&clock.to_string()));
+            tag.insert("time".into(), Tag::Int(time));
+        }
+        "difficulty" => {
+            let difficulty = fields
+                .get("difficulty")
+                .and_then(Value::as_str)
+                .ok_or("difficulty: a string is required")?;
+            if !matches!(difficulty, "peaceful" | "easy" | "normal" | "hard") {
+                return Err(format!("difficulty: unknown difficulty {difficulty}"));
+            }
+            tag.insert("difficulty".into(), string(difficulty));
+        }
+        "function" => {
+            for field in ["setup", "teardown"] {
+                if let Some(raw) = fields.get(field) {
+                    let fn_id = parse_identifier_field(field, raw)?;
+                    tag.insert(field.into(), string(&fn_id.to_string()));
+                }
+            }
+        }
+        "game_rules" => {
+            let rules_map = fields
+                .get("rules")
+                .and_then(Value::as_object)
+                .ok_or("rules: a map is required")?;
+            let registry = sunrise_client_core::gamerules::rule_registry();
+            let mut rules_tag = Compound::new();
+            for (name, val) in rules_map {
+                let rule_id =
+                    Identifier::parse(name).map_err(|error| format!("rules.{name}: {error}"))?;
+                let canonical = rule_id.to_string();
+                let rule = registry
+                    .rule(&canonical)
+                    .ok_or_else(|| format!("rules.{name}: unknown game rule"))?;
+                let encoded = match rule.default {
+                    sunrise_client_core::gamerules::Value::Bool(_) => {
+                        let b = val
+                            .as_bool()
+                            .ok_or_else(|| format!("rules.{name}: a boolean is required"))?;
+                        Tag::Byte(i8::from(b))
+                    }
+                    sunrise_client_core::gamerules::Value::Int(_) => {
+                        let n = parse_int_range(&format!("rules.{name}"), val, rule.min, rule.max)?;
+                        Tag::Int(n)
+                    }
+                };
+                rules_tag.insert(canonical.as_str().into(), encoded);
+            }
+            tag.insert("rules".into(), Tag::Compound(rules_tag));
+        }
+        "timeline_attributes" => {
+            let list = fields
+                .get("timelines")
+                .and_then(Value::as_array)
+                .ok_or("timelines: a list is required")?;
+            let timelines = list
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    parse_identifier_field(&format!("timelines[{index}]"), entry).map(|id| {
+                        decoder.holder_references.push(HolderReference {
+                            referring_registry,
+                            referring_id: referring_id.to_owned(),
+                            referring_file: referring_file.to_owned(),
+                            target_registry: "minecraft:timeline",
+                            target_id: id.to_string(),
+                        });
+                        string(&id.to_string())
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            tag.insert("timelines".into(), Tag::List(timelines));
+        }
+        "weather" => {
+            let weather = fields
+                .get("weather")
+                .and_then(Value::as_str)
+                .ok_or("weather: a string is required")?;
+            if !matches!(weather, "clear" | "rain" | "thunder") {
+                return Err(format!("weather: unknown weather {weather}"));
+            }
+            tag.insert("weather".into(), string(weather));
+        }
+        _ => return Err(format!("type: unknown test_environment type {kind}")),
+    }
+    Ok(Tag::Compound(tag))
+}
+
+/// `GameTestInstance.DIRECT_CODEC`: `BlockBasedTestInstance.CODEC` and
+/// `FunctionGameTestInstance.CODEC` over `TestData.CODEC`.
+fn decode_test_instance(
+    decoder: &mut Decoder<'_>,
+    id: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let fields = value.as_object().ok_or("not a map")?;
+    let file = registry_file_path("test_instance", id);
+    let kind = parse_identifier_field("type", fields.get("type").ok_or("type is required")?)?;
+    if kind.namespace() != "minecraft" || !matches!(kind.path(), "block_based" | "function") {
+        return Err(format!("type: unknown test_instance type {kind}"));
+    }
+    let mut tag = Compound::from([("type".into(), string(&kind.to_string()))]);
+    if kind.path() == "function" {
+        let function = parse_identifier_field(
+            "function",
+            fields.get("function").ok_or("function is required")?,
+        )?;
+        tag.insert("function".into(), string(&function.to_string()));
+    }
+    let environment = decode_test_environment_holder(
+        decoder,
+        "minecraft:test_instance",
+        id,
+        &file,
+        "environment",
+        fields.get("environment").ok_or("environment is required")?,
+    )?;
+    tag.insert("environment".into(), environment);
+    let structure = parse_identifier_field(
+        "structure",
+        fields.get("structure").ok_or("structure is required")?,
+    )?;
+    tag.insert("structure".into(), string(&structure.to_string()));
+    let max_ticks = parse_int_range(
+        "max_ticks",
+        fields.get("max_ticks").ok_or("max_ticks is required")?,
+        1,
+        i32::MAX,
+    )?;
+    tag.insert("max_ticks".into(), Tag::Int(max_ticks));
+    if let Some(raw) = fields.get("dimension") {
+        let dimension = parse_identifier_field("dimension", raw)?;
+        tag.insert("dimension".into(), string(&dimension.to_string()));
+    }
+    if let Some(raw) = fields.get("setup_ticks") {
+        let setup_ticks = parse_int_range("setup_ticks", raw, 0, i32::MAX)?;
+        tag.insert("setup_ticks".into(), Tag::Int(setup_ticks));
+    }
+    for field in ["required", "manual_only", "sky_access"] {
+        if let Some(raw) = fields.get(field) {
+            let b = raw
+                .as_bool()
+                .ok_or_else(|| format!("{field}: a boolean is required"))?;
+            tag.insert(field.into(), Tag::Byte(i8::from(b)));
+        }
+    }
+    if let Some(raw) = fields.get("rotation") {
+        let rotation = raw.as_str().ok_or("rotation: a string is required")?;
+        if sunrise_world::worldgen::structure::Rotation::from_name(rotation).is_none() {
+            return Err(format!("rotation: unknown rotation {rotation}"));
+        }
+        tag.insert("rotation".into(), string(rotation));
+    }
+    for field in ["max_attempts", "required_successes"] {
+        if let Some(raw) = fields.get(field) {
+            let n = parse_int_range(field, raw, 1, i32::MAX)?;
+            tag.insert(field.into(), Tag::Int(n));
+        }
+    }
+    if let Some(raw) = fields.get("padding") {
+        let padding = parse_int_range("padding", raw, 0, 128)?;
+        tag.insert("padding".into(), Tag::Int(padding));
+    }
+    let tag = Tag::Compound(tag);
+    check_network_nbt(&tag)?;
+    Ok(Definition::Validated(value, Some(tag)))
+}
+
 /// A winning dialog definition: `Dialog.DIRECT_CODEC` over the file, and the
 /// dialogs it names, which the registry must hold (`decode_pack`).
 fn decode_dialog(decoder: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definition, String> {
@@ -1069,6 +1459,10 @@ fn decode_timeline(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definit
     check_network_nbt(&wire)?;
     Ok(Definition::Timeline(Arc::new(timeline), wire))
 }
+
+#[cfg(test)]
+#[path = "data_pack_game_tests.rs"]
+mod game_tests;
 
 #[cfg(test)]
 mod tests {

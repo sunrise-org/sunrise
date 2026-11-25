@@ -303,6 +303,15 @@ pub(super) fn load_world_rest(
     }
     let nether_environment = nether_environment?;
     let end_environment = end_environment?;
+    let prepared_tests =
+        sunrise_client::lan::data::PackRegistryDefinitions::load_prepared_game_tests(
+            root,
+            item_defaults,
+        );
+    let (test_environments, test_instances) = test_instances::build_game_test_tables(
+        &prepared_tests,
+        &mod_api::GameTestFunctions::default(),
+    );
     log::info!(
         "Sunrise: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -334,5 +343,7 @@ pub(super) fn load_world_rest(
         player_arm,
         player_arm_slim,
         spin_attack,
+        test_environments,
+        test_instances,
     })
 }
