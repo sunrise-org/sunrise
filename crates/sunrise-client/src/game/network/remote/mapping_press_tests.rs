@@ -150,6 +150,40 @@ fn holding_use_draws_a_bow_once_and_letting_go_releases_it() {
     });
 }
 
+/// A held use key uses again when `Minecraft.rightClickDelay` reads 0: each use sets it to 4,
+/// and a mod's `set_right_click_delay(0)` lets the next key step use again at once. Outside a
+/// client world there is no delay to read or set.
+#[test]
+#[ignore = "daily"]
+fn a_mod_shortens_the_right_click_delay_of_a_held_use() {
+    with_interaction_game(false, |game| {
+        assert_eq!(game.right_click_delay(), None);
+        assert!(!game.set_right_click_delay(0));
+    });
+    with_pressing_game(|game, packets, _| {
+        game.inventory[game.selected] = Some(ItemStack::new("minecraft:snowball", 16));
+        let use_mapping = game.vanilla_key_mapping("key.use").unwrap();
+        assert_eq!(use_mapping.set_down(game, true), Ok(()));
+        game.remote_handle_input();
+        assert_eq!(sent(packets), ["minecraft:use_item"]);
+        assert_eq!(game.right_click_delay(), Some(4));
+        // Held, the key waits out the delay the use set.
+        game.remote_handle_input();
+        assert_eq!(sent(packets), Vec::<String>::new());
+        // A mod's 0 lets the held key use again on the next key step, which sets 4 again.
+        assert!(game.set_right_click_delay(0));
+        assert_eq!(game.right_click_delay(), Some(0));
+        game.remote_handle_input();
+        assert_eq!(sent(packets), ["minecraft:use_item"]);
+        assert_eq!(game.right_click_delay(), Some(4));
+        // A longer delay holds the key back as well.
+        assert!(game.set_right_click_delay(20));
+        game.remote_handle_input();
+        assert_eq!(sent(packets), Vec::<String>::new());
+        assert_eq!(game.right_click_delay(), Some(20));
+    });
+}
+
 /// A click on a block in reach starts the break with a prediction sequence, then the punch; with
 /// the key not held, the same tick's `continueAttack(false)` stops it, as a tap between two ticks
 /// does. Held, the break goes on, punching each tick, and the release stops it.

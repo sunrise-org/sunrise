@@ -71,6 +71,19 @@ impl Game<'_> {
     /// `setYRot` / `setXRot` of the local player by a client mod: yaw as given, pitch `% 360`
     /// clamped to -90..90, the previous angles moved by as much (`Entity.turn`). Sends nothing:
     /// the tick's player sync (`remote_send_state`) carries the look.
+    /// `Minecraft.rightClickDelay`, which `startUseItem` sets to 4 and the client tick counts
+    /// down; None outside a client world.
+    pub(in crate::game) fn right_click_delay(&self) -> Option<u32> {
+        (self.native_session().is_some() && self.player.is_some()).then_some(self.use_delay)
+    }
+    /// Sets `Minecraft.rightClickDelay`; false, changing nothing, outside a client world.
+    pub(in crate::game) fn set_right_click_delay(&mut self, ticks: u32) -> bool {
+        if self.native_session().is_none() || self.player.is_none() {
+            return false;
+        }
+        self.use_delay = ticks;
+        true
+    }
     pub(in crate::game) fn set_local_rotation(
         &mut self,
         yaw: f32,
