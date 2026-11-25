@@ -687,12 +687,7 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
             ThirdPersonReversed => flag(frame.third_person_reversed),
             RightHanded => flag(!m.main_arm_left()),
             // The tamed animals' DATA_FLAGS_ID, and the species that keep their own.
-            Sitting => flag(match m.species() {
-                super::Species::Fox => super::fox::flag(m, super::fox::SITTING),
-                super::Species::Panda => super::panda::is_sitting(m),
-                super::Species::Camel | super::Species::CamelHusk => super::camel::sitting(m),
-                _ => m.extra.sitting_pose,
-            }),
+            Sitting => flag(m.sitting().unwrap_or(m.extra.sitting_pose)),
             Tamed => flag(m.extra.tame),
             Sprinting => flag(m.extra.sprinting),
             Sneaking => flag(m.extra.crouching),

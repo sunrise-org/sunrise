@@ -53,6 +53,14 @@ pub trait EntityStanceBackend {
     /// own Main Hand option. Sunrise keeps no left-handed flag for the ender dragon, which reads
     /// right. None for an entity that isn't living and for a stale handle.
     fn entity_main_arm(&self, entity: EntityRef) -> Option<MainHand>;
+    /// Side: both.
+    /// Whether the entity sits, by its own vanilla test: `Panda.isSitting`,
+    /// `Camel.isCamelSitting` (a camel husk too), `Fox.isSitting` and
+    /// `TamableAnimal.isInSittingPose` (wolf, cat, parrot, nautilus, zombie nautilus). A mod
+    /// entity answers by its template's test. On a client, the synced flags the server last sent
+    /// for a kept mob. None for a kind with no sitting test (players included), a stale handle, or
+    /// an entity whose body the client doesn't keep.
+    fn entity_is_sitting(&self, entity: EntityRef) -> Option<bool>;
 }
 /// The handles' writes of the `entity_stance` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

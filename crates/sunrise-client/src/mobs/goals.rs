@@ -973,6 +973,18 @@ impl Mob {
             self.extra.main_hand_id()
         }
     }
+    /// Each vanilla mob's own sitting test, as its renderer and goals read it: `Fox.isSitting`,
+    /// `Panda.isSitting`, `Camel.isCamelSitting` and `TamableAnimal.isInSittingPose`. None for a
+    /// species with no such test.
+    pub fn sitting(&self) -> Option<bool> {
+        Some(match self.species() {
+            Species::Fox => super::fox::flag(self, super::fox::SITTING),
+            Species::Panda => super::panda::is_sitting(self),
+            Species::Camel | Species::CamelHusk => super::camel::sitting(self),
+            _ if self.is_tamable_animal() => self.extra.sitting_pose,
+            _ => return None,
+        })
+    }
     /// Whether the species is a `TamableAnimal` (not the horses and llamas,
     /// which are tamed another way).
     pub fn is_tamable_animal(&self) -> bool {

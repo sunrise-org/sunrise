@@ -825,6 +825,13 @@ impl Game<'_> {
             },
         )
     }
+    /// Each mob's own sitting test (`Mob::sitting`), on either side.
+    pub(super) fn entity_is_sitting(&self, entity: EntityRef) -> Option<bool> {
+        match self.native_target_body(self.native_entity_read_target(entity)?)? {
+            Body::Mob(m) => m.sitting(),
+            Body::Player(_) | Body::Other(_) => None,
+        }
+    }
 }
 
 const WATER_ID: &str = "minecraft:water";

@@ -121,6 +121,60 @@ fn restricted_level_support_and_sky_reads() {
     });
 }
 
+/// `EntityRef::is_sitting` answers each mob's own test (`Fox.isSitting`, `Panda.isSitting`,
+/// `Camel.isCamelSitting`, `TamableAnimal.isInSittingPose`), and none for a kind without one or
+/// a stale handle.
+#[test]
+#[ignore = "daily"]
+fn is_sitting_reads_each_mobs_own_test() {
+    use sunrise_client::mobs::{Mob, fox, panda};
+    use sunrise_core::geometry::Vec3;
+    with_game(|game| {
+        let kinds = [
+            "minecraft:wolf",
+            "minecraft:fox",
+            "minecraft:panda",
+            "minecraft:camel",
+            "minecraft:cow",
+        ];
+        for (i, kind) in kinds.iter().enumerate() {
+            let kind = game.res.mob_types().get(*kind).unwrap().clone();
+            game.mobs
+                .push(Mob::new(40 + i as u32, kind, Vec3::ZERO, 0.0));
+        }
+        game.next_entity = game.next_entity.max(44);
+        // An entity is found only in a loaded column.
+        game.world.chunks.insert(
+            (0, 0),
+            std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+        );
+        let read = |game: &Game<'_>, id: u32| game.entity_is_sitting(game.entity(id).unwrap());
+        for id in 40..44 {
+            assert_eq!(read(game, id), Some(false), "mob {id} stands");
+        }
+        assert_eq!(read(game, 44), None, "a cow has no sitting test");
+        fn mob<'a>(game: &'a mut Game<'_>, id: u32) -> &'a mut Mob {
+            game.mobs.iter_mut().find(|m| m.id == id).unwrap()
+        }
+        mob(game, 40).extra.sitting_pose = true;
+        mob(game, 41).extra.ints[0] = fox::SITTING;
+        panda::set_flags(mob(game, 42), panda::FLAG_SIT);
+        mob(game, 43).extra.camel_sitting = true;
+        for id in 40..44 {
+            assert_eq!(read(game, id), Some(true), "mob {id} sits");
+        }
+        // A fox's other flags are not sitting.
+        mob(game, 41).extra.ints[0] = fox::CROUCHING;
+        assert_eq!(read(game, 41), Some(false));
+        let entity = game.entity(40).unwrap();
+        let stale = mod_api::EntityRef::new(
+            mod_api::WorldEpoch::new(entity.epoch().get() + 1),
+            entity.id(),
+        );
+        assert_eq!(game.entity_is_sitting(stale), None);
+    });
+}
+
 /// A guest's sprinting is written to its row, so it survives the turn boundary the body is
 /// rebuilt at, and its speed modifier stays with the flag; a stale handle sets nothing.
 #[test]
