@@ -149,6 +149,17 @@ pub(super) fn creation_stack(
 }
 
 impl PackStack {
+    /// What a world opened in safe mode saves once its load has succeeded
+    /// (`MinecraftServer.configureRepositoryWithSelection` with `disableInactive` false): the
+    /// packs that are on, and nothing disabled, so the next ordinary open selects the world's
+    /// other packs again.
+    pub(super) fn safe_mode_selection(&self) -> (Vec<String>, Vec<String>) {
+        let enabled = std::iter::once("vanilla".to_owned())
+            .chain(self.enabled.iter().cloned())
+            .collect();
+        (enabled, Vec::new())
+    }
+
     fn new(
         builtin_source: &sunrise_assets::resource_source::ResourceSource,
         content_source: &sunrise_assets::resource_source::ResourceSource,

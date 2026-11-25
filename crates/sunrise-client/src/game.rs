@@ -9524,7 +9524,7 @@ impl Game<'_> {
         let features = prepared.level.enabled_features.clone();
         let (stack, terrain) = self
             .open_world_datapacks(&features, Some(&mut prepared))
-            .map_err(|error| error.diagnostic())?;
+            .map_err(|error| world_loading::DatapackLoadFailed(error.diagnostic()))?;
         let world_loading::PreparedTerrain {
             configured_levels,
             world,

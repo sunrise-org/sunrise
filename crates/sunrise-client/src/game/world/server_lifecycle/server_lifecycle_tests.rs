@@ -826,6 +826,7 @@ fn dedicated_port_bind_failure_emits_only_stopped_without_touching_world() {
                     level_name: "untouched_world".into(),
                     port: Some(port),
                     allow_missing_mods: false,
+                    safe_mode: false,
                 };
                 let error = game.run_dedicated_with_setup(setup).unwrap_err();
                 assert!(

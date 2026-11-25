@@ -339,6 +339,14 @@ impl Game<'_> {
             event_loop.exit();
             return;
         }
+        // DatapackLoadFailureScreen's Safe Mode.
+        if let Some(folder) = self.title.as_mut().and_then(|t| t.take_safe_mode_request())
+            && let Err(error) = self.open_world_in_safe_mode(&folder)
+        {
+            self.error = Some(error);
+            event_loop.exit();
+            return;
+        }
         // The world a backup made before its upgrade opens (EditWorldScreen's callback).
         if let Some(folder) = self.title.as_mut().and_then(|t| t.take_open_request())
             && let Err(error) = self.open_world(&folder, None, None, false, None)

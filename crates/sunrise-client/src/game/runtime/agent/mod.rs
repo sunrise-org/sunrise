@@ -718,6 +718,9 @@ impl Game<'_> {
                 json!({ "mode": "optimize-world", "folder": world.folder, "name": world.name })
             }
             Mode::PackValidationFailed { .. } => json!({ "mode": "pack-validation-failed" }),
+            Mode::DatapackFailure { folder, .. } => {
+                json!({ "mode": "datapack-failure", "folder": folder })
+            }
             Mode::LowDiskSpace { world } => {
                 json!({ "mode": "low-disk-space", "folder": world.folder, "name": world.name })
             }

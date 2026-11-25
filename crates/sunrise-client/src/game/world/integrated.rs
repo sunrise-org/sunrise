@@ -17,7 +17,7 @@ use super::{
     },
     native_singleplayer_owner::SingleplayerProfile,
     owner_link::{OwnerRequest, Reply},
-    world_loading::{WorldLoader, WorldRequest},
+    world_loading::{self, WorldLoader, WorldRequest},
 };
 use std::{
     net::TcpListener,
@@ -411,7 +411,27 @@ enum Publish {
 
 /// What the server thread hands the window once the world is open: its end
 /// of the connection and the world's name, or why it failed.
-type Ready = std::result::Result<(Pipe, String, Arc<sunrise_client::biome::Biomes>), String>;
+type Ready = std::result::Result<(Pipe, String, Arc<sunrise_client::biome::Biomes>), StartFailure>;
+
+/// Why the integrated server did not start.
+#[derive(Debug)]
+enum StartFailure {
+    /// The world's data packs failed to load (`WorldOpenFlows.openWorldLoadLevelStem`'s catch);
+    /// `safe_mode` is whether that open was already in safe mode.
+    DataPacks {
+        message: String,
+        safe_mode: bool,
+    },
+    Other(String),
+}
+
+impl std::fmt::Display for StartFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataPacks { message, .. } | Self::Other(message) => f.write_str(message),
+        }
+    }
+}
 
 /// An integrated server loading its world: the window keeps drawing its
 /// loading screen and joins once the server is ready, as vanilla's client
@@ -436,6 +456,8 @@ struct Launch {
     seed: Option<i64>,
     creative: bool,
     create: Option<WorldOptions>,
+    /// `WorldLoader.PackConfig`'s `safeMode`: the world opens with only the vanilla pack.
+    safe_mode: bool,
     /// The window's profile: the only one let in until the world is open to
     /// the LAN, and the world's player.
     owner: u128,
@@ -486,6 +508,26 @@ impl Game<'_> {
         creative: bool,
         create: Option<&WorldOptions>,
     ) -> Result<()> {
+        self.start_integrated(folder, name, seed, creative, create, false)
+    }
+
+    /// `DatapackLoadFailureScreen`'s Safe Mode: the world opens again with only the vanilla pack
+    /// (`WorldOpenFlows.openWorldLoadLevelStem` with `safeMode`), whatever its saved packs select.
+    pub(super) fn open_world_in_safe_mode(&mut self, folder: &str) -> Result<()> {
+        world_loading::world_data_used();
+        self.join_world_rest()?;
+        self.start_integrated(folder, None, None, false, None, true)
+    }
+
+    fn start_integrated(
+        &mut self,
+        folder: &str,
+        name: Option<&str>,
+        seed: Option<i64>,
+        creative: bool,
+        create: Option<&WorldOptions>,
+        safe_mode: bool,
+    ) -> Result<()> {
         self.client_logging_out();
         sunrise_client::command::vanilla::set_sunrise_commands(
             self.options.pregen || self.settings.extras.pregen,
@@ -514,6 +556,7 @@ impl Game<'_> {
             seed,
             creative,
             create: create.cloned(),
+            safe_mode,
             owner,
             player: player.clone(),
             owner_profile: auth.as_ref().map(|a| {
@@ -563,6 +606,7 @@ impl Game<'_> {
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
+        let safe_mode = launch.safe_mode;
         let run_server = move |_: &()| {
             let _finished = Finished(server_flags.clone());
             // MinecraftServer.spin's Thread.setPriority(8).
@@ -588,7 +632,15 @@ impl Game<'_> {
             if let Err(e) = result {
                 log::error!("Sunrise: integrated server: {e}");
                 *server_flags.failure.lock().unwrap() = Some(e.to_string());
-                let _ = ready_tx.send(Err(e.to_string()));
+                let failure = if e.is::<world_loading::DatapackLoadFailed>() {
+                    StartFailure::DataPacks {
+                        message: e.to_string(),
+                        safe_mode,
+                    }
+                } else {
+                    StartFailure::Other(e.to_string())
+                };
+                let _ = ready_tx.send(Err(failure));
             }
         };
         // Production installations are process-wide. A test installation is scoped
@@ -650,9 +702,29 @@ impl Game<'_> {
                 self.perf.cancel_world_opening();
                 return Ok(());
             }
+            Ok(Err(StartFailure::DataPacks { message, safe_mode })) => {
+                log::warn!(
+                    "Sunrise: the data packs of \"{}\" failed to load: {message}",
+                    starting.folder
+                );
+                let folder = starting.folder.clone();
+                self.integrated_starting = None;
+                self.perf.cancel_world_opening();
+                // `DatapackLoadFailureScreen`, or the safe-mode failure's `AlertScreen`.
+                if self.title.is_none() {
+                    let title = self
+                        .new_title(std::env::current_dir()?.join("saves"))
+                        .with_user(|| self.options.player_name());
+                    self.show_title(title);
+                }
+                if let Some(title) = self.title.as_mut() {
+                    title.datapack_load_failed(folder, safe_mode);
+                }
+                return Ok(());
+            }
             Ok(Err(e)) => {
                 self.integrated_starting = None;
-                return Err(e.into());
+                return Err(e.to_string().into());
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.integrated_starting = None;
@@ -973,7 +1045,11 @@ impl Game<'_> {
         startup::time("server.wait_rest", || self.join_world_rest())?;
         self.perf.world_opening();
         let open_step = startup::step("server.open_world");
-        self.finish_open_world(prepared)?;
+        let stack = self.finish_open_world(prepared)?;
+        // The load succeeded: what a safe-mode open saves is vanilla's.
+        if launch.safe_mode {
+            self.level.data_packs = Some(stack.safe_mode_selection());
+        }
         drop(open_step);
         if let Some(sync) = opening.sync {
             startup::time("server.sync_adopt", || sync.adopt(&self.pack_files()));
@@ -1422,6 +1498,7 @@ fn serve(
     // (an older world's offline owner moves to it at open).
     .and_then(|mut request| {
         request.chunk_reports = flags.reports.clone();
+        request.safe_mode = launch.safe_mode;
         WorldLoader::start(
             request.owned_by(&launch.player, launch.owner),
             res.clone(),
@@ -2466,6 +2543,7 @@ pub(super) mod tests {
                 seed: Some(1),
                 creative: true,
                 create: None,
+                safe_mode: false,
                 owner,
                 player: "Tester".into(),
                 owner_profile: None,
@@ -2553,6 +2631,7 @@ pub(super) mod tests {
                 seed: Some(1),
                 creative: true,
                 create: None,
+                safe_mode: false,
                 owner,
                 player: "Tester".into(),
                 owner_profile: None,

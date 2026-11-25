@@ -1,0 +1,1 @@
+sunrise-client game::server_reload::tests::safe_mode_opens_a_world_with_only_the_vanilla_pack_and_saves_vanilla_s_selection lib daily resources
