@@ -1635,13 +1635,9 @@ pub fn dimension_stems(data: &DataPacks) -> BTreeMap<String, serde_json::Value> 
 
 /// The worldgen entries of the merged view `data` (every layer but the prepared root,
 /// `vanilla`: the prepared bundles are it) for the chunk generator, and what it leaves out, for
-/// the log. `biomes` says which biomes the game has: a pack's new biome is left out (the game
-/// has no colours, sounds or id for it).
-pub fn worldgen_overrides(
-    data: &DataPacks,
-    biomes: impl Fn(&str) -> bool,
-) -> (WorldgenOverrides, Vec<String>) {
-    worldgen_overrides_over(overrides::mod_dimensions(), data, biomes)
+/// the log. Every biome a pack gives is kept, as `RegistryDataLoader` loads them.
+pub fn worldgen_overrides(data: &DataPacks) -> (WorldgenOverrides, Vec<String>) {
+    worldgen_overrides_over(overrides::mod_dimensions(), data)
 }
 
 /// [`worldgen_overrides`] over the levels `mods` registered, which sit below
@@ -1649,7 +1645,6 @@ pub fn worldgen_overrides(
 pub fn worldgen_overrides_over(
     mods: &[overrides::ModDimension],
     data: &DataPacks,
-    biomes: impl Fn(&str) -> bool,
 ) -> (WorldgenOverrides, Vec<String>) {
     let mut out = WorldgenOverrides::default();
     for dimension in mods {
@@ -1680,7 +1675,6 @@ pub fn worldgen_overrides_over(
             }
         }
     }
-    warnings.extend(out.finish(biomes));
     for (kind, files) in not_read {
         warnings.push(format!("{kind}: {files} files the generator does not read"));
     }
@@ -2038,7 +2032,7 @@ mod tests {
         ]}});
         let high = memory_pack("high", &[]).with_filter(filter_of(&meta));
         let data = DataPacks::new(&[&low, &high]);
-        let (o, warnings) = worldgen_overrides_over(&[], &data, |_| true);
+        let (o, warnings) = worldgen_overrides_over(&[], &data);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
             o.entries("noises").collect::<Vec<_>>(),
@@ -2047,7 +2041,7 @@ mod tests {
         assert!(dimension_stems(&data).is_empty());
         let unfiltered = DataPacks::new(&[&low]);
         assert_eq!(
-            worldgen_overrides_over(&[], &unfiltered, |_| true)
+            worldgen_overrides_over(&[], &unfiltered)
                 .0
                 .entries("noises")
                 .count(),
@@ -2081,7 +2075,7 @@ mod tests {
             sea_level: None,
         }];
         let height = |packs: &[&DataPack]| {
-            let (o, _) = worldgen_overrides_over(&mods, &DataPacks::new(packs), |_| true);
+            let (o, _) = worldgen_overrides_over(&mods, &DataPacks::new(packs));
             o.level_height("test:pocket").unwrap().height
         };
         assert_eq!(height(&[]), 448);
@@ -2161,12 +2155,12 @@ mod tests {
         write_archive(2);
         let old =
             DataPack::from_source("passive".into(), ResourceSource::archive(&archive).unwrap());
-        let (before, warnings) = worldgen_overrides(&DataPacks::new(&[&old]), |_| true);
+        let (before, warnings) = worldgen_overrides(&DataPacks::new(&[&old]));
         assert!(warnings.is_empty(), "{warnings:?}");
         write_archive(5);
         let new =
             DataPack::from_source("passive".into(), ResourceSource::archive(&archive).unwrap());
-        let (after, warnings) = worldgen_overrides(&DataPacks::new(&[&new]), |_| true);
+        let (after, warnings) = worldgen_overrides(&DataPacks::new(&[&new]));
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_ne!(
             before, after,
@@ -2452,8 +2446,7 @@ mod tests {
             .iter()
             .map(|id| packs.iter().find(|p| &p.id == id).unwrap())
             .collect();
-        let (o, warnings) =
-            worldgen_overrides(&DataPacks::new(&enabled), |b| b == "minecraft:plains");
+        let (o, warnings) = worldgen_overrides(&DataPacks::new(&enabled));
         assert_eq!(
             o.entries("noises").collect::<Vec<_>>(),
             [("minecraft:cave", "a")]
@@ -2462,13 +2455,12 @@ mod tests {
         assert_eq!(o.templates()["p:room/a"].read().unwrap(), b"a");
         assert_eq!(
             o.entries("biomes").collect::<Vec<_>>(),
-            [("minecraft:plains", "{}")]
+            [("minecraft:new_peaks", "{}"), ("minecraft:plains", "{}")]
         );
         let tag_packs: Vec<&str> = o.tags("biome_tags").map(|(_, p, _)| p).collect();
         assert_eq!(tag_packs, ["file/b", "file/a"]);
-        assert_eq!(warnings.len(), 2, "{warnings:?}");
-        assert!(warnings[0].contains("minecraft:new_peaks"));
-        assert!(warnings[1].contains("worldgen/world_preset"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("worldgen/world_preset"));
         assert_eq!(
             o.level_height("minecraft:overworld").map(|h| h.height),
             Some(2096)

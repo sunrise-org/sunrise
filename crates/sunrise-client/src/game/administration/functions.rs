@@ -627,7 +627,7 @@ impl Game<'_> {
         // (`command-registries.json` lists only the game's own), and so do
         // its worldgen tag ids for the `#tag` completions. The packs are the
         // ones the world's worldgen is built from.
-        let (overrides, _) = sunrise_client::datapack::worldgen_overrides(&self.fns.data, |_| true);
+        let (overrides, _) = sunrise_client::datapack::worldgen_overrides(&self.fns.data);
         for (bundle, registry) in [
             ("biomes", "minecraft:worldgen/biome"),
             ("structures", "minecraft:worldgen/structure"),

@@ -298,7 +298,6 @@ pub(super) fn load_core(
                         resources.data(),
                         resources.data_changes(),
                         registry,
-                        biomes.clone(),
                         additional_data,
                     );
                 }
@@ -899,7 +898,6 @@ pub(super) fn load_resources_for_mods_with_limit(
             resolved.data(),
             resolved.data_changes(),
             assets.registry,
-            biomes.clone(),
             &additional_data,
         );
     }

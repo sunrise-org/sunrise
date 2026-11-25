@@ -125,11 +125,7 @@ impl Game<'_> {
                         &packs,
                         &self.pack.additional_data,
                     );
-                    world_loading::worldgen_overrides_of(
-                        &stack.data_packs(Vec::new()),
-                        self.res.biomes(),
-                    )
-                    .0
+                    world_loading::worldgen_overrides_of(&stack.data_packs(Vec::new())).0
                 })
                 .unwrap_or_default();
             let data_source = self.pack.data_changes.clone();
