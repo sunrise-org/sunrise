@@ -25,7 +25,7 @@ Turtle.playStepSound	port	crates/sunrise-client/src/mobs/ai/step.rs::step_sound	
 Turtle.travelInWater	port	crates/sunrise-client/src/mobs/turtle.rs::travel	ticked in #3512; `Turtle.travelInWater` is cited at crates/sunrise-client/src/mobs/turtle.rs:152
 Turtle.TurtleLayEggGoal.isValidTarget	port	crates/sunrise-client/src/mobs/turtle.rs::LayEgg::valid	air above and sand below
 Wolf.registerGoals	port	crates/sunrise-client/src/mobs/tame.rs::register
-Wolf.getSoundSet	port	crates/sunrise-client/src/mobs/finalize.rs::variant_sound
+Wolf.getSoundSet	port	crates/sunrise-client/src/mobs/variants.rs::WolfSoundVariant::sound
 Wolf.createAttributes	skip:data		attribute values come from data tables
 Wolf.defineSynchedData	port	crates/sunrise-client/src/game/network/lan/mod.rs::mob_meta	flags, variant and anger metadata sent to clients
 Wolf.addAdditionalSaveData	port	crates/sunrise-client/src/entity_nbt.rs::mob_to_nbt	CollarColor written

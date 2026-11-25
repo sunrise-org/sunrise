@@ -14,7 +14,7 @@ use mod_api::{
 use std::sync::Arc;
 use sunrise_client::items::Items;
 use sunrise_client::mobs::finalize::{Ageable, Group};
-use sunrise_client::mobs::{Mob, equine, llama, render, tame};
+use sunrise_client::mobs::{Mob, equine, llama, render};
 use sunrise_client::text::Text;
 use sunrise_world::attribute_map::ValueKind;
 use sunrise_world::attributes::{Operation, entity::Catalog};
@@ -485,7 +485,11 @@ impl Game<'_> {
 
 /// The pack's group data as the API's, a school's leader a handle of `epoch`;
 /// None where a value has no API name.
-pub(in crate::game) fn native_spawn_group(group: &Group, epoch: WorldEpoch) -> Option<SpawnGroup> {
+pub(in crate::game) fn native_spawn_group(
+    group: &Group,
+    epoch: WorldEpoch,
+    variants: &sunrise_client::mobs::variants::VariantTables,
+) -> Option<SpawnGroup> {
     let named = |names: &[&'static str], i: u8| names.get(usize::from(i)).map(|n| (*n).to_owned());
     Some(match group {
         Group::Ageable(a) => SpawnGroup::Ageable(native_ageable(a)),
@@ -528,7 +532,7 @@ pub(in crate::game) fn native_spawn_group(group: &Group, epoch: WorldEpoch) -> O
         },
         Group::Wolf(a, v) => SpawnGroup::Wolf {
             ageable: native_ageable(a),
-            variant: Identifier::parse(tame::WOLF_VARIANTS.get(usize::from(*v))?.0).ok()?,
+            variant: Identifier::parse(variants.wolf.id(*v)?).ok()?,
         },
         Group::School(leader, look) => SpawnGroup::School {
             leader: EntityRef::new(epoch, *leader),
@@ -546,7 +550,10 @@ pub(in crate::game) fn native_spawn_group(group: &Group, epoch: WorldEpoch) -> O
 
 /// The API's group data as the game's; None for a name the game does not know,
 /// which drops the group.
-pub(in crate::game) fn spawn_group(group: &SpawnGroup) -> Option<Group> {
+pub(in crate::game) fn spawn_group(
+    group: &SpawnGroup,
+    variants: &sunrise_client::mobs::variants::VariantTables,
+) -> Option<Group> {
     let index = |names: &[&str], name: &str| names.iter().position(|n| *n == name).map(|i| i as u8);
     Some(match group {
         SpawnGroup::Ageable(a) => Group::Ageable(ageable(a)),
@@ -599,12 +606,8 @@ pub(in crate::game) fn spawn_group(group: &SpawnGroup) -> Option<Group> {
             ageable: a,
             variant,
         } => {
-            if variant.namespace() != "minecraft" {
-                return None;
-            }
-            let name = variant.path();
-            let i = tame::WOLF_VARIANTS.iter().position(|(n, _)| *n == name)?;
-            Group::Wolf(ageable(a), i as u8)
+            let r = variants.wolf.lookup(variant.as_str())?;
+            Group::Wolf(ageable(a), r)
         }
         SpawnGroup::School { leader, tropical } => Group::School(
             leader.id(),
@@ -965,6 +968,45 @@ mod tests {
         let epoch = WorldEpoch::new(3);
         let ageable = Ageable::babies(true);
         let api = AgeableGroup::new(true, 0.05);
+        let variants = sunrise_client::mobs::variants::VariantTables {
+            wolf: sunrise_client::mobs::variants::VariantTable::from_entries(vec![
+                (
+                    ("minecraft".into(), "spotted".into()),
+                    sunrise_client::mobs::variants::WolfVariant {
+                        assets: sunrise_client::mobs::variants::WolfAssetInfo {
+                            wild: "minecraft:entity/wolf/wolf_spotted".into(),
+                            tame: "minecraft:entity/wolf/wolf_spotted_tame".into(),
+                            angry: "minecraft:entity/wolf/wolf_spotted_angry".into(),
+                        },
+                        baby_assets: sunrise_client::mobs::variants::WolfAssetInfo {
+                            wild: "minecraft:entity/wolf/wolf_spotted_baby".into(),
+                            tame: "minecraft:entity/wolf/wolf_spotted_tame_baby".into(),
+                            angry: "minecraft:entity/wolf/wolf_spotted_angry_baby".into(),
+                        },
+                        spawn_conditions: Vec::new(),
+                    },
+                ),
+                (
+                    ("test".into(), "mint".into()),
+                    sunrise_client::mobs::variants::WolfVariant {
+                        assets: sunrise_client::mobs::variants::WolfAssetInfo {
+                            wild: "test:entity/wolf/mint".into(),
+                            tame: "test:entity/wolf/mint_tame".into(),
+                            angry: "test:entity/wolf/mint_angry".into(),
+                        },
+                        baby_assets: sunrise_client::mobs::variants::WolfAssetInfo {
+                            wild: "test:entity/wolf/mint_baby".into(),
+                            tame: "test:entity/wolf/mint_tame_baby".into(),
+                            angry: "test:entity/wolf/mint_angry_baby".into(),
+                        },
+                        spawn_conditions: Vec::new(),
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let spotted = variants.wolf.lookup("minecraft:spotted").unwrap();
+        let mint = variants.wolf.lookup("test:mint").unwrap();
         let cases = [
             (
                 Group::Horse(ageable, 1),
@@ -995,10 +1037,17 @@ mod tests {
                 },
             ),
             (
-                Group::Wolf(ageable, 1),
+                Group::Wolf(ageable, spotted),
                 SpawnGroup::Wolf {
                     ageable: api,
                     variant: id("minecraft:spotted"),
+                },
+            ),
+            (
+                Group::Wolf(ageable, mint),
+                SpawnGroup::Wolf {
+                    ageable: api,
+                    variant: id("test:mint"),
                 },
             ),
             (
@@ -1032,13 +1081,21 @@ mod tests {
             ),
         ];
         for (game, api) in cases {
-            assert_eq!(native_spawn_group(&game, epoch).as_ref(), Some(&api));
-            assert_eq!(spawn_group(&api), Some(game));
+            assert_eq!(
+                native_spawn_group(&game, epoch, &variants).as_ref(),
+                Some(&api)
+            );
+            assert_eq!(spawn_group(&api, &variants), Some(game));
         }
         let unknown = SpawnGroup::Horse {
             ageable: api,
             variant: "plaid".into(),
         };
-        assert_eq!(spawn_group(&unknown), None);
+        assert_eq!(spawn_group(&unknown, &variants), None);
+        let unknown_wolf = SpawnGroup::Wolf {
+            ageable: api,
+            variant: id("test:missing"),
+        };
+        assert_eq!(spawn_group(&unknown_wolf, &variants), None);
     }
 }

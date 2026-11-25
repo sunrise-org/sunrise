@@ -18,6 +18,10 @@ impl render::RenderDataSource for Game<'_> {
         mod_api::__private::listened(mod_api::HookId::HumanoidSetupAnim)
             .then_some(self as &dyn anim::HumanoidSetup)
     }
+
+    fn variants(&self) -> Option<&sunrise_client::mobs::variants::VariantTables> {
+        Some(self.world_variants())
+    }
 }
 
 impl anim::HumanoidSetup for Game<'_> {

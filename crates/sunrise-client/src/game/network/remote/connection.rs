@@ -258,6 +258,10 @@ impl Game<'_> {
                     .collect()
             })
             .unwrap_or_default();
+        let variants = Arc::new(sunrise_client::mobs::variants::VariantTables::from_synced(
+            &registries,
+            self.res.variants(),
+        ));
         if let Some(r) = self.remote.as_mut() {
             r.enchantments = enchantments;
             let bits = ceil_log2(biomes.len());
@@ -265,6 +269,7 @@ impl Game<'_> {
             r.chunk_format =
                 Arc::new(ChunkFormat::new(&r.dimension, biomes, bits).in_column(column));
             r.registries = registries;
+            r.variants = variants;
             r.resolve_clocks();
             r.level_environments.clear();
             self.install_server_items();

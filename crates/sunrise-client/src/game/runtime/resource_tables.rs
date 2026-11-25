@@ -132,6 +132,10 @@ impl Resources {
     pub fn spawn_registries(&self) -> &sunrise_client::mobs::finalize::SpawnRegistries {
         &self.core.spawn_registries
     }
+    /// The prepared vanilla variant tables for families on `REGISTRY_KINDS`.
+    pub fn variants(&self) -> &sunrise_client::mobs::variants::VariantTables {
+        &self.core.variants
+    }
     pub(super) fn threads(&self) -> usize {
         self.core.threads
     }

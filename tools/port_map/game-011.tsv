@@ -85,7 +85,7 @@ ZombieHorse.generateZombieHorseJumpStrength	inline	crates/sunrise-client/src/mob
 ZombieHorse.generateZombieHorseSpeed	inline	crates/sunrise-client/src/mobs/finalize.rs::Ctx::horse	(9 plus three draws) over 42.16
 ZombieHorse.addBehaviourGoals	inline	crates/sunrise-client/src/mobs/equine.rs::register	float and tempt with the zombie horse food, no mount panic
 ZombieHorse.mobInteract	inline	crates/sunrise-client/src/game/mobs/mounts.rs::Game::interact_mount	gap: player: an untamed zombie horse with a non-food item in hand is mounted instead of rearing angrily, and food that is not eaten still mounts it
-Cat.getSoundSet	port	crates/sunrise-client/src/mobs/finalize.rs::variant_sound
+Cat.getSoundSet	port	crates/sunrise-client/src/mobs/variants.rs::CatSoundVariant::sound
 Cat.defineSynchedData	port	crates/sunrise-client/src/game/network/lan/mod.rs::mob_meta	gap: minor: variant, lying, relax and collar are sent, the sound variant entry is not
 Cat.addAdditionalSaveData	port	crates/sunrise-client/src/entity_nbt.rs::mob_to_nbt	variant, sound_variant and CollarColor
 Cat.readAdditionalSaveData	port	crates/sunrise-client/src/entity_nbt/mob_load.rs::mob_from_nbt

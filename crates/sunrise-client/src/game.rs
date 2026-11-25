@@ -30,6 +30,14 @@ macro_rules! world_items {
         }
     };
 }
+macro_rules! world_variants {
+    ($s:ident) => {
+        match &$s.world_tables {
+            Some(t) => &*t.variants,
+            None => $s.res.variants(),
+        }
+    };
+}
 macro_rules! world_recipes {
     ($s:ident) => {
         match &$s.world_tables {
@@ -3151,6 +3159,7 @@ struct WorldCore {
     motion: MotionResources,
     suffocation: sunrise_world::suffocation::SuffocationRegistry<'static>,
     spawn_registries: sunrise_client::mobs::finalize::SpawnRegistries,
+    variants: Arc<sunrise_client::mobs::variants::VariantTables>,
     threads: usize,
 }
 
@@ -3208,6 +3217,8 @@ struct WorldTables {
     /// Frozen `minecraft:timeline` entries and their bound tags, read by `Environment` and
     /// `/time`.
     timelines: sunrise_client::environment::TimelineTable,
+    /// Data-driven mob variant and sound-variant registries, frozen at world open.
+    variants: Arc<sunrise_client::mobs::variants::VariantTables>,
     providers: Providers,
     biomes: Arc<world_loading::WorldBiomeRegistry>,
     loot: Arc<sunrise_world::loot::LootData>,

@@ -542,6 +542,7 @@ impl Game<'_> {
         admitted: Option<bool>,
     ) -> u32 {
         self.resolve_loaded_profession(&mut m);
+        entity_nbt::read_mob_variants(&mut m, &tag, self.world_variants());
         if sunrise_client::mobs::camel::is_camel(m.species()) {
             sunrise_client::mobs::camel::finish_load(&mut m, self.world.game_time);
         }
@@ -988,6 +989,7 @@ impl Game<'_> {
             entity_nbt::MobSave {
                 include_id,
                 game_time: self.world.game_time,
+                variants: Some(self.world_variants()),
             },
         );
         out.finish()

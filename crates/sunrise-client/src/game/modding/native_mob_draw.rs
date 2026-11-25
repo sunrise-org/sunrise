@@ -208,7 +208,7 @@ impl Game<'_> {
         if !living_pre && player_pre.is_none() {
             return true;
         }
-        let Some(model) = frame_draw.prepare(mob, self.res.mob_data()) else {
+        let Some(model) = frame_draw.prepare(mob, self) else {
             return true;
         };
         let local = who.as_ref().is_some_and(|who| who.local);

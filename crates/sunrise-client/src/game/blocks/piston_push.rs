@@ -1547,6 +1547,7 @@ impl Game<'_> {
                         Some(&self.pack.block_registries),
                         &self.damage_hooks,
                     )
+                    .with_variants(world_variants!(self))
                     .with_reads(crate::game::entity::hit_reads_of!(self))
                     .with_mob_hurt_handoff(&mut paused_hurt);
                     mobs[i].update_pushed_support(&world, wanted, moved);

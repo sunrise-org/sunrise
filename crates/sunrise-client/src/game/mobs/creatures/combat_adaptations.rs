@@ -1,6 +1,5 @@
 //! Typed adaptations for upstream mob knockback and breeding draws.
 use super::{Damage, Game, HurtSource, Who, source_damage_type};
-use sunrise_client::mobs::Species;
 use sunrise_core::random::RandomSource;
 
 impl Game<'_> {
@@ -52,12 +51,20 @@ impl Game<'_> {
         };
         self.knock_back_player(power, x, z, source, &attack, 0.0);
     }
-    pub(super) fn bred_wolf_voice(&mut self, parent: u32) -> Option<u8> {
-        let voices = sunrise_client::mobs::finalize::sound_variants(Species::Wolf);
+    pub(super) fn bred_wolf_voice(
+        &mut self,
+        parent: u32,
+    ) -> Option<
+        sunrise_client::lan::data::RegistryRef<sunrise_client::mobs::variants::WolfSoundVariant>,
+    > {
+        let len = self.world_variants().wolf_sound.len();
+        if len == 0 {
+            return None;
+        }
         self.mobs
             .iter_mut()
             .find(|m| m.id == parent)
-            .and_then(|m| m.random.next_int_bound(voices.len() as i32).ok())
-            .map(|i| i as u8)
+            .and_then(|m| m.random.next_int_bound(len as i32).ok())
+            .map(|i| sunrise_client::lan::data::RegistryRef::new(i as u32))
     }
 }

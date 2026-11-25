@@ -435,8 +435,6 @@ fn farm_animals_keep_their_variant_and_sound_variant() {
         (Species::Pig, &registries.pig_sound),
         (Species::Cow, &registries.cow_sound),
         (Species::Chicken, &registries.chicken_sound),
-        (Species::Cat, &registries.cat_sound),
-        (Species::Wolf, &registries.wolf_sound),
     ] {
         assert_eq!(
             finalize::sound_variants(species),

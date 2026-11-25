@@ -46,11 +46,33 @@ impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
         biome_or_plains(self.biome_name(pos))
     }
     fn biome_tag(&self, tag: &str, pos: [i32; 3]) -> bool {
-        self.biome_name(pos)
-            .is_some_and(|b| self.game.res.mob_data().biome_has(tag, &b))
+        self.biome_name(pos).is_some_and(|b| {
+            if let Some(tags) = self
+                .game
+                .world_tables
+                .as_ref()
+                .and_then(|t| t.pack_tags.get("worldgen/biome"))
+            {
+                return tags.get(tag).is_some_and(|members| members.contains(&b));
+            }
+            self.game.res.mob_data().biome_has(tag, &b)
+        })
     }
     fn structures_with_piece_at(&self, pos: [i32; 3]) -> Vec<String> {
         self.game.structures_at(pos)
+    }
+    fn structure_tag(&self, tag: &str, structure: &str) -> bool {
+        if let Some(tags) = self
+            .game
+            .world_tables
+            .as_ref()
+            .and_then(|t| t.pack_tags.get("worldgen/structure"))
+        {
+            return tags
+                .get(tag)
+                .is_some_and(|members| members.contains(structure));
+        }
+        self.game.structure_tag(tag).iter().any(|m| m == structure)
     }
     fn moon_phase(&self, _: [i32; 3]) -> usize {
         self.game.finalize_moon_phase()
@@ -125,6 +147,18 @@ impl Game<'_> {
     pub(super) fn finalize_halloween(&self) -> bool {
         finalize::is_halloween()
     }
+    /// The active variant tables: a client's synced registries when joined,
+    /// otherwise the server's frozen world tables (or prepared defaults).
+    pub(in crate::game) fn world_variants(&self) -> &sunrise_client::mobs::variants::VariantTables {
+        if let Some(r) = self.remote.as_ref()
+            && !r.variants.is_empty()
+        {
+            return &r.variants;
+        }
+        self.world_tables
+            .as_ref()
+            .map_or_else(|| self.res.variants(), |t| &t.variants)
+    }
     /// The tables a finalizeSpawn `Ctx` borrows: the variant registries, the
     /// enchantments and items its gear rolls need, and `EntityTypes.CAMEL_HUSK`'s
     /// dimensions if the table has the type.
@@ -132,6 +166,7 @@ impl Game<'_> {
         let game = self;
         finalize::SpawnData {
             registries: game.res.spawn_registries(),
+            variants: game.world_variants(),
             enchantments: &world_stations!(game).enchantments,
             items: world_items!(game),
             camel_husk_size: game

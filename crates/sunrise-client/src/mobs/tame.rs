@@ -18,40 +18,6 @@ use sunrise_core::{
     random::RandomSource,
 };
 
-/// Wolf variants: registry name and texture file (`WolfVariants`).
-pub const WOLF_VARIANTS: [(&str, &str); 9] = [
-    ("pale", "wolf"),
-    ("spotted", "wolf_spotted"),
-    ("snowy", "wolf_snowy"),
-    ("black", "wolf_black"),
-    ("ashen", "wolf_ashen"),
-    ("rusty", "wolf_rusty"),
-    ("woods", "wolf_woods"),
-    ("chestnut", "wolf_chestnut"),
-    ("striped", "wolf_striped"),
-];
-/// The wolf variant a biome spawns (its high-priority `BiomeCheck`).
-pub fn wolf_variant_for(biome: &str, has_tag: &dyn Fn(&str) -> bool) -> u8 {
-    if has_tag("minecraft:is_savanna") {
-        1
-    } else if biome == "minecraft:grove" {
-        2
-    } else if biome == "minecraft:old_growth_pine_taiga" {
-        3
-    } else if biome == "minecraft:snowy_taiga" {
-        4
-    } else if has_tag("minecraft:is_jungle") {
-        5
-    } else if biome == "minecraft:forest" {
-        6
-    } else if biome == "minecraft:old_growth_spruce_taiga" {
-        7
-    } else if has_tag("minecraft:is_badlands") {
-        8
-    } else {
-        0
-    }
-}
 /// The default collar: red.
 pub const RED: u8 = 14;
 
@@ -1122,34 +1088,24 @@ pub fn tint(m: &Mob, partial: f32) -> u32 {
     let c = (shade * 255.0) as u32;
     0xFF00_0000 | c << 16 | c << 8 | c
 }
-/// `Wolf.getTexture`.
-pub fn texture(m: &Mob) -> String {
-    let file = WOLF_VARIANTS[(m.extra.variant as usize).min(8)].1;
-    let state = if m.extra.tame {
-        "_tame"
-    } else if angry(m) {
-        "_angry"
-    } else {
-        ""
+/// `Wolf.getTexture`: resolves the mob's `RegistryRef<WolfVariant>` through the
+/// synced `minecraft:wolf_variant` table. An absent entry yields an empty key
+/// so the renderer draws the missing texture rather than a built-in fallback.
+pub fn texture(m: &Mob, variants: Option<&super::variants::VariantTables>) -> String {
+    let Some(variants) = variants else {
+        return String::new();
     };
-    let baby = if m.is_baby() { "_baby" } else { "" };
-    format!("entity/wolf/{file}{state}{baby}")
+    let Some(r) = m.wolf_variant(&variants.wolf) else {
+        return String::new();
+    };
+    let Some(entry) = variants.wolf.get(r) else {
+        return String::new();
+    };
+    entry
+        .texture(m.is_baby(), m.extra.tame, angry(m))
+        .to_owned()
 }
 
-/// Cat variants (`CatVariants`): registry name, texture file.
-pub const CAT_VARIANTS: [&str; 11] = [
-    "tabby",
-    "black",
-    "red",
-    "siamese",
-    "british_shorthair",
-    "calico",
-    "persian",
-    "ragdoll",
-    "white",
-    "jellie",
-    "all_black",
-];
 // Cat AnimState slots.
 const LIE: usize = 0;
 const LIE_TAIL: usize = 1;
@@ -1158,8 +1114,6 @@ const RELAX: usize = 2;
 /// `Cat.registerGoals` (with `reassessTameGoals`' player avoidance).
 pub(crate) fn register_cat(m: &mut Mob) {
     m.extra.color = RED;
-    // Cat.defineSynchedData: DATA_VARIANT_ID starts at DEFAULT_VARIANT (CatVariants.BLACK, id 1).
-    m.extra.variant = 1;
     let food = m.kind.food.clone();
     let g = &mut m.ai.goals;
     g.add(1, Float);
@@ -1383,13 +1337,18 @@ impl Goal for CatTempt {
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         // Cat.tick: a wild cat being tempted begs every 100 ticks.
         if m.age.is_multiple_of(100) {
-            cx.events.push(MobEvent::Sound(
-                super::finalize::variant_sound(m, "beg_for_food")
-                    .unwrap_or("entity.cat.beg_for_food"),
-                m.center(),
-                1.0,
-                1.0,
-            ));
+            if let Some(sound) = super::ai::cat_sound(m, cx.w.side.variant_tables(), "beg_for_food")
+            {
+                cx.events
+                    .push(MobEvent::SoundId(sound.to_owned(), m.center(), 1.0, 1.0));
+            } else {
+                cx.events.push(MobEvent::Sound(
+                    "entity.cat.beg_for_food",
+                    m.center(),
+                    1.0,
+                    1.0,
+                ));
+            }
         }
         self.0.tick(m, cx);
         // CatTemptGoal.tick: pick the tempting player with a 1 in 600 chance a
@@ -1812,12 +1771,15 @@ impl Goal for OcelotAttack {
     }
 }
 /// `Cat.tick`: lying and relaxing amounts and the purr.
-pub(crate) fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
+pub fn cat_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     cat_amounts(m);
     if (m.extra.flag || m.extra.relax_one) && m.age.is_multiple_of(5) {
         let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
-        let sound = super::finalize::variant_sound(m, "purr").unwrap_or("entity.cat.purr");
-        events.push(MobEvent::Sound(sound, m.center(), volume, 1.0));
+        if let Some(sound) = super::ai::cat_sound(m, w.side.variant_tables(), "purr") {
+            events.push(MobEvent::SoundId(sound.to_owned(), m.center(), volume, 1.0));
+        } else {
+            events.push(MobEvent::Sound("entity.cat.purr", m.center(), volume, 1.0));
+        }
     }
 }
 /// The lying and relaxing amounts of `Cat.tick` (also a client's, from the
@@ -1839,15 +1801,21 @@ pub fn cat_amounts(m: &mut Mob) {
         (v[RELAX] - 0.13).max(0.0)
     };
 }
-/// `Cat.finalizeSpawn` variant: any but all-black, which a full moon allows.
-pub fn cat_variant(w_moon_full: bool, r: &mut impl RandomSource) -> u8 {
-    let n = if w_moon_full { 11 } else { 10 };
-    r.next_int_bound(n).unwrap_or(0) as u8
-}
-pub(crate) fn cat_texture(m: &Mob) -> String {
-    let v = CAT_VARIANTS[(m.extra.variant as usize).min(10)];
-    let baby = if m.is_baby() { "_baby" } else { "" };
-    format!("entity/cat/cat_{v}{baby}")
+/// `CatRenderer.extractRenderState`: resolves the mob's `RegistryRef<CatVariant>`
+/// through the synced `minecraft:cat_variant` table. An absent entry yields an
+/// empty key so the renderer draws the missing texture rather than a built-in
+/// fallback.
+pub fn cat_texture(m: &Mob, variants: Option<&super::variants::VariantTables>) -> String {
+    let Some(variants) = variants else {
+        return String::new();
+    };
+    let Some(r) = m.cat_variant(&variants.cat) else {
+        return String::new();
+    };
+    let Some(entry) = variants.cat.get(r) else {
+        return String::new();
+    };
+    entry.texture(m.is_baby()).to_owned()
 }
 /// `CatRenderer.setupRotations`: lying cats roll onto their side.
 pub(crate) fn cat_rotations(m: &Mob, partial: f32) -> glam::Mat4 {
@@ -2130,11 +2098,27 @@ mod tests {
         k.id = "minecraft:cat".into();
         k.species = Species::Cat;
         let m = Mob::new(1, kind, Vec3::ZERO, 0.0);
-        assert_eq!(m.extra.variant, 1);
-        assert_eq!(
-            super::super::finalize::variant_name(Species::Cat, m.extra.variant),
-            "black"
-        );
+        assert!(m.extra.cat_variant.is_none());
+        let table = super::super::variants::VariantTable::from_entries(vec![
+            (
+                ("minecraft".into(), "tabby".into()),
+                super::super::variants::CatVariant {
+                    asset_id: "minecraft:entity/cat/cat_tabby".into(),
+                    baby_asset_id: "minecraft:entity/cat/cat_tabby_baby".into(),
+                    spawn_conditions: Vec::new(),
+                },
+            ),
+            (
+                ("minecraft".into(), "black".into()),
+                super::super::variants::CatVariant {
+                    asset_id: "minecraft:entity/cat/cat_black".into(),
+                    baby_asset_id: "minecraft:entity/cat/cat_black_baby".into(),
+                    spawn_conditions: Vec::new(),
+                },
+            ),
+        ]);
+        let r = m.cat_variant(&table).expect("default black variant");
+        assert_eq!(table.id(r), Some("minecraft:black"));
     }
 
     /// `TamableAnimal.unableToMoveToOwner` (#12939): a pet on a lead, with lead

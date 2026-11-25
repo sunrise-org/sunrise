@@ -1,6 +1,6 @@
 //! A draw's selected body, baked hierarchy, and captured pose.
 
-use super::{Atlas, body, cem_key, cem_texture};
+use super::{Atlas, RenderDataSource, body_with_variants, cem_key, cem_texture};
 use crate::fast_hash::FxHashMap;
 use crate::mobs::{Mob, MobData, MobType, Part, anim, cem};
 use mod_api::{__private::frame_model_part, FrameModel, FrameModelEdit, FrameModelPart};
@@ -17,13 +17,14 @@ pub(super) struct FrameBody<'a> {
 }
 
 impl<'a> FrameBody<'a> {
-    pub(super) fn select(mob: &'a Mob, data: &MobData) -> Self {
+    pub(super) fn select(mob: &'a Mob, data: &dyn RenderDataSource) -> Self {
         let cem = data
+            .mob_data()
             .cem
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let (model_key, texture) = body(mob);
+        let (model_key, texture) = body_with_variants(mob, data.variants());
         let vanilla = mob.kind.layer(&model_key).unwrap_or(&mob.kind.model);
         let custom = cem.layer_ref(cem_key(&model_key)).cloned();
         Self {

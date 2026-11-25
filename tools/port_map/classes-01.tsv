@@ -99,11 +99,11 @@ Snowball.onHit	inline	crates/sunrise-client/src/game/mobs/creatures/mod.rs::Game
 ThrowableItemProjectile.readAdditionalSaveData	port	crates/sunrise-client/src/entity_nbt.rs::throwable_from_nbt	the `Item` it flies as is read back with the rest (a potion keeps its effects); a tag without one keeps `getItem`'s default
 Activity.equals	skip:java		value equality of a named activity; no Sunrise counterpart needed
 ModelAndTexture.codec	skip:data		codec for the variant model and texture asset; Sunrise reads variant data from files
-MoonBrightnessCheck.test	inline	crates/sunrise-client/src/mobs/finalize.rs::VariantRegistry::select	Condition::Moon arm: moon brightness of the phase against the range
-PriorityProvider.select	port	crates/sunrise-client/src/mobs/finalize.rs::VariantRegistry::select	highest priority entries whose conditions hold, one picked at random
+MoonBrightnessCheck.test	inline	crates/sunrise-client/src/mobs/variants.rs::VariantTable::select	SpawnCondition::MoonBrightness arm: moon brightness of the phase against the range
+PriorityProvider.select	port	crates/sunrise-client/src/mobs/variants.rs::VariantTable::select	highest priority entries whose conditions hold, one picked at random
 SpawnConditions.bootstrap	skip:data		registry bootstrap of spawn condition codecs; Sunrise reads variant conditions from files
-SpawnContext.create	inline	crates/sunrise-client/src/mobs/finalize.rs::VariantRegistry::select	the level and position passed to select; no separate context object
-variant/StructureCheck.test	inline	crates/sunrise-client/src/mobs/finalize.rs::VariantRegistry::select	Condition::Structure arm: structures with a piece at the position
+SpawnContext.create	inline	crates/sunrise-client/src/mobs/variants.rs::VariantTable::select	the level and position passed to select; no separate context object
+variant/StructureCheck.test	inline	crates/sunrise-client/src/mobs/variants.rs::VariantTable::select	SpawnCondition::Structure arm: structures with a piece at the position
 AbstractMinecartContainer.applyNaturalSlowdown	inline	crates/sunrise-client/src/game/entities/minecarts.rs::Game::natural_slowdown	gap: minor: plain cart friction 0.96; the container's 0.98 plus 0.001 per empty redstone level is missing
 AbstractMinecartContainer.createMenu	inline	crates/sunrise-client/src/game/entities/minecarts.rs::Game::interact_cart	gap: minor: opens the chest for anyone; no refusal of a loot-table cart for spectators
 AbstractMinecartContainer.remove	port	crates/sunrise-client/src/game/entities/minecarts.rs::Game::drop_vehicle_contents	Containers.dropContents on every destroying removal, whatever entity_drops says: the damage path's kill or a creative player's discard, and /kill after the open menu writes its slots back; a loot table still held drops the roll made on load

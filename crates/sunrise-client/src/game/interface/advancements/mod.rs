@@ -1042,10 +1042,13 @@ impl Game<'_> {
                     (id.to_owned(), amplifier, duration)
                 })
                 .collect(),
-            components: sunrise_client::mobs::finalize::variant_component(m)
-                .map(|(id, value)| (id.to_owned(), value))
-                .into_iter()
-                .collect(),
+            components: sunrise_client::mobs::finalize::variant_component_in(
+                m,
+                self.world_variants(),
+            )
+            .map(|(id, value)| (id.to_owned(), value))
+            .into_iter()
+            .collect(),
             custom_name: m.custom_name_text.as_ref().map(Text::component),
             passengers,
             nbt,

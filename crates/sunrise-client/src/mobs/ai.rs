@@ -3490,27 +3490,15 @@ pub(super) fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::sounds(m)[0],
         Species::Enderman if m.ai.target.is_some() => "entity.enderman.scream",
         // Wolf.isAngry reads the persistent anger timer, not the current target.
-        Species::Wolf if super::tame::angry(m) => {
-            super::finalize::variant_sound(m, "growl").unwrap_or("entity.wolf.growl")
-        }
-        Species::Wolf if m.random.next_int_bound(3).unwrap_or(1) == 0 => {
-            let kind = if m.extra.tame && m.health < m.attrs.max_health / 2.0 {
-                "whine"
-            } else {
-                "pant"
-            };
-            super::finalize::variant_sound(m, kind).unwrap_or("entity.wolf.pant")
+        Species::Wolf => {
+            play_wolf_ambient(m, w.side.variant_tables(), events);
+            return;
         }
         Species::Parrot => super::parrot::ambient(m, w),
-        // Cat.getAmbientSound: purr in love, purreow one time in four, else ambient.
-        Species::Cat if m.extra.tame && m.extra.in_love > 0 => {
-            super::finalize::variant_sound(m, "purr").unwrap_or("entity.cat.purr")
-        }
-        Species::Cat if m.extra.tame && m.random.next_int_bound(4).unwrap_or(1) == 0 => {
-            super::finalize::variant_sound(m, "purreow").unwrap_or("entity.cat.purreow")
-        }
-        Species::Cat if !m.extra.tame => {
-            super::finalize::variant_sound(m, "stray_ambient").unwrap_or("entity.cat.stray_ambient")
+        // Cat.getAmbientSound: purr in love, purreow one time in four, else ambient (stray_ambient when wild).
+        Species::Cat => {
+            play_cat_ambient(m, w.side.variant_tables(), events);
+            return;
         }
         // Fox.getAmbientSound: a sleeping fox makes its sleep sound.
         Species::Fox if super::fox::flag(m, super::fox::SLEEPING) => "entity.fox.sleep",
@@ -5255,7 +5243,7 @@ fn species_ai_step(
         // to persist is discarded at 2400.
         Species::Endermite => super::hostile::endermite_lifetime(m),
         Species::Wolf => super::tame::ai_step(m, w, events),
-        Species::Cat => super::tame::cat_ai_step(m, events),
+        Species::Cat => super::tame::cat_ai_step(m, w, events),
         Species::IronGolem => super::golem::iron_ai_step(m, w),
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => super::piglin::ai_step(m),
         Species::Zoglin if m.extra.anim_ticks > 0 => m.extra.anim_ticks -= 1,
@@ -5508,7 +5496,7 @@ pub(super) fn inherited_voice_sounds(m: &Mob) -> [&'static str; 3] {
             m.kind.sounds[2],
         ],
         // The mob's sound variant set, the baby one for a baby.
-        Species::Pig | Species::Cow | Species::Chicken | Species::Wolf | Species::Cat => {
+        Species::Pig | Species::Cow | Species::Chicken => {
             use super::finalize::variant_sound as v;
             match (v(m, "ambient"), v(m, "hurt"), v(m, "death")) {
                 (Some(a), Some(h), Some(d)) => [a, h, d],
@@ -5517,6 +5505,87 @@ pub(super) fn inherited_voice_sounds(m: &Mob) -> [&'static str; 3] {
         }
         _ => m.kind.sounds,
     }
+}
+/// `Wolf.getSoundSet`: resolves `kind` (`ambient`, `death`, `growl`, `hurt`,
+/// `pant`, `whine`, `step`) from the world's `minecraft:wolf_sound_variant` table.
+pub(super) fn wolf_sound<'a>(
+    m: &Mob,
+    variants: Option<&'a super::variants::VariantTables>,
+    kind: &str,
+) -> Option<&'a str> {
+    let variants = variants?;
+    let r = m.wolf_sound_variant(&variants.wolf_sound)?;
+    variants.wolf_sound.get(r)?.sound(m.is_baby(), kind)
+}
+/// `Wolf.getAmbientSound` + `Mob.playAmbientSound` over the world's sound-variant table.
+pub(super) fn play_wolf_ambient(
+    m: &mut Mob,
+    variants: Option<&super::variants::VariantTables>,
+    events: &mut Vec<MobEvent>,
+) {
+    let kind = if super::tame::angry(m) {
+        "growl"
+    } else if m.random.next_int_bound(3).unwrap_or(1) == 0 {
+        if m.extra.tame && m.health < m.attrs.max_health / 2.0 {
+            "whine"
+        } else {
+            "pant"
+        }
+    } else {
+        "ambient"
+    };
+    if let Some(sound) = wolf_sound(m, variants, kind) {
+        m.voice_id(sound, events);
+        return;
+    }
+    let fallback = match kind {
+        "growl" => "entity.wolf.growl",
+        "whine" => "entity.wolf.whine",
+        "pant" => "entity.wolf.pant",
+        _ => "entity.wolf.ambient",
+    };
+    m.voice(fallback, events);
+}
+/// `Cat.getSoundSet`: resolves `kind` (`ambient`, `stray_ambient`, `hiss`,
+/// `hurt`, `death`, `eat`, `beg_for_food`, `purr`, `purreow`) from the world's
+/// `minecraft:cat_sound_variant` table.
+pub fn cat_sound<'a>(
+    m: &Mob,
+    variants: Option<&'a super::variants::VariantTables>,
+    kind: &str,
+) -> Option<&'a str> {
+    let variants = variants?;
+    let r = m.cat_sound_variant(&variants.cat_sound)?;
+    variants.cat_sound.get(r)?.sound(m.is_baby(), kind)
+}
+/// `Cat.getAmbientSound` + `Mob.playAmbientSound` over the world's sound-variant table.
+pub(super) fn play_cat_ambient(
+    m: &mut Mob,
+    variants: Option<&super::variants::VariantTables>,
+    events: &mut Vec<MobEvent>,
+) {
+    let kind = if m.extra.tame {
+        if m.extra.in_love > 0 {
+            "purr"
+        } else if m.random.next_int_bound(4).unwrap_or(1) == 0 {
+            "purreow"
+        } else {
+            "ambient"
+        }
+    } else {
+        "stray_ambient"
+    };
+    if let Some(sound) = cat_sound(m, variants, kind) {
+        m.voice_id(sound, events);
+        return;
+    }
+    let fallback = match kind {
+        "purr" => "entity.cat.purr",
+        "purreow" => "entity.cat.purreow",
+        "stray_ambient" => "entity.cat.stray_ambient",
+        _ => "entity.cat.ambient",
+    };
+    m.voice(fallback, events);
 }
 /// `Animal.mobInteract` with its food in hand: an adult that can fall in
 /// love does, a baby grows up by a tenth, and either plays its eating sound
@@ -5527,6 +5596,20 @@ pub fn feed_animal(
     level: &mut impl RandomSource,
     love_cause: Option<[i32; 4]>,
 ) -> Option<Option<(&'static str, f32, f32)>> {
+    feed_animal_with_variants(m, level, love_cause, None).map(|sound| {
+        sound.map(|(s, v, p)| match s {
+            std::borrow::Cow::Borrowed(s) => (s, v, p),
+            std::borrow::Cow::Owned(_) => ("entity.cat.eat", v, p),
+        })
+    })
+}
+/// [`feed_animal`] resolving registry-backed sound variants against `variants`.
+pub fn feed_animal_with_variants(
+    m: &mut Mob,
+    level: &mut impl RandomSource,
+    love_cause: Option<[i32; 4]>,
+    variants: Option<&super::variants::VariantTables>,
+) -> Option<Option<(std::borrow::Cow<'static, str>, f32, f32)>> {
     // Armadillo.mobInteract: a ball takes no food.
     if super::armadillo::scared(m) {
         return None;
@@ -5544,10 +5627,10 @@ pub fn feed_animal(
         let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
         age_up(m, secs, true);
     }
-    let mut sound = eating_sound(m, level);
+    let mut sound = eating_sound_with_variants(m, level, variants);
     if m.species() == Species::Strider && !m.silent {
         let pitch = 1.0 + (m.random.next_float() - m.random.next_float()) * 0.2;
-        sound = Some(("entity.strider.eat", 1.0, pitch));
+        sound = Some((std::borrow::Cow::Borrowed("entity.strider.eat"), 1.0, pitch));
     }
     Some(sound)
 }
@@ -5635,36 +5718,54 @@ pub fn eating_sound(
     m: &mut Mob,
     level: &mut impl RandomSource,
 ) -> Option<(&'static str, f32, f32)> {
+    eating_sound_with_variants(m, level, None).map(|(s, v, p)| match s {
+        std::borrow::Cow::Borrowed(s) => (s, v, p),
+        std::borrow::Cow::Owned(_) => ("entity.cat.eat", v, p),
+    })
+}
+/// [`eating_sound`] resolving registry-backed sound variants against `variants`.
+pub fn eating_sound_with_variants(
+    m: &mut Mob,
+    level: &mut impl RandomSource,
+    variants: Option<&super::variants::VariantTables>,
+) -> Option<(std::borrow::Cow<'static, str>, f32, f32)> {
+    use std::borrow::Cow;
     // Mth.randomBetween(level.getRandom(), 0.8, 1.2).
     let mut between = || level.next_float() * 0.4 + 0.8;
-    let (sound, volume, pitch, entity_sound) = match m.species() {
-        // makeSound: getSoundVolume, getVoicePitch.
-        Species::Armadillo | Species::Pig | Species::SulfurCube => {
-            let sound = match m.species() {
-                Species::Armadillo => "entity.armadillo.eat",
-                Species::Pig => {
-                    super::finalize::variant_sound(m, "eat").unwrap_or("entity.pig.eat")
-                }
-                _ => "entity.small_sulfur_cube.eat",
-            };
-            let pitch = m.voice_pitch();
-            (sound, sound_volume(m), pitch, true)
-        }
-        // playSound(sound, 1, 1).
-        Species::Cat => (
-            super::finalize::variant_sound(m, "eat").unwrap_or("entity.cat.eat"),
-            1.0,
-            1.0,
-            true,
-        ),
-        Species::Fox => ("entity.fox.eat", 1.0, 1.0, true),
-        // level().playSound(null, this, sound, NEUTRAL, volume, pitch).
-        Species::Frog => ("entity.frog.eat", 2.0, 1.0, false),
-        Species::Goat if m.extra.screaming => ("entity.goat.screaming.eat", 1.0, between(), false),
-        Species::Goat => ("entity.goat.eat", 1.0, between(), false),
-        Species::Sniffer => ("entity.sniffer.eat", 1.0, between(), false),
-        _ => return None,
-    };
+    let (sound, volume, pitch, entity_sound): (Cow<'static, str>, f32, f32, bool) =
+        match m.species() {
+            // makeSound: getSoundVolume, getVoicePitch.
+            Species::Armadillo | Species::Pig | Species::SulfurCube => {
+                let sound = match m.species() {
+                    Species::Armadillo => "entity.armadillo.eat",
+                    Species::Pig => {
+                        super::finalize::variant_sound(m, "eat").unwrap_or("entity.pig.eat")
+                    }
+                    _ => "entity.small_sulfur_cube.eat",
+                };
+                let pitch = m.voice_pitch();
+                (Cow::Borrowed(sound), sound_volume(m), pitch, true)
+            }
+            // playSound(sound, 1, 1).
+            Species::Cat => {
+                let sound = cat_sound(m, variants, "eat")
+                    .map(|s| Cow::Owned(s.to_owned()))
+                    .unwrap_or(Cow::Borrowed("entity.cat.eat"));
+                (sound, 1.0, 1.0, true)
+            }
+            Species::Fox => (Cow::Borrowed("entity.fox.eat"), 1.0, 1.0, true),
+            // level().playSound(null, this, sound, NEUTRAL, volume, pitch).
+            Species::Frog => (Cow::Borrowed("entity.frog.eat"), 2.0, 1.0, false),
+            Species::Goat if m.extra.screaming => (
+                Cow::Borrowed("entity.goat.screaming.eat"),
+                1.0,
+                between(),
+                false,
+            ),
+            Species::Goat => (Cow::Borrowed("entity.goat.eat"), 1.0, between(), false),
+            Species::Sniffer => (Cow::Borrowed("entity.sniffer.eat"), 1.0, between(), false),
+            _ => return None,
+        };
     // Entity.playSound is skipped for a silent entity.
     if entity_sound && m.silent {
         return None;

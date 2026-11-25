@@ -49,6 +49,10 @@ pub trait RenderDataSource {
     fn humanoid_setup(&self) -> Option<&dyn anim::HumanoidSetup> {
         None
     }
+    /// The synced or world variant tables for registry-backed entity textures.
+    fn variants(&self) -> Option<&super::variants::VariantTables> {
+        None
+    }
 }
 
 impl RenderDataSource for MobData {
@@ -260,6 +264,13 @@ pub fn layers_shown(m: &Mob) -> bool {
 }
 /// The model layer key and texture for the mob's body.
 pub fn body(m: &Mob) -> (Cow<'static, str>, Cow<'_, str>) {
+    body_with_variants(m, None)
+}
+/// [`body`] with the synced or world variant tables for registry-backed textures.
+pub fn body_with_variants<'a>(
+    m: &'a Mob,
+    variants: Option<&super::variants::VariantTables>,
+) -> (Cow<'static, str>, Cow<'a, str>) {
     use Species as S;
     let baby = m.is_baby();
     let b = |s: &str| -> Cow<'static, str> {
@@ -305,7 +316,7 @@ pub fn body(m: &Mob) -> (Cow<'static, str>, Cow<'_, str>) {
         }
         S::Wolf => (
             baby_or(m, "wolf#main", "wolf_baby#main"),
-            super::tame::texture(m).into(),
+            super::tame::texture(m, variants).into(),
         ),
         S::Panda => (
             baby_or(m, "panda#main", "panda_baby#main"),
@@ -348,7 +359,7 @@ pub fn body(m: &Mob) -> (Cow<'static, str>, Cow<'_, str>) {
         ),
         S::Cat => (
             baby_or(m, "cat#main", "cat_baby#main"),
-            super::tame::cat_texture(m).into(),
+            super::tame::cat_texture(m, variants).into(),
         ),
         S::Frog => (
             "frog#main".into(),
@@ -1633,10 +1644,10 @@ impl<'a> FrameDraw<'a> {
     pub fn prepare(
         &mut self,
         mob: &'a Mob,
-        data: &MobData,
+        data: &dyn RenderDataSource,
     ) -> Option<&mut dyn mod_api::FrameModelEdit> {
         let body = FrameBody::select(mob, data);
-        let layout = body.layout(data)?.clone();
+        let layout = body.layout(data.mob_data())?.clone();
         let mut poses = Poses::pooled();
         poses.reset(body.model());
         poses.prepare_frame_visibility(layout.clone());
@@ -2074,7 +2085,7 @@ pub fn drawn_textures(m: &Mob, data: &dyn RenderDataSource) -> Vec<String> {
         .cem
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (model_key, texture) = body(m);
+    let (model_key, texture) = body_with_variants(m, data.variants());
     let cem_key = cem_key(&model_key);
     let mut names = Vec::new();
     push(&mut names, cem.layer(cem_key), texture.into_owned());
@@ -2177,7 +2188,7 @@ fn render_visible(
     let (body, mut poses, layout) = match frame.prepared.take() {
         Some((body, prepared)) => (body, prepared.poses, Some(prepared.layout)),
         None => {
-            let body = FrameBody::select(m, data.mob_data());
+            let body = FrameBody::select(m, data);
             let mut poses = Poses::pooled();
             poses.reset(body.model());
             (body, poses, None)
@@ -2344,6 +2355,8 @@ fn render_selected(
         let uv = drawn.map(|(_, uv)| uv).or_else(|| {
             if avatar(m) {
                 atlas(&m.kind.texture)
+            } else if matches!(m.species(), Species::Wolf | Species::Cat) {
+                atlas(crate::hud::MISSING_SPRITE)
             } else {
                 None
             }

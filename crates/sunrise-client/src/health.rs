@@ -579,6 +579,9 @@ pub struct DamageLevel<'a> {
     /// The entity id the hook's source names as its causing entity (`DamageSource.getEntity`),
     /// 0 for none: the lent attacker is the hit's causer only when it is that entity.
     causing: i32,
+    /// The world's frozen mob variant tables, for variant-backed hurt and death sounds
+    /// (`Wolf.getHurtSound`/`getDeathSound`, `Cat.getHurtSound`/`getDeathSound`).
+    variants: Option<&'a crate::mobs::variants::VariantTables>,
 }
 impl<'a> DamageLevel<'a> {
     /// The level of `world`, whose blocks `registry` names.
@@ -622,6 +625,7 @@ impl<'a> DamageLevel<'a> {
             reads: None,
             victim: None,
             causing: 0,
+            variants: None,
         }
     }
     /// The level of `world`, with the random and attachments `lent` took out of it.
@@ -656,6 +660,7 @@ impl<'a> DamageLevel<'a> {
             reads: None,
             victim: None,
             causing: 0,
+            variants: None,
         }
     }
     /// The same level, whose hit lends `lend` (its causing entity) to its listeners, where the
@@ -673,6 +678,14 @@ impl<'a> DamageLevel<'a> {
     }
     pub(crate) fn mob_uuid(&self, id: u32) -> Option<[i32; 4]> {
         self.mob_uuids?.get(&id).copied()
+    }
+    /// Attach the world's frozen mob variant tables for variant-backed hurt and death sounds.
+    pub fn with_variants(mut self, variants: &'a crate::mobs::variants::VariantTables) -> Self {
+        self.variants = Some(variants);
+        self
+    }
+    pub(crate) fn variants(&self) -> Option<&crate::mobs::variants::VariantTables> {
+        self.variants
     }
     /// The same level, for a shorter borrow.
     pub fn reborrow(&mut self) -> DamageLevel<'_> {
@@ -702,6 +715,7 @@ impl<'a> DamageLevel<'a> {
             reads: self.reads,
             victim: self.victim,
             causing: self.causing,
+            variants: self.variants,
         }
     }
     /// The owner's slot for a hit that must release its borrows before resuming.

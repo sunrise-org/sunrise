@@ -36,7 +36,9 @@ use {
 struct Data {
     types: HashMap<String, Arc<MobType>>,
     biome_tags: HashMap<String, HashSet<String>>,
+    structure_tags: HashMap<String, HashSet<String>>,
     registries: SpawnRegistries,
+    variants: crate::mobs::variants::VariantTables,
     enchantments: Enchantments,
     items: Items,
     camel_husk: (f32, f32),
@@ -53,7 +55,14 @@ fn load(root: &std::path::Path, defaults: &ItemDefaults) -> Option<Data> {
             &sunrise_world::loot::PackOverlay::NONE,
         )
         .unwrap_or_default(),
+        structure_tags: crate::items::load_tags(
+            root,
+            "worldgen/structure",
+            &sunrise_world::loot::PackOverlay::NONE,
+        )
+        .unwrap_or_default(),
         registries: SpawnRegistries::load(root),
+        variants: crate::mobs::variants::VariantTables::load_prepared(root),
         enchantments: Enchantments::load(root, defaults).ok()?,
         items: Items::catalog(root, &sunrise_world::loot::PackOverlay::NONE, defaults).ok()?,
         camel_husk,
@@ -145,6 +154,12 @@ impl FinalizeLevel for Level<'_> {
     fn structures_with_piece_at(&self, _: [i32; 3]) -> Vec<String> {
         self.structures.to_vec()
     }
+    fn structure_tag(&self, tag: &str, structure: &str) -> bool {
+        self.data
+            .structure_tags
+            .get(tag)
+            .is_some_and(|s| s.contains(structure))
+    }
     fn moon_phase(&self, _: [i32; 3]) -> usize {
         self.day_time.div_euclid(24000).rem_euclid(8) as usize
     }
@@ -184,6 +199,7 @@ impl FinalizeLevel for Level<'_> {
     fn spawn_data(&self) -> finalize::SpawnData<'_> {
         finalize::SpawnData {
             registries: &self.data.registries,
+            variants: &self.data.variants,
             enchantments: &self.data.enchantments,
             items: &self.data.items,
             camel_husk_size: self.data.camel_husk,
@@ -245,10 +261,28 @@ fn saved_mob(
     raw: Option<&Tag>,
     dimension: &str,
     items: &Items,
+    variants: &crate::mobs::variants::VariantTables,
     uuid: [i32; 4],
 ) -> Compound {
     // No block registry here: a carried block stays as the template had it.
-    let saved = entity_nbt::mob_to_nbt(m, uuid, raw, None, |_| None, items);
+    let mut retained = raw
+        .cloned()
+        .unwrap_or_else(|| Tag::Compound(Compound::new()));
+    entity_nbt::write_ai_paused(m.ai.ai_paused, &mut retained);
+    let mut out = entity_nbt::EntityTagWriter::from_saved(retained);
+    entity_nbt::write_mob(
+        m,
+        uuid,
+        &mut out,
+        None,
+        |_| None,
+        items,
+        entity_nbt::MobSave {
+            variants: Some(variants),
+            ..Default::default()
+        },
+    );
+    let saved = out.finish();
     let Tag::Compound(mut c) = saved else {
         return Compound::new();
     };
@@ -269,13 +303,19 @@ fn saved_mob(
 }
 
 /// The saved compound of mob `i` with the mobs riding it under `Passengers`.
-fn tree(mobs: &[(Mob, Option<Tag>)], i: usize, dimension: &str, items: &Items) -> Compound {
+fn tree(
+    mobs: &[(Mob, Option<Tag>)],
+    i: usize,
+    dimension: &str,
+    items: &Items,
+    variants: &crate::mobs::variants::VariantTables,
+) -> Compound {
     let (m, raw) = &mobs[i];
-    let mut c = saved_mob(m, raw.as_ref(), dimension, items, [0; 4]);
+    let mut c = saved_mob(m, raw.as_ref(), dimension, items, variants, [0; 4]);
     c.remove(&"UUID".into());
     let riders: Vec<Tag> = (0..mobs.len())
         .filter(|&j| mobs[j].0.extra.mount == Some(m.id))
-        .map(|j| Tag::Compound(tree(mobs, j, dimension, items)))
+        .map(|j| Tag::Compound(tree(mobs, j, dimension, items, variants)))
         .collect();
     if !riders.is_empty() {
         c.insert("Passengers".into(), Tag::List(riders));
@@ -298,10 +338,11 @@ impl StructureMobs for StructureMobFinalizer {
         if let Tag::Compound(c) = &mut raw {
             c.remove(&"sunrise:finalize".into());
         }
-        let Some(m) = entity_nbt::mob_from_nbt(&raw, &data.types, 1, None) else {
+        let Some(mut m) = entity_nbt::mob_from_nbt(&raw, &data.types, 1, None) else {
             // Not a mob: vanilla finalizes only Mob instances.
             return true;
         };
+        entity_nbt::read_mob_variants(&mut m, &raw, &data.variants);
         let reason = Reason::Structure;
         match self.finish(
             data,
@@ -405,7 +446,14 @@ impl StructureMobFinalizer {
                 }
             }
             let uuid = uuids.iter().find(|(id, _)| *id == body.id).unwrap().1;
-            let mut tag = saved_mob(&body, None, &self.dimension, &data.items, uuid);
+            let mut tag = saved_mob(
+                &body,
+                None,
+                &self.dimension,
+                &data.items,
+                &data.variants,
+                uuid,
+            );
             if !body.extra.spawn_tags.is_empty() {
                 tag.insert(
                     "Tags".into(),
@@ -469,7 +517,13 @@ impl StructureMobFinalizer {
             .iter()
             .position(|(m, _)| m.extra.mount.is_none())
             .unwrap_or(0);
-        Some(tree(&mobs, root, &self.dimension, &data.items))
+        Some(tree(
+            &mobs,
+            root,
+            &self.dimension,
+            &data.items,
+            &data.variants,
+        ))
     }
 }
 

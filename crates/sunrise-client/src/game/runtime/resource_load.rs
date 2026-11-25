@@ -954,6 +954,7 @@ pub(super) fn load_resources_for_mods_with_limit(
             motion,
             suffocation,
             spawn_registries: sunrise_client::mobs::finalize::SpawnRegistries::load(&root),
+            variants: Arc::new(sunrise_client::mobs::variants::VariantTables::load_prepared(&root)),
             threads,
         },
         rest: std::sync::OnceLock::new(),

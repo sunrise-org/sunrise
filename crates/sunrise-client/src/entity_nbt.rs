@@ -747,16 +747,18 @@ pub fn mob_to_nbt(
 }
 
 /// Runtime state shared by chunk saving and inspecting a live mob.
-pub struct MobSave {
+pub struct MobSave<'a> {
     pub include_id: bool,
     pub game_time: i64,
+    pub variants: Option<&'a crate::mobs::variants::VariantTables>,
 }
 
-impl Default for MobSave {
+impl Default for MobSave<'_> {
     fn default() -> Self {
         Self {
             include_id: true,
             game_time: 0,
+            variants: None,
         }
     }
 }
@@ -769,11 +771,12 @@ pub fn write_mob(
     registry: Option<&BlockRegistry>,
     mut uuid_of: impl FnMut(u32) -> Option<[i32; 4]>,
     items: &crate::items::Items,
-    mode: MobSave,
+    mode: MobSave<'_>,
 ) {
     let MobSave {
         include_id,
         game_time,
+        variants,
     } = mode;
     use crate::mobs::Species as S;
     let base = Base {
@@ -1199,7 +1202,21 @@ pub fn write_mob(
     // mooshroom saves `Type` (below), a fox `Type`, a horse and a llama a
     // packed `Variant` int, so those report the component but save no name.
     // ZombieNautilus writes its variant after the TamableAnimal fields below.
-    if species != S::ZombieNautilus
+    if species == S::Wolf {
+        if let Some(variants) = variants
+            && let Some(r) = m.wolf_variant(&variants.wolf)
+            && let Some(id) = variants.wolf.id(r)
+        {
+            map.insert("variant".into(), string(id));
+        }
+    } else if species == S::Cat {
+        if let Some(variants) = variants
+            && let Some(r) = m.cat_variant(&variants.cat)
+            && let Some(id) = variants.cat.id(r)
+        {
+            map.insert("variant".into(), string(id));
+        }
+    } else if species != S::ZombieNautilus
         && crate::mobs::finalize::saves_variant_name(species)
         && let Some((_, variant)) =
             crate::mobs::finalize::species_variant_component(species, m.extra.variant)
@@ -1208,15 +1225,29 @@ pub fn write_mob(
     }
     if species == S::Wolf {
         write_persistent_anger(m, map, &mut uuid_of);
-    }
-    let sounds = crate::mobs::finalize::sound_variants(species);
-    if !sounds.is_empty() {
-        let sound = m.extra.sound_variant.and_then(|i| sounds.get(i as usize));
-        let sound = sound.copied().unwrap_or("classic");
-        map.insert(
-            "sound_variant".into(),
-            string(&format!("minecraft:{sound}")),
-        );
+        if let Some(variants) = variants
+            && let Some(r) = m.wolf_sound_variant(&variants.wolf_sound)
+            && let Some(id) = variants.wolf_sound.id(r)
+        {
+            map.insert("sound_variant".into(), string(id));
+        }
+    } else if species == S::Cat {
+        if let Some(variants) = variants
+            && let Some(r) = m.cat_sound_variant(&variants.cat_sound)
+            && let Some(id) = variants.cat_sound.id(r)
+        {
+            map.insert("sound_variant".into(), string(id));
+        }
+    } else {
+        let sounds = crate::mobs::finalize::sound_variants(species);
+        if !sounds.is_empty() {
+            let sound = m.extra.sound_variant.and_then(|i| sounds.get(i as usize));
+            let sound = sound.copied().unwrap_or("classic");
+            map.insert(
+                "sound_variant".into(),
+                string(&format!("minecraft:{sound}")),
+            );
+        }
     }
     match id {
         // Fox.addAdditionalSaveData.
@@ -2406,7 +2437,10 @@ fn mob_from_nbt_at(
             };
         }
     }
-    if crate::mobs::finalize::saves_variant_name(m.species())
+    if !matches!(
+        m.species(),
+        crate::mobs::Species::Wolf | crate::mobs::Species::Cat
+    ) && crate::mobs::finalize::saves_variant_name(m.species())
         && let Some(v) = text(tag.get("variant"))
     {
         m.extra.variant = crate::mobs::finalize::variant_index(m.species(), &v);
@@ -2416,7 +2450,11 @@ fn mob_from_nbt_at(
     {
         m.extra.egg_time = t as i32;
     }
-    if let Some(v) = text(tag.get("sound_variant")) {
+    if !matches!(
+        m.species(),
+        crate::mobs::Species::Wolf | crate::mobs::Species::Cat
+    ) && let Some(v) = text(tag.get("sound_variant"))
+    {
         let v = v.trim_start_matches("minecraft:");
         let sounds = crate::mobs::finalize::sound_variants(m.species());
         m.extra.sound_variant = sounds.iter().position(|n| *n == v).map(|i| i as u8);
@@ -7355,6 +7393,44 @@ pub fn apply_item_components(m: &mut Mob, stack: &crate::items::ItemStack) {
     {
         m.extra.color = i as u8;
     }
+}
+
+/// Resolve registry-backed mob variants from saved NBT against the world's
+/// `VariantTables` (`VariantUtils.readVariant` + `Wolf`/`Cat.readAdditionalSaveData`).
+/// Missing or unknown ids leave the vanilla default (`getDefaultOrAny`).
+pub fn read_mob_variants(m: &mut Mob, tag: &Tag, variants: &crate::mobs::variants::VariantTables) {
+    match m.species() {
+        crate::mobs::Species::Wolf => {
+            m.extra.wolf_variant = text(tag.get("variant"))
+                .and_then(|v| variants.wolf.lookup(&v))
+                .or_else(|| variants.wolf.default_or_any("minecraft:pale"));
+            m.extra.wolf_sound_variant = text(tag.get("sound_variant"))
+                .and_then(|v| variants.wolf_sound.lookup(&v))
+                .or_else(|| variants.wolf_sound.default_or_any("minecraft:classic"));
+        }
+        crate::mobs::Species::Cat => {
+            m.extra.cat_variant = text(tag.get("variant"))
+                .and_then(|v| variants.cat.lookup(&v))
+                .or_else(|| variants.cat.default_or_any("minecraft:black"));
+            m.extra.cat_sound_variant = text(tag.get("sound_variant"))
+                .and_then(|v| variants.cat_sound.lookup(&v))
+                .or_else(|| variants.cat_sound.default_or_any("minecraft:classic"));
+        }
+        _ => {}
+    }
+}
+
+/// `mob_from_nbt` followed by [`read_mob_variants`].
+pub fn mob_from_nbt_with_variants(
+    tag: &Tag,
+    types: &HashMap<String, Arc<MobType>>,
+    id: u32,
+    registry: Option<&BlockRegistry>,
+    variants: &crate::mobs::variants::VariantTables,
+) -> Option<Mob> {
+    let mut mob = mob_from_nbt(tag, types, id, registry)?;
+    read_mob_variants(&mut mob, tag, variants);
+    Some(mob)
 }
 
 #[cfg(test)]

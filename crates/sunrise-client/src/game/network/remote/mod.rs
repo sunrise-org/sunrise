@@ -432,6 +432,8 @@ pub(super) struct Remote {
     pub(super) builtin: Arc<Builtin>,
     lang: Arc<Language>,
     pub(in crate::game) registries: Arc<Dynamic>,
+    /// Data-driven mob variant tables decoded from `registries` in server sync order.
+    pub(in crate::game) variants: Arc<sunrise_client::mobs::variants::VariantTables>,
     /// The block, item and fluid tags of `registries` by name, as native mods read them
     /// (`install_remote_tags`).
     pub(super) tags: Option<sunrise_client::items::Items>,

@@ -73,7 +73,10 @@ use sunrise_client::{
     mesher::Vertex,
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobWorld, PlayerView, Seen, SpawnSetup, Species, Who,
-        ai::{eating_sound, eating_sound_is_bound, feed_animal, takes_food},
+        ai::{
+            cat_sound, eating_sound_is_bound, eating_sound_with_variants,
+            feed_animal_with_variants, takes_food,
+        },
         entity_sounds::full_id,
         finalize::Group,
         spawning::{self, BiomeFacts},
@@ -1351,9 +1354,13 @@ impl Game<'_> {
     ) {
         let mut heard = mod_api::Difficulty::from(difficulty);
         let (mut spawn_cancelled, mut skip_finalize) = (false, false);
-        let given = group
-            .as_ref()
-            .and_then(|g| super::native_unspawned_mob::native_spawn_group(g, self.lend_epoch()));
+        let given = group.as_ref().and_then(|g| {
+            super::native_unspawned_mob::native_spawn_group(
+                g,
+                self.lend_epoch(),
+                self.world_variants(),
+            )
+        });
         let mut native_group = given.clone();
         let mut borrowed = self.borrowed_unspawned_mob_mut(kind, at, mob);
         self.native_finalize_spawn(mod_api::__private::FinalizeSpawnCall {
@@ -1371,7 +1378,7 @@ impl Game<'_> {
         if native_group != given {
             *group = native_group
                 .as_ref()
-                .and_then(super::native_unspawned_mob::spawn_group);
+                .and_then(|g| super::native_unspawned_mob::spawn_group(g, self.world_variants()));
         }
         (
             sunrise_client::mobs::finalize::SpawnEvent {
@@ -2613,7 +2620,8 @@ impl Game<'_> {
         };
         let at = self.mobs[i].position.components();
         self.lan_entity_event(id as i32, 35, at);
-        hit.before_post(&mut self.mobs[i]);
+        let variants = world_variants!(self);
+        hit.before_post(&mut self.mobs[i], Some(variants));
         if let Some(post) = hit.post.take() {
             let kind = self.mobs[i].kind.clone();
             self.finish_damage_post(id as i32, &kind.id, post);
@@ -3461,9 +3469,10 @@ impl Game<'_> {
                 MobEvent::Hiss { mob } => {
                     if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
                         let at = m.center();
-                        let sound = sunrise_client::mobs::finalize::variant_sound(m, "hiss")
-                            .unwrap_or("entity.cat.hiss");
-                        self.play_audio(&full_id(sound), Some(at), 1.0, 1.0);
+                        let sound = cat_sound(m, Some(self.world_variants()), "hiss")
+                            .unwrap_or("entity.cat.hiss")
+                            .to_owned();
+                        self.play_audio(&full_id(&sound), Some(at), 1.0, 1.0);
                     }
                 }
                 MobEvent::StabMemory {
@@ -4483,7 +4492,11 @@ impl Game<'_> {
         partner: u32,
         equine: Option<Box<sunrise_client::mobs::equine::Offspring>>,
         parent_variant: Option<bool>,
-        wolf_voice: Option<u8>,
+        wolf_voice: Option<
+            sunrise_client::lan::data::RegistryRef<
+                sunrise_client::mobs::variants::WolfSoundVariant,
+            >,
+        >,
         experience: sunrise_client::mobs::BreedExperience,
         at_tick_boundary: bool,
     ) -> Option<u32> {
@@ -4615,10 +4628,10 @@ impl Game<'_> {
                 if p.species() == Species::Cat {
                     // Cat.getBreedOffspring.
                     let other = q.as_ref().unwrap_or(&p);
-                    child.extra.variant = if coin {
-                        p.extra.variant
+                    child.extra.cat_variant = if coin {
+                        p.extra.cat_variant
                     } else {
-                        other.extra.variant
+                        other.extra.cat_variant
                     };
                     if p.extra.tame {
                         child.extra.tame = true;
@@ -4638,10 +4651,10 @@ impl Game<'_> {
                     // Wolf.getBreedOffspring: a parent's variant; tame parents
                     // give a tame baby with their collar colours mixed.
                     let other = q.as_ref().unwrap_or(&p);
-                    child.extra.variant = if coin {
-                        p.extra.variant
+                    child.extra.wolf_variant = if coin {
+                        p.extra.wolf_variant
                     } else {
-                        other.extra.variant
+                        other.extra.wolf_variant
                     };
                     if p.extra.tame {
                         sunrise_client::mobs::tame::set_tame(child, true);
@@ -4655,7 +4668,8 @@ impl Game<'_> {
                         );
                         child.extra.color = mixed;
                     }
-                    child.extra.sound_variant = wolf_voice.or_else(|| self.bred_wolf_voice(parent));
+                    child.extra.wolf_sound_variant =
+                        wolf_voice.or_else(|| self.bred_wolf_voice(parent));
                     break 'offspring;
                 }
                 // Panda.getBreedOffspring: genes from both parents.
@@ -8564,7 +8578,7 @@ impl Game<'_> {
         let mut give: Option<&str> = None;
         let mut sound: Option<(&str, f32, f32)> = None;
         // Sounds played as vanilla plays them: (event, volume, pitch) at the feet.
-        let mut eat: Option<(&'static str, f32, f32)> = None;
+        let mut eat: Option<(std::borrow::Cow<'static, str>, f32, f32)> = None;
         let mut shear: Option<sunrise_client::sound_engine::SoundEntity> = None;
         let feet = [m.position.x, m.position.y, m.position.z];
         let mut handled = true;
@@ -8614,7 +8628,11 @@ impl Game<'_> {
                         give = Some("minecraft:suspicious_stew");
                         give_stew = Some(effects);
                         // `playSound(.., 1.0F, 1.0F)` at the feet.
-                        eat = Some(("entity.mooshroom.suspicious_milk", 1.0, 1.0));
+                        eat = Some((
+                            std::borrow::Cow::Borrowed("entity.mooshroom.suspicious_milk"),
+                            1.0,
+                            1.0,
+                        ));
                     }
                     None => {
                         give = Some("minecraft:mushroom_stew");
@@ -8637,7 +8655,7 @@ impl Game<'_> {
                 } else {
                     m.extra.stew_effects = Some(effects.to_vec());
                     consume = true;
-                    eat = Some(("entity.mooshroom.eat", 2.0, 1.0));
+                    eat = Some((std::borrow::Cow::Borrowed("entity.mooshroom.eat"), 2.0, 1.0));
                     stew_particles = Some(true);
                 }
             }
@@ -8670,7 +8688,11 @@ impl Game<'_> {
             {
                 armor_drop = m.equipment_stacks()[6].clone();
                 m.extra.set_body_stack(None);
-                eat = Some(("item.armor.unequip_wolf", 1.0, 1.0));
+                eat = Some((
+                    std::borrow::Cow::Borrowed("item.armor.unequip_wolf"),
+                    1.0,
+                    1.0,
+                ));
                 equip_event = Some(false);
                 self.damage_held_tool();
             }
@@ -8701,7 +8723,11 @@ impl Game<'_> {
                 body.extra = held_extra;
                 m.extra.set_body_stack(Some(body));
                 consume = true;
-                eat = Some(("item.armor.equip_wolf", 1.0, 1.0));
+                eat = Some((
+                    std::borrow::Cow::Borrowed("item.armor.equip_wolf"),
+                    1.0,
+                    1.0,
+                ));
                 equip_event = Some(true);
             }
             // Wolf.mobInteract: an armadillo scute repairs a sitting wolf's
@@ -8719,7 +8745,11 @@ impl Game<'_> {
                         - (sunrise_client::mobs::WOLF_ARMOR_DURABILITY as f32 * 0.125) as i32,
                 );
                 consume = true;
-                eat = Some(("item.wolf_armor.repair", 1.0, 1.0));
+                eat = Some((
+                    std::borrow::Cow::Borrowed("item.wolf_armor.repair"),
+                    1.0,
+                    1.0,
+                ));
             }
             Species::Wolf
                 if m.extra.tame
@@ -8835,7 +8865,11 @@ impl Game<'_> {
                 // TamableAnimal.feed.
                 m.heal(&self.loop_context, heal);
                 consume = true;
-                eat = eating_sound(m, &mut self.world.random);
+                let variants = self
+                    .world_tables
+                    .as_ref()
+                    .map_or_else(|| self.res.variants(), |t| &t.variants);
+                eat = eating_sound_with_variants(m, &mut self.world.random, Some(variants));
             }
             // Cat.mobInteract: Animal.mobInteract first breeds an adult or
             // grows a baby with the food; only when it did not does the owner
@@ -8875,7 +8909,11 @@ impl Game<'_> {
                     m.extra.owner = Some(acting);
                     m.extra.sitting = true;
                 }
-                eat = eating_sound(m, &mut self.world.random);
+                let variants = self
+                    .world_tables
+                    .as_ref()
+                    .map_or_else(|| self.res.variants(), |t| &t.variants);
+                eat = eating_sound_with_variants(m, &mut self.world.random, Some(variants));
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
                 self.mob_event_particles(self.mobs[index].id, if tamed { 7 } else { 6 });
                 if tamed {
@@ -8895,7 +8933,11 @@ impl Game<'_> {
             {
                 m.heal(&self.loop_context, 25.0);
                 consume = true;
-                eat = Some(("entity.iron_golem.repair", 1.0, m.golem_repair_pitch()));
+                eat = Some((
+                    std::borrow::Cow::Borrowed("entity.iron_golem.repair"),
+                    1.0,
+                    m.golem_repair_pitch(),
+                ));
             }
             Species::Creeper if creeper_igniter => {
                 m.extra.flag = true;
@@ -8907,7 +8949,11 @@ impl Game<'_> {
                 } else {
                     "item.flintandsteel.use"
                 };
-                eat = Some((event, 1.0, m.random.next_float() * 0.4 + 0.8));
+                eat = Some((
+                    std::borrow::Cow::Borrowed(event),
+                    1.0,
+                    m.random.next_float() * 0.4 + 0.8,
+                ));
                 if damageable {
                     self.damage_held_tool();
                 } else {
@@ -8962,7 +9008,7 @@ impl Game<'_> {
                 consume = true;
                 if !m.silent {
                     let pitch = 1.0 + (m.random.next_float() - m.random.next_float()) * 0.2;
-                    eat = Some(("entity.parrot.eat", 1.0, pitch));
+                    eat = Some((std::borrow::Cow::Borrowed("entity.parrot.eat"), 1.0, pitch));
                 }
                 let rolled = m.random.next_int_bound(10).unwrap_or(1) == 0;
                 let tamed =
@@ -8983,7 +9029,7 @@ impl Game<'_> {
             // Dolphin.mobInteract: a fish makes a baby grow by a tenth and an
             // adult remember it (`gotFish`), to swim to a treasure.
             Species::Dolphin if fish => {
-                eat = Some(("entity.dolphin.eat", 1.0, 1.0));
+                eat = Some((std::borrow::Cow::Borrowed("entity.dolphin.eat"), 1.0, 1.0));
                 if sunrise_client::mobs::ai::can_age_up(m) {
                     let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
                     sunrise_client::mobs::ai::age_up(m, secs, true);
@@ -9055,7 +9101,16 @@ impl Game<'_> {
             {
                 // Animal.mobInteract: breed adults, speed up babies, then
                 // playEatingSound (silent unless the species overrides it).
-                match feed_animal(m, &mut self.world.random, Some(acting)) {
+                let variants = self
+                    .world_tables
+                    .as_ref()
+                    .map_or_else(|| self.res.variants(), |t| &t.variants);
+                match feed_animal_with_variants(
+                    m,
+                    &mut self.world.random,
+                    Some(acting),
+                    Some(variants),
+                ) {
                     Some(sound) => {
                         consume = true;
                         eat = sound;
@@ -9161,7 +9216,7 @@ impl Game<'_> {
             self.play_audio_bound("minecraft:entity.sheep.shear", 7, 1.0, 1.0, entity, None);
         }
         if let Some((s, volume, pitch)) = eat {
-            let name = full_id(s);
+            let name = full_id(&s);
             if eating_sound_is_bound(species) {
                 let id = self.mobs[index].id;
                 let sound =

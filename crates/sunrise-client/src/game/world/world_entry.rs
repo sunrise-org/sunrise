@@ -483,6 +483,9 @@ impl Game<'_> {
             );
             (Arc::new(packed), admission)
         };
+        let variants = frozen
+            .map(|tables| tables.variants.clone())
+            .unwrap_or_else(|| Arc::new(packed_registry_definitions.variant_tables()));
         let biomes = if let Some(tables) = frozen {
             tables.biomes.clone()
         } else {
@@ -891,6 +894,7 @@ impl Game<'_> {
                 packed_registries: packed_registry_definitions,
                 painting_variants,
                 transformers,
+                variants,
                 providers,
                 biomes,
                 loot,

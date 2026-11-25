@@ -564,6 +564,7 @@ impl Game<'_> {
                 .ok_or_else(stale)?;
                 sunrise_client::mobs::armor::prepare(&new, &self.motion.attributes);
                 self.resolve_loaded_profession(&mut new);
+                entity_nbt::read_mob_variants(&mut new, &tag, self.world_variants());
                 let unresolved = self
                     .stations()
                     .professions

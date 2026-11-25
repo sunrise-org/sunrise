@@ -681,10 +681,39 @@ impl sunrise_client::mobs::finalize::FinalizeLevel for PassLevel<'_, '_, '_> {
         let Some(b) = self.l.biome(pos[0], pos[1], pos[2]) else {
             return false;
         };
+        if let Some(tags) = self
+            .l
+            .game
+            .world_tables
+            .as_ref()
+            .and_then(|t| t.pack_tags.get("worldgen/biome"))
+        {
+            return tags
+                .get(tag)
+                .is_some_and(|members| members.contains(&b.name));
+        }
         self.l.game.res.mob_data().biome_has(tag, &b.name)
     }
     fn structures_with_piece_at(&self, pos: [i32; 3]) -> Vec<String> {
         self.l.game.structures_at(pos)
+    }
+    fn structure_tag(&self, tag: &str, structure: &str) -> bool {
+        if let Some(tags) = self
+            .l
+            .game
+            .world_tables
+            .as_ref()
+            .and_then(|t| t.pack_tags.get("worldgen/structure"))
+        {
+            return tags
+                .get(tag)
+                .is_some_and(|members| members.contains(structure));
+        }
+        self.l
+            .game
+            .structure_tag(tag)
+            .iter()
+            .any(|m| m == structure)
     }
     fn moon_phase(&self, _: [i32; 3]) -> usize {
         self.l.game.finalize_moon_phase()

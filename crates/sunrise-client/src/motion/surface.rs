@@ -51,6 +51,10 @@ pub trait SideLevel {
     fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
         None
     }
+    /// The world's frozen variant registries (server's world tables, or client's synced tables).
+    fn variant_tables(&self) -> Option<&crate::mobs::variants::VariantTables> {
+        None
+    }
 }
 
 /// Level data for tests and probes that do not have a live game.

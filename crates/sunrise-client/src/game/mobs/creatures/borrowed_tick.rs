@@ -275,6 +275,7 @@ impl Game<'_> {
                     Some(&self.pack.block_registries),
                     &self.damage_hooks,
                 )
+                .with_variants(world_variants!(self))
                 .with_mob_hurt_handoff(&mut paused_hurt)
                 .with_mob_uuids(&self.persist.uuids)
                 .with_player_resolver(

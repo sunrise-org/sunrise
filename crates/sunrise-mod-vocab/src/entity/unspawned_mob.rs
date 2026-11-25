@@ -363,7 +363,7 @@ pub enum SpawnGroup {
     Wolf {
         /// The ageable part.
         ageable: AgeableGroup,
-        /// The `minecraft:wolf_variant` registry entry.
+        /// An entry of the world's `minecraft:wolf_variant` registry.
         variant: Identifier,
     },
     /// `AbstractSchoolingFish.SchoolSpawnGroupData`: the school's leader, and for tropical

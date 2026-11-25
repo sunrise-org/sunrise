@@ -172,6 +172,10 @@ impl sunrise_client::motion::SideLevel for Game<'_> {
     fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
         Some(mod_api::BlockStates::of(self))
     }
+
+    fn variant_tables(&self) -> Option<&sunrise_client::mobs::variants::VariantTables> {
+        Some(self.world_variants())
+    }
 }
 
 type Query = (*const World, BlockPos, BlockStateId, Option<EntityRef>);

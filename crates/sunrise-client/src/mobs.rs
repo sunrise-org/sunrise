@@ -110,6 +110,7 @@ pub mod transport_items;
 pub mod trial_spawner;
 pub mod turtle;
 pub mod undead;
+pub mod variants;
 pub mod vex;
 pub mod villager;
 pub mod villager_brain;
@@ -1395,6 +1396,22 @@ pub struct Extra {
     /// The sound variant: index in the species' `*_sound_variant` registry
     /// (`finalize::sound_variants`); None is the default, `classic`.
     pub sound_variant: Option<u8>,
+    /// `Wolf.DATA_VARIANT_ID`: the world's `minecraft:wolf_variant` holder
+    /// (network id in the world's sync order); `None` before initialization
+    /// resolves to `minecraft:pale` (or the registry's first entry).
+    pub wolf_variant: Option<crate::lan::data::RegistryRef<variants::WolfVariant>>,
+    /// `Wolf.DATA_SOUND_VARIANT_ID`: the world's `minecraft:wolf_sound_variant`
+    /// holder; `None` before initialization resolves to `minecraft:classic`
+    /// (or the registry's first entry).
+    pub wolf_sound_variant: Option<crate::lan::data::RegistryRef<variants::WolfSoundVariant>>,
+    /// `Cat.DATA_VARIANT_ID`: the world's `minecraft:cat_variant` holder
+    /// (network id in the world's sync order); `None` before initialization
+    /// resolves to `minecraft:black` (or the registry's first entry).
+    pub cat_variant: Option<crate::lan::data::RegistryRef<variants::CatVariant>>,
+    /// `Cat.DATA_SOUND_VARIANT_ID`: the world's `minecraft:cat_sound_variant`
+    /// holder; `None` before initialization resolves to `minecraft:classic`
+    /// (or the registry's first entry).
+    pub cat_sound_variant: Option<crate::lan::data::RegistryRef<variants::CatSoundVariant>>,
     /// `Zombie.canBreakDoors`.
     pub can_break_doors: bool,
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
@@ -2583,7 +2600,7 @@ pub enum MobEvent {
         /// Whether the parent supplies the variant, if already drawn.
         parent_variant: Option<bool>,
         /// Wolf voice drawn before experience, unless baby-spawn approval defers inheritance.
-        wolf_voice: Option<u8>,
+        wolf_voice: Option<crate::lan::data::RegistryRef<variants::WolfSoundVariant>>,
         /// The parent-RNG experience decision, if already made.
         experience: BreedExperience,
     },
@@ -3272,8 +3289,8 @@ struct HurtTail {
 }
 
 impl ProtectedHurt {
-    pub fn before_post(&self, mob: &mut Mob) {
-        mob.finish_hurt_before_post(self.tail);
+    pub fn before_post(&self, mob: &mut Mob, variants: Option<&variants::VariantTables>) {
+        mob.finish_hurt_before_post(self.tail, variants);
     }
 
     pub fn after_post(&self, mob: &mut Mob) {
@@ -4876,7 +4893,7 @@ impl Mob {
                 post,
             }));
         } else {
-            self.finish_hurt_before_post(tail);
+            self.finish_hurt_before_post(tail, level.variants());
             // The last of `LivingEntity.hurtServer`: Post also runs for a hit taking no health.
             // A killing hit's owner runs it after die, including when death is vetoed.
             self.damage_completion = level.finish_damage(
@@ -4895,7 +4912,11 @@ impl Mob {
                 || self.ai.last_hurt_by.is_some())
     }
 
-    fn finish_hurt_before_post(&mut self, tail: HurtTail) {
+    fn finish_hurt_before_post(
+        &mut self,
+        tail: HurtTail,
+        variants: Option<&variants::VariantTables>,
+    ) {
         let HurtTail {
             knock,
             absorbed,
@@ -4907,9 +4928,33 @@ impl Mob {
             // playHurtSound (Mob: also resets the ambient sound clock) or the
             // death sound: makeSound draws the voice pitch whenever there is a sound.
             let dead = !self.alive();
-            // Wolf.getHurtSound: the armor's own sound when it takes the hit.
+            let sound_kind = if dead { "death" } else { "hurt" };
+            // Wolf.getHurtSound: the armor's own sound when it takes the hit;
+            // otherwise Wolf.getHurtSound/getDeathSound and Cat.getHurtSound/getDeathSound
+            // read the world's sound variant table.
+            // A content type's declared hurt or death slot replaces the template's
+            // `getHurtSound`/`getDeathSound`, variant sets included.
+            let declared = matches!(
+                if dead {
+                    self.kind.sound_overrides.death
+                } else {
+                    self.kind.sound_overrides.hurt
+                },
+                entity_sounds::Selection::Id(_) | entity_sounds::Selection::Mute
+            );
+            let variant_sound = if absorbed || declared {
+                None
+            } else {
+                match self.species() {
+                    Species::Wolf => ai::wolf_sound(self, variants, sound_kind),
+                    Species::Cat => ai::cat_sound(self, variants, sound_kind),
+                    _ => None,
+                }
+            };
             let sound = if absorbed {
                 "item.wolf_armor.damage"
+            } else if variant_sound.is_some() {
+                ""
             } else {
                 entity_sounds::voices(self)[if dead { 2 } else { 1 }]
             };
@@ -4917,12 +4962,25 @@ impl Mob {
                 self.ambient_timer = self.ambient_interval().wrapping_neg();
             }
             let at = self.position.components();
-            let voice = if sound.is_empty() {
+            let voice = if let Some(id) = variant_sound {
+                if id.is_empty() {
+                    None
+                } else {
+                    let pitch = self.voice_pitch();
+                    (!self.silent).then(|| {
+                        MobEvent::SoundId(
+                            entity_sounds::full_id(id).into_owned(),
+                            at,
+                            ai::sound_volume(self),
+                            pitch,
+                        )
+                    })
+                }
+            } else if sound.is_empty() {
                 None
             } else {
                 let pitch = self.voice_pitch();
-                (!self.silent)
-                    .then(|| villager::HurtSound(sound, at, ai::sound_volume(self), pitch))
+                (!self.silent).then(|| MobEvent::Sound(sound, at, ai::sound_volume(self), pitch))
             };
             // playSecondaryHurtSound: a thorns hit sounds where the mob
             // stands, silent or not.
@@ -4933,11 +4991,18 @@ impl Mob {
                 1.0,
             ));
             if self.species() == Species::Villager {
+                let voice = match voice {
+                    Some(MobEvent::Sound(name, at, volume, pitch)) => {
+                        Some(villager::HurtSound(name, at, volume, pitch))
+                    }
+                    _ => None,
+                };
                 villager::ext_mut(self).pending_hurt_sounds = [voice, thorns];
             } else {
-                for villager::HurtSound(name, at, volume, pitch) in
-                    [voice, thorns].into_iter().flatten()
-                {
+                if let Some(event) = voice {
+                    self.outbox.push(event);
+                }
+                if let Some(villager::HurtSound(name, at, volume, pitch)) = thorns {
                     self.outbox.push(MobEvent::Sound(name, at, volume, pitch));
                 }
             }
@@ -5636,6 +5701,61 @@ impl Mob {
         // Entity.playSound: at the entity's feet.
         let at = [self.position.x, self.position.y, self.position.z];
         events.push(MobEvent::Sound(event, at, ai::sound_volume(self), pitch));
+    }
+    /// Mob.playSound with LivingEntity.getVoicePitch for a dynamic sound id
+    /// (such as a data-pack sound variant).
+    pub fn voice_id(&mut self, event: &str, events: &mut Vec<MobEvent>) {
+        let pitch = self.voice_pitch();
+        if self.silent || event.is_empty() {
+            return;
+        }
+        let at = [self.position.x, self.position.y, self.position.z];
+        events.push(MobEvent::SoundId(
+            entity_sounds::full_id(event).into_owned(),
+            at,
+            ai::sound_volume(self),
+            pitch,
+        ));
+    }
+    /// `Wolf.getVariant` resolved against `table`: the stored holder, or
+    /// `VariantUtils.getDefaultOrAny(..., WolfVariants.DEFAULT)` when unset.
+    pub fn wolf_variant(
+        &self,
+        table: &variants::VariantTable<variants::WolfVariant>,
+    ) -> Option<crate::lan::data::RegistryRef<variants::WolfVariant>> {
+        self.extra
+            .wolf_variant
+            .or_else(|| table.default_or_any("minecraft:pale"))
+    }
+    /// `Wolf.getSoundVariant` resolved against `table`: the stored holder, or
+    /// `WolfSoundVariants.CLASSIC` (else any entry) when unset.
+    pub fn wolf_sound_variant(
+        &self,
+        table: &variants::VariantTable<variants::WolfSoundVariant>,
+    ) -> Option<crate::lan::data::RegistryRef<variants::WolfSoundVariant>> {
+        self.extra
+            .wolf_sound_variant
+            .or_else(|| table.default_or_any("minecraft:classic"))
+    }
+    /// `Cat.getVariant` resolved against `table`: the stored holder, or
+    /// `VariantUtils.getDefaultOrAny(..., CatVariants.BLACK)` when unset.
+    pub fn cat_variant(
+        &self,
+        table: &variants::VariantTable<variants::CatVariant>,
+    ) -> Option<crate::lan::data::RegistryRef<variants::CatVariant>> {
+        self.extra
+            .cat_variant
+            .or_else(|| table.default_or_any("minecraft:black"))
+    }
+    /// `Cat.getSoundVariant` resolved against `table`: the stored holder, or
+    /// `CatSoundVariants.CLASSIC` (else any entry) when unset.
+    pub fn cat_sound_variant(
+        &self,
+        table: &variants::VariantTable<variants::CatSoundVariant>,
+    ) -> Option<crate::lan::data::RegistryRef<variants::CatSoundVariant>> {
+        self.extra
+            .cat_sound_variant
+            .or_else(|| table.default_or_any("minecraft:classic"))
     }
 }
 /// Model geometry for a mob, posed for its animation state, as camera-relative

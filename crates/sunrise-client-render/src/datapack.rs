@@ -1043,6 +1043,10 @@ fn content_id(file: &str) -> Option<String> {
         | "banner_pattern"
         | "predicate"
         | "item_modifier"
+        | "wolf_variant"
+        | "wolf_sound_variant"
+        | "cat_variant"
+        | "cat_sound_variant"
         | "test_environment"
         | "test_instance"
         | "world_clock" => kind,
@@ -1173,6 +1177,8 @@ impl DataStore {
         let kinds: Vec<_> = [
             "advancement",
             "banner_pattern",
+            "cat_sound_variant",
+            "cat_variant",
             "chat_type",
             "damage_type",
             "data_maps",
@@ -1197,6 +1203,8 @@ impl DataStore {
             "trim_material",
             "trim_pattern",
             "villager_trade",
+            "wolf_sound_variant",
+            "wolf_variant",
             "world_clock",
             "worldgen/biome",
         ]
