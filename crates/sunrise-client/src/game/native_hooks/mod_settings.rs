@@ -829,6 +829,7 @@ mod tests {
                             label: "test.on".into(),
                             tooltip: None,
                             value: NativeSettingValue::Toggle(false),
+                            category: None,
                         }],
                         ..Default::default()
                     }),

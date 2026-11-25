@@ -168,6 +168,10 @@ already, comes back as the error. On the client the settings appear on your mod'
 - Read a setting with `host.setting(key)` or the typed `setting_bool`, `setting_choice`, `setting_f64`
   and `setting_color` on any `Host`; each reads the live value on the side it runs. These calls take
   the `SettingKey` minted at registration and return `Result<_, SettingAccessError>`.
+- Group settings under headings with `Registrar::categorize_setting(key, category)` after registering
+  them: settings sharing a category (a translation key) are drawn under one heading, in registration
+  order, on the mod's page. Settings without a category render as today. A key the calling mod never
+  registered, or an empty category, comes back as the error.
 - Update a setting on either host with `host.set_setting(key, value) -> Result<bool, SettingAccessError>`.
   The game validates it, persists it atomically, updates that side's live store and any client Options > Mods
   row, and synchronously tells its owner through `setting_changed`. The hook takes a read-only `&dyn Host` and can

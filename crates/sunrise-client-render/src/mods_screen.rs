@@ -1255,6 +1255,7 @@ mod tests {
                 label: "Open".into(),
                 tooltip: None,
                 value: crate::mod_list::NativeSettingValue::Toggle(true),
+                category: None,
             }],
             ..NativePage::default()
         };

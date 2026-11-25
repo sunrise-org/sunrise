@@ -12,6 +12,18 @@ pub fn setting(mod_id: &str, key: &str) -> Option<&'static crate::SettingSpec> {
         .map(|(_, spec)| spec)
 }
 
+/// The category mod `mod_id` gave its setting `key`, if any.
+pub fn setting_category(mod_id: &str, key: &str) -> Option<&'static str> {
+    installed().and_then(|installed| {
+        installed
+            .keys
+            .setting_categories
+            .iter()
+            .find(|(owner, k, _)| *owner == mod_id && k.as_str() == key)
+            .map(|(_, _, category)| category.as_str())
+    })
+}
+
 /// Mint an owner-bound [`SettingKey`](crate::SettingKey) during registration.
 pub fn setting_key(owner: &'static str, slot: usize) -> crate::SettingKey {
     crate::SettingKey { owner, slot }
@@ -111,6 +123,12 @@ pub trait SettingsRegistrar {
         &mut self,
         setting: crate::SettingSpec,
     ) -> Result<crate::SettingKey, crate::SettingError>;
+
+    /// Give a setting the mod registered already a section on its page in Options > Mods:
+    /// settings sharing a category are drawn under one heading, in registration order.
+    /// Called from `Hooks::register`, after `register_setting` for the same key; a key
+    /// the calling mod never registered, or an empty category, is refused.
+    fn categorize_setting(&mut self, key: &str, category: &str) -> Result<(), crate::SettingError>;
 
     /// Register the screen the Mods screen's Config button opens for the calling mod
     /// (NeoForge's `IConfigScreenFactory`, registered with `ModContainer.registerExtensionPoint`).
