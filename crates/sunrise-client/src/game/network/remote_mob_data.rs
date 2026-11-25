@@ -438,9 +438,34 @@ fn apply_registry_data(
                 continue;
             }
             (Species::Frog, 18, Value::Id(_)) => "minecraft:frog_variant",
-            (Species::Pig, 19, Value::Id(_)) => "minecraft:pig_variant",
-            (Species::Cow, 18, Value::Id(_)) => "minecraft:cow_variant",
-            (Species::Chicken, 18, Value::Id(_)) => "minecraft:chicken_variant",
+            (Species::Pig, 19, Value::Id(id)) => {
+                m.extra.pig_variant = Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
+            (Species::Pig, 20, Value::Id(id)) => {
+                m.extra.pig_sound_variant =
+                    Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
+            (Species::Cow, 18, Value::Id(id)) => {
+                m.extra.cow_variant = Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
+            (Species::Cow, 19, Value::Id(id)) => {
+                m.extra.cow_sound_variant =
+                    Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
+            (Species::Chicken, 18, Value::Id(id)) => {
+                m.extra.chicken_variant =
+                    Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
+            (Species::Chicken, 19, Value::Id(id)) => {
+                m.extra.chicken_sound_variant =
+                    Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
             (Species::ZombieNautilus, 21, Value::Id(_)) => "minecraft:zombie_nautilus_variant",
             // Wolf.DATA_ANGER_END_TIME: the angry texture while it lies ahead.
             (Species::Wolf, 22, Value::Long(end)) => {

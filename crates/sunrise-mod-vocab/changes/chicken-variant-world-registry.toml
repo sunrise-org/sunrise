@@ -1,0 +1,3 @@
+ids = ["method:LootEntityView::chicken_variant"]
+why = "Chicken variants now load from the world's data packs into the minecraft:chicken_variant registry, matching vanilla 26.3. LootEntityView::chicken_variant returns the holder's entry id from the world's minecraft:chicken_variant registry instead of a fixed vanilla list."
+migrate = "No type or signature change. Mods reading LootEntityView::chicken_variant may now observe non-minecraft variant ids added by data packs."

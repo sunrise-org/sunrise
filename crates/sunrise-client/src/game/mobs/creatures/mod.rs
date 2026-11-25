@@ -2677,7 +2677,7 @@ impl Game<'_> {
             .mobs
             .iter()
             .find(|m| m.id == mob)
-            .map(|m| drops::loot_entity(m, None));
+            .map(|m| drops::loot_entity_with_variants(m, None, Some(self.world_variants())));
         let stacks = match (loot, this) {
             (Some(loot), Some(this)) if loot.has_table(table) => {
                 let params = EntityLootParams {
@@ -4590,9 +4590,6 @@ impl Game<'_> {
                 // later in Animal.spawnChildFromBreeding or Fox.FoxBreedGoal.breed.
                 // No Mob.finalizeSpawn either: no follow range bonus, right-handed.
                 spawning::bred_offspring(child);
-                // getBreedOffspring creates the baby without finalizeSpawn: it keeps
-                // the default (`classic`) sound variant.
-                child.extra.sound_variant = None;
                 // Fox.getBreedOffspring runs no finalizeSpawn: nothing in the
                 // baby fox's mouth.
                 if p.species() == Species::Fox {
@@ -4690,13 +4687,42 @@ impl Game<'_> {
                     child.persistent = true;
                 }
                 // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
-                child.extra.variant = p.extra.variant;
-                // Fox, Pig, Cow and Chicken.getBreedOffspring: either parent's variant.
-                if sunrise_client::mobs::draws_parent_variant(p.species())
-                    && p.species() != Species::Cat
-                    && !coin
-                {
-                    child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+                match p.species() {
+                    Species::Pig => {
+                        let other = q.as_ref().unwrap_or(&p);
+                        child.extra.pig_variant = if coin {
+                            p.extra.pig_variant
+                        } else {
+                            other.extra.pig_variant
+                        };
+                    }
+                    Species::Cow => {
+                        let other = q.as_ref().unwrap_or(&p);
+                        child.extra.cow_variant = if coin {
+                            p.extra.cow_variant
+                        } else {
+                            other.extra.cow_variant
+                        };
+                    }
+                    Species::Chicken => {
+                        let other = q.as_ref().unwrap_or(&p);
+                        child.extra.chicken_variant = if coin {
+                            p.extra.chicken_variant
+                        } else {
+                            other.extra.chicken_variant
+                        };
+                    }
+                    _ => {
+                        child.extra.variant = p.extra.variant;
+                        // Fox.getBreedOffspring: either parent's variant.
+                        if sunrise_client::mobs::draws_parent_variant(p.species())
+                            && p.species() != Species::Cat
+                            && !coin
+                        {
+                            child.extra.variant =
+                                q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+                        }
+                    }
                 }
                 // The rabbit's own draw above.
                 if let Some(variant) = rabbit_variant {
@@ -7788,11 +7814,21 @@ impl Game<'_> {
                     } else {
                         1
                     };
+                    let chicken_variant = p
+                        .egg_variant
+                        .as_deref()
+                        .and_then(|id| self.world_variants().chicken.lookup(id))
+                        .or_else(|| {
+                            self.world_variants()
+                                .chicken
+                                .default_or_any("minecraft:temperate")
+                        });
                     for _ in 0..n {
                         if let Some(id) = self.spawn_mob_raw("minecraft:chicken", atp, true)
                             && let Some(c) = self.mobs.iter_mut().find(|m| m.id == id)
                         {
-                            (c.extra.age, c.extra.variant) = (-24000, p.egg_variant.unwrap_or(0));
+                            c.extra.age = -24000;
+                            c.extra.chicken_variant = chicken_variant;
                         }
                     }
                 }
@@ -9493,6 +9529,12 @@ impl Game<'_> {
         );
         let (species, variant, color) =
             (parent.species(), parent.extra.variant, parent.extra.color);
+        let (wolf_variant, pig_variant, cow_variant, chicken_variant) = (
+            parent.extra.wolf_variant,
+            parent.extra.pig_variant,
+            parent.extra.cow_variant,
+            parent.extra.chicken_variant,
+        );
         // `MushroomCow.getBreedOffspring(level, this)`: the egg's mate is the
         // parent itself, so the colour always rolls `nextInt(1024) == 0` to
         // flip, and every other roll spends the coin flip that can only pick
@@ -9521,6 +9563,10 @@ impl Game<'_> {
         };
         if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
             sunrise_client::mobs::finalize::spawn_egg_offspring(child, species, variant, color);
+            child.extra.wolf_variant = wolf_variant;
+            child.extra.pig_variant = pig_variant;
+            child.extra.cow_variant = cow_variant;
+            child.extra.chicken_variant = chicken_variant;
         }
         // `Mob.checkAndHandleImportantInteractions` then calls
         // `onOffspringSpawnedFromEgg`: `Fox`'s makes the baby trust the player
@@ -9625,8 +9671,13 @@ impl Game<'_> {
         };
         // SpawnEggItem.spawnMob: `EntityType.create` finalizes the mob, then
         // `PostSpawnProcessor` puts the egg's components on it.
+        let variants = self
+            .world_tables
+            .as_ref()
+            .map_or_else(|| self.res.variants(), |t| &t.variants);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             sunrise_client::entity_nbt::apply_item_components(m, stack);
+            sunrise_client::entity_nbt::apply_item_variant_components(m, stack, variants);
         }
         self.apply_spawn_egg_entity_data(id, &data);
         self.post_block_game_event("minecraft:entity_place", p, Some(Who::Player), None);

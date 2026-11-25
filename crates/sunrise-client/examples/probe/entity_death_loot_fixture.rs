@@ -295,6 +295,7 @@ pub fn main() -> sunrise_client::Result<()> {
                 vehicle: c.get("vehicle").map(|v| LootEntity::new(v)),
                 mob_drops: true,
                 world_seed,
+                variants: None,
             };
             // Vanilla's entity tables all name a random sequence: no level random.
             let mut level = sunrise_core::random::LegacyRandom::new(0);

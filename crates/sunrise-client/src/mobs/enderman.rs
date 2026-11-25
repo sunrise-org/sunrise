@@ -832,6 +832,7 @@ mod tests {
             vehicle: None,
             mob_drops,
             world_seed: 0,
+            variants: None,
         };
         let mut sequences = RandomSequences::default();
         let mut random = sunrise_core::random::LegacyRandom::new(0);

@@ -1089,9 +1089,14 @@ impl Game<'_> {
     /// persistent mob. A tadpole's setter does nothing: its `fromBucket` is
     /// always true.
     pub(super) fn mob_placed(&mut self, id: u32, stack: &ItemStack) -> Result<()> {
+        let variants = self
+            .world_tables
+            .as_ref()
+            .map_or_else(|| self.res.variants(), |t| &t.variants);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             m.persistent = false;
             sunrise_client::entity_nbt::apply_item_components(m, stack);
+            sunrise_client::entity_nbt::apply_item_variant_components(m, stack, variants);
             match m.species() {
                 Species::Cod
                 | Species::Salmon
@@ -1135,12 +1140,17 @@ impl Game<'_> {
             return Ok((Some(stack), CLICK));
         };
         // EntityType.create: `finalizeSpawn` first, the egg's components after.
+        let variants = self
+            .world_tables
+            .as_ref()
+            .map_or_else(|| self.res.variants(), |t| &t.variants);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             // SpawnEggItemBehavior's `EntityType.spawn` never calls
             // `setPersistenceRequired`, as a spawn egg used by hand doesn't;
             // only the elder guardian's and copper golem's constructors do.
             m.persistent = matches!(m.species(), Species::ElderGuardian | Species::CopperGolem);
             sunrise_client::entity_nbt::apply_item_components(m, &stack);
+            sunrise_client::entity_nbt::apply_item_variant_components(m, &stack, variants);
         }
         // EntityType.updateCustomEntityTag: a configured egg
         // (`/give @s pig_spawn_egg[minecraft:entity_data={…}]`) spawns the mob

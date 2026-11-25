@@ -450,9 +450,9 @@ pub struct Projectile {
     pub item: Option<crate::items::ItemStack>,
     /// `ThrowableItemProjectile.DATA_ITEM_STACK` for non-potion throwables (count 1).
     pub thrown_item: Option<Box<crate::items::ItemStack>>,
-    /// `ThrownEgg`'s item `CHICKEN_VARIANT` component, as the chicken variant
-    /// index its hatchlings get; None when no item was recorded.
-    pub egg_variant: Option<u8>,
+    /// `ThrownEgg`'s item `CHICKEN_VARIANT` component, as the canonical
+    /// `minecraft:chicken_variant` registry entry id (`None` when removed or not an egg).
+    pub egg_variant: Option<String>,
     /// The UUID its own random made (`Mth.createInsecureUUID`), for the server
     /// to keep unless a save gives one: an arrow's at construction, another
     /// kind's when it is shot (`shoot_own`), which is the same stream since
@@ -747,34 +747,44 @@ pub(crate) fn water_bubble_at(position: [f64; 3], movement: [f64; 3]) -> ([f64; 
         movement,
     )
 }
-/// The chicken variant a thrown egg stack carries: its explicit
+/// The chicken variant id a thrown egg stack carries: its explicit
 /// `minecraft:chicken/variant` component, else its item's default (egg
 /// temperate, blue egg cold, brown egg warm). An explicit removal
-/// (`!minecraft:chicken/variant`) leaves the hatchling its temperate default.
-pub(crate) fn egg_chicken_variant(stack: &crate::items::ItemStack) -> u8 {
-    let named = stack
+/// (`!minecraft:chicken/variant`) returns `None`, leaving the hatchling its
+/// default variant.
+pub fn egg_chicken_variant(stack: &crate::items::ItemStack) -> Option<String> {
+    if let Some(raw) = stack
         .extra
         .as_ref()
         .and_then(|d| d.other("minecraft:chicken/variant"))
         .and_then(|t| match t {
             sunrise_core::nbt::Tag::String(s) => s.to_string().ok(),
             _ => None,
-        });
+        })
+        .and_then(|raw| {
+            sunrise_core::identifier::Identifier::parse(&raw)
+                .ok()
+                .map(|id| id.as_str().to_owned())
+        })
+    {
+        return Some(raw);
+    }
     // A removed component resolves to absent, not to the item default.
-    let removed = stack
+    if stack
         .extra
         .as_ref()
-        .is_some_and(|d| d.other("!minecraft:chicken/variant").is_some());
-    let name = named.as_deref().unwrap_or(if removed {
-        "temperate"
-    } else {
+        .is_some_and(|d| d.other("!minecraft:chicken/variant").is_some())
+    {
+        return None;
+    }
+    Some(
         match &*stack.item {
-            "minecraft:blue_egg" => "cold",
-            "minecraft:brown_egg" => "warm",
-            _ => "temperate",
+            "minecraft:blue_egg" => "minecraft:cold",
+            "minecraft:brown_egg" => "minecraft:warm",
+            _ => "minecraft:temperate",
         }
-    });
-    crate::mobs::finalize::variant_index(crate::mobs::Species::Chicken, name)
+        .to_owned(),
+    )
 }
 impl Projectile {
     /// `Entity.getBoundingBox`: its type's square box standing on its position,
@@ -1349,7 +1359,7 @@ impl Projectile {
             }
             _ => {
                 if self.kind == ProjectileKind::Egg {
-                    self.egg_variant = Some(egg_chicken_variant(&stack));
+                    self.egg_variant = egg_chicken_variant(&stack);
                 }
                 self.thrown_item = Some(Box::new(stack));
             }
@@ -2352,11 +2362,10 @@ mod tests {
 
     #[test]
     fn egg_variant_honors_explicit_removal() {
-        use crate::mobs::{Species, finalize::variant_index};
         let mut blue = crate::items::ItemStack::new("minecraft:blue_egg", 1);
         assert_eq!(
-            egg_chicken_variant(&blue),
-            variant_index(Species::Chicken, "cold")
+            egg_chicken_variant(&blue).as_deref(),
+            Some("minecraft:cold")
         );
         let mut data = sunrise_items::item_data::StackData::default();
         data.set_other(
@@ -2364,10 +2373,7 @@ mod tests {
             Some(sunrise_core::nbt::Tag::Compound(Default::default())),
         );
         blue.extra = Some(Box::new(data));
-        assert_eq!(
-            egg_chicken_variant(&blue),
-            variant_index(Species::Chicken, "temperate")
-        );
+        assert_eq!(egg_chicken_variant(&blue), None);
     }
 
     struct Empty(Vec<(Who, Aabb)>);
@@ -4661,9 +4667,18 @@ mod render_light_tests {
             egg.set_egg_item(&ItemStack::new(item, 1));
             egg.egg_variant
         };
-        assert_eq!(variant("minecraft:egg"), Some(0));
-        assert_eq!(variant("minecraft:brown_egg"), Some(1));
-        assert_eq!(variant("minecraft:blue_egg"), Some(2));
+        assert_eq!(
+            variant("minecraft:egg").as_deref(),
+            Some("minecraft:temperate")
+        );
+        assert_eq!(
+            variant("minecraft:brown_egg").as_deref(),
+            Some("minecraft:warm")
+        );
+        assert_eq!(
+            variant("minecraft:blue_egg").as_deref(),
+            Some("minecraft:cold")
+        );
         let mut snowball = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);
         snowball.set_egg_item(&ItemStack::new("minecraft:blue_egg", 1));
         assert_eq!(snowball.egg_variant, None);

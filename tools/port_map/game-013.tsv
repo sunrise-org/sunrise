@@ -74,7 +74,7 @@ ShoulderRidingEntity.setEntityOnShoulder	port	crates/sunrise-client/src/game/mob
 Pig.registerGoals	port	crates/sunrise-client/src/mobs/farm.rs::register	Species::Pig arm: float, panic 1.25, breed, two temptations (stick and food), follow parent, stroll, look
 Pig.getControllingPassenger	port	crates/sunrise-client/src/mobs/equine.rs::controlled	saddled and the rider holds the carrot on a stick (r.steer)
 Pig.onSyncedDataUpdated	missing		minor: a server's pig does not start its client boost timer from the synched boost time (remote.rs reads only the strider's flag there)
-Pig.defineSynchedData	skip:other		synched boost time, variant and sound variant; Sunrise keeps them in extra.counter, extra.counter2, extra.variant and extra.sound_variant
+Pig.defineSynchedData	skip:other		synched boost time, variant and sound variant; Sunrise keeps the boost time in extra.counter and extra.counter2; the variant and sound variant are the holders pig_variant and pig_sound_variant
 Pig.addAdditionalSaveData	port	crates/sunrise-client/src/entity_nbt.rs::mob_to_nbt	variant, sound_variant and the saddle in equipment
 Pig.readAdditionalSaveData	port	crates/sunrise-client/src/entity_nbt/mob_load.rs::mob_from_nbt	variant, sound_variant and the saddle
 Pig.mobInteract	port	crates/sunrise-client/src/game/mobs/mounts.rs::Game::interact_steerable	gap: player: a saddled pig is mounted even when the click holds its food, so it cannot be fed or bred while saddled (vanilla feeds first)
@@ -88,7 +88,7 @@ Pig.getBreedOffspring	port	crates/sunrise-client/src/game/mobs/creatures/mod.rs:
 Pig.getLeashOffset	port	crates/sunrise-client/src/mobs/leash.rs::leash_offset	0.6 of the eye height, the default width/2 forwards
 Pig.getSoundSet	inline	crates/sunrise-client/src/mobs/ai.rs::voice_sounds	gap: player: only the baby or adult classic sounds are used, so mini and big sound variants (chosen and saved) never sound different
 Pig.finalizeSpawn	port	crates/sunrise-client/src/mobs/finalize.rs::Ctx::finalize	variant by biome tag and a random sound variant
-PigSoundVariants.bootstrap	skip:data		sound variant registry; names come from finalize::sound_variants
+PigSoundVariants.bootstrap	skip:data		sound variant registry; entries come from the world's registry (VariantTables)
 PigVariants.bootstrap	skip:data		variant registry; the variants and their biome tags are read from data
 PigVariants.register	skip:data		registry helper
 PolarBear.createAttributes	skip:data		attributes come from the entity type table

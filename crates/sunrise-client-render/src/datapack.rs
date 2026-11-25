@@ -1034,6 +1034,16 @@ fn content_id(file: &str) -> Option<String> {
         | "chat_type"
         | "trim_pattern"
         | "trim_material"
+        | "wolf_variant"
+        | "wolf_sound_variant"
+        | "cat_variant"
+        | "cat_sound_variant"
+        | "pig_variant"
+        | "pig_sound_variant"
+        | "cow_variant"
+        | "cow_sound_variant"
+        | "chicken_variant"
+        | "chicken_sound_variant"
         | "data_maps"
         | "enchantment"
         | "enchantment_provider"
@@ -1043,10 +1053,6 @@ fn content_id(file: &str) -> Option<String> {
         | "banner_pattern"
         | "predicate"
         | "item_modifier"
-        | "wolf_variant"
-        | "wolf_sound_variant"
-        | "cat_variant"
-        | "cat_sound_variant"
         | "test_environment"
         | "test_instance"
         | "world_clock" => kind,
@@ -1180,6 +1186,10 @@ impl DataStore {
             "cat_sound_variant",
             "cat_variant",
             "chat_type",
+            "chicken_sound_variant",
+            "chicken_variant",
+            "cow_sound_variant",
+            "cow_variant",
             "damage_type",
             "data_maps",
             "dialog",
@@ -1192,6 +1202,8 @@ impl DataStore {
             "jukebox_song",
             "loot_table",
             "painting_variant",
+            "pig_sound_variant",
+            "pig_variant",
             "predicate",
             "recipe",
             "recipe_filter",

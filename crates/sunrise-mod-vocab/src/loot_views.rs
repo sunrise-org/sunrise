@@ -247,7 +247,8 @@ impl<'a> LootEntityView<'a> {
         self.0.frog_variant()
     }
 
-    /// Chicken variant identifier, when applicable.
+    /// Chicken variant identifier from the world's `minecraft:chicken_variant`
+    /// registry, when applicable.
     pub fn chicken_variant(&self) -> Option<&'a str> {
         self.0.chicken_variant()
     }

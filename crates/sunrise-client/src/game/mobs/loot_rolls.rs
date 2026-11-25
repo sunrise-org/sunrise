@@ -259,7 +259,11 @@ impl Game<'_> {
                         .mount
                         .and_then(|mount| self.mobs.iter().find(|o| o.id == mount))
                         .map(|o| sunrise_world::loot::LootEntity::new(&o.kind.id));
-                    sunrise_client::mobs::drops::loot_entity(mob, vehicle)
+                    sunrise_client::mobs::drops::loot_entity_with_variants(
+                        mob,
+                        vehicle,
+                        Some(self.world_variants()),
+                    )
                 })
                 .unwrap_or_else(|| sunrise_world::loot::LootEntity::new(&self.target_type(target))),
             _ => {

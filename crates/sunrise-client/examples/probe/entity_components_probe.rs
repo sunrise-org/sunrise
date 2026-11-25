@@ -77,24 +77,29 @@ pub fn main() -> Result<()> {
         let kind = c["type"].as_str().unwrap();
         let s = species(kind);
         let raw_variant = c["variant"].as_str().unwrap();
-        let components = if matches!(s, Species::Wolf | Species::Cat) {
-            let full = if raw_variant.contains(':') {
-                raw_variant.to_owned()
-            } else {
-                format!("minecraft:{raw_variant}")
-            };
-            let key = if s == Species::Wolf {
-                "minecraft:wolf/variant"
-            } else {
-                "minecraft:cat/variant"
-            };
-            std::iter::once((key.to_owned(), full)).collect()
-        } else {
-            let variant = variant_index(s, raw_variant);
-            species_variant_component(s, variant)
-                .map(|(id, v)| (id.to_owned(), v))
-                .into_iter()
-                .collect()
+        let components = match s {
+            Species::Wolf | Species::Cat | Species::Pig | Species::Cow | Species::Chicken => {
+                let key = match s {
+                    Species::Wolf => "minecraft:wolf/variant",
+                    Species::Cat => "minecraft:cat/variant",
+                    Species::Pig => "minecraft:pig/variant",
+                    Species::Cow => "minecraft:cow/variant",
+                    _ => "minecraft:chicken/variant",
+                };
+                let full = if raw_variant.contains(':') {
+                    raw_variant.to_owned()
+                } else {
+                    format!("minecraft:{raw_variant}")
+                };
+                std::iter::once((key.to_owned(), full)).collect()
+            }
+            _ => {
+                let variant = variant_index(s, raw_variant);
+                species_variant_component(s, variant)
+                    .map(|(id, v)| (id.to_owned(), v))
+                    .into_iter()
+                    .collect()
+            }
         };
         let view = EntityView {
             kind: kind.to_owned(),

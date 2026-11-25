@@ -180,34 +180,53 @@ const MEMORIES: [&str; 7] = [
     "home",
 ];
 
-fn variant(
-    m: &Mob,
-    regs: &SpawnRegistries,
-    variants: &sunrise_client::mobs::variants::VariantTables,
-    v: &mut Vec<String>,
-) {
+fn variant(m: &Mob, variants: &sunrise_client::mobs::variants::VariantTables, v: &mut Vec<String>) {
     use Species as S;
     let s = m.species();
-    let named = |reg: &finalize::VariantRegistry, i: Option<u8>| {
-        let name = i.map_or("classic", |i| {
-            reg.names.get(i as usize).map_or("?", |n| n.as_str())
-        });
-        format!("minecraft:{name}")
-    };
     let var = format!("minecraft:{}", finalize::variant_name(s, m.extra.variant));
     match s {
         S::Pig => {
+            let var = m
+                .pig_variant(&variants.pig)
+                .and_then(|r| variants.pig.id(r))
+                .unwrap_or("minecraft:temperate")
+                .to_owned();
+            let snd = m
+                .pig_sound_variant(&variants.pig_sound)
+                .and_then(|r| variants.pig_sound.id(r))
+                .unwrap_or("minecraft:classic")
+                .to_owned();
             v.push(var);
-            v.push(named(&regs.pig_sound, m.extra.sound_variant));
+            v.push(snd);
         }
         S::Cow => {
+            let var = m
+                .cow_variant(&variants.cow)
+                .and_then(|r| variants.cow.id(r))
+                .unwrap_or("minecraft:temperate")
+                .to_owned();
+            let snd = m
+                .cow_sound_variant(&variants.cow_sound)
+                .and_then(|r| variants.cow_sound.id(r))
+                .unwrap_or("minecraft:classic")
+                .to_owned();
             v.push(var);
-            v.push(named(&regs.cow_sound, m.extra.sound_variant));
+            v.push(snd);
         }
         S::Mooshroom => v.push(if m.extra.variant == 0 { "red" } else { "brown" }.into()),
         S::Chicken => {
+            let var = m
+                .chicken_variant(&variants.chicken)
+                .and_then(|r| variants.chicken.id(r))
+                .unwrap_or("minecraft:temperate")
+                .to_owned();
+            let snd = m
+                .chicken_sound_variant(&variants.chicken_sound)
+                .and_then(|r| variants.chicken_sound.id(r))
+                .unwrap_or("minecraft:classic")
+                .to_owned();
             v.push(var);
-            v.push(named(&regs.chicken_sound, m.extra.sound_variant));
+            v.push(snd);
             v.push(format!("jockey={}", m.extra.jockey));
         }
         S::Cat => {
@@ -318,7 +337,6 @@ fn variant(
 fn describe(
     m: &Mob,
     all: &[Mob],
-    regs: &SpawnRegistries,
     variants: &sunrise_client::mobs::variants::VariantTables,
 ) -> String {
     let mut t = vec![m.kind.id.clone()];
@@ -446,7 +464,7 @@ fn describe(
         t.push(format!("mem={}", mem.join(",")));
     }
     let mut v = Vec::new();
-    variant(m, regs, variants, &mut v);
+    variant(m, variants, &mut v);
     if !v.is_empty() {
         t.push(format!("v={}", v.join(" ").replace(' ', "_")));
     }
@@ -594,10 +612,7 @@ pub fn main() -> sunrise_client::Result<()> {
             }
         }
         all.sort_by_key(|m| m.id);
-        let mut parts: Vec<String> = all
-            .iter()
-            .map(|m| describe(m, &all, &registries, &variants))
-            .collect();
+        let mut parts: Vec<String> = all.iter().map(|m| describe(m, &all, &variants)).collect();
         for m in &mut all {
             parts.push(format!("rng {}", m.random.next_long()));
         }

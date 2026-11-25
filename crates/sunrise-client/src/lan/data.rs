@@ -317,6 +317,12 @@ fn synchronized_entries(
                 | "wolf_sound_variant"
                 | "cat_variant"
                 | "cat_sound_variant"
+                | "pig_variant"
+                | "pig_sound_variant"
+                | "cow_variant"
+                | "cow_sound_variant"
+                | "chicken_variant"
+                | "chicken_sound_variant"
         )
     {
         mod_entries(resources, path, &mut entries);

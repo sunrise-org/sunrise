@@ -19,13 +19,19 @@ fn a_spawn_egg_beats_the_biome_variant() {
         m.extra.variant = 0;
         m
     };
+    let variants = crate::mobs::variants::VariantTables::load_prepared(&root);
     let mut egg = crate::items::ItemStack::new("minecraft:chicken_spawn_egg", 1);
     egg.data_mut()
         .set_other("minecraft:chicken/variant", Some(string("minecraft:warm")));
     let mut hen = spawn("minecraft:chicken", 1);
-    assert_eq!(hen.extra.variant, 0);
+    hen.extra.chicken_variant = variants.chicken.lookup("minecraft:temperate");
     apply_item_components(&mut hen, &egg);
-    assert_eq!(hen.extra.variant, 1, "minecraft:warm, not the biome's");
+    apply_item_variant_components(&mut hen, &egg, &variants);
+    assert_eq!(
+        hen.extra.chicken_variant,
+        variants.chicken.lookup("minecraft:warm"),
+        "minecraft:warm, not the biome's"
+    );
     // MushroomCow.applyImplicitComponents: the egg's variant, and the
     // component the mob reports back.
     let mut egg = crate::items::ItemStack::new("minecraft:mooshroom_spawn_egg", 1);
