@@ -209,6 +209,8 @@ impl Game<'_> {
         if registry == "minecraft:trial_spawner" {
             return Ok(sunrise_client::mobs::trial_spawner::registry_ids()
                 .ok_or(RegistryReadError::UnknownRegistry)?
+                .iter()
+                .map(String::as_str)
                 .try_for_each(visit));
         }
         if let Some(features) = self.res.behaviours().live_features()

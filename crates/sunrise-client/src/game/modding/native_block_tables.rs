@@ -327,12 +327,9 @@ impl<'a> BlockTables<'a> {
             return Some(unwaxed);
         }
         let registry = self.pack.assets.registry;
+        let transformers = self.res.transformers();
         registry
-            .resolve(
-                &rest
-                    .transformers
-                    .unwaxed(registry, registry.state(state)?)?,
-            )
+            .resolve(&transformers.unwaxed(registry, registry.state(state)?)?)
             .ok()
     }
 

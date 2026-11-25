@@ -659,6 +659,15 @@ impl Game<'_> {
             &overlay,
             self.res.item_defaults(),
         );
+        // The block registry binds each transform's blocks and states, so a name it does not
+        // know refuses the load with the other registry errors.
+        let transformers = sunrise_client::block_transform::Transformers::build(
+            packed_registry_definitions
+                .validated("minecraft:block_transformer")
+                .iter()
+                .map(|(id, value)| (id.as_str(), *value)),
+            self.pack.assets.registry,
+        );
         // Item damage predicates use the same frozen registry as player hurt.
         Arc::make_mut(&mut items.enchantments).bind_damage_catalog(&health.damage);
         items.bind_component_damage_catalog(&health.damage);
@@ -694,6 +703,7 @@ impl Game<'_> {
             songs_admission.err(),
             providers.as_ref().err().cloned(),
             install_items_result.err().map(|error| error.to_string()),
+            transformers.as_ref().err().cloned(),
             conditions.check_errors().err(),
             (!advancements.refused.is_empty()).then(|| advancements.refused.join("\n")),
             loot.as_ref().err().map(ToString::to_string),
@@ -713,6 +723,7 @@ impl Game<'_> {
         if reload {
             items.retain_unbound_tags(self.items());
         }
+        let transformers = Arc::new(transformers?);
         let sources = sources?;
         let (mut loot, context) = loot?;
         let recipes = Recipes::from_resolved(root, &items, &overlay, &sources)?;
@@ -858,6 +869,7 @@ impl Game<'_> {
                 items: Arc::new(items),
                 packed_registries: packed_registry_definitions,
                 painting_variants,
+                transformers,
                 providers,
                 biomes,
                 loot,
@@ -899,12 +911,87 @@ impl Game<'_> {
             .as_ref()
             .map_or_else(Vec::new, |t| t.data_maps.registries());
         self.install_block_maps();
+        self.install_registry_snapshots();
         self.install_fluid_interactions()?;
         self.install_profession_save_snapshots();
         self.share_mob_maps();
         self.share_biome_keys();
         sunrise_client::datapack_net::serve(self.mods.datapack_registries.clone());
         Ok(())
+    }
+    /// Publish what gameplay and drawing read of the open world's data-driven registries, from
+    /// the tables just opened: the block transformers, the trial spawner configs, the sulfur cube
+    /// archetypes and the decorated pot patterns, replacing the last world's.
+    pub(in crate::game) fn install_registry_snapshots(&self) {
+        use sunrise_client::mobs::{sulfur_cube, trial_spawner};
+        let Some(tables) = self.world_tables.as_ref() else {
+            return;
+        };
+        let registries = &tables.packed_registries;
+        self.res.set_transformers(tables.transformers.clone());
+        trial_spawner::install(
+            registries
+                .validated("minecraft:trial_spawner")
+                .into_iter()
+                .filter_map(|(id, value)| {
+                    let config =
+                        <trial_spawner::TrialConfig as trial_spawner::TrialConfigExt>::decode(
+                            &sunrise_client::scoreboard::json_to_tag(value),
+                        )?;
+                    Some((id, config))
+                })
+                .collect(),
+        );
+        sulfur_cube::install(sulfur_cube::build(
+            &registries.validated("minecraft:sulfur_cube_archetype"),
+            &tables.items.item_tags,
+        ));
+        self.install_pot_patterns(
+            registries
+                .validated("minecraft:decorated_pot_pattern")
+                .into_iter()
+                .filter_map(|(id, value)| Some((id, value["asset_id"].as_str()?.to_owned())))
+                .collect(),
+        );
+    }
+    /// The resource root's own `block_transformer` files as the world's registry, for tests that
+    /// boot a game without opening a world.
+    #[cfg(test)]
+    pub(in crate::game) fn install_root_block_transformers(&self) {
+        let dir = self
+            .options
+            .resources
+            .join("data/minecraft/block_transformer");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let files: Vec<_> = entries
+            .filter_map(|entry| {
+                let path = entry.unwrap().path();
+                (path.extension().and_then(|e| e.to_str()) == Some("json")).then(|| {
+                    let id = format!("minecraft:{}", path.file_stem().unwrap().to_string_lossy());
+                    let value =
+                        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap())
+                            .unwrap();
+                    (id, value)
+                })
+            })
+            .collect();
+        let transformers = sunrise_client::block_transform::Transformers::build(
+            files.iter().map(|(id, value)| (id.as_str(), value)),
+            self.pack.assets.registry,
+        )
+        .unwrap();
+        self.res.set_transformers(Arc::new(transformers));
+    }
+    /// Publish the pot patterns of the registry (`id` to its `asset_id`) to the block entity renderer.
+    pub(in crate::game) fn install_pot_patterns(&self, assets: HashMap<String, String>) {
+        self.res.block_entity_render().set_pot_patterns(
+            sunrise_client::block_entity_render::pot_pattern_textures(
+                self.res.item_defaults(),
+                |pattern| assets.get(pattern).cloned(),
+            ),
+        );
     }
     /// Sends each joined Sunrise client the snapshot of the set just published, built from the
     /// offer owned by its connection. A refused replacement ends that connection with its reason.
@@ -967,6 +1054,7 @@ impl Game<'_> {
             .as_ref()
             .map_or_else(Vec::new, |t| t.data_maps.registries());
         self.install_block_maps();
+        self.install_registry_snapshots();
         if let Err(error) = self.install_fluid_interactions() {
             log::error!("Sunrise: {error}");
         }

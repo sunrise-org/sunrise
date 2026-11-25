@@ -6956,11 +6956,9 @@ fn signs_take_their_form_wood_and_wall_block_from_their_declaration() {
     );
     assert_eq!(&*block("signs:board").item, "signs:notice");
     assert_eq!(&*block("signs:bracket").item, "signs:lantern");
-    let defaults = sunrise_world::item_defaults::read(&root).unwrap();
     let mut renderer = crate::block_entity_render::BlockEntityRenderer::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
         registry,
-        &defaults,
     )
     .unwrap();
     renderer.add_mod_signs(&facts, registry);

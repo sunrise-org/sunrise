@@ -1097,8 +1097,9 @@ pub struct BlockEntityRenderer {
     /// What draws: `vanilla`, or the packs' custom entity models over it.
     shapes: RwLock<Arc<BlockEntityShapes>>,
     kinds: Vec<Kind>,
-    /// Item id to its `PROVIDES_POTTERY_PATTERN` side texture (`Sheets.DECORATED_POT_MAPPER`).
-    pot_patterns: HashMap<String, String>,
+    /// Item id to its `PROVIDES_POTTERY_PATTERN` side texture (`Sheets.DECORATED_POT_MAPPER`),
+    /// from the world's `decorated_pot_pattern` registry ([`Self::set_pot_patterns`]).
+    pot_patterns: RwLock<HashMap<String, String>>,
     /// `Block.shouldRenderFace` for End gateway faces (its occlusion pair cache needs a lock).
     visibility: Option<Mutex<FaceVisibility>>,
     sign_texts: Mutex<SignTexts>,
@@ -1547,13 +1548,9 @@ const MODELS: [(&str, &str); 27] = [
 ];
 
 impl BlockEntityRenderer {
-    pub fn load(
-        root: &ResourceRoot,
-        registry: &BlockRegistry,
-        defaults: &sunrise_world::item_defaults::ItemDefaults,
-    ) -> Result<Self> {
+    pub fn load(root: &ResourceRoot, registry: &BlockRegistry) -> Result<Self> {
         let visibility = load_visibility(root.prepared(), registry)?;
-        Self::load_with_visibility(root, registry, visibility, defaults)
+        Self::load_with_visibility(root, registry, visibility)
     }
     /// [`BlockEntityRenderer::load`] over the face visibility the meshes use
     /// (`MeshTables::visibility`): a clone shares its shapes and their faces.
@@ -1561,18 +1558,16 @@ impl BlockEntityRenderer {
         root: &ResourceRoot,
         registry: &BlockRegistry,
         visibility: FaceVisibility,
-        defaults: &sunrise_world::item_defaults::ItemDefaults,
     ) -> Result<Self> {
-        Self::load_with_visibility_models_and_defaults(root, registry, visibility, None, defaults)
+        Self::load_with_visibility_and_models(root, registry, visibility, None)
     }
 
-    /// Reuse the startup batch's decoded entity models and shared item defaults.
-    pub fn load_with_visibility_models_and_defaults(
+    /// Reuse the startup batch's decoded entity models.
+    pub fn load_with_visibility_and_models(
         root: &ResourceRoot,
         registry: &BlockRegistry,
         visibility: FaceVisibility,
         models: Option<&Value>,
-        defaults: &sunrise_world::item_defaults::ItemDefaults,
     ) -> Result<Self> {
         let owned_models = if models.is_none() {
             Some(serde_json::from_slice::<Value>(&std::fs::read(
@@ -1590,24 +1585,6 @@ impl BlockEntityRenderer {
         renderer.visibility = Some(Mutex::new(visibility));
         // The packs' custom entity models (`.jem` files), before anything draws.
         renderer.set_shapes(renderer.shapes_for(root.source()));
-        // Sherd items: provides_pottery_pattern -> decorated_pot_pattern asset id.
-        for (item, components) in defaults.entries() {
-            let Some(pattern) = components["minecraft:provides_pottery_pattern"].as_str() else {
-                continue;
-            };
-            let name = pattern.strip_prefix("minecraft:").unwrap_or(pattern);
-            let file = format!("data/minecraft/decorated_pot_pattern/{name}.json");
-            let Ok(def) = root.source().read(&file) else {
-                continue;
-            };
-            let def: Value = serde_json::from_slice(&def)?;
-            if let Some(asset) = def["asset_id"].as_str() {
-                let asset = asset.strip_prefix("minecraft:").unwrap_or(asset);
-                renderer
-                    .pot_patterns
-                    .insert(item.clone(), format!("entity/decorated_pot/{asset}"));
-            }
-        }
         Ok(renderer)
     }
 
@@ -1619,6 +1596,21 @@ impl BlockEntityRenderer {
         }
     }
 
+    /// Publish the open world's pot patterns, replacing the last world's
+    /// ([`pot_pattern_textures`]).
+    pub fn set_pot_patterns(&self, patterns: HashMap<String, String>) {
+        *self
+            .pot_patterns
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = patterns;
+    }
+    fn pot_pattern(&self, item: &str) -> Option<String> {
+        self.pot_patterns
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(item)
+            .cloned()
+    }
     fn new(models: HashMap<&'static str, ModelPart>, registry: &BlockRegistry) -> Self {
         let vanilla = Arc::new(BlockEntityShapes::new(models, HashMap::new()));
         let kinds = (0..registry.len() as u32)
@@ -1636,7 +1628,7 @@ impl BlockEntityRenderer {
             shapes: RwLock::new(vanilla.clone()),
             vanilla,
             kinds,
-            pot_patterns: HashMap::new(),
+            pot_patterns: RwLock::default(),
             visibility: None,
             sign_texts: Mutex::default(),
             static_geometry: Mutex::default(),
@@ -2515,10 +2507,9 @@ impl BlockEntityRenderer {
                 for item in &anim.sherds {
                     let texture = item
                         .as_ref()
-                        .and_then(|item| self.pot_patterns.get(item))
-                        .map(String::as_str)
-                        .unwrap_or("entity/decorated_pot/decorated_pot_side");
-                    add_sprite(texture);
+                        .and_then(|item| self.pot_pattern(item))
+                        .unwrap_or_else(|| "entity/decorated_pot/decorated_pot_side".to_owned());
+                    add_sprite(&texture);
                 }
             }
             Kind::CopperGolem { texture, .. } if options.copper_golem_statues => {
@@ -3175,10 +3166,8 @@ impl BlockEntityRenderer {
                 let blank = "entity/decorated_pot/decorated_pot_side";
                 let blank = shapes.texture("decorated_pot_sides", blank, scene.sprites);
                 for (side, item) in ["back", "left", "right", "front"].iter().zip(&a.sherds) {
-                    let texture = item
-                        .as_ref()
-                        .and_then(|i| self.pot_patterns.get(i))
-                        .map_or(blank, String::as_str);
+                    let texture = item.as_ref().and_then(|i| self.pot_pattern(i));
+                    let texture = texture.as_deref().unwrap_or(blank);
                     if let (Some(part), Some(paint)) =
                         (sides.child(side), paint(texture, 0xFFFFFF, packed))
                     {
@@ -3746,6 +3735,43 @@ fn portal_cube(m: Mat4, faces: &[Direction], layer: u32, out: &mut Vec<Vertex>) 
 
 #[cfg(test)]
 mod tests {
+    /// A sherd item a pack adds gets the side of the pattern the world's registry maps it to;
+    /// a pattern the registry lacks keeps the blank side.
+    #[test]
+    fn a_pack_pot_pattern_is_the_side_of_its_sherd() {
+        let defaults = sunrise_world::item_defaults::ItemDefaults::decode(
+            br#"{
+                "test:flame_sherd": {"minecraft:provides_pottery_pattern": "test:flame"},
+                "minecraft:angler_pottery_sherd": {"minecraft:provides_pottery_pattern": "minecraft:angler"},
+                "minecraft:brick": {}
+            }"#,
+        )
+        .unwrap();
+        let assets = HashMap::from([
+            (
+                "test:flame".to_owned(),
+                "test:flame_pottery_pattern".to_owned(),
+            ),
+            (
+                "minecraft:angler".to_owned(),
+                "minecraft:angler_pottery_pattern".to_owned(),
+            ),
+        ]);
+        let textures = pot_pattern_textures(&defaults, |pattern| assets.get(pattern).cloned());
+        assert_eq!(
+            textures["test:flame_sherd"],
+            "entity/decorated_pot/test:flame_pottery_pattern"
+        );
+        assert_eq!(
+            textures["minecraft:angler_pottery_sherd"],
+            "entity/decorated_pot/angler_pottery_pattern"
+        );
+        assert_eq!(textures.len(), 2);
+        let without = pot_pattern_textures(&defaults, |pattern| {
+            (pattern != "test:flame").then(|| "minecraft:x_pottery_pattern".to_owned())
+        });
+        assert!(!without.contains_key("test:flame_sherd"));
+    }
     use super::*;
     use crate::assets::Assets;
     use sunrise_core::nbt::Tag;
@@ -4660,7 +4686,7 @@ mod tests {
                     angle: 90.0,
                 },
             ],
-            pot_patterns: HashMap::new(),
+            pot_patterns: RwLock::default(),
             visibility: None,
             sign_texts: Mutex::default(),
             static_geometry: Mutex::default(),
@@ -4971,11 +4997,9 @@ mod tests {
         }
         let assets = Assets::load(&root).unwrap();
         let registry = assets.registry;
-        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
         let renderer = BlockEntityRenderer::load(
             &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
             registry,
-            &defaults,
         )
         .unwrap();
         let state = registry.default_state("minecraft:decorated_pot").unwrap();
@@ -5052,7 +5076,7 @@ mod tests {
             shapes: RwLock::new(vanilla.clone()),
             vanilla,
             kinds: Vec::new(),
-            pot_patterns: HashMap::new(),
+            pot_patterns: RwLock::default(),
             visibility: None,
             sign_texts: Mutex::default(),
             static_geometry: Mutex::default(),
@@ -5167,7 +5191,7 @@ mod tests {
             shapes: RwLock::new(renderer.vanilla.clone()),
             vanilla: renderer.vanilla.clone(),
             kinds: Vec::new(),
-            pot_patterns: HashMap::new(),
+            pot_patterns: RwLock::default(),
             visibility: None,
             sign_texts: Mutex::default(),
             static_geometry: Mutex::default(),
@@ -5189,3 +5213,29 @@ mod tests {
 #[cfg(test)]
 #[path = "block_entity_render_tests.rs"]
 mod cache_behavior_tests;
+
+/// Each sherd item's side texture: the `provides_pottery_pattern` of its default components,
+/// looked up in the world's `decorated_pot_pattern` registry by `asset_of` (the pattern's
+/// `asset_id`), as `Sheets.DECORATED_POT_MAPPER` maps `DecoratedPotPatterns` to
+/// `entity/decorated_pot/<asset>`. An item whose pattern the registry does not hold keeps the
+/// blank side.
+pub fn pot_pattern_textures(
+    defaults: &sunrise_world::item_defaults::ItemDefaults,
+    asset_of: impl Fn(&str) -> Option<String>,
+) -> HashMap<String, String> {
+    defaults
+        .entries()
+        .iter()
+        .filter_map(|(item, components)| {
+            let pattern = components["minecraft:provides_pottery_pattern"].as_str()?;
+            let pattern = if pattern.contains(':') {
+                pattern.to_owned()
+            } else {
+                format!("minecraft:{pattern}")
+            };
+            let asset = asset_of(&pattern)?;
+            let asset = asset.strip_prefix("minecraft:").unwrap_or(&asset);
+            Some((item.clone(), format!("entity/decorated_pot/{asset}")))
+        })
+        .collect()
+}

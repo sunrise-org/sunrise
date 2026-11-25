@@ -58,7 +58,7 @@ fn renderer_with_shapes(
         vanilla: vanilla.clone(),
         shapes: std::sync::RwLock::new(vanilla),
         kinds,
-        pot_patterns,
+        pot_patterns: std::sync::RwLock::new(pot_patterns),
         ..Default::default()
     }
 }

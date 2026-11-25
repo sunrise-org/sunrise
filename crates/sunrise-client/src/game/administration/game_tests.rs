@@ -1766,6 +1766,7 @@ pub(in crate::game) mod tests {
         )
         .unwrap();
         game.reset_entity_residency();
+        game.install_root_block_transformers();
         game.native_lifecycle
             .begin_open(Some(mod_api::Authority::IntegratedServer));
         // Match the server fixture this replaces: commands can force this

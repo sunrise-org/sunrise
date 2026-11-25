@@ -539,7 +539,7 @@ pub fn main() -> sunrise_client::Result<()> {
     let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     // Trial spawner rewards: the loot tables and the configs.
     let loot = if input.contains("mode=trial") || input.contains("mode=vault") {
-        sunrise_client::mobs::trial_spawner::load_registry(root);
+        install_trial_spawner_configs(root);
         Some(std::sync::Arc::new(sunrise_world::loot::LootData::load(
             root,
             &PackOverlay::NONE,
@@ -1461,4 +1461,34 @@ fn vault_events(
             )),
         }
     }
+}
+
+/// The root's own `trial_spawner` files as the world's registry (no packs in this fixture).
+fn install_trial_spawner_configs(root: &std::path::Path) {
+    use sunrise_client::mobs::trial_spawner::TrialConfigExt;
+    let base = root.join("data/minecraft/trial_spawner");
+    let mut configs = std::collections::HashMap::new();
+    let mut stack = vec![base.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let id = path.with_extension("");
+            let id = id
+                .strip_prefix(&base)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let config = sunrise_client::mobs::trial_spawner::TrialConfig::decode(
+                &sunrise_client::scoreboard::json_to_tag(&value),
+            );
+            configs.insert(format!("minecraft:{id}"), config.unwrap());
+        }
+    }
+    sunrise_client::mobs::trial_spawner::install(configs);
 }

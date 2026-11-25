@@ -2708,6 +2708,13 @@ impl Mining {
         (self.progress > 0.0).then(|| ((self.progress * 10.0) as u8).min(9))
     }
 }
+/// What a transform does beyond the swap: its `transform_type` and the `drop_strategy` its loot
+/// table's stacks pop with (both empty for a tool ability outside the table).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TransformKind {
+    pub(crate) transform_type: String,
+    pub(crate) drop_strategy: String,
+}
 #[derive(Clone, Copy)]
 struct TransformContext<'a> {
     world: &'a World,
@@ -3150,7 +3157,9 @@ struct WorldCore {
 struct WorldRest {
     items: Arc<Items>,
     recipes: Recipes,
-    transformers: sunrise_client::block_transform::Transformers,
+    /// The open world's `block_transformer` registry, published by
+    /// [`Resources::set_transformers`] (empty until a world opens).
+    transformers: std::sync::RwLock<Arc<sunrise_client::block_transform::Transformers>>,
     mob_types: HashMap<String, Arc<MobType>>,
     /// The registry keys of the player, the armor stand and the dragon, resolved with these
     /// resources as each mob type's own key is ([`MobType::type_key`]).
@@ -3192,6 +3201,8 @@ struct WorldTables {
     /// Registry definitions stay frozen at world open, even when tags reload.
     packed_registries: Arc<sunrise_client::lan::data::PackRegistryDefinitions>,
     painting_variants: paintings::PaintingVariants,
+    /// `block_transformer`, bound to the block registry.
+    transformers: Arc<sunrise_client::block_transform::Transformers>,
     providers: Providers,
     biomes: Arc<world_loading::WorldBiomeRegistry>,
     loot: Arc<sunrise_world::loot::LootData>,
@@ -9973,7 +9984,14 @@ impl Game<'_> {
         &self,
         stack: &ItemStack,
         hit: &Hit,
-    ) -> Option<(BlockStateId, String, Option<String>, u32, String, String)> {
+    ) -> Option<(
+        BlockStateId,
+        String,
+        Option<String>,
+        u32,
+        String,
+        TransformKind,
+    )> {
         let blocking = self
             .offhand
             .as_ref()
@@ -9997,7 +10015,14 @@ impl Game<'_> {
         stack: &ItemStack,
         hit: &Hit,
         context: TransformContext<'_>,
-    ) -> Option<(BlockStateId, String, Option<String>, u32, String, String)> {
+    ) -> Option<(
+        BlockStateId,
+        String,
+        Option<String>,
+        u32,
+        String,
+        TransformKind,
+    )> {
         use sunrise_client::block_transform::Around;
         let TransformContext {
             world,
@@ -10050,9 +10075,8 @@ impl Game<'_> {
             registry,
             pos,
         };
-        let vanilla = self
-            .res
-            .transformers()
+        let transformers = self.res.transformers();
+        let vanilla = transformers
             .apply(self.items(), registry, &id, face_name, &around)
             .and_then(|(_, t, state)| Some((registry.resolve(&state).ok()?, t)));
         let result = |new, t: &sunrise_client::block_transform::Transform| {
@@ -10062,7 +10086,10 @@ impl Game<'_> {
                 t.loot.clone(),
                 t.damage,
                 t.particle.clone(),
-                t.transform_type.clone(),
+                TransformKind {
+                    transform_type: t.transform_type.clone(),
+                    drop_strategy: t.drop_strategy.clone(),
+                },
             )
         };
         let mapped = self.axe_mapped(&id, block);
@@ -10116,16 +10143,25 @@ impl Game<'_> {
     fn use_block_transformer(&mut self, stack: &ItemStack, hit: &Hit) -> Result<bool> {
         let pos = hit.pos;
         let face = hit.face;
-        let Some((new, sound, loot, damage, particle, transform_type)) =
-            self.block_transform(stack, hit)
+        let Some((new, sound, loot, damage, particle, kind)) = self.block_transform(stack, hit)
         else {
             return Ok(false);
         };
+        let transform_type = kind.transform_type;
         // BlockTransformer.transformBlock: ITEM_USED_ON_BLOCK before the swap.
         self.trigger_block("minecraft:item_used_on_block", pos, stack);
-        // A loot table drops on the clicked face, before the block changes.
-        if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
-            self.pop_resource_from_face(pos, face, ItemStack::new("minecraft:hanging_roots", 1));
+        // Block.dropFromBlockInteractLootTable of the transform's own loot table, popped by its
+        // drop strategy, before the block changes.
+        if let Some(table) = loot {
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            let actor = self.interacting_loot_entity();
+            for drop in self.interact_loot_at(&table, pos, state, Some(actor), Some(stack)) {
+                if kind.drop_strategy == "clicked_face" {
+                    self.pop_resource_from_face(pos, face, drop);
+                } else {
+                    self.pop_resource(pos, drop);
+                }
+            }
         }
         let old = self.world.block(pos[0], pos[1], pos[2]);
         self.level_set(pos, new)?;

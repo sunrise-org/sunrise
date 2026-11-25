@@ -42,8 +42,23 @@ impl Resources {
     pub(super) fn recipes(&self) -> &Recipes {
         &self.rest().recipes
     }
-    pub(super) fn transformers(&self) -> &sunrise_client::block_transform::Transformers {
-        &self.rest().transformers
+    pub(super) fn transformers(&self) -> Arc<sunrise_client::block_transform::Transformers> {
+        self.rest()
+            .transformers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+    /// Publish the open world's `block_transformer` registry, replacing the last world's.
+    pub(super) fn set_transformers(
+        &self,
+        transformers: Arc<sunrise_client::block_transform::Transformers>,
+    ) {
+        *self
+            .rest()
+            .transformers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = transformers;
     }
     pub(super) fn biomes(&self) -> &Arc<Biomes> {
         &self.core.biomes

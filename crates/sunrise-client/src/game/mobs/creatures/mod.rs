@@ -3308,6 +3308,20 @@ impl Game<'_> {
                 } => {
                     self.mob_hits_mob(target, amount, source);
                 }
+                MobEvent::ContactDamageMob {
+                    target,
+                    amount,
+                    kind,
+                    attacker,
+                } => {
+                    let mut source =
+                        Damage::of(Self::damage_kind(&self.health_resources.damage, kind));
+                    if let Some((cube, from)) = attacker {
+                        source.attacker = Some(Who::Mob(cube));
+                        source.from = Some(from);
+                    }
+                    self.mob_hits_mob(target, amount, source);
+                }
                 MobEvent::AttackMobWithEffect {
                     target,
                     amount,

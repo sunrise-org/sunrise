@@ -19,7 +19,8 @@ use sunrise_world::{item_defaults::ItemDefaults, loot::PackOverlay};
 
 /// One data-driven registry kind: `RegistryDataLoader.WORLD_REGISTRIES`'s entry for a
 /// registry a world's packs add to or replace, with the typed decode of its codec.
-/// Every row is synchronized; a decode error of any row refuses the whole load.
+/// A row is synchronized when `SYNCHRONIZED` lists its key (`trial_spawner` is not: the server's
+/// gameplay reads it and no client is sent it); a decode error of any row refuses the whole load.
 pub struct RegistryKind {
     pub key: &'static str,
     decode: fn(&mut Decoder<'_>, &str, Value) -> Result<Definition, String>,
@@ -31,6 +32,9 @@ pub struct RegistryKind {
 /// world's pack definitions too, so their ids must reach clients.
 /// World clocks are too: a dimension type's `default_clock` must name a
 /// clock the client was sent, or it reads that dimension's time as zero.
+/// Block transformers, trial spawner configs, sulfur cube archetypes and decorated pot
+/// patterns are too: gameplay and drawing read the world's table of them, never the resource
+/// root's files, so the prepared files are decoded here like a pack's.
 pub const REGISTRY_KINDS: &[RegistryKind] = &[
     RegistryKind {
         key: "minecraft:dimension_type",
@@ -39,6 +43,15 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
     RegistryKind {
         key: "minecraft:chat_type",
         decode: decode_chat_type,
+    },
+    // Not synchronized (absent from `SYNCHRONIZED`): the server's gameplay reads it, no client is sent it.
+    RegistryKind {
+        key: "minecraft:trial_spawner",
+        decode: decode_trial_spawner,
+    },
+    RegistryKind {
+        key: "minecraft:sulfur_cube_archetype",
+        decode: decode_sulfur_cube_archetype,
     },
     RegistryKind {
         key: "minecraft:trim_pattern",
@@ -71,6 +84,14 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
     RegistryKind {
         key: "minecraft:world_clock",
         decode: decode_world_clock,
+    },
+    RegistryKind {
+        key: "minecraft:decorated_pot_pattern",
+        decode: decode_decorated_pot_pattern,
+    },
+    RegistryKind {
+        key: "minecraft:block_transformer",
+        decode: decode_block_transformer,
     },
 ];
 
@@ -132,6 +153,9 @@ enum Definition {
     Instrument(Instrument, Tag),
     Painting(crate::entities::PaintingVariant, Tag),
     BannerPattern(crate::banner::Pattern, Tag),
+    /// A definition whose codec ran and whose gameplay reads the JSON itself, with its wire
+    /// encoding when the registry is synchronized.
+    Validated(Value, Option<Tag>),
 }
 
 impl PackRegistryDefinitions {
@@ -253,7 +277,7 @@ impl PackRegistryDefinitions {
                     }
                     let definition = if kind == "enchantment" {
                         Definition::Enchantment(value)
-                    } else if from_pack {
+                    } else if from_pack || Self::decodes_prepared(registry) {
                         let id = format!("{}:{}", key.0, key.1);
                         match (table.decode)(&mut decoder, &id, value) {
                             Ok(definition) => definition,
@@ -389,7 +413,44 @@ impl PackRegistryDefinitions {
     }
 
     pub(super) fn includes_prepared_entries(registry: &str) -> bool {
-        matches!(registry, "minecraft:enchantment" | "minecraft:instrument")
+        matches!(
+            registry,
+            "minecraft:enchantment"
+                | "minecraft:instrument"
+                | "minecraft:trial_spawner"
+                | "minecraft:sulfur_cube_archetype"
+                | "minecraft:decorated_pot_pattern"
+                | "minecraft:block_transformer"
+        )
+    }
+
+    /// The kinds whose prepared (vanilla) files are decoded by the kind's own codec like a pack's,
+    /// because gameplay reads the world's table and not the resource root's files.
+    fn decodes_prepared(registry: &str) -> bool {
+        Self::includes_prepared_entries(registry)
+            && !matches!(registry, "minecraft:enchantment" | "minecraft:instrument")
+    }
+
+    /// The definitions of a [`Definition::Validated`] registry that are in this world, by id and
+    /// in file order (`ResourceManager` lists a registry's files by path, then namespace).
+    pub fn validated(&self, registry: &str) -> Vec<(String, &Value)> {
+        let mut found: Vec<_> = self
+            .entries
+            .get(registry)
+            .into_iter()
+            .flatten()
+            .filter_map(|((namespace, path), entry)| match entry {
+                Some((Definition::Validated(value, _), _)) => {
+                    Some((path.as_str(), namespace.as_str(), value))
+                }
+                _ => None,
+            })
+            .collect();
+        found.sort_by_key(|&(path, namespace, _)| (path, namespace));
+        found
+            .into_iter()
+            .map(|(path, namespace, value)| (format!("{namespace}:{path}"), value))
+            .collect()
     }
 
     pub fn append_encoded(&self, registry: &str, entries: &mut Vec<((String, String), Tag, bool)>) {
@@ -401,6 +462,7 @@ impl PackRegistryDefinitions {
                     | Definition::Instrument(_, tag)
                     | Definition::Painting(_, tag)
                     | Definition::BannerPattern(_, tag) => tag.clone(),
+                    Definition::Validated(_, tag) => tag.clone()?,
                     Definition::Enchantment(json) => json_to_nbt(json),
                 };
                 Some((key.clone(), tag, *from_pack))
@@ -852,6 +914,58 @@ fn decode_dialog(decoder: &mut Decoder<'_>, _: &str, value: Value) -> Result<Def
 }
 
 // WorldClock.DIRECT_CODEC is a unit map codec: extra keys are permitted.
+/// `DecoratedPotPattern.CODEC`: the `asset_id` identifier.
+fn decode_decorated_pot_pattern(
+    _: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let asset = value
+        .as_object()
+        .ok_or("not a map")?
+        .get("asset_id")
+        .ok_or("asset_id is required")?
+        .as_str()
+        .ok_or("asset_id: not an identifier")?;
+    Identifier::parse(asset).map_err(|error| format!("asset_id: {error}"))?;
+    validated(value, true)
+}
+
+/// `BlockTransformer.DIRECT_CODEC`; the blocks and states it names are bound when the world's
+/// tables are built.
+fn decode_block_transformer(
+    decoder: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    crate::block_transform::Transformers::validate(&value, decoder.sound_exists)?;
+    validated(value, true)
+}
+
+/// `TrialSpawnerConfig.DIRECT_CODEC`; the registry is not synchronized.
+fn decode_trial_spawner(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definition, String> {
+    crate::mobs::trial_spawner::validate_config(&value)?;
+    validated(value, false)
+}
+
+/// `SulfurCubeArchetype.DIRECT_CODEC`.
+fn decode_sulfur_cube_archetype(
+    decoder: &mut Decoder<'_>,
+    id: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    crate::mobs::sulfur_cube::Decoded::decode(id, &value, decoder.sound_exists)?;
+    validated(value, true)
+}
+
+fn validated(value: Value, synchronized: bool) -> Result<Definition, String> {
+    let wire = synchronized.then(|| json_to_nbt(&value));
+    if let Some(wire) = &wire {
+        check_network_nbt(wire)?;
+    }
+    Ok(Definition::Validated(value, wire))
+}
+
 fn decode_world_clock(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Definition, String> {
     if !value.is_object() {
         return Err("not a map".into());
@@ -1660,5 +1774,158 @@ mod tests {
             }
         }
         assert!(!error.contains("condition_false"));
+    }
+
+    fn stage(
+        files: &[(String, Vec<Vec<u8>>)],
+        sound_exists: impl Fn(&str) -> bool,
+    ) -> (PackRegistryDefinitions, Result<(), String>) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+        let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+        super::super::SyncData::stage_registry_definitions(
+            root.path(),
+            &defaults,
+            &PackOverlay::new(files),
+            &Default::default(),
+            &Default::default(),
+            sound_exists,
+        )
+    }
+
+    fn pack(path: &str, value: Value) -> (String, Vec<Vec<u8>>) {
+        (path.into(), vec![value.to_string().into_bytes()])
+    }
+
+    #[test]
+    fn a_pack_decorated_pot_pattern_is_staged_for_gameplay_and_the_wire() {
+        let files = [pack(
+            "decorated_pot_pattern/test:flame",
+            json!({"asset_id": "test:flame_pottery_pattern"}),
+        )];
+        let (staged, result) = stage(&files, |_| true);
+        result.unwrap();
+        let held = staged.validated("minecraft:decorated_pot_pattern");
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].0, "test:flame");
+        assert_eq!(held[0].1["asset_id"], "test:flame_pottery_pattern");
+        let mut wire = Vec::new();
+        staged.append_encoded("minecraft:decorated_pot_pattern", &mut wire);
+        assert_eq!(wire.len(), 1);
+        assert_eq!(wire[0].0, ("test".to_owned(), "flame".to_owned()));
+        assert_eq!(
+            wire[0].1.get("asset_id"),
+            Some(&string("test:flame_pottery_pattern"))
+        );
+        assert!(wire[0].2);
+        let (_, refused) = stage(
+            &[pack(
+                "decorated_pot_pattern/test:bad",
+                json!({"asset": "x"}),
+            )],
+            |_| true,
+        );
+        assert!(refused.unwrap_err().contains("asset_id is required"));
+    }
+
+    #[test]
+    fn a_pack_block_transformer_is_decoded_and_a_bad_one_refuses_the_load() {
+        let transformer = json!([{
+            "block_state_provider": {"id": "minecraft:dirt"},
+            "sound": "minecraft:item.hoe.till"
+        }]);
+        let (staged, result) = stage(
+            &[pack("block_transformer/test:hammer", transformer.clone())],
+            |sound| sound == "minecraft:item.hoe.till",
+        );
+        result.unwrap();
+        assert_eq!(staged.validated("minecraft:block_transformer").len(), 1);
+        let (_, refused) = stage(
+            &[pack("block_transformer/test:hammer", transformer)],
+            |_| false,
+        );
+        assert!(
+            refused
+                .unwrap_err()
+                .contains("unknown holder minecraft:item.hoe.till")
+        );
+    }
+
+    #[test]
+    fn a_pack_trial_spawner_is_kept_for_the_server_and_never_sent() {
+        let config = json!({
+            "spawn_range": 6,
+            "spawn_potentials": [{"weight": 1, "data": {"entity": {"id": "minecraft:husk"}}}]
+        });
+        let (staged, result) = stage(&[pack("trial_spawner/test:husks", config)], |_| true);
+        result.unwrap();
+        let held = staged.validated("minecraft:trial_spawner");
+        assert_eq!(held[0].0, "test:husks");
+        let decoded = <crate::mobs::trial_spawner::TrialConfig as crate::mobs::trial_spawner::TrialConfigExt>::decode(
+            &crate::scoreboard::json_to_tag(held[0].1),
+        )
+        .unwrap();
+        assert_eq!(decoded.spawn_range, 6);
+        assert_eq!(decoded.spawn_potentials.len(), 1);
+        let mut wire = Vec::new();
+        staged.append_encoded("minecraft:trial_spawner", &mut wire);
+        assert!(wire.is_empty());
+        assert!(!super::super::SYNCHRONIZED.contains(&"minecraft:trial_spawner"));
+        let (_, refused) = stage(
+            &[pack("trial_spawner/test:far", json!({"spawn_range": 129}))],
+            |_| true,
+        );
+        assert!(refused.unwrap_err().contains("spawn_range"));
+    }
+
+    fn archetype_file(items: &str) -> Value {
+        json!({
+            "items": items,
+            "attribute_modifiers": [{
+                "attribute": "minecraft:bounciness", "id": "test:springy_add_bounciness",
+                "amount": 0.75, "operation": "add_value"
+            }],
+            "buoyant": true,
+            "knockback_modifiers": {"horizontal_power": 0.5, "vertical_power": 0.1},
+            "sound_settings": {
+                "hit_sound": "minecraft:entity.sulfur_cube.regular.hit",
+                "push_sound": "minecraft:entity.sulfur_cube.regular.push",
+                "push_sound_impulse_threshold": 0.2, "push_sound_cooldown": 0.5
+            }
+        })
+    }
+
+    #[test]
+    fn a_pack_sulfur_cube_archetype_takes_its_items_from_the_world_tags() {
+        let files = [pack(
+            "sulfur_cube_archetype/test:springy",
+            archetype_file("#test:springy_items"),
+        )];
+        let (staged, result) = stage(&files, |_| true);
+        result.unwrap();
+        let held = staged.validated("minecraft:sulfur_cube_archetype");
+        let tags = std::collections::HashMap::from([(
+            "test:springy_items".to_owned(),
+            std::collections::HashSet::from(["minecraft:slime_block".to_owned()]),
+        )]);
+        let built = crate::mobs::sulfur_cube::build(&held, &tags);
+        assert_eq!(built.len(), 1);
+        assert!(built[0].items.contains("minecraft:slime_block"));
+        assert!(built[0].buoyant);
+        assert_eq!(built[0].bounciness, 0.75);
+        assert_eq!(built[0].hit_sound, "entity.sulfur_cube.regular.hit");
+        let mut wire = Vec::new();
+        staged.append_encoded("minecraft:sulfur_cube_archetype", &mut wire);
+        assert_eq!(wire.len(), 1);
+        let mut bad = archetype_file("#test:springy_items");
+        bad.as_object_mut().unwrap().remove("knockback_modifiers");
+        let (_, refused) = stage(&[pack("sulfur_cube_archetype/test:springy", bad)], |_| true);
+        assert!(
+            refused
+                .unwrap_err()
+                .contains("knockback_modifiers is required")
+        );
+        let (_, refused) = stage(&files, |sound| !sound.ends_with(".push"));
+        assert!(refused.unwrap_err().contains("push_sound: unknown holder"));
     }
 }

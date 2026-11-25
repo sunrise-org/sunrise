@@ -429,7 +429,6 @@ impl MobTypes {
         let item_tags =
             crate::items::load_tags(root, "item", &sunrise_world::loot::PackOverlay::NONE)
                 .unwrap_or_default();
-        sulfur_cube::load_archetype_items(&item_tags);
         let tag = |name: &str| -> Arc<[String]> {
             let mut v: Vec<String> = item_tags
                 .get(&format!("minecraft:{name}"))
@@ -2212,6 +2211,15 @@ pub enum MobEvent {
         target: u32,
         amount: f32,
         source: Damage,
+    },
+    /// `SulfurCube.applyContactDamage` on a mob: the archetype's damage type
+    /// (resolved against the world's registry) and the cube as the source only
+    /// when `attribute_to_source`, with its id and position.
+    ContactDamageMob {
+        target: u32,
+        amount: f32,
+        kind: &'static str,
+        attacker: Option<(u32, [f64; 3])>,
     },
     /// An attack that runs post-attack effects when the hit lands.
     AttackMob {

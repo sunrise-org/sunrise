@@ -496,9 +496,6 @@ impl VanillaTerrain {
                 );
             }
         }
-        if let Some(root) = dir.parent() {
-            crate::mobs::trial_spawner::load_registry(root);
-        }
         let mut tick_blocks = Vec::with_capacity(registry.len());
         let mut tick_states = Vec::new();
         let mut block_entity_types = Vec::with_capacity(registry.len());

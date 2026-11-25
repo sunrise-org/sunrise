@@ -145,7 +145,6 @@ pub fn main() -> Result<()> {
     let renderer = BlockEntityRenderer::load(
         &sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
         registry,
-        item_data.defaults(),
     )?;
     let atlas = HudAtlas::build(&sunrise_assets::resource_source::ResourceSource::directory(
         root.to_path_buf(),
