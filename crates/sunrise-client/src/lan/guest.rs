@@ -794,14 +794,15 @@ impl Guest {
             && self.viewed.in_level(dimension)
     }
     /// `ChunkMap.isChunkTracked`: whether the guest watches chunk `(x, z)` of
-    /// level `dimension`, inside its view (`ChunkTrackingView.contains`) and
-    /// sent rather than pending.
+    /// level `dimension`, inside its view (`ChunkTrackingView.contains`) or kept
+    /// past it for an area (`viewed_levels::own`), and sent rather than pending.
     pub fn tracks_chunk(&self, dimension: &str, (x, z): (i32, i32)) -> bool {
         self.watches_level(dimension)
             && self.sent_chunks.contains(&(x, z))
-            && self
+            && (self
                 .center
                 .is_some_and(|(cx, cz)| super::hub::tracked(cx, cz, self.view_distance, x, z))
+                || self.viewed.own.kept.contains(&(x, z)))
     }
 
     fn with_defaults(

@@ -121,6 +121,11 @@ pub struct ChunkMap {
     /// the normal map reads (including mesh/tick membership) can see them.
     hidden: FxHashMap<(i64, i64), Arc<Chunk>>,
     cache_range: Option<ClientChunkRange>,
+    /// Columns a server keeps on this client past the cache's view (`sunrise:levels` `far`): a
+    /// centre move never hides one, and one is admitted wherever it is.
+    far: FxHashSet<Key>,
+    /// Bumped each time `far` changes, for the consumers that cache what it held.
+    far_changes: u64,
     revision: u64,
     /// The oldest revision `recent_deltas` still answers for: the revision of
     /// the change it last dropped, or the revision that cleared them. A
@@ -148,6 +153,8 @@ impl Default for ChunkMap {
             ordered: BTreeSet::new(),
             hidden: FxHashMap::default(),
             cache_range: None,
+            far: FxHashSet::default(),
+            far_changes: 0,
             revision,
             min_valid_revision: revision,
             recent_deltas: VecDeque::new(),
@@ -295,7 +302,7 @@ impl ChunkMap {
             .columns
             .keys()
             .copied()
-            .filter(|&key| !range.contains(key))
+            .filter(|&key| !range.contains(key) && !self.far.contains(&key))
             .collect();
         for &key in &hidden {
             let chunk = self
@@ -313,12 +320,65 @@ impl ChunkMap {
     /// An in-range admission can collide only with a hidden column. The caller must
     /// unload it before inserting, while that column's state is still resident.
     pub fn client_chunk_alias(&self, key: Key) -> Option<Key> {
-        if self.hidden.is_empty() {
+        let range = self.cache_range?;
+        // A far column outside the view has no slot.
+        if self.hidden.is_empty() || !range.contains(key) {
             return None;
         }
-        let slot = self.cache_range?.slot(key);
+        let slot = range.slot(key);
         let chunk = self.hidden.get(&slot)?;
         Some((chunk.x, chunk.z))
+    }
+
+    /// Whether the column is one a server keeps here past the cache's view.
+    pub fn is_far(&self, key: Key) -> bool {
+        self.far.contains(&key)
+    }
+
+    /// How many far columns there are, and a number that changes whenever they do.
+    pub fn far_state(&self) -> (usize, u64) {
+        (self.far.len(), self.far_changes)
+    }
+
+    /// The server keeps `keys` here past the cache's view from now on. One hidden in its slot
+    /// is visible again: those come back, for the caller to draw again.
+    #[must_use]
+    pub fn keep_far(&mut self, keys: &[Key]) -> Vec<Key> {
+        let mut shown = Vec::new();
+        for &key in keys {
+            if !self.far.insert(key) {
+                continue;
+            }
+            let Some(range) = self.cache_range else {
+                continue;
+            };
+            let slot = range.slot(key);
+            if self.hidden.get(&slot).is_some_and(|c| (c.x, c.z) == key) {
+                let chunk = self.hidden.remove(&slot).expect("hidden in its slot");
+                self.add_visible(key);
+                self.columns.insert(key, chunk);
+                shown.push(key);
+            }
+        }
+        self.far_changes += 1;
+        shown
+    }
+
+    /// The server keeps `keys` here no more: the resident ones outside the cache's view, which
+    /// the caller forgets.
+    #[must_use]
+    pub fn release_far(&mut self, keys: &[Key]) -> Vec<Key> {
+        let gone = keys
+            .iter()
+            .copied()
+            .filter(|key| self.far.remove(key))
+            .filter(|&key| {
+                self.columns.contains_key(&key)
+                    && self.cache_range.is_some_and(|range| !range.contains(key))
+            })
+            .collect();
+        self.far_changes += 1;
+        gone
     }
 
     /// Includes hidden occupants for a storage resize or level teardown.
@@ -498,6 +558,10 @@ impl ChunkMap {
         previous
     }
     pub fn clear(&mut self) {
+        if !self.far.is_empty() {
+            self.far.clear();
+            self.far_changes += 1;
+        }
         if !self.columns.is_empty() || !self.hidden.is_empty() {
             self.unload_attachments();
             self.columns.clear();

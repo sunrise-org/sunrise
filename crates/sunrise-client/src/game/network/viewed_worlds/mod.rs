@@ -217,6 +217,48 @@ pub(in crate::game) mod tests {
         Some(&game.remote.as_ref()?.viewed.get(level)?.world)
     }
 
+    /// `far` (revision 5): a column of the player's own level 300 chunks from the cache centre
+    /// is ignored before it is kept and admitted after; it stays through a move of the centre and
+    /// takes a block update; released, it goes. More than `MAX_COLUMNS` kept close the connection.
+    #[test]
+    #[ignore = "daily"]
+    fn a_far_column_is_kept_past_the_view_until_released() {
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let far = |kept: &[(i32, i32)], released: &[(i32, i32)]| {
+            payload(&viewed_levels::far(kept, released))
+        };
+        game.handle_packet(column(300, 0)).unwrap();
+        assert!(!game.world.chunks.contains_key(&(300, 0)), "past the view");
+        game.handle_packet(far(&[(300, 0)], &[])).unwrap();
+        game.handle_packet(column(300, 0)).unwrap();
+        assert!(game.world.chunks.contains_key(&(300, 0)));
+        let centre = C::SetChunkCacheCenter(play::SetChunkCacheCenter { x: 20, z: 0 });
+        game.handle_packet(centre).unwrap();
+        assert!(
+            game.world.chunks.contains_key(&(300, 0)),
+            "the centre moved"
+        );
+        let block = C::BlockUpdate(play::BlockUpdate {
+            pos: [4803, 70, 5],
+            state: AIR.0 as i32,
+        });
+        game.handle_packet(block).unwrap();
+        assert_eq!(game.world.block(4803, 70, 5), AIR);
+        assert_eq!(game.world.block(4803, 71, 5), STONE);
+        game.handle_packet(far(&[], &[(300, 0)])).unwrap();
+        assert!(!game.world.chunks.contains_key(&(300, 0)), "released");
+
+        let many: Vec<_> = (0..viewed_levels::MAX_COLUMNS as i32)
+            .map(|x| (1000 + x, 0))
+            .collect();
+        assert_eq!(game.route_viewed_levels(data(&far(&many, &[]))), Ok(()));
+        assert_eq!(
+            game.route_viewed_levels(data(&far(&[(-1000, 0)], &[]))),
+            Err(RouteError::TooManyFar)
+        );
+    }
+
     /// A wrapped `BlockUpdate` changes the viewed level's block, and the player's level keeps
     /// its own at the same position.
     #[test]

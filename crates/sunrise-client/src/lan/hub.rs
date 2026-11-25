@@ -2991,6 +2991,7 @@ impl Hub {
         let mut batches = Vec::new();
         for i in 0..self.guests.len() {
             if self.watches(&self.guests[i]) {
+                self.update_far(i);
                 self.update_view(i);
                 if let Some(batch) = self.next_batch(i, world, ctx.streaming) {
                     batches.push((i, batch));
@@ -3146,12 +3147,13 @@ impl Hub {
                     z: cz,
                 }));
             }
-            // Chunks that left the view.
+            // Chunks that left the view, but for those an area keeps past it.
+            let kept = &g.viewed.own.kept;
             let forget: Vec<_> = g
                 .sent_chunks
                 .iter()
                 .copied()
-                .filter(|&(x, z)| !tracked(cx, cz, r, x, z))
+                .filter(|&(x, z)| !tracked(cx, cz, r, x, z) && !kept.contains(&(x, z)))
                 .collect();
             for (x, z) in forget {
                 g.sent_chunks.remove(&(x, z));
@@ -3159,6 +3161,8 @@ impl Hub {
                 g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
             }
             requeue(&mut g.chunk_queue, &g.sent_chunks, (cx, cz), r);
+            let own = &g.viewed.own;
+            super::viewed_levels::own::queue_far(&mut g.chunk_queue, &g.sent_chunks, own);
         });
     }
 
@@ -5114,6 +5118,7 @@ impl Hub {
             g.sent_chunks.clear();
             g.chunk_queue.clear();
             g.viewed.forget_views();
+            g.viewed.own.reset();
             g.entity_id
         });
         self.respawned(id);
@@ -5184,6 +5189,7 @@ impl Hub {
             g.sent_chunks.clear();
             g.chunk_queue.clear();
             g.tracker.clear();
+            g.viewed.own.reset();
         });
         self.resend_teleport(i, None);
         let spawn = self.default_spawn(ctx.spawn, ctx.spawn_angle, ctx.spawn_dimension);

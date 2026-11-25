@@ -38,3 +38,24 @@ fn the_cache_indexes_negative_slots_on_both_axes() {
     assert!(chunks.remove(&(-9, -8)).is_none());
     assert!(Arc::ptr_eq(chunks.resident_get(&(2, 3)).unwrap(), &old));
 }
+
+/// A column a centre move hid comes back when the server keeps it past the view (`far`), and is
+/// handed back to be drawn again; a later centre move leaves it visible.
+#[test]
+fn keeping_a_hidden_column_far_shows_it_again() {
+    use std::sync::Arc;
+    use sunrise_client::{
+        chunk::Chunk,
+        chunk_map::{ChunkMap, ClientChunkRange},
+    };
+
+    let mut chunks = ChunkMap::default();
+    chunks.insert((2, 3), Arc::new(Chunk::empty(2, 3)));
+    let (hidden, _) = chunks.set_client_chunk_range(ClientChunkRange::new((-9, -8), 2));
+    assert_eq!(hidden, [(2, 3)]);
+    assert!(!chunks.contains_key(&(2, 3)));
+    assert_eq!(chunks.keep_far(&[(2, 3)]), [(2, 3)]);
+    assert!(chunks.contains_key(&(2, 3)));
+    let (hidden, _) = chunks.set_client_chunk_range(ClientChunkRange::new((-40, -8), 2));
+    assert!(hidden.is_empty() && chunks.contains_key(&(2, 3)));
+}

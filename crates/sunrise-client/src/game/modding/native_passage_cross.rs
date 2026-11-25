@@ -588,6 +588,85 @@ mod tests {
         });
     }
 
+    /// A passage to chunk (300, 0), far past the view, in the player's own level: with a mod's
+    /// area there, a client that answered no revision 5 of `sunrise:levels` is refused
+    /// `FarEndNotTracked`, as the area's chunk is not sent to it; once its client answers 5, the
+    /// chunk is sent past the view and the crossing is followed.
+    #[test]
+    #[ignore = "daily"]
+    fn a_far_end_an_own_level_area_sends_is_tracked() {
+        use sunrise_client::lan::viewed_levels::areas::{ChunkArea, ChunkAreaMode};
+        with_guests(|game| {
+            let rx = scene(game, [0.5, 65.0, 8.25]);
+            let level = game.level(game.dim.id()).unwrap();
+            let portal = Passage {
+                destination: Vec3::new(4800.5, 65.5, 8.5),
+                ..near_doorway()
+            };
+            assert_eq!(
+                game.level_register_passage(level, portal),
+                Ok(PassageId::from_raw(2))
+            );
+            let area = ChunkArea {
+                level: game.dim.id().to_owned(),
+                center: (300, 0),
+                radius: 0,
+                mode: ChunkAreaMode::Loaded,
+            };
+            let uuid = guest(game).uuid;
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.set_viewed_areas(uuid, "test:portal", vec![area])
+                .unwrap();
+            for cx in 299..=301 {
+                for cz in -1..=1 {
+                    let mut chunk = Chunk::empty(cx, cz);
+                    chunk.lit = true;
+                    game.world.chunks.insert((cx, cz), Arc::new(chunk));
+                }
+            }
+            let here = [0.5, 65.0, 8.25];
+            let send_far = |game: &mut crate::game::Game<'_>| {
+                for _ in 0..10 {
+                    game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                        g.unacknowledged = 0;
+                    });
+                    tick(game, Vec::new());
+                }
+                guest(game).sent_chunks.contains(&(300, 0))
+            };
+            assert!(!send_far(game), "nothing past the view of an older client");
+            packets(&rx);
+            tick(game, vec![cross(2, here)]);
+            let sent = packets(&rx);
+            let reason = refusal_code(Refusal::FarEndNotTracked);
+            assert_eq!(refusals(&sent), [Message::Refused { id: 2, reason }]);
+            let teleport = position_packets(&sent)[0].teleport;
+            let accepted = S::AcceptTeleportation(play::AcceptTeleportation {
+                id: teleport,
+                x: here[0],
+                y: here[1],
+                z: here[2],
+                yaw: 0.0,
+                pitch: 0.0,
+            });
+            tick(game, vec![accepted]);
+
+            game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                g.sender.viewed_levels = sunrise_protocol::viewed_levels::Answer {
+                    revision: sunrise_protocol::viewed_levels::REVISION_5,
+                    max_levels: 2,
+                };
+            });
+            assert!(send_far(game), "the area's chunk past the view");
+            packets(&rx);
+            tick(game, vec![cross(2, here)]);
+            let sent = packets(&rx);
+            assert!(refusals(&sent).is_empty(), "{:?}", refusals(&sent));
+            assert_eq!(guest(game).position, [4800.75, 65.0, 8.5]);
+            assert_eq!(position_packets(&sent)[0].relatives, ALL);
+        });
+    }
+
     /// What `player_passage_cross` heard.
     static HEARD: std::sync::Mutex<Vec<(PassageId, Vec3)>> = std::sync::Mutex::new(Vec::new());
 

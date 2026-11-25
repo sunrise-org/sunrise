@@ -643,6 +643,7 @@ pub(in crate::game) mod tests {
                     }))
                 }
                 Message::Swap { .. } => unreachable!("no swap below revision 4"),
+                Message::Far { .. } => unreachable!("no far below revision 5"),
             }
         }
         got

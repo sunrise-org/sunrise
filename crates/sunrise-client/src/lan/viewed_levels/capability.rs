@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(
             join("sunrise", &[], &[&[1, 4, 2]]),
             Joined {
-                asked: Some(vec![0, 4]),
+                asked: Some(vec![0, 5]),
                 kept: kept(4, 2),
             }
         );
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(
             join("sunrise", &[], &[]),
             Joined {
-                asked: Some(vec![0, 4]),
+                asked: Some(vec![0, 5]),
                 kept: kept(0, 0),
             }
         );
@@ -245,9 +245,9 @@ mod tests {
     #[test]
     fn an_answer_of_a_revision_not_served_views_none() {
         assert_eq!(
-            join("sunrise", &[], &[&[1, 5, 5]]),
+            join("sunrise", &[], &[&[1, 6, 5]]),
             Joined {
-                asked: Some(vec![0, 4]),
+                asked: Some(vec![0, 5]),
                 kept: kept(0, 0),
             }
         );
@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(
             join("sunrise", &[], &[&[1, 4, 2], &[1, 4, 2]]),
             Joined {
-                asked: Some(vec![0, 4]),
+                asked: Some(vec![0, 5]),
                 kept: Err("sunrise:levels: a second answer".into()),
             }
         );

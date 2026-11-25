@@ -57,6 +57,8 @@ pub(in crate::game) enum RouteError {
     },
     /// A `run`'s chunk of a new column in a world that holds its cap of columns already.
     TooManyColumns(u32),
+    /// A `far` past `viewed_levels::MAX_COLUMNS` columns of the player's level kept.
+    TooManyFar,
     /// An `open` whose column cap passes the client's ceiling, `viewed_levels::MAX_COLUMNS`.
     CapPastCeiling(u32),
     /// A `swap` the client made no travel swap for.
@@ -109,6 +111,9 @@ impl std::fmt::Display for RouteError {
             }
             Self::TooManyColumns(cap) => {
                 write!(f, "{CHANNEL}: a viewed level past {cap} columns")
+            }
+            Self::TooManyFar => {
+                write!(f, "{CHANNEL}: far columns past {MAX_COLUMNS}")
             }
             Self::CapPastCeiling(cap) => write!(
                 f,
@@ -313,6 +318,10 @@ impl Game<'_> {
                 }
                 Ok(())
             }
+            Message::Far { kept, released } => self
+                .remote_far_columns(&kept, &released)
+                .then_some(())
+                .ok_or(RouteError::TooManyFar),
             Message::Close { level } => {
                 let (level, epoch) = bound(level)?;
                 if self.live(level, epoch)?

@@ -154,6 +154,7 @@ fn pass(level: &mut Entities, clients: &mut [Client], at: &[[f64; 3]], states: &
             view_distance: c.view_distance,
             chunks: &chunks,
             sources: c.sources.as_deref(),
+            far: &[],
             tracker: &mut c.tracker,
             out,
         })

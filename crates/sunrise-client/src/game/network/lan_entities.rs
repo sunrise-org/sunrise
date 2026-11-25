@@ -1534,6 +1534,7 @@ mod tests {
             view_distance: 2,
             chunks: &chunks,
             sources: None,
+            far: &[],
             attachment_sender: None,
             tracker,
             out: &mut out,

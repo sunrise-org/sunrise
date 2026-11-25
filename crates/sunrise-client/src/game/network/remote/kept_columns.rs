@@ -1,14 +1,44 @@
 use super::*;
 use sunrise_client::{chunk_map::ClientChunkRange, fast_hash::FxHashSet};
+use sunrise_protocol::viewed_levels::MAX_COLUMNS;
 
 type Column = (i32, i32);
 
 impl Game<'_> {
     pub(in crate::game) fn remote_chunk_in_range(&self, x: i32, z: i32) -> bool {
         self.replay.playing()
+            || self.world.chunks.is_far((x, z))
             || self.remote.as_ref().is_none_or(|r| {
                 ClientChunkRange::new(r.chunk_center, r.view_distance).contains((x, z))
             })
+    }
+
+    /// `sunrise:levels` `far` (revision 5): the server keeps `kept` here past the view from now
+    /// on, and `released` no more; a released column outside the view goes, as a forget. False,
+    /// keeping none of `kept`, when they would pass `MAX_COLUMNS`: the connection closes.
+    pub(in crate::game) fn remote_far_columns(
+        &mut self,
+        kept: &[Column],
+        released: &[Column],
+    ) -> bool {
+        let mut gone: FxHashSet<Column> = self
+            .world
+            .chunks
+            .release_far(released)
+            .into_iter()
+            .collect();
+        let (far, _) = self.world.chunks.far_state();
+        let new = kept.iter().filter(|&&key| !self.world.chunks.is_far(key));
+        let within = far + new.count() <= MAX_COLUMNS as usize;
+        if within {
+            let shown = self.world.chunks.keep_far(kept);
+            self.streaming
+                .remote_chunk_visibility_changed(&mut self.world, &[], &shown);
+        }
+        // Released, they are out of range: not `forget_remote_packets`, which keeps those.
+        self.forget_remote_light(&gone);
+        self.forget_remote_columns(&mut gone, true);
+        within
     }
 
     pub(super) fn set_remote_chunk_cache_center(&mut self, center: Column) {
@@ -20,12 +50,11 @@ impl Game<'_> {
                 if adopted_view {
                     // Viewed worlds hold arbitrary areas, not a ring. Only copy entries
                     // in the new active view when establishing its cache for the first time.
-                    let mut gone = self
-                        .world
-                        .chunks
+                    let chunks = &self.world.chunks;
+                    let mut gone = chunks
                         .keys()
                         .copied()
-                        .filter(|&key| !range.contains(key))
+                        .filter(|&key| !range.contains(key) && !chunks.is_far(key))
                         .collect();
                     self.forget_remote_columns(&mut gone, true);
                 }
@@ -47,11 +76,10 @@ impl Game<'_> {
                 // ClientChunkCache.updateViewRadius copies the in-range slots into new
                 // storage and abandons the rest. Their data is freed here, so each tells
                 // its `client_chunk_unload`, unlike a centre move's hidden slots.
-                let mut gone: FxHashSet<Column> = self
-                    .world
-                    .chunks
+                let chunks = &self.world.chunks;
+                let mut gone: FxHashSet<Column> = chunks
                     .resident_keys()
-                    .filter(|&key| !range.contains(key))
+                    .filter(|&key| !range.contains(key) && !chunks.is_far(key))
                     .collect();
                 for &(x, z) in &gone {
                     self.forget_chunk_passages(x, z);

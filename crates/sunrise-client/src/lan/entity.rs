@@ -1154,6 +1154,10 @@ pub struct Viewer<'a> {
     /// chunks, which it tracks from in place of its position (`viewed_levels::entities`), and at
     /// most `MAX_ENTITIES` entities. None for a player in the level.
     pub sources: Option<&'a [((i32, i32), i32)]>,
+    /// A player in the level whose client keeps areas of it past its view
+    /// (`viewed_levels::own`): their centres and radii, which it also tracks
+    /// from, as a viewing client does. Empty for any other.
+    pub far: &'a [((i32, i32), i32)],
     pub tracker: &'a mut Tracker,
     /// What the tick sends it, in order.
     pub out: &'a mut Vec<super::Body>,
@@ -1215,6 +1219,12 @@ fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]) -> bool {
             let range = f64::from(p.range.min(v.view_distance * 16));
             let (dx, dz) = (v.position[0] - p.x, v.position[2] - p.z);
             dx * dx + dz * dz <= range * range
+                || (!v.far.is_empty()
+                    && super::viewed_levels::entities::in_reach(
+                        v.far,
+                        chunks[p.chunk as usize],
+                        p.range,
+                    ))
         }
         Some(areas) => {
             super::viewed_levels::entities::in_reach(areas, chunks[p.chunk as usize], p.range)
@@ -1900,6 +1910,7 @@ impl Entities {
                         for (&(cx, cz), members) in chunks.iter().zip(members) {
                             if v.sources.is_none()
                                 && ((cx - vx).abs() > reach || (cz - vz).abs() > reach)
+                                && !super::viewed_levels::view::covers(v.far, cx, cz)
                             {
                                 continue;
                             }
@@ -2472,6 +2483,7 @@ mod tests {
                             general_entity: true,
                             attachment_sender: None,
                             sources: None,
+                            far: &[],
                             spectator: false,
                             permission: 0,
                             moved: moved[k],
@@ -3205,6 +3217,7 @@ mod tests {
                     view_distance: 10,
                     chunks: &self.chunks,
                     sources: None,
+                    far: &[],
                     tracker: t0,
                     out: o0,
                 },
@@ -3220,6 +3233,7 @@ mod tests {
                     view_distance: 10,
                     chunks: &self.chunks,
                     sources: None,
+                    far: &[],
                     tracker: t1,
                     out: o1,
                 },
@@ -3279,6 +3293,7 @@ mod tests {
                 view_distance: 10,
                 chunks: &chunks,
                 sources: None,
+                far: &[],
                 attachment_sender: None,
                 tracker: &mut tracker,
                 out: &mut out,
@@ -4063,6 +4078,7 @@ mod tests {
                     view_distance: 10,
                     chunks: &chunks,
                     sources: None,
+                    far: &[],
                     tracker,
                     out,
                 })
@@ -4145,6 +4161,7 @@ mod tests {
                 view_distance: 10,
                 chunks: &chunks,
                 sources: None,
+                far: &[],
                 tracker: &mut t0,
                 out: &mut o0,
             },
@@ -4160,6 +4177,7 @@ mod tests {
                 view_distance: 10,
                 chunks: &chunks,
                 sources: None,
+                far: &[],
                 tracker: &mut t1,
                 out: &mut o1,
             },

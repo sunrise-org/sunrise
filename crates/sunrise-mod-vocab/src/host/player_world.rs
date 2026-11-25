@@ -91,7 +91,10 @@ pub trait PlayerWorldBackendMut {
     /// empty slice withdraws them, and other mods' areas stay. The engine keeps each area's
     /// chunks loaded with a ticket of its own (`Loaded`, or `Ticking` as a player's simulation
     /// ticket), generates what is missing, and sends a level besides the player's own to a client
-    /// that can view it. A chunk no area covers any more is forgotten 52 ticks later. An area
+    /// that can view it. In the player's own level, a Sunrise client of this build is sent an
+    /// area's chunks past its view too, and they count as tracked (their block changes, entities
+    /// and passages go with them, and a passage may lead into them); to vanilla's, nothing past
+    /// its view is sent. A chunk no area covers any more is forgotten 52 ticks later. An area
     /// counts as no player for spawning, sleeping, raids or any other rule. Areas are never saved
     /// and end when the player leaves. A call that breaks a limit changes nothing and names it.
     fn player_set_chunk_areas(

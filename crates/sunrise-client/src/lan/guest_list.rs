@@ -169,12 +169,13 @@ impl GuestList {
             if g.attachments.has_index_entries() {
                 player_attachments.insert(g.entity_id, (g.uuid, &*g.attachments));
             }
-            let (chunks, sources, tracker, out, moved) = if is_visible {
+            let (chunks, sources, far, tracker, out, moved) = if is_visible {
                 let Some(out) = outputs.next() else {
                     continue;
                 };
                 let moved = take_moved && std::mem::take(&mut g.moved);
-                (&g.sent_chunks, None, &mut g.tracker, out, moved)
+                let far = &g.viewed.own.sources[..];
+                (&g.sent_chunks, None, far, &mut g.tracker, out, moved)
             } else if viewing && tracks_view(g, dimension) {
                 let (Some(out), Some(view)) = (views.next(), g.viewed.views.get_mut(dimension))
                 else {
@@ -184,6 +185,7 @@ impl GuestList {
                 (
                     &view.sent,
                     Some(&view.sources[..]),
+                    &[][..],
                     &mut view.tracker,
                     out,
                     true,
@@ -203,6 +205,7 @@ impl GuestList {
                 view_distance: g.view_distance,
                 chunks,
                 sources,
+                far,
                 tracker,
                 out,
             });

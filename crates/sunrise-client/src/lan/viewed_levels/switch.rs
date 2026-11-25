@@ -61,6 +61,8 @@ impl Hub {
         let (kept, weather) = self.guests.update(i, |g| {
             let own = std::mem::take(&mut g.sent_chunks);
             g.chunk_queue.clear();
+            // Its client keeps nothing of the level entered past its view yet.
+            g.viewed.own.reset();
             // The client drops both levels' entities: the server sends them again.
             g.tracker.clear();
             let Some(level) = swap else {

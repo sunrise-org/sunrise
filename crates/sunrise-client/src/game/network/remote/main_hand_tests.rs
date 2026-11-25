@@ -74,6 +74,7 @@ fn a_client_receives_a_mannequins_main_hand() {
                             view_distance: 8,
                             chunks: &chunks,
                             sources: None,
+                            far: &[],
                             tracker: &mut tracker,
                             out: &mut out,
                         }],
