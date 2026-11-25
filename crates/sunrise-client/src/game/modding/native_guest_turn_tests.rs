@@ -241,7 +241,7 @@ fn refused_wire_reload_preserves_hub_and_engine_generation() {
             &root,
             &game.pack.data_source,
             &game.pack.data_changes,
-            false,
+            None,
             &[],
             &[],
         );
@@ -269,7 +269,7 @@ fn refused_wire_reload_preserves_hub_and_engine_generation() {
             &good,
             &game.pack.data_source,
             &game.pack.data_changes,
-            false,
+            None,
             &[],
             &[],
         );

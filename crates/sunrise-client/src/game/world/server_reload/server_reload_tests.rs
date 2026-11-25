@@ -382,10 +382,6 @@ fn reload_command_runs_listeners_on_both_sides_of_function_library() {
                 &scratch.path().join("datapacks/anchor/pack.mcmeta"),
                 r#"{"pack":{"description":"anchor"}}"#,
             );
-            write(
-                &scratch.path().join("datapacks.json"),
-                r#"{"enabled":["file/anchor"],"disabled":[]}"#,
-            );
             write(&path, "reload_probe too_early");
             let trace = Arc::new(Mutex::new(Vec::new()));
             let mods = vec![ModEntry::new(
@@ -398,7 +394,8 @@ fn reload_command_runs_listeners_on_both_sides_of_function_library() {
             .into();
             mod_platform::testing::with_mods(mods, || {
                 with_game(|game| {
-                    game.load_world(request(scratch.path())).unwrap();
+                    game.load_world(request_selecting(scratch.path(), &["file/anchor"], &[]))
+                        .unwrap();
                     trace.lock().unwrap().clear();
                     assert!(game.run_command("reload"));
                     assert_eq!(
@@ -426,6 +423,15 @@ fn request(root: &Path) -> WorldRequest {
     request
 }
 
+fn request_selecting(root: &Path, enabled: &[&str], disabled: &[&str]) -> WorldRequest {
+    let mut request = request(root);
+    request.data_packs = Some((
+        enabled.iter().map(|id| (*id).to_owned()).collect(),
+        disabled.iter().map(|id| (*id).to_owned()).collect(),
+    ));
+    request
+}
+
 #[test]
 #[ignore = "daily"]
 fn dedicated_world_open_publishes_crafting_item_tags() {
@@ -439,15 +445,12 @@ fn dedicated_world_open_publishes_crafting_item_tags() {
         &root.join("datapacks/crafting_tags/data/test/tags/item/crafting_inputs.json"),
         r#"{"values":[{"id":"test:absent_optional","required":false},"minecraft:stick"]}"#,
     );
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["file/crafting_tags"],"disabled":[]}"#,
-    );
     mod_platform::testing::with_mods(Vec::<ModEntry>::new().into(), || {
         with_game(|game| {
             game.options.execution_role =
                 crate::game::execution_role::ExecutionRole::DedicatedServer;
-            game.load_world(request(root)).unwrap();
+            game.load_world(request_selecting(root, &["file/crafting_tags"], &[]))
+                .unwrap();
             use mod_api::LoopContext;
             use sunrise_client_render::api_context::LoopReader;
             let tag = mod_api::__private::tag_key(
@@ -546,13 +549,10 @@ fn missing_original_at_reload_preserves_the_published_data_and_reports_its_owner
         r#"{"pack":{"description":"Reload fixture"}}"#,
     );
     write(&function, "say old");
-    write(
-        &world.join("datapacks.json"),
-        r#"{"enabled":["file/test"],"disabled":[]}"#,
-    );
     with_game(|game| {
         install_mod_resources(game, &resources, &package);
-        game.load_world(request(&world)).unwrap();
+        game.load_world(request_selecting(&world, &["file/test"], &[]))
+            .unwrap();
         let previous = game.fns.store.functions["reload_test:keep"].clone();
         let enabled = game.fns.enabled().to_vec();
         write(&function, "say new");
@@ -634,10 +634,6 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
     write(&pack.join("data/other/machines/ignored.txt"), "not json");
     let function = pack.join("data/reload_test/function/keep.mcfunction");
     write(&function, "say old");
-    write(
-        &world.join("datapacks.json"),
-        r#"{"enabled":["file/test"],"disabled":[]}"#,
-    );
     let live = Arc::new(Mutex::new(0));
     let reject = Arc::new(AtomicBool::new(false));
     let mods = vec![ModEntry::new(
@@ -651,7 +647,8 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             install_mod_resources(game, &resources, &package);
-            game.load_world(request(&world)).unwrap();
+            game.load_world(request_selecting(&world, &["file/test"], &[]))
+                .unwrap();
             assert_eq!(
                 *live.lock().unwrap(),
                 7,
@@ -669,9 +666,8 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
             assert!(game.run_command("reload"));
             assert_eq!(*live.lock().unwrap(), 8);
             let old_function = game.fns.store.functions["reload_test:keep"].clone();
-            let old_selection = std::fs::read(world.join("datapacks.json")).unwrap();
+            let old_selection = game.level.data_packs.clone();
             let old_enabled = game.fns.enabled().to_vec();
-            let old_vanilla_disabled = game.cmds.vanilla_disabled;
             write(&data, "4");
             write(&function, "say new");
             reject.store(true, Ordering::Relaxed);
@@ -693,18 +689,11 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
             );
             assert_eq!(game.fns.store.functions["reload_test:keep"], old_function);
             assert!(!game.run_command("datapack disable \"file/test\""));
-            assert_eq!(
-                std::fs::read(world.join("datapacks.json")).unwrap(),
-                old_selection
-            );
+            assert_eq!(game.level.data_packs, old_selection);
             assert_eq!(
                 game.fns.enabled(),
                 old_enabled,
                 "the refused change publishes nothing"
-            );
-            assert_eq!(
-                game.cmds.vanilla_disabled, old_vanilla_disabled,
-                "the refused change flips no command switch"
             );
             assert!(game.fns.store.functions.contains_key("reload_test:keep"));
             assert_eq!(*live.lock().unwrap(), 8);
@@ -814,10 +803,6 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
         &pack.join("data/reload_test/machines/bar.json"),
         "\"better\"",
     );
-    write(
-        &world.join("datapacks.json"),
-        r#"{"enabled":["file/test"],"disabled":[]}"#,
-    );
     let live = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
         vec![ModEntry::new(
@@ -828,7 +813,8 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
         || {
             with_game(|game| {
                 install_mod_resources(game, &resources, &package);
-                game.load_world(request(&world)).unwrap();
+                game.load_world(request_selecting(&world, &["file/test"], &[]))
+                    .unwrap();
                 assert_eq!(
                     *live.lock().unwrap(),
                     vec![("reload_test:bar".into(), "better".into())],
@@ -1091,10 +1077,6 @@ fn server_reload_retains_listeners_for_other_hooks() {
     );
     let data = pack.join("data/reload_test/machines/value.json");
     write(&data, "2");
-    write(
-        &world.join("datapacks.json"),
-        r#"{"enabled":["file/test"],"disabled":[]}"#,
-    );
     let live = Arc::new(Mutex::new(0));
     let reject = Arc::new(AtomicBool::new(false));
     let mods = vec![ModEntry::new(
@@ -1112,7 +1094,8 @@ fn server_reload_retains_listeners_for_other_hooks() {
         with_game(|game| {
             assert!(game.reload_resources().listener(&key).is_none());
             install_mod_resources(game, &resources, &package);
-            game.load_world(request(&world)).unwrap();
+            game.load_world(request_selecting(&world, &["file/test"], &[]))
+                .unwrap();
             let kept = game.reload_resources().listener(&key).unwrap();
             assert_eq!(*kept.live.lock().unwrap(), 2);
             assert!(Arc::ptr_eq(

@@ -415,11 +415,6 @@ fn a_server_profile_can_reload_and_reopen_a_world_with_a_placed_boat() {
     let (major, minor) = sunrise_core::version::DATA_PACK_FORMAT;
     std::fs::write(pack.join("pack.mcmeta"), format!(r#"{{"pack":{{"description":"Server profile smoke test","min_format":[{major},{minor}],"max_format":[{major},{minor}]}}}}"#)).unwrap();
     std::fs::write(&function, "say profile_before_reload\n").unwrap();
-    std::fs::write(
-        game.join("world/datapacks.json"),
-        r#"{"enabled":["vanilla","file/profile-smoke"],"disabled":[]}"#,
-    )
-    .unwrap();
     std::fs::write(game.join("server.properties"), format!(
         "server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\nwhite-list=false\nlevel-seed=12345\n\
          view-distance=3\nsimulation-distance=3\ngamemode=creative\nforce-gamemode=true\n\

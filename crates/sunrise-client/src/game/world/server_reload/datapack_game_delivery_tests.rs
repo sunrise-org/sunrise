@@ -62,15 +62,12 @@ fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_ref
     );
     let entry = pack.join("data/registry_test/registry_test/spell/fire.json");
     write(&entry, r#"{"power":7}"#);
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/base"],"disabled":[]}"#,
-    );
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_test", Box::new(Synced))].into(),
         || {
             with_game(|game| {
-                game.load_world(request(root)).unwrap();
+                game.load_world(request_selecting(root, &["vanilla", "file/base"], &[]))
+                    .unwrap();
                 let offer = datapack_net::offer()
                     .unwrap()
                     .expect("synchronized registry offer required");

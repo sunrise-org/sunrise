@@ -78,11 +78,7 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
     )
     .unwrap();
     std::fs::write(tables.join("il_empty.json"), r#"{"pools":[]}"#).unwrap();
-    std::fs::write(
-        dir.join("datapacks.json"),
-        r#"{"enabled":["file/il"],"disabled":[]}"#,
-    )
-    .unwrap();
+    game.level.data_packs = Some((vec!["file/il".to_owned()], vec![]));
     game.world_root = dir;
     let root = game.options.resources.clone();
     let stack = crate::game::functions::pack_stack(
@@ -90,7 +86,7 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
         &root,
         &sunrise_assets::resource_source::ResourceSource::directory(root.clone()),
         &Default::default(),
-        false,
+        game.level.data_packs.as_ref(),
         &[],
         &[],
     );

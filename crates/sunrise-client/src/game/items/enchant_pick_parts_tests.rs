@@ -507,11 +507,6 @@ fn short_enchantment_item_holders_bind_for_both_selectors() {
         )
         .unwrap();
         std::fs::write(
-            root.path().join("datapacks.json"),
-            r#"{"enabled":["file/enchant_test"],"disabled":[]}"#,
-        )
-        .unwrap();
-        std::fs::write(
             data.join("test/loot_table/sword.json"),
             r#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond_sword","modifier":[{"type":"minecraft:enchant_with_levels","levels":30,"options":["minecraft:sharpness"]}]}]}]}"#,
         )
@@ -607,6 +602,7 @@ fn support_resolves_once_against_the_tags_published_by_world_open_and_play_packe
             )
             .unwrap();
             request.save_root = scratch.path().to_owned();
+            request.data_packs = Some((vec!["file/enchant_test".to_owned()], vec![]));
             seen.lock().unwrap().clear();
             game.load_world(request).unwrap();
             assert_eq!(*seen.lock().unwrap(), [Some(true)]);

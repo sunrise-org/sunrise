@@ -2009,11 +2009,7 @@ mod mob_equipment_command_tests {
                 serde_json::to_vec(&definition).unwrap(),
             )
             .unwrap();
-            std::fs::write(
-                game.world_root.join("datapacks.json"),
-                r#"{"enabled":["file/catalog"]}"#,
-            )
-            .unwrap();
+            game.level.data_packs = Some((vec!["file/catalog".to_owned()], vec![]));
             let functions = pack.join("data/wpenchant/function");
             std::fs::create_dir_all(&functions).unwrap();
             std::fs::write(functions.join("ready.mcfunction"), "return 1\n").unwrap();

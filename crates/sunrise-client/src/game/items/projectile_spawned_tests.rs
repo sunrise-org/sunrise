@@ -35,11 +35,7 @@ fn with_enchantments(defs: &[(&str, Value)], test: impl FnOnce(&mut super::Game<
             r#"{"pack":{"description":"projectile_spawned fixture"}}"#,
         )
         .unwrap();
-        std::fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["file/spawned"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/spawned".to_owned()], vec![]));
         for (name, effects) in defs {
             let definition = json!({
                 "description": "fixture", "supported_items": "#minecraft:enchantable/bow",

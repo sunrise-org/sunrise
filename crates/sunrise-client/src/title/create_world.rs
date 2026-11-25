@@ -166,7 +166,7 @@ impl WorldOptions {
         registry: std::sync::Arc<crate::gamerules::RuleRegistry>,
     ) -> Self {
         let generation = crate::save::WorldGen::read(dir).unwrap_or_default();
-        let (pack_dir, data_packs) = crate::datapack::for_recreate(dir);
+        let (pack_dir, data_packs) = crate::datapack::for_recreate(dir, level.data_packs.as_ref());
         Self {
             hardcore: level.hardcore,
             difficulty: DIFFICULTIES

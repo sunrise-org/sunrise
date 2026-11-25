@@ -93,7 +93,7 @@ MinecraftServer.reloadResources	port	crates/sunrise-client/src/game/administrati
 MinecraftServer.configurePackRepository	port	crates/sunrise-client/src/game/administration/functions.rs::Game::reload_datapacks	gap: minor: the enabled packs are picked and new ones added through datapack::enabled_ids, feature flags and all; no safe mode
 MinecraftServer.configureRepositoryWithSelection	inline	crates/sunrise-client/src/game/administration/functions.rs::Game::reload_datapacks	gap: minor: sets the enabled list only; the forced feature packs come from datapack::enabled_ids
 MinecraftServer.enableForcedFeaturePacks	inline	crates/sunrise-client-render/src/datapack.rs::enabled_ids	the last loop forces on every feature pack whose flags the world enables, whatever the world's selection says; a pack's flags are its pack.mcmeta features.enabled
-MinecraftServer.getSelectedPacks	port	crates/sunrise-client/src/game/administration/functions.rs::Game::save_datapack_settings	gap: minor: writes the enabled and disabled lists; no feature check
+MinecraftServer.getSelectedPacks	port	crates/sunrise-client/src/game/administration/functions.rs::Game::commit_pack_selection	gap: minor: sets the world DataPacks from the loaded stack; no feature check
 MinecraftServer.findRespawnDimension	port	crates/sunrise-client/src/game/network/lan/mod.rs::Game::world_spawn_level	uses the saved world spawn's dimension
 MinecraftServer.setRespawnData	port	crates/sunrise-client/src/game/administration/commands/mod.rs::Game::cmd_setworldspawn	gap: minor: the new spawn is not sent to guests here; they get it on join
 MinecraftServer.getCommandStorage	skip:java		getter for the command storage

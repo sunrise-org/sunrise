@@ -288,6 +288,23 @@ impl Level {
             };
             level.data_packs = Some((ids("Enabled"), ids("Disabled")));
         }
+        // remove in the first release after 26.3-0.1.0: a selection the launcher or an
+        // older game left in `datapacks.json` wins over level.dat's; the next save
+        // writes it to level.dat and deletes the file.
+        if let Some(saved) = fs::read(dir.join("datapacks.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        {
+            let ids = |key: &str| -> Vec<String> {
+                saved[key]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect()
+            };
+            level.data_packs = Some((ids("enabled"), ids("disabled")));
+        }
         let registry = level.rule_registry.clone();
         let mut rules: BTreeMap<String, i32> = registry
             .available_rules(false)
@@ -997,23 +1014,24 @@ impl Level {
                     Tag::List(self.enabled_features.iter().map(|s| string(s)).collect()),
                 );
             }
-            map.entry("DataPacks".into()).or_insert_with(|| {
-                let (enabled, disabled) = self.data_packs.clone().unwrap_or_else(|| {
-                    (
-                        vec!["vanilla".into()],
-                        [
-                            "minecart_improvements",
-                            "redstone_experiments",
-                            "trade_rebalance",
-                        ]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
-                    )
-                });
-                let list = |ids: Vec<String>| Tag::List(ids.iter().map(|s| string(s)).collect());
-                Tag::compound([("Enabled", list(enabled)), ("Disabled", list(disabled))])
+            let (enabled, disabled) = self.data_packs.clone().unwrap_or_else(|| {
+                (
+                    vec!["vanilla".into()],
+                    [
+                        "minecart_improvements",
+                        "redstone_experiments",
+                        "trade_rebalance",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                )
             });
+            let list = |ids: Vec<String>| Tag::List(ids.iter().map(|s| string(s)).collect());
+            map.insert(
+                "DataPacks".into(),
+                Tag::compound([("Enabled", list(enabled)), ("Disabled", list(disabled))]),
+            );
         }
         // Saved data: weather, clocks, and (when missing or legacy) world
         // generation settings and game rules. An upload's temporary world carries only
@@ -1111,6 +1129,11 @@ impl Level {
         }
         put(&mut root, "Data", data);
         write_dat(&dir.join("level.dat"), root)?;
-        Ok(())
+        // remove in the first release after 26.3-0.1.0: the selection `datapacks.json` held is
+        // in level.dat now.
+        match fs::remove_file(dir.join("datapacks.json")) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
     }
 }

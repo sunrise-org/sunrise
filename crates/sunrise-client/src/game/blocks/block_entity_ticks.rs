@@ -1391,10 +1391,6 @@ mod furnace_changed_tests {
             std::fs::write(path, body).unwrap();
         };
         write(
-            &root.join("datapacks.json"),
-            r#"{"enabled":["file/furnace"],"disabled":[]}"#,
-        );
-        write(
             &pack.join("pack.mcmeta"),
             r#"{"pack":{"description":"furnace provider fixture"}}"#,
         );
@@ -1431,6 +1427,7 @@ mod furnace_changed_tests {
         )
         .unwrap();
         request.save_root = root.to_owned();
+        request.data_packs = Some((vec!["file/furnace".to_owned()], vec![]));
         game.load_world(request).unwrap();
         assert!(game.fns.enabled().iter().any(|name| name == "file/furnace"));
         game.world

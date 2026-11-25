@@ -347,21 +347,14 @@ fn contributed_packs_are_discoverable_and_only_selected_resources_apply() {
             let world = fixture.root.join("world");
             fs::create_dir(&world).unwrap();
             let repository = data_repository(&world, &fixture.root, &data);
-            assert!(sunrise_client::datapack::enabled_ids(&world, &repository, &[]).is_empty());
-            fs::write(
-                world.join("datapacks.json"),
-                serde_json::json!({
-                    "enabled": [fixture.data_id()], "disabled": [],
-                })
-                .to_string(),
-            )
-            .unwrap();
+            assert!(sunrise_client::datapack::enabled_ids(None, &repository, &[]).is_empty());
+            let selection = (vec![fixture.data_id()], vec!["vanilla".to_owned()]);
             let stack = crate::game::functions::pack_stack(
                 &world,
                 &fixture.root,
                 &Default::default(),
                 &Default::default(),
-                true,
+                Some(&selection),
                 &[],
                 &data,
             );
@@ -521,7 +514,7 @@ fn required_packs_keep_their_priority_and_cannot_be_cleared() {
         let world = fixture.root.join("world");
         let repository = data_repository(&world, &fixture.root, &data);
         assert!(
-            sunrise_client::datapack::enabled_ids(&world, &repository, &[])
+            sunrise_client::datapack::enabled_ids(None, &repository, &[])
                 .contains(&fixture.data_id())
         );
     });
@@ -765,18 +758,17 @@ fn hidden_optional_data_pack_is_command_selectable_and_loads_its_function() {
                 .iter()
                 .any(|p| p.id == "mod/packmod:data/packmod/datapacks/optional")
         );
-        assert!(sunrise_client::datapack::enabled_ids(&world, &repository, &[]).is_empty());
-        fs::write(
-            world.join("datapacks.json"),
-            r#"{"enabled":["mod/packmod:data/packmod/datapacks/optional"],"disabled":[]}"#,
-        )
-        .unwrap();
+        assert!(sunrise_client::datapack::enabled_ids(None, &repository, &[]).is_empty());
+        let selection = (
+            vec!["mod/packmod:data/packmod/datapacks/optional".to_owned()],
+            vec!["vanilla".to_owned()],
+        );
         let stack = crate::game::functions::pack_stack(
             &world,
             &fixture.root,
             &Default::default(),
             &Default::default(),
-            true,
+            Some(&selection),
             &[],
             &data,
         );

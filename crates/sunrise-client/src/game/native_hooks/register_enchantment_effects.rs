@@ -231,11 +231,7 @@ mod tests {
                         r#"{"pack":{"description":"codec fixture"}}"#,
                     )
                     .unwrap();
-                    std::fs::write(
-                        root.path().join("datapacks.json"),
-                        r#"{"enabled":["file/effects"],"disabled":[]}"#,
-                    )
-                    .unwrap();
+                    game.level.data_packs = Some((vec!["file/effects".to_owned()], vec![]));
                     for (id, slots, effects) in definitions {
                         let definition = serde_json::json!({
                             "description":"Codec fixture", "supported_items":"minecraft:stick",
@@ -437,11 +433,7 @@ mod tests {
                         r#"{"pack":{"description":"damage fixture"}}"#,
                     )
                     .unwrap();
-                    std::fs::write(
-                        root.join("datapacks.json"),
-                        r#"{"enabled":["file/effects"],"disabled":[]}"#,
-                    )
-                    .unwrap();
+                    game.level.data_packs = Some((vec!["file/effects".to_owned()], vec![]));
                     let definition = serde_json::json!({
                         "description":"Damage fixture", "supported_items":"minecraft:stick", "weight":1, "max_level":2,
                         "min_cost":{"base":1,"per_level_above_first":0}, "max_cost":{"base":1,"per_level_above_first":0},

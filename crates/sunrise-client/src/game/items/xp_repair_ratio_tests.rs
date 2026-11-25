@@ -184,11 +184,7 @@ fn a_data_packs_mending_arrives_as_the_ratio() {
             r#"{"pack":{"description":"xp_repair_ratio fixture"}}"#,
         )
         .unwrap();
-        std::fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["file/mending"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/mending".to_owned()], vec![]));
         let mending = serde_json::json!({
             "anvil_cost": 4,
             "description": {"translate": "enchantment.minecraft.mending"},

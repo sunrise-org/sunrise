@@ -84,7 +84,7 @@ impl PreparedFunctionCall {
 
 /// The world's pack stack: the built-in pack (unless disabled), the packs
 /// of `<world>/datapacks` and the resources root's feature packs, with the
-/// enabled ids from `datapacks.json` (`PackRepository.reload`).
+/// enabled ids from the world's `DataPacks` selection (`PackRepository.reload`).
 pub(super) struct PackStack {
     pub builtin: Option<DataPack>,
     pub(super) content: DataPack,
@@ -108,16 +108,16 @@ pub(super) fn pack_stack(
     resources: &std::path::Path,
     builtin_source: &sunrise_assets::resource_source::ResourceSource,
     content_source: &sunrise_assets::resource_source::ResourceSource,
-    vanilla_disabled: bool,
+    selection: Option<&(Vec<String>, Vec<String>)>,
     enabled_features: &[String],
     additional: &[Arc<DataPack>],
 ) -> PackStack {
     let packs = super::pack_finders::data_repository(world_root, resources, additional);
-    let enabled = datapack::enabled_ids(world_root, &packs, enabled_features);
+    let enabled = datapack::enabled_ids(selection, &packs, enabled_features);
     PackStack::new(
         builtin_source,
         content_source,
-        vanilla_disabled,
+        datapack::vanilla_disabled(selection),
         packs,
         enabled,
         enabled_features,
@@ -290,9 +290,6 @@ impl FnState {
 impl Game<'_> {
     // ---- loading -----------------------------------------------------------
 
-    fn datapack_settings_path(&self) -> std::path::PathBuf {
-        self.world_root.join("datapacks.json")
-    }
     /// Discover and load the data packs of the world (once, or on `/reload`).
     pub(super) fn ensure_datapacks(&mut self) {
         if self.fns.loaded || self.world_root.as_os_str().is_empty() {
@@ -352,17 +349,21 @@ impl Game<'_> {
             .as_ref()
             .map_or(&self.pack.data_changes, |root| root.data_changes())
             .clone();
-        if opening_world {
-            // `DataPackConfig` keeps `vanilla` in Disabled across opens.
-            self.cmds.vanilla_disabled = datapack::vanilla_disabled(&self.world_root);
-        }
         let additional = super::pack_finders::data_packs(&self.mods);
+        // A world opening installs `self.level` only after this load: the selection is the
+        // opening level's `DataPacks` (`WorldDataConfiguration`), chosen at creation for a new
+        // world, not the previous world's.
+        let selection = opening
+            .as_ref()
+            .map_or(self.level.data_packs.as_ref(), |prepared| {
+                prepared.level.data_packs.as_ref()
+            });
         let stack = pack_stack(
             &self.world_root,
             &resources,
             data,
             &changes,
-            self.cmds.vanilla_disabled,
+            selection,
             enabled_features,
             &additional,
         );
@@ -443,6 +444,7 @@ impl Game<'_> {
         }
         self.fns.packs = stack.packs.clone();
         self.fns.enabled = stack.enabled.clone();
+        self.commit_pack_selection(stack.builtin.is_none());
         self.pack.additional_data = additional.into();
         self.fns.loaded = true;
         self.fns.load_pending = true;
@@ -578,17 +580,27 @@ impl Game<'_> {
             }
         }
     }
-    fn save_datapack_settings(&self) {
-        let disabled: Vec<&str> = self
-            .fns
-            .packs
-            .iter()
-            .filter(|p| !self.fns.enabled.contains(&p.id))
-            .map(|p| p.id.as_str())
-            .chain(self.cmds.vanilla_disabled.then_some("vanilla"))
+    /// `MinecraftServer.reloadResources`' `setDataConfiguration(getSelectedPacks(..))`: the
+    /// selection the pack stack just loaded becomes the world's `DataPacks`, for the next
+    /// level save.
+    fn commit_pack_selection(&mut self, vanilla_disabled: bool) {
+        let mut enabled: Vec<String> = (!vanilla_disabled)
+            .then(|| "vanilla".to_owned())
+            .into_iter()
             .collect();
-        let json = serde_json::json!({"enabled": self.fns.enabled, "disabled": disabled});
-        let _ = std::fs::write(self.datapack_settings_path(), json.to_string());
+        enabled.extend(self.fns.enabled.iter().cloned());
+        let mut disabled: Vec<String> = vanilla_disabled
+            .then(|| "vanilla".to_owned())
+            .into_iter()
+            .collect();
+        disabled.extend(
+            self.fns
+                .packs
+                .iter()
+                .filter(|p| !self.fns.enabled.contains(&p.id))
+                .map(|p| p.id.clone()),
+        );
+        self.level.data_packs = Some((enabled, disabled));
     }
     pub(super) fn sync_function_registries(&mut self) {
         self.sync_schedule_registry();
@@ -1325,7 +1337,8 @@ impl Game<'_> {
     }
     /// The selected packs, lowest priority first.
     fn selected_packs(&self) -> Vec<String> {
-        let vanilla = (!self.cmds.vanilla_disabled).then(|| "vanilla".to_owned());
+        let vanilla = (!datapack::vanilla_disabled(self.level.data_packs.as_ref()))
+            .then(|| "vanilla".to_owned());
         vanilla
             .into_iter()
             .chain(self.fns.enabled.iter().cloned())
@@ -1524,7 +1537,8 @@ impl Game<'_> {
             "datapack.enable" => {
                 let name = name.unwrap_or_default();
                 self.get_pack(&name, true, &selected)?;
-                let vanilla_disabled = name != "vanilla" && self.cmds.vanilla_disabled;
+                let vanilla_disabled =
+                    name != "vanilla" && datapack::vanilla_disabled(self.level.data_packs.as_ref());
                 {
                     let existing = match ctx.get("existing") {
                         Some(Arg::Str(e)) => Some(e.clone()),
@@ -1584,7 +1598,8 @@ impl Game<'_> {
                 {
                     return Err(err("sunrise.datapack.required", &[&name]));
                 }
-                let vanilla_disabled = name == "vanilla" || self.cmds.vanilla_disabled;
+                let vanilla_disabled =
+                    name == "vanilla" || datapack::vanilla_disabled(self.level.data_packs.as_ref());
                 enabled.retain(|p| p != &name);
                 self.feedback(Text::translate(
                     "commands.datapack.modify.disable",
@@ -1603,12 +1618,20 @@ impl Game<'_> {
         // timers already in memory stay, and none come back from disk
         // (`ServerFunctionManager` keeps its queue over a pack change).
         let additional = super::pack_finders::data_packs(&self.mods);
+        // The selection this change makes; `stack.enabled` below is its order.
+        let trial = (
+            enabled.to_vec(),
+            vanilla_disabled
+                .then(|| "vanilla".to_owned())
+                .into_iter()
+                .collect(),
+        );
         let mut stack = pack_stack(
             &self.world_root,
             &self.options.resources,
             &self.pack.data_source,
             &self.pack.data_changes,
-            vanilla_disabled,
+            Some(&trial),
             &self.level.enabled_features,
             &additional,
         );
@@ -1628,9 +1651,8 @@ impl Game<'_> {
         self.install_loop_context(context);
         self.fns.packs = stack.packs.clone();
         self.fns.enabled = stack.enabled.clone();
-        self.cmds.vanilla_disabled = vanilla_disabled;
+        self.commit_pack_selection(vanilla_disabled);
         self.pack.additional_data = additional.into();
-        self.save_datapack_settings();
         self.fns.load_pending = true;
         self.install_world_tables(world);
         self.apply_server_reload(prepared, &self.level.enabled_features.clone());
@@ -2670,17 +2692,13 @@ mod tests {
                 super::super::native_tags::block_in_tag(Some(game.items()), stone, candidate),
                 old_tag
             );
-            game.save_datapack_settings();
-            let settings = std::fs::read(root.join("datapacks.json")).unwrap();
+            let settings = game.level.data_packs.clone();
             let enabled = game.fns.enabled.clone();
             let context = game.loop_context.clone();
             let generation = game.damage_tag_generation;
             assert!(!game.run_command("datapack disable \"file/candidate\""));
             assert_eq!(game.fns.enabled, enabled);
-            assert_eq!(
-                std::fs::read(root.join("datapacks.json")).unwrap(),
-                settings
-            );
+            assert_eq!(game.level.data_packs, settings);
             assert!(Arc::ptr_eq(&game.loop_context, &context));
             assert_eq!(game.damage_tag_generation, generation);
             assert!(game.items().block_tags["reload_test:candidate"].contains("minecraft:stone"));
@@ -2785,6 +2803,13 @@ mod tests {
         .unwrap();
     }
     fn open_datapack_world(game: &mut Game<'_>, root: &std::path::Path) {
+        open_datapack_world_with(game, root, None);
+    }
+    fn open_datapack_world_with(
+        game: &mut Game<'_>,
+        root: &std::path::Path,
+        data_packs: Option<(Vec<String>, Vec<String>)>,
+    ) {
         let mut request = crate::game::world_loading::WorldRequest::new(
             "test",
             Some("test"),
@@ -2795,6 +2820,7 @@ mod tests {
         )
         .unwrap();
         request.save_root = root.to_path_buf();
+        request.data_packs = data_packs;
         game.load_world(request).unwrap();
     }
 
@@ -2824,12 +2850,13 @@ mod tests {
         with_game(|game| {
             open_datapack_world(game, &root);
             assert!(game.run_command("datapack disable vanilla"));
-            assert!(game.cmds.vanilla_disabled);
+            assert!(datapack::vanilla_disabled(game.level.data_packs.as_ref()));
+            game.save_game().unwrap();
         });
         with_game(|game| {
-            assert!(!game.cmds.vanilla_disabled);
+            assert!(!datapack::vanilla_disabled(game.level.data_packs.as_ref()));
             open_datapack_world(game, &root);
-            assert!(game.cmds.vanilla_disabled);
+            assert!(datapack::vanilla_disabled(game.level.data_packs.as_ref()));
             assert!(!game.selected_packs().contains(&"vanilla".to_owned()));
         });
         let _ = std::fs::remove_dir_all(root);
@@ -2840,13 +2867,10 @@ mod tests {
     fn datapack_enable_next_to_vanilla_and_the_existing_pack_is_checked_for_vanilla() {
         use crate::game::native_entity_refs::tests::with_game;
         let root = datapack_world("datapack-vanilla-neighbour", &["a", "b"]);
-        std::fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["file/a"],"disabled":["file/b"]}"#,
-        )
-        .unwrap();
         with_game(|game| {
+            // The pack stack reads the saved level.dat at open, so a fresh world has both packs on.
             open_datapack_world(game, &root);
+            assert!(game.run_command("datapack disable \"file/b\""));
             assert!(game.run_command("datapack enable \"file/b\" after \"vanilla\""));
             assert_eq!(game.fns.enabled, ["file/b", "file/a"]);
             assert!(game.run_command("datapack disable \"file/b\""));
@@ -2855,10 +2879,10 @@ mod tests {
             // `getPack(existing, false)` runs whatever the name is.
             assert!(game.run_command("datapack disable vanilla"));
             assert!(!game.run_command("datapack enable vanilla after \"nosuchpack\""));
-            assert!(game.cmds.vanilla_disabled);
+            assert!(datapack::vanilla_disabled(game.level.data_packs.as_ref()));
             assert!(!game.run_command("datapack enable vanilla after \"vanilla\""));
             assert!(game.run_command("datapack enable vanilla after \"file/a\""));
-            assert!(!game.cmds.vanilla_disabled);
+            assert!(!datapack::vanilla_disabled(game.level.data_packs.as_ref()));
         });
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2868,13 +2892,12 @@ mod tests {
     fn datapack_enable_next_to_a_flagged_feature_pack_is_refused() {
         use crate::game::native_entity_refs::tests::with_game;
         let root = datapack_world("datapack-feature-neighbour", &["a", "b"]);
-        std::fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["file/a"],"disabled":["file/b"]}"#,
-        )
-        .unwrap();
         with_game(|game| {
-            open_datapack_world(game, &root);
+            open_datapack_world_with(
+                game,
+                &root,
+                Some((vec!["file/a".into()], vec!["file/b".into()])),
+            );
             game.level.enabled_features = vec![
                 "minecraft:vanilla".into(),
                 "minecraft:trade_rebalance".into(),
@@ -2888,6 +2911,55 @@ mod tests {
             assert!(!game.fns.enabled.contains(&"file/b".to_owned()));
             assert!(game.run_command("datapack enable \"file/b\" after \"file/a\""));
             assert!(game.fns.enabled.contains(&"file/b".to_owned()));
+        });
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `/datapack disable` (a pack, and the built-in pack) is the world's `DataPacks`: the
+    /// saved level.dat carries it into the next open.
+    #[test]
+    #[ignore = "daily"]
+    fn datapack_selection_survives_a_reopen_through_level_dat() {
+        use crate::game::{native_entity_refs::tests::with_game, world_loading::WorldRequest};
+
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("datapack-selection-reopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pack = root.join("datapacks/a");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"Selection fixture"}}"#,
+        )
+        .unwrap();
+        with_game(|game| {
+            let open = || {
+                let mut request = WorldRequest::new(
+                    "test",
+                    Some("test"),
+                    Some(1),
+                    true,
+                    None,
+                    std::sync::Arc::new(sunrise_client::gamerules::RuleRegistry::vanilla()),
+                )
+                .unwrap();
+                request.save_root = root.clone();
+                request
+            };
+            game.load_world(open()).unwrap();
+            assert!(game.fns.enabled.iter().any(|id| id == "file/a"));
+            assert!(game.run_command("datapack disable \"file/a\""));
+            assert!(game.run_command("datapack disable vanilla"));
+            game.save_game().unwrap();
+            game.finish_close_world().unwrap();
+            game.load_world(open()).unwrap();
+            assert!(!game.fns.enabled.iter().any(|id| id == "file/a"));
+            assert!(sunrise_client::datapack::vanilla_disabled(
+                game.level.data_packs.as_ref()
+            ));
+            assert!(!root.join("datapacks.json").exists());
         });
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2939,11 +3011,6 @@ mod tests {
             r#"{"values":[]}"#,
         )
         .unwrap();
-        std::fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["file/test"],"disabled":[]}"#,
-        )
-        .unwrap();
         with_game(|game| {
             let mut request = WorldRequest::new(
                 "test",
@@ -2955,6 +3022,7 @@ mod tests {
             )
             .unwrap();
             request.save_root = root.clone();
+            request.data_packs = Some((vec!["file/test".to_owned()], vec![]));
             game.load_world(request).unwrap();
             assert!(game.fns.store.functions.contains_key("test:start"));
             assert_eq!(
@@ -3390,7 +3458,7 @@ mod tests {
     }
 
     /// Two packs override the same recipe: the later one in the selected
-    /// (`datapacks.json`) order wins, not the later one alphabetically.
+    /// (`DataPacks`) order wins, not the later one alphabetically.
     #[test]
     fn content_overlay_follows_enabled_order() {
         for order in [["file/a", "file/b"], ["file/b", "file/a"]] {
@@ -3410,14 +3478,16 @@ mod tests {
                 .unwrap();
                 std::fs::write(pack.join("data/x/recipe/r.json"), name).unwrap();
             }
-            let json = serde_json::json!({"enabled": order, "disabled": []});
-            std::fs::write(dir.join("datapacks.json"), json.to_string()).unwrap();
+            let selection = (
+                order.iter().map(|id| (*id).to_owned()).collect(),
+                vec!["vanilla".to_owned()],
+            );
             let stack = pack_stack(
                 &dir,
                 std::path::Path::new(""),
                 &Default::default(),
                 &Default::default(),
-                true,
+                Some(&selection),
                 &[],
                 &[],
             );
@@ -3456,8 +3526,7 @@ mod tests {
             r#"{"replace": true, "values": ["pkg:from_pack"]}"#,
         )
         .unwrap();
-        let settings = serde_json::json!({"enabled": ["file/pack"], "disabled": []});
-        std::fs::write(dir.join("datapacks.json"), settings.to_string()).unwrap();
+        let selection = (vec!["file/pack".to_owned()], vec!["vanilla".to_owned()]);
         let tag = |entry: &str| format!(r#"{{"values": ["{entry}"]}}"#).into_bytes();
         std::fs::create_dir_all(pack.join("data/pkg/recipe")).unwrap();
         std::fs::write(
@@ -3483,7 +3552,7 @@ mod tests {
             std::path::Path::new(""),
             &Default::default(),
             &passive,
-            true,
+            Some(&selection),
             &[],
             &[],
         );

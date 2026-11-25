@@ -34,11 +34,7 @@ fn game_event_key_registry_data_reload_and_unavailable_sides() {
                 r#"{"pack":{"description":"Game event fixture"}}"#,
             )
             .unwrap();
-            std::fs::write(
-                root.path().join("datapacks.json"),
-                r#"{"enabled":["file/events"],"disabled":[]}"#,
-            )
-            .unwrap();
+            game.level.data_packs = Some((vec!["file/events".to_owned()], vec![]));
             for frequency in [7, 12] {
                 std::fs::write(&file, format!(r#"{{"replace":true,"values":{{"minecraft:step":{{"frequency":{frequency}}}}}}}"#)).unwrap();
                 let packs = game.reload_datapacks(false, &[]).unwrap();

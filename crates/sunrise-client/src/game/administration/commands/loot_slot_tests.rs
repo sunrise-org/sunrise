@@ -24,11 +24,7 @@ fn loot_kill_matches_the_world_pack_entity_type_tag() {
             pack.join("minecraft/loot_table/entities/sheep.json"),
             r##"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond","condition":{"type":"minecraft:entity_properties","entity":"this","predicate":{"minecraft:entity_type":"#snapshot:target"}}}]}]}"##,
         ).unwrap();
-        std::fs::write(
-            world.path().join("datapacks.json"),
-            r#"{"enabled":["file/loot"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/loot".to_owned()], vec![]));
         game.world_root = world.path().to_path_buf();
         game.reload_datapacks(true, &[]).unwrap();
         assert!(game.run_command("setblock 4 200 4 chest"));

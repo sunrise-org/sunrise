@@ -3867,15 +3867,14 @@ mod structure_tag_tests {
             r#"{"values": ["minecraft:ocean_ruin_cold"]}"#,
         )
         .unwrap();
-        let settings = json!({"enabled": ["file/mypack"], "disabled": []});
-        std::fs::write(dir.join("datapacks.json"), settings.to_string()).unwrap();
+        game.level.data_packs = Some((vec!["file/mypack".to_owned()], vec![]));
         game.world_root = dir.clone();
         let stack = crate::game::functions::pack_stack(
             &dir,
             &root,
             &sunrise_assets::resource_source::ResourceSource::directory(root.clone()),
             &Default::default(),
-            false,
+            game.level.data_packs.as_ref(),
             &[],
             &[],
         );

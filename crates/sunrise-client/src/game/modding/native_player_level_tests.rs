@@ -530,11 +530,7 @@ fn an_inventory_reward_for_a_player_in_another_level_waits_for_their_own_tick() 
             r#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:emerald"}]}]}"#,
         )
         .unwrap();
-        std::fs::write(
-            world.path().join("datapacks.json"),
-            r#"{"enabled":["file/rewards"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/rewards".to_owned()], vec![]));
         game.world_root = world.path().to_path_buf();
         game.reload_datapacks(true, &[]).unwrap();
         let diamond = in_the_nether(game);

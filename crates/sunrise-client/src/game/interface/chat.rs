@@ -3177,11 +3177,7 @@ mod enchantment_snapshot_tests {
         )
         .unwrap();
         std::fs::write(tags.join("empty.json"), r#"{"values":[]}"#).unwrap();
-        std::fs::write(
-            dir.join("datapacks.json"),
-            r#"{"enabled":["file/model"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/model".to_owned()], vec![]));
         game.world_root = dir;
         let stack = game.reload_datapacks(false, &[]).unwrap();
         let root = game.options.resources.clone();
@@ -3333,11 +3329,7 @@ mod damage_type_registry_tests {
             r#"{"message_id":"example.test","scaling":"never","exhaustion":0.0}"#,
         )
         .unwrap();
-        std::fs::write(
-            dir.join("datapacks.json"),
-            r#"{"enabled":["file/model"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/model".to_owned()], vec![]));
         game.world_root = dir;
         let stack = game.reload_datapacks(false, &[]).unwrap();
         let staged = game.stage_world_tables(&stack, false, &root).unwrap();

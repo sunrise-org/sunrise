@@ -155,11 +155,7 @@ fn progress_events_capture_each_players_full_mutation_state() {
                 "scoreboard players add @s reward_hits 1\n",
             )
             .unwrap();
-            std::fs::write(
-                game.world_root.join("datapacks.json"),
-                r#"{"enabled":["file/test"],"disabled":[]}"#,
-            )
-            .unwrap();
+            game.level.data_packs = Some((vec!["file/test".to_owned()], vec![]));
             game.adv.tree = Arc::new(Tree::load(&scratch.join("data")));
             game.score.board.add_objective(
                 "reward_hits",

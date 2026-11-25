@@ -19,10 +19,6 @@ fn generic_processor_and_referencing_pool_accept_block_properties() {
         &pack.join("pack.mcmeta"),
         r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
-    write(
-        &scratch.path().join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/processors"],"disabled":[]}"#,
-    );
     // A vanilla rule processor matching a block state with properties.
     write(
         &pack.join("data/registry_processor_test/worldgen/processor_list/rule.json"),
@@ -52,6 +48,10 @@ fn generic_processor_and_referencing_pool_accept_block_properties() {
         )
         .unwrap();
         request.save_root = scratch.path().to_owned();
+        request.data_packs = Some((
+            vec!["vanilla".to_owned(), "file/processors".to_owned()],
+            vec![],
+        ));
         game.load_world(request).unwrap();
         let host: &dyn mod_api::Host = game;
         for registry in [

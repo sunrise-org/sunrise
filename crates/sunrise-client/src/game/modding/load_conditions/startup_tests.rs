@@ -52,11 +52,6 @@ fn first_open_conditions_see_static_tags_and_admitted_biomes() {
         r#"{"pack":{"description":"conditions","min_format":[121,0],"max_format":[121,0]}}"#,
     )
     .unwrap();
-    fs::write(
-        scratch.path().join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/conditions"],"disabled":[]}"#,
-    )
-    .unwrap();
     let write = |file: &str, value: Value| {
         let path = pack.join("data/demo").join(file);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -150,6 +145,10 @@ fn first_open_conditions_see_static_tags_and_admitted_biomes() {
         )
         .unwrap();
         request.save_root = scratch.path().to_owned();
+        request.data_packs = Some((
+            vec!["vanilla".to_owned(), "file/conditions".to_owned()],
+            vec![],
+        ));
         game.load_world(request).unwrap();
         let biomes = game.world_biomes_base.as_ref().unwrap();
         assert!(biomes.contains("demo:enabled"));

@@ -435,11 +435,8 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                                         "layers":[{"height":1,"block":"minecraft:bedrock"}]}}}"#,
                                 )
                                 .unwrap();
-                                std::fs::write(
-                                    root.join("datapacks.json"),
-                                    r#"{"enabled":["vanilla","file/pocket"],"disabled":[]}"#,
-                                )
-                                .unwrap();
+                                game.level.data_packs =
+                                    Some((vec!["vanilla".to_owned(), "file/pocket".to_owned()], vec![]));
                                 Dim::add_extra("test:pocket");
                                 let pocket = Dim::extra("test:pocket").unwrap();
                                 let parked = game.open_level(pocket).unwrap();
@@ -917,11 +914,6 @@ fn datapack_dimensions_open_prepare_save_and_close_in_creation_order() {
         r#"{"pack":{"description":"Lifecycle fixture","min_format":[121,0],"max_format":[121,0]}}"#,
     )
     .unwrap();
-            fs::write(
-                root.path().join("datapacks.json"),
-                r#"{"enabled":["vanilla","file/stems"],"disabled":[]}"#,
-            )
-            .unwrap();
             for name in ["last", "first"] {
                 fs::write(
             dimensions.join(format!("{name}.json")),
@@ -956,6 +948,8 @@ fn datapack_dimensions_open_prepare_save_and_close_in_creation_order() {
                         )
                         .unwrap();
                         request.save_root = root.path().to_path_buf();
+                        request.data_packs =
+                            Some((vec!["vanilla".to_owned(), "file/stems".to_owned()], vec![]));
                         // Supply the effective registry's traversal before the normal prepare path
                         // projects its shapes. This is not a claim about Java's hash-bucket order.
                         request.stem_order = Some(&[

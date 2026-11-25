@@ -121,18 +121,14 @@ fn game<'a>(
     std::fs::write(tables.join("sift.json"), SIFT).unwrap();
     std::fs::write(tables.join("sequence.json"), SEQUENCE).unwrap();
     std::fs::write(tables.join("small.json"), r#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:ender_pearl","modifier":[{"type":"minecraft:set_count","count":40},{"type":"minecraft:set_components","components":{"minecraft:max_stack_size":8}}]}]}]}"#).unwrap();
-    std::fs::write(
-        dir.join("datapacks.json"),
-        r#"{"enabled":["file/sift"],"disabled":[]}"#,
-    )
-    .unwrap();
+    game.level.data_packs = Some((vec!["file/sift".to_owned()], vec![]));
     game.world_root = dir;
     let stack = functions::pack_stack(
         &game.world_root,
         &root,
         &sunrise_assets::resource_source::ResourceSource::directory(root.clone()),
         &Default::default(),
-        false,
+        game.level.data_packs.as_ref(),
         &[],
         &[],
     );
