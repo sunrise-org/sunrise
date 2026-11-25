@@ -1002,3 +1002,291 @@ fn the_level_records_its_colliders_as_each_tick_begins() {
         assert!(game.level_collider_history().is_none());
     });
 }
+
+/// Steps one client tick and drains its packets up to `ClientTickEnd`.
+fn tick_client(game: &mut Game<'_>, wire: &mut sunrise_protocol::connection::Connection) {
+    use sunrise_protocol::packets::play::Serverbound;
+    game.tick().unwrap();
+    loop {
+        let (id, bytes) = wire.recv().unwrap();
+        if matches!(
+            Serverbound::decode(id, &bytes).unwrap(),
+            Serverbound::ClientTickEnd(_)
+        ) {
+            break;
+        }
+    }
+}
+
+/// A collider that turns in place via `collider_sync::Message::Rotation` arriving before each
+/// client tick carries the local player standing 1.2 blocks off its axis around it (#5584).
+#[test]
+#[ignore = "daily"]
+fn a_client_collider_turning_before_the_tick_carries_the_local_player() {
+    use crate::game::native_client_session::tests::{finish_login, logged_client};
+    use crate::game::native_entity_refs::tests::with_client_game;
+    use sunrise_client::motion::PlayerMotion;
+    use sunrise_protocol::collider_sync::{self, Message as ColliderMessage, WireBox};
+    use sunrise_protocol::connection::Connection;
+    use sunrise_protocol::packets::{configuration::CustomPayload, play::Clientbound};
+
+    crate::game::in_own_process(
+        "game::native_colliders_tests::a_client_collider_turning_before_the_tick_carries_the_local_player",
+        || {
+            const PLAYER: u32 = 42;
+            const SOURCE: i32 = 80;
+            // Off the axis far enough that the player's box (half width 0.3) never meets the
+            // pig's (0.45) on the turn: inside 0.75 on both axes `Entity.push` would shove
+            // the player outward and the radius would no longer be the carry's alone.
+            const RADIUS: f64 = 1.2;
+            let yaw = |degrees: f32| {
+                let half = degrees.to_radians() / 2.0;
+                [0.0, half.sin(), 0.0, half.cos()]
+            };
+
+            for deg_per_tick in [2.4_f32, 4.8_f32] {
+                with_client_game(|game| {
+                    let mut wire = Connection::local(logged_client(game));
+                    wire.reader
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    finish_login(game, &mut wire);
+                    game.title = None;
+                    game.screen = super::Screen::Playing;
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+
+                    game.spawn_entity(SOURCE, "minecraft:pig", [8.0, 70.0, 8.0], [0.0; 3]);
+                    game.handle_packet(Clientbound::CustomPayload(CustomPayload {
+                        channel: collider_sync::CHANNEL.into(),
+                        data: collider_sync::encode(&ColliderMessage::Boxes {
+                            entity: SOURCE as u32,
+                            rotation: [0.0, 0.0, 0.0, 1.0],
+                            total: 1,
+                            first: 0,
+                            boxes: vec![WireBox {
+                                min: [-1.5, -1.0, -1.5],
+                                max: [1.5, 0.0, 1.5],
+                            }],
+                        }),
+                    }))
+                    .unwrap();
+
+                    let mut player =
+                        PlayerMotion::new(game.motion, Vec3::new(8.0 + RADIUS, 70.0, 8.0)).unwrap();
+                    player.entity_id = PLAYER as i32;
+                    player.client_side = true;
+                    game.player = Some(player);
+                    let remote = game.remote.as_mut().unwrap();
+                    remote.entity_id = PLAYER as i32;
+                    remote.loaded_sent = true;
+                    remote.level_load.finish();
+
+                    // Initial tick settles on_ground and snapshots the unturned collider pose.
+                    tick_client(game, &mut wire);
+
+                    const STEPS: usize = 15;
+                    for step in 1..=STEPS {
+                        game.handle_packet(Clientbound::CustomPayload(CustomPayload {
+                            channel: collider_sync::CHANNEL.into(),
+                            data: collider_sync::encode(&ColliderMessage::Rotation {
+                                entity: SOURCE as u32,
+                                rotation: yaw(deg_per_tick * step as f32),
+                            }),
+                        }))
+                        .unwrap();
+                        tick_client(game, &mut wire);
+                    }
+
+                    let total = f64::from(deg_per_tick * STEPS as f32).to_radians();
+                    let want =
+                        Vec3::new(8.0 + RADIUS * total.cos(), 70.0, 8.0 - RADIUS * total.sin());
+                    let at = game.player.as_ref().unwrap().position;
+                    assert!(
+                        near(at, want, 0.06),
+                        "rate {deg_per_tick} deg/tick: got {at:?}, want {want:?}"
+                    );
+                });
+            }
+        },
+    );
+}
+
+/// A collider descending 0.03125/tick (moved by `teleport_to` / `EntityPositionSync`, and again
+/// by the entity's own move / `MoveEntityPos`) carries the local player down with no x/z drift
+/// over 40 ticks, and `closest_space_nudge` ignores mod collider boxes (#5585).
+#[test]
+#[ignore = "daily"]
+fn a_client_descending_collider_carries_the_local_player_without_sideways_drift() {
+    use crate::game::native_client_session::tests::{finish_login, logged_client};
+    use crate::game::native_entity_refs::tests::with_client_game;
+    use sunrise_client::motion::PlayerMotion;
+    use sunrise_protocol::collider_sync::{self, Message as ColliderMessage, WireBox};
+    use sunrise_protocol::connection::Connection;
+    use sunrise_protocol::general_entity::{self, Message as GeneralMessage};
+    use sunrise_protocol::packets::{
+        configuration::CustomPayload,
+        play::{self, Clientbound},
+    };
+
+    struct Declare;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Declare {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.declare_general_entity(
+                "platform",
+                mod_api::GeneralEntityCategory::Misc,
+                0.5,
+                0.5,
+                None,
+                mod_api::GeneralSavePolicy::Save,
+                true,
+                false,
+                Some(mod_api::PushReaction::IgnoreEntity),
+                8,
+                1,
+                1,
+                &[],
+            )
+            .unwrap();
+        }
+    }
+
+    crate::game::in_own_process(
+        "game::native_colliders_tests::a_client_descending_collider_carries_the_local_player_without_sideways_drift",
+        || {
+            const PLAYER: u32 = 42;
+            const SOURCE: i32 = 80;
+            const STEP: f64 = 0.03125;
+            const TICKS: usize = 40;
+
+            mod_platform::__private::initialize().unwrap();
+            let _phase = mod_platform::__private::RegistrationGuard::open();
+            let declare = || vec![mod_api::ModEntry::new("mymod", Box::new(Declare))];
+            mod_platform::testing::with_mods(declare().into(), || {
+                mod_platform::__private::part_tests::install_parts_fixture(&declare()).unwrap();
+
+                for by_teleport in [true, false] {
+                    with_client_game(|game| {
+                        let mut wire = Connection::local(logged_client(game));
+                        wire.reader
+                            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                            .unwrap();
+                        finish_login(game, &mut wire);
+                        game.title = None;
+                        game.screen = super::Screen::Playing;
+                        game.world
+                            .chunks
+                            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+
+                        game.handle_packet(Clientbound::CustomPayload(CustomPayload {
+                            channel: general_entity::CHANNEL.into(),
+                            data: general_entity::encode(&GeneralMessage::Spawn {
+                                id: SOURCE,
+                                uuid: 0x77,
+                                type_key: "mymod:platform".into(),
+                                position: [8.0, 70.0, 8.0],
+                                rotation: [0.0, 0.0],
+                                velocity: [0.0; 3],
+                            })
+                            .unwrap(),
+                        }))
+                        .unwrap();
+                        game.handle_packet(Clientbound::CustomPayload(CustomPayload {
+                            channel: collider_sync::CHANNEL.into(),
+                            data: collider_sync::encode(&ColliderMessage::Boxes {
+                                entity: SOURCE as u32,
+                                rotation: [0.0, 0.0, 0.0, 1.0],
+                                total: 1,
+                                first: 0,
+                                boxes: vec![WireBox {
+                                    min: [-1.5, -1.0, -1.5],
+                                    max: [1.5, 0.0, 1.5],
+                                }],
+                            }),
+                        }))
+                        .unwrap();
+
+                        let mut player =
+                            PlayerMotion::new(game.motion, Vec3::new(9.0, 70.0, 8.0)).unwrap();
+                        player.entity_id = PLAYER as i32;
+                        player.client_side = true;
+                        game.player = Some(player);
+                        let remote = game.remote.as_mut().unwrap();
+                        remote.entity_id = PLAYER as i32;
+                        remote.loaded_sent = true;
+                        remote.level_load.finish();
+
+                        // Settle on the platform before descent begins.
+                        tick_client(game, &mut wire);
+
+                        let mut y = 70.0;
+                        for tick in 0..TICKS {
+                            y -= STEP;
+                            let packet = if by_teleport {
+                                Clientbound::EntityPositionSync(play::EntityPositionSync {
+                                    id: SOURCE,
+                                    path: play::PositionPath::Linear([8.0, y, 8.0]),
+                                    yaw: 0.0,
+                                    pitch: 0.0,
+                                    on_ground: false,
+                                })
+                            } else {
+                                // -128 / 4096 == -0.03125
+                                Clientbound::MoveEntityPos(play::MoveEntityPos(play::MoveEntity {
+                                    id: SOURCE,
+                                    delta: Some(play::VecDelta::Linear([0, -128, 0])),
+                                    rotation: None,
+                                    on_ground: false,
+                                }))
+                            };
+                            game.handle_packet(packet).unwrap();
+                            tick_client(game, &mut wire);
+                            let at = game.player.as_ref().unwrap().position;
+                            assert!(
+                                (at.x - 9.0).abs() < 1.0e-9 && (at.z - 8.0).abs() < 1.0e-9,
+                                "by_teleport={by_teleport} tick {tick}: drifted sideways to {at:?}"
+                            );
+                        }
+
+                        let at = game.player.as_ref().unwrap().position;
+                        let deck_y = game.collider_origin(SOURCE as u32).unwrap().y;
+                        assert!(
+                            (at.y - deck_y).abs() < 0.02,
+                            "by_teleport={by_teleport}: player y {} vs deck y {deck_y}",
+                            at.y
+                        );
+                        assert!(
+                            at.y < 70.0 - 1.1,
+                            "by_teleport={by_teleport}: carried down from 70.0, got {}",
+                            at.y
+                        );
+
+                        // Even if a body overlaps the collider top by a hair (e.g. after a
+                        // server position update), `LocalPlayer.suffocatesAt` only checks
+                        // suffocating blocks and never nudges sideways out of collider boxes.
+                        let mut dipped =
+                            PlayerMotion::new(game.motion, Vec3::new(9.0, deck_y - 0.05, 8.0))
+                                .unwrap();
+                        dipped.entity_id = PLAYER as i32;
+                        let placed = game.placed_moving_colliders();
+                        let nudge =
+                            sunrise_client_render::moving_colliders::in_level(placed, || {
+                                super::closest_space_nudge(
+                                    &dipped,
+                                    &game.world,
+                                    game.collision,
+                                    game.level_suffocation(),
+                                )
+                            });
+                        assert_eq!(
+                            nudge, [None; 2],
+                            "collider boxes never trigger suffocation nudge"
+                        );
+                    });
+                }
+            });
+        },
+    );
+}

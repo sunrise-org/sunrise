@@ -71,10 +71,6 @@ index, and the rotation alone for `set_collider_transform`. **A vanilla client d
 it sees the entity and walks through it. A mod that needs players to stand on one requires the Sunrise
 client at join.
 
-A shape edit does not immediately move a body it overlaps. On its movement tick, the Sunrise local
-player's ordinary wall-escape nudge also checks solid collider boxes, except those in the same
-vehicle stack. It checks the sampled pose, not the space a rotating box swept between poses.
-
 ### Carrying
 
 A collider that moves carries what stands on it. Once a tick, after the level's entities ticked

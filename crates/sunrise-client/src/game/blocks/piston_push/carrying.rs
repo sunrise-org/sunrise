@@ -97,34 +97,28 @@ impl Game<'_> {
     /// translating collider. `start` is the colliders as the tick began. A tick where none
     /// moved does nothing.
     pub(in crate::game) fn carry_pass(&mut self, start: &Prepared) {
-        // The client handles entity movement packets before its tick (Minecraft.runTick).
-        // Keep the last tick's placement for a shove instead of sweeping from the pose that
-        // already includes those packets. The existing support and carry pass is unchanged.
+        // The client handles collider and entity movement packets before its tick
+        // (`Minecraft.runTick`). Carry and shove from the last tick's end placement for this
+        // level so changes that arrived before the tick (`Rotation`, `Boxes`, `Patch`, a
+        // teleport) and changes during it combine into one displacement; the server has no
+        // `remote` state and carries from `start` unchanged.
         let last = self
             .remote
             .as_mut()
-            .and_then(|r| r.collider_shove_start.take())
+            .and_then(|r| r.collider_pass_start.take())
             .filter(|(level, _)| *level == self.dim);
-        let carry = self.any_collider_moved(start);
-        let shove = last
-            .as_ref()
-            .map_or(carry, |(_, placed)| self.any_collider_moved(placed));
-        if carry || shove {
+        let before = last.as_ref().map_or(start, |(_, placed)| placed);
+        if !before.is_empty() && self.any_collider_moved(before) {
             let mut scratch = SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
             let steps = self.push_step_heights();
             scratch.riders.clear();
-            if carry {
-                self.collider_riders(start, &steps, &mut scratch);
-                if !scratch.riders.is_empty() {
-                    self.carry_in_order(start, &steps, &mut scratch);
-                    // A passenger that owns a collider moves with its vehicle too.
-                    self.position_riders();
-                }
+            self.collider_riders(before, &steps, &mut scratch);
+            if !scratch.riders.is_empty() {
+                self.carry_in_order(before, &steps, &mut scratch);
+                // A passenger that owns a collider moves with its vehicle too.
+                self.position_riders();
             }
-            if shove {
-                let before = last.as_ref().map_or(start, |(_, placed)| placed);
-                self.shove_pass(before, &steps, &scratch.riders);
-            }
+            self.shove_pass(before, &steps, &scratch.riders);
             SCRATCH.with(|cell| *cell.borrow_mut() = scratch);
         }
         if self
@@ -134,7 +128,7 @@ impl Game<'_> {
         {
             let now = self.placed_moving_colliders();
             if let Some(remote) = self.remote.as_mut() {
-                remote.collider_shove_start = Some((self.dim, now));
+                remote.collider_pass_start = Some((self.dim, now));
             }
         }
     }

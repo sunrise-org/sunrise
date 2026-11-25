@@ -104,9 +104,7 @@ pub trait PlayerWorldBackendMut {
     ) -> Result<(), ChunkAreaRefusal>;
     /// Side: both.
     /// Simulate one client movement tick for this server player without changing the player.
-    /// The usual closest-space velocity nudge accounts for solid collider boxes when a
-    /// collision scene is in scope. Refuses stale, absent, dead, spectator or riding players
-    /// and invalid input.
+    /// Refuses stale, absent, dead, spectator or riding players and invalid input.
     fn player_simulate_move(
         &mut self,
         player: PlayerRef,

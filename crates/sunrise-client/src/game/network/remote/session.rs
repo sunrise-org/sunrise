@@ -256,7 +256,7 @@ impl Game<'_> {
             logged_out: false,
             attachments: HashMap::new(),
             colliders: HashMap::new(),
-            collider_shove_start: None,
+            collider_pass_start: None,
             carry_age: Default::default(),
             far_terrain: None,
             builtin,
@@ -551,7 +551,7 @@ impl Game<'_> {
             custom_books: false,
             attachments: HashMap::new(),
             colliders: HashMap::new(),
-            collider_shove_start: None,
+            collider_pass_start: None,
             carry_age: Default::default(),
             far_terrain: None,
             builtin,
@@ -974,7 +974,7 @@ impl Game<'_> {
         self.track_remote_levels(&spawn.dimension);
         let r = self.remote.as_mut().unwrap();
         if !same {
-            r.collider_shove_start = None;
+            r.collider_pass_start = None;
             // A same-level respawn keeps the existing ClientLevel's seed and sea level.
             r.hashed_seed = spawn.seed;
             r.sea_level = spawn.sea_level;
