@@ -30,6 +30,7 @@ impl Game<'_> {
         self.refresh_infiniburn();
         self.refresh_creative_search_tags();
         self.install_remote_tags();
+        self.refresh_face_visibility_tags();
         if self.recipe_ui.server_stations.is_some()
             && tags
                 .registries
@@ -132,6 +133,59 @@ impl Game<'_> {
         });
         self.resolve_primary_items();
         self.resolve_enchant_particles();
+    }
+
+    /// Recompile tag-based block face rules (`skip_rendering` / `hides_neighbor_face`) against
+    /// the client's synced `minecraft:block` tags and remesh loaded sections when they change.
+    pub(super) fn refresh_face_visibility_tags(&mut self) {
+        if !self.pack.context.tables.visibility.has_tag_rules() {
+            return;
+        }
+        let block_tags: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = {
+            let Some(r) = self.remote.as_ref() else {
+                return;
+            };
+            let Some(raw_tags) = r.registries.tags.get("minecraft:block") else {
+                return;
+            };
+            let names = SyncedNames {
+                builtin: &r.builtin,
+                dynamic: &r.registries,
+            };
+            raw_tags
+                .iter()
+                .map(|(tag, ids)| {
+                    let members = ids
+                        .iter()
+                        .filter_map(|&id| names.name("minecraft:block", id))
+                        .collect();
+                    (tag.clone(), members)
+                })
+                .collect()
+        };
+        let Some(visibility) = self
+            .pack
+            .context
+            .tables
+            .visibility
+            .rebuild_for_tags(self.pack.assets.registry, &block_tags)
+        else {
+            return;
+        };
+        let old = &self.pack.context;
+        let tables = Arc::new(old.tables.with_visibility(visibility.clone()));
+        self.pack.context = Arc::new(sunrise_client::streaming::WorkerContext {
+            assets: old.assets.clone(),
+            render: old.render.clone(),
+            tables,
+            biomes: old.biomes.clone(),
+            light: old.light.clone(),
+            hidden_states: old.hidden_states.clone(),
+            part_tables: old.part_tables.clone(),
+        });
+        self.res.block_entity_render().set_visibility(visibility);
+        let context = self.worker_context();
+        self.streaming.reload_resources(&mut self.world, context);
     }
 }
 

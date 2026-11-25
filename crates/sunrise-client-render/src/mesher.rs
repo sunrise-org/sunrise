@@ -819,6 +819,7 @@ pub struct MeshFacts {
     pub overlay: bool,
     pub tint_sources: u8,
 }
+#[derive(Clone)]
 pub struct MeshTables {
     info: Vec<Info>,
     /// `Info::solid` by state, packed apart: the opacity mask of a section
@@ -971,6 +972,14 @@ fn world_tint(tint: Tint, tints: &mut Tints, [x, y, z]: [i32; 3]) -> Option<u32>
     })
 }
 impl MeshTables {
+    /// Returns a copy of these mesh tables with a rebuilt [`FaceVisibility`] (for example
+    /// after synced block tags update tag-based face rules).
+    pub fn with_visibility(&self, visibility: FaceVisibility) -> Self {
+        let mut tables = self.clone();
+        tables.visibility = visibility;
+        tables
+    }
+
     pub fn new(
         assets: &Assets,
         render: &RenderAssets,

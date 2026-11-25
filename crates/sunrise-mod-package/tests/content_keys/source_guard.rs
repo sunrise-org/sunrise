@@ -16,12 +16,17 @@ mod manifest_reviewed;
 // Registry crates such as semver, serde_json and toml are out of scope.
 const EXTERNAL_DECLARATIONS: &[&str] = &[
     "sunrise_core::arm_pose::ArmPose",
+    "sunrise_core::geometry::Direction",
     "mod_vocab::Side",
     "mod_vocab::DependencyOrder",
     "mod_vocab::DependencyOrder::After",
     // The field's custom deserializer maps names to this vocabulary instead of deriving Serde.
     "mod_vocab::NoteInstrument",
     "mod_vocab::NoteInstrument::ALL",
+    "mod_vocab::FaceRule",
+    "mod_vocab::FaceNeighbor",
+    "mod_vocab::FaceDirections",
+    "mod_vocab::FaceFacts",
 ];
 
 // Where each such crate keeps its sources.
@@ -61,7 +66,9 @@ const REVIEWED: &[Reviewed] = &[
     (("content.rs", "instrument", "deserialize_with = \"deserialize_instrument\""), &["block_full", "refused_block_bad_instrument"]),
     (("content.rs", "ignited_by_lava", "deserialize_with = \"deserialize_ignited_by_lava\""), &["block_full", "refused_block_bad_property_type"]),
     (("content.rs", "replaceable", "deserialize_with = \"deserialize_replaceable\""), &["block_full"]),
-    (("content.rs", "skip_same_block_faces", "deserialize_with = \"deserialize_skip_same_block_faces\""), &["block_full"]),
+    (("content.rs", "skip_rendering", "deserialize_with = \"face_rules::deserialize_skip_rendering\""), &["block_full", "src/content.rs:block_face_rules_parse_and_refuse_unknown_facts_and_directions"]),
+    (("content.rs", "hides_neighbor_face", "deserialize_with = \"face_rules::deserialize_hides_neighbor_face\""), &["block_full", "src/content.rs:block_face_rules_parse_and_refuse_unknown_facts_and_directions"]),
+    (("content.rs", "supports_external_face_hiding", "deserialize_with = \"face_rules::deserialize_supports_external_face_hiding\""), &["block_full", "src/content.rs:block_face_rules_parse_and_refuse_unknown_facts_and_directions"]),
     (("content.rs", "RandomTicks", "untagged"), &["block_full"]),
     (("content.rs", "BlockShapes", "impl Deserialize"), &["block_full", "keys_block_forms", "refused_block_shape_bounds"]),
     (("content.rs", "StateProperty", "tag = \"type\""), &["block_full"]),

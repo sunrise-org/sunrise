@@ -348,10 +348,27 @@ below it and head instruments (`ZOMBIE` through `CUSTOM_HEAD`) from the block ab
 is silent without a skull block entity above the note block with a `note_block_sound`.
 `ignited_by_lava` sets lava's ignition flag; a subscribed per-position `ignited_by_lava` hook still answers
 first. `replaceable` controls replacement by block placement and by features that check replaceability;
-the usual refusal when the hand holds the block's own item still applies. `skip_same_block_faces: true`
-hides model faces against any state of this same block, as glass does; `false` disables the template's render
-definition skip rule. Leaf and ice graphics options can still hide faces based on the template class.
-Unset values inherit the template. These are load-time properties on both sides, with no new hook.
+the usual refusal when the hand holds the block's own item still applies. Unset values inherit the
+template. These are load-time properties on both sides, with no new hook.
+
+`skip_rendering`, `hides_neighbor_face` and `supports_external_face_hiding` control culled neighbor
+faces as compiled block data (`BlockBehaviour.skipRendering`, NeoForge
+`IBlockExtension.hidesNeighborFace` and `supportsExternalFaceHiding`), without running mod code on
+meshing workers:
+- `skip_rendering` is a list of face rules that replaces the template's skip rule (`[]` disables it;
+  omitted inherits the template). `[{"neighbor": "self"}]` skips faces against any state of this
+  same block, as glass does.
+- `hides_neighbor_face` is a list of face rules whose matching neighbor faces pointing toward this
+  block are hidden when the neighbor supports external face hiding.
+- `supports_external_face_hiding: false` prevents any neighbor's `hides_neighbor_face` rules from
+  hiding this block's faces (default `true`).
+
+Each rule object accepts optional `neighbor` (a block id, `#tag`, `{"block"|"tag", "state"}`,
+`"self"`, or omitted for any neighbor), `state` (required property values on this block), `same`
+(property names that must match on both states), `faces` (`"all"`, `"horizontal"`, `"vertical"` or
+a list of direction names) and `facts` (a closed set of `BlockBehaviour.BlockStateBase` booleans:
+`is_air`, `can_occlude`, `is_solid_render`, `liquid`). Tag rules resolve against the client's
+synced block tags and remesh loaded sections on tag sync.
 
 `spawn_rule` sets which mobs spawn on the block (`BlockBehaviour.Properties.isValidSpawn`): `default` is vanilla's
 (a sturdy top face and light emission below 14), `always` and `never` answer for every mob, and `ocelot_or_parrot`

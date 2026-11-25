@@ -25,7 +25,32 @@
     "instrument": "BELL",
     "ignited_by_lava": true,
     "replaceable": true,
-    "skip_same_block_faces": true,
+    "skip_rendering": [
+      {
+        "neighbor": "self"
+      }
+    ],
+    "hides_neighbor_face": [
+      {
+        "neighbor": {
+          "block": "minecraft:glass",
+          "state": {
+            "facing": "north"
+          }
+        },
+        "state": {
+          "phase": "bright"
+        },
+        "same": [
+          "raised"
+        ],
+        "faces": "horizontal",
+        "facts": {
+          "can_occlude": false
+        }
+      }
+    ],
+    "supports_external_face_hiding": false,
     "spawn_rule": "default",
     "vegetation": true
   },

@@ -1610,6 +1610,15 @@ impl BlockEntityRenderer {
         }
         Ok(renderer)
     }
+
+    /// Replaces the face-visibility table used for culled block-entity faces (for example
+    /// after synced block tags rebuild tag-based face rules).
+    pub fn set_visibility(&self, visibility: FaceVisibility) {
+        if let Some(current) = &self.visibility {
+            *current.lock().unwrap_or_else(|e| e.into_inner()) = visibility;
+        }
+    }
+
     fn new(models: HashMap<&'static str, ModelPart>, registry: &BlockRegistry) -> Self {
         let vanilla = Arc::new(BlockEntityShapes::new(models, HashMap::new()));
         let kinds = (0..registry.len() as u32)

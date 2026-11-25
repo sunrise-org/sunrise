@@ -9,6 +9,7 @@ impl Game<'_> {
         }
         // Configuration's tags, over the block ids the parts just bound.
         self.install_remote_tags();
+        self.refresh_face_visibility_tags();
         self.refresh_render_visibility();
         self.test_highlights.clear();
         // handleLogin: `debugSubscriber.clear()`.

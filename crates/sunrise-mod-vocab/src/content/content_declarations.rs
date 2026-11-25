@@ -95,9 +95,15 @@ pub struct BlockProperties {
     pub ignited_by_lava: Option<bool>,
     /// Whether placement and features may replace this block; the held-own-item rule still applies.
     pub replaceable: Option<bool>,
-    /// Skip faces against any state of this same block; false disables the template's render rule.
-    /// Leaf and ice graphics culling still follows the template class.
-    pub skip_same_block_faces: Option<bool>,
+    /// Data rules replacing vanilla `BlockBehaviour.skipRendering` for this block.
+    /// `None` inherits the template's render rule; `Some(vec![])` disables it.
+    pub skip_rendering: Option<Vec<FaceRule>>,
+    /// Data rules implementing NeoForge `IBlockExtension.hidesNeighborFace`: matching neighbor
+    /// faces pointing toward this block are hidden when the neighbor supports external hiding.
+    pub hides_neighbor_face: Vec<FaceRule>,
+    /// NeoForge `IBlockExtension.supportsExternalFaceHiding`: when `Some(false)`, no neighbor's
+    /// `hides_neighbor_face` rules hide this block's faces. Unset or `Some(true)` allows it.
+    pub supports_external_face_hiding: Option<bool>,
     /// Which mobs may spawn on the block (`BlockBehaviour.Properties.isValidSpawn`), the same
     /// `spawn_rule` key a content file's `properties` take; unset keeps the template block's rule.
     pub spawn_rule: Option<SpawnRule>,
@@ -105,6 +111,165 @@ pub struct BlockProperties {
     /// template. Templates that already inherit `VegetationBlock` keep their rules.
     /// Otherwise the default support is `minecraft:supports_vegetation`.
     pub vegetation: bool,
+}
+
+/// A data rule describing when a block's culled face is skipped (`skip_rendering`) or hides an
+/// adjacent block's face (`hides_neighbor_face`). Compiled once at resource load so meshing
+/// workers run no mod code.
+// exhaustive: the closed face-rule declaration record.
+#[derive(Clone, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub struct FaceRule {
+    /// Neighbor block filter (`FaceNeighbor::Any` matches any neighbor).
+    pub neighbor: FaceNeighbor,
+    /// Property values required on this block's own state; empty matches any state.
+    pub state: BTreeMap<String, String>,
+    /// Property names whose values must match on both this state and the neighbor state.
+    pub same: Vec<String>,
+    /// Faces to which this rule applies (`FaceDirections::All` when omitted).
+    pub faces: FaceDirections,
+    /// Per-state vanilla `BlockBehaviour.BlockStateBase` facts required on the neighbor state.
+    pub facts: FaceFacts,
+}
+
+/// Which neighbor block states a [`FaceRule`] matches.
+// exhaustive: the closed neighbor matcher vocabulary for block face rules.
+#[derive(Clone, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub enum FaceNeighbor {
+    /// Any neighbor block state.
+    #[default]
+    Any,
+    /// Any state of the same block as the declaring block, filtered by `state`.
+    SameBlock {
+        /// Property values required on the neighbor state; empty matches any state.
+        state: BTreeMap<String, String>,
+    },
+    /// States of a specific namespaced block id, filtered by `state`.
+    Block {
+        /// Namespaced block id (for example `"minecraft:glass"`).
+        id: String,
+        /// Property values required on the neighbor state; empty matches any state.
+        state: BTreeMap<String, String>,
+    },
+    /// States of any block in a block tag (without the leading `'#'`), filtered by `state`.
+    Tag {
+        /// Namespaced block tag id without the leading `'#'`.
+        id: String,
+        /// Property values required on the neighbor state; empty matches any state.
+        state: BTreeMap<String, String>,
+    },
+}
+
+/// Which faces a [`FaceRule`] applies to.
+// exhaustive: the closed face-selection vocabulary for block face rules.
+#[derive(Clone, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub enum FaceDirections {
+    /// All six faces.
+    #[default]
+    All,
+    /// North, south, west and east.
+    Horizontal,
+    /// Down and up.
+    Vertical,
+    /// An explicit list of directions.
+    Only(Vec<crate::Direction>),
+}
+
+impl FaceDirections {
+    /// Six-bit mask indexed by [`crate::Direction`] ordinal (`1 << dir as u8`).
+    pub fn mask(&self) -> u8 {
+        match self {
+            Self::All => 0b0011_1111,
+            Self::Horizontal => {
+                (1 << crate::Direction::North as u8)
+                    | (1 << crate::Direction::South as u8)
+                    | (1 << crate::Direction::West as u8)
+                    | (1 << crate::Direction::East as u8)
+            }
+            Self::Vertical => {
+                (1 << crate::Direction::Down as u8) | (1 << crate::Direction::Up as u8)
+            }
+            Self::Only(dirs) => dirs.iter().fold(0u8, |acc, d| acc | (1 << *d as u8)),
+        }
+    }
+}
+
+/// Closed per-state neighbor facts named after vanilla 26.3 `BlockBehaviour.BlockStateBase`
+/// methods. Every `Some(bool)` field must match the neighbor state; `None` is unconstrained.
+// exhaustive: the closed vanilla BlockStateBase fact filter set for block face rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub struct FaceFacts {
+    /// `BlockBehaviour.BlockStateBase.isAir`.
+    pub is_air: Option<bool>,
+    /// `BlockBehaviour.BlockStateBase.canOcclude`.
+    pub can_occlude: Option<bool>,
+    /// `BlockBehaviour.BlockStateBase.isSolidRender`.
+    pub is_solid_render: Option<bool>,
+    /// `BlockBehaviour.BlockStateBase.liquid`.
+    pub liquid: Option<bool>,
+}
+
+impl FaceFacts {
+    /// Whether no fact constraints are set.
+    pub const fn is_empty(self) -> bool {
+        self.is_air.is_none()
+            && self.can_occlude.is_none()
+            && self.is_solid_render.is_none()
+            && self.liquid.is_none()
+    }
+}
+
+#[cfg(test)]
+mod face_rule_tests {
+    use super::{FaceDirections, FaceFacts, FaceNeighbor, FaceRule};
+    use crate::wire::{Reader, Wire, Writer};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn face_rule_forms_cross_wire() {
+        let rules = [
+            FaceRule::default(),
+            FaceRule {
+                neighbor: FaceNeighbor::SameBlock {
+                    state: BTreeMap::from([("axis".into(), "y".into())]),
+                },
+                state: BTreeMap::from([("half".into(), "bottom".into())]),
+                same: vec!["axis".into()],
+                faces: FaceDirections::Horizontal,
+                facts: FaceFacts {
+                    is_air: Some(false),
+                    can_occlude: Some(true),
+                    is_solid_render: None,
+                    liquid: Some(false),
+                },
+            },
+            FaceRule {
+                neighbor: FaceNeighbor::Block {
+                    id: "minecraft:glass".into(),
+                    state: BTreeMap::new(),
+                },
+                state: BTreeMap::new(),
+                same: Vec::new(),
+                faces: FaceDirections::Vertical,
+                facts: FaceFacts::default(),
+            },
+            FaceRule {
+                neighbor: FaceNeighbor::Tag {
+                    id: "minecraft:slabs".into(),
+                    state: BTreeMap::from([("type".into(), "bottom".into())]),
+                },
+                state: BTreeMap::new(),
+                same: Vec::new(),
+                faces: FaceDirections::Only(vec![crate::Direction::North, crate::Direction::Up]),
+                facts: FaceFacts::default(),
+            },
+        ];
+        for rule in rules {
+            let mut out = Writer::default();
+            rule.put(&mut out);
+            let back: FaceRule = Reader::decode(&out.into_bytes()).unwrap();
+            assert_eq!(back, rule);
+        }
+    }
 }
 
 /// A block's mob spawn rule (`BlockBehaviour.Properties.isValidSpawn`), the answer of

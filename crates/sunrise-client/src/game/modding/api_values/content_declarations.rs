@@ -95,7 +95,9 @@ impl TryIntoEngine<()> for mod_api::BlockProperties {
             instrument: self.instrument,
             ignited_by_lava: self.ignited_by_lava,
             replaceable: self.replaceable,
-            skip_same_block_faces: self.skip_same_block_faces,
+            skip_rendering: self.skip_rendering.clone(),
+            hides_neighbor_face: self.hides_neighbor_face.clone(),
+            supports_external_face_hiding: self.supports_external_face_hiding,
             spawn_rule: self.spawn_rule.map(|rule| match rule {
                 mod_api::SpawnRule::Default => engine::SpawnRule::Default,
                 mod_api::SpawnRule::Always => engine::SpawnRule::Always,

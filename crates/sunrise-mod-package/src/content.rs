@@ -196,10 +196,22 @@ pub struct BlockProperties {
     /// Whether placement and features may replace this block; the held-own-item rule still applies.
     #[serde(default, deserialize_with = "deserialize_replaceable")]
     pub replaceable: Option<bool>,
-    /// Skip faces against any state of this same block; false disables the template's render rule.
-    /// Leaf and ice graphics culling still follows the template class.
-    #[serde(default, deserialize_with = "deserialize_skip_same_block_faces")]
-    pub skip_same_block_faces: Option<bool>,
+    /// Data rules replacing vanilla `BlockBehaviour.skipRendering` for this block.
+    /// `None` inherits the template's render rule; `Some(vec![])` disables it.
+    #[serde(default, deserialize_with = "face_rules::deserialize_skip_rendering")]
+    pub skip_rendering: Option<Vec<mod_vocab::FaceRule>>,
+    /// Data rules implementing NeoForge `IBlockExtension.hidesNeighborFace`.
+    #[serde(
+        default,
+        deserialize_with = "face_rules::deserialize_hides_neighbor_face"
+    )]
+    pub hides_neighbor_face: Vec<mod_vocab::FaceRule>,
+    /// NeoForge `IBlockExtension.supportsExternalFaceHiding` (default `true`).
+    #[serde(
+        default,
+        deserialize_with = "face_rules::deserialize_supports_external_face_hiding"
+    )]
+    pub supports_external_face_hiding: Option<bool>,
     /// Which mobs may spawn on the block (`BlockBehaviour.Properties.isValidSpawn`); unset keeps
     /// the template block's rule. Set on every state of the block, from the block alone: a
     /// `dynamic_light` block's cell light and an outline declared over the template's do not
@@ -294,11 +306,6 @@ fn deserialize_replaceable<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<bool>, D::Error> {
     property_bool(d, "replaceable")
-}
-fn deserialize_skip_same_block_faces<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<bool>, D::Error> {
-    property_bool(d, "skip_same_block_faces")
 }
 
 /// Vanilla's `PushReaction`, by its constant's name.
@@ -1083,6 +1090,8 @@ pub const LIVING_TEMPLATES: [&str; 8] = [
 pub mod entity_sounds;
 mod entity_type;
 pub use entity_type::EntityType;
+mod face_rules;
+pub use face_rules::{check_face_rule_properties, parse_face_rules};
 pub mod fluid_interaction;
 pub use fluid_interaction::FluidInteraction;
 mod lenient;
@@ -2382,6 +2391,12 @@ fn check_block(file: &Block) -> Result<(), String> {
     }
     if p.sounds.as_deref().is_some_and(|s| !vanilla_id(s)) {
         return Err("sounds names a vanilla block (minecraft:...)".into());
+    }
+    if let Some(rules) = &p.skip_rendering {
+        face_rules::check_face_rules("skip_rendering", rules)?;
+    }
+    if !p.hides_neighbor_face.is_empty() {
+        face_rules::check_face_rules("hides_neighbor_face", &p.hides_neighbor_face)?;
     }
     if !file.item && !file.components.is_empty() {
         return Err("item is false, so the block has no item to take components".into());
@@ -3910,6 +3925,105 @@ capabilities = ["registries"]
             let error =
                 smod("offset-refusal", MANIFEST_TEXT, &[(file, json.as_bytes())]).unwrap_err();
             assert!(error.contains(file) && error.contains(key), "{error}");
+        }
+    }
+
+    #[test]
+    fn block_face_rules_parse_and_refuse_unknown_facts_and_directions() {
+        let json = r##"{
+            "skip_rendering": [
+                {"neighbor": "self", "same": ["axis"], "faces": "horizontal"},
+                {"neighbor": "#minecraft:slabs", "faces": ["north", "up"], "facts": {"can_occlude": false, "is_air": false}},
+                {"neighbor": {"block": "minecraft:glass", "state": {"facing": "east"}}, "state": {"half": "bottom"}, "faces": "vertical"}
+            ],
+            "hides_neighbor_face": [
+                {"neighbor": {"tag": "test:targets", "state": {"lit": "true"}}, "facts": {"is_solid_render": false, "liquid": false}}
+            ],
+            "supports_external_face_hiding": false
+        }"##;
+        let props: BlockProperties = serde_json::from_str(json).unwrap();
+        let skip = props.skip_rendering.as_ref().unwrap();
+        assert_eq!(skip.len(), 3);
+        assert_eq!(props.hides_neighbor_face.len(), 1);
+        assert_eq!(props.supports_external_face_hiding, Some(false));
+        assert!(face_rules::check_face_rules("skip_rendering", skip).is_ok());
+        assert!(
+            face_rules::check_face_rules("hides_neighbor_face", &props.hides_neighbor_face).is_ok()
+        );
+
+        assert!(
+            serde_json::from_str::<BlockProperties>(
+                r#"{"skip_rendering":[{"facts":{"blocks_motion":false}}]}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<BlockProperties>(
+                r#"{"hides_neighbor_face":[{"faces":["north","sideways"]}]}"#
+            )
+            .is_err()
+        );
+
+        use mod_vocab::{FaceNeighbor, FaceRule};
+        let bad_typed = vec![FaceRule {
+            neighbor: FaceNeighbor::Block {
+                id: "not_namespaced".into(),
+                state: BTreeMap::new(),
+            },
+            ..FaceRule::default()
+        }];
+        assert!(face_rules::check_face_rules("skip_rendering", &bad_typed).is_err());
+
+        let file = "data/ruby/sunrise/block/bad_rules.json";
+        assert!(
+            smod(
+                "bad-face-rule",
+                MANIFEST_TEXT,
+                &[(
+                    file,
+                    br#"{"template":"minecraft:stone","properties":{"skip_rendering":[{"facts":{"unknown_fact":true}}]}}"#,
+                )],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn face_rules_refuse_properties_the_block_does_not_declare() {
+        use mod_vocab::{FaceNeighbor, FaceRule};
+        let known = BTreeMap::from([(
+            "axis".to_owned(),
+            std::collections::BTreeSet::from(["x".to_owned(), "y".to_owned()]),
+        )]);
+        let rule = |state: &[(&str, &str)], same: &[&str]| FaceRule {
+            state: state
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            same: same.iter().map(|k| (*k).to_owned()).collect(),
+            ..FaceRule::default()
+        };
+        let accepted = [
+            rule(&[("axis", "x")], &["axis"]),
+            FaceRule {
+                neighbor: FaceNeighbor::Tag {
+                    id: "optional:empty".into(),
+                    state: BTreeMap::from([("elsewhere".to_owned(), "1".to_owned())]),
+                },
+                ..FaceRule::default()
+            },
+        ];
+        assert!(
+            face_rules::check_face_rule_properties("skip_rendering", &accepted, &known).is_ok()
+        );
+        for bad in [
+            rule(&[("axs", "x")], &[]),
+            rule(&[("axis", "z")], &[]),
+            rule(&[], &["axs"]),
+        ] {
+            assert!(
+                face_rules::check_face_rule_properties("skip_rendering", &[bad], &known).is_err()
+            );
         }
     }
 

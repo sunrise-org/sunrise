@@ -8559,8 +8559,13 @@ fn declared_offsets_resolve_modes_and_publish_only_declared_shape_channels() {
 #[test]
 fn plain_block_properties_replace_template_facts_and_face_rule() {
     for value in [true, false] {
+        let skip = if value {
+            r#"[{"neighbor":"self"}]"#
+        } else {
+            "[]"
+        };
         let declaration = format!(
-            r#"{{"template":"minecraft:test","item":false,"properties":{{"instrument":"CUSTOM_HEAD","ignited_by_lava":{value},"replaceable":{value},"skip_same_block_faces":{value}}}}}"#
+            r#"{{"template":"minecraft:test","item":false,"properties":{{"instrument":"CUSTOM_HEAD","ignited_by_lava":{value},"replaceable":{value},"skip_rendering":{skip}}}}}"#
         );
         let (base, mods) = block_base(&format!("plain-properties-{value}"), &[&declaration]);
         let plan = Plan::new(&base, &mods).unwrap();
@@ -8595,11 +8600,17 @@ fn plain_block_properties_replace_template_facts_and_face_rule() {
             serde_json::from_str(r#"{"minecraft:test":{"rule":"bars"}}"#).unwrap();
         plan.json("render-definitions.json", &mut definitions)
             .unwrap();
+        let expected_rules = if value {
+            J::Arr(vec![J::Obj(vec![(
+                "neighbor".into(),
+                J::Str("self".into()),
+            )])])
+        } else {
+            J::Arr(Vec::new())
+        };
         assert_eq!(
-            definitions.at("testmod:test/rule"),
-            Some(&mut J::Str(
-                if value { "same_block" } else { "never" }.into()
-            ))
+            definitions.at("testmod:test/skip_rendering"),
+            Some(&mut expected_rules.clone())
         );
         let mut behaviour: J = serde_json::from_str(
             r#"{"states":[[0,0,0,0,0,0,0,0,"HARP"],[0,0,0,0,0,0,0,0,"HARP"]],"blocks":[],"items":{}}"#,
@@ -8874,6 +8885,77 @@ fn accept_declared_refuses_host_duplicates_of_served_content_and_keeps_served_re
             "{label}: batch must be refused atomically"
         );
     }
+}
+
+/// Face rules declared in a content block's data reach the visibility table the mesher culls
+/// with, over the prepared game: `skip_rendering`, `hides_neighbor_face` and
+/// `supports_external_face_hiding` decide the face between two neighbours.
+#[test]
+#[ignore = "daily"]
+fn content_block_face_rules_reach_the_mesher_visibility() {
+    use sunrise_core::geometry::Direction;
+    use sunrise_world::registry::BlockStateId;
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("sunrise-face-rules-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let manifest_text = manifest("testmod", "");
+    let m = folder_mod(
+        &scratch.join("mod"),
+        &[
+            ("sunrise-mod.toml", manifest_text.as_str()),
+            (
+                "data/testmod/sunrise/block/self_skip.json",
+                r#"{"template":"minecraft:glass","item":false,"properties":{"occludes":false,"skip_rendering":[{"neighbor":"self"}]}}"#,
+            ),
+            (
+                "data/testmod/sunrise/block/no_skip.json",
+                r#"{"template":"minecraft:glass","item":false,"properties":{"occludes":false,"skip_rendering":[]}}"#,
+            ),
+            (
+                "data/testmod/sunrise/block/hider.json",
+                r#"{"template":"minecraft:glass","item":false,"properties":{"occludes":false,"skip_rendering":[],"hides_neighbor_face":[{"neighbor":"testmod:no_skip"},{"neighbor":"testmod:opt_out"}]}}"#,
+            ),
+            (
+                "data/testmod/sunrise/block/opt_out.json",
+                r#"{"template":"minecraft:glass","item":false,"properties":{"occludes":false,"skip_rendering":[],"supports_external_face_hiding":false}}"#,
+            ),
+        ],
+    );
+    let root = resource_root_fixture(&base, Path::new(""), &[m], &scratch.join("cache")).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let registry = assets.registry;
+    let mut visibility = crate::models::load_visibility(&root, registry).unwrap();
+    let state = |id: &str| BlockStateId(registry.default_state(id).unwrap().0);
+    let (self_skip, no_skip, hider, opt_out) = (
+        state("testmod:self_skip"),
+        state("testmod:no_skip"),
+        state("testmod:hider"),
+        state("testmod:opt_out"),
+    );
+    let mut shown = |a, b| {
+        visibility
+            .should_render_face(a, b, Direction::East, true)
+            .unwrap()
+    };
+    assert!(
+        !shown(self_skip, self_skip),
+        "skip_rendering self hides the shared face"
+    );
+    assert!(
+        shown(no_skip, no_skip),
+        "an empty skip_rendering drops glass's same-block skip"
+    );
+    assert!(
+        !shown(no_skip, hider),
+        "hides_neighbor_face hides the neighbour's face"
+    );
+    assert!(
+        shown(opt_out, hider),
+        "supports_external_face_hiding: false keeps the face"
+    );
+    let _ = fs::remove_dir_all(&scratch);
 }
 
 #[test]
