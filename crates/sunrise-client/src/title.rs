@@ -1577,7 +1577,7 @@ impl Title {
         if !stem_asked {
             let issue = if crate::save::is_old_customized_world(&dir) {
                 Some(StemIssue::Customized)
-            } else if crate::save::world_gen_unstable(&dir) {
+            } else if crate::save::world_gen_unstable(&dir, &crate::save::world_data_packs(&dir)) {
                 Some(StemIssue::Experimental)
             } else {
                 None

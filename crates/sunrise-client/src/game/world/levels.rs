@@ -914,16 +914,7 @@ impl Game<'_> {
             .unwrap_or_else(|| self.res.biomes());
         let overrides = match &self.world_tables {
             Some(tables) => tables.biomes.overrides.clone(),
-            None => {
-                super::world_loading::worldgen_overrides_of(
-                    &self.world_root,
-                    &self.options.resources,
-                    biomes,
-                    &self.level.enabled_features,
-                    &self.pack.additional_data,
-                )
-                .0
-            }
+            None => super::world_loading::worldgen_overrides_of(&self.fns.data, biomes).0,
         };
         let (streaming, save, locator) = super::world_loading::make_streaming(
             &self.res,

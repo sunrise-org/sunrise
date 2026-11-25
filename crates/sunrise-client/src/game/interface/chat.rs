@@ -3233,7 +3233,7 @@ mod enchantment_snapshot_tests {
             .tags = tags.clone();
         let item_ids = game.ui.registries.ids("minecraft:item").to_vec();
         let effects = game.ui.registries.effects.clone();
-        game.sync_function_registries(&stack);
+        game.sync_function_registries();
         for phase in [0, 1] {
             if phase == 1 {
                 game.build_registries();
@@ -3268,7 +3268,7 @@ mod enchantment_snapshot_tests {
                 .get("h024:audit")
                 .is_none()
         );
-        game.sync_function_registries(&stack);
+        game.sync_function_registries();
         assert!(
             !game
                 .ui

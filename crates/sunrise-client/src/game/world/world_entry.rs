@@ -117,13 +117,19 @@ impl Game<'_> {
             let overrides = title
                 .creation_packs()
                 .map(|(dir, packs)| {
-                    world_loading::creation_worldgen_overrides(
+                    let stack = super::functions::creation_stack(
                         dir.as_deref(),
                         &self.options.resources,
+                        &self.pack.data_source,
+                        &self.pack.data_changes,
                         &packs,
-                        self.res.biomes(),
                         &self.pack.additional_data,
+                    );
+                    world_loading::worldgen_overrides_of(
+                        &stack.data_packs(Vec::new()),
+                        self.res.biomes(),
                     )
+                    .0
                 })
                 .unwrap_or_default();
             let data_source = self.pack.data_changes.clone();
@@ -494,6 +500,7 @@ impl Game<'_> {
                 root,
                 self.pack.assets.registry,
                 stack,
+                &data,
                 &registry_overlay,
                 &read_errors,
             )?)

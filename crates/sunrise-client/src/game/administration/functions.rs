@@ -112,16 +112,60 @@ pub(super) fn pack_stack(
     enabled_features: &[String],
     additional: &[Arc<DataPack>],
 ) -> PackStack {
-    let builtin = (!vanilla_disabled)
-        .then(|| DataPack::from_source("vanilla".into(), builtin_source.clone()));
     let packs = super::pack_finders::data_repository(world_root, resources, additional);
     let enabled = datapack::enabled_ids(world_root, &packs, enabled_features);
-    PackStack {
-        content: DataPack::from_source("sunrise-content".into(), content_source.clone()),
-        builtin,
-        packs: packs.into_iter().map(Arc::new).collect(),
+    PackStack::new(
+        builtin_source,
+        content_source,
+        vanilla_disabled,
+        packs,
         enabled,
-        features: enabled_features.to_vec(),
+        enabled_features,
+    )
+}
+
+/// The packs a Create World screen has selected (`applyNewPackConfig`), found in the screen's
+/// temporary folder (`pack_dir`) and the resources root: the stack a world opened with them
+/// would have.
+pub(super) fn creation_stack(
+    pack_dir: Option<&std::path::Path>,
+    resources: &std::path::Path,
+    builtin_source: &sunrise_assets::resource_source::ResourceSource,
+    content_source: &sunrise_assets::resource_source::ResourceSource,
+    selected: &[String],
+    additional: &[Arc<DataPack>],
+) -> PackStack {
+    let packs = super::pack_finders::data_repository(
+        pack_dir.unwrap_or(std::path::Path::new("")),
+        resources,
+        additional,
+    );
+    let enabled = selected
+        .iter()
+        .filter(|id| packs.iter().any(|pack| &pack.id == *id))
+        .cloned()
+        .collect();
+    PackStack::new(builtin_source, content_source, false, packs, enabled, &[])
+}
+
+impl PackStack {
+    fn new(
+        builtin_source: &sunrise_assets::resource_source::ResourceSource,
+        content_source: &sunrise_assets::resource_source::ResourceSource,
+        vanilla_disabled: bool,
+        packs: Vec<DataPack>,
+        enabled: Vec<String>,
+        enabled_features: &[String],
+    ) -> Self {
+        let builtin = (!vanilla_disabled)
+            .then(|| DataPack::from_source("vanilla".into(), builtin_source.clone()));
+        Self {
+            content: DataPack::from_source("sunrise-content".into(), content_source.clone()),
+            builtin,
+            packs: packs.into_iter().map(Arc::new).collect(),
+            enabled,
+            features: enabled_features.to_vec(),
+        }
     }
 }
 
@@ -417,7 +461,7 @@ impl Game<'_> {
                 .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
             super::lan::sync::install_world_sync_data(wire);
         }
-        self.apply_server_reload(prepared, &stack, enabled_features);
+        self.apply_server_reload(prepared, enabled_features);
         self.run_native_advancement_grants();
         // The schedule is the world's live `TimerQueue` `SavedData`, not pack
         // content: firing an event (`TimerQueue.tick`) and `/schedule clear`
@@ -434,7 +478,7 @@ impl Game<'_> {
     /// Macro lines are parsed
     /// only after substitution, but ordinary lines in a macro file still
     /// have to compile (`CommandFunction.fromLines`).
-    pub(super) fn admit_store(&mut self, mut store: DataStore, stack: &PackStack) {
+    pub(super) fn admit_store(&mut self, mut store: DataStore) {
         // The installed candidate already selected and checked the same winners
         // gameplay uses, including the native contributions.
         if let Some(tables) = &self.world_tables {
@@ -502,7 +546,7 @@ impl Game<'_> {
             log::warn!("Sunrise: failed to load function {id}: {e}");
         }
         self.fns.store = store;
-        self.sync_function_registries(stack);
+        self.sync_function_registries();
     }
     /// The item and block tags the world's packs define, as `TagLoader` binds
     /// them into the registries before the functions compile: the item and
@@ -546,7 +590,7 @@ impl Game<'_> {
         let json = serde_json::json!({"enabled": self.fns.enabled, "disabled": disabled});
         let _ = std::fs::write(self.datapack_settings_path(), json.to_string());
     }
-    pub(super) fn sync_function_registries(&mut self, stack: &PackStack) {
+    pub(super) fn sync_function_registries(&mut self) {
         self.sync_schedule_registry();
         self.sync_enchantment_registries();
         let reg = &mut self.ui.registries;
@@ -583,8 +627,7 @@ impl Game<'_> {
         // (`command-registries.json` lists only the game's own), and so do
         // its worldgen tag ids for the `#tag` completions. The packs are the
         // ones the world's worldgen is built from.
-        let enabled: Vec<_> = stack.enabled_packs().collect();
-        let (overrides, _) = sunrise_client::datapack::worldgen_overrides(&enabled, |_| true);
+        let (overrides, _) = sunrise_client::datapack::worldgen_overrides(&self.fns.data, |_| true);
         for (bundle, registry) in [
             ("biomes", "minecraft:worldgen/biome"),
             ("structures", "minecraft:worldgen/structure"),
@@ -1590,7 +1633,7 @@ impl Game<'_> {
         self.save_datapack_settings();
         self.fns.load_pending = true;
         self.install_world_tables(world);
-        self.apply_server_reload(prepared, &stack, &self.level.enabled_features.clone());
+        self.apply_server_reload(prepared, &self.level.enabled_features.clone());
         self.run_native_advancement_grants();
         Ok(())
     }

@@ -52,9 +52,9 @@ fn dimension_is_vanilla_like(key: &str, dimension: &Tag) -> bool {
     }
 }
 
-/// The level stems the world's enabled data packs define, as `WorldOpenFlows.loadWorldStem`'s
-/// `datapackDimensions`.
-fn datapack_dimensions(world: &Path) -> Vec<(String, Tag)> {
+/// The merged view of the data packs `world` selects, for a stem check made before the world
+/// opens and its load builds its own view (`WorldOpenFlows.openWorldCheckWorldStemCompatibility`).
+pub fn world_data_packs(world: &Path) -> crate::datapack::DataPacks {
     let packs = crate::datapack::discover(world);
     let enabled_features = Level::read(world)
         .map(|l| l.enabled_features)
@@ -64,7 +64,13 @@ fn datapack_dimensions(world: &Path) -> Vec<(String, Tag)> {
         .iter()
         .filter_map(|id| packs.iter().find(|p| &p.id == id))
         .collect();
-    crate::datapack::dimension_stems(&enabled)
+    crate::datapack::DataPacks::new(&enabled)
+}
+
+/// The level stems the world's enabled data packs define, as `WorldOpenFlows.loadWorldStem`'s
+/// `datapackDimensions`.
+fn datapack_dimensions(data: &crate::datapack::DataPacks) -> Vec<(String, Tag)> {
+    crate::datapack::dimension_stems(data)
         .into_iter()
         .map(|(id, json)| (id, json_tag(&json)))
         .collect()
@@ -72,12 +78,12 @@ fn datapack_dimensions(world: &Path) -> Vec<(String, Tag)> {
 /// `data.worldGenSettingsLifecycle() != Lifecycle.stable()` (`WorldDimensions.bake`): the known
 /// dimensions (the saved ones and the enabled data packs', a pack's replacing the saved one of
 /// its id) lack one of the three builtin ones, or have one that is not the vanilla one.
-pub fn world_gen_unstable(world: &Path) -> bool {
+pub fn world_gen_unstable(world: &Path, data: &crate::datapack::DataPacks) -> bool {
     let saved = world_gen_settings(world)
         .as_ref()
         .and_then(|s| s.get("dimensions"))
         .cloned();
-    let stems = datapack_dimensions(world);
+    let stems = datapack_dimensions(data);
     if saved.is_none() && stems.is_empty() {
         return false;
     }

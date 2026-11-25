@@ -1601,38 +1601,31 @@ pub fn selected_ids<'a>(
         .collect()
 }
 
-/// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
-/// as `enabled_ids` orders them): the id `namespace:path` and the parsed JSON, a later pack's
-/// file for an id replacing an earlier one's. This is `context.datapackDimensions()` of
-/// `WorldOpenFlows.loadWorldStem`.
-pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Value> {
+/// The level stems of the merged view (`data/<namespace>/dimension/<path>.json`, the winning
+/// copy of each name): the id `namespace:path` and the parsed JSON. This is
+/// `context.datapackDimensions()` of `WorldOpenFlows.loadWorldStem`.
+pub fn dimension_stems(data: &DataPacks) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
-    for pack in packs {
-        for file in pack.list_kinds(&["dimension"]) {
-            let Some(rest) = file.strip_prefix("data/") else {
-                continue;
-            };
-            let Some((namespace, rest)) = rest.split_once('/') else {
-                continue;
-            };
-            let Some(path) = rest
-                .strip_prefix("dimension/")
-                .and_then(|p| p.strip_suffix(".json"))
-            else {
-                continue;
-            };
-            // An id that is no safe folder name (`..`, an empty segment) would open a level
-            // outside the world's `dimensions` folder.
-            let id = format!("{namespace}:{path}");
-            if !sunrise_core::level_id::valid_level_id(&id) {
-                continue;
-            }
-            if let Some(json) = pack
-                .read(&file)
-                .and_then(|b| serde_json::from_slice(&b).ok())
-            {
-                out.insert(id, json);
-            }
+    for name in data.list("dimension", ".json") {
+        let Some(path) = name
+            .path()
+            .strip_prefix("dimension/")
+            .and_then(|p| p.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        // An id that is no safe folder name (`..`, an empty segment) would open a level
+        // outside the world's `dimensions` folder.
+        let id = format!("{}:{path}", name.namespace());
+        if !sunrise_core::level_id::valid_level_id(&id) {
+            continue;
+        }
+        if let Some(json) = data
+            .read(&name)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+        {
+            out.insert(id, json);
         }
     }
     out
@@ -1640,22 +1633,22 @@ pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Valu
 
 // ---- worldgen ----------------------------------------------------------------
 
-/// The worldgen entries of `packs` (lowest priority first, the built-in pack
-/// left out: the prepared bundles are it) for the chunk generator, and what
-/// it leaves out, for the log. `biomes` says which biomes the game has: a
-/// pack's new biome is left out (the game has no colours, sounds or id for it).
+/// The worldgen entries of the merged view `data` (every layer but the prepared root,
+/// `vanilla`: the prepared bundles are it) for the chunk generator, and what it leaves out, for
+/// the log. `biomes` says which biomes the game has: a pack's new biome is left out (the game
+/// has no colours, sounds or id for it).
 pub fn worldgen_overrides(
-    packs: &[&DataPack],
+    data: &DataPacks,
     biomes: impl Fn(&str) -> bool,
 ) -> (WorldgenOverrides, Vec<String>) {
-    worldgen_overrides_over(overrides::mod_dimensions(), packs, biomes)
+    worldgen_overrides_over(overrides::mod_dimensions(), data, biomes)
 }
 
 /// [`worldgen_overrides`] over the levels `mods` registered, which sit below
 /// every pack.
 pub fn worldgen_overrides_over(
     mods: &[overrides::ModDimension],
-    packs: &[&DataPack],
+    data: &DataPacks,
     biomes: impl Fn(&str) -> bool,
 ) -> (WorldgenOverrides, Vec<String>) {
     let mut out = WorldgenOverrides::default();
@@ -1664,22 +1657,26 @@ pub fn worldgen_overrides_over(
     }
     let mut not_read: BTreeMap<String, usize> = BTreeMap::new();
     let mut warnings = Vec::new();
-    for pack in packs {
-        for file in pack.list_kinds(&overrides::PACK_KINDS) {
-            if let Some(id) = overrides::template_id(&file) {
-                out.set_template(
-                    id,
-                    sunrise_assets::resource_source::Resource::file(pack.source.clone(), file),
-                );
-                continue;
-            }
-            let read = || String::from_utf8(pack.read(&file)?).ok();
-            match out.add_file(&pack.id, &file, read) {
-                PackFile::Read | PackFile::Other => {}
-                PackFile::NotRead(kind) => {
-                    *not_read.entry(format!("{}: {kind}", pack.id)).or_default() += 1
+    for folder in overrides::PACK_KINDS {
+        for id in data.list(folder, "") {
+            let file = DataPacks::name(&id);
+            // `getResourceStack`: every copy, lowest layer first, so tags merge in layer order.
+            for (layer, resource) in data.stack(&id) {
+                if layer == "vanilla" {
+                    continue;
                 }
-                PackFile::Unreadable => warnings.push(format!("{}: {file}: unreadable", pack.id)),
+                if let Some(template) = overrides::template_id(&file) {
+                    out.set_template(template, resource);
+                    continue;
+                }
+                let read = || String::from_utf8(resource.read().ok()?).ok();
+                match out.add_file(layer, &file, read) {
+                    PackFile::Read | PackFile::Other => {}
+                    PackFile::NotRead(kind) => {
+                        *not_read.entry(format!("{layer}: {kind}")).or_default() += 1
+                    }
+                    PackFile::Unreadable => warnings.push(format!("{layer}: {file}: unreadable")),
+                }
             }
         }
     }
@@ -2019,9 +2016,44 @@ mod tests {
         .unwrap();
         let packs = discover(&dir);
         let refs: Vec<&DataPack> = packs.iter().collect();
-        let ids: Vec<String> = dimension_stems(&refs).into_keys().collect();
+        let ids: Vec<String> = dimension_stems(&DataPacks::new(&refs))
+            .into_keys()
+            .collect();
         assert_eq!(ids, ["test:a/b", "test:pocket"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_filter_hides_a_lower_packs_worldgen_file_from_the_generator() {
+        let low = memory_pack(
+            "low",
+            &[
+                ("data/test/worldgen/noise/hidden.json", "{\"low\":1}"),
+                ("data/test/worldgen/noise/kept.json", "{\"low\":2}"),
+                ("data/test/dimension/hidden.json", "{}"),
+            ],
+        );
+        let meta = serde_json::json!({"filter": {"block": [
+            {"namespace": "^test$", "path": "^(worldgen/noise|dimension)/hidden[.]json$"},
+        ]}});
+        let high = memory_pack("high", &[]).with_filter(filter_of(&meta));
+        let data = DataPacks::new(&[&low, &high]);
+        let (o, warnings) = worldgen_overrides_over(&[], &data, |_| true);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            o.entries("noises").collect::<Vec<_>>(),
+            [("test:kept", "{\"low\":2}")]
+        );
+        assert!(dimension_stems(&data).is_empty());
+        let unfiltered = DataPacks::new(&[&low]);
+        assert_eq!(
+            worldgen_overrides_over(&[], &unfiltered, |_| true)
+                .0
+                .entries("noises")
+                .count(),
+            2
+        );
+        assert_eq!(dimension_stems(&unfiltered).len(), 1);
     }
 
     #[test]
@@ -2049,7 +2081,7 @@ mod tests {
             sea_level: None,
         }];
         let height = |packs: &[&DataPack]| {
-            let (o, _) = worldgen_overrides_over(&mods, packs, |_| true);
+            let (o, _) = worldgen_overrides_over(&mods, &DataPacks::new(packs), |_| true);
             o.level_height("test:pocket").unwrap().height
         };
         assert_eq!(height(&[]), 448);
@@ -2129,12 +2161,12 @@ mod tests {
         write_archive(2);
         let old =
             DataPack::from_source("passive".into(), ResourceSource::archive(&archive).unwrap());
-        let (before, warnings) = worldgen_overrides(&[&old], |_| true);
+        let (before, warnings) = worldgen_overrides(&DataPacks::new(&[&old]), |_| true);
         assert!(warnings.is_empty(), "{warnings:?}");
         write_archive(5);
         let new =
             DataPack::from_source("passive".into(), ResourceSource::archive(&archive).unwrap());
-        let (after, warnings) = worldgen_overrides(&[&new], |_| true);
+        let (after, warnings) = worldgen_overrides(&DataPacks::new(&[&new]), |_| true);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_ne!(
             before, after,
@@ -2420,7 +2452,8 @@ mod tests {
             .iter()
             .map(|id| packs.iter().find(|p| &p.id == id).unwrap())
             .collect();
-        let (o, warnings) = worldgen_overrides(&enabled, |b| b == "minecraft:plains");
+        let (o, warnings) =
+            worldgen_overrides(&DataPacks::new(&enabled), |b| b == "minecraft:plains");
         assert_eq!(
             o.entries("noises").collect::<Vec<_>>(),
             [("minecraft:cave", "a")]

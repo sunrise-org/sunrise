@@ -101,7 +101,6 @@ impl Game<'_> {
     pub(super) fn apply_server_reload(
         &mut self,
         prepared: PreparedServerReload,
-        stack: &PackStack,
         enabled_features: &[String],
     ) {
         let skipped = apply_listeners(
@@ -110,7 +109,7 @@ impl Game<'_> {
             "server_reload_apply",
             |store| {
                 self.build_native_commands(enabled_features);
-                self.admit_store(*store, stack);
+                self.admit_store(*store);
                 Ok::<_, std::convert::Infallible>(())
             },
         )

@@ -295,6 +295,7 @@ pub(super) fn load_core(
                     world_loading::preload_launch_world(
                         folder,
                         root,
+                        resources.data(),
                         resources.data_changes(),
                         registry,
                         biomes.clone(),
@@ -895,6 +896,7 @@ pub(super) fn load_resources_for_mods_with_limit(
         world_loading::preload_launch_world(
             folder,
             &root,
+            resolved.data(),
             resolved.data_changes(),
             assets.registry,
             biomes.clone(),

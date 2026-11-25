@@ -4301,13 +4301,13 @@ fn world_stem_compatibility_flags_unstable_and_customized_worlds() {
             },
         )
         .unwrap();
-        assert!(!world_gen_unstable(&dir), "{preset:?}");
+        assert!(!unstable(&dir), "{preset:?}");
         assert!(!is_old_customized_world(&dir));
         let _ = fs::remove_dir_all(dir);
     }
     // Without world_gen_settings there is nothing to ask about.
     let dir = gen_world("stem-none");
-    assert!(!world_gen_unstable(&dir) && !is_old_customized_world(&dir));
+    assert!(!unstable(&dir) && !is_old_customized_world(&dir));
     let _ = fs::remove_dir_all(dir);
 
     let dir = gen_world("stem-edit");
@@ -4330,13 +4330,13 @@ fn world_stem_compatibility_flags_unstable_and_customized_worlds() {
             ("biome", string("minecraft:plains")),
         ]);
     });
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     // The End on another dimension type.
     edit(&|tag| {
         let end = dimension(tag, "minecraft:the_end");
         *end.get_mut("type").unwrap() = string("minecraft:overworld");
     });
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     // Another noise settings in the Overworld is fine (amplified), in the Nether it is not.
     edit(&|tag| {
         let nether = dimension(tag, "minecraft:the_nether");
@@ -4346,7 +4346,7 @@ fn world_stem_compatibility_flags_unstable_and_customized_worlds() {
             .get_mut("settings")
             .unwrap() = string("minecraft:overworld");
     });
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     // A fourth dimension, and a missing builtin one.
     edit(&|tag| {
         if let Some(Tag::Compound(dimensions)) = tag.get_mut("dimensions") {
@@ -4354,13 +4354,13 @@ fn world_stem_compatibility_flags_unstable_and_customized_worlds() {
             dimensions.insert("mypack:moon".into(), end);
         }
     });
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     edit(&|tag| {
         if let Some(Tag::Compound(dimensions)) = tag.get_mut("dimensions") {
             dimensions.remove(&"minecraft:the_end".into());
         }
     });
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     // legacy_custom_options marks an old customized world.
     edit(&|tag| {
         if let Tag::Compound(map) = tag {
@@ -4377,7 +4377,7 @@ fn world_stem_compatibility_flags_unstable_and_customized_worlds() {
 fn world_stem_compatibility_reads_data_pack_dimensions() {
     let dir = gen_world("stem-datapack");
     write_world_gen_settings(&dir, 7, WorldGen::default()).unwrap();
-    assert!(!world_gen_unstable(&dir));
+    assert!(!unstable(&dir));
     let write = |pack: &str, file: &str, text: &str| {
         let path = dir.join("datapacks").join(pack).join(file);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -4390,27 +4390,27 @@ fn world_stem_compatibility_reads_data_pack_dimensions() {
         "data/mypack/dimension/moon.json",
         r#"{"type":"minecraft:the_end","generator":{"type":"minecraft:noise","settings":"minecraft:end","biome_source":{"type":"minecraft:the_end"}}}"#,
     );
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     // Disabled, it counts for nothing.
     fs::write(dir.join("datapacks.json"), r#"{"disabled":["file/p"]}"#).unwrap();
-    assert!(!world_gen_unstable(&dir));
+    assert!(!unstable(&dir));
     fs::remove_file(dir.join("datapacks.json")).unwrap();
     fs::remove_file(dir.join("datapacks/p/data/mypack/dimension/moon.json")).unwrap();
-    assert!(!world_gen_unstable(&dir));
+    assert!(!unstable(&dir));
     // A pack's Nether with another biome source replaces the saved vanilla one.
     write(
         "p",
         "data/minecraft/dimension/the_nether.json",
         r#"{"type":"minecraft:the_nether","generator":{"type":"minecraft:noise","settings":"minecraft:nether","biome_source":{"type":"minecraft:fixed","biome":"minecraft:plains"}}}"#,
     );
-    assert!(world_gen_unstable(&dir));
+    assert!(unstable(&dir));
     // And a vanilla-like one stays stable.
     write(
         "p",
         "data/minecraft/dimension/the_nether.json",
         r#"{"type":"minecraft:the_nether","generator":{"type":"minecraft:noise","settings":"minecraft:nether","biome_source":{"type":"minecraft:multi_noise","preset":"minecraft:nether"}}}"#,
     );
-    assert!(!world_gen_unstable(&dir));
+    assert!(!unstable(&dir));
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -4444,7 +4444,7 @@ fn world_gen_settings_of_a_world_needing_file_fixes_are_read_in_memory() {
     assert!(needs_file_fixes(&dir));
     let read = world_gen_settings(&dir).expect("settings");
     assert!(read.get("dimensions").is_some());
-    assert!(!world_gen_unstable(&dir));
+    assert!(!unstable(&dir));
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -5213,4 +5213,9 @@ fn a_chunk_from_before_1_17_loads_the_entities_it_keeps() {
     // There is no `entities/` record for it: these are all it has.
     assert!(save.load_entities(0, 0).unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&world);
+}
+
+/// `world_gen_unstable` over the view of the packs the world selects.
+fn unstable(world: &Path) -> bool {
+    world_gen_unstable(world, &world_data_packs(world))
 }
