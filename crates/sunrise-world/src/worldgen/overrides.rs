@@ -22,9 +22,22 @@ pub const DIMENSION_TYPES: &str = "dimension_types";
 /// The bundle of `worldgen/noise_settings/<id>.json` noise generator settings.
 pub const NOISE_SETTINGS: &str = "settings";
 
+/// The bundle of `worldgen/flat_level_generator_preset/<id>.json` flat presets.
+/// Nothing prepared has it: the vanilla ones are files of the resource root.
+pub const FLAT_PRESETS: &str = "flat_presets";
+/// The bundle of `worldgen/multi_noise_biome_source_parameter_list/<id>.json`
+/// parameter lists: each file is `{"preset": <built-in preset>}`, not a table.
+/// Nothing prepared has it: the built-in presets' tables are the `presets` bundle.
+pub const PARAMETER_LISTS: &str = "parameter_lists";
+/// The tag bundle of `tags/worldgen/world_preset/` (`WorldPresetTags`).
+pub const WORLD_PRESET_TAGS: &str = "world_preset_tags";
+/// The tag bundle of `tags/worldgen/flat_level_generator_preset/`
+/// (`FlatLevelGeneratorPresetTags`).
+pub const FLAT_PRESET_TAGS: &str = "flat_preset_tags";
+
 /// Pack folders (`data/<ns>/<kind>/`) the chunk generator reads, and the
 /// bundle each joins.
-const KINDS: [(&str, &str); 16] = [
+const KINDS: [(&str, &str); 19] = [
     ("dimension", DIMENSIONS),
     ("dimension_type", DIMENSION_TYPES),
     ("worldgen/biome", "biomes"),
@@ -42,14 +55,25 @@ const KINDS: [(&str, &str); 16] = [
     ("worldgen/structure", "structures"),
     ("worldgen/structure_set", "structure_sets"),
     ("worldgen/template_pool", "template_pools"),
+    ("worldgen/world_preset", "world_presets"),
+    ("worldgen/flat_level_generator_preset", FLAT_PRESETS),
+    (
+        "worldgen/multi_noise_biome_source_parameter_list",
+        PARAMETER_LISTS,
+    ),
 ];
 /// Tag folders the chunk generator reads, and the tag bundle each joins.
-const TAG_KINDS: [(&str, &str); 5] = [
+const TAG_KINDS: [(&str, &str); 7] = [
     ("tags/block", "block_tags"),
     ("tags/fluid", "fluid_tags"),
     ("tags/worldgen/biome", "biome_tags"),
     ("tags/worldgen/carver", "carver_tags"),
     ("tags/worldgen/placed_feature", "placed_feature_tags"),
+    ("tags/worldgen/world_preset", WORLD_PRESET_TAGS),
+    (
+        "tags/worldgen/flat_level_generator_preset",
+        FLAT_PRESET_TAGS,
+    ),
 ];
 /// The pack folders the worldgen resolver reads, in walk order.
 pub const PACK_KINDS: [&str; 5] = [
@@ -682,8 +706,33 @@ mod tests {
             PackFile::NotRead("worldgen/configured_carver".into())
         );
         assert_eq!(
-            add("data/minecraft/worldgen/world_preset/normal.json", "{}"),
-            PackFile::NotRead("worldgen/world_preset".into())
+            add("data/minecraft/worldgen/world_preset/normal.json", "9"),
+            PackFile::Read
+        );
+        assert_eq!(
+            add(
+                "data/p/worldgen/flat_level_generator_preset/islands.json",
+                "10"
+            ),
+            PackFile::Read
+        );
+        assert_eq!(
+            add(
+                "data/p/worldgen/multi_noise_biome_source_parameter_list/mine.json",
+                "11"
+            ),
+            PackFile::Read
+        );
+        assert_eq!(
+            add(
+                "data/p/tags/worldgen/flat_level_generator_preset/visible.json",
+                "{}"
+            ),
+            PackFile::Read
+        );
+        assert_eq!(
+            add("data/minecraft/tags/worldgen/structure/village.json", "{}"),
+            PackFile::NotRead("tags/worldgen/structure".into())
         );
         assert_eq!(add("data/p/function/f.mcfunction", ""), PackFile::Other);
         assert_eq!(
@@ -699,6 +748,9 @@ mod tests {
         assert_eq!(get("carvers"), [("minecraft:cave", "6")]);
         assert_eq!(get("features"), [("minecraft:water_delta", "7")]);
         assert_eq!(get("state_providers"), [("p:stony_cliffs", "8")]);
+        assert_eq!(get("world_presets"), [("minecraft:normal", "9")]);
+        assert_eq!(get(FLAT_PRESETS), [("p:islands", "10")]);
+        assert_eq!(get(PARAMETER_LISTS), [("p:mine", "11")]);
         assert_eq!(get("structures"), []);
         assert_eq!(o.tags("biome_tags").count(), 1);
     }

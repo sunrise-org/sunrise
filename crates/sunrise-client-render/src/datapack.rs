@@ -2425,7 +2425,7 @@ mod tests {
         write("a", "data/minecraft/worldgen/biome/plains.json", "{}");
         write(
             "a",
-            "data/minecraft/worldgen/world_preset/normal.json",
+            "data/minecraft/tags/worldgen/structure/village.json",
             "{}",
         );
         write(
@@ -2460,7 +2460,7 @@ mod tests {
         let tag_packs: Vec<&str> = o.tags("biome_tags").map(|(_, p, _)| p).collect();
         assert_eq!(tag_packs, ["file/b", "file/a"]);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("worldgen/world_preset"));
+        assert!(warnings[0].contains("tags/worldgen/structure"));
         assert_eq!(
             o.level_height("minecraft:overworld").map(|h| h.height),
             Some(2096)

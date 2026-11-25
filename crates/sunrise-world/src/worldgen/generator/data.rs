@@ -348,6 +348,22 @@ fn load_biome_sources(
                 .or_insert(quantize_parameter_report(&fs::read_to_string(&path)?)?);
         }
     }
+    // A parameter list file names one of the two built-in presets
+    // (`MultiNoiseBiomeSourceParameterList.Preset.CODEC`) and gives its table to the
+    // list's id, whichever tables the other lists hold.
+    let built_in = presets.clone();
+    for (id, json) in ov.entries(overrides::PARAMETER_LISTS) {
+        let list: Value = serde_json::from_str(json)?;
+        let preset = list["preset"]
+            .as_str()
+            .and_then(|name| super::super::density::identifier(name).ok())
+            .filter(|name| matches!(name.as_str(), "minecraft:overworld" | "minecraft:nether"))
+            .ok_or_else(|| resource(format!("parameter list {id}: unknown preset")))?;
+        let table = built_in
+            .get(&preset)
+            .ok_or_else(|| resource(format!("parameter list {id}: no table for {preset}")))?;
+        presets.insert(id.to_owned(), table.clone());
+    }
     let source_catalog =
         BiomeSourceCatalog::new(&biome_set, &biome_tags, &presets.keys().cloned().collect())?;
     Ok((biomes, biome_tags, presets, source_catalog))

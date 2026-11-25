@@ -2834,7 +2834,10 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             ) if options.custom_preset.is_none()
                 && options.world_type == crate::save::WorldPreset::Flat =>
             {
-                let flat = flat::State::new(&self.resources, options.flat_settings.clone());
+                let overrides =
+                    options.selected_overrides(&self.resources, self.preset_data.as_deref());
+                let flat =
+                    flat::State::new(&self.resources, options.flat_settings.clone(), &overrides);
                 let mode = Mode::CreateFlat {
                     name: name.clone(),
                     seed: seed.clone(),

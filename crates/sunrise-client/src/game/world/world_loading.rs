@@ -1936,6 +1936,149 @@ mod tests {
         });
     }
 
+    /// The biome names of the first chunk of the overworld a world with the data pack `files`
+    /// (path under the pack, text) generates, one per quarter of the chunk at sea level.
+    fn overworld_biomes_with_pack(files: &[(&str, &str)]) -> Vec<String> {
+        use crate::game::native_entity_refs::tests::with_game;
+        use std::fs;
+        use sunrise_client::chunk::LevelShape;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pack = root.join("datapacks/preset");
+        let write = |path: &str, text: &str| {
+            let path = pack.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        write(
+            "pack.mcmeta",
+            r#"{"pack":{"description":"Preset fixture","min_format":[121,0],"max_format":[121,0]}}"#,
+        );
+        fs::write(
+            root.join("datapacks.json"),
+            r#"{"enabled":["vanilla","file/preset"],"disabled":[]}"#,
+        )
+        .unwrap();
+        for (path, text) in files {
+            write(path, text);
+        }
+        let mut names = Vec::new();
+        with_game(|game| {
+            let empty =
+                sunrise_assets::resource_source::ResourceSource::indexed(Default::default());
+            let stack = super::functions::pack_stack(
+                root,
+                &game.options.resources,
+                &empty,
+                &empty,
+                false,
+                &game.level.enabled_features,
+                &game.pack.additional_data,
+            );
+            let data = stack.data_packs(Vec::new());
+            let (overrides, _) = worldgen_overrides_of(&data);
+            let packed: Vec<(String, serde_json::Value)> = overrides
+                .entries("biomes")
+                .filter_map(|(id, json)| Some((id.to_owned(), serde_json::from_str(json).ok()?)))
+                .collect();
+            let biomes = Arc::new(
+                game.res
+                    .biomes()
+                    .with_packs(packed.iter().map(|(i, v)| (i.as_str(), v)))
+                    .unwrap(),
+            );
+            let shape = LevelShape::OVERWORLD;
+            let (mut streaming, _, _) = make_streaming(
+                &game.res,
+                &game.pack,
+                &game.options,
+                &game.settings,
+                root,
+                Dim::Overworld,
+                shape,
+                7,
+                &game.level,
+                biomes.clone(),
+                &overrides,
+                None,
+                game.save.chunk_reports().clone(),
+                game.save.save_failure_reporter().clone(),
+            )
+            .unwrap();
+            let mut world = World::new(game.res.facts().air, 7);
+            world.shape = shape;
+            assert!(streaming.set_forced_loaded(&mut world, 0, 0, true));
+            let chunk = &world.chunks[&(0, 0)];
+            names = [0, 5, 10, 15]
+                .into_iter()
+                .map(|x| biomes.saved_name(chunk.biome(x, 64, x)).into_owned())
+                .collect();
+        });
+        names
+    }
+
+    /// A pack's file for `minecraft:normal` is the world preset a world created with the default
+    /// preset generates (`RegistryDataLoader` over `WORLD_REGISTRIES`: `world_preset`).
+    #[test]
+    #[ignore = "daily"]
+    fn a_pack_world_preset_replaces_the_default_presets_overworld() {
+        const CASE: &str = "SUNRISE_PRESET_WORLD_CASE";
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::world_loading::tests::a_pack_world_preset_replaces_the_default_presets_overworld",
+            CASE,
+            &["overworld"],
+        ) {
+            return;
+        }
+        let names = overworld_biomes_with_pack(&[(
+            "data/minecraft/worldgen/world_preset/normal.json",
+            r#"{"dimensions":{"minecraft:overworld":{"type":"minecraft:overworld","generator":{
+            "type":"minecraft:noise","settings":"minecraft:overworld",
+            "biome_source":{"type":"minecraft:fixed","biome":"minecraft:cherry_grove"}}}}}"#,
+        )]);
+        assert_eq!(names, ["minecraft:cherry_grove"; 4]);
+    }
+
+    /// A level stem that names a pack's multi-noise parameter list takes the table of the
+    /// built-in preset the list's file names (`MultiNoiseBiomeSourceParameterList`): here the
+    /// Nether's, so the overworld generates Nether biomes.
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_stem_naming_a_pack_parameter_list_generates_per_that_list() {
+        const CASE: &str = "SUNRISE_PARAMETER_LIST_WORLD_CASE";
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::world_loading::tests::a_level_stem_naming_a_pack_parameter_list_generates_per_that_list",
+            CASE,
+            &["overworld"],
+        ) {
+            return;
+        }
+        let names = overworld_biomes_with_pack(&[
+            (
+                "data/test/worldgen/multi_noise_biome_source_parameter_list/mine.json",
+                r#"{"preset":"minecraft:nether"}"#,
+            ),
+            (
+                "data/minecraft/dimension/overworld.json",
+                r#"{"type":"minecraft:overworld","generator":{"type":"minecraft:noise",
+                "settings":"minecraft:overworld",
+                "biome_source":{"type":"minecraft:multi_noise","preset":"test:mine"}}}"#,
+            ),
+        ]);
+        let nether = [
+            "minecraft:nether_wastes",
+            "minecraft:soul_sand_valley",
+            "minecraft:crimson_forest",
+            "minecraft:warped_forest",
+            "minecraft:basalt_deltas",
+        ];
+        assert!(
+            names.iter().all(|name| nether.contains(&name.as_str())),
+            "{names:?}"
+        );
+    }
+
     /// A world whose level.dat does not read but whose level.dat_old does: only the
     /// dedicated server restores it unasked. Every role here carries the launch configuration
     /// (`options.dedicated`) a dedicated server and the integrated server thread both have, so
