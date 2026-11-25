@@ -435,44 +435,40 @@ impl PackRegistryDefinitions {
                     .map(|((namespace, path), ..)| format!("{namespace}:{path}")),
             )
             .collect();
-        if definitions.entries.contains_key("minecraft:timeline") {
-            if let Some(entries) = definitions.entries.get_mut("minecraft:timeline") {
-                let mut rejected = Vec::new();
-                let mut valid_timelines: Vec<(String, (String, String), Arc<Timeline>)> =
-                    Vec::new();
-                for (key, entry) in entries.iter() {
-                    let Some((Definition::Timeline(timeline, _), _)) = entry.as_ref() else {
-                        continue;
-                    };
-                    let id = format!("{}:{}", key.0, key.1);
-                    if !held_clocks.contains(&timeline.clock) {
-                        errors
-                            .entry("minecraft:timeline")
-                            .or_default()
-                            .insert(id, format!("unknown world_clock {}", timeline.clock));
-                        rejected.push(key.clone());
-                    } else {
-                        valid_timelines.push((id, key.clone(), Arc::clone(timeline)));
-                    }
-                }
-                let duplicate_errors = Timeline::validate_registry(
-                    valid_timelines
-                        .iter()
-                        .map(|(id, _, timeline)| (id.as_str(), timeline.as_ref())),
-                );
-                for (id, error) in duplicate_errors {
+        if let Some(entries) = definitions.entries.get_mut("minecraft:timeline") {
+            let mut rejected = Vec::new();
+            let mut valid_timelines: Vec<(String, (String, String), Arc<Timeline>)> = Vec::new();
+            for (key, entry) in entries.iter() {
+                let Some((Definition::Timeline(timeline, _), _)) = entry.as_ref() else {
+                    continue;
+                };
+                let id = format!("{}:{}", key.0, key.1);
+                if !held_clocks.contains(&timeline.clock) {
                     errors
                         .entry("minecraft:timeline")
                         .or_default()
-                        .insert(id.clone(), error);
-                    if let Some((_, key, _)) = valid_timelines.iter().find(|(tid, _, _)| *tid == id)
-                    {
-                        rejected.push(key.clone());
-                    }
+                        .insert(id, format!("unknown world_clock {}", timeline.clock));
+                    rejected.push(key.clone());
+                } else {
+                    valid_timelines.push((id, key.clone(), Arc::clone(timeline)));
                 }
-                for key in rejected {
-                    entries.insert(key, None);
+            }
+            let duplicate_errors = Timeline::validate_registry(
+                valid_timelines
+                    .iter()
+                    .map(|(id, _, timeline)| (id.as_str(), timeline.as_ref())),
+            );
+            for (id, error) in duplicate_errors {
+                errors
+                    .entry("minecraft:timeline")
+                    .or_default()
+                    .insert(id.clone(), error);
+                if let Some((_, key, _)) = valid_timelines.iter().find(|(tid, _, _)| *tid == id) {
+                    rejected.push(key.clone());
                 }
+            }
+            for key in rejected {
+                entries.insert(key, None);
             }
         }
         // RegistryDataLoader.validateRegistry: every test_environment, world_clock and timeline
