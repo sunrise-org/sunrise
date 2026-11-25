@@ -3372,6 +3372,58 @@ mod namespace_tests {
         assert!(!data.in_tag("item", "minecraft:food", "minecraft:kelp"));
         let _ = fs::remove_dir_all(&root);
     }
+    /// A world pack's tag file (no `replace`, one optional entry that is not in the registry)
+    /// joins the tag the game's own files define, for every registry `load_table_candidate` binds
+    /// from files: the optional miss drops, the rest keep their layer order (`TagLoader.build`).
+    #[test]
+    fn pack_tag_files_reach_the_loot_readers_of_five_registries() {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-loot-pack-tags-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let members = [
+            ("predicate", r#"{"type": "minecraft:survives_explosion"}"#),
+            ("item_modifier", r#"{"type": "minecraft:explosion_decay"}"#),
+            (
+                "enchantment",
+                r#"{"supported_items": "minecraft:stick", "max_level": 1}"#,
+            ),
+            ("instrument", "{}"),
+            ("worldgen/biome", "{}"),
+        ];
+        let mut overlay_files = Vec::new();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("items.json"), r#"{"minecraft:stick": {}}"#).unwrap();
+        for (registry, body) in members {
+            for name in ["a", "b"] {
+                let path = root.join(format!("data/test/{registry}/{name}.json"));
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, body).unwrap();
+            }
+            let path = root.join(format!("data/test/tags/{registry}/t.json"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, r#"{"values": ["test:a"]}"#).unwrap();
+            overlay_files.push((
+                format!("tags/test:{registry}/t"),
+                vec![
+                    br#"{"values": ["test:b", {"id": "test:ghost", "required": false}]}"#.to_vec(),
+                ],
+            ));
+        }
+        let overlay = PackOverlay {
+            files: &overlay_files,
+            ..PackOverlay::default()
+        };
+        let defaults = crate::item_defaults::read(&root).unwrap();
+        let data = LootData::load(&root, &overlay, &defaults).unwrap();
+        for (registry, _) in members {
+            assert_eq!(
+                data.tag(registry, "test:t"),
+                ["test:a", "test:b"],
+                "{registry}"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
     /// `ToggleTooltips`: a loot table's toggles show the components an earlier
     /// display hid and hide the ones it shows; the item layer reads the
     /// `minecraft:tooltip_display` component back for its tooltip.

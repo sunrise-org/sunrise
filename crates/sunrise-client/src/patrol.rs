@@ -387,7 +387,10 @@ mod tag_cycle_tests {
         assert!(value(&attributes(&[])));
         let files = [(
             "tags/minecraft:timeline/from_pack".to_owned(),
-            vec![br#"{"values":["minecraft:blocked"]}"#.to_vec()],
+            vec![
+                br#"{"values":["minecraft:blocked",{"id":"minecraft:absent","required":false}]}"#
+                    .to_vec(),
+            ],
         )];
         assert!(!value(&attributes(&files)));
     }

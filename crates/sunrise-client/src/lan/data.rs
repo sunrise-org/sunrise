@@ -2253,6 +2253,39 @@ mod tests {
         }
     }
 
+    /// The tags the world open binds for the registries it reads through `registry_tag_bindings`
+    /// (biome, structure, timeline, dialog): two pack layers of one tag, neither `replace`, the
+    /// second with an optional entry the registry lacks, give the held members in layer order.
+    #[test]
+    fn pack_tag_layers_bind_for_biome_structure_timeline_and_dialog() {
+        let root = tempfile::tempdir().unwrap();
+        let files: Vec<_> = ["worldgen/biome", "worldgen/structure", "timeline", "dialog"]
+            .into_iter()
+            .map(|kind| {
+                (
+                    format!("tags/test:{kind}/t"),
+                    vec![
+                        br#"{"values":["test:a"]}"#.to_vec(),
+                        br#"{"values":["test:b",{"id":"test:ghost","required":false}]}"#.to_vec(),
+                    ],
+                )
+            })
+            .collect();
+        let overlay = sunrise_world::loot::PackOverlay::new(&files);
+        for registry in [
+            "minecraft:worldgen/biome",
+            "minecraft:worldgen/structure",
+            "minecraft:timeline",
+            "minecraft:dialog",
+        ] {
+            let tags = registry_tag_bindings(root.path(), &overlay, registry, |id| {
+                id == "test:a" || id == "test:b"
+            })
+            .unwrap();
+            assert_eq!(tags["test:t"], ["test:a", "test:b"], "{registry}");
+        }
+    }
+
     /// #7843: the server sends its tags as `TagLoader` merged them from the
     /// whole pack stack. A world pack that adds dirt to `climbable` and
     /// replaces `mineable/pickaxe` reaches the block tags sent, over the
