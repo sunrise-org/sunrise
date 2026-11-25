@@ -3096,6 +3096,7 @@ mod unused_feature_startup_tests {
                 sunrise_client::save::WorldGen::read(&root).unwrap().preset,
                 sunrise_client::save::WorldPreset::Flat
             );
+            let save_root = root.clone();
             let request = WorldRequest {
                 save_root: root,
                 folder: case.into(),
@@ -3108,19 +3109,51 @@ mod unused_feature_startup_tests {
                 stem_order: None,
                 rule_registry: Level::default().rule_registry,
             };
-            let result = request.prepare(
+            let mut prepared = request
+                .prepare(
+                    &loaded.resources,
+                    &loaded.pack,
+                    &options,
+                    &sunrise_world::datafix::progress::UpgradeProgress::new(),
+                )
+                .unwrap();
+            // The registry check runs in the terrain phase of the load, after the world's
+            // registry winners are admitted, as `functions.rs` drives it.
+            let empty =
+                sunrise_assets::resource_source::ResourceSource::indexed(Default::default());
+            let stack = crate::game::functions::pack_stack(
+                &save_root,
+                &options.resources,
+                &empty,
+                &empty,
+                false,
+                &prepared.level.enabled_features,
+                &loaded.pack.additional_data,
+            );
+            let biomes = WorldBiomeRegistry::load(
+                loaded.resources.biomes(),
+                &save_root,
+                loaded.pack.assets.registry,
+                &stack,
+                &stack.data_packs(Vec::new()),
+                &sunrise_world::loot::PackOverlay::default(),
+                &Default::default(),
+            )
+            .unwrap();
+            let result = prepared.prepare_terrain(
                 &loaded.resources,
                 &loaded.pack,
                 &options,
-                &sunrise_world::datafix::progress::UpgradeProgress::new(),
+                &settings,
+                &biomes,
             );
             if height == 0 {
-                assert!(result.is_ok(), "valid unused registry entry must prepare");
+                assert!(result.is_ok(), "valid unused registry entry must load");
                 drop(result);
             } else {
                 let error = match result {
                     Ok(_) => panic!(
-                        "unused invalid h259:unused_probe was accepted by actual world preparation"
+                        "unused invalid h259:unused_probe was accepted by actual world loading"
                     ),
                     Err(error) => error.to_string(),
                 };
