@@ -590,6 +590,21 @@ impl Title {
                     u32::MAX,
                 );
             }
+            Mode::DatapackFailure { .. } => {
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                phases(crate::screen_draw::RenderPhase::Background, batch);
+                let message = lang::get_or(
+                    "datapackFailure.title",
+                    "Errors in currently selected datapacks prevented the world from loading.",
+                );
+                for (i, line) in message
+                    .split('\n')
+                    .flat_map(|line| wrapped(atlas, line, w - 50.0))
+                    .enumerate()
+                {
+                    centered(atlas, batch, &line, 70.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
             Mode::MissingBiomeRegions { missing, .. } => {
                 self.draw_missing_biome_regions(atlas, batch, (w, h), missing, phases)
             }
@@ -645,6 +660,11 @@ impl Title {
                         Alert::Symlink => (
                             "symlink_warning.title.world",
                             "The world folder contains links",
+                            u32::MAX,
+                        ),
+                        Alert::SafeModeFailed => (
+                            "datapackFailure.safeMode.failed.title",
+                            "Failed to load world in safe mode",
                             u32::MAX,
                         ),
                     };

@@ -457,6 +457,29 @@ impl Title {
                     .does(crate::widgets::Action::Back),
                 ]
             }
+            Mode::DatapackFailure { .. } => {
+                // DatapackLoadFailureScreen.init.
+                let y = h / 6.0 + 96.0;
+                vec![
+                    b(
+                        (w / 2.0).floor() - 155.0,
+                        y,
+                        150.0,
+                        &lang::get_or("datapackFailure.safeMode", "Safe Mode"),
+                        true,
+                        106,
+                    ),
+                    b(
+                        (w / 2.0).floor() - 155.0 + 160.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.back", "Back"),
+                        true,
+                        107,
+                    )
+                    .does(crate::widgets::Action::Back),
+                ]
+            }
             Mode::MissingMods { .. } => {
                 let (_, _, narrow) = missing_mods::layout(w, h);
                 let button_width = if narrow { (w - 20.0).min(300.0) } else { 150.0 };

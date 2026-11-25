@@ -3141,3 +3141,28 @@ mod hidden_features {
         );
     }
 }
+
+#[test]
+fn a_failed_data_pack_load_offers_safe_mode_then_fails_in_an_alert() {
+    let mut f = Fixture::new();
+    f.world("Broken", "Broken");
+    f.title.datapack_load_failed("Broken".into(), false);
+    assert!(matches!(f.title.mode, Mode::DatapackFailure { .. }));
+    // Escape does not close it (`shouldCloseOnEsc` is false).
+    f.title.escape();
+    assert!(matches!(f.title.mode, Mode::DatapackFailure { .. }));
+    assert_eq!(f.click("Safe Mode"), Action::None);
+    assert_eq!(f.title.take_safe_mode_request().as_deref(), Some("Broken"));
+    // Back is `onCancel`.
+    f.click("Back");
+    assert!(matches!(f.title.mode, Mode::Main));
+    // A safe-mode open that fails too is the alert, with no second offer.
+    f.title.datapack_load_failed("Broken".into(), true);
+    assert!(matches!(
+        f.title.mode,
+        Mode::Error {
+            alert: Some(Alert::SafeModeFailed),
+            ..
+        }
+    ));
+}

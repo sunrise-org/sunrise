@@ -22,6 +22,10 @@ pub(super) struct WorldRequest {
     /// The account the world opens under, for an integrated server
     /// (`IntegratedServer.getSingleplayerProfile`): its name and UUID.
     owner: Option<(String, u128)>,
+    /// `WorldLoader.PackConfig`'s `safeMode`: the world opens with the vanilla pack, the required
+    /// ones and the feature packs its flags force, whatever its saved `DataPacks` select. The
+    /// saved selection is not touched until the load has succeeded.
+    pub(super) safe_mode: bool,
     /// A fixture's effective registry traversal, before shape projection.
     #[cfg(test)]
     pub(super) stem_order: Option<&'static [&'static str]>,
@@ -29,6 +33,18 @@ pub(super) struct WorldRequest {
     #[cfg(test)]
     pub(super) data_packs: Option<(Vec<String>, Vec<String>)>,
 }
+
+/// The world's data packs failed to load (`WorldOpenFlows.openWorldLoadLevelStem`'s catch): the
+/// window offers `DatapackLoadFailureScreen`, whose Safe Mode opens the world again with only
+/// the vanilla pack.
+#[derive(Debug)]
+pub(super) struct DatapackLoadFailed(pub(super) String);
+impl std::fmt::Display for DatapackLoadFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for DatapackLoadFailed {}
 
 pub(super) struct PreparedWorld {
     pub save_root: PathBuf,
@@ -143,6 +159,7 @@ impl WorldRequest {
             rule_registry,
             chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
             owner: None,
+            safe_mode: false,
             #[cfg(test)]
             stem_order: None,
             #[cfg(test)]
@@ -176,6 +193,7 @@ impl WorldRequest {
             rule_registry,
             chunk_reports,
             owner,
+            safe_mode,
             #[cfg(test)]
             stem_order,
             #[cfg(test)]
@@ -225,6 +243,20 @@ impl WorldRequest {
         #[cfg(test)]
         if let Some(selection) = data_packs {
             level.data_packs = Some(selection);
+        }
+        // `MinecraftServer.configurePackRepository` with `safeMode`: only `vanilla` is selected,
+        // so every other pack of the repository is held off for this load; the required packs
+        // and the forced feature packs still join it (`enabled_ids`).
+        if safe_mode {
+            let repository = super::pack_finders::data_repository(
+                &save_root,
+                &options.resources,
+                &pack.additional_data,
+            );
+            level.data_packs = Some((
+                vec!["vanilla".into()],
+                repository.into_iter().map(|p| p.id).collect(),
+            ));
         }
         // `IntegratedServer.setSingleplayerProfile`: a world older Sunrise builds made
         // under the offline profile moves its owner to the account at open — the player
@@ -2193,6 +2225,7 @@ mod tests {
                 chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
                 stem_order: None,
                 data_packs: None,
+                safe_mode: false,
                 save_root: dir.clone(),
                 folder: "test".into(),
                 name: Some("test".into()),
@@ -2986,6 +3019,7 @@ mod tests {
                             chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
                             stem_order: None,
                             data_packs: None,
+                            safe_mode: false,
                             save_root: world.clone(),
                             folder: "world".into(),
                             name: Some("Region fixture".into()),
@@ -3115,6 +3149,7 @@ mod unused_feature_startup_tests {
                 chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
                 stem_order: None,
                 data_packs: None,
+                safe_mode: false,
                 rule_registry: Level::default().rule_registry,
             };
             let mut prepared = request
@@ -3264,6 +3299,7 @@ mod unused_feature_preservation_tests {
             chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
             stem_order: None,
             data_packs: None,
+            safe_mode: false,
             rule_registry: Level::default().rule_registry,
         };
         assert!(

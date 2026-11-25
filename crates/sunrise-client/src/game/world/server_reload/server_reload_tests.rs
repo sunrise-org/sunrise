@@ -434,6 +434,39 @@ fn request_selecting(root: &Path, enabled: &[&str], disabled: &[&str]) -> WorldR
 
 #[test]
 #[ignore = "daily"]
+fn safe_mode_opens_a_world_with_only_the_vanilla_pack_and_saves_vanilla_s_selection() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    write(
+        &root.join("datapacks/selected/pack.mcmeta"),
+        r#"{"pack":{"description":"selected"}}"#,
+    );
+    write(
+        &root.join("datapacks/selected/data/test/function/probe.mcfunction"),
+        "say probe",
+    );
+    let mut request = request_selecting(root, &["file/selected"], &[]);
+    request.safe_mode = true;
+    mod_platform::testing::with_mods(Vec::<ModEntry>::new().into(), || {
+        with_game(|game| {
+            game.options.execution_role =
+                crate::game::execution_role::ExecutionRole::DedicatedServer;
+            let prepared = game.prepare_world_and_rules(request).unwrap();
+            let stack = game.finish_open_world(prepared).unwrap();
+            assert!(game.fns.enabled().is_empty());
+            assert!(!game.fns.store.functions.contains_key("test:probe"));
+            // What the world saves once the load has succeeded: the packs that are on, none
+            // disabled, so the next ordinary open selects `file/selected` again.
+            assert_eq!(
+                stack.safe_mode_selection(),
+                (vec!["vanilla".to_owned()], Vec::new())
+            );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn dedicated_world_open_publishes_crafting_item_tags() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();

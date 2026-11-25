@@ -174,6 +174,8 @@ pub(in crate::game) struct Setup {
     pub(in crate::game) port: Option<u16>,
     /// `--allowMissingMods`: open a world whose saved mods are missing (`missing_mods`).
     pub(in crate::game) allow_missing_mods: bool,
+    /// `--safeMode`: the world loads with only the vanilla pack (`WorldLoader.PackConfig`).
+    pub(in crate::game) safe_mode: bool,
 }
 static SETUP: OnceLock<Mutex<Option<Setup>>> = OnceLock::new();
 /// usercache.json (Services.nameToIdCache): used by the server thread only.
@@ -311,6 +313,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     let mut port = None;
     let mut init_settings = false;
     let mut allow_missing_mods = false;
+    let mut safe_mode = false;
     for argument in crate::entry::dedicated_arguments::parse(&args) {
         let (name, value) = argument?;
         match name {
@@ -320,10 +323,10 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
             | "forceUpgrade"
             | "eraseCache"
             | "recreateRegionFiles"
-            | "safeMode"
             | "jfrProfile"
             | "game-tests" => {}
             "initSettings" => init_settings = true,
+            "safeMode" => safe_mode = true,
             name if name == sunrise_client::save::level_mods::ALLOW_FLAG => {
                 allow_missing_mods = true
             }
@@ -332,7 +335,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
                     sunrise_client::lang::get("sunrise.missing_mods.server.help")
                 });
                 eprintln!(
-                    "Option                Description\n------                -----------\n--allowMissingMods    {allow}\n--help\n--game-tests          Enables test-only mod content (or SUNRISE_GAME_TESTS=1/true)\n--initSettings        Initializes 'server.properties' and 'eula.txt', then quits\n--nogui\n--port <Integer>      (default: -1)\n--universe <String>   (default: .)\n--world <String>"
+                    "Option                Description\n------                -----------\n--allowMissingMods    {allow}\n--help\n--game-tests          Enables test-only mod content (or SUNRISE_GAME_TESTS=1/true)\n--initSettings        Initializes 'server.properties' and 'eula.txt', then quits\n--nogui\n--port <Integer>      (default: -1)\n--safeMode            Loads level with vanilla datapack only\n--universe <String>   (default: .)\n--world <String>"
                 );
                 return Ok(false);
             }
@@ -419,6 +422,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
             level_name,
             port,
             allow_missing_mods,
+            safe_mode,
         });
     Ok(true)
 }
@@ -910,6 +914,7 @@ impl Game<'_> {
             level_name,
             port,
             allow_missing_mods,
+            safe_mode,
         } = setup;
         let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
         // The console thread starts first, as in initServer.
@@ -1025,20 +1030,28 @@ impl Game<'_> {
         lists.player_idle_timeout = props.player_idle_timeout;
         let lists = Arc::new(Mutex::new(lists));
         self.server_lists = Some(lists.clone());
+        if safe_mode {
+            log(
+                "WARN",
+                "Safe mode active, only vanilla datapack will be loaded",
+            );
+        }
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let level_load_started = Instant::now();
         let new_world = self.prepare_world_metadata(&world_dir, &props, allow_missing_mods)?;
         let folder = world_dir.to_string_lossy().into_owned();
         // The mods' common and server configs, read before the server starts.
         self.native_configs_server_start(&world_dir, true);
-        let prepared = self.prepare_world_and_rules(WorldRequest::new(
+        let mut request = WorldRequest::new(
             &folder,
             Some(&level_name),
             Some(props.seed),
             game_mode == 1,
             None,
             Arc::new(crate::game::api_values::game_rule_registry()),
-        )?)?;
+        )?;
+        request.safe_mode = safe_mode;
+        let prepared = self.prepare_world_and_rules(request)?;
         self.native_server_about_to_start(true);
         self.native_lifecycle_open_started();
         // The registries the server sends are read while the world prepares.
@@ -1073,6 +1086,10 @@ impl Game<'_> {
                 "Failed to load datapacks, can't proceed with server load. You can either fix your datapacks or reset to vanilla with --safeMode",
             );
             return Err(Box::new(DatapacksRefused));
+        }
+        // The load succeeded: what a safe-mode start saves is vanilla's.
+        if safe_mode {
+            self.level.data_packs = Some(opened_packs.safe_mode_selection());
         }
         if new_world {
             self.level.hardcore = props.hardcore;

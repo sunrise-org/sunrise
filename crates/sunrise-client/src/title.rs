@@ -249,6 +249,8 @@ pub enum Alert {
     /// `symlink_warning.title.world`
     /// (`NoticeWithLinkScreen.createWorldSymlinkWarningScreen`).
     Symlink,
+    /// `datapackFailure.safeMode.failed.title`: the world failed to load in safe mode too.
+    SafeModeFailed,
 }
 #[derive(Clone, Debug)]
 pub enum Mode {
@@ -339,6 +341,12 @@ pub enum Mode {
     /// `CreateWorldScreen.applyNewPackConfig`'s ConfirmScreen when the selected packs fail to
     /// load: Back reopens the Data Packs screen with the selection it had, Reset with the default.
     PackValidationFailed {
+        return_to: Box<Mode>,
+    },
+    /// `DatapackLoadFailureScreen`: the world's data packs failed to load. Safe Mode opens
+    /// `folder` again with only the vanilla pack; Back (`onCancel`) goes to `return_to`.
+    DatapackFailure {
+        folder: String,
         return_to: Box<Mode>,
     },
     Multiplayer(crate::multiplayer::Screen),
@@ -483,6 +491,8 @@ pub struct Title {
     erase_check: Cell<[f32; 4]>,
     /// The folder to open next, once that backup has finished.
     open_request: Option<String>,
+    /// The folder `DatapackLoadFailureScreen`'s Safe Mode opens next.
+    safe_mode_request: Option<String>,
     /// A Realm's checked address, once the Realms screen's join came back.
     connect_request: Option<String>,
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
@@ -822,6 +832,7 @@ impl Mode {
             Self::Recovered { .. } => "world_recovered",
             Self::Error { .. } => "error",
             Self::PackValidationFailed { .. } => "pack_validation_failed",
+            Self::DatapackFailure { .. } => "datapack_failure",
             Self::Multiplayer(screen) => screen.id(),
             Self::MultiplayerWarning { .. } => "multiplayer_warning",
             Self::Onboarding(_) => "onboarding",
@@ -895,9 +906,9 @@ impl Title {
                     options.rules.rebind_registry(registry.clone())
                 }
                 Mode::CreatePreset { parent, .. } => rebind(parent, registry),
-                Mode::Error { return_to, .. } | Mode::PackValidationFailed { return_to } => {
-                    rebind(return_to, registry)
-                }
+                Mode::Error { return_to, .. }
+                | Mode::PackValidationFailed { return_to }
+                | Mode::DatapackFailure { return_to, .. } => rebind(return_to, registry),
                 _ => {}
             }
         }
@@ -967,6 +978,7 @@ impl Title {
             optimize: None,
             erase_check: Cell::new([0.0; 4]),
             open_request: None,
+            safe_mode_request: None,
             connect_request: None,
             pending_toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
@@ -1539,6 +1551,27 @@ impl Title {
     }
     pub fn take_open_request(&mut self) -> Option<String> {
         self.open_request.take()
+    }
+    pub fn take_safe_mode_request(&mut self) -> Option<String> {
+        self.safe_mode_request.take()
+    }
+    /// `WorldOpenFlows.openWorldLoadLevelStem`'s catch: the world's data packs failed to load.
+    /// An ordinary open offers `DatapackLoadFailureScreen`; one already in safe mode shows the
+    /// failed-in-safe-mode `AlertScreen`.
+    pub fn datapack_load_failed(&mut self, folder: String, safe_mode: bool) {
+        let return_to = Box::new(self.mode.clone());
+        if safe_mode {
+            self.set_mode(Mode::Error {
+                message: lang::get_or(
+                    "datapackFailure.safeMode.failed.description",
+                    "This world cannot be read by this version of the game even with only the vanilla data pack.",
+                ),
+                return_to,
+                alert: Some(Alert::SafeModeFailed),
+            });
+        } else {
+            self.set_mode(Mode::DatapackFailure { folder, return_to });
+        }
     }
     /// `WorldOpenFlows.openWorldLoadLevelData` for a world opened without the list (the control
     /// socket): level data that does not read shows RecoverWorldDataScreen. False when the world
@@ -2155,6 +2188,13 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     join(&[&get("recover_world.done.title", "Recovery done"), &message]),
                 )
             }
+            Mode::DatapackFailure { .. } => ScreenInfo::new(
+                "datapack_failure",
+                get(
+                    "datapackFailure.title",
+                    "Errors in currently selected datapacks prevented the world from loading.",
+                ),
+            ),
             Mode::PackValidationFailed { .. } => ScreenInfo::new(
                 "pack_validation_failed",
                 get(
@@ -2173,6 +2213,10 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     Some(Alert::Symlink) => get(
                         "symlink_warning.title.world",
                         "The world folder contains links",
+                    ),
+                    Some(Alert::SafeModeFailed) => get(
+                        "datapackFailure.safeMode.failed.title",
+                        "Failed to load world in safe mode",
                     ),
                     None => get("selectWorld.access_failure", "Failed to access world"),
                 };
@@ -2863,6 +2907,15 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             (Mode::PackValidationFailed { .. }, Some(id @ (104 | 105))) => {
                 self.answer_pack_validation(id == 104);
+                Action::None
+            }
+            (Mode::DatapackFailure { folder, .. }, Some(106)) => {
+                self.safe_mode_request = Some(folder.clone());
+                Action::None
+            }
+            (Mode::DatapackFailure { return_to, .. }, Some(107)) => {
+                let back = *return_to.clone();
+                self.set_mode(back);
                 Action::None
             }
             (Mode::Error { return_to, .. }, Some(39)) => {
@@ -3817,6 +3870,8 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         match &self.mode {
             // OptimizeWorldScreen: `shouldCloseOnEsc` is false; the Backup wait takes no input.
             Mode::Backup { .. } | Mode::Optimize { .. } => {}
+            // DatapackLoadFailureScreen: `shouldCloseOnEsc` is false.
+            Mode::DatapackFailure { .. } => {}
             Mode::MissingMods { .. } => self.leave_closed_for_missing_mods(),
             // BackupConfirmScreen.keyPressed: Escape runs `onCancel`, the Edit World screen again.
             Mode::OptimizeConfirm { world, name, .. } | Mode::AdoptBiomeRegions { world, name } => {
