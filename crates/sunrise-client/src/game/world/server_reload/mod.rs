@@ -36,7 +36,7 @@ impl PreparedServerReload {
 /// (`ServerFunctionLibrary`). A predicate, item modifier or slot source its codec
 /// refuses fails the load, every one listed (`RegistryDataLoader.logErrors`).
 fn functions_store(stack: &PackStack) -> Result<DataStore, ReloadStageError> {
-    let packs: Vec<_> = stack.builtin.iter().chain(stack.enabled_packs()).collect();
+    let packs: Vec<_> = stack.selected_packs().collect();
     let store = DataStore::load(&DataPacks::new(&packs));
     for (id, e) in &store.errors {
         log::warn!("Sunrise: failed to load function {id}: {e}");
@@ -60,7 +60,7 @@ impl PackStack {
         listener: &Identifier,
         converter: &FileToIdConverter,
     ) -> ServerReloadContext {
-        let packs: Vec<_> = self.builtin.iter().chain(self.enabled_packs()).collect();
+        let packs: Vec<_> = self.selected_packs().collect();
         ServerReloadContext::new(reload_files("data", &packs, listener, converter))
     }
 }

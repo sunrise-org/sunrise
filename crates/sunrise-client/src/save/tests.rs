@@ -5299,7 +5299,7 @@ fn level_dat_data_packs_choose_the_enabled_packs() {
     let packs = crate::datapack::discover(&dir);
     assert_eq!(
         crate::datapack::enabled_ids(level.data_packs.as_ref(), &packs, &[]),
-        ["file/b"]
+        ["vanilla", "file/b"]
     );
     let _ = fs::remove_dir_all(dir);
 }
@@ -5319,13 +5319,43 @@ fn a_datapacks_json_moves_into_level_dat_at_the_next_save() {
     let packs = crate::datapack::discover(&dir);
     assert_eq!(
         crate::datapack::enabled_ids(level.data_packs.as_ref(), &packs, &[]),
-        ["file/a"]
+        ["vanilla", "file/a"]
     );
     level.write_without_player(&dir).unwrap();
     assert!(!dir.join("datapacks.json").exists());
     assert_eq!(
         Level::read(&dir).unwrap().data_packs,
-        Some((vec!["file/a".into()], vec!["file/b".into()]))
+        Some((
+            vec!["vanilla".into(), "file/a".into()],
+            vec!["file/b".into()]
+        ))
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// An old Sunrise selection that does not name vanilla opens with vanilla at the bottom; one
+/// that recorded it disabled keeps it off.
+#[test]
+fn an_old_selection_without_vanilla_opens_with_vanilla_at_the_bottom() {
+    let dir = selection_world("selection-migration-vanilla");
+    Level::default().write_without_player(&dir).unwrap();
+    fs::write(
+        dir.join("datapacks.json"),
+        r#"{"enabled":["file/a"],"disabled":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        Level::read(&dir).unwrap().data_packs,
+        Some((vec!["vanilla".into(), "file/a".into()], Vec::new()))
+    );
+    fs::write(
+        dir.join("datapacks.json"),
+        r#"{"enabled":["file/a"],"disabled":["vanilla"]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        Level::read(&dir).unwrap().data_packs,
+        Some((vec!["file/a".into()], vec!["vanilla".into()]))
     );
     let _ = fs::remove_dir_all(dir);
 }

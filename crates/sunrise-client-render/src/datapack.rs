@@ -715,7 +715,6 @@ pub fn install(dir: &Path, world: &Path) -> Result<(), String> {
 /// its `datapacks` (`CreateWorldScreen.createTempDataPackDirFromExistingWorld`; `None` when the
 /// world has none), and the selection `selection` (its level.dat `DataPacks`) makes, lowest
 /// priority first (`WorldOpenFlows.recreateWorldData` keeps the world's `DataConfiguration`).
-/// The built-in pack is selected unless the world turned it off.
 pub fn for_recreate(
     world: &Path,
     selection: Option<&(Vec<String>, Vec<String>)>,
@@ -725,10 +724,7 @@ pub fn for_recreate(
     // `enabled_features`, and the flag-aware load re-adds the feature packs
     // it asks for (`for_recreate`'s selection only seeds the new world's
     // `DataPacks`).
-    let mut selected = enabled_ids(selection, &packs, &[]);
-    if !vanilla_disabled(selection) {
-        selected.insert(0, "vanilla".into());
-    }
+    let selected = enabled_ids(selection, &packs, &[]);
     if packs.is_empty() {
         return (None, selected);
     }
@@ -1507,10 +1503,10 @@ fn features_enabled(pack: &DataPack, enabled_features: &[String]) -> bool {
         .all(|f| enabled_features.iter().any(|e| e == f))
 }
 
-/// The ids of `packs` (a world's, from `discover`) that are enabled, lowest
-/// priority first: those `selection` (the world's `DataPacks`, `None` for a
-/// world with none) lists as enabled, in its order, then every pack it lists
-/// neither way, in name order.
+/// The selected ids, lowest priority first: those `selection` (the world's `DataPacks`,
+/// `None` for a world with none) lists as enabled, in its order and `vanilla` among them
+/// like any pack, that exist among `packs` (a world's, from `discover`), then every pack it
+/// lists neither way, in name order.
 ///
 /// `enabled_features` are the world's feature flags
 /// (`WorldDataConfiguration.enabledFeatures`): a pack a pack file selected
@@ -1523,13 +1519,12 @@ pub fn enabled_ids(
     packs: &[DataPack],
     enabled_features: &[String],
 ) -> Vec<String> {
-    let (listed, disabled) = match selection {
-        Some((enabled, disabled)) => (enabled.as_slice(), disabled.as_slice()),
-        None => (&[][..], &[][..]),
-    };
+    // `WorldDataConfiguration.DEFAULT`: only `vanilla` enabled.
+    let default = (vec!["vanilla".to_owned()], Vec::new());
+    let (listed, disabled) = selection.unwrap_or(&default);
     let mut enabled: Vec<String> = listed
         .iter()
-        .filter(|id| packs.iter().any(|p| p.id == **id))
+        .filter(|id| id.as_str() == "vanilla" || packs.iter().any(|p| p.id == **id))
         .filter(|id| {
             packs
                 .iter()
@@ -1550,6 +1545,10 @@ pub fn enabled_ids(
             enabled.push(p.id.clone());
         }
     }
+    // `MinecraftServer.configurePackRepository`: no pack selected forces vanilla.
+    if enabled.is_empty() {
+        enabled.push("vanilla".to_owned());
+    }
     for p in packs {
         if p.is_feature()
             && !p.features().is_empty()
@@ -1562,9 +1561,10 @@ pub fn enabled_ids(
     selected_ids(packs.iter(), &enabled)
 }
 
-/// Whether `selection` (the world's `DataPacks`) turned the built-in pack off.
+/// Whether `selection` (the world's `DataPacks`) leaves the built-in pack out of its enabled
+/// list; `vanilla` is an ordinary entry of that list, wherever the pack sits in the stack.
 pub fn vanilla_disabled(selection: Option<&(Vec<String>, Vec<String>)>) -> bool {
-    selection.is_some_and(|(_, disabled)| disabled.iter().any(|id| id == "vanilla"))
+    selection.is_some_and(|(enabled, _)| !enabled.iter().any(|id| id == "vanilla"))
 }
 
 /// Rebuild a data-pack selection, preserving its order and inserting required packs.
@@ -1581,6 +1581,11 @@ pub fn selected_ids<'a>(
                 crate::pack_screen::PackInfo::selectable,
             )
         })
+        // `ServerPacksSource.VANILLA_SELECTION_CONFIG`: not required, at the bottom.
+        .chain(std::iter::once(crate::packs::Selectable {
+            position: crate::packs::Position::Bottom,
+            ..crate::packs::Selectable::optional("vanilla", true)
+        }))
         .collect();
     crate::packs::SelectionModel::new(available, selected)
         .selected

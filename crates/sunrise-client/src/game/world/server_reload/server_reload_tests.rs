@@ -453,7 +453,7 @@ fn safe_mode_opens_a_world_with_only_the_vanilla_pack_and_saves_vanilla_s_select
                 crate::game::execution_role::ExecutionRole::DedicatedServer;
             let prepared = game.prepare_world_and_rules(request).unwrap();
             let stack = game.finish_open_world(prepared).unwrap();
-            assert!(game.fns.enabled().is_empty());
+            assert_eq!(game.fns.enabled(), ["vanilla"]);
             assert!(!game.fns.store.functions.contains_key("test:probe"));
             // What the world saves once the load has succeeded: the packs that are on, none
             // disabled, so the next ordinary open selects `file/selected` again.
@@ -680,7 +680,7 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             install_mod_resources(game, &resources, &package);
-            game.load_world(request_selecting(&world, &["file/test"], &[]))
+            game.load_world(request_selecting(&world, &["vanilla", "file/test"], &[]))
                 .unwrap();
             assert_eq!(
                 *live.lock().unwrap(),

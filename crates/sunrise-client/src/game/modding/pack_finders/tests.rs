@@ -347,7 +347,10 @@ fn contributed_packs_are_discoverable_and_only_selected_resources_apply() {
             let world = fixture.root.join("world");
             fs::create_dir(&world).unwrap();
             let repository = data_repository(&world, &fixture.root, &data);
-            assert!(sunrise_client::datapack::enabled_ids(None, &repository, &[]).is_empty());
+            assert_eq!(
+                sunrise_client::datapack::enabled_ids(None, &repository, &[]),
+                ["vanilla"]
+            );
             let selection = (vec![fixture.data_id()], vec!["vanilla".to_owned()]);
             let stack = crate::game::functions::pack_stack(
                 &world,
@@ -758,7 +761,10 @@ fn hidden_optional_data_pack_is_command_selectable_and_loads_its_function() {
                 .iter()
                 .any(|p| p.id == "mod/packmod:data/packmod/datapacks/optional")
         );
-        assert!(sunrise_client::datapack::enabled_ids(None, &repository, &[]).is_empty());
+        assert_eq!(
+            sunrise_client::datapack::enabled_ids(None, &repository, &[]),
+            ["vanilla"]
+        );
         let selection = (
             vec!["mod/packmod:data/packmod/datapacks/optional".to_owned()],
             vec!["vanilla".to_owned()],
