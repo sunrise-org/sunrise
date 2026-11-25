@@ -281,12 +281,15 @@ paths = [
   "crates/sunrise-command/*", "crates/sunrise-client/src/game/administration/*", "crates/sunrise-client/src/scoreboard_cmd.rs",
   "crates/sunrise-client/src/data_cmd.rs", "crates/sunrise-client-core/src/scoreboard.rs",
   "crates/sunrise-*/src/nbt_path.rs", "crates/sunrise-client/src/game/world/server_reload/*",
+  "crates/sunrise-client-render/src/datapack*",
   "tools/command_exec_corpus.py", "tools/command_parse_corpus.py",
 ]
 cargo = [
   { package = "sunrise-command", target = "lib", filter = "" },
   { package = "sunrise-world", target = "lib", filter = "nbt_path::" },
+  { package = "sunrise-client-render", target = "lib", filter = "datapack::" },
   { package = "sunrise-client", target = "lib", filter = "game::commands::" },
+  { package = "sunrise-client", target = "lib", filter = "game::functions::" },
   { package = "sunrise-client", target = "lib", filter = "game::server_reload::" },
   { package = "sunrise-client", target = "lib", filter = "game::mob_discard_tests::" },
 ]

@@ -104,16 +104,9 @@ impl DataPack {
         self.source.read(path).ok()
     }
 
-    /// The `description` of `pack.mcmeta`, as text.
-    pub fn description(&self) -> String {
-        let Some(bytes) = self.read("pack.mcmeta") else {
-            return String::new();
-        };
-        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-        match &v["pack"]["description"] {
-            serde_json::Value::String(s) => s.clone(),
-            other => other["text"].as_str().unwrap_or_default().to_owned(),
-        }
+    /// The `description` of `pack.mcmeta`, as a text component.
+    pub fn description(&self) -> crate::text::Text {
+        crate::packs::component_root(&self.mcmeta()["pack"]["description"]).0
     }
     /// The `features.enabled` flag ids of `pack.mcmeta`
     /// (`FeatureFlagsMetadataSection.CODEC` -> `FeatureFlagRegistry.codec` -> `Identifier.CODEC`):
@@ -312,7 +305,7 @@ pub fn feature_packs(resources: &Path) -> Vec<DataPack> {
                 ),
                 icon: None,
                 required: false,
-                position: crate::packs::Position::Bottom,
+                position: crate::packs::Position::Top,
                 fixed: false,
                 hidden: false,
             });
@@ -571,12 +564,7 @@ pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
     // it asks for (`for_recreate`'s selection only seeds the new world's
     // `datapacks.json`).
     let mut selected = enabled_ids(world, &packs, &[]);
-    let vanilla_off = std::fs::read(world.join("datapacks.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["disabled"].as_array().cloned())
-        .is_some_and(|a| a.iter().any(|id| id.as_str() == Some("vanilla")));
-    if !vanilla_off {
+    if !vanilla_disabled(world) {
         selected.insert(0, "vanilla".into());
     }
     if packs.is_empty() {
@@ -591,6 +579,15 @@ pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
         }
     });
     (dir, selected)
+}
+/// Whether the world's `datapacks.json` lists the built-in `vanilla` pack as
+/// disabled (`DataPackConfig` keeps it in `Disabled`).
+pub fn vanilla_disabled(world: &Path) -> bool {
+    std::fs::read(world.join("datapacks.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["disabled"].as_array().cloned())
+        .is_some_and(|a| a.iter().any(|id| id.as_str() == Some("vanilla")))
 }
 /// A file, or a folder and everything in it.
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
@@ -1875,6 +1872,25 @@ mod tests {
     }
 
     #[test]
+    fn feature_packs_select_at_the_top() {
+        let resources =
+            std::env::temp_dir().join(format!("feature-position-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&resources);
+        let feature = resources.join("data/minecraft/datapacks/feature");
+        std::fs::create_dir_all(&feature).unwrap();
+        std::fs::write(
+            feature.join("pack.mcmeta"),
+            r#"{"pack":{"description":"feature"}}"#,
+        )
+        .unwrap();
+        let packs = feature_packs(&resources);
+        let selection = packs[0].selection.as_ref().unwrap();
+        assert!(selection.position == crate::packs::Position::Top);
+        assert!(!selection.required && !selection.fixed);
+        std::fs::remove_dir_all(resources).unwrap();
+    }
+
+    #[test]
     fn data_store_admits_only_valid_content_resource_ids() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("data/example/recipe/sub");
@@ -2177,7 +2193,7 @@ mod tests {
         let packs = discover(&dir);
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].id, "file/mypack");
-        assert_eq!(packs[0].description(), "Hello");
+        assert_eq!(packs[0].description().plain(), "Hello");
         let store = DataStore::load(&[&packs[0]]);
         assert_eq!(store.functions.len(), 2);
         assert!(store.functions.contains_key("mine:sub/b"));
