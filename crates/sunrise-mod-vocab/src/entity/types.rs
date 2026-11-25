@@ -121,6 +121,39 @@ pub struct VirtualHost {
     pub port: u16,
 }
 
+/// An armor stand's six pose rotations (`ArmorStand.DATA_HEAD_POSE` to `DATA_RIGHT_LEG_POSE`,
+/// vanilla's `Rotations`): x, y and z in degrees, as `getHeadPose` ... `getRightLegPose` give them.
+#[derive(Clone, Copy, Debug, PartialEq, sunrise_mod_api_macros::Wire)]
+// exhaustive: the game builds it with a literal; mods only read it
+pub struct ArmorStandPose {
+    /// `ArmorStand.headPose`: x, y and z rotation in degrees.
+    pub head: [f32; 3],
+    /// `ArmorStand.bodyPose`: x, y and z rotation in degrees.
+    pub body: [f32; 3],
+    /// `ArmorStand.leftArmPose`: x, y and z rotation in degrees.
+    pub left_arm: [f32; 3],
+    /// `ArmorStand.rightArmPose`: x, y and z rotation in degrees.
+    pub right_arm: [f32; 3],
+    /// `ArmorStand.leftLegPose`: x, y and z rotation in degrees.
+    pub left_leg: [f32; 3],
+    /// `ArmorStand.rightLegPose`: x, y and z rotation in degrees.
+    pub right_leg: [f32; 3],
+}
+
+/// An armor stand's client flags (`ArmorStand.DATA_CLIENT_FLAGS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+// exhaustive: the game builds it with a literal; mods only read it
+pub struct ArmorStandFlags {
+    /// `ArmorStand.isSmall`.
+    pub small: bool,
+    /// `ArmorStand.showArms`.
+    pub show_arms: bool,
+    /// `ArmorStand.showBasePlate`.
+    pub show_base_plate: bool,
+    /// `ArmorStand.isMarker`.
+    pub marker: bool,
+}
+
 /// A persistent entity UUID in the same bit order as the value from `EntityRef::uuid`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, sunrise_mod_api_macros::Wire)]
 // exhaustive: a UUID is exactly one public 128-bit value

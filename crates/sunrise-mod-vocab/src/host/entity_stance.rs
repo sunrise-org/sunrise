@@ -39,6 +39,17 @@ pub trait EntityStanceBackend {
     /// tracked bodies without the flag), other kinds and stale handles.
     fn entity_is_swimming(&self, entity: EntityRef) -> Option<bool>;
     /// Side: both.
+    /// An armor stand's pose rotations (`ArmorStand.getHeadPose` ... `getRightLegPose`). On a
+    /// client, the synced `DATA_*_POSE` the server last sent, so another player's or a
+    /// command's edit shows as soon as it arrives. None for an entity that isn't an armor stand
+    /// and for a stale handle.
+    fn entity_armor_stand_pose(&self, entity: EntityRef) -> Option<ArmorStandPose>;
+    /// Side: both.
+    /// An armor stand's client flags (`isSmall`, `showArms`, `showBasePlate`, `isMarker`). On a
+    /// client, the synced `DATA_CLIENT_FLAGS` the server last sent. None for an entity that isn't
+    /// an armor stand and for a stale handle.
+    fn entity_armor_stand_flags(&self, entity: EntityRef) -> Option<ArmorStandFlags>;
+    /// Side: both.
     /// The entity's pose (`Entity.getPose`) as `Pose` names it: `standing`,
     /// `crouching`, `swimming`, `sleeping`, a warden's `roaring`... Kinds
     /// with no pose stand. On a client, the local player's own predicted pose, or the synched

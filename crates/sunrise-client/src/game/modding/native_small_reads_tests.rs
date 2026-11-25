@@ -212,6 +212,105 @@ fn a_guests_sprinting_survives_a_turn() {
     });
 }
 
+/// `EntityRef::armor_stand_pose` and `armor_stand_flags` read the stand's pose rotations and
+/// client flags on a server and on a client; none for another kind or a stale handle.
+#[test]
+#[ignore = "daily"]
+fn armor_stand_pose_and_flags_read_the_stand() {
+    use super::native_entity_refs::tests::with_client_game;
+    use sunrise_client::entities::ArmorStand;
+    use sunrise_core::geometry::Vec3;
+    let check = |game: &mut Game<'_>| {
+        // An entity is found only in a loaded column.
+        game.world.chunks.insert(
+            (0, 0),
+            std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
+        );
+        // A server spawns the stand here; a client has it from the server's AddEntity.
+        if !game.armor_stands.iter().any(|s| s.id == 21) {
+            game.armor_stands
+                .push(ArmorStand::new(21, Vec3::new(0.5, 64.0, 0.5), 0.0));
+        }
+        let stand = game.armor_stands.iter_mut().find(|s| s.id == 21).unwrap();
+        stand.pose = [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [-10.0, 0.0, -10.0],
+            [-15.0, 0.0, 10.0],
+            [-1.0, 0.0, -1.0],
+            [1.0, 0.0, 1.0],
+        ];
+        stand.small = true;
+        stand.show_arms = true;
+        stand.no_base_plate = true;
+        game.next_entity = game.next_entity.max(21);
+        let entity = game.entity(21).expect("the stand's handle");
+        assert_eq!(
+            game.entity_armor_stand_pose(entity),
+            Some(mod_api::ArmorStandPose {
+                head: [1.0, 2.0, 3.0],
+                body: [4.0, 5.0, 6.0],
+                left_arm: [-10.0, 0.0, -10.0],
+                right_arm: [-15.0, 0.0, 10.0],
+                left_leg: [-1.0, 0.0, -1.0],
+                right_leg: [1.0, 0.0, 1.0],
+            })
+        );
+        assert_eq!(
+            game.entity_armor_stand_flags(entity),
+            Some(mod_api::ArmorStandFlags {
+                small: true,
+                show_arms: true,
+                show_base_plate: false,
+                marker: false,
+            })
+        );
+        let stale = mod_api::EntityRef::new(
+            mod_api::WorldEpoch::new(entity.epoch().get() + 1),
+            entity.id(),
+        );
+        assert_eq!(game.entity_armor_stand_pose(stale), None);
+        assert_eq!(game.entity_armor_stand_flags(stale), None);
+    };
+    with_game(|game| {
+        check(game);
+        // Another kind has neither.
+        let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+        game.mobs
+            .push(sunrise_client::mobs::Mob::new(22, cow, Vec3::ZERO, 0.0));
+        game.next_entity = game.next_entity.max(22);
+        let cow = game.entity(22).unwrap();
+        assert_eq!(game.entity_armor_stand_pose(cow), None);
+        assert_eq!(game.entity_armor_stand_flags(cow), None);
+    });
+    with_client_game(|game| {
+        use sunrise_protocol::packets::play::{self, Clientbound as C};
+        let _server = super::native_client_session::tests::logged_client(game);
+        let kind = game
+            .remote
+            .as_ref()
+            .unwrap()
+            .builtin
+            .get("minecraft:entity_type")
+            .unwrap()
+            .id("minecraft:armor_stand")
+            .unwrap();
+        game.handle_packet(C::AddEntity(play::AddEntity {
+            id: 21,
+            uuid: 21,
+            kind,
+            position: [0.5, 64.0, 0.5],
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 0,
+            head_yaw: 0,
+            data: 0,
+        }))
+        .unwrap();
+        check(game);
+    });
+}
+
 /// The server's frozen state follows `/tick freeze`; a client has none.
 #[test]
 #[ignore = "daily"]

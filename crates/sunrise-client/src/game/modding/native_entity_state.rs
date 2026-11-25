@@ -124,6 +124,45 @@ impl Game<'_> {
             mod_api::MainHand::Right
         })
     }
+    /// The armor stand an entity handle names, on either side.
+    fn native_armor_stand(
+        &self,
+        entity: EntityRef,
+    ) -> Option<&sunrise_client::entities::ArmorStand> {
+        let Target::Stand(id) = self.native_entity_read_target(entity)? else {
+            return None;
+        };
+        self.armor_stands.iter().find(|s| s.id == id)
+    }
+    /// `ArmorStand.getHeadPose` ... `getRightLegPose`, in `POSE_KEYS` order.
+    pub(super) fn entity_armor_stand_pose(
+        &self,
+        entity: EntityRef,
+    ) -> Option<mod_api::ArmorStandPose> {
+        let [head, body, left_arm, right_arm, left_leg, right_leg] =
+            self.native_armor_stand(entity)?.pose;
+        Some(mod_api::ArmorStandPose {
+            head,
+            body,
+            left_arm,
+            right_arm,
+            left_leg,
+            right_leg,
+        })
+    }
+    /// `ArmorStand.DATA_CLIENT_FLAGS`.
+    pub(super) fn entity_armor_stand_flags(
+        &self,
+        entity: EntityRef,
+    ) -> Option<mod_api::ArmorStandFlags> {
+        let stand = self.native_armor_stand(entity)?;
+        Some(mod_api::ArmorStandFlags {
+            small: stand.small,
+            show_arms: stand.show_arms,
+            show_base_plate: !stand.no_base_plate,
+            marker: stand.marker,
+        })
+    }
     /// A server's player's main arm, from the Main Hand its client last reported.
     fn guest_main_arm(&self, conn: u32) -> Option<mod_api::MainHand> {
         Some(super::lan::main_hand(
