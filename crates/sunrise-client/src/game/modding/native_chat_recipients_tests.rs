@@ -92,6 +92,32 @@ impl Hooks for Queries {
     }
 }
 
+/// A placed operator guest, named `guest<conn>`, and what the hub sends it.
+fn join_guest(game: &mut super::Game<'_>, conn: u32) -> mpsc::Receiver<Out> {
+    let (tx, rx) = mpsc::channel();
+    let mut guest = Guest::new(
+        Joined {
+            conn,
+            uuid: u128::from(conn),
+            name: format!("guest{conn}"),
+            properties: Vec::new(),
+            info: ClientInformation::new(8),
+            brand: String::new(),
+            sender: PlayerSender::new(tx, Arc::default()),
+            latency: Arc::new(AtomicI32::new(0)),
+            address: "127.0.0.1:1".parse().unwrap(),
+            expected: false,
+        },
+        conn as i32,
+        [0.5, 64.0, 0.5],
+        2,
+    );
+    guest.placed = true;
+    guest.permission = 4;
+    game.lan.as_mut().unwrap().hub.guests.push(guest);
+    rx
+}
+
 /// Guests 12 (the sender) and 13 on a LAN host, with what each is sent.
 fn two_guests(game: &mut super::Game<'_>) -> (mpsc::Receiver<Out>, mpsc::Receiver<Out>) {
     let net = NetConfig {
@@ -121,31 +147,7 @@ fn two_guests(game: &mut super::Game<'_>) -> (mpsc::Receiver<Out>, mpsc::Receive
         force_game_mode: false,
     };
     game.lan_host(settings, net, config).unwrap();
-    let mut join = |conn: u32| {
-        let (tx, rx) = mpsc::channel();
-        let mut guest = Guest::new(
-            Joined {
-                conn,
-                uuid: u128::from(conn),
-                name: format!("guest{conn}"),
-                properties: Vec::new(),
-                info: ClientInformation::new(8),
-                brand: String::new(),
-                sender: PlayerSender::new(tx, Arc::default()),
-                latency: Arc::new(AtomicI32::new(0)),
-                address: "127.0.0.1:1".parse().unwrap(),
-                expected: false,
-            },
-            conn as i32,
-            [0.5, 64.0, 0.5],
-            2,
-        );
-        guest.placed = true;
-        guest.permission = 4;
-        game.lan.as_mut().unwrap().hub.guests.push(guest);
-        rx
-    };
-    (join(12), join(13))
+    (join_guest(game, 12), join_guest(game, 13))
 }
 
 fn packets(rx: &mpsc::Receiver<Out>) -> impl Iterator<Item = play::Clientbound> + '_ {
@@ -698,5 +700,81 @@ fn a_relay_answering_its_own_answer_stops_at_the_repeat() {
                 ]
             );
         });
+    });
+}
+
+/// `/teammsg` is chat to the team: the other member is sent a disguised chat of the world's
+/// `team_msg_command_incoming` type, the sender one of `team_msg_command_outgoing`, both
+/// bound to the team's display name; a player outside the team is sent nothing.
+#[test]
+#[ignore = "daily"]
+fn teammsg_sends_the_team_chat_types_bound_to_the_team_name() {
+    with_game(|game| {
+        let (sender, other) = two_guests(game);
+        let outsider = join_guest(game, 14);
+        lines(&sender);
+        lines(&other);
+        game.score.board.add_team("red");
+        game.score.board.add_to_team("guest12", "red");
+        game.score.board.add_to_team("guest13", "red");
+        game.guest_command(12, "teammsg hi", None);
+        game.run_guest_commands();
+        let hub = &game.lan.as_ref().unwrap().hub;
+        let (outgoing, incoming) = (
+            hub.chat_type_id("team_msg_command_outgoing")
+                .unwrap()
+                .network_id() as i32,
+            hub.chat_type_id("team_msg_command_incoming")
+                .unwrap()
+                .network_id() as i32,
+        );
+        assert_ne!(outgoing, incoming);
+        let hi = sunrise_client::lan::data::component_nbt(&Text::literal("hi").component());
+        let play::Clientbound::DisguisedChat(mine) = packets(&sender).next().unwrap() else {
+            panic!("the sender is sent chat");
+        };
+        assert_eq!(mine.chat_type.chat_type, outgoing);
+        assert_eq!(mine.message, hi);
+        let play::Clientbound::DisguisedChat(theirs) = packets(&other).next().unwrap() else {
+            panic!("the team member is sent chat");
+        };
+        assert_eq!(theirs.chat_type.chat_type, incoming);
+        assert_eq!(theirs.message, hi);
+        assert!(
+            theirs.chat_type.target.is_some(),
+            "bound to the team's name"
+        );
+        assert_eq!(theirs.chat_type.target, mine.chat_type.target);
+        assert_eq!(
+            lines(&outsider),
+            0,
+            "a player outside the team is sent nothing"
+        );
+    });
+}
+
+/// The vanilla pack is not required (`/datapack disable vanilla`) and a `pack.mcmeta` filter can
+/// hide a built-in `chat_type` file, so the registry may lack a chat type. `ChatType.bind` then
+/// throws, `Commands.performCommand` catches it and the command fails with `command.failed`:
+/// nobody is sent the chat, and nothing panics.
+#[test]
+#[ignore = "daily"]
+fn teammsg_fails_without_a_panic_when_a_chat_type_is_missing() {
+    with_game(|game| {
+        let (sender, other) = two_guests(game);
+        lines(&sender);
+        lines(&other);
+        game.score.board.add_team("red");
+        game.score.board.add_to_team("guest12", "red");
+        game.score.board.add_to_team("guest13", "red");
+        let mut sync = sunrise_client::lan::data::SyncData::empty();
+        sync.dynamic
+            .registries
+            .insert("minecraft:chat_type".to_owned(), Vec::new());
+        game.lan.as_mut().unwrap().hub.sync = Arc::new(sync);
+        game.guest_command(12, "teammsg hi", None);
+        game.run_guest_commands();
+        assert_eq!(lines(&sender), 0);
+        assert_eq!(lines(&other), 0);
     });
 }

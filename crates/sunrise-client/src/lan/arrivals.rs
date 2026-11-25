@@ -880,6 +880,11 @@ mod hub_tests {
             "minecraft:entity_type".to_string(),
             sunrise_protocol::registry::Ids::from_names(vec!["minecraft:player".to_string()]),
         );
+        // The chat types the chat tests bind.
+        sync.dynamic.registries.insert(
+            "minecraft:chat_type".to_string(),
+            vec![("minecraft:chat".to_string(), None)],
+        );
         let sync = std::sync::Arc::new(sync);
         // No listener: these tests drive the hub directly and never connect.
         let config = NetConfig {

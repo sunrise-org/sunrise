@@ -296,6 +296,8 @@ impl Game<'_> {
 
     /// `SayCommand` / `EmoteCommands`: a command source's visible message is sent as
     /// player chat, including to its source, never as the command's feedback.
+    /// False, with nothing sent, when the registry lacks the chat type: `ChatType.bind`
+    /// throws and the command fails (`Commands.performCommand`).
     pub(super) fn lan_broadcast_command_chat(
         &mut self,
         sender: u128,
@@ -303,7 +305,7 @@ impl Game<'_> {
         id: &str,
         message: &Text,
         mut signed: Option<ChatMessage>,
-    ) {
+    ) -> bool {
         let (chat_type, key) = if id == "say" {
             ("say_command", "chat.type.announcement")
         } else {
@@ -312,10 +314,13 @@ impl Game<'_> {
         let line = Text::translate(key, &[name.clone(), message.clone()]);
         let Some(host) = self.lan.as_ref() else {
             self.record_public_chat(line, false);
-            return;
+            return true;
+        };
+        let Some(chat_type) = host.hub.chat_type_id(chat_type) else {
+            return false;
         };
         let bound = play::ChatTypeBound {
-            chat_type: host.hub.chat_type_id(chat_type).network_id() as i32,
+            chat_type: chat_type.network_id() as i32,
             name: component_nbt(&name.component()),
             target: None,
         };
@@ -336,6 +341,19 @@ impl Game<'_> {
             &bound,
             delivery,
         );
+        true
+    }
+
+    /// `Commands.performCommand`'s catch: a command that threw fails with
+    /// `command.failed`, sent to the guest in red.
+    fn guest_command_failed(&self, i: usize) {
+        if let Some(host) = self.lan.as_ref() {
+            let failure = Text::translate("command.failed", &[]).with_color(text::RED);
+            host.hub.guests[i].send(&C::SystemChat(play::SystemChat {
+                content: component_nbt(&failure.component()),
+                overlay: false,
+            }));
+        }
     }
 
     /// SayCommand, EmoteCommands and MsgCommand for a guest: chat to the
@@ -393,7 +411,9 @@ impl Game<'_> {
             if let Some(text) =
                 self.for_player(Target::Guest(conn), |game| game.resolve_chat_message(text))
             {
-                self.lan_broadcast_command_chat(sender, &name, id, &text, message);
+                if !self.lan_broadcast_command_chat(sender, &name, id, &text, message) {
+                    self.guest_command_failed(i);
+                }
             } else {
                 log::warn!(
                     "Cannot resolve public chat command for disconnected player {sender:032x}"
@@ -454,7 +474,9 @@ impl Game<'_> {
             }));
             return true;
         }
-        host.hub.whisper(i, &targets, message, text);
+        if !host.hub.whisper(i, &targets, message, text) {
+            self.guest_command_failed(i);
+        }
         true
     }
 }

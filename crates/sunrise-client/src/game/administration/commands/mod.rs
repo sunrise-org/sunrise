@@ -4257,7 +4257,9 @@ impl Game<'_> {
                     }
                     _ => 0,
                 };
-                self.lan_broadcast_command_chat(sender, &name, id, &message, None);
+                if !self.lan_broadcast_command_chat(sender, &name, id, &message, None) {
+                    return Err(err("command.failed", &[]));
+                }
                 Ok(1)
             }
             _ => {
@@ -4265,6 +4267,19 @@ impl Game<'_> {
                 let name = self.source_display_name();
                 let targets = self.entities(ctx, "targets", true)?;
                 let count = targets.len() as i32;
+                // ChatType.bind throws for a missing type before anything is sent.
+                let incoming_type = match &self.lan {
+                    Some(host) => {
+                        let (Some(incoming), Some(_)) = (
+                            host.hub.chat_type_id("msg_command_incoming"),
+                            host.hub.chat_type_id("msg_command_outgoing"),
+                        ) else {
+                            return Err(err("command.failed", &[]));
+                        };
+                        Some(incoming)
+                    }
+                    None => None,
+                };
                 for target in targets {
                     let target_name = match target {
                         Target::Player => self.player_display_name(),
@@ -4302,9 +4317,8 @@ impl Game<'_> {
                             // The target's copy is private chat with the incoming whisper
                             // type, shown only to players who show chat (`Hub::whisper`).
                             let bound = sunrise_protocol::packets::play::ChatTypeBound {
-                                chat_type: host
-                                    .hub
-                                    .chat_type_id("msg_command_incoming")
+                                chat_type: incoming_type
+                                    .expect("a hub's incoming type was checked above")
                                     .network_id() as i32,
                                 name: sunrise_client::lan::data::component_nbt(&name.component()),
                                 target: None,
@@ -4346,10 +4360,14 @@ impl Game<'_> {
 
     /// MessageArgument: `@p`-style selectors in a message become names.
     pub(super) fn expand_selectors(&mut self, raw: &str) -> Text {
-        let mut out = Text::empty();
+        // `MessageArgument.Message.resolveComponent`: no selector part leaves the whole text as one
+        // literal; otherwise the text before the first part is the literal root and each part and
+        // each non-empty stretch after it is appended as a sibling.
+        let mut out: Option<Text> = None;
+        let mut pending = String::new();
         let mut rest = raw;
         while let Some(at) = rest.find('@') {
-            out.push(&rest[..at]);
+            pending.push_str(&rest[..at]);
             let mut reader = Reader::new(&rest[at..]);
             match (sunrise_client::command::ArgType::Entity {
                 single: false,
@@ -4359,22 +4377,35 @@ impl Game<'_> {
             {
                 Ok(Arg::Entity(s)) if reader.cursor > 1 => {
                     let found = self.select(&s);
+                    let text =
+                        out.get_or_insert_with(|| Text::literal(std::mem::take(&mut pending)));
+                    if !pending.is_empty() {
+                        text.push(std::mem::take(&mut pending));
+                    }
                     for (i, t) in found.iter().enumerate() {
                         if i > 0 {
-                            out.push(", ");
+                            text.push(", ");
                         }
-                        out.push(self.target_name(*t));
+                        text.push(self.target_name(*t));
                     }
                     rest = &rest[at + reader.cursor..];
                 }
                 _ => {
-                    out.push("@");
+                    pending.push('@');
                     rest = &rest[at + 1..];
                 }
             }
         }
-        out.push(rest);
-        out
+        pending.push_str(rest);
+        match out {
+            None => Text::literal(pending),
+            Some(mut text) => {
+                if !pending.is_empty() {
+                    text.push(pending);
+                }
+                text
+            }
+        }
     }
 }
 

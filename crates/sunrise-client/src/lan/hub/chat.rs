@@ -232,8 +232,18 @@ impl Hub {
                 message.content
             )));
         }
+        // ChatType.bind throws when the registry lacks the type; the chat
+        // message chain logs the failure and drops this message (no
+        // broadcast, no rate-spam count), and the player stays connected.
+        let Some(chat_type) = self.chat_type_id("chat") else {
+            events.push(HostEvent::Error(
+                "Chain link failed, continuing to next one: minecraft:chat is not in the chat_type registry"
+                    .to_owned(),
+            ));
+            return;
+        };
         let bound = play::ChatTypeBound {
-            chat_type: self.chat_type_id("chat").network_id() as i32,
+            chat_type: chat_type.network_id() as i32,
             name: self.player_display_name(uuid, &name),
             target: None,
         };
@@ -474,19 +484,24 @@ impl Hub {
     }
 
     /// MsgCommand.sendMessage to each target: the outgoing line for the
-    /// sender, the incoming one for the target. Nothing is logged.
+    /// sender, the incoming one for the target. Nothing is logged. False,
+    /// with nothing sent, when the registry lacks one of the two chat types:
+    /// `ChatType.bind` throws before the first message goes out, and the
+    /// command fails.
     pub fn whisper(
         &mut self,
         i: usize,
         targets: &[usize],
         message: Option<ChatMessage>,
         text: &str,
-    ) {
+    ) -> bool {
         let (uuid, name) = (self.guests[i].uuid, self.guests[i].name.clone());
-        let (outgoing, incoming) = (
+        let (Some(outgoing), Some(incoming)) = (
             self.chat_type_id("msg_command_outgoing"),
             self.chat_type_id("msg_command_incoming"),
-        );
+        ) else {
+            return false;
+        };
         for &t in targets {
             let target = self.player_display_name(self.guests[t].uuid, &self.guests[t].name);
             let out = play::ChatTypeBound {
@@ -510,17 +525,20 @@ impl Hub {
                 }
             }
         }
+        true
     }
 
     /// `ChatType.bind`'s lookup: a `ChatType` key's entry in the world's registry, by the
     /// network id the clients were sent (`SyncData::id`, the order of the sync), so a pack's
-    /// replacement of the entry is the one they decorate with.
-    pub fn chat_type_id(&self, name: &str) -> RegistryRef<ChatType> {
-        RegistryRef::new(
-            self.sync
-                .id("minecraft:chat_type", &format!("minecraft:{name}"))
-                .map_or(0, |id| id as u32),
-        )
+    /// replacement of the entry is the one they decorate with. None when the registry lacks the
+    /// key, where `getOrThrow` throws: the vanilla pack is not required (`/datapack disable
+    /// vanilla`) and a pack.mcmeta filter can hide a built-in chat type. Each caller does what
+    /// the exception does to it in vanilla.
+    pub fn chat_type_id(&self, name: &str) -> Option<RegistryRef<ChatType>> {
+        let id = self
+            .sync
+            .id("minecraft:chat_type", &format!("minecraft:{name}"))?;
+        Some(RegistryRef::new(id as u32))
     }
 }
 

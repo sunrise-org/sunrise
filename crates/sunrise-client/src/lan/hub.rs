@@ -401,7 +401,7 @@ pub struct Hub {
     pub loop_context: Arc<LoopContext>,
     pub encoder: ChunkEncoder,
     pub guests: super::guest_list::GuestList,
-    pub(super) sync: Arc<SyncData>,
+    pub sync: Arc<SyncData>,
     /// The active world session rule definitions.
     pub rule_registry: Arc<crate::gamerules::RuleRegistry>,
     pub ticks: u64,
@@ -1164,10 +1164,14 @@ impl Hub {
     }
     /// A chat message from the host (a disguised chat: the host has no connection to sign with).
     pub fn chat(&self, sender: &str, text: &str) {
+        // ChatType.bind throws without the type: nothing is sent.
+        let Some(chat_type) = self.chat_type_id("chat") else {
+            return;
+        };
         self.broadcast(&C::DisguisedChat(play::DisguisedChat {
             message: literal(text),
             chat_type: play::ChatTypeBound {
-                chat_type: self.chat_type_id("chat").network_id() as i32,
+                chat_type: chat_type.network_id() as i32,
                 name: literal(sender),
                 target: None,
             },

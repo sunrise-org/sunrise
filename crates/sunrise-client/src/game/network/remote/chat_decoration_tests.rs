@@ -87,6 +87,54 @@ fn a_packs_say_command_chat_type_is_the_decoration_clients_apply() {
     );
 }
 
+/// `/teammsg` binds `minecraft:team_msg_command_incoming` with the team's name as the target:
+/// a pack's replacement of the entry is the decoration, and its `target` parameter is the team.
+#[test]
+fn a_packs_team_msg_command_incoming_decorates_with_the_team_as_target() {
+    use super::super::chat::chat_type_decorate;
+    use super::super::{Decoration, play};
+    use serde_json::json;
+    use sunrise_core::nbt::{JavaString, Tag};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("items.json"), b"{}").unwrap();
+    let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+    let files = [(
+        "chat_type/minecraft:team_msg_command_incoming".to_owned(),
+        vec![json!({
+            "chat": {
+                "translation_key": "pack.team",
+                "parameters": ["target", "sender", "content"]
+            },
+            "narration": {"translation_key": "pack.team.narrate", "parameters": ["sender", "content"]}
+        })
+        .to_string()
+        .into_bytes()],
+    )];
+    let (packed, admitted) = sunrise_client::lan::data::SyncData::stage_registry_definitions(
+        root.path(),
+        &defaults,
+        &sunrise_world::loot::PackOverlay::new(&files),
+        &Default::default(),
+        &Default::default(),
+        |_| true,
+    );
+    admitted.unwrap();
+    let mut wire = Vec::new();
+    packed.append_encoded("minecraft:chat_type", &mut wire);
+    let (_, incoming, from_pack) = &wire[0];
+    assert!(*from_pack);
+    let bound = play::ChatTypeBound {
+        chat_type: 0,
+        name: Tag::String(JavaString::from("Steve")),
+        target: Some(Tag::String(JavaString::from("Red"))),
+    };
+    let decorated = chat_type_decorate(Some(incoming), Decoration::Chat, &bound, &json!("hi"));
+    assert_eq!(
+        decorated,
+        json!({"translate": "pack.team", "with": ["Red", "Steve", "hi"]})
+    );
+}
+
 /// The client resolves a chat type by the server's network id, in the server's sync order: a
 /// pack's extra chat type before `minecraft:chat` moves every later id.
 #[test]
