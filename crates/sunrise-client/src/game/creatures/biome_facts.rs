@@ -23,7 +23,6 @@ pub(in crate::game) fn biome_facts_in(
         Climate::Temperate
     };
     BiomeFacts {
-        coral_nautilus: has("minecraft:spawns_coral_variant_zombie_nautilus"),
         white_rabbit: has("minecraft:spawns_white_rabbits"),
         gold_rabbit: has("minecraft:spawns_gold_rabbits"),
         climate,

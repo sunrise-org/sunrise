@@ -8,7 +8,7 @@ use crate::{
     items::Items,
     mobs::{
         Mob, MobType, MobTypes,
-        finalize::{self, Ctx, FinalizeLevel, Group, SpawnRegistries},
+        finalize::{self, Ctx, FinalizeLevel, Group},
         spawn_rules::Reason,
         spawning::{LocalDifficulty, MOON_BRIGHTNESS},
     },
@@ -37,7 +37,6 @@ struct Data {
     types: HashMap<String, Arc<MobType>>,
     biome_tags: HashMap<String, HashSet<String>>,
     structure_tags: HashMap<String, HashSet<String>>,
-    registries: SpawnRegistries,
     variants: crate::mobs::variants::VariantTables,
     enchantments: Enchantments,
     items: Items,
@@ -61,7 +60,6 @@ fn load(root: &std::path::Path, defaults: &ItemDefaults) -> Option<Data> {
             &sunrise_world::loot::PackOverlay::NONE,
         )
         .unwrap_or_default(),
-        registries: SpawnRegistries::load(root),
         variants: crate::mobs::variants::VariantTables::load_prepared(root),
         enchantments: Enchantments::load(root, defaults).ok()?,
         items: Items::catalog(root, &sunrise_world::loot::PackOverlay::NONE, defaults).ok()?,
@@ -198,7 +196,6 @@ impl FinalizeLevel for Level<'_> {
     }
     fn spawn_data(&self) -> finalize::SpawnData<'_> {
         finalize::SpawnData {
-            registries: &self.data.registries,
             variants: &self.data.variants,
             enchantments: &self.data.enchantments,
             items: &self.data.items,

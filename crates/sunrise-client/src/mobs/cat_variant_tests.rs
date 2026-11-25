@@ -8,7 +8,7 @@ use crate::{
     lan::data::{PackRegistryDefinitions, RegistryRef, SyncData},
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobType, Species, ai,
-        finalize::{self, Ctx, FinalizeLevel, SpawnData, SpawnRegistries},
+        finalize::{self, Ctx, FinalizeLevel, SpawnData},
         spawn_rules::Reason,
         spawning::LocalDifficulty,
         tame,
@@ -88,7 +88,6 @@ struct TestLevel<'a> {
     structures: Vec<String>,
     black_cat_structures: Vec<&'a str>,
     moon_phase: usize,
-    registries: SpawnRegistries,
     variants: &'a VariantTables,
     enchantments: Enchantments,
     items: Items,
@@ -131,7 +130,6 @@ impl FinalizeLevel for TestLevel<'_> {
     }
     fn spawn_data(&self) -> SpawnData<'_> {
         SpawnData {
-            registries: &self.registries,
             variants: self.variants,
             enchantments: &self.enchantments,
             items: &self.items,
@@ -141,13 +139,11 @@ impl FinalizeLevel for TestLevel<'_> {
 }
 
 fn test_level<'a>(biome: &'a str, variants: &'a VariantTables) -> TestLevel<'a> {
-    let empty = tempfile::tempdir().unwrap();
     TestLevel {
         biome,
         structures: Vec::new(),
         black_cat_structures: vec!["minecraft:swamp_hut"],
         moon_phase: 4,
-        registries: SpawnRegistries::load(empty.path()),
         variants,
         enchantments: Enchantments::default(),
         items: Items::empty(),
@@ -353,7 +349,7 @@ fn client_resolves_synced_cat_variant_asset_id_by_network_id() {
             })
             .collect(),
     });
-    let client_variants = VariantTables::from_synced(&dynamic, &VariantTables::default());
+    let client_variants = VariantTables::from_synced(&dynamic, &VariantTables::default()).unwrap();
 
     // Entity data carries `midnight.network_id()` directly.
     let mut client_cat = Mob::new(1, cat_type(), Vec3::ZERO, 0.0);

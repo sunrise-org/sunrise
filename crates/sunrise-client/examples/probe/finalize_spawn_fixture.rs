@@ -20,7 +20,7 @@ use sunrise_client::{
     mobs::{
         Mob, MobTypes, Species,
         data::MobData,
-        finalize::{self, Attr, Ctx, FinalizeLevel, SpawnData, SpawnRegistries},
+        finalize::{self, Attr, Ctx, FinalizeLevel, SpawnData},
         gear,
         render::{DYE_NAMES, VILLAGER_TYPES},
         spawn_rules::Reason,
@@ -37,7 +37,6 @@ struct Level<'a> {
     types: &'a MobTypes,
     data: &'a MobData,
     structure_tags: &'a HashMap<String, HashSet<String>>,
-    registries: &'a SpawnRegistries,
     variants: &'a sunrise_client::mobs::variants::VariantTables,
     enchantments: &'a Enchantments,
     items: &'a Items,
@@ -132,7 +131,6 @@ impl FinalizeLevel for Level<'_> {
     }
     fn spawn_data(&self) -> SpawnData<'_> {
         SpawnData {
-            registries: self.registries,
             variants: self.variants,
             enchantments: self.enchantments,
             items: self.items,
@@ -183,7 +181,6 @@ const MEMORIES: [&str; 7] = [
 fn variant(m: &Mob, variants: &sunrise_client::mobs::variants::VariantTables, v: &mut Vec<String>) {
     use Species as S;
     let s = m.species();
-    let var = format!("minecraft:{}", finalize::variant_name(s, m.extra.variant));
     match s {
         S::Pig => {
             let var = m
@@ -265,7 +262,14 @@ fn variant(m: &Mob, variants: &sunrise_client::mobs::variants::VariantTables, v:
                 .to_owned();
             v.push(var);
         }
-        S::ZombieNautilus => v.push(var),
+        S::ZombieNautilus => {
+            let var = m
+                .zombie_nautilus_variant(&variants.zombie_nautilus)
+                .and_then(|r| variants.zombie_nautilus.id(r))
+                .unwrap_or("minecraft:temperate")
+                .to_owned();
+            v.push(var);
+        }
         S::Sheep => v.push(DYE_NAMES[m.extra.color as usize & 15].into()),
         S::Horse => v.push(format!(
             "{}/{}",
@@ -501,7 +505,6 @@ pub fn main() -> sunrise_client::Result<()> {
     let structure_tags =
         sunrise_client::items::load_tags(root, "worldgen/structure", &PackOverlay::NONE)
             .unwrap_or_default();
-    let registries = SpawnRegistries::load(root);
     let variants = sunrise_client::mobs::variants::VariantTables::load_prepared(root);
     let camel = &types.types["minecraft:camel_husk"];
     let camel_husk_size = (camel.width as f32, camel.height as f32);
@@ -548,7 +551,6 @@ pub fn main() -> sunrise_client::Result<()> {
             types: &types,
             data: &mob_data,
             structure_tags: &structure_tags,
-            registries: &registries,
             variants: &variants,
             enchantments: &enchantments,
             items: &items,

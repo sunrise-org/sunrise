@@ -8,7 +8,7 @@ use crate::{
     lan::data::{PackRegistryDefinitions, RegistryRef, SyncData},
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobType, Species, ai,
-        finalize::{self, Ctx, FinalizeLevel, SpawnData, SpawnRegistries},
+        finalize::{self, Ctx, FinalizeLevel, SpawnData},
         spawn_rules::Reason,
         spawning::LocalDifficulty,
         tame,
@@ -91,7 +91,6 @@ fn stage_pack(files: &[(String, Vec<Vec<u8>>)]) -> PackRegistryDefinitions {
 
 struct TestLevel<'a> {
     biome: &'a str,
-    registries: SpawnRegistries,
     variants: &'a VariantTables,
     enchantments: Enchantments,
     items: Items,
@@ -131,7 +130,6 @@ impl FinalizeLevel for TestLevel<'_> {
     }
     fn spawn_data(&self) -> SpawnData<'_> {
         SpawnData {
-            registries: &self.registries,
             variants: self.variants,
             enchantments: &self.enchantments,
             items: &self.items,
@@ -141,10 +139,8 @@ impl FinalizeLevel for TestLevel<'_> {
 }
 
 fn test_level<'a>(biome: &'a str, variants: &'a VariantTables) -> TestLevel<'a> {
-    let empty = tempfile::tempdir().unwrap();
     TestLevel {
         biome,
-        registries: SpawnRegistries::load(empty.path()),
         variants,
         enchantments: Enchantments::default(),
         items: Items::empty(),
@@ -306,7 +302,7 @@ fn synced_wolf_variant_network_id_resolves_to_pack_asset_id_on_client() {
             })
             .collect(),
     });
-    let client_variants = VariantTables::from_synced(&dynamic, &VariantTables::default());
+    let client_variants = VariantTables::from_synced(&dynamic, &VariantTables::default()).unwrap();
 
     // Entity data carries `mint.network_id()` directly.
     let mut client_wolf = Mob::new(1, wolf_type(), Vec3::ZERO, 0.0);
@@ -328,6 +324,28 @@ fn synced_wolf_variant_network_id_resolves_to_pack_asset_id_on_client() {
     // Out-of-range id never falls back to a built-in wolf texture.
     client_wolf.extra.wolf_variant = Some(RegistryRef::new(99));
     assert_eq!(tame::texture(&client_wolf, Some(&client_variants)), "");
+}
+
+/// A malformed synced wolf variant (no `baby_assets`) refuses the registry data.
+#[test]
+fn malformed_synced_wolf_variant_refuses_the_registry_data() {
+    let asset = |name: &str| {
+        Tag::compound([
+            ("wild", Tag::String(JavaString::from(name))),
+            ("tame", Tag::String(JavaString::from(name))),
+            ("angry", Tag::String(JavaString::from(name))),
+        ])
+    };
+    let mut dynamic = Dynamic::default();
+    dynamic.add(RegistryData {
+        registry: "minecraft:wolf_variant".to_owned(),
+        entries: vec![RegistryEntry {
+            id: "test:bad".to_owned(),
+            data: Some(Tag::compound([("assets", asset("test:entity/wolf/bad"))])),
+        }],
+    });
+    let error = VariantTables::from_synced(&dynamic, &VariantTables::default()).unwrap_err();
+    assert!(error.contains("minecraft:wolf_variant/test:bad"), "{error}");
 }
 
 /// (4) A pack wolf sound variant is chosen on spawn and its sounds are played for bark.

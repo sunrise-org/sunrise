@@ -3158,7 +3158,6 @@ struct WorldCore {
     collision: Arc<BlockCollisionRegistry<'static>>,
     motion: MotionResources,
     suffocation: sunrise_world::suffocation::SuffocationRegistry<'static>,
-    spawn_registries: sunrise_client::mobs::finalize::SpawnRegistries,
     variants: Arc<sunrise_client::mobs::variants::VariantTables>,
     threads: usize,
 }

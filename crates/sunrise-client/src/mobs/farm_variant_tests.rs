@@ -9,7 +9,7 @@ use crate::{
     lan::data::{PackRegistryDefinitions, RegistryRef, SyncData},
     mobs::{
         Mob, MobEvent, MobType, Species, ai, drops,
-        finalize::{self, Ctx, FinalizeLevel, SpawnData, SpawnRegistries},
+        finalize::{self, Ctx, FinalizeLevel, SpawnData},
         render,
         spawn_rules::Reason,
         spawning::LocalDifficulty,
@@ -133,12 +133,11 @@ fn sync_tables(packed: &PackRegistryDefinitions, registries: &[&str]) -> Variant
         };
         synced.add(packet);
     }
-    VariantTables::from_synced(&synced, &VariantTables::default())
+    VariantTables::from_synced(&synced, &VariantTables::default()).unwrap()
 }
 
 struct TestLevel<'a> {
     biome: &'a str,
-    registries: SpawnRegistries,
     variants: &'a VariantTables,
     enchantments: Enchantments,
     items: Items,
@@ -178,7 +177,6 @@ impl FinalizeLevel for TestLevel<'_> {
     }
     fn spawn_data(&self) -> SpawnData<'_> {
         SpawnData {
-            registries: &self.registries,
             variants: self.variants,
             enchantments: &self.enchantments,
             items: &self.items,
@@ -188,10 +186,8 @@ impl FinalizeLevel for TestLevel<'_> {
 }
 
 fn test_level<'a>(biome: &'a str, variants: &'a VariantTables) -> TestLevel<'a> {
-    let empty = tempfile::tempdir().unwrap();
     TestLevel {
         biome,
-        registries: SpawnRegistries::load(empty.path()),
         variants,
         enchantments: Enchantments::default(),
         items: Items::empty(),

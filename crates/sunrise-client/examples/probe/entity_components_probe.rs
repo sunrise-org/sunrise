@@ -83,14 +83,16 @@ pub fn main() -> Result<()> {
             | Species::Pig
             | Species::Cow
             | Species::Chicken
-            | Species::Frog => {
+            | Species::Frog
+            | Species::ZombieNautilus => {
                 let key = match s {
                     Species::Wolf => "minecraft:wolf/variant",
                     Species::Cat => "minecraft:cat/variant",
                     Species::Pig => "minecraft:pig/variant",
                     Species::Cow => "minecraft:cow/variant",
                     Species::Chicken => "minecraft:chicken/variant",
-                    _ => "minecraft:frog/variant",
+                    Species::Frog => "minecraft:frog/variant",
+                    _ => "minecraft:zombie_nautilus/variant",
                 };
                 let full = if raw_variant.contains(':') {
                     raw_variant.to_owned()

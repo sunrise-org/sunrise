@@ -324,8 +324,8 @@ pub fn body_with_variants<'a>(
             },
         ),
         S::Nautilus | S::ZombieNautilus => (
-            super::nautilus::model(m).into(),
-            super::nautilus::texture(m).into(),
+            super::nautilus::model(m, variants).into(),
+            super::nautilus::texture(m, variants).into(),
         ),
         S::SulfurCube => {
             let (model, texture) = super::sulfur_cube::body(m);
@@ -2394,6 +2394,7 @@ fn render_selected(
                     | Species::Cow
                     | Species::Chicken
                     | Species::Frog
+                    | Species::ZombieNautilus
             ) {
                 atlas(crate::hud::MISSING_SPRITE)
             } else {

@@ -258,10 +258,13 @@ impl Game<'_> {
                     .collect()
             })
             .unwrap_or_default();
-        let variants = Arc::new(sunrise_client::mobs::variants::VariantTables::from_synced(
-            &registries,
-            self.res.variants(),
-        ));
+        let variants = Arc::new(
+            sunrise_client::mobs::variants::VariantTables::from_synced(
+                &registries,
+                self.res.variants(),
+            )
+            .map_err(|error| format!("refused variant registries: {error}"))?,
+        );
         if let Some(r) = self.remote.as_mut() {
             r.enchantments = enchantments;
             let bits = ceil_log2(biomes.len());

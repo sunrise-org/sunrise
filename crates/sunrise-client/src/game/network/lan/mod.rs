@@ -265,24 +265,21 @@ fn mob_variant_meta(
                 defaults.push((18, serializer::FROG_VARIANT, Value::Id(v)));
             }
         }
-        // ZombieNautilus's DATA_VARIANT_ID (after the entries of its parents): registry holder.
+        // ZombieNautilus.DATA_VARIANT_ID carries the world table's network id
+        // directly (`RegistryRef<ZombieNautilusVariant>`).
         "minecraft:zombie_nautilus" => {
-            let (index, serializer, registry) = (
-                21,
-                serializer::ZOMBIE_NAUTILUS_VARIANT,
-                "minecraft:zombie_nautilus_variant",
-            );
-            // Each registry's default (`define(DATA_VARIANT_ID, ... TEMPERATE)`)
-            // stays out of the pairing data, as other default values do.
-            let name = sunrise_client::mobs::finalize::variant_name(m.species(), e.variant);
-            let name = name.trim_start_matches("minecraft:");
-            if let Some(v) = id(registry, name)
-                && name != "temperate"
+            let default = id("minecraft:zombie_nautilus_variant", "temperate");
+            let variant_id = e
+                .zombie_nautilus_variant
+                .map(|r| r.network_id() as i32)
+                .or(default);
+            if let Some(v) = variant_id
+                && Some(v) != default
             {
-                meta.push((index, serializer, Value::Id(v)));
+                meta.push((21, serializer::ZOMBIE_NAUTILUS_VARIANT, Value::Id(v)));
             }
-            if let Some(v) = id(registry, "temperate") {
-                defaults.push((index, serializer, Value::Id(v)));
+            if let Some(v) = default {
+                defaults.push((21, serializer::ZOMBIE_NAUTILUS_VARIANT, Value::Id(v)));
             }
         }
         // Rabbit.DATA_TYPE_ID (after AgeableMob's two) and

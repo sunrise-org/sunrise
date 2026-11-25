@@ -11,7 +11,7 @@ use sunrise_client::mobs::{
 };
 use sunrise_client::particles::{ParticleOptions, ParticleType};
 use sunrise_protocol::entity_data::{ParticleData, Particles, Value};
-use sunrise_protocol::registry::{Builtin, Dynamic};
+use sunrise_protocol::registry::Builtin;
 use sunrise_world::registry::BlockStateId;
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
@@ -409,79 +409,60 @@ fn tropical_fish(m: &mut Mob, packed: i32) {
 /// synchronized registry (the variants of the cat, wolf, frog, pig, cow,
 /// chicken and zombie nautilus) or count game time (a wolf's anger).
 /// `game_time` is the client level's.
-fn apply_registry_data(
-    m: &mut Mob,
-    values: &[(u8, i32, Value)],
-    registries: &Dynamic,
-    game_time: i64,
-) {
+fn apply_registry_data(m: &mut Mob, values: &[(u8, i32, Value)], game_time: i64) {
     let species = m.species();
     for (index, _, value) in values {
-        let registry = match (species, *index, value) {
+        match (species, *index, value) {
             (Species::Cat, 20, Value::Id(id)) => {
                 m.extra.cat_variant = Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Cat, 24, Value::Id(id)) => {
                 m.extra.cat_sound_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Wolf, 23, Value::Id(id)) => {
                 m.extra.wolf_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Wolf, 24, Value::Id(id)) => {
                 m.extra.wolf_sound_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Frog, 18, Value::Id(id)) => {
                 m.extra.frog_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Pig, 19, Value::Id(id)) => {
                 m.extra.pig_variant = Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Pig, 20, Value::Id(id)) => {
                 m.extra.pig_sound_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Cow, 18, Value::Id(id)) => {
                 m.extra.cow_variant = Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Cow, 19, Value::Id(id)) => {
                 m.extra.cow_sound_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Chicken, 18, Value::Id(id)) => {
                 m.extra.chicken_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
             (Species::Chicken, 19, Value::Id(id)) => {
                 m.extra.chicken_sound_variant =
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
-                continue;
             }
-            (Species::ZombieNautilus, 21, Value::Id(_)) => "minecraft:zombie_nautilus_variant",
+            (Species::ZombieNautilus, 21, Value::Id(id)) => {
+                m.extra.zombie_nautilus_variant =
+                    Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+            }
             // Wolf.DATA_ANGER_END_TIME: the angry texture while it lies ahead.
             (Species::Wolf, 22, Value::Long(end)) => {
                 m.extra.anger = (end - game_time).clamp(0, i64::from(i32::MAX)) as i32;
-                continue;
             }
-            _ => continue,
-        };
-        if let Value::Id(id) = value
-            && let Some(name) = registries.name(registry, *id)
-        {
-            m.extra.variant = finalize::variant_index(species, name);
+            _ => {}
         }
     }
 }
@@ -557,7 +538,7 @@ impl Game<'_> {
         if let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) {
             let stare_sound =
                 super::villager_client::receive(m, values, &r.builtin, r.entity_id, &professions);
-            apply_registry_data(m, values, &r.registries, self.world.game_time);
+            apply_registry_data(m, values, self.world.game_time);
             if let Some(pos) = sleeping_pos {
                 m.extra.sleeping_pos = pos;
                 if pos.is_some()

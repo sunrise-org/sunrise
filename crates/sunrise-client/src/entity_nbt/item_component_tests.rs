@@ -62,7 +62,14 @@ fn a_spawn_egg_beats_the_biome_variant() {
     );
     let mut nautilus = spawn("minecraft:zombie_nautilus", 4);
     apply_item_components(&mut nautilus, &egg);
-    assert_eq!(nautilus.extra.variant, 1, "minecraft:warm, not temperate");
+    apply_item_variant_components(&mut nautilus, &egg, &variants);
+    assert_eq!(
+        nautilus
+            .zombie_nautilus_variant(&variants.zombie_nautilus)
+            .and_then(|r| variants.zombie_nautilus.id(r)),
+        Some("minecraft:warm"),
+        "minecraft:warm, not temperate"
+    );
 }
 
 /// `Fox.applyImplicitComponent` and `Frog.applyImplicitComponent`: the

@@ -1251,13 +1251,6 @@ pub fn write_mob(
                 map.insert("variant".into(), string(id));
             }
         }
-        _ if species != S::ZombieNautilus && crate::mobs::finalize::saves_variant_name(species) => {
-            if let Some((_, variant)) =
-                crate::mobs::finalize::species_variant_component(species, m.extra.variant)
-            {
-                map.insert("variant".into(), string(&variant));
-            }
-        }
         _ => {}
     }
     match species {
@@ -1627,7 +1620,7 @@ pub fn write_mob(
             );
         }
         "minecraft:nautilus" | "minecraft:zombie_nautilus" => {
-            crate::mobs::nautilus::to_nbt(m, map);
+            crate::mobs::nautilus::to_nbt(m, map, variants);
         }
         "minecraft:sulfur_cube" => crate::mobs::sulfur_cube::to_nbt(m, map),
         "minecraft:bee" => crate::mobs::bee::to_nbt(m, map, &mut uuid_of),
@@ -2491,19 +2484,6 @@ fn mob_from_nbt_at(
                 0.7
             };
         }
-    }
-    if !matches!(
-        m.species(),
-        crate::mobs::Species::Wolf
-            | crate::mobs::Species::Cat
-            | crate::mobs::Species::Pig
-            | crate::mobs::Species::Cow
-            | crate::mobs::Species::Chicken
-            | crate::mobs::Species::Frog
-    ) && crate::mobs::finalize::saves_variant_name(m.species())
-        && let Some(v) = text(tag.get("variant"))
-    {
-        m.extra.variant = crate::mobs::finalize::variant_index(m.species(), &v);
     }
     if m.species() == crate::mobs::Species::Chicken
         && let Some(t) = number(tag.get("EggLayTime"))
@@ -7385,13 +7365,11 @@ pub fn apply_item_components(m: &mut Mob, stack: &crate::items::ItemStack) {
             m.extra.variant3 = id as u8;
         }
     }
-    // Enum and not-yet-migrated registry variant components (`applyImplicitComponents`).
-    // Pig, Cow, Chicken and Wolf resolve against the world's `VariantTables` in
+    // Enum variant components (`applyImplicitComponents`). Registry-backed
+    // variants resolve against the world's `VariantTables` in
     // `apply_item_variant_components`.
     let species = m.species();
     let variant = match species {
-        // ZombieNautilus.applyImplicitComponents: the variant only.
-        crate::mobs::Species::ZombieNautilus => Some("minecraft:zombie_nautilus/variant"),
         // Fox.applyImplicitComponent: `setVariant` from the component
         // alone, so a spawn egg carrying one hatches that variant.
         crate::mobs::Species::Fox => Some("minecraft:fox/variant"),
@@ -7427,8 +7405,8 @@ pub fn apply_item_components(m: &mut Mob, stack: &crate::items::ItemStack) {
 }
 
 /// Apply registry-backed variant and sound-variant item components
-/// (`Pig`/`Cow`/`Chicken`/`Wolf`/`Cat`/`Frog.applyImplicitComponents`) against
-/// the world's `VariantTables`.
+/// (`Pig`/`Cow`/`Chicken`/`Wolf`/`Cat`/`Frog`/`ZombieNautilus.applyImplicitComponents`)
+/// against the world's `VariantTables`.
 pub fn apply_item_variant_components(
     m: &mut Mob,
     stack: &crate::items::ItemStack,
@@ -7505,13 +7483,20 @@ pub fn apply_item_variant_components(
                 m.extra.frog_variant = Some(r);
             }
         }
+        crate::mobs::Species::ZombieNautilus => {
+            if let Some(name) = text(components.other("minecraft:zombie_nautilus/variant"))
+                && let Some(r) = variants.zombie_nautilus.lookup(&name)
+            {
+                m.extra.zombie_nautilus_variant = Some(r);
+            }
+        }
         _ => {}
     }
 }
 
 /// Resolve registry-backed mob variants from saved NBT against the world's
 /// `VariantTables` (`VariantUtils.readVariant` +
-/// `Wolf`/`Cat`/`Pig`/`Cow`/`Chicken`/`Frog.readAdditionalSaveData`).
+/// `Wolf`/`Cat`/`Pig`/`Cow`/`Chicken`/`Frog`/`ZombieNautilus.readAdditionalSaveData`).
 /// Missing or unknown ids leave the vanilla default (`getDefaultOrAny`).
 pub fn read_mob_variants(m: &mut Mob, tag: &Tag, variants: &crate::mobs::variants::VariantTables) {
     match m.species() {
@@ -7559,6 +7544,15 @@ pub fn read_mob_variants(m: &mut Mob, tag: &Tag, variants: &crate::mobs::variant
             m.extra.frog_variant = text(tag.get("variant"))
                 .and_then(|v| variants.frog.lookup(&v))
                 .or_else(|| variants.frog.default_or_any("minecraft:temperate"));
+        }
+        crate::mobs::Species::ZombieNautilus => {
+            m.extra.zombie_nautilus_variant = text(tag.get("variant"))
+                .and_then(|v| variants.zombie_nautilus.lookup(&v))
+                .or_else(|| {
+                    variants
+                        .zombie_nautilus
+                        .default_or_any("minecraft:temperate")
+                });
         }
         _ => {}
     }

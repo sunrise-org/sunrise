@@ -27,8 +27,7 @@ use crate::{
     items::{ItemStack, Items},
     living_attributes::EquipmentDeltas,
 };
-use serde_json::Value;
-use std::{borrow::Cow, fs, path::Path, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 use sunrise_core::{equipment_slot::EquipmentSlot, geometry::Aabb, random::RandomSource};
 use sunrise_world::attributes::entity::Catalog;
 
@@ -150,159 +149,9 @@ impl Group {
     }
 }
 
-/// A variant registry entry's spawn conditions (`SpawnPrioritySelectors`).
-#[derive(Clone, Debug)]
-enum Condition {
-    Biome(Vec<String>),
-    Structure(Vec<String>),
-    Moon(Option<f64>, Option<f64>),
-}
-#[derive(Clone, Debug)]
-pub struct VariantRegistry {
-    /// Entry names in registry order (sorted by id).
-    pub names: Vec<String>,
-    selectors: Vec<(usize, Option<Condition>, i32)>,
-}
-impl VariantRegistry {
-    fn load(dir: &Path, structure_tags: &dyn Fn(&str) -> Vec<String>) -> Self {
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                e.file_name()
-                    .to_str()
-                    .and_then(|n| n.strip_suffix(".json"))
-                    .map(str::to_owned)
-            })
-            .collect();
-        names.sort();
-        let mut selectors = Vec::new();
-        for (i, name) in names.iter().enumerate() {
-            let Ok(bytes) = fs::read(dir.join(format!("{name}.json"))) else {
-                continue;
-            };
-            let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
-                continue;
-            };
-            for s in v["spawn_conditions"].as_array().into_iter().flatten() {
-                let priority = s["priority"].as_i64().unwrap_or(0) as i32;
-                let c = &s["condition"];
-                let list = |v: &Value| -> Vec<String> {
-                    match v {
-                        Value::String(s) => vec![s.clone()],
-                        Value::Array(a) => a
-                            .iter()
-                            .filter_map(|x| x.as_str().map(str::to_owned))
-                            .collect(),
-                        _ => Vec::new(),
-                    }
-                };
-                let condition = match c["type"].as_str() {
-                    Some("minecraft:biome") => Some(Condition::Biome(list(&c["biomes"]))),
-                    Some("minecraft:structure") => Some(Condition::Structure(
-                        list(&c["structures"])
-                            .into_iter()
-                            .flat_map(|s| match s.strip_prefix('#') {
-                                Some(tag) => structure_tags(tag),
-                                None => vec![s],
-                            })
-                            .collect(),
-                    )),
-                    Some("minecraft:moon_brightness") => {
-                        let r = &c["range"];
-                        Some(match r.as_f64() {
-                            Some(x) => Condition::Moon(Some(x), Some(x)),
-                            None => Condition::Moon(r["min"].as_f64(), r["max"].as_f64()),
-                        })
-                    }
-                    _ => None,
-                };
-                selectors.push((i, condition, priority));
-            }
-        }
-        Self { names, selectors }
-    }
-    pub fn index(&self, name: &str) -> Option<usize> {
-        let name = name.strip_prefix("minecraft:").unwrap_or(name);
-        self.names.iter().position(|n| n == name)
-    }
-    /// `VariantUtils.selectVariantToSpawn`: the entries of the highest
-    /// priority whose condition holds, one of them at random.
-    pub fn select<L: FinalizeLevel + ?Sized>(
-        &self,
-        level: &L,
-        pos: [i32; 3],
-        random: &mut impl RandomSource,
-    ) -> Option<usize> {
-        let mut unpacked: Vec<&(usize, Option<Condition>, i32)> = self.selectors.iter().collect();
-        unpacked.sort_by_key(|s| std::cmp::Reverse(s.2));
-        let mut highest = i32::MIN;
-        let mut selected = Vec::new();
-        for (entry, condition, priority) in unpacked {
-            if *priority < highest {
-                continue;
-            }
-            let ok = match condition {
-                None => true,
-                Some(Condition::Biome(list)) => list.iter().any(|b| match b.strip_prefix('#') {
-                    Some(tag) => level.biome_tag(tag, pos),
-                    None => level.biome(pos) == *b,
-                }),
-                Some(Condition::Structure(list)) => {
-                    let here = level.structures_with_piece_at(pos);
-                    here.iter().any(|s| list.contains(s))
-                }
-                Some(Condition::Moon(min, max)) => {
-                    let b = f64::from(super::spawning::MOON_BRIGHTNESS[level.moon_phase(pos) & 7]);
-                    min.is_none_or(|m| b >= m) && max.is_none_or(|m| b <= m)
-                }
-            };
-            if ok {
-                highest = *priority;
-                selected.push(*entry);
-            }
-        }
-        if selected.is_empty() {
-            return None;
-        }
-        Some(selected[random.next_int_bound(selected.len() as i32).unwrap_or(0) as usize])
-    }
-}
-
-/// The registries finalizeSpawn reads.
-pub struct SpawnRegistries {
-    pub zombie_nautilus: VariantRegistry,
-}
-impl SpawnRegistries {
-    /// Loads the variant registries from a resources directory
-    /// (`data/minecraft/<registry>/`).
-    pub fn load(root: &Path) -> Self {
-        let data = root.join("data/minecraft");
-        let structure_tag = |tag: &str| -> Vec<String> {
-            let path = tag.strip_prefix("minecraft:").unwrap_or(tag);
-            let file = data.join(format!("tags/worldgen/structure/{path}.json"));
-            let Ok(bytes) = fs::read(file) else {
-                return Vec::new();
-            };
-            serde_json::from_slice::<Value>(&bytes)
-                .ok()
-                .and_then(|v| v["values"].as_array().cloned())
-                .into_iter()
-                .flatten()
-                .filter_map(|x| x.as_str().map(str::to_owned))
-                .collect()
-        };
-        let r = |name: &str| VariantRegistry::load(&data.join(name), &structure_tag);
-        Self {
-            zombie_nautilus: r("zombie_nautilus_variant"),
-        }
-    }
-}
-
-/// What finalizeSpawn needs besides the level: registries, enchantments.
+/// What finalizeSpawn needs besides the level: variant tables, enchantments.
+#[derive(Clone)]
 pub struct SpawnData<'a> {
-    pub registries: &'a SpawnRegistries,
     pub variants: &'a super::variants::VariantTables,
     pub enchantments: &'a Enchantments,
     pub items: &'a Items,
@@ -2203,15 +2052,6 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         let at = block(m);
         m.extra.variant = self.level.mob_maps().villager_type(&self.level.biome(at));
     }
-    /// `VariantUtils.selectVariantToSpawn` into `variant`, by registry name.
-    fn variant(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
-        let r = registry(self.level.spawn_data().registries);
-        let at = block(m);
-        if let Some(i) = r.select(&*self.level, at, self.random) {
-            let name = r.names[i].clone();
-            m.extra.variant = variant_index(m.species(), &name);
-        }
-    }
 
     /// `finalizeSpawn` of the mob's class.
     pub fn finalize(&mut self, m: &mut Mob, reason: Reason, g: Option<Group>) -> Option<Group> {
@@ -2334,7 +2174,14 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 self.ageable(m, g)
             }
             S::ZombieNautilus => {
-                self.variant(m, |r| &r.zombie_nautilus);
+                let at = block(m);
+                if let Some(v) = self.level.spawn_data().variants.zombie_nautilus.select(
+                    &*self.level,
+                    at,
+                    self.random,
+                ) {
+                    m.extra.zombie_nautilus_variant = Some(v);
+                }
                 let cooldown = self.uniform(2400, 3600);
                 set_memory(m, "attack_target_cooldown", i64::from(cooldown), i64::MAX);
                 m.extra.counter = cooldown;
@@ -2732,11 +2579,11 @@ fn sulfur_size(m: &mut Mob, size: i32) {
 fn cube_size(m: &mut Mob, size: i32) {
     super::cube::set_size(m, size);
 }
-/// The index the game keeps for a variant registry entry.
+/// The index the game keeps for an enum variant species (`Mooshroom`, `Fox`,
+/// `Horse`, `Llama`, `TraderLlama`).
 pub fn variant_index(s: Species, name: &str) -> u8 {
     let name = name.strip_prefix("minecraft:").unwrap_or(name);
     let i = match s {
-        Species::ZombieNautilus => super::nautilus::VARIANTS.iter().position(|v| *v == name),
         // MushroomCow.Variant: red is the codec's default, brown the other.
         Species::Mooshroom => ["red", "brown"].iter().position(|v| *v == name),
         // Fox.Variant, read from a `minecraft:fox/variant` component; the save
@@ -2748,9 +2595,7 @@ pub fn variant_index(s: Species, name: &str) -> u8 {
         Species::Llama | Species::TraderLlama => {
             super::llama::VARIANTS.iter().position(|v| *v == name)
         }
-        _ => ["temperate", "warm", "cold"]
-            .iter()
-            .position(|v| *v == name),
+        _ => None,
     };
     i.unwrap_or(0) as u8
 }
@@ -2796,45 +2641,29 @@ pub fn variant_component_in(
             let id = variants.frog.id(r)?;
             Some(("minecraft:frog/variant", id.to_owned()))
         }
+        Species::ZombieNautilus => {
+            let r = m.zombie_nautilus_variant(&variants.zombie_nautilus)?;
+            let id = variants.zombie_nautilus.id(r)?;
+            Some(("minecraft:zombie_nautilus/variant", id.to_owned()))
+        }
         _ => variant_component(m),
     }
 }
-/// [`variant_component`] of a species with the game's variant index.
+/// [`variant_component`] of an enum-variant species with the game's variant index.
 pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static str, String)> {
     let component = match s {
         Species::Mooshroom => "minecraft:mooshroom/variant",
-        Species::ZombieNautilus => "minecraft:zombie_nautilus/variant",
         Species::Horse => "minecraft:horse/variant",
         Species::Llama | Species::TraderLlama => "minecraft:llama/variant",
         _ => return None,
     };
     Some((component, format!("minecraft:{}", variant_name(s, variant))))
 }
-/// Whether the mob's save keeps its variant under `variant` — the registry
-/// id `VariantUtils.writeVariant` stores — rather than under its own key (a
-/// fox's and a mooshroom's `Type`) or a packed int (a horse's and a llama's
-/// `Variant`). Only these seven classes call `writeVariant`, so reporting the
-/// component does not mean the save carries the name.
-pub(crate) fn saves_variant_name(s: Species) -> bool {
-    matches!(
-        s,
-        Species::Wolf
-            | Species::Cat
-            | Species::Frog
-            | Species::Pig
-            | Species::Cow
-            | Species::Chicken
-            | Species::ZombieNautilus
-    )
-}
-/// The registry name of the game's variant index.
+/// The enum name of the game's variant index (`Mooshroom`, `Horse`, `Llama`,
+/// `TraderLlama`).
 pub fn variant_name(s: Species, index: u8) -> &'static str {
     let i = index as usize;
     match s {
-        Species::ZombieNautilus => super::nautilus::VARIANTS
-            .get(i)
-            .copied()
-            .unwrap_or("temperate"),
         Species::Mooshroom => ["red", "brown"].get(i).copied().unwrap_or("red"),
         Species::Horse => super::equine::VARIANT_NAMES
             .get(i)
@@ -2843,10 +2672,7 @@ pub fn variant_name(s: Species, index: u8) -> &'static str {
         Species::Llama | Species::TraderLlama => {
             super::llama::VARIANTS.get(i).copied().unwrap_or("creamy")
         }
-        _ => ["temperate", "warm", "cold"]
-            .get(i)
-            .copied()
-            .unwrap_or("temperate"),
+        _ => "",
     }
 }
 /// `VillagerType.BY_BIOME` (index into `render::VILLAGER_TYPES`: plains,
@@ -3003,20 +2829,6 @@ mod tests {
         assert_eq!(variant_index(Species::Llama, "minecraft:temperate"), 0);
         assert_eq!(variant_name(Species::Horse, 7), "white");
         assert_eq!(variant_name(Species::TraderLlama, 4), "creamy");
-        // Only `VariantUtils.writeVariant` species save the name; a horse and
-        // a llama save a packed `Variant` int, a fox and a mooshroom `Type`.
-        for species in [Species::Wolf, Species::Cat, Species::Chicken, Species::Pig] {
-            assert!(saves_variant_name(species), "{species:?}");
-        }
-        for species in [
-            Species::Horse,
-            Species::Llama,
-            Species::TraderLlama,
-            Species::Fox,
-            Species::Mooshroom,
-        ] {
-            assert!(!saves_variant_name(species), "{species:?}");
-        }
     }
     /// #2269: the offspring of a spawn egg used on a mob is a baby of that
     /// kind (`SpawnEggItem.spawnOffspringFromSpawnEgg`), and only the mob's
@@ -3264,7 +3076,6 @@ mod tests {
     }
 
     struct ProviderTestLevel {
-        registries: SpawnRegistries,
         variants: crate::mobs::variants::VariantTables,
         items: Items,
     }
@@ -3302,7 +3113,6 @@ mod tests {
         }
         fn spawn_data(&self) -> SpawnData<'_> {
             SpawnData {
-                registries: &self.registries,
                 variants: &self.variants,
                 enchantments: &self.items.enchantments,
                 items: &self.items,
@@ -3339,7 +3149,6 @@ mod tests {
             .install_items(&mut items, root.path(), &overlay, &defaults)
             .unwrap();
         ProviderTestLevel {
-            registries: SpawnRegistries::load(root.path()),
             variants: Default::default(),
             items,
         }

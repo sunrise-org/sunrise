@@ -15,7 +15,7 @@ AbstractNautilus.handleStartJump	inline	crates/sunrise-client/src/mobs/nautilus.
 AbstractNautilus.onSyncedDataUpdated	skip:other		client mirror of the dash flag; the nautilus keeps its own dash clock (anim_ticks) and the jump bar uses mount.jump_ticks
 AbstractNautilus.tryToTame	inline	crates/sunrise-client/src/game/mobs/nautili.rs::Game::interact_nautilus	one chance in three, taming particles (event 7 or 6), eating sound, tame_animal trigger
 AbstractNautilus.hurtServer	port	crates/sunrise-client/src/mobs/nautilus.rs::after_hurt	angry at the attacker for 400 ticks
-AbstractNautilus.finalizeSpawn	port	crates/sunrise-client/src/mobs/nautilus.rs::finalize	attack target cooldown of 2400 to 3600 ticks
+AbstractNautilus.finalizeSpawn	port	crates/sunrise-client/src/mobs/finalize.rs::Ctx::finalize	attack target cooldown of 2400 to 3600 ticks
 AbstractNautilus.getEquipSound	port	crates/sunrise-client/src/mobs/nautilus.rs::saddle_sound	underwater saddle sound while the eyes are in water
 AbstractNautilus.createInventory	skip:other		getInventoryColumns is 0, so the container has no slots; saddle and armour are equipment slots
 AbstractNautilus.openCustomInventoryScreen	port	crates/sunrise-gameplay/src/mount_rules.rs::has_mount_menu	shift-use on a tame nautilus and the inventory key while riding open the saddle/armour screen
@@ -34,7 +34,7 @@ NautilusAi.isHostileTarget	inline	crates/sunrise-client/src/mobs/nautilus.rs::fi
 ZombieNautilus.defineSynchedData	skip:other		synched variant id; Sunrise keeps the variant in extra.variant and reads it from the server's data in remote_mob_data.rs
 ZombieNautilus.get	skip:other		reads the variant as a data component for predicates; Sunrise has no entity component view
 ZombieNautilus.applyImplicitComponent	inline	crates/sunrise-client/src/entity_nbt.rs::apply_item_components	the minecraft:zombie_nautilus/variant component of a spawn egg or bucket; no sound variant
-ZombieNautilus.finalizeSpawn	port	crates/sunrise-client/src/mobs/nautilus.rs::finalize	warm variant in warm oceans (coral), temperate elsewhere
+ZombieNautilus.finalizeSpawn	port	crates/sunrise-client/src/mobs/finalize.rs::Ctx::finalize	variant picked from the zombie_nautilus table by its spawn conditions (VariantTable::select), then the attack target cooldown
 ZombieNautilusAi.initCoreActivity	inline	crates/sunrise-client/src/mobs/nautilus.rs::register	zombie arm: no panic; the cooldown counters tick in ai_step
 ZombieNautilusAi.initIdleActivity	inline	crates/sunrise-client/src/mobs/nautilus.rs::register	zombie arm: tempt 0.9, swim stroll 1.0, target pick in find_target; no breeding
 ZombieNautilusAi.initFightActivity	inline	crates/sunrise-client/src/mobs/nautilus.rs::register	zombie arm: Charge goal at speed 0.5

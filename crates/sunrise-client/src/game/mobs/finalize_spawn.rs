@@ -165,7 +165,6 @@ impl Game<'_> {
     pub(super) fn finalize_spawn_data(&self) -> finalize::SpawnData<'_> {
         let game = self;
         finalize::SpawnData {
-            registries: game.res.spawn_registries(),
             variants: game.world_variants(),
             enchantments: &world_stations!(game).enchantments,
             items: world_items!(game),

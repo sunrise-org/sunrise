@@ -110,6 +110,10 @@ pub const REGISTRY_KINDS: &[RegistryKind] = &[
         decode: decode_frog_variant,
     },
     RegistryKind {
+        key: "minecraft:zombie_nautilus_variant",
+        decode: decode_zombie_nautilus_variant,
+    },
+    RegistryKind {
         key: "minecraft:painting_variant",
         decode: decode_painting_variant,
     },
@@ -234,6 +238,7 @@ enum Definition {
     ChickenVariant(crate::mobs::variants::ChickenVariant, Tag),
     ChickenSoundVariant(crate::mobs::variants::ChickenSoundVariant, Tag),
     FrogVariant(crate::mobs::variants::FrogVariant, Tag),
+    ZombieNautilusVariant(crate::mobs::variants::ZombieNautilusVariant, Tag),
 }
 
 impl PackRegistryDefinitions {
@@ -697,6 +702,7 @@ impl PackRegistryDefinitions {
                 | "minecraft:chicken_variant"
                 | "minecraft:chicken_sound_variant"
                 | "minecraft:frog_variant"
+                | "minecraft:zombie_nautilus_variant"
         )
     }
 
@@ -749,7 +755,8 @@ impl PackRegistryDefinitions {
                     | Definition::CowSoundVariant(_, tag)
                     | Definition::ChickenVariant(_, tag)
                     | Definition::ChickenSoundVariant(_, tag)
-                    | Definition::FrogVariant(_, tag) => tag.clone(),
+                    | Definition::FrogVariant(_, tag)
+                    | Definition::ZombieNautilusVariant(_, tag) => tag.clone(),
                     Definition::Validated(_, tag) => tag.clone()?,
                     Definition::Enchantment(json) => json_to_nbt(json),
                     Definition::EnchantmentProvider(_) => return None,
@@ -933,6 +940,14 @@ impl PackRegistryDefinitions {
                 Definition::FrogVariant(v, _) => Some(v),
                 _ => None,
             }),
+            zombie_nautilus: collect(
+                &self.entries,
+                "minecraft:zombie_nautilus_variant",
+                |d| match d {
+                    Definition::ZombieNautilusVariant(v, _) => Some(v),
+                    _ => None,
+                },
+            ),
         }
     }
 
@@ -1814,6 +1829,18 @@ fn decode_frog_variant(_: &mut Decoder<'_>, _: &str, value: Value) -> Result<Def
     Ok(Definition::FrogVariant(variant, wire))
 }
 
+/// `ZombieNautilusVariant.DIRECT_CODEC` on disk, `ZombieNautilusVariant.NETWORK_CODEC` on the wire.
+fn decode_zombie_nautilus_variant(
+    _: &mut Decoder<'_>,
+    _: &str,
+    value: Value,
+) -> Result<Definition, String> {
+    let variant = crate::mobs::variants::ZombieNautilusVariant::decode(&value)?;
+    let wire = variant.to_network_nbt();
+    check_network_nbt(&wire)?;
+    Ok(Definition::ZombieNautilusVariant(variant, wire))
+}
+
 fn is_variant_kind(kind: &str) -> bool {
     matches!(
         kind,
@@ -1828,6 +1855,7 @@ fn is_variant_kind(kind: &str) -> bool {
             | "chicken_variant"
             | "chicken_sound_variant"
             | "frog_variant"
+            | "zombie_nautilus_variant"
     )
 }
 
