@@ -1147,7 +1147,7 @@ impl Game<'_> {
         // Painting.readAdditionalSaveData: a `variant` that does not resolve
         // leaves Painting.defineSynchedData's VariantUtils.getAny in place.
         if let Some((pos, facing, variant)) = entity_nbt::painting_from_nbt(&tag)
-            && let Some(v) = self.painting_variants.saved_or_default(variant.as_deref())
+            && let Some(v) = world_paintings!(self).saved_or_default(variant.as_deref())
         {
             self.next_entity += 1;
             let id = self.next_entity;

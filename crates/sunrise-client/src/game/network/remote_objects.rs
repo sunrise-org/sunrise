@@ -180,7 +180,7 @@ impl Game<'_> {
             let json = sunrise_client::scoreboard::tag_to_json(tag);
             return super::paintings::Variant::decode(name, &json).ok();
         }
-        self.painting_variants.get(name).cloned()
+        world_paintings!(self).get(name).cloned()
     }
 
     /// `handleSetEntityData` for an object: what changes how it looks.

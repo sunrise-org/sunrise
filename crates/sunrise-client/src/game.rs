@@ -38,6 +38,16 @@ macro_rules! world_recipes {
         }
     };
 }
+/// The painting variants the world places with (`Painting.create`): its own
+/// registry and `#minecraft:placeable`, else the prepared root's.
+macro_rules! world_paintings {
+    ($s:ident) => {
+        match &$s.world_tables {
+            Some(t) => &t.painting_variants,
+            None => &$s.painting_variants,
+        }
+    };
+}
 macro_rules! world_stations {
     ($s:ident) => {
         match &$s.world_tables {
@@ -3173,6 +3183,7 @@ struct WorldTables {
     items: Arc<Items>,
     /// Registry definitions stay frozen at world open, even when tags reload.
     packed_registries: Arc<sunrise_client::lan::data::PackRegistryDefinitions>,
+    painting_variants: paintings::PaintingVariants,
     providers: Providers,
     biomes: Arc<world_loading::WorldBiomeRegistry>,
     loot: Arc<sunrise_world::loot::LootData>,

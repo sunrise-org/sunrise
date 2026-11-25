@@ -32,6 +32,7 @@ enum Definition {
     Encoded(Tag),
     Enchantment(Value),
     Instrument(Instrument, Tag),
+    Painting(crate::entities::PaintingVariant, Tag),
 }
 
 impl PackRegistryDefinitions {
@@ -314,12 +315,52 @@ impl PackRegistryDefinitions {
             entries.extend(pack.iter().filter_map(|(key, value)| {
                 let (definition, from_pack) = value.as_ref()?;
                 let tag = match definition {
-                    Definition::Encoded(tag) | Definition::Instrument(_, tag) => tag.clone(),
+                    Definition::Encoded(tag)
+                    | Definition::Instrument(_, tag)
+                    | Definition::Painting(_, tag) => tag.clone(),
                     Definition::Enchantment(json) => json_to_nbt(json),
                 };
                 Some((key.clone(), tag, *from_pack))
             }));
         }
+    }
+
+    /// The `painting_variant` registry this load holds: `prepared` (the root's
+    /// variants) except those a pack winner replaces, even a refused or skipped
+    /// one, then the packs' admitted definitions, in registry order (identifier
+    /// order: path, then namespace).
+    pub fn painting_variants(
+        &self,
+        prepared: Vec<crate::entities::PaintingVariant>,
+    ) -> Vec<crate::entities::PaintingVariant> {
+        let pack = self.entries.get("minecraft:painting_variant");
+        let mut all: Vec<_> = prepared
+            .into_iter()
+            .filter(|variant| {
+                let (namespace, path) = variant
+                    .id
+                    .split_once(':')
+                    .unwrap_or(("minecraft", &variant.id));
+                !pack
+                    .is_some_and(|pack| pack.contains_key(&(namespace.to_owned(), path.to_owned())))
+            })
+            .collect();
+        all.extend(
+            pack.into_iter()
+                .flatten()
+                .filter_map(|(_, entry)| match entry {
+                    Some((Definition::Painting(variant, _), _)) => Some(variant.clone()),
+                    _ => None,
+                }),
+        );
+        all.sort_by(|a, b| {
+            let key = |id: &str| {
+                let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+                (path.to_owned(), namespace.to_owned())
+            };
+            key(&a.id).cmp(&key(&b.id))
+        });
+        all
     }
 
     /// Use the same selected definitions as the synchronized registry packets.
@@ -489,18 +530,24 @@ fn decode_definition(
             return Ok(Definition::Enchantment(value));
         }
         "minecraft:painting_variant" => {
-            let painting = crate::entities::PaintingVariant::decode(id, &value)?;
+            let painting_variant = crate::entities::PaintingVariant::decode(id, &value)?;
+            let painting = &painting_variant;
             let mut fields = Compound::from([
                 ("asset_id".into(), asset_id(&painting.asset)),
                 ("width".into(), Tag::Int(painting.width)),
                 ("height".into(), Tag::Int(painting.height)),
             ]);
-            for (field, text) in [("title", painting.title), ("author", painting.author)] {
+            for (field, text) in [
+                ("title", painting.title.clone()),
+                ("author", painting.author.clone()),
+            ] {
                 if let Some(text) = text.filter(|value| !value.is_null()) {
                     fields.insert(field.into(), json_to_nbt(&decode_text(field, &text)?));
                 }
             }
-            Tag::Compound(fields)
+            let tag = Tag::Compound(fields);
+            check_network_nbt(&tag)?;
+            return Ok(Definition::Painting(painting_variant, tag));
         }
         "minecraft:instrument" => {
             let instrument = Instrument::decode(&value)?;

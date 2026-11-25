@@ -126,7 +126,7 @@ fn expected_quads(game: &Game<'_>, p: &Painting, camera: glam::DVec3) -> Vec<Ver
     let Some(back) = sprites.get("painting/back").copied() else {
         return Vec::new();
     };
-    let Some(v) = game.painting_variants.get(&p.variant) else {
+    let Some(v) = world_paintings!(game).get(&p.variant) else {
         return Vec::new();
     };
     let Some(front) = sprites.get(&format!("painting/{}", v.asset)).copied() else {

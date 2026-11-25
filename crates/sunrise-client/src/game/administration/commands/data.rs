@@ -930,7 +930,7 @@ impl Game<'_> {
                 let (pos, facing) =
                     entity_nbt::painting_placement_from_nbt(&tag).ok_or_else(stale)?;
                 let known = entity_nbt::painting_from_nbt(&tag)
-                    .and_then(|(_, _, v)| self.painting_variants.get(&v?).cloned());
+                    .and_then(|(_, _, v)| world_paintings!(self).get(&v?).cloned());
                 let p = self
                     .paintings
                     .iter_mut()

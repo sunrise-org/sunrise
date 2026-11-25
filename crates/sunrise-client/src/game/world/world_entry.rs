@@ -492,6 +492,25 @@ impl Game<'_> {
         for registry in fixed.chain([BIOME_REGISTRY]) {
             bind_tags(registry, &mut view)?;
         }
+        // Painting.create's candidates: the world's painting_variant registry (the
+        // root's variants under the packs' winners) and `#minecraft:placeable` over it.
+        let painting_variants = {
+            let all = packed_registry_definitions
+                .painting_variants(paintings::PaintingVariants::load(root).all);
+            let mut tags = sunrise_client::lan::data::registry_tag_bindings(
+                root,
+                &tag_files,
+                "minecraft:painting_variant",
+                |id| all.iter().any(|variant| &*variant.id == id),
+            )?;
+            let placeable = tags
+                .remove("minecraft:placeable")
+                .unwrap_or_default()
+                .into_iter()
+                .map(Arc::from)
+                .collect();
+            paintings::PaintingVariants { all, placeable }
+        };
         // WORLD_REGISTRIES owns the structures; its raw definitions are not holders.
         // First open uses the same cached data as live features. Reload binds new tags
         // to the frozen owner, just as TagLoader does before server resource reload.
@@ -768,6 +787,7 @@ impl Game<'_> {
                 priority_layers,
                 items: Arc::new(items),
                 packed_registries: packed_registry_definitions,
+                painting_variants,
                 providers,
                 biomes,
                 loot,

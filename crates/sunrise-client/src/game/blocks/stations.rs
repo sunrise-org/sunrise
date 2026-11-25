@@ -1779,7 +1779,7 @@ impl Game<'_> {
                 &display,
                 creative,
                 |id| {
-                    let v = self.painting_variants.get(id)?;
+                    let v = world_paintings!(self).get(id)?;
                     Some(PaintingTooltip {
                         title: v.title.as_ref(),
                         author: v.author.as_ref(),

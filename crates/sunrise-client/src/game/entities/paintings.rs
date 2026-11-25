@@ -85,8 +85,8 @@ impl Game<'_> {
             ticks: 0,
         };
         let mut any = false;
-        for id in &self.painting_variants.placeable {
-            let Some(v) = self.painting_variants.get(id) else {
+        for id in &world_paintings!(self).placeable {
+            let Some(v) = world_paintings!(self).get(id) else {
                 continue;
             };
             (candidate.width, candidate.height) = (v.width, v.height);
@@ -98,7 +98,7 @@ impl Game<'_> {
         if !any {
             return false;
         }
-        if let Some(v) = self.painting_variants.of_stack(stack).cloned() {
+        if let Some(v) = world_paintings!(self).of_stack(stack).cloned() {
             (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
             return self.painting_survives(&candidate);
         }
@@ -135,8 +135,8 @@ impl Game<'_> {
         };
         // Painting.create: the largest placeable variants that survive, one at random.
         let mut fitting: Vec<Variant> = Vec::new();
-        for id in self.painting_variants.placeable.clone() {
-            let Some(v) = self.painting_variants.get(&id).cloned() else {
+        for id in world_paintings!(self).placeable.clone() {
+            let Some(v) = world_paintings!(self).get(&id).cloned() else {
                 continue;
             };
             (candidate.width, candidate.height) = (v.width, v.height);
@@ -159,7 +159,7 @@ impl Game<'_> {
         // EntityType.createDefaultStackConfig -> Painting.applyImplicitComponents:
         // the stack's `painting/variant` replaces the random pick, and that
         // painting has to survive where it goes (else the use is CONSUME).
-        if let Some(v) = self.painting_variants.of_stack(stack).cloned() {
+        if let Some(v) = world_paintings!(self).of_stack(stack).cloned() {
             (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
             if !self.painting_survives(&candidate) {
                 self.award_stat("used", &stack.item, 1);
@@ -177,8 +177,7 @@ impl Game<'_> {
         );
         if let Some((_, _, Some(variant))) = sunrise_client::entity_nbt::painting_from_nbt(&raw)
             && *candidate.variant != *variant
-            && let Some(v) = self
-                .painting_variants
+            && let Some(v) = world_paintings!(self)
                 .get(&sunrise_world::datafix::dynamic::namespaced(&variant))
                 .cloned()
         {
@@ -434,7 +433,7 @@ impl Game<'_> {
             };
             let asset = match p.asset.as_deref() {
                 Some(asset) => asset,
-                None => match self.painting_variants.get(&p.variant) {
+                None => match world_paintings!(self).get(&p.variant) {
                     Some(v) => v.asset.as_str(),
                     None => continue,
                 },
