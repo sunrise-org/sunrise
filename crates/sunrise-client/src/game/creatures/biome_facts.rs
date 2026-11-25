@@ -37,12 +37,5 @@ pub(in crate::game) fn biome_facts_in(
         mushroom: b.name == "minecraft:mushroom_fields",
         desert: b.name == "minecraft:desert",
         jungle: has("minecraft:is_jungle"),
-        frog: if has("minecraft:spawns_warm_variant_frogs") {
-            1
-        } else if has("minecraft:spawns_cold_variant_frogs") {
-            2
-        } else {
-            0
-        },
     }
 }

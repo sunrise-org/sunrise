@@ -1589,6 +1589,65 @@ impl ChickenSoundVariant {
     }
 }
 
+/// `FrogVariant`: texture asset id (`asset_id`) plus spawn conditions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrogVariant {
+    pub asset_id: String,
+    pub spawn_conditions: Vec<SpawnSelector>,
+}
+
+impl HasSpawnConditions for FrogVariant {
+    fn spawn_conditions(&self) -> &[SpawnSelector] {
+        &self.spawn_conditions
+    }
+}
+
+impl FrogVariant {
+    fn missing() -> Self {
+        Self {
+            asset_id: String::new(),
+            spawn_conditions: Vec::new(),
+        }
+    }
+
+    /// `FrogVariant.DIRECT_CODEC`.
+    pub fn decode(value: &Value) -> Result<Self, String> {
+        let obj = value.as_object().ok_or("not a map")?;
+        let asset_id = decode_asset_field(obj, "asset_id")?;
+        let spawn_conditions = decode_spawn_conditions(
+            obj.get("spawn_conditions")
+                .ok_or("spawn_conditions is required")?,
+        )?;
+        Ok(Self {
+            asset_id,
+            spawn_conditions,
+        })
+    }
+
+    /// `FrogVariant.NETWORK_CODEC`: `asset_id` only.
+    pub fn to_network_nbt(&self) -> Tag {
+        Tag::compound([(
+            "asset_id",
+            Tag::String(JavaString::from(self.asset_id.as_str())),
+        )])
+    }
+
+    /// Decode a client's synced `FrogVariant.NETWORK_CODEC` NBT entry.
+    pub fn decode_network_nbt(tag: &Tag) -> Option<Self> {
+        Some(Self {
+            asset_id: read_nbt_string(tag, "asset_id")?,
+            spawn_conditions: Vec::new(),
+        })
+    }
+
+    /// `FrogRenderer.extractRenderState`: the atlas sprite key for this variant.
+    /// Default-namespace assets strip `"minecraft:"` to match Sunrise's atlas keys;
+    /// non-default namespaces keep `"<ns>:<path>"`.
+    pub fn texture(&self) -> &str {
+        strip_minecraft_prefix(&self.asset_id)
+    }
+}
+
 /// The frozen world variant tables converted onto `REGISTRY_KINDS`.
 #[derive(Clone, Debug, Default)]
 pub struct VariantTables {
@@ -1602,6 +1661,7 @@ pub struct VariantTables {
     pub cow_sound: VariantTable<CowSoundVariant>,
     pub chicken: VariantTable<ChickenVariant>,
     pub chicken_sound: VariantTable<ChickenSoundVariant>,
+    pub frog: VariantTable<FrogVariant>,
 }
 
 impl VariantTables {
@@ -1617,6 +1677,7 @@ impl VariantTables {
             && self.cow_sound.is_empty()
             && self.chicken.is_empty()
             && self.chicken_sound.is_empty()
+            && self.frog.is_empty()
     }
 
     /// Load the prepared vanilla tables (`data/minecraft/<registry>/`) for worlds
@@ -1644,6 +1705,7 @@ impl VariantTables {
             chicken_sound: load_prepared_table(&data.join("chicken_sound_variant"), |v| {
                 ChickenSoundVariant::decode_with(v, decode_prepared_sound_holder).map(|(d, _)| d)
             }),
+            frog: load_prepared_table(&data.join("frog_variant"), FrogVariant::decode),
         }
     }
 
@@ -1721,6 +1783,13 @@ impl VariantTables {
                 &fallback.chicken_sound,
                 ChickenSoundVariant::decode_network_nbt,
                 ChickenSoundVariant::missing,
+            ),
+            frog: from_synced_table(
+                registries,
+                "minecraft:frog_variant",
+                &fallback.frog,
+                FrogVariant::decode_network_nbt,
+                FrogVariant::missing,
             ),
         }
     }
@@ -1818,3 +1887,7 @@ mod cat_variant_tests;
 #[cfg(test)]
 #[path = "farm_variant_tests.rs"]
 mod farm_variant_tests;
+
+#[cfg(test)]
+#[path = "frog_variant_tests.rs"]
+mod frog_variant_tests;

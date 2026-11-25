@@ -93,13 +93,24 @@ fn a_fox_or_frog_spawn_egg_picks_its_variant_component() {
     apply_item_components(&mut fox, &egg);
     assert_eq!(fox.extra.variant, 1, "Fox.Variant.SNOW, not red");
     // A temperate frog, as a swamp spawn leaves it.
+    let variants = crate::mobs::variants::VariantTables::load_prepared(&root);
     let mut frog = spawn("minecraft:frog", 2);
-    assert_eq!(frog.extra.variant, 0);
+    assert_eq!(
+        frog.frog_variant(&variants.frog)
+            .and_then(|r| variants.frog.id(r)),
+        Some("minecraft:temperate")
+    );
     let mut egg = crate::items::ItemStack::new("minecraft:frog_spawn_egg", 1);
     egg.data_mut()
         .set_other("minecraft:frog/variant", Some(string("minecraft:warm")));
     apply_item_components(&mut frog, &egg);
-    assert_eq!(frog.extra.variant, 1, "minecraft:warm, not temperate");
+    apply_item_variant_components(&mut frog, &egg, &variants);
+    assert_eq!(
+        frog.frog_variant(&variants.frog)
+            .and_then(|r| variants.frog.id(r)),
+        Some("minecraft:warm"),
+        "minecraft:warm, not temperate"
+    );
     // An unknown name falls back to the codec's default, red.
     let mut egg = crate::items::ItemStack::new("minecraft:fox_spawn_egg", 1);
     egg.data_mut()

@@ -437,7 +437,11 @@ fn apply_registry_data(
                     Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
                 continue;
             }
-            (Species::Frog, 18, Value::Id(_)) => "minecraft:frog_variant",
+            (Species::Frog, 18, Value::Id(id)) => {
+                m.extra.frog_variant =
+                    Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
+                continue;
+            }
             (Species::Pig, 19, Value::Id(id)) => {
                 m.extra.pig_variant = Some(sunrise_client::lan::data::RegistryRef::new(*id as u32));
                 continue;
@@ -603,6 +607,7 @@ pub(in crate::game) mod tests {
         use sunrise_client::mobs::{Anim, Brain, Flags, MobType, Part};
         let species = match kind {
             "minecraft:cow" => Species::Cow,
+            "minecraft:frog" => Species::Frog,
             "minecraft:axolotl" => Species::Axolotl,
             "minecraft:dolphin" => Species::Dolphin,
             "minecraft:cod" => Species::Cod,
@@ -1824,6 +1829,9 @@ pub(in crate::game) mod tests {
     }
 }
 
+#[cfg(test)]
+#[path = "remote_mob_data/frog_variant_meta_tests.rs"]
+mod frog_variant_meta_tests;
 #[cfg(test)]
 #[path = "remote_mob_data/pet_pose_meta_tests.rs"]
 mod pet_pose_meta_tests;

@@ -242,7 +242,8 @@ impl<'a> LootEntityView<'a> {
         self.0.captain()
     }
 
-    /// Frog variant identifier, when applicable.
+    /// Frog variant identifier from the world's `minecraft:frog_variant`
+    /// registry, when applicable (including variants added by data packs).
     pub fn frog_variant(&self) -> Option<&'a str> {
         self.0.frog_variant()
     }

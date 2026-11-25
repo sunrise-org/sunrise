@@ -272,7 +272,6 @@ impl VariantRegistry {
 
 /// The registries finalizeSpawn reads.
 pub struct SpawnRegistries {
-    pub frog: VariantRegistry,
     pub zombie_nautilus: VariantRegistry,
 }
 impl SpawnRegistries {
@@ -296,7 +295,6 @@ impl SpawnRegistries {
         };
         let r = |name: &str| VariantRegistry::load(&data.join(name), &structure_tag);
         Self {
-            frog: r("frog_variant"),
             zombie_nautilus: r("zombie_nautilus_variant"),
         }
     }
@@ -2324,7 +2322,13 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 self.ageable(m, g)
             }
             S::Frog => {
-                self.variant(m, |r| &r.frog);
+                if let Some(v) = self.level.spawn_data().variants.frog.select(
+                    &*self.level,
+                    block(m),
+                    self.random,
+                ) {
+                    m.extra.frog_variant = Some(v);
+                }
                 let jump = self.uniform(100, 140);
                 set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 self.ageable(m, g)
@@ -2787,13 +2791,17 @@ pub fn variant_component_in(
             let id = variants.chicken.id(r)?;
             Some(("minecraft:chicken/variant", id.to_owned()))
         }
+        Species::Frog => {
+            let r = m.frog_variant(&variants.frog)?;
+            let id = variants.frog.id(r)?;
+            Some(("minecraft:frog/variant", id.to_owned()))
+        }
         _ => variant_component(m),
     }
 }
 /// [`variant_component`] of a species with the game's variant index.
 pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static str, String)> {
     let component = match s {
-        Species::Frog => "minecraft:frog/variant",
         Species::Mooshroom => "minecraft:mooshroom/variant",
         Species::ZombieNautilus => "minecraft:zombie_nautilus/variant",
         Species::Horse => "minecraft:horse/variant",

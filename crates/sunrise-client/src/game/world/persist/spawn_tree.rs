@@ -52,6 +52,7 @@ impl SpawnTree {
                     game.pack.assets.registry,
                     random,
                 );
+                entity_nbt::read_mob_variants(&mut mob, &tag, game.world_variants());
                 mob.extra.spawn_tags = spawn_tags(&tag).collect();
                 (
                     Node::Mob(Box::new(mob)),

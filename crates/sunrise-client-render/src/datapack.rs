@@ -1044,6 +1044,7 @@ fn content_id(file: &str) -> Option<String> {
         | "cow_sound_variant"
         | "chicken_variant"
         | "chicken_sound_variant"
+        | "frog_variant"
         | "data_maps"
         | "enchantment"
         | "enchantment_provider"
@@ -1196,6 +1197,7 @@ impl DataStore {
             "dimension_type",
             "enchantment",
             "enchantment_provider",
+            "frog_variant",
             "function",
             "instrument",
             "item_modifier",

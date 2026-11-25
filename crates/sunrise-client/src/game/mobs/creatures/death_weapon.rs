@@ -398,8 +398,8 @@ impl Game<'_> {
             .and_then(|id| self.mobs.iter().find(|o| o.id == id))
             .map(|o| LootEntity::new(&o.kind.id));
         let kind = crate::game::native_hooks::mob_kind(m);
-        let death_variants =
-            (m.species() == Species::Chicken).then(|| self.world_variants().clone());
+        let death_variants = matches!(m.species(), Species::Chicken | Species::Frog)
+            .then(|| self.world_variants().clone());
         let death = drops::Death {
             this_nbt: if loot.copies_entity_nbt() {
                 self.command_target_nbt(crate::game::commands::Target::Mob(m.id))

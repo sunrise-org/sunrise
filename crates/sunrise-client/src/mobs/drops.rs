@@ -428,7 +428,7 @@ pub fn loot_entity(m: &Mob, vehicle: Option<LootEntity>) -> LootEntity {
     loot_entity_with_variants(m, vehicle, None)
 }
 /// [`loot_entity`] with the world's data-driven variant tables for
-/// registry-backed variant predicates (`LootView::chicken_variant`, etc.).
+/// registry-backed variant predicates (`LootView::chicken_variant`, `LootView::frog_variant`, etc.).
 pub fn loot_entity_with_variants(
     m: &Mob,
     vehicle: Option<LootEntity>,
@@ -457,11 +457,9 @@ pub fn loot_entity_with_variants(
         e.captain = Some(raider::is_captain(m));
     }
     if s == S::Frog {
-        e.frog_variant = Some(
-            ["minecraft:temperate", "minecraft:warm", "minecraft:cold"]
-                [usize::from(m.extra.variant).min(2)]
-            .to_owned(),
-        );
+        e.frog_variant = variants
+            .and_then(|v| m.frog_variant(&v.frog).and_then(|r| v.frog.id(r)))
+            .map(str::to_owned);
     }
     if s == S::Chicken {
         e.chicken_variant = variants

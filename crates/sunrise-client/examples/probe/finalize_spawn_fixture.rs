@@ -257,7 +257,15 @@ fn variant(m: &Mob, variants: &sunrise_client::mobs::variants::VariantTables, v:
             v.push(var);
             v.push(snd);
         }
-        S::Frog | S::ZombieNautilus => v.push(var),
+        S::Frog => {
+            let var = m
+                .frog_variant(&variants.frog)
+                .and_then(|r| variants.frog.id(r))
+                .unwrap_or("minecraft:temperate")
+                .to_owned();
+            v.push(var);
+        }
+        S::ZombieNautilus => v.push(var),
         S::Sheep => v.push(DYE_NAMES[m.extra.color as usize & 15].into()),
         S::Horse => v.push(format!(
             "{}/{}",

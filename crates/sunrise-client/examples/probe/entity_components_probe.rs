@@ -78,13 +78,19 @@ pub fn main() -> Result<()> {
         let s = species(kind);
         let raw_variant = c["variant"].as_str().unwrap();
         let components = match s {
-            Species::Wolf | Species::Cat | Species::Pig | Species::Cow | Species::Chicken => {
+            Species::Wolf
+            | Species::Cat
+            | Species::Pig
+            | Species::Cow
+            | Species::Chicken
+            | Species::Frog => {
                 let key = match s {
                     Species::Wolf => "minecraft:wolf/variant",
                     Species::Cat => "minecraft:cat/variant",
                     Species::Pig => "minecraft:pig/variant",
                     Species::Cow => "minecraft:cow/variant",
-                    _ => "minecraft:chicken/variant",
+                    Species::Chicken => "minecraft:chicken/variant",
+                    _ => "minecraft:frog/variant",
                 };
                 let full = if raw_variant.contains(':') {
                     raw_variant.to_owned()

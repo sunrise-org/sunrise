@@ -323,6 +323,7 @@ fn synchronized_entries(
                 | "cow_sound_variant"
                 | "chicken_variant"
                 | "chicken_sound_variant"
+                | "frog_variant"
         )
     {
         mod_entries(resources, path, &mut entries);

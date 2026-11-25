@@ -18,8 +18,6 @@ pub struct BiomeFacts {
     pub mushroom: bool,
     pub desert: bool,
     pub jungle: bool,
-    /// Frog variant from `spawns_warm/cold_variant_frogs` (0 temperate, 1 warm, 2 cold).
-    pub frog: u8,
     /// `spawns_coral_variant_zombie_nautilus` (the warm ocean).
     pub coral_nautilus: bool,
     /// `#minecraft:spawns_white_rabbits` (`Rabbit.getRandomRabbitVariant`).

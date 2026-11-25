@@ -244,13 +244,6 @@ fn baby_or<'a>(
 pub mod villager_client;
 use villager_client::interned;
 
-fn climate(m: &Mob) -> &'static str {
-    match m.extra.variant {
-        1 => "warm",
-        2 => "cold",
-        _ => "temperate",
-    }
-}
 /// `AvatarRenderer` entities: a mannequin draws exactly like a player —
 /// the player model, its resolved skin and the same scale.
 pub fn avatar(m: &Mob) -> bool {
@@ -361,10 +354,15 @@ pub fn body_with_variants<'a>(
             baby_or(m, "cat#main", "cat_baby#main"),
             super::tame::cat_texture(m, variants).into(),
         ),
-        S::Frog => (
-            "frog#main".into(),
-            interned(format_args!("entity/frog/frog_{}", climate(m))),
-        ),
+        S::Frog => {
+            let texture = variants
+                .and_then(|v| {
+                    let r = m.frog_variant(&v.frog)?;
+                    Some(v.frog.get(r)?.texture().to_owned())
+                })
+                .unwrap_or_default();
+            ("frog#main".into(), Cow::Owned(texture))
+        }
         // RabbitRenderer.getTextureLocation: the Toast name tag, else the
         // variant (the killer bunny's id is 99).
         S::Rabbit => {
@@ -2390,7 +2388,12 @@ fn render_selected(
                 atlas(&m.kind.texture)
             } else if matches!(
                 m.species(),
-                Species::Wolf | Species::Cat | Species::Pig | Species::Cow | Species::Chicken
+                Species::Wolf
+                    | Species::Cat
+                    | Species::Pig
+                    | Species::Cow
+                    | Species::Chicken
+                    | Species::Frog
             ) {
                 atlas(crate::hud::MISSING_SPRITE)
             } else {

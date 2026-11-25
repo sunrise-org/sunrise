@@ -252,17 +252,26 @@ fn mob_variant_meta(
                 defaults.push((s_idx, s_ser, Value::Id(v)));
             }
         }
-        // Frog.DATA_VARIANT_ID and ZombieNautilus's (after the entries of their
-        // parents): registry holders.
-        "minecraft:frog" | "minecraft:zombie_nautilus" => {
-            let (index, serializer, registry) = match kind {
-                "minecraft:frog" => (18, serializer::FROG_VARIANT, "minecraft:frog_variant"),
-                _ => (
-                    21,
-                    serializer::ZOMBIE_NAUTILUS_VARIANT,
-                    "minecraft:zombie_nautilus_variant",
-                ),
-            };
+        // Frog.DATA_VARIANT_ID: the world table's network id directly (`RegistryRef<FrogVariant>`).
+        "minecraft:frog" => {
+            let default_id = id("minecraft:frog_variant", "temperate");
+            let variant_id = e.frog_variant.map(|r| r.network_id() as i32).or(default_id);
+            if let Some(v) = variant_id
+                && Some(v) != default_id
+            {
+                meta.push((18, serializer::FROG_VARIANT, Value::Id(v)));
+            }
+            if let Some(v) = default_id {
+                defaults.push((18, serializer::FROG_VARIANT, Value::Id(v)));
+            }
+        }
+        // ZombieNautilus's DATA_VARIANT_ID (after the entries of its parents): registry holder.
+        "minecraft:zombie_nautilus" => {
+            let (index, serializer, registry) = (
+                21,
+                serializer::ZOMBIE_NAUTILUS_VARIANT,
+                "minecraft:zombie_nautilus_variant",
+            );
             // Each registry's default (`define(DATA_VARIANT_ID, ... TEMPERATE)`)
             // stays out of the pairing data, as other default values do.
             let name = sunrise_client::mobs::finalize::variant_name(m.species(), e.variant);

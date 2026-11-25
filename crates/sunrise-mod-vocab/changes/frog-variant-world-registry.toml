@@ -1,0 +1,3 @@
+ids = ["handle:LootEntityView::frog_variant"]
+why = "Frog variants now load from the world's data packs into the minecraft:frog_variant registry, matching vanilla 26.3. LootEntityView::frog_variant now returns the frog's holder identifier from the world's minecraft:frog_variant registry instead of a fixed vanilla list, including pack-added variant ids."
+migrate = "No type or signature change. Mods reading LootEntityView::frog_variant may now see non-minecraft variant ids added by data packs."
