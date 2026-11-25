@@ -77,6 +77,14 @@ impl Game<'_> {
         Some(json.to_string())
     }
 
+    /// `Player.getEnchantmentSeed`: the stored seed, as the enchanting table menu copies it.
+    pub(super) fn player_enchantment_seed(&self, player: PlayerRef) -> Option<i32> {
+        match self.player_handle_read(player)? {
+            PlayerRead::Guest(g) => Some(g.xp_seed),
+            PlayerRead::Acting { .. } => Some(self.level.xp_seed),
+        }
+    }
+
     /// Decode with the server's registries before entering the player's turn. Inside a
     /// transaction the replacement waits for the root commit, as the game's own deferred
     /// statistics do, so counters and criterion scores never outlive an abort apart.

@@ -18,6 +18,15 @@ pub trait PlayerProgressBackend {
     /// A reachable player without counters has an empty `stats` map. Returns `None` on
     /// a client or for a stale or unavailable player.
     fn player_statistics(&self, player: PlayerRef) -> Option<String>;
+    /// Side: server.
+    /// `Player.getEnchantmentSeed`: the seed the player's enchanting table menu seeds its
+    /// offers with (`EnchantmentMenu` copies it into its `enchantmentSeed` when it opens and
+    /// draws each slot's costs and clues from it), so a listener can redo vanilla's seeded draws.
+    /// A plain read of the stored value: it changes when the player enchants (a fresh draw
+    /// from their random) and is saved as `XpSeed`. The engine draws it the first time the
+    /// player opens an enchanting table, so it reads 0 for a player who has not yet. `None`
+    /// on a client or for a stale or unavailable player.
+    fn player_enchantment_seed(&self, player: PlayerRef) -> Option<i32>;
 }
 /// The handles' writes of the `player_progress` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

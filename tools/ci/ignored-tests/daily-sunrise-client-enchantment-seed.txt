@@ -1,0 +1,2 @@
+# PlayerRef::enchantment_seed (Player.getEnchantmentSeed): the read equals the seed the enchanting table menu holds after the player opens a table; with_guests loads prepared resources, so it runs in its own process.
+sunrise-client game::native_enchantment_seed_tests::the_read_equals_the_seed_the_enchantment_menu_uses_after_opening_a_table lib daily child-process

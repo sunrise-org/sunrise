@@ -1698,6 +1698,9 @@ mod native_scoreboard;
 mod native_scoreboard_teams;
 
 #[cfg(test)]
+#[path = "game/modding/native_enchantment_seed_tests.rs"]
+mod native_enchantment_seed_tests;
+#[cfg(test)]
 #[path = "game/modding/native_entity_random_tests.rs"]
 mod native_entity_random_tests;
 #[path = "game/modding/native_section_visibility.rs"]
