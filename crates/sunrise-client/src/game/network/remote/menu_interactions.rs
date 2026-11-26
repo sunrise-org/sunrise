@@ -803,6 +803,7 @@ impl Game<'_> {
 
         let install = |game: &mut Self| {
             if replaces {
+                game.pad_clear_focus();
                 game.discard_remote_menu();
             }
             game.recipe_ui.reset_screen();
@@ -912,8 +913,6 @@ impl Game<'_> {
         };
         if outcome == ScreenOpenOutcome::Vetoed {
             reject(self);
-        } else if replaces {
-            self.pad_clear_focus();
         }
     }
 

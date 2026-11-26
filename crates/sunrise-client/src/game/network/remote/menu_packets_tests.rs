@@ -157,8 +157,11 @@ fn a_mount_chest_beyond_the_slot_range_ends_the_connection() {
 #[test]
 #[ignore = "daily"]
 fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
-    use mod_api::{ClientHost, Hooks, ModEntry, ScreenInitPostEvent};
+    use mod_api::{ClientHost, Hooks, ModEntry, ScreenInitPostEvent, client::widgets::TextField};
     use std::sync::{Arc, Mutex};
+    use sunrise_client::widgets::{Kind, Target};
+
+    const FOCUS_RECT: [f32; 4] = [10.0, 20.0, 80.0, 20.0];
 
     // Listening only to Init.Post leaves screen_opening disabled. The menu
     // must still be installed when Gui.setScreen publishes the new view.
@@ -171,6 +174,8 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     .lock()
                     .unwrap()
                     .push(event.screen.menu.map(str::to_owned));
+                let widget = event.widgets.add_text_field(TextField::new(FOCUS_RECT, 32));
+                assert!(event.widgets.set_initial_focus(widget));
             }
         }
     }
@@ -198,6 +203,7 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     }))
                     .unwrap();
                     game.remote.as_mut().unwrap().level_load.finish();
+                    game.pad.menu.keyboard = true;
                     let open = |game: &mut Game<'_>, container, entity, species, columns| {
                         let ty = game.res.mob_types().get(species).unwrap().clone();
                         game.mobs.push(Mob::new(entity as u32, ty, Vec3::ZERO, 0.0));
@@ -238,10 +244,31 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     assert!(packets.into_iter().any(|p| matches!(p,
                     S::ContainerClick(click) if (click.container, click.state, click.slot) == (8, 5, 19))));
 
-                    game.set_screen(Screen::Playing);
-                    // `HorseInventoryMenu` adds its chest slots only `if (inventoryColumns > 0)`:
-                    // a count whose size wraps positive (`-1431655764 * 3` is 4 as Java's `int`) lays out none.
+                    let previous = game.screen_state.widgets.focused_id().unwrap();
+                    assert_eq!(game.remote_menu().0, 8);
+                    // Replace window 8 in place. `HorseInventoryMenu` lays out no
+                    // chest for negative columns, even when its backing size wraps positive.
                     open(game, 10, 43, "minecraft:horse", -1431655764);
+                    assert_eq!(
+                        *observed.lock().unwrap(),
+                        [
+                            Some("sunrise:mount6".to_owned()),
+                            Some("sunrise:mount0".to_owned())
+                        ]
+                    );
+                    let current = game.screen_state.widgets.focused_id().unwrap();
+                    assert_ne!(current, previous);
+                    assert_eq!(
+                        game.pad.menu.focus,
+                        Some(Target {
+                            rect: FOCUS_RECT,
+                            kind: Kind::Mounted {
+                                id: current.raw(),
+                                field: true
+                            },
+                        })
+                    );
+                    assert_eq!(game.pad.menu.origin, Some(FOCUS_RECT));
                     assert_eq!(game.mount_menu_columns(), Some(0));
                     assert_eq!(game.slot_count(), 38);
                     assert_eq!(game.mount_slot_position(CHEST), None);
