@@ -33,11 +33,31 @@ fn packets_through_pong(game: &mut Game<'_>, reader: &mut ConnReader) -> Vec<S> 
 #[test]
 #[ignore = "daily"]
 fn rejected_menu_packets_retire_the_previous_client_menu() {
+    use crate::game::{RenderSnapshot, native_hotbar_slot::hotbar_slot_tests::logged_in};
+    use mod_api::{ClientHost, Hooks, ModEntry, ScreenOpening, ScreenOpeningEvent};
+    use std::sync::{Arc, Mutex};
+
+    struct ObserveShulker(Arc<Mutex<Option<[f32; 4]>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for ObserveShulker {
+        fn screen_opening(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ScreenOpeningEvent<'_>,
+        ) -> Option<ScreenOpening> {
+            if event.new.menu == Some("minecraft:shulker_box") {
+                *self.0.lock().unwrap() = Some(event.new.rect);
+            }
+            None
+        }
+    }
+
     in_own_process(
         "game::remote::tests::menu_packets_tests::rejected_menu_packets_retire_the_previous_client_menu",
         || {
             with_game(|game| {
-                let (mut reader, _writer) = connect_menu_test(game);
+                let mut reader = logged_in(game);
+                game.remote.as_mut().unwrap().level_load.finish();
                 let remote = game.remote.as_mut().unwrap();
                 remote.menu.set(Some((7, "minecraft:generic_9x3".into())));
                 let generation = remote.menu.generation;
@@ -59,6 +79,44 @@ fn rejected_menu_packets_retire_the_previous_client_menu() {
                         .into_iter()
                         .any(|p| { matches!(p, S::ContainerClose(close) if close.container == 7) })
                 );
+
+                // A subsequent valid packet can open a shulker menu without a backing block.
+                game.title = None;
+                game.render_snapshot.set(Some(RenderSnapshot {
+                    framebuffer: game.gui_frame_now().0,
+                    prepared_generation: None,
+                    staged_prepared_draws: 0,
+                }));
+                let menu = game
+                    .remote
+                    .as_ref()
+                    .unwrap()
+                    .builtin
+                    .get("minecraft:menu")
+                    .unwrap()
+                    .id("minecraft:shulker_box")
+                    .unwrap();
+                let opening = Arc::new(Mutex::new(None));
+                let mods = vec![ModEntry::new(
+                    "shulker_observer",
+                    Box::new(ObserveShulker(opening.clone())),
+                )];
+                mod_platform::testing::with_mods(mods.into(), || {
+                    let packet = C::OpenScreen(OpenScreen {
+                        container: 8,
+                        menu,
+                        title: Tag::String("Shulker".into()),
+                    })
+                    .encode();
+                    let mut reader = sunrise_protocol::buf::Reader::new(&packet);
+                    game.handle_packet(C::decode(reader.varint().unwrap(), reader.rest()).unwrap())
+                        .unwrap();
+                    assert_eq!(game.remote_menu().0, 8);
+                    let accepted = game.screen_state.observed.as_ref().unwrap();
+                    assert_eq!(accepted.menu.as_deref(), Some("minecraft:shulker_box"));
+                    assert_eq!(accepted.rect[2..], [176.0, 166.0]);
+                    assert_eq!(*opening.lock().unwrap(), Some(accepted.rect));
+                });
             });
         },
     );

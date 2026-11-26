@@ -845,23 +845,23 @@ impl Game<'_> {
             // book placement, screen room, slots and regions for the new receiver.
             let rect = self.renderer_framebuffer().map_or([0.0; 4], |framebuffer| {
                 let batch = HudBatch::new(framebuffer, self.settings.gui_scale_inputs());
-                let [width, height] = native_size.unwrap_or_else(|| {
-                    let rows = menu
-                        .strip_prefix("minecraft:generic_9x")
-                        .and_then(|rows| rows.parse().ok());
-                    [
-                        176.0,
-                        Self::stock_container_height(
-                            station == Some(Kind::Beacon),
-                            rows,
-                            menu == "minecraft:shulker_box",
-                            menu == "minecraft:hopper",
-                        ),
-                    ]
-                });
-                let (x, y) = batch.centered_origin(width, height);
-                let (offset, panel_width) = Self::inventory_image_width(station, width);
-                [x + offset, y, panel_width, height].map(|axis| axis as i32 as f32)
+                let (width, height) = match native_size {
+                    Some([width, height]) => (Some(width), height),
+                    None => {
+                        let (key, entity) = match &staged {
+                            StagedMenu::Block { key, entity, .. } => {
+                                (Some(*key), Some(entity.as_ref()))
+                            }
+                            _ => (None, None),
+                        };
+                        (
+                            None,
+                            self.stock_container_height(station, Some(&menu), key, entity),
+                        )
+                    }
+                };
+                let (_, image) = Self::inventory_panel(&batch, width, height, station, [0.0; 2]);
+                image.map(|axis| axis as i32 as f32)
             });
             let view = mod_api::ScreenView::from(mod_api::__private::built::ScreenView {
                 id: Screen::Inventory.id(),
@@ -1106,10 +1106,7 @@ impl Game<'_> {
             // CrafterMenu: the disabled slots and triggered come in ContainerSetData.
             "minecraft:crafter_3x3" => Some(BlockEntity::Crafter(Default::default())),
             m if m.starts_with("minecraft:generic_9x") || m == "minecraft:shulker_box" => {
-                let rows = m
-                    .strip_prefix("minecraft:generic_9x")
-                    .and_then(|r| r.parse::<usize>().ok())
-                    .unwrap_or(3);
+                let rows = Self::remote_chest_rows(m).unwrap_or(3);
                 Some(BlockEntity::Chest(vec![None; rows * 9]))
             }
             // A content mod's menu type: its container's slots, which its
@@ -1140,8 +1137,7 @@ impl Game<'_> {
             // an ender chest's or a double chest's slots are no one block's,
             // so they go under a key no block has.
             let holds = |k: &(i32, i32, i32)| {
-                let name = &self.res.facts().get(self.world.block(k.0, k.1, k.2)).name;
-                BlockEntity::for_block(name).is_some_and(|e| {
+                BlockEntity::for_block(self.container_block_at(*k)).is_some_and(|e| {
                     e.id() == entity.id() && e.slots().len() == entity.slots().len()
                 })
             };
@@ -1226,18 +1222,16 @@ impl Game<'_> {
     /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
     pub(in crate::game) fn remote_chest_menu(&self) -> Option<(usize, sunrise_client::text::Text)> {
         let r = self.remote.as_ref()?;
-        let rows = r
-            .menu
-            .as_ref()?
-            .1
-            .strip_prefix("minecraft:generic_9x")?
-            .parse()
-            .ok()?;
+        let rows = Self::remote_chest_rows(&r.menu.as_ref()?.1)?;
         Some((
             rows,
             r.menu_title
                 .clone()
                 .unwrap_or_else(sunrise_client::text::Text::empty),
         ))
+    }
+
+    pub(in crate::game) fn remote_chest_rows(menu: &str) -> Option<usize> {
+        menu.strip_prefix("minecraft:generic_9x")?.parse().ok()
     }
 }

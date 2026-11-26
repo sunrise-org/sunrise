@@ -2423,7 +2423,13 @@ impl Game<'_> {
     }
     /// The open cart's kind when a cart container is shown.
     pub(super) fn open_cart_kind(&self) -> Option<CartKind> {
-        let key = self.container.filter(|k| k.1 == CART_KEY_Y)?;
+        self.cart_container_kind(self.container?)
+    }
+
+    pub(super) fn cart_container_kind(&self, key: (i32, i32, i32)) -> Option<CartKind> {
+        if key.1 != CART_KEY_Y {
+            return None;
+        }
         // A chest boat's chest shows like a chest minecart's.
         self.carts
             .iter()

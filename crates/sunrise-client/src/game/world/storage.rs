@@ -325,6 +325,14 @@ impl Game<'_> {
         let Some(entity) = self.world.block_entities.get(&key) else {
             return Vec::new();
         };
+        self.container_parts_at(key, entity)
+    }
+
+    fn container_parts_at(
+        &self,
+        key: (i32, i32, i32),
+        entity: &BlockEntity,
+    ) -> Vec<((i32, i32, i32), usize)> {
         let own = (key, entity.slots().len());
         match self.chest_partner(key) {
             Some((other, true)) => vec![own, (other, 27)],
@@ -467,42 +475,56 @@ impl Game<'_> {
         }
     }
     pub(super) fn container_block_is_shulker(&self) -> bool {
-        self.container_block()
-            .as_deref()
-            .is_some_and(is_shulker_box)
+        self.container
+            .is_some_and(|key| is_shulker_box(self.container_block_at(key)))
     }
-    fn container_block(&self) -> Option<std::sync::Arc<str>> {
-        let k = self.container?;
-        Some(
-            self.res
-                .facts()
-                .get(self.world.block(k.0, k.1, k.2))
-                .name
-                .clone(),
-        )
+    pub(super) fn container_block_at(&self, (x, y, z): (i32, i32, i32)) -> &str {
+        &self.res.facts().get(self.world.block(x, y, z)).name
+    }
+    fn container_block(&self) -> Option<&str> {
+        self.container.map(|key| self.container_block_at(key))
     }
     /// Rows of the open generic 9-wide container (`ChestMenu`), or None for
     /// the other menus (hoppers, dispensers, shulker boxes, furnaces...).
     pub(super) fn chest_rows(&self) -> Option<usize> {
-        if let Some((rows, _)) = self.remote_chest_menu() {
+        self.chest_rows_for(
+            self.remote_menu_type(),
+            self.container,
+            self.container_kind(),
+        )
+    }
+
+    pub(super) fn chest_rows_for(
+        &self,
+        menu: Option<&str>,
+        key: Option<(i32, i32, i32)>,
+        entity: Option<&BlockEntity>,
+    ) -> Option<usize> {
+        if let Some(rows) = menu.and_then(Self::remote_chest_rows) {
             return Some(rows);
         }
-        if !matches!(self.container_kind()?, BlockEntity::Chest(_)) {
+        let (key, entity @ BlockEntity::Chest(_)) = (key?, entity?) else {
             return None;
-        }
-        let generic = match self.container_block().as_deref() {
-            Some("minecraft:barrel" | "minecraft:ender_chest") => true,
-            Some(n) if is_chest_block(n) => true,
-            _ => self.open_cart_kind() == Some(super::minecarts::CartKind::Chest),
         };
-        generic.then(|| self.open_container_size() / 9)
+        let generic = match self.container_block_at(key) {
+            "minecraft:barrel" | "minecraft:ender_chest" => true,
+            n if is_chest_block(n) => true,
+            _ => self.cart_container_kind(key) == Some(super::minecarts::CartKind::Chest),
+        };
+        generic.then(|| {
+            self.container_parts_at(key, entity)
+                .iter()
+                .map(|p| p.1)
+                .sum::<usize>()
+                / 9
+        })
     }
     /// The title of the open chest-like menu.
     fn chest_title(&self, rows: usize) -> Text {
         if let Some((_, title)) = self.remote_chest_menu() {
             return title;
         }
-        let (key, fallback) = match self.container_block().as_deref() {
+        let (key, fallback) = match self.container_block() {
             Some("minecraft:barrel") => ("container.barrel", "Barrel"),
             Some("minecraft:ender_chest") => ("container.enderchest", "Ender Chest"),
             _ if self.open_cart_kind().is_some() => {
@@ -525,11 +547,7 @@ impl Game<'_> {
         use sunrise_client::hud::rgba;
         let atlas = &self.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
-        if self
-            .container_block()
-            .as_deref()
-            .is_some_and(is_shulker_box)
-        {
+        if self.container_block_is_shulker() {
             batch.sprite_region(
                 atlas,
                 "gui/container/shulker_box",
