@@ -566,7 +566,8 @@ impl Game<'_> {
             }
             // EnderEyeItem.use: startUsingItem (getUseDuration 0, so the use
             // lasts until the button lets go), then the eye is thrown towards
-            // the nearest stronghold if there is one (CONSUME without).
+            // the nearest structure of #eye_of_ender_located if there is one
+            // (CONSUME without).
             self.start_using_item();
             self.throw_ender_eye();
             return Ok(true);
@@ -1355,38 +1356,35 @@ impl Game<'_> {
         }
     }
 
-    /// EnderEyeItem.use: findNearestMapStructure over the stronghold rings,
-    /// then an EyeOfEnder signalled towards it. Without a stronghold (other
-    /// dimensions) nothing is thrown.
+    /// `ServerLevel.findNearestMapStructure(StructureTags.EYE_OF_ENDER_LOCATED, from, 100,
+    /// false)`: the locate position of the nearest structure the tag lists, as
+    /// `EnderEyeItem.use` asks it. None where this level's generator places none of them.
+    pub(in crate::game) fn ender_eye_target(&self, from: [i32; 3]) -> Option<[i32; 3]> {
+        let names = self.structure_tag("minecraft:eye_of_ender_located");
+        self.end
+            .locator()
+            .filter(|_| !names.is_empty())
+            .and_then(|terrain| terrain.locate(&names, from, 100))
+            .map(|(_, at)| at)
+    }
+
+    /// EnderEyeItem.use: the nearest structure of `#minecraft:eye_of_ender_located`, then an
+    /// EyeOfEnder signalled towards it. Without one nothing is thrown (`CONSUME`).
     fn throw_ender_eye(&mut self) {
-        let rings = self
-            .end
-            .locator
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|t| t.ring_positions("minecraft:strongholds"));
-        let (Some(rings), Some(p)) = (rings, self.player.as_ref()) else {
+        let Some(p) = self.player.as_ref() else {
             return;
         };
-        let block = [
-            p.position.x.floor(),
-            p.position.y.floor(),
-            p.position.z.floor(),
-        ];
-        // ChunkGenerator.getNearestGeneratedStructure: the ring chunk closest to
-        // its (8, 32, 8) block, located at the chunk's corner.
-        let Some(nearest) = rings.iter().min_by(|a, b| {
-            let d = |c: &sunrise_core::position::ChunkPos| {
-                (f64::from(c.x * 16 + 8) - block[0]).powi(2)
-                    + (32.0 - block[1]).powi(2)
-                    + (f64::from(c.z * 16 + 8) - block[2]).powi(2)
-            };
-            d(a).total_cmp(&d(b))
-        }) else {
+        let at = [p.position.x, p.position.y, p.position.z];
+        // Player.blockPosition.
+        let Some(nearest) = self.ender_eye_target(at.map(|v| v.floor() as i32)) else {
             return;
         };
-        let target = glam::DVec3::new(f64::from(nearest.x * 16), 0.0, f64::from(nearest.z * 16));
+        // Vec3.atLowerCornerOf.
+        let target = glam::DVec3::new(
+            f64::from(nearest[0]),
+            f64::from(nearest[1]),
+            f64::from(nearest[2]),
+        );
         let start = glam::DVec3::new(
             p.position.x,
             p.position.y + f64::from(p.dimensions.height) * 0.5,
@@ -1406,7 +1404,6 @@ impl Game<'_> {
             target
         };
         let survive = self.world.random.next_int_bound(5).unwrap_or(0) > 0;
-        let at = [p.position.x, p.position.y, p.position.z];
         let ctx = self.player_context(None);
         self.post_game_event(
             "minecraft:projectile_shoot",
@@ -1427,10 +1424,7 @@ impl Game<'_> {
         let pitch = 0.33 + r * (0.5 - 0.33);
         self.play_audio("minecraft:entity.ender_eye.launch", Some(at), 1.0, pitch);
         // CriteriaTriggers.USED_ENDER_EYE, against the feature's block.
-        let (dx, dz) = (
-            at[0] - f64::from(nearest.x * 16),
-            at[2] - f64::from(nearest.z * 16),
-        );
+        let (dx, dz) = (at[0] - f64::from(nearest[0]), at[2] - f64::from(nearest[2]));
         self.trigger_used_ender_eye(dx * dx + dz * dz);
         self.consume_held();
         self.award_stat("used", "minecraft:ender_eye", 1);

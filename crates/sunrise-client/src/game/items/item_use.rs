@@ -2271,6 +2271,56 @@ pub(super) mod interact_vibration_tests {
         };
     }
 
+    /// `EnderEyeItem.use` locates over `#minecraft:eye_of_ender_located`, not the stronghold
+    /// rings: a pack that lists another structure there sends the eye to it, and one that
+    /// empties the tag leaves nothing to throw at.
+    #[test]
+    #[ignore = "daily"]
+    fn an_eye_finds_the_nearest_structure_its_tag_lists() {
+        let Some(_) = with_game("minecraft:ender_eye", |game| {
+            let root =
+                std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+            let terrain = std::sync::Arc::new(
+                sunrise_client::vanillagen::VanillaTerrain::new(
+                    sunrise_client::vanillagen::TerrainResources {
+                        dir: &root.join("worldgen"),
+                        data: Some(&game.pack.data_changes),
+                        registry: game.pack.assets.registry,
+                        biomes: &game.res.core.biomes,
+                        item_data: &game.res.core.item_data,
+                    },
+                    1234,
+                )
+                .unwrap(),
+            );
+            game.end.set_locator(Some(terrain.clone()));
+            let from = [10, 64, -4];
+            let nearest = |names: &[&str]| {
+                let names: Vec<String> = names.iter().map(|n| (*n).to_owned()).collect();
+                terrain.locate(&names, from, 100).map(|(_, at)| at)
+            };
+            // Vanilla's tag lists the stronghold.
+            let stronghold = nearest(&["minecraft:stronghold"]);
+            assert!(stronghold.is_some());
+            assert_eq!(game.ender_eye_target(from), stronghold);
+            let tag = "tags/minecraft:worldgen/structure/eye_of_ender_located".to_owned();
+            game.fns.store.files.insert(
+                tag.clone(),
+                vec![br#"{"replace": true, "values": ["minecraft:village_plains"]}"#.to_vec()],
+            );
+            let village = nearest(&["minecraft:village_plains"]);
+            assert!(village.is_some() && village != stronghold);
+            assert_eq!(game.ender_eye_target(from), village);
+            game.fns
+                .store
+                .files
+                .insert(tag, vec![br#"{"replace": true, "values": []}"#.to_vec()]);
+            assert_eq!(game.ender_eye_target(from), None);
+        }) else {
+            panic!("prepared resources failed to load")
+        };
+    }
+
     #[test]
     #[ignore = "daily"]
     fn thrown_eye_posts_projectile_shoot_at_eye_from_player() {
