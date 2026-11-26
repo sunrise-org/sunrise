@@ -1,6 +1,7 @@
 """The rolling mod tool: the folders that rebuild it come from cargo metadata, and its workflow mirrors the SDK's signing."""
 import json
 import re
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -34,6 +35,7 @@ class ToolFoldersTests(unittest.TestCase):
         self.assertEqual(mod_tool.crates(metadata),
                          ["crates/build-helper", "crates/cargo-sunrise-mod", "crates/lib"])
 
+    @unittest.skipUnless(shutil.which("cargo"), "needs cargo")
     def test_the_real_workspace_names_the_tool_and_its_package_crates(self):
         folders = mod_tool.crates()
         self.assertIn("crates/cargo-sunrise-mod", folders)

@@ -132,6 +132,12 @@ impl<'a> EntityQuadScope<'a> {
         }
     }
 
+    /// The vertices appended so far, for a caller that appends a run of its own and then
+    /// finishes it with [`Self::retain_valid_since`].
+    pub fn vertices_mut(&mut self) -> &mut Vec<Vertex> {
+        self.vertices
+    }
+
     /// Whether at least one more complete quad fits in this scope's remaining batch budget.
     pub fn has_room(&self) -> bool {
         self.vertices

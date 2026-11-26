@@ -47,13 +47,17 @@ pub fn register(m: &mut Mob) {
     m.set_malus(super::path::PathType::Water, -1.0);
 }
 /// Enderman.isBeingStaredBy: the player's look within a cone of 0.025 / distance
-/// of the eyes, with line of sight, and no head item in #minecraft:gaze_disguise_equipment. Last,
-/// a mod may keep the enderman calm (`EnderManAngerEvent`).
+/// of the eyes, with line of sight, and no head item in #minecraft:gaze_disguise_equipment (or
+/// what a mod's `gaze_disguise` answers for it). Last, a mod may keep the enderman calm
+/// (`EnderManAngerEvent`).
 pub fn stared_at(m: &Mob, w: &MobWorld) -> bool {
     let Some(p) = w.selected_player() else {
         return false;
     };
-    if !p.alive || super::ai::wears_gaze_disguise(p.head.as_deref(), w) {
+    if !p.alive {
+        return false;
+    }
+    if super::ai::gaze_disguised(m.id, p, w) {
         return false;
     }
     let look = p.look;

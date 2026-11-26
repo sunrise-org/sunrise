@@ -64,7 +64,15 @@ impl render::RenderDataSource for HiddenLayersData<'_, '_> {
     fn humanoid_setup(&self) -> Option<&dyn anim::HumanoidSetup> {
         render::RenderDataSource::humanoid_setup(self.game)
     }
+
+    fn variants(&self) -> Option<&sunrise_client::mobs::variants::VariantTables> {
+        render::RenderDataSource::variants(self.game)
+    }
 }
+
+#[cfg(test)]
+#[path = "tests/hidden_layers_variants_tests.rs"]
+mod hidden_layers_variants_tests;
 
 impl anim::HumanoidSetup for Game<'_> {
     fn before_arm_pose(&self, mob: &Mob, state: &anim::State<'_>, poses: &mut anim::Poses) {

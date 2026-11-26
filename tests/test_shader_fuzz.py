@@ -9,6 +9,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.os_support import needs_symlinks
 from tools import shader_fuzz as fuzz
 
 
@@ -113,6 +114,7 @@ class DriverTests(unittest.TestCase):
                 fuzz.main(['--binary', '/nonexistent', '--replay', bad])
             self.assertEqual(stop.exception.code, 2, bad)
 
+    @needs_symlinks
     def test_a_symlinked_work_directory_holds_the_run(self):
         with tempfile.TemporaryDirectory() as temp:
             real = Path(temp) / 'real'

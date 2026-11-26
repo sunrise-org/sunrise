@@ -446,6 +446,22 @@ fn verified(
     bytes: &[u8],
     surface: &[u8],
 ) -> Result<Index, String> {
+    let index = verified_index(tag, keys, build, sums, signature, bytes)?;
+    index
+        .verify(SURFACE, surface)
+        .map_err(|e| format!("{tag}: {e}"))?;
+    Ok(index)
+}
+
+/// The SDK index `bytes`, once the signed sums list it.
+fn verified_index(
+    tag: &str,
+    keys: &[PublicKey],
+    build: &str,
+    sums: &[u8],
+    signature: &[u8],
+    bytes: &[u8],
+) -> Result<Index, String> {
     let listed =
         sunrise_release_sign::verify(tag, sums, &String::from_utf8_lossy(signature), keys)?;
     let digest = format!("{:x}", Sha256::digest(bytes));
@@ -459,11 +475,7 @@ fn verified(
             sunrise_release_sign::SUMS
         ));
     }
-    let index = Index::read(bytes, build).map_err(|e| format!("{tag}: {e}"))?;
-    index
-        .verify(SURFACE, surface)
-        .map_err(|e| format!("{tag}: {e}"))?;
-    Ok(index)
+    Index::read(bytes, build).map_err(|e| format!("{tag}: {e}"))
 }
 
 /// The compiled slices (`runtime`, `api`, `engine`) of the build `index` describes, for `target`,
@@ -556,17 +568,70 @@ fn unpack(
 }
 
 fn pinned(index: &Index, dir: &Path) -> PinnedSdk {
-    let build = index.build.commit.clone();
-    let short = &build[..7];
     PinnedSdk {
-        name: match &index.build.nightly {
-            Some(nightly) => format!("{nightly} ({short})"),
-            None => short.to_owned(),
-        },
-        build,
+        name: name(index),
+        build: index.build.commit.clone(),
         dir: dir.to_owned(),
         surface: dir.join(SURFACE),
     }
+}
+
+/// The build `index` describes, as people read it: its Nightly and short commit, or the commit.
+pub(crate) fn name(index: &Index) -> String {
+    let short = &index.build.commit[..7];
+    match &index.build.nightly {
+        Some(nightly) => format!("{nightly} ({short})"),
+        None => short.to_owned(),
+    }
+}
+
+/// `build`'s verified `sdk.json` alone, for its change notes and the build before it: only the
+/// signed sums, their signature and `sdk.json` are fetched, kept in the project's
+/// `.sunrise/cache/<build>/` and verified again each time they are read from there.
+pub(crate) fn fetch_index_only(project: &Path, build: &str) -> Result<Index, String> {
+    fetch_index_only_from(&Base::from_env(), &keys(), project, build)
+}
+
+fn fetch_index_only_from(
+    base: &Base,
+    keys: &[PublicKey],
+    project: &Path,
+    build: &str,
+) -> Result<Index, String> {
+    if !sunrise_mod_package::manifest::revision(build) {
+        return Err(format!("{build} is not a build's full commit"));
+    }
+    let dir = project.join(CACHE).join(build);
+    // A linked folder on the way would send the cache's writes outside the project.
+    for folder in [project.join(".sunrise"), project.join(CACHE), dir.clone()] {
+        crate::internals::check_output_dir(&folder)?;
+    }
+    let tag = format!("sdk-{build}");
+    let names = [
+        sunrise_release_sign::SUMS,
+        sunrise_release_sign::SIGNATURE,
+        sdk::INDEX,
+    ];
+    let kept = names.map(|name| {
+        crate::bounded::read_bytes(&dir.join(name), SMALL, crate::bounded::Symlinks::Refuse).ok()
+    });
+    if let [Some(sums), Some(signature), Some(bytes)] = &kept
+        && let Ok(index) = verified_index(&tag, keys, build, sums, signature, bytes)
+    {
+        return Ok(index);
+    }
+    let fetched = names
+        .map(|name| base.read(&tag, name, SMALL))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("game build {build} has no signed SDK (release {tag}): {e}"))?;
+    let index = verified_index(&tag, keys, build, &fetched[0], &fetched[1], &fetched[2])?;
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // A link committed in the cache is replaced, never written through.
+    for (name, bytes) in names.iter().zip(&fetched) {
+        crate::internals::atomic_write(&dir.join(name), bytes)?;
+    }
+    Ok(index)
 }
 
 /// `text` (a release tag or a sha)'s build, its small files only (`sdk.json`, `surface.json`),

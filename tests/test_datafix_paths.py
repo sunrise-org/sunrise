@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 import zipfile
 
+from tests.os_support import needs_symlinks
 from tools import datafix_paths, pr_ready
 
 
@@ -20,7 +21,7 @@ class DatafixPaths(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.checkout = self.base / 'checkout'
         self.checkout.mkdir()
         self.shared = self.base / 'fixtures'
@@ -32,17 +33,20 @@ class DatafixPaths(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
+    @needs_symlinks
     def test_minecraft_input_does_not_select_output(self):
         (self.checkout / '.local').mkdir()
         (self.checkout / '.local/minecraft').symlink_to(self.shared, target_is_directory=True)
         self.assertEqual(datafix_paths.writable_root(), self.checkout / '.local/datafix')
 
+    @needs_symlinks
     def test_symlinked_ancestor_refused(self):
         (self.checkout / '.local').symlink_to(self.shared, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT'):
             datafix_paths.writable_root()
         self.assertEqual(list(self.shared.iterdir()), [])
 
+    @needs_symlinks
     def test_datafix_symlink_refused(self):
         (self.checkout / '.local').mkdir()
         (self.checkout / '.local/datafix').symlink_to(self.shared, target_is_directory=True)
@@ -73,6 +77,7 @@ class DatafixPaths(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'SUNRISE_DATAFIX_ROOT.*not writable'):
                 datafix_paths.writable_root()
 
+    @needs_symlinks
     def test_protected_ancestor_root_refused(self):
         os.environ['SUNRISE_DATAFIX_ROOT'] = str(self.base)
         (self.base / 'servers').symlink_to(self.shared / 'servers')
@@ -105,6 +110,7 @@ class DatafixPaths(unittest.TestCase):
         os.environ['SUNRISE_DATAFIX_ROOT'] = 'private-datafix'
         self.assertEqual(datafix_paths.writable_root(), Path('private-datafix').resolve())
 
+    @needs_symlinks
     def test_descendant_symlinks_refused_without_writes(self):
         root = self.checkout / '.local/datafix'
         root.mkdir(parents=True)

@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from tools import pr_ready
+from tests.os_support import POSIX_BASH
 
 PACKAGES = {"sunrise-core": "crates/sunrise-core", "sunrise-client": "crates/sunrise-client",
             "sunrise-theme": "crates/sunrise-theme", "xtask": "xtask"}
@@ -22,11 +23,6 @@ LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"sunrise-client": {"sunrise-core"}}
 MODS = ""
 CLIPPY = f'status=0\n{pr_ready.CI_CLIPPY} || status=$?\n{pr_ready.CI_CLIPPY_SERVER} || status=$?\nexit "$status"'
-# The bash on PATH: Windows' CreateProcess looks in System32 before PATH, so a bare "bash" there is WSL's
-# (#5383), which has none of the host's paths. Git Bash on PATH runs the launcher's snippets as on Linux.
-BASH = shutil.which("bash")
-POSIX_BASH = BASH is not None and not (
-    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
 
 
 def args(host="local", quick=False, harnesses=False):
@@ -213,6 +209,9 @@ class PrReadyTests(unittest.TestCase):
             popen.return_value.__enter__.return_value.stdout = []
             popen.return_value.__enter__.return_value.wait.return_value = 0
             popen.return_value.__enter__.return_value.returncode = 0
+            # No Windows job object: on Windows the reaper hands `job` to ctypes, which would follow a mock's
+            # `_as_parameter_` without end.
+            popen.return_value.__enter__.return_value.job = None
             pr_ready.run_windows([step], False)
         self.assertEqual(popen.call_args.args[0],
                          ["cargo", "test", "--manifest-path", "a/Cargo.toml", "--locked"])

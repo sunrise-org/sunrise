@@ -30,7 +30,7 @@ def limits(cgroup: Path) -> tuple[int, int]:
     """The runner's CPUs and memory bytes, from its cgroup (v2, else v1); a host with no limit, or no
     cgroup file at all (a GitHub-hosted job runs in the root cgroup, which has no cpu.max), falls back to
     the machine's own CPUs and memory."""
-    cpus = len(os.sched_getaffinity(0))
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
     v2 = read(cgroup / "cpu.max")
     if v2 is not None:
         quota, period = v2.split()

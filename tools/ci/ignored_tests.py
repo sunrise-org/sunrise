@@ -1137,17 +1137,16 @@ def run_leg(package, skip, number=None, count=None, only=None, binaries=None):
         elif SUMMARY.match(line):
             if target_count is not None:
                 last_summary = line
-        elif status := re.search(r"\((signal|exit status): (\d+)", line):
+        elif status := re.search(r"\((signal|exit status): (\d+)(?:, (SIG\w+))?", line):
             # Emit only the numeric status, never adjacent test output.
-            print(f"{package}: {status[0]})")
+            print(f"{package}: ({status[1]}: {status[2]})")
             # Cargo's own line for a test process that ended: 101 is libtest's "tests failed"; a signal or any
             # other status is a crash, whatever summaries came before it.
             if cargo_failure and "process didn't exit successfully" in line:
                 crash = status[1] == "signal" or status[2] != "101"
                 if crash and ended_by is None:
-                    number = int(status[2])
-                    name = signal.Signals(number).name if status[1] == "signal" and number in signal.valid_signals() else None
-                    ended_by = f"{status[1]} {number}" + (f" ({name})" if name else "")
+                    # The name is the one cargo printed: this machine's signal table may not know the signal.
+                    ended_by = f"{status[1]} {status[2]}" + (f" ({status[3]})" if status[3] else "")
                 crashed |= crash
                 cargo_failure = False
         if line.startswith("error: test failed, to rerun pass "):

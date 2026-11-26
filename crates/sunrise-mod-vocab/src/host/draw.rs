@@ -671,13 +671,16 @@ pub trait WorldDrawContext {
     }
     /// Draw `draw.max_count` commands a compute shader wrote into a storage buffer
     /// (vanilla's `RenderPass.drawIndexedIndirect(commands, drawCount)` and `drawIndirect`), with
-    /// no CPU readback. The same draw on every backend and through a translated shader pack. See
-    /// [`IndirectDraw`] for the command layout. Everything is checked before anything is recorded
-    /// (never panics, never triggers a GPU validation error): pipeline liveness
+    /// no CPU readback, or with a count buffer as many as the GPU wrote, at most `max_count`. The
+    /// same draw on every backend and through a translated shader pack. See [`IndirectDraw`] for
+    /// the command layout. Everything is checked before anything is recorded (never panics,
+    /// never triggers a GPU validation error): pipeline liveness
     /// ([`PipelineDrawError::Pipeline`]), mesh ownership, liveness and strides
-    /// ([`PipelineDrawError::Mesh`]), the command buffer's handle ([`PipelineDrawError::Buffer`])
-    /// and its use as indirect arguments ([`PipelineDrawError::InvalidIndirect`]), and the
-    /// bindings. A `max_count` of zero is a legal no-op.
+    /// ([`PipelineDrawError::Mesh`]), the command and count buffers' handles
+    /// ([`PipelineDrawError::Buffer`]) and their use as indirect arguments
+    /// ([`PipelineDrawError::InvalidIndirect`]), a count buffer the adapter cannot read
+    /// ([`PipelineDrawError::UnsupportedIndirectCount`]), and the bindings. A `max_count` of
+    /// zero is a legal no-op.
     fn draw_indirect(&mut self, draw: &IndirectDraw<'_>) -> Result<(), PipelineDrawError> {
         let _ = draw;
         Err(PipelineDrawError::Pipeline(RenderPipelineError::Invalid))

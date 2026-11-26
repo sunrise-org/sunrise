@@ -442,18 +442,11 @@ impl Game<'_> {
         // editor or a screen consumes the key, there is no world, or a
         // command handler returns an error: a lost release keeps Shift down.
         let released = released_modifier(line);
-        // The socket's own key, mouse and typing commands are input, as the window's events are.
-        let input = matches!(
-            line.split_whitespace().next(),
-            Some("key" | "mouse" | "type")
-        );
-        let result = self.with_user_input(input, |game| {
-            game.control_command_inner(line, reply, event_loop)
-        });
+        let result = self.control_command_inner(line, reply, event_loop);
         self.settle_title_mode();
         // After handling, as the window's: the mods' mappings and `input_key` hear the key.
         if let Some((key, action)) = socket_key(line) {
-            self.with_user_input(true, |game| game.socket_key_input(key, action));
+            self.socket_key_input(key, action);
         }
         if let Some(key) = released {
             self.press_modifier_key(key, false);
@@ -1243,6 +1236,8 @@ impl Game<'_> {
                 if sunrise_client::options_ui::OptionsUi::lists_shader_packs(page) {
                     self.settings.shader_packs =
                         sunrise_client::shader_pack_list::scan(&Self::shader_packs_dir());
+                    // A pack may have been replaced under the same name.
+                    self.native_shaders.pick_hdr.get_mut().forget();
                     self.open_shader_options();
                 }
                 ok()

@@ -100,8 +100,10 @@ For replacing or wrapping a HUD status layer, see [HUD drawing](hud-drawing.md).
   whole sprite's logical size and the source offset in its pixels. Only `Textured` and `Crosshair`
   work on this path. A removed GUI sprite is refused, not drawn as a missing texture.
 - `canvas.atlas_sprite` looks up the exact packed atlas name, independently of the GUI lookup.
-- `canvas.blit` draws part of a raw texture (a path under `textures/`, without `.png`, or a live
-  or registered texture id). `GuiBlitRegion { uv, src, tex }` gives the source offset, signed source
+- `canvas.blit` draws part of a texture packed in the GUI atlas (a path under `textures/`,
+  without `.png`, or a registered atlas's sprite such as `mymod:gui/atlases/icons/mymod/heart`).
+  A live dynamic texture or a standalone resource-pack texture is refused with `UnknownTexture`:
+  draw those with `canvas.texture`. `GuiBlitRegion { uv, src, tex }` gives the source offset, signed source
   extents and texture-axis divisors in pixels. A negative source extent mirrors that axis; a zero
   divisor is refused. `Textured` blends normally, `Vignette` darkens what is under
   it (`dst * (1 - src)`), `Nausea` is additive and `Crosshair` inverts it.

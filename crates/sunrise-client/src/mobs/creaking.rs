@@ -353,9 +353,9 @@ fn check_can_move(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool
         // canAttack (not creative, spectator or dead) and not allied.
         if p.alive && !p.creative && !p.spectator {
             potential = true;
-            // GAZE_DISGUISE_EQUIPMENT hides the player once the creaking is awake.
-            let disguised = super::ai::wears_gaze_disguise(p.head.as_deref(), w);
-            if (!active || !disguised) && looked_at_by(m, w) {
+            // GAZE_DISGUISE_EQUIPMENT (or a mod's `gaze_disguise`) hides the player once the
+            // creaking is awake; a dormant one doesn't ask.
+            if (!active || !super::ai::gaze_disguised(m.id, p, w)) && looked_at_by(m, w) {
                 if active {
                     return false;
                 }

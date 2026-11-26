@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
 import yaml
 
+from tests.os_support import needs_runner_shell
 from tools import release_file
 from tools import release_train as train
 from tools.ci import nightly
@@ -132,6 +133,7 @@ class AuthorizeTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             train.require_ref("refs/heads/Release/26.3", "stable")
 
+    @needs_runner_shell
     def test_each_workflow_runs_the_gate_and_its_variants_stay_dry(self):
         # (job, step, kind, the one ref that publishes it): each gate as its workflow runs it, with its variants.
         gates = [(workflow("daily.yml")["jobs"]["resolve"], "auth", "daily", RELEASE),

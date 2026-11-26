@@ -16,6 +16,9 @@ In a mod folder, `cargo sunrise-mod` does this for you from the SDK it fetched i
   apply (a mod made for one build, a content mod, or a package with no `uses.json`).
 - `cargo sunrise-mod pin [<build>]` reports what moving the pin breaks, where the mod uses each changed item,
   and the closest replacement it can find, then moves the pin. With no build given it pins the current Nightly.
+  It prints the change notes (why and `migrate`) of every SDK between the two pins for the items the mod uses
+  that changed; `cargo sunrise-mod check` prints the same notes after a compile error they explain. Each SDK's
+  release page lists the notes since the SDK before it.
 - `cargo sunrise-mod hooks <text>` searches the pinned build's hooks by id, doc and their NeoForge, Fabric and
   Paper names, offline; `--all` searches every item. `cargo sunrise-mod sdk diff <build> <build>` prints what
   changed between two builds, from their small files alone, so it works for builds whose game files are pruned.

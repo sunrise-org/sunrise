@@ -308,6 +308,35 @@ target can be sampled with `SamplerFilter::Linear`. A device refusal of the allo
 A render target survives a resource reload and a world close, and is freed by
 `target.release(host)` or when its mod unloads.
 
+## Samplers and mipmapped textures
+
+A set-1 sampler entry takes one `Sampler` descriptor, the shape of vanilla's
+`GpuDevice.createSampler(addressU, addressV, minFilter, magFilter, maxAnisotropy, maxLod)`:
+`BindGroupLayout::builder().sampler("Atlas", Sampler::new(SamplerFilter::Nearest,
+SamplerAddress::ClampToEdge))` is one filter and one address mode for both axes, with no `max_lod`.
+For anything else set the public fields of the descriptor: `address_u`, `address_v`, `min`, `mag` and
+`max_lod: Option<f32>`. Like vanilla's, a sampler has no separate mipmap filter and no minimum level of
+detail: a `max_lod` above `0.25` blends linearly between the two nearest mip levels (vanilla's
+`NEAREST_MIPMAP_LINEAR` and `LINEAR_MIPMAP_LINEAR`, and Vulkan's linear mipmap mode for `maxLod > 0.25`), and
+`Some(0.0)` reads only the base level. `None` is what `Sampler::new` gives: vanilla's absent `maxLod` (1000),
+so it blends between levels too. A sampler that blends is a filtering one: to sample a depth target, or an
+`R32Float` target where `float32_filterable` is false, set `max_lod = Some(0.0)` with `SamplerFilter::Nearest`.
+A negative or non-finite `max_lod` is `BindGroupLayoutError::BadMaxLod`. Anisotropy is not offered.
+
+A dynamic texture (see [Textures made at run time](dynamic-textures.md)) made with `mip_levels` above 1 is
+bound to such a sampler by its id, `TextureSource::DynamicTexture(id)`, and the shader's `texture`,
+`textureLod` and `textureGrad` read every level:
+
+```rust,ignore
+let mut atlas = Sampler::new(SamplerFilter::Nearest, SamplerAddress::ClampToEdge);
+atlas.max_lod = Some(4.0);
+let layout = BindGroupLayout::builder().sampler("Atlas", atlas).build()?;
+```
+
+Fill the levels from the CPU with `update_dynamic_texture_region(id, mip_level, ...)`, as vanilla's
+`MipmapGenerator` builds the block atlas's levels and uploads each one; the game builds none on the GPU.
+`GuiCanvas::texture` always samples level 0 of a mipmapped texture.
+
 ## Participating in translated shader packs
 
 When an Iris/OptiFine shader pack is active and owns terrain rendering, a mod pipeline without a
@@ -633,8 +662,18 @@ ctx.draw_indirect(
 `draw_indirect` is on `WorldDrawContext`, `PrepareRenderBuffersContext` (with the stage, as
 `draw_mesh` is) and `OffscreenDrawContext`. It draws exactly `max_count` commands from
 `indirect_offset`, the same on every backend, as vanilla's `RenderPass.drawIndexedIndirect(commands,
-drawCount)` does. There is no GPU-written count: have the culling shader write `instance_count = 0`
-into each slot it drops, which draws nothing. A `max_count` of zero is a legal no-op.
+drawCount)` does. Have the culling shader write `instance_count = 0` into each slot it drops, which
+draws nothing. A `max_count` of zero is a legal no-op.
+
+Where `render_capabilities().multi_draw_indirect_count` is set, the culling pass can instead
+compact the commands it keeps and write how many there are as a `u32` into a buffer created with
+`StorageBufferDescriptor::indirect`. `IndirectDraw::with_count_buffer(buffer, offset)` then draws
+that many, at most `max_count` (`multi_draw_indirect_count`), so dropped slots cost nothing. The
+offset is a multiple of 4 with the count's 4 bytes inside the buffer, or the draw is refused with
+`PipelineDrawError::InvalidIndirect`. Where the capability is false (no
+`MULTI_DRAW_INDIRECT_COUNT`, or DirectX 12, whose count draws drop an indexed command's
+`base_vertex`), a draw with a count buffer is refused with
+`PipelineDrawError::UnsupportedIndirectCount`.
 
 - **Layout.** With a `MeshRef` that has an index buffer, each command is five 4-byte words
   (`index_count, instance_count, first_index, base_vertex, first_instance`; `INDIRECT_INDEXED_DRAW_SIZE`
@@ -652,3 +691,35 @@ The command buffer must have been created with `indirect: true`, its offset be a
 `indirect_offset + max_count * stride` lie inside it. A stale or foreign buffer is
 `PipelineDrawError::Buffer`, any other misuse `PipelineDrawError::InvalidIndirect`, and nothing is
 recorded.
+
+## Reading a storage buffer back
+
+A mod that needs a compute pass's result on the CPU (a request queue, visibility counts) reads it
+back without waiting, as vanilla does: `CommandEncoder.copyToBuffer(source, target)` into a
+`USAGE_MAP_READ` buffer, then `GpuBuffer.map(read)` once its fence has signalled. Create the buffer
+with `StorageBufferDescriptor::new(size).copy_src()` (vanilla's `USAGE_COPY_SRC`; off by default),
+request the copy inside the compute node that writes it, and poll over the following frames:
+
+```rust,ignore
+// in the `record` callback of `add_compute_pass`
+ctx.dispatch(pipeline, &bindings, [groups, 1, 1])?;
+let ticket = counts.request_readback(host, 0, 16)?;
+// kept by the mod; each later frame:
+if let Some(bytes) = ticket.poll_readback(host)? {
+    // the 16 bytes the dispatch above wrote
+}
+```
+
+- **Where the copy happens.** `request_readback` records the copy at the call's place in the node:
+  it sees the writes of the dispatches recorded before it and none recorded after. It is allowed
+  only inside a frame-graph compute node's `record` callback; anywhere else it is
+  `BufferError::NotInFrame`.
+- **No waiting.** `poll_readback` is `Ok(None)` while the copy is in flight, then `Ok(Some(bytes))`
+  once, and the staging buffer is freed with it. The map starts after the frame is submitted.
+- **Bounds.** `offset` and `len` are multiples of 4, `len` is not zero, the range lies inside the
+  buffer and the buffer has `copy_src` (`BufferError::{InvalidAlignment, Empty, OutOfRange,
+  NotReadable}`), all refused before the GPU is touched. There is no cap on tickets beyond the
+  device's memory: running out is `BufferError::ExceedsDeviceLimit`.
+- **Letting go.** `ticket.release(host)` drops a ticket you no longer want; unpolled tickets are freed
+  when the mod unloads. A spent or unknown ticket, a node the frame did not run, and a lost device
+  are `BufferError::Unavailable`.

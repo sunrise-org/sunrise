@@ -71,6 +71,9 @@ impl ModStorageBuffers {
         if desc.indirect {
             usage |= wgpu::BufferUsages::INDIRECT;
         }
+        if desc.copy_src {
+            usage |= wgpu::BufferUsages::COPY_SRC;
+        }
         let out_of_memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {

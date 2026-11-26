@@ -19,10 +19,26 @@ pub const RUNTIME_DIR: &str = "runtime";
 /// which the build would apply, and the pinned SDK the mod tool fetches into `.sunrise/`.
 pub const NOT_PACKAGED: [&str; 4] = [".git", "target", ".sunrise", ".cargo"];
 
+/// The registry page beside the manifest, and the folder of its images: `build` writes them to
+/// `<id>.page.tar`, never into the `.smod`. Older builds' readers allow only a short file list
+/// and refuse a package that carries them.
+pub const PAGE_FILE: &str = "page.toml";
+pub const PAGE_DIR: &str = "page";
+
+/// Whether `name` is the root page file or under the root page folder. Only the root ones: a
+/// crate's own `src/page/` is source.
+pub fn page_file(name: &str) -> bool {
+    name == PAGE_FILE
+        || name
+            .strip_prefix(PAGE_DIR)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Whether `name` (`/`-separated, relative to the package) is a source file: any path outside
 /// [`NOT_PACKAGED`] folders that is not one of the package's own names, which are the manifest,
-/// the uses table, the icon, and what is under `runtime/`, `assets/` and `data/`. A name is never
-/// judged by its extension; a trailing `/` reads as a file below the folder.
+/// the uses table, the icon, and what is under `runtime/`, `assets/` and `data/`, nor the
+/// registry page ([`page_file`]). A name is never judged by its extension; a trailing `/` reads
+/// as a file below the folder.
 pub fn source_file(name: &str) -> bool {
     let mut parts = name.split('/');
     let first = parts.next().unwrap_or_default();
@@ -31,6 +47,7 @@ pub fn source_file(name: &str) -> bool {
         && name != MANIFEST
         && name != USES_FILE
         && name != "icon.png"
+        && !page_file(name)
         && ![RUNTIME_DIR, "assets", "data"].iter().any(|folder| {
             name.strip_prefix(folder)
                 .is_some_and(|rest| rest.starts_with('/'))
@@ -315,6 +332,10 @@ mod tests {
             // Cargo skips only the root `target`.
             "src/target/x.c",
             "vendor/foo/target/x.c",
+            // Only the root page is the registry's.
+            "src/page/mod.rs",
+            "src/page.toml",
+            "pages/a.rs",
         ] {
             assert!(source_file(name), "{name}");
         }
@@ -331,6 +352,9 @@ mod tests {
             ".sunrise/sdk/api/lib.rs",
             ".cargo/config.toml",
             "vendor/.git/config",
+            "page.toml",
+            "page/runes.jpg",
+            "page/",
         ] {
             assert!(!source_file(name), "{name}");
         }

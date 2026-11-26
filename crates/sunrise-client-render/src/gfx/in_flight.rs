@@ -40,7 +40,8 @@ fn contain_loss(
 impl Renderer {
     /// The frame's readbacks to start right after its submission (on the submit thread when
     /// the frame goes there): occlusion culling's results (`cull`) and GPU culling's
-    /// statistics, then a pack-drawn light texture's copy while F3 charts it. GPU frames leave
+    /// statistics, then a pack-drawn light texture's copy while F3 charts it, then the copies of
+    /// the mods' storage buffer readbacks. GPU frames leave
     /// occlusion culling off, so a frame has one of the first two at most.
     pub(super) fn after_submit(&mut self) -> Option<submit::AfterSubmit> {
         let cull = self.cull.as_mut().and_then(|c| c.submitted());
@@ -53,7 +54,9 @@ impl Renderer {
         let lightmap = self.core_lightmap.as_mut().and_then(|l| l.submitted());
         let cull = cull.map(|c| Box::new(c) as submit::AfterSubmit);
         let gpu = gpu.map(|g| Box::new(g) as submit::AfterSubmit);
-        chain(chain(cull, gpu), chain(sourced, lightmap))
+        // A mod's readback copies, mapped as the frame that holds them is submitted.
+        let mods = self.mod_gpu.readbacks_submitted();
+        chain(chain(chain(cull, gpu), chain(sourced, lightmap)), mods)
     }
     /// Frame `frame`'s statistics shown, unless a newer frame's are: a CPU frame's as it is
     /// drawn, a GPU frame's when its counts come back (`GpuCulling::collect`).

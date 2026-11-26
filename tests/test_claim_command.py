@@ -523,10 +523,11 @@ class WorkflowTests(unittest.TestCase):
         from unittest import mock
         for body, found in (("🤖 Agent:\n/claim", "true"), ("thanks\n  /unclaim @Some-One", "true"),
                             ("the /claim limit is 10 now", "false")):
-            with tempfile.NamedTemporaryFile("r", suffix=".out") as out:
-                with mock.patch.dict(os.environ, {"BODY": body, "GITHUB_OUTPUT": out.name}):
+            with tempfile.TemporaryDirectory() as folder:
+                out = Path(folder, "output")
+                with mock.patch.dict(os.environ, {"BODY": body, "GITHUB_OUTPUT": str(out)}):
                     cc.detect()
-                self.assertEqual(out.read(), f"command={found}\n", body)
+                self.assertEqual(out.read_text(), f"command={found}\n", body)
 
     def test_the_command_gets_what_exempts_the_repositorys_own_people_from_the_limit(self):
         # Without them the script reads every commenter as association NONE with no exempt logins, and refuses an org

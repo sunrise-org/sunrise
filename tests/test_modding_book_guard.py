@@ -10,6 +10,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
+from tests.os_support import needs_runner_shell
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools/ci/vendor/pyyaml-6.0.3.zip'))
@@ -57,6 +58,7 @@ sys.exit(42)
 class BookErrorTests(unittest.TestCase):
     """The build step fails when mdBook logs an error it would otherwise build past."""
 
+    @needs_runner_shell
     def build(self, log, exit_code=0):
         step = next(step for step in yaml.safe_load(WORKFLOW.read_text())['jobs']['book']['steps']
                     if step.get('name') == 'Build the book')
@@ -100,6 +102,7 @@ class BookGuardTests(unittest.TestCase):
             step = next(step for step in steps if step.get('run') == command)
             self.assertEqual(step['if'], present + " && github.event_name != 'pull_request'")
 
+    @needs_runner_shell
     def run_guard(self, event, *, token=None, missing=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -179,6 +182,7 @@ class BookGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, '^unreadable fixture probe failed: exit 1$'):
                 require_unreadable_file(Path('unused'), {}, Path('.'))
 
+    @needs_runner_shell
     def test_grep_errors_do_not_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

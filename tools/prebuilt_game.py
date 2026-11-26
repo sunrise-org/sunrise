@@ -782,7 +782,7 @@ def carry_patches(staged: Path, out: Path) -> dict:
             shutil.copytree(source, destination, symlinks=True)
             if any(path.is_symlink() for path in destination.rglob("*")):
                 raise ValueError("copied game patch contains a symlink")
-            spec["path"] = str(destination.relative_to(out))
+            spec["path"] = destination.relative_to(out).as_posix()
     # This deliberately is not the game's buildable workspace manifest.
     lines = []
     for registry, entries in patches.items():
@@ -1055,9 +1055,12 @@ def start(out: Path) -> None:
 
 def tar_xz(folder: Path, names: list[str], archive: Path) -> None:
     """A tar of `names` (paths under `folder`, folders included) the same on every OS and run: sorted `./` entries,
-    zero times and owners, GNU format, xz-compressed with no timestamp of its own."""
+    zero times and owners, GNU format, xz-compressed with no timestamp of its own. Modes are 0o755 for folders and
+    executables and 0o644 for other files, whatever the host's umask or file system gave them (Windows reports
+    0o666 and 0o777)."""
     def clean(info: tarfile.TarInfo) -> tarfile.TarInfo:
         info.mtime, info.uid, info.gid, info.uname, info.gname = 0, 0, 0, "", ""
+        info.mode = 0o755 if info.isdir() or info.mode & 0o111 else 0o644
         return info
     with lzma.open(archive, "wb", format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC64, preset=XZ_PRESET) as xz, \
             tarfile.open(fileobj=xz, mode="w", format=tarfile.GNU_FORMAT) as tar:

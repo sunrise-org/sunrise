@@ -1222,6 +1222,7 @@ fn render_pack_with(
             &[crate::hud::dynamic_textures::Command::Create {
                 handle: 1,
                 size: [1, 1],
+                mip_levels: 1,
                 rgba: rgba.to_vec(),
             }],
         );
@@ -2997,6 +2998,7 @@ mod dynamic_quads {
         Command::Create {
             handle: HANDLE,
             size: [2, 2],
+            mip_levels: 1,
             rgba,
         }
     }
@@ -3245,6 +3247,7 @@ mod dynamic_quads {
                 vec![create(texels([RED, GREEN, BLUE, YELLOW]))],
                 vec![Command::Write {
                     handle: HANDLE,
+                    mip_level: 0,
                     origin: [1, 1],
                     size: [1, 1],
                     rgba: WHITE.to_vec(),
@@ -3338,6 +3341,7 @@ mod dynamic_quads {
                 vec![create(texels([RED, GREEN, BLUE, YELLOW]))],
                 vec![Command::Write {
                     handle: HANDLE,
+                    mip_level: 0,
                     origin: [1, 1],
                     size: [1, 1],
                     rgba: WHITE.to_vec(),

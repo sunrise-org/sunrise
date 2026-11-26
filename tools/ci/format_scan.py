@@ -29,8 +29,8 @@ CHUNK = 200 if os.name == "nt" else 500
 
 
 def commands(root: Path) -> list[list[str]]:
-    files = sorted(str(path.relative_to(root)) for tree in TREES for path in (root / tree).rglob("*.rs"))
-    files += sorted(str(path.relative_to(root)) for pattern in DISCOVERED for path in root.glob(pattern))
+    files = sorted(path.relative_to(root).as_posix() for tree in TREES for path in (root / tree).rglob("*.rs"))
+    files += sorted(path.relative_to(root).as_posix() for pattern in DISCOVERED for path in root.glob(pattern))
     return [["cargo", "fmt", "--all", "--", "--check"]] + [
         RUSTFMT + files[start:start + CHUNK] for start in range(0, len(files), CHUNK)]
 

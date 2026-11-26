@@ -13,14 +13,14 @@ pub mod dynamic_panel {
         let (width, height) = (64, 32);
         let rgba = [24, 24, 48, 230].repeat(width * height);
         let id = Identifier::parse(PANEL).unwrap();
-        host.create_dynamic_texture(&id, width as u32, height as u32, &rgba)
+        host.create_dynamic_texture(&id, width as u32, height as u32, 1, &rgba)
     }
 
     /// Redraw the gauge's rows, 4 to 11, without sending the rest of the image again.
     pub fn redraw_gauge(host: &mut dyn ClientHost) -> Result<(), DynamicTextureError> {
         let id = Identifier::parse(PANEL).unwrap();
         let rows = [200, 60, 60, 255].repeat(64 * 8);
-        host.update_dynamic_texture_region(&id, [0, 4], [64, 8], &rows)
+        host.update_dynamic_texture_region(&id, 0, [0, 4], [64, 8], &rows)
     }
 
     #[derive(Default)]

@@ -42,7 +42,7 @@ class RunTestBinariesTests(unittest.TestCase):
         ])
         binaries = runner.test_binaries(messages)
         self.assertEqual([b["executable"] for b in binaries], ["/t/a"])
-        self.assertEqual(binaries[0]["cwd"], "/repo/crates/sunrise-world")
+        self.assertEqual(binaries[0]["cwd"], str(Path("/repo/crates/sunrise-world")))
         self.assertEqual(binaries[0]["env"]["CARGO_PKG_NAME"], "sunrise-world")
         self.assertEqual(binaries[0]["env"]["CARGO_CRATE_NAME"], "sunrise_world")
 

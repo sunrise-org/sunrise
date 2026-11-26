@@ -1,8 +1,9 @@
 //! Client mods' dynamic textures (`ClientRenderClientHost::create_dynamic_texture`),
 //! vanilla's `DynamicTexture` registered in the `TextureManager` under an id
 //! (`TextureManager.register`, `release`). Each texture is a GPU texture of its own
-//! (`RGBA8_UNORM`, one mip level, sampled nearest with repeat: `DynamicTexture`'s constructor),
-//! drawn as a standalone texture by `HudBatch::dynamic_texture`.
+//! (`RGBA8_UNORM`, one mip level unless the mod asks for more, sampled nearest with repeat by the
+//! GUI: `DynamicTexture`'s constructor), drawn as a standalone texture, from level 0, by
+//! `HudBatch::dynamic_texture`.
 //!
 //! Two halves meet through [`Command`]s. [`DynamicTextures`] is the client thread's: which ids
 //! exist, who owns them and how large they are, with every refusal decided there, and no pixels
@@ -26,15 +27,19 @@ use sunrise_core::identifier::Identifier;
 /// `handle` names a texture for as long as its id lives, whatever size it is re-created at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// A new texture, or one replacing the handle's (a different size), holding `rgba`.
+    /// A new texture of `mip_levels` levels, or one replacing the handle's (a different size),
+    /// with `rgba` in level 0 and the other levels empty.
     Create {
         handle: u64,
         size: [u32; 2],
+        mip_levels: u32,
         rgba: Vec<u8>,
     },
-    /// `CommandEncoder.writeToTexture`'s region overload: `rgba` into the region at `origin`.
+    /// `CommandEncoder.writeToTexture`'s region overload: `rgba` into the region at `origin` of
+    /// mip level `mip_level`.
     Write {
         handle: u64,
+        mip_level: u32,
         origin: [u32; 2],
         size: [u32; 2],
         rgba: Vec<u8>,
@@ -69,6 +74,17 @@ struct Image {
     owner: Box<str>,
     handle: u64,
     size: [u32; 2],
+    mip_levels: u32,
+}
+
+/// The length of a full mip chain for a texture of `size`: `32 - max(w, h).leading_zeros()`.
+fn full_chain(size: [u32; 2]) -> u32 {
+    32 - size[0].max(size[1]).leading_zeros()
+}
+
+/// The side of mip level `level` of a texture side `side`, at least 1.
+fn level_side(side: u32, level: u32) -> u32 {
+    side.checked_shr(level).unwrap_or(0).max(1)
 }
 
 /// `BadSize` for a side of 0 or pixels that are not `width * height * 4` bytes, `TooLarge` for a
@@ -105,17 +121,21 @@ impl DynamicTextures {
         self.bound = Some((store, max_side));
     }
 
-    /// Mod `owner` creates texture `id` of `size` from `rgba`. Every refusal comes before the
-    /// pixels are copied, and changes nothing.
+    /// Mod `owner` creates texture `id` of `size` and `mip_levels` levels, level 0 from `rgba`.
+    /// Every refusal comes before the pixels are copied, and changes nothing.
     pub fn create(
         &mut self,
         owner: &str,
         id: &Identifier,
         size: [u32; 2],
+        mip_levels: u32,
         rgba: &[u8],
     ) -> Result<(), DynamicTextureError> {
         let (_, max) = self.bound.ok_or(DynamicTextureError::Unavailable)?;
         checked(size, rgba.len(), max)?;
+        if mip_levels == 0 || mip_levels > full_chain(size) {
+            return Err(DynamicTextureError::BadMipLevels);
+        }
         if self.images.contains_key(id) {
             return Err(DynamicTextureError::NameTaken);
         }
@@ -123,6 +143,7 @@ impl DynamicTextures {
         self.queue.push(Command::Create {
             handle,
             size,
+            mip_levels,
             rgba: rgba.to_vec(),
         });
         self.images.insert(
@@ -131,6 +152,7 @@ impl DynamicTextures {
                 owner: owner.into(),
                 handle,
                 size,
+                mip_levels,
             },
         );
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
@@ -154,30 +176,51 @@ impl DynamicTextures {
         if image.size == size {
             self.queue.push(Command::Write {
                 handle,
+                mip_level: 0,
                 origin: [0, 0],
                 size,
                 rgba,
             });
         } else {
+            let mip_levels = image.mip_levels;
+            if mip_levels > full_chain(size) {
+                return Err(DynamicTextureError::BadMipLevels);
+            }
             image.size = size;
-            self.queue.push(Command::Create { handle, size, rgba });
+            self.queue.push(Command::Create {
+                handle,
+                size,
+                mip_levels,
+                rgba,
+            });
             self.geometry_revision = self.geometry_revision.wrapping_add(1);
         }
         Ok(())
     }
 
-    /// Mod `owner` replaces the region of its texture `id` at `origin` of `size` with `rgba`.
+    /// Mod `owner` replaces the region of mip level `mip_level` of its texture `id` at `origin`
+    /// of `size` (both in pixels of that level) with `rgba`.
     pub fn update_region(
         &mut self,
         owner: &str,
         id: &Identifier,
+        mip_level: u32,
         origin: [u32; 2],
         size: [u32; 2],
         rgba: &[u8],
     ) -> Result<(), DynamicTextureError> {
         let (_, max) = self.bound.ok_or(DynamicTextureError::Unavailable)?;
         let image = self.owned_image(owner, id)?;
-        let (handle, extent) = (image.handle, image.size);
+        if mip_level >= image.mip_levels {
+            return Err(DynamicTextureError::BadMipLevels);
+        }
+        let (handle, extent) = (
+            image.handle,
+            [
+                level_side(image.size[0], mip_level),
+                level_side(image.size[1], mip_level),
+            ],
+        );
         checked(size, rgba.len(), max)?;
         let inside = |axis: usize| {
             origin[axis]
@@ -189,6 +232,7 @@ impl DynamicTextures {
         }
         self.queue.push(Command::Write {
             handle,
+            mip_level,
             origin,
             size,
             rgba: rgba.to_vec(),
@@ -441,7 +485,12 @@ impl Store {
         let mut textures = self.lock();
         for command in commands {
             match command {
-                Command::Create { handle, size, rgba } => {
+                Command::Create {
+                    handle,
+                    size,
+                    mip_levels,
+                    rgba,
+                } => {
                     // The sides were checked against the device's limit when the call was made. A
                     // failure the device still reports is logged and leaves no GPU texture, while the
                     // client table keeps the id: it draws vanilla's missing texture
@@ -457,7 +506,7 @@ impl Store {
                             height: size[1],
                             depth_or_array_layers: 1,
                         },
-                        mip_level_count: 1,
+                        mip_level_count: *mip_levels,
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: wgpu::TextureFormat::Rgba8Unorm,
@@ -486,6 +535,7 @@ impl Store {
                 }
                 Command::Write {
                     handle,
+                    mip_level,
                     origin,
                     size,
                     rgba,
@@ -493,7 +543,13 @@ impl Store {
                     let Some(gpu) = textures.get(handle) else {
                         continue;
                     };
-                    let (width, height) = (gpu.texture.width(), gpu.texture.height());
+                    if *mip_level >= gpu.texture.mip_level_count() {
+                        continue;
+                    }
+                    let (width, height) = (
+                        level_side(gpu.texture.width(), *mip_level),
+                        level_side(gpu.texture.height(), *mip_level),
+                    );
                     if origin[0].saturating_add(size[0]) > width
                         || origin[1].saturating_add(size[1]) > height
                     {
@@ -503,7 +559,7 @@ impl Store {
                         encoder,
                         wgpu::TexelCopyTextureInfo {
                             texture: &gpu.texture,
-                            mip_level: 0,
+                            mip_level: *mip_level,
                             origin: wgpu::Origin3d {
                                 x: origin[0],
                                 y: origin[1],
@@ -592,7 +648,7 @@ mod tests {
         // Three pixels wide: each row is padded to 256 bytes on the GPU.
         let rgba: Vec<u8> = (0..3 * 2 * 4).map(|i| (i * 9) as u8).collect();
         textures
-            .create("mod", &id("mod:dyn/icon"), [3, 2], &rgba)
+            .create("mod", &id("mod:dyn/icon"), [3, 2], 1, &rgba)
             .unwrap();
         let mut uploads = crate::gfx::upload::Uploads::new(&device);
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -606,7 +662,7 @@ mod tests {
         uploads.finish(&encoder);
         queue.submit([encoder.finish()]);
         textures
-            .create("mod", &id("mod:pending"), [1, 1], &[0; 4])
+            .create("mod", &id("mod:pending"), [1, 1], 1, &[0; 4])
             .unwrap();
 
         let dir = tempfile::tempdir().unwrap();
@@ -629,7 +685,7 @@ mod tests {
         let mut textures = DynamicTextures::default();
         let a = id("mod:a");
         assert_eq!(
-            textures.create("mod", &a, [1, 1], &[0; 4]),
+            textures.create("mod", &a, [1, 1], 1, &[0; 4]),
             Err(Unavailable)
         );
         assert_eq!(textures.release("mod", &a), Err(Unavailable));
@@ -639,10 +695,16 @@ mod tests {
     fn a_pixel_buffer_of_the_wrong_length_or_size_is_refused_by_name() {
         let mut textures = textures();
         let a = id("mod:a");
-        assert_eq!(textures.create("mod", &a, [2, 2], &[0; 15]), Err(BadSize));
-        assert_eq!(textures.create("mod", &a, [2, 2], &[0; 17]), Err(BadSize));
-        assert_eq!(textures.create("mod", &a, [0, 4], &[]), Err(BadSize));
-        assert_eq!(textures.create("mod", &a, [4, 0], &[]), Err(BadSize));
+        assert_eq!(
+            textures.create("mod", &a, [2, 2], 1, &[0; 15]),
+            Err(BadSize)
+        );
+        assert_eq!(
+            textures.create("mod", &a, [2, 2], 1, &[0; 17]),
+            Err(BadSize)
+        );
+        assert_eq!(textures.create("mod", &a, [0, 4], 1, &[]), Err(BadSize));
+        assert_eq!(textures.create("mod", &a, [4, 0], 1, &[]), Err(BadSize));
         assert!(commands(&mut textures).is_empty());
         assert_eq!(textures.get(&a), None);
     }
@@ -652,25 +714,28 @@ mod tests {
         let mut textures = textures();
         let a = id("mod:a");
         assert_eq!(
-            textures.create("mod", &a, [129, 1], &[0; 516]),
+            textures.create("mod", &a, [129, 1], 1, &[0; 516]),
             Err(TooLarge)
         );
-        assert_eq!(textures.create("mod", &a, [1, 129], &[]), Err(TooLarge));
+        assert_eq!(textures.create("mod", &a, [1, 129], 1, &[]), Err(TooLarge));
         assert_eq!(
-            textures.create("mod", &a, [u32::MAX, u32::MAX], &[]),
+            textures.create("mod", &a, [u32::MAX, u32::MAX], 1, &[]),
             Err(TooLarge)
         );
-        assert_eq!(textures.create("mod", &a, [128, 1], &[0; 512]), Ok(()));
+        assert_eq!(textures.create("mod", &a, [128, 1], 1, &[0; 512]), Ok(()));
     }
 
     #[test]
     fn a_name_is_taken_unknown_or_another_mods() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [1, 1], &[0; 4]).unwrap();
-        assert_eq!(textures.create("mod", &a, [1, 1], &[0; 4]), Err(NameTaken));
+        textures.create("mod", &a, [1, 1], 1, &[0; 4]).unwrap();
         assert_eq!(
-            textures.create("other", &a, [1, 1], &[0; 4]),
+            textures.create("mod", &a, [1, 1], 1, &[0; 4]),
+            Err(NameTaken)
+        );
+        assert_eq!(
+            textures.create("other", &a, [1, 1], 1, &[0; 4]),
             Err(NameTaken)
         );
         let missing = id("mod:missing");
@@ -681,7 +746,7 @@ mod tests {
         assert_eq!(textures.release("mod", &missing), Err(Unknown));
         assert_eq!(textures.update("other", &a, [1, 1], &[0; 4]), Err(NotOwned));
         assert_eq!(
-            textures.update_region("other", &a, [0, 0], [1, 1], &[0; 4]),
+            textures.update_region("other", &a, 0, [0, 0], [1, 1], &[0; 4]),
             Err(NotOwned)
         );
         assert_eq!(textures.release("other", &a), Err(NotOwned));
@@ -692,11 +757,11 @@ mod tests {
     fn a_region_outside_the_texture_is_refused_by_name() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [4, 4], &[0; 64]).unwrap();
+        textures.create("mod", &a, [4, 4], 1, &[0; 64]).unwrap();
         commands(&mut textures);
         let region = |textures: &mut DynamicTextures, origin, size: [u32; 2]| {
             let rgba = vec![0; (size[0] * size[1] * 4) as usize];
-            textures.update_region("mod", &a, origin, size, &rgba)
+            textures.update_region("mod", &a, 0, origin, size, &rgba)
         };
         assert_eq!(region(&mut textures, [3, 0], [2, 1]), Err(OutOfBounds));
         assert_eq!(region(&mut textures, [0, 4], [1, 1]), Err(OutOfBounds));
@@ -706,7 +771,7 @@ mod tests {
         );
         assert_eq!(region(&mut textures, [0, 0], [5, 1]), Err(OutOfBounds));
         assert_eq!(
-            textures.update_region("mod", &a, [0, 0], [1, 1], &[0; 3]),
+            textures.update_region("mod", &a, 0, [0, 0], [1, 1], &[0; 3]),
             Err(BadSize)
         );
         assert!(commands(&mut textures).is_empty());
@@ -714,13 +779,84 @@ mod tests {
     }
 
     #[test]
+    fn mip_levels_run_from_one_to_the_full_chain_and_a_write_is_checked_against_its_level() {
+        let mut textures = textures();
+        let a = id("mod:a");
+        // A 8 x 4 texture has a full chain of 4 levels: 8x4, 4x2, 2x1, 1x1.
+        let base = vec![0; 8 * 4 * 4];
+        for bad in [0, 5, u32::MAX] {
+            assert_eq!(
+                textures.create("mod", &a, [8, 4], bad, &base),
+                Err(BadMipLevels)
+            );
+        }
+        assert_eq!(textures.get(&a), None);
+        assert_eq!(textures.create("mod", &a, [8, 4], 4, &base), Ok(()));
+        commands(&mut textures);
+        let write = |textures: &mut DynamicTextures, level, origin, size: [u32; 2]| {
+            let rgba = vec![0; (size[0] * size[1] * 4) as usize];
+            textures.update_region("mod", &a, level, origin, size, &rgba)
+        };
+        assert_eq!(write(&mut textures, 1, [0, 0], [4, 2]), Ok(()));
+        assert_eq!(write(&mut textures, 1, [0, 0], [5, 2]), Err(OutOfBounds));
+        assert_eq!(write(&mut textures, 2, [1, 0], [1, 1]), Ok(()));
+        assert_eq!(write(&mut textures, 2, [0, 0], [2, 2]), Err(OutOfBounds));
+        assert_eq!(write(&mut textures, 3, [0, 0], [1, 1]), Ok(()));
+        assert_eq!(write(&mut textures, 3, [1, 0], [1, 1]), Err(OutOfBounds));
+        assert_eq!(write(&mut textures, 4, [0, 0], [1, 1]), Err(BadMipLevels));
+        assert_eq!(
+            write(&mut textures, u32::MAX, [0, 0], [1, 1]),
+            Err(BadMipLevels)
+        );
+        assert_eq!(
+            textures.update_region("mod", &a, 2, [0, 0], [2, 1], &[0; 7]),
+            Err(BadSize)
+        );
+        assert_eq!(
+            commands(&mut textures)
+                .iter()
+                .map(|command| match command {
+                    Command::Write { mip_level, .. } => *mip_level,
+                    other => panic!("{other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn a_new_size_keeps_the_mip_levels_when_its_chain_holds_them() {
+        let mut textures = textures();
+        let a = id("mod:a");
+        textures.create("mod", &a, [8, 8], 3, &[0; 256]).unwrap();
+        commands(&mut textures);
+        assert_eq!(
+            textures.update("mod", &a, [2, 2], &[0; 16]),
+            Err(BadMipLevels)
+        );
+        assert_eq!(textures.size(&a), Some([8, 8]));
+        assert!(commands(&mut textures).is_empty());
+        textures.update("mod", &a, [4, 4], &[0; 64]).unwrap();
+        let (handle, _) = textures.get(&a).unwrap();
+        assert_eq!(
+            commands(&mut textures),
+            [Command::Create {
+                handle,
+                size: [4, 4],
+                mip_levels: 3,
+                rgba: vec![0; 64]
+            }]
+        );
+    }
+
+    #[test]
     fn calls_queue_in_order_and_a_new_size_recreates_the_same_handle() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [2, 2], &[1; 16]).unwrap();
+        textures.create("mod", &a, [2, 2], 1, &[1; 16]).unwrap();
         let (handle, _) = textures.get(&a).unwrap();
         textures
-            .update_region("mod", &a, [1, 1], [1, 1], &[2; 4])
+            .update_region("mod", &a, 0, [1, 1], [1, 1], &[2; 4])
             .unwrap();
         textures.update("mod", &a, [2, 2], &[3; 16]).unwrap();
         textures.update("mod", &a, [1, 3], &[4; 12]).unwrap();
@@ -731,16 +867,19 @@ mod tests {
                 Command::Create {
                     handle,
                     size: [2, 2],
+                    mip_levels: 1,
                     rgba: vec![1; 16]
                 },
                 Command::Write {
                     handle,
+                    mip_level: 0,
                     origin: [1, 1],
                     size: [1, 1],
                     rgba: vec![2; 4]
                 },
                 Command::Write {
                     handle,
+                    mip_level: 0,
                     origin: [0, 0],
                     size: [2, 2],
                     rgba: vec![3; 16]
@@ -748,6 +887,7 @@ mod tests {
                 Command::Create {
                     handle,
                     size: [1, 3],
+                    mip_levels: 1,
                     rgba: vec![4; 12]
                 },
                 Command::Release { handle },
@@ -761,8 +901,8 @@ mod tests {
     fn unloading_a_mod_releases_only_its_textures() {
         let mut textures = textures();
         let (a, b) = (id("one:a"), id("two:b"));
-        textures.create("one", &a, [1, 1], &[0; 4]).unwrap();
-        textures.create("two", &b, [1, 1], &[0; 4]).unwrap();
+        textures.create("one", &a, [1, 1], 1, &[0; 4]).unwrap();
+        textures.create("two", &b, [1, 1], 1, &[0; 4]).unwrap();
         let (handle, _) = textures.get(&a).unwrap();
         commands(&mut textures);
         textures.release_owned_by("one");
@@ -775,7 +915,7 @@ mod tests {
     fn a_new_device_forgets_every_texture() {
         let mut textures = textures();
         let a = id("mod:a");
-        textures.create("mod", &a, [1, 1], &[0; 4]).unwrap();
+        textures.create("mod", &a, [1, 1], 1, &[0; 4]).unwrap();
         textures.bind(1, 128);
         assert!(textures.get(&a).is_some());
         textures.bind(2, 64);
@@ -789,10 +929,10 @@ mod tests {
         let mut textures = textures();
         let (skin, small) = (id("mod:skin"), id("mod:small"));
         textures
-            .create("mod", &skin, [64, 64], &[0; 64 * 64 * 4])
+            .create("mod", &skin, [64, 64], 1, &[0; 64 * 64 * 4])
             .unwrap();
         textures
-            .create("mod", &small, [32, 64], &[0; 32 * 64 * 4])
+            .create("mod", &small, [32, 64], 1, &[0; 32 * 64 * 4])
             .unwrap();
         commands(&mut textures);
         assert!(!textures.copy_to_atlas(&small, [0, 0]));

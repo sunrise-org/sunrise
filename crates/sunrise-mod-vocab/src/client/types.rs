@@ -220,6 +220,57 @@ impl std::error::Error for MappingError {
     }
 }
 
+/// Why [`confirm_link`](crate::prelude::ClientInputClientHost::confirm_link) opened no prompt.
+/// Nothing is opened or changed when it is returned.
+// no wire: refusal of a process-local client operation
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenLinkError {
+    /// The text is not an http or https URI (`Util.parseAndValidateUntrustedUri`): another
+    /// scheme (`file:`, `javascript:`, `ftp:`), no scheme, or a malformed URI such as one with
+    /// a space. The scheme is matched without regard to case.
+    Invalid,
+    /// This host has no native window (a server or a headless host).
+    Unavailable,
+}
+
+impl std::fmt::Display for OpenLinkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Invalid => "the link is not a valid http or https URI",
+            Self::Unavailable => "there is no window to show the link in",
+        })
+    }
+}
+
+impl std::error::Error for OpenLinkError {}
+
+/// Why [`open_path`](crate::prelude::ClientInputClientHost::open_path) opened nothing.
+// no wire: refusal of a process-local client operation
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenPathError {
+    /// The path does not exist. No process was started.
+    NotFound,
+    /// The operating system could not hand the path to the desktop's handler; the text is the
+    /// system's own error.
+    Failed(String),
+    /// This host has no native window (a server or a headless host).
+    Unavailable,
+}
+
+impl std::fmt::Display for OpenPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("the path does not exist"),
+            Self::Failed(error) => write!(f, "the desktop could not open the path: {error}"),
+            Self::Unavailable => f.write_str("there is no desktop to open the path in"),
+        }
+    }
+}
+
+impl std::error::Error for OpenPathError {}
+
 /// A read-only view of a play packet in `Hooks::client_packet` or `Hooks::client_packet_send`.
 ///
 /// The view is valid only during the hook. Only custom payloads expose more

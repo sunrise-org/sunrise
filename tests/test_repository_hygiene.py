@@ -126,6 +126,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("invalid workflow YAML", result.stderr)
 
+    @unittest.skipUnless(shutil.which("sh"), "the pre-push hook is a POSIX shell script and this system has no sh")
     def test_hook_validates_tips_and_preserves_public_tree_ref_input(self):
         self.write("tools/ci/check_repository_hygiene.py", SCRIPT.read_text())
         shutil.copytree(VENDOR, self.root / "tools/ci/vendor")

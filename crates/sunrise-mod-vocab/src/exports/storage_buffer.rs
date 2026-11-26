@@ -1,1 +1,3 @@
-pub use client::storage_buffer::{StorageBufferDescriptor, StorageBufferRef, StorageBufferSlice};
+pub use client::storage_buffer::{
+    ReadbackTicket, StorageBufferDescriptor, StorageBufferRef, StorageBufferSlice,
+};

@@ -33,17 +33,40 @@ pub trait ClientInputClientHost {
     /// Cleared when the window loses focus; available even outside a world.
     fn modifiers(&self) -> ClientModifiers;
     /// Side: client.
-    /// The clipboard's text (`KeyboardHandler.getClipboard`), empty when it holds none,
-    /// while the game handles a key, mouse or typed-text event: a mod's key or screen hook
-    /// pasting into its own field. None at any other moment (a tick, a frame, a packet),
-    /// so no mod reads the clipboard without the player doing something, and None on a
-    /// server.
+    /// The clipboard's text (`KeyboardHandler.getClipboard`), empty when it holds none.
+    /// Works from any client callback (a tick, a frame, a payload handler, an input event, a
+    /// screen hook), as vanilla's `KeyboardHandler`; None only without a native window (a
+    /// server or a headless host).
     fn clipboard_text(&self) -> Option<String>;
     /// Side: client.
-    /// Puts `text` on the clipboard (`KeyboardHandler.setClipboard`) on the same terms as
-    /// `native_clipboard_text` reads it. False, with nothing copied, at any other moment or
-    /// on a server; empty text copies nothing, as vanilla's.
+    /// Puts `text` on the clipboard (`KeyboardHandler.setClipboard`) from any client
+    /// callback, as `clipboard_text` reads it. False, with nothing copied, only without a
+    /// native window (a server or a headless host); empty text is ignored and leaves the
+    /// clipboard unchanged, as vanilla's.
     fn set_clipboard_text(&self, text: &str) -> bool;
+    /// Side: client.
+    /// Opens the link confirmation over whatever screen is open (`ConfirmLinkScreen.confirmLinkNow`).
+    /// Yes hands `uri` to the desktop's browser (`Blaze3D.openUri`); Copy to Clipboard copies it;
+    /// every answer returns to the screen that was open. The player's answer is the consent, so no
+    /// input event is needed: a tick or a payload handler may call it. `trusted` only changes the
+    /// prompt, as vanilla's argument does: untrusted shows `chat.link.confirm`, the
+    /// `chat.link.warning` line and Yes / Copy to Clipboard / No; trusted shows
+    /// `chat.link.confirmTrusted`, no warning line and Open in Browser / Copy to Clipboard / Cancel.
+    /// The chat's Web Links and Prompt on Links options gate chat click events only and do not
+    /// apply. Only http and https URIs are accepted, as `Util.parseAndValidateUntrustedUri` does
+    /// (the scheme in any case); anything else returns [`OpenLinkError::Invalid`] and opens
+    /// nothing. Returns [`OpenLinkError::Unavailable`] without a native window (a server or a
+    /// headless host). A screen hook that cancels the prompt's opening leaves it unopened, as
+    /// for any screen.
+    fn confirm_link(&mut self, uri: &str, trusted: bool) -> Result<(), OpenLinkError>;
+    /// Side: client.
+    /// Hands `path` to the desktop's handler at once, with no confirmation (`Blaze3D.openPath`):
+    /// a folder opens in the default file manager, a file in the program the system assigns it.
+    /// The path comes from the mod; no input event is needed. A path that does not exist returns
+    /// [`OpenPathError::NotFound`] and starts no process; any other failure of the system's
+    /// call returns [`OpenPathError::Failed`] with its text. Returns [`OpenPathError::Unavailable`]
+    /// without a native window (a server or a headless host).
+    fn open_path(&self, path: &std::path::Path) -> Result<(), OpenPathError>;
     /// Side: client.
     /// Whether the window holds the pointer (`MouseHandler.isMouseGrabbed`): true while the
     /// player looks around in a world, false with a screen open or the window released.

@@ -11,6 +11,7 @@ import tempfile
 import textwrap
 import unittest
 
+from tests.os_support import needs_runner_shell
 from tests.test_ci_runners import jobs
 from tests.test_ci_concurrency import yaml
 
@@ -139,6 +140,7 @@ console.log(JSON.stringify(eval(state.expression)));
                         expected = row["os"]
                     self.assertEqual(runs_on(job, row, variables, dev), expected)
 
+    @needs_runner_shell
     def test_any_missing_leg_holds_the_build(self):
         workflow_jobs = dict(jobs(GAME.read_text()))
         decide = workflow_jobs["legs"].split("        run: |\n", 1)[1].split("\n      # ", 1)[0].split("\n      - ", 1)[0]

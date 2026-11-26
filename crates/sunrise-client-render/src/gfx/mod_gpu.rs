@@ -6,6 +6,7 @@
 //! shared with the renderer that made it.
 
 use super::mod_meshes::{ModMeshes, ResolvedMeshDraw};
+use super::mod_readback::ModReadbacks;
 use super::mod_render_targets::{
     ModRenderTargets, ResolvedOffscreenTarget, TargetMips, probe_render_capabilities,
 };
@@ -15,9 +16,9 @@ use super::mod_uniforms::{
 };
 use mod_api::{
     BufferError, Identifier, MeshDescriptor, MeshDraw, MeshError, MeshRef, PipelineDrawError,
-    PrimitiveTopology, RenderCapabilities, RenderTargetDescriptor, RenderTargetError,
-    RenderTargetRef, StorageBufferDescriptor, StorageBufferRef, StorageBufferSlice,
-    StorageImageAccess, StorageImageBinding, UniformBufferRef, VertexFormat,
+    PrimitiveTopology, ReadbackTicket, RenderCapabilities, RenderTargetDescriptor,
+    RenderTargetError, RenderTargetRef, StorageBufferDescriptor, StorageBufferRef,
+    StorageBufferSlice, StorageImageAccess, StorageImageBinding, UniformBufferRef, VertexFormat,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
@@ -64,6 +65,8 @@ pub struct ModGpuResources {
     /// Retained GPU storage buffers backing [`mod_api::StorageBufferRef`]; they outlive a resource
     /// reload and a world close.
     pub(crate) storage: Arc<Mutex<ModStorageBuffers>>,
+    /// Pending readbacks of storage buffers backing [`mod_api::ReadbackTicket`].
+    pub(crate) readbacks: Arc<Mutex<ModReadbacks>>,
     /// Mod-owned offscreen GPU render targets backing [`mod_api::RenderTargetRef`].
     pub(crate) render_targets: Arc<Mutex<ModRenderTargets>>,
     /// The mods' dynamic textures, shared with the renderer's HUD.
@@ -89,6 +92,7 @@ impl ModGpuResources {
             meshes: Arc::default(),
             uniforms: Arc::default(),
             storage: Arc::default(),
+            readbacks: Arc::default(),
             render_targets: Arc::default(),
             dynamic_textures,
             frame_views: Arc::new(Mutex::new(frame_views)),
@@ -150,6 +154,11 @@ impl ModGpuResources {
         self.render_capabilities.clone()
     }
 
+    /// `RenderCapabilities::multi_draw_indirect_count`, without copying the rest.
+    pub fn multi_draw_indirect_count(&self) -> bool {
+        self.render_capabilities.multi_draw_indirect_count
+    }
+
     /// The largest inline uniform and texel-buffer payloads a mod's set-1 draw may bind: the
     /// device's `max_uniform_buffer_binding_size` and `max_storage_buffer_binding_size`, each
     /// capped by `max_buffer_size`.
@@ -203,6 +212,10 @@ forward! {
     pub fn storage_buffer_size(&self, owner: Option<&'static str>, buffer: StorageBufferRef) -> Result<u64, BufferError>;
     pub fn storage_buffer_release(&self, owner: Option<&'static str>, buffer: StorageBufferRef) -> Result<(), BufferError>;
     pub fn retire_unloaded_mod_storage(&self, unloaded: &BTreeSet<String>);
+    pub fn retire_unloaded_mod_readbacks(&self, unloaded: &BTreeSet<String>);
+    pub fn storage_buffer_request_readback(&self, owner: Option<&'static str>, buffer: StorageBufferRef, offset: u64, len: u64) -> Result<ReadbackTicket, BufferError>;
+    pub fn readback_poll(&self, owner: Option<&'static str>, ticket: ReadbackTicket) -> Result<Option<Vec<u8>>, BufferError>;
+    pub fn readback_release(&self, owner: Option<&'static str>, ticket: ReadbackTicket) -> Result<(), BufferError>;
     pub fn resolve_mod_storage_range(&self, owner: Option<&'static str>, slice: StorageBufferSlice, min_size: u32) -> Result<ResolvedStorageRange, BufferError>;
     pub fn resolve_mod_storage_buffer(&self, owner: Option<&'static str>, handle: StorageBufferRef) -> Result<wgpu::Buffer, BufferError>;
     pub(super) fn flush_mod_storage(&self);

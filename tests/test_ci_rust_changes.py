@@ -192,8 +192,12 @@ class RustChangesTests(unittest.TestCase):
             (docs / "old.md").rename(docs / "renamed.md")
             (docs / "added.md").write_text("added\n")
             (docs / "type.md").unlink()
-            (docs / "type.md").symlink_to("modified.md")
             git("add", "-A")
+            # type.md becomes the entry git stores for a symbolic link (mode 120000, its target as content), made
+            # without one on disk.
+            link = subprocess.run(["git", "-C", directory, "hash-object", "-w", "--stdin"], input=b"modified.md",
+                                  capture_output=True, check=True).stdout.decode().strip()
+            git("update-index", "--add", "--cacheinfo", f"120000,{link},docs/type.md")
             git(*commit)
             previous = Path.cwd()
             try:

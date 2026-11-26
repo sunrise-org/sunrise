@@ -153,4 +153,7 @@ pub use renderer::*;
 mod coverage_tests;
 
 #[cfg(test)]
+mod dynamic_gui_gpu_tests;
+
+#[cfg(test)]
 mod tests;

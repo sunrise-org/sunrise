@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from test_ci_concurrency import yaml
+from tests.os_support import needs_runner_shell
 from tools.ci import daily_fuzz as fuzz
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +152,7 @@ class DailyWorkflowTests(unittest.TestCase):
             self.assertNotIn('fuzz', dependencies(job))
         self.assertEqual(daily['fuzz']['uses'], './.github/workflows/parity-fuzz.yml')
 
+    @needs_runner_shell
     def test_private_directory_step_prunes_only_old_runs_and_needs_no_keep_variable(self):
         workflow = yaml.load((ROOT / '.github/workflows/parity-fuzz.yml').read_text(), Loader=yaml.BaseLoader)
         step = next(s for job in workflow['jobs'].values() for s in job['steps'] if s.get('id') == 'private')

@@ -215,7 +215,7 @@ sunrise-client game::client_reload::tests::initial_load_stages_and_applies_clien
 sunrise-client game::client_reload::tests::only_the_first_local_client_is_the_client_start lib daily resources
 sunrise-client game::client_reload::tests::refused_client_context_keeps_pack_and_listeners lib daily resources
 sunrise-client game::client_reload::tests::the_lifecycle_moments_fire_once_each_in_order lib daily resources
-sunrise-client game::clipboard::tests::a_mod_reaches_the_clipboard_only_while_input_is_handled lib daily resources
+sunrise-client game::clipboard::tests::a_mod_reaches_the_clipboard_from_any_client_callback lib daily resources
 sunrise-client game::clone_block_ticks_tests::a_strict_clone_copies_the_pending_block_ticks_of_its_source lib daily resources
 sunrise-client game::clone_block_ticks_tests::copied_block_ticks_keep_order_priority_and_dedup lib daily resources
 sunrise-client game::clone_dimensions_tests::a_clone_to_another_dimension_lands_in_that_world_and_comes_back lib daily resources

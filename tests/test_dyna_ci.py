@@ -13,11 +13,10 @@ import textwrap
 import time
 import unittest
 
+from tests.os_support import POSIX_BASH, needs_runner_shell
+
 ROOT = Path(__file__).resolve().parents[1]
 PARITY = ROOT / ".github/workflows/parity.yml"
-BASH = shutil.which("bash")
-POSIX_BASH = BASH is not None and not (
-    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
 
 
 class DynaRoutingTests(unittest.TestCase):
@@ -633,6 +632,7 @@ class DynaRoutingTests(unittest.TestCase):
         self.assertEqual([path.name for path in sorted((ROOT / "tools").glob("test_*_parity.py"))
                           if builds_client_lib_test(path)], [])
 
+    @needs_runner_shell
     def test_daily_harnesses_client_lib_tests_are_built_before_the_harnesses(self):
         from test_ci_runners import jobs
         parity = dict(jobs(PARITY.read_text()))["vanilla-parity"]
@@ -740,6 +740,7 @@ class IgnoredTestsKeepTests(unittest.TestCase):
         self.assertEqual(step["env"]["NAME"],
                          "${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}")
 
+    @needs_runner_shell
     def test_a_failed_runs_output_is_kept_under_its_run_attempt_and_job(self):
         self.private.mkdir()
         (self.private / "sunrise-client#1of2.test.log").write_text("synthetic private payload")
@@ -751,6 +752,7 @@ class IgnoredTestsKeepTests(unittest.TestCase):
         self.assertIn("ignored-tests-failed-logs/77-2-3", result.stdout)
         self.assertNotIn("synthetic private payload", result.stdout + result.stderr)
 
+    @needs_runner_shell
     def test_expired_entries_are_pruned_and_a_clean_run_adds_none(self):
         root = self.keep / "ignored-tests-failed-logs"
         stale, fresh = root / "70-1-0", root / "76-1-0"
@@ -772,6 +774,7 @@ class IgnoredTestsKeepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+@needs_runner_shell
 class ParityWorkflowTests(unittest.TestCase):
     def setUp(self):
         from test_ci_concurrency import yaml

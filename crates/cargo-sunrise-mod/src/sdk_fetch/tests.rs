@@ -71,6 +71,24 @@ fn a_signed_release_is_unpacked_once_and_reused() {
 }
 
 #[test]
+fn the_notes_fetch_reads_only_the_signed_index_and_keeps_it() {
+    let (base, key) = release(None);
+    // A release whose surface is gone still gives its signed `sdk.json`: the surface is never read.
+    fs::remove_file(base.path().join(format!("sdk-{BUILD}")).join(SURFACE)).unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let base = Base::Folder(base.path().to_owned());
+    let index = fetch_index_only_from(&base, &[key], project.path(), BUILD).unwrap();
+    assert_eq!(index.build.commit, BUILD);
+    let dir = project.path().join(CACHE).join(BUILD);
+    assert!(!dir.join(SURFACE).exists());
+    // Kept, it is read again with nothing fetched; changed, it is refused with nowhere to fetch.
+    let gone = Base::Folder(project.path().join("nowhere"));
+    assert!(fetch_index_only_from(&gone, &[key], project.path(), BUILD).is_ok());
+    fs::write(dir.join(sdk::INDEX), b"{}").unwrap();
+    assert!(fetch_index_only_from(&gone, &[key], project.path(), BUILD).is_err());
+}
+
+#[test]
 fn a_kept_surface_changed_under_a_matching_stamp_is_fetched_again() {
     let (base, key) = release(None);
     let project = tempfile::tempdir().unwrap();

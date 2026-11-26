@@ -54,6 +54,8 @@ pub struct RecordedFramePass {
     pub after: Vec<FramePassRef>,
     pub before: Vec<FramePassRef>,
     pub disable_culling: bool,
+    /// The mip level of a mod target the pass renders into ([`FramePassDescriptor::mip_level`]).
+    pub mip_level: u32,
     pub draws: Vec<PipelineDraw>,
     pub transient_vertices: Vec<u8>,
     pub transient_indices: Vec<u8>,
@@ -62,6 +64,9 @@ pub struct RecordedFramePass {
     pub owner: Option<&'static str>,
     /// The dispatches of a compute node (`None` for a render pass).
     pub dispatches: Option<Vec<super::mod_compute::RecordedDispatch>>,
+    /// The storage buffer copies a compute node requested, each encoded between the dispatches
+    /// recorded before and after its request.
+    pub readbacks: Vec<super::mod_readback::RecordedReadback>,
 }
 
 impl RecordedFramePass {
@@ -80,6 +85,7 @@ impl RecordedFramePass {
             after: desc.after,
             before: desc.before,
             disable_culling: desc.disable_culling,
+            mip_level: desc.mip_level,
             draws: Vec::new(),
             transient_vertices: Vec::new(),
             transient_indices: Vec::new(),
@@ -87,6 +93,7 @@ impl RecordedFramePass {
             texel_data: Vec::new(),
             owner,
             dispatches: None,
+            readbacks: Vec::new(),
         }
     }
 
@@ -108,6 +115,7 @@ impl RecordedFramePass {
             after: desc.after,
             before: desc.before,
             disable_culling: true,
+            mip_level: 0,
             draws: Vec::new(),
             transient_vertices: Vec::new(),
             transient_indices: Vec::new(),
@@ -115,6 +123,7 @@ impl RecordedFramePass {
             texel_data: Vec::new(),
             owner,
             dispatches: Some(Vec::new()),
+            readbacks: Vec::new(),
         }
     }
 }
@@ -762,7 +771,8 @@ pub struct FrameGraphRunner {
     /// Scratch for a compute node's dispatches that bind a transient target, reused across
     /// passes and frames.
     dispatch_scratch: Vec<super::mod_compute::RecordedDispatch>,
-    dispatch_plan: Vec<DispatchPick>,
+    /// Each planned dispatch with its index among the node's recorded dispatches.
+    dispatch_plan: Vec<(usize, DispatchPick)>,
 }
 
 /// Where a compute node's dispatch to record comes from.
@@ -854,20 +864,42 @@ impl FrameGraphRunner {
                     &mut self.dispatch_scratch,
                     &mut self.dispatch_plan,
                 );
-                let scratch = &self.dispatch_scratch;
-                world_primitives.pipelines.compute.record(
-                    device,
-                    encoder,
-                    self.dispatch_plan.iter().map(|pick| match *pick {
-                        DispatchPick::Recorded(i) => &dispatches[i],
-                        DispatchPick::Scratch(i) => &scratch[i],
-                    }),
-                );
+                // Each readback is encoded after the dispatches recorded before its request.
+                let mut start = 0;
+                for readback in pass.readbacks.iter().map(Some).chain([None]) {
+                    let end = match readback {
+                        Some(readback) => {
+                            start
+                                + self.dispatch_plan[start..]
+                                    .iter()
+                                    .take_while(|(index, _)| *index < readback.after)
+                                    .count()
+                        }
+                        None => self.dispatch_plan.len(),
+                    };
+                    if start < end {
+                        let scratch = &self.dispatch_scratch;
+                        world_primitives.pipelines.compute.record(
+                            device,
+                            encoder,
+                            self.dispatch_plan[start..end]
+                                .iter()
+                                .map(|(_, pick)| match *pick {
+                                    DispatchPick::Recorded(i) => &dispatches[i],
+                                    DispatchPick::Scratch(i) => &scratch[i],
+                                }),
+                        );
+                    }
+                    start = end;
+                    if let Some(readback) = readback {
+                        readback.encode(encoder);
+                    }
+                }
             }
             let resolved_target = match pass.target {
-                Some(FrameTarget::Mod(rt)) => {
-                    mod_render_targets.resolve_target(pass.owner, rt, 0).ok()
-                }
+                Some(FrameTarget::Mod(rt)) => mod_render_targets
+                    .resolve_target(pass.owner, rt, pass.mip_level)
+                    .ok(),
                 Some(FrameTarget::Transient(id)) => {
                     self.active_transients.get(&id).map(|t| t.as_resolved())
                 }
@@ -883,6 +915,7 @@ impl FrameGraphRunner {
                 offscreen.clear_stencil = pass.clear_stencil;
                 offscreen.projection = pass.projection;
                 offscreen.view = pass.view;
+                offscreen.mip_level = pass.mip_level;
                 world_primitives.execute_offscreen_pass(
                     device,
                     queue,
@@ -975,7 +1008,7 @@ fn resolve_dispatch_transients(
     dispatches: &[super::mod_compute::RecordedDispatch],
     active_transients: &HashMap<TransientTargetId, PooledTransientTarget>,
     scratch: &mut Vec<super::mod_compute::RecordedDispatch>,
-    plan: &mut Vec<DispatchPick>,
+    plan: &mut Vec<(usize, DispatchPick)>,
 ) {
     scratch.clear();
     plan.clear();
@@ -987,7 +1020,7 @@ fn resolve_dispatch_transients(
             )
         });
         if !binds_transient {
-            plan.push(DispatchPick::Recorded(index));
+            plan.push((index, DispatchPick::Recorded(index)));
             continue;
         }
         let mut cloned = dispatch.clone();
@@ -1017,7 +1050,7 @@ fn resolve_dispatch_transients(
             }
         }
         if ok {
-            plan.push(DispatchPick::Scratch(scratch.len()));
+            plan.push((index, DispatchPick::Scratch(scratch.len())));
             scratch.push(cloned);
         }
     }
@@ -1203,6 +1236,107 @@ mod tests {
         );
     }
 
+    /// The first texel of mip `level` of `texture`, read back after `enc`'s commands.
+    fn read_texel(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mut enc: wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        level: u32,
+    ) -> [u8; 4] {
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fg mip readback"),
+            size: 256,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: level,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([enc.finish()]);
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range().unwrap();
+        data[..4].try_into().unwrap()
+    }
+
+    /// A frame-graph pass built from an `OffscreenPass` renders into the mip level it names
+    /// (#5990): level 1 of a two-level target takes the pass's clear and level 0 is untouched.
+    /// Level 2 is out of range, and the target refuses it as `add_pass` does.
+    #[test]
+    #[ignore = "daily"]
+    fn gpu_frame_graph_pass_renders_into_its_mip_level() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((_, device, queue)) = crate::gfx::test_gpu::optional_device() else {
+            return;
+        };
+        let mut targets = ModRenderTargets::default();
+        let rt = targets
+            .create(&device, Some("test_mod"), &rgba8_desc([8, 8]).mip_levels(2))
+            .expect("two-level render target");
+        assert!(matches!(
+            targets.resolve_target(Some("test_mod"), rt, 2),
+            Err(mod_api::RenderTargetError::InvalidMipLevels)
+        ));
+        let mut offscreen = OffscreenPass::new(rt);
+        offscreen.clear_color = vec![Some([0.0, 1.0, 0.0, 1.0])];
+        offscreen.mip_level = 1;
+        let desc = FramePassDescriptor::offscreen("mip_1", offscreen).disable_culling();
+        assert_eq!(desc.mip_level, 1, "the descriptor keeps the pass's level");
+        let mut recorded = RecordedFrameGraph::default();
+        recorded
+            .validate_new_pass(&desc, false)
+            .expect("valid pass");
+        recorded.push_pass(RecordedFramePass::from_descriptor(desc, Some("test_mod")));
+
+        let mut transient_pool = TransientTargetPool::default();
+        let mut primitives =
+            WorldPrimitives::new(&device, (wgpu::TextureFormat::Rgba8Unorm, false));
+        let mut warned = std::collections::HashSet::new();
+        let mut runner =
+            FrameGraphRunner::prepare(recorded, false, &mut warned).expect("compiled graph");
+        let mut enc = device.create_command_encoder(&Default::default());
+        runner.execute_slot(
+            FrameGraphSlot::BeforeWorld,
+            &device,
+            &queue,
+            &mut enc,
+            &mut primitives,
+            &targets,
+            &mut transient_pool,
+        );
+        runner.finish(&mut transient_pool);
+        let texture = targets.color_texture(rt, 0).expect("colour texture");
+        let level_1 = read_texel(&device, &queue, enc, texture, 1);
+        assert_eq!(level_1, [0, 255, 0, 255], "level 1 takes the pass");
+        let enc = device.create_command_encoder(&Default::default());
+        let level_0 = read_texel(&device, &queue, enc, texture, 0);
+        assert_ne!(level_0, [0, 255, 0, 255], "level 0 is untouched");
+    }
+
     #[test]
     #[ignore = "daily"]
     fn gpu_frame_graph_runs_two_pass_transient_chain_culls_unused_and_rejects_cycle() {
@@ -1213,8 +1347,8 @@ mod tests {
 
         use crate::mod_pipelines::Pipelines;
         use mod_api::{
-            Identifier, MeshDraw, PipelineBlend, RenderPipeline, SamplerAddress, SamplerFilter,
-            VertexAttributeFormat, VertexFormat, VertexStepMode, WorldDepth,
+            Identifier, MeshDraw, PipelineBlend, RenderPipeline, Sampler, SamplerAddress,
+            SamplerFilter, VertexAttributeFormat, VertexFormat, VertexStepMode, WorldDepth,
         };
 
         // Pass A pipeline: writes solid red into transient target.
@@ -1269,8 +1403,7 @@ mod tests {
         .vertex_binding(0, sample_fmt)
         .sampler(
             "SrcTex",
-            SamplerFilter::Nearest,
-            SamplerAddress::ClampToEdge,
+            Sampler::new(SamplerFilter::Nearest, SamplerAddress::ClampToEdge),
         );
 
         let set = Pipelines::build(&[p_write, p_sample], 1, |path| {

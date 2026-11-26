@@ -3485,7 +3485,7 @@ struct Game<'a> {
     /// The window's inbox for server notices, kept across world disconnects.
     client_reports: Arc<sunrise_client::chunk_io::Reports>,
     /// The link a chat click asks to open (`ConfirmLinkScreen`).
-    link_prompt: Option<String>,
+    link_prompt: Option<chat::LinkPrompt>,
     /// A command the player didn't type, waiting for their answer
     /// (game/network/remote_chat.rs).
     command_prompt: Option<remote_chat::CommandPrompt>,
@@ -4494,9 +4494,6 @@ struct Game<'a> {
     gamemode_switcher: Option<sunrise_client::game_mode_switcher::GameModeSwitcher>,
     /// The system clipboard (`KeyboardHandler.clipboardManager`).
     clipboard: sunrise_client::clipboard::SystemClipboard,
-    /// The game is handling a key, mouse or typed-text event, from the window or the
-    /// control socket: the only time a mod reaches the clipboard (`with_user_input`).
-    user_input: std::cell::Cell<bool>,
     /// Select All in the append-only text fields.
     text_selection: sunrise_client::clipboard::AppendSelection,
     /// The client loop consumes a mod's quit request outside the calling hook.
@@ -10813,7 +10810,7 @@ impl Game<'_> {
             self.settings.sunrise.translucent_batching,
             self.effective_vsync(),
             &self.settings.sunrise,
-            shader_packs::picked_pack_shape(&self.settings),
+            self.picked_pack_shape(),
             display,
             self.settings.texture_atlas_settings(),
         )?;
@@ -14998,7 +14995,6 @@ impl<'a> Game<'a> {
             previous_mode: None,
             gamemode_switcher: None,
             clipboard: Default::default(),
-            user_input: Default::default(),
             text_selection: Default::default(),
             client_quit: std::cell::Cell::new(saving::ClientQuit::Running),
             saved_for_exit: false,

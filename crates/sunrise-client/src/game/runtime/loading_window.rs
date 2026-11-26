@@ -84,6 +84,8 @@ pub(super) fn build_renderer(
         shader_pack.frame(),
         display,
     ))?;
+    // The world's renderer is not loaded yet, and the upload holds only standalone models, which
+    // no block state's special part changes; `Game` builds its own geometry once it is.
     let (prepared_vertices, prepared_ranges) =
         native_block_entity_draw::StandaloneGeometry::new(pack, gui, None).prepared_upload();
     renderer.install_prepared_models(
@@ -95,6 +97,7 @@ pub(super) fn build_renderer(
     // adopted. Configure the world swapchain before its first gameplay frame instead of
     // waiting for `Game::apply_settings` after the handoff.
     renderer.set_present_mode(vsync, settings.present_mode);
+    renderer.pack_hdr = shader_pack.hdr;
     renderer.hud.sprite_animations = atlas.renderer_animations();
     // The packs' core shaders: the device refusing a pipeline vanilla requires fails the load,
     // after the renderer is made (`ShaderManager.apply`'s required programs).

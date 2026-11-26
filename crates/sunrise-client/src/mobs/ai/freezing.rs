@@ -36,6 +36,14 @@ pub fn can_freeze(m: &Mob, w: &MobWorld) -> bool {
     .any(|item| immune.is_some_and(|t| t.contains(item)))
 }
 
+/// Whether `p`'s head item disguises their gaze from mob `observer`: vanilla's tag test,
+/// then a mod's `gaze_disguise` answer (`IItemExtension.isGazeDisguise`).
+pub fn gaze_disguised(observer: u32, p: &crate::mobs::PlayerView, w: &MobWorld) -> bool {
+    let disguised = wears_gaze_disguise(p.head.as_deref(), w);
+    w.mob_hooks.map_or(disguised, |hooks| {
+        hooks.gaze_disguise(observer, p, disguised)
+    })
+}
 /// The player's HEAD item belongs to vanilla's gaze disguise tag.
 pub fn wears_gaze_disguise(head: Option<&str>, w: &MobWorld) -> bool {
     head.is_some_and(|item| {

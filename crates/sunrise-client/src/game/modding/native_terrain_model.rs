@@ -42,17 +42,9 @@ impl Game<'_> {
                     .copied()
             },
             options,
-            |pose, light, out, capacity, reserved_quads| {
+            |pose, light, scope| {
                 if let Some(state) = special {
-                    self.special_model_part(
-                        state,
-                        pose,
-                        light,
-                        color,
-                        out,
-                        capacity,
-                        reserved_quads,
-                    );
+                    self.special_model_part(state, pose, light, color, scope);
                 }
             },
         );
@@ -96,18 +88,11 @@ pub(super) fn draw_terrain_model(
     faces: &[BakedFace],
     sprite_layer: impl Fn(&str) -> Option<u32>,
     options: TerrainModelOptions<'_>,
-    special: impl FnOnce(
-        glam::Mat4,
-        u32,
-        &mut Vec<sunrise_client::mesher::Vertex>,
-        sunrise_client::gfx::EntityQuadCapacity,
-        usize,
-    ),
+    special: impl FnOnce(glam::Mat4, u32, &mut sunrise_client::gfx::EntityQuadScope<'_>),
 ) {
     let pose = draw.pose();
     let light = draw.element_ambient();
     let start = draw.vertices_len();
-    let (capacity, reserved_quads) = draw.quad_budget();
     {
         let mut scope = draw.quad_scope();
         if !scope.has_room() {
@@ -121,8 +106,8 @@ pub(super) fn draw_terrain_model(
             sprite_layer,
             |quad| scope.submit_quad(quad),
         );
+        special(pose, light, &mut scope);
     }
-    special(pose, light, draw.vertices_mut(), capacity, reserved_quads);
     draw.lit_since(start, BlockEntityDraw::cell_centre, draw.light() & 0xffff);
 }
 
@@ -192,7 +177,7 @@ mod tests {
             Vec::new(),
         )
         .with_quad_budget(capacity, reserved_quads);
-        draw_terrain_model(&mut draw, faces, sprite, options, |_, _, _, _, _| {});
+        draw_terrain_model(&mut draw, faces, sprite, options, |_, _, _| {});
         draw.into_vertices()
     }
 
@@ -289,7 +274,7 @@ mod tests {
             );
             draw.unlit(unlit);
             let options = TerrainModelOptions::default().with_shade(TerrainShade::Model);
-            draw_terrain_model(&mut draw, &faces, sprite, options, |_, _, _, _, _| {});
+            draw_terrain_model(&mut draw, &faces, sprite, options, |_, _, _| {});
             draw.into_vertices()
         };
         let unlit = drawn(true);

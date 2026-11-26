@@ -216,9 +216,24 @@ pub trait LivingBackend {
         read: &mut dyn for<'a> FnMut(ItemStackView<'a>),
     ) -> Option<()>;
     /// Side: server.
+    /// The mob's drop chance for `slot` (`Mob.getDropChances().byEquipment`): the chance its
+    /// death roll starts from, before enchantments and the `get_equipment_drop_chance` hook.
+    /// The recorded chance once the mob's equipment, a spawn or a save set one, else the one
+    /// the game's spawn and equip paths give (0.085, 2.0 for a saddle, a body-slot species'
+    /// body armour and a raid captain's banner, 0 for a vex's sword). Above 1.0 the slot is
+    /// preserved (`DropChances.isPreserved`). None for a player, an armor stand, the dragon, a
+    /// stale handle or on a client.
+    fn living_equipment_drop_chance(&self, living: LivingRef, slot: EquipmentSlot) -> Option<f32>;
+    /// Side: server.
     /// `TamableAnimal.isTame`, `AbstractHorse.isTamed`: None for a kind that
     /// can't be tamed or a stale handle. API @API:living_refs@.
     fn living_is_tamed(&self, living: LivingRef) -> Option<bool>;
+    /// Side: server.
+    /// The living entity as a player (`instanceof Player`), with its UUID (`Entity.getUUID`):
+    /// the player in place or a guest. None for any other living entity, a stale handle or on
+    /// a client. A pure read of an id the player already has, so it answers under a read-only
+    /// host, as in `living_visibility`.
+    fn living_player(&self, living: LivingRef) -> Option<PlayerRef>;
     /// Side: server.
     /// The owner's UUID (`OwnableEntity.getOwnerReference`): None for a wild
     /// mob, a kind that can't be tamed, or a stale handle. API @API:living_refs@.

@@ -4,8 +4,10 @@ A client mod that bakes its own images (a panel, a gauge, glyphs from its own fo
 each one under a name and draws it by that name. This is vanilla's `DynamicTexture`: Java registers one with
 `TextureManager.register(id, texture)`, sends its pixels with `DynamicTexture.upload()`, draws it with
 `GuiGraphics.blit(id, ...)` and frees it with `TextureManager.release(id)`. In Sunrise each one is a GPU texture of its
-own, `RGBA8_UNORM` with one mip level, sampled nearest with repeat as `DynamicTexture` does; there is no choice of
-format or sampler. (A mod render pipeline that wants another filter picks it in its own sampler binding.)
+own, `RGBA8_UNORM` (never sRGB, as vanilla's dynamic textures and block atlas are UNORM), sampled nearest with repeat
+by the GUI as `DynamicTexture` does; there is no choice of format or GUI sampler. It has one mip level unless you ask for
+more with `mip_levels`. (A mod render pipeline that wants another filter, or the other mip levels, picks them in its own
+[sampler binding](render-pipelines.md#samplers-and-mipmapped-textures).)
 
 ```rust
 {{#include ../../../examples/src/client_rendering.rs:dynamic_panel}}
@@ -14,14 +16,22 @@ format or sampler. (A mod render pipeline that wants another filter picks it in 
 The calls are on the client host. They change the game's textures, so they take `&mut dyn ClientHost`: call them from
 a hook that has it, such as `client_tick_post`, not from inside a draw.
 
-- **`create_dynamic_texture(id, width, height, rgba)`** makes the texture, `rgba` being `width * height` pixels of four
-  bytes, row by row from the top left. From the next frame, `GuiCanvas::texture(&id, dst, region, argb)` draws it
-  inside `DrawContext::draw_gui`: `region.tex` is its size, `region.uv` and `region.src` pick the part to draw.
+- **`create_dynamic_texture(id, width, height, mip_levels, rgba)`** makes the texture, `rgba` being `width * height`
+  pixels of four bytes, row by row from the top left: level 0. `mip_levels` is 1 for vanilla's `DynamicTexture`, up
+  to the full chain (`32 - max(width, height).leading_zeros()`) otherwise; the other levels start empty. From the next
+  frame, `GuiCanvas::texture(&id, dst, region, argb)` draws it inside `DrawContext::draw_gui`: `region.tex` is its
+  size, `region.uv` and `region.src` pick the part to draw. The GUI always samples level 0, so a mipmapped texture
+  draws there as a one-level one does; a mod pipeline binds it by id (`TextureSource::DynamicTexture`) to read the
+  levels.
 - **`update_dynamic_texture(id, width, height, rgba)`** gives it new pixels. A different size makes a new texture
-  under the same id, as registering a new `DynamicTexture` under an id does. Update when the texture changed, not
-  every frame.
-- **`update_dynamic_texture_region(id, [x, y], [w, h], rgba)`** replaces one region and keeps the rest, after the
-  region overload of `CommandEncoder.writeToTexture`. A region not inside the texture is `OutOfBounds`.
+  under the same id, as registering a new `DynamicTexture` under an id does, keeping its `mip_levels` (the new size's
+  full chain must hold them). Update when the texture changed, not every frame.
+- **`update_dynamic_texture_region(id, mip_level, [x, y], [w, h], rgba)`** replaces one region of one mip level and
+  keeps the rest, after `CommandEncoder.writeToTexture(texture, source, mipLevel, depthOrLayer, destX, destY, width,
+  height)`. The region is in pixels of that level, whose side is the texture's side shifted right by `mip_level` (at
+  least 1), and `rgba` must be exactly `w * h * 4` bytes. A region not inside the level is `OutOfBounds`, a level the
+  texture does not have is `BadMipLevels`. The levels are filled from the CPU, as vanilla's `MipmapGenerator` does for
+  the block atlas; nothing is generated on the GPU.
 - **`release_dynamic_texture(id)`** frees it (`TextureManager.release`). A texture never released lasts until its mod
   unloads or the game ends.
 
@@ -41,8 +51,8 @@ reach it.
 
 ## Limits and refusals
 
-The only size limit is the device's largest 2D texture (`max_texture_dimension_2d`): a side past it is `TooLarge`.
-There is no count or byte cap. Every call answers `Result<_, DynamicTextureError>`, and a refused call changes nothing:
+The only limits are the device's: a side past the largest 2D texture (`max_texture_dimension_2d`) is `TooLarge`,
+and `mip_levels` of 0 or past the full chain is `BadMipLevels`. There is no count or byte cap. Every call answers `Result<_, DynamicTextureError>`, and a refused call changes nothing:
 
 | Refusal | When |
 |---|---|
@@ -51,7 +61,8 @@ There is no count or byte cap. Every call answers `Result<_, DynamicTextureError
 | `TooLarge` | a side is longer than the device's largest texture |
 | `NameTaken` | `create` of an id that names a dynamic texture |
 | `Unknown` | `update`, `update_dynamic_texture_region` or `release` of an id that names none |
-| `OutOfBounds` | a region not inside the texture |
+| `OutOfBounds` | a region not inside the mip level |
+| `BadMipLevels` | `mip_levels` of 0 or past the full chain, a `mip_level` the texture lacks, or a new size whose chain is shorter than the texture's levels |
 | `Unavailable` | nothing draws here: a server, or no window |
 
 Match `DynamicTextureError` non-exhaustively.

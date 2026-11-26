@@ -27,18 +27,20 @@ impl Game<'_> {
         }
     }
 
-    /// The calling mod's texture `id` made from `rgba` (`width * height` pixels of four bytes).
+    /// The calling mod's texture `id` of `mip_levels` levels made from `rgba` (`width * height`
+    /// pixels of four bytes, level 0).
     pub(in crate::game) fn create_dynamic_texture(
         &mut self,
         id: &Identifier,
         width: u32,
         height: u32,
+        mip_levels: u32,
         rgba: &[u8],
     ) -> Result<(), DynamicTextureError> {
         self.bind_dynamic_textures();
         let owner = Self::dynamic_texture_owner(id)?;
         self.dynamic_textures
-            .create(owner, id, [width, height], rgba)
+            .create(owner, id, [width, height], mip_levels, rgba)
     }
     /// The calling mod's texture `id` given new pixels.
     pub(in crate::game) fn update_dynamic_texture(
@@ -53,10 +55,11 @@ impl Game<'_> {
         self.dynamic_textures
             .update(owner, id, [width, height], rgba)
     }
-    /// A region of the calling mod's texture `id` given new pixels.
+    /// A region of mip level `mip_level` of the calling mod's texture `id` given new pixels.
     pub(in crate::game) fn update_dynamic_texture_region(
         &mut self,
         id: &Identifier,
+        mip_level: u32,
         origin: [u32; 2],
         size: [u32; 2],
         rgba: &[u8],
@@ -64,7 +67,7 @@ impl Game<'_> {
         self.bind_dynamic_textures();
         let owner = Self::dynamic_texture_owner(id)?;
         self.dynamic_textures
-            .update_region(owner, id, origin, size, rgba)
+            .update_region(owner, id, mip_level, origin, size, rgba)
     }
     /// The calling mod's texture `id` released.
     pub(in crate::game) fn release_dynamic_texture(

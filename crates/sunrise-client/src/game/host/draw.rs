@@ -1030,10 +1030,11 @@ impl FrameGraphContext for GameFrameGraphContext<'_, '_> {
             return Err(FrameGraphError::Unavailable);
         };
         let owner = mod_api::content::crash::current_native_mod();
-        // Validate imported mod render target ownership/liveness up front.
+        // Validate imported mod render target ownership/liveness, and the mip level the pass
+        // renders into, up front.
         if let FrameTarget::Mod(rt) = desc.target {
             renderer
-                .render_target_size(owner, rt)
+                .resolve_mod_render_target(owner, rt, desc.mip_level)
                 .map_err(FrameGraphError::InvalidTarget)?;
         }
         for &t in desc.reads.iter().chain(desc.writes.iter()) {
@@ -1052,6 +1053,11 @@ impl FrameGraphContext for GameFrameGraphContext<'_, '_> {
                 renderer.warn_frame_graph_cycle_once(passes);
             }
             return Err(err);
+        }
+        if matches!(desc.target, FrameTarget::Transient(_)) && desc.mip_level != 0 {
+            return Err(FrameGraphError::InvalidTarget(
+                RenderTargetError::InvalidMipLevels,
+            ));
         }
         let mut recorded =
             sunrise_client::gfx::mod_frame_graph::RecordedFramePass::from_descriptor(desc, owner);
@@ -1097,6 +1103,8 @@ impl FrameGraphContext for GameFrameGraphContext<'_, '_> {
             sunrise_client::gfx::mod_frame_graph::RecordedFramePass::from_compute_descriptor(
                 desc, owner,
             );
+        // Readbacks are accepted only while the node records: they are copies at its place.
+        let readbacks = renderer.begin_readback_recording();
         {
             let mut ctx = GameComputeDispatchContext {
                 game: self.game,
@@ -1105,6 +1113,7 @@ impl FrameGraphContext for GameFrameGraphContext<'_, '_> {
             };
             record(&mut ctx);
         }
+        recorded.readbacks = readbacks.finish();
         Ok(self.surface.graph.push_pass(recorded))
     }
 }

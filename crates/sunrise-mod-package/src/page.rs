@@ -9,7 +9,7 @@ use std::{collections::HashSet, io::ErrorKind, path::Path};
 use url::Url;
 
 /// The page manifest beside `sunrise-mod.toml`.
-pub const PAGE_FILE: &str = "page.toml";
+pub use mod_source::package::PAGE_FILE;
 /// The release format `cargo sunrise-mod` speaks: `check --release <tag>` and the `<id>.page.tar` bundle `build`
 /// writes. The rolling `mod-tool` release's `tool.json` publishes it as `release_contract`
 /// (`tools/ci/mod_tool.py`), so the registry's release workflow can tell a tool that speaks it from an older

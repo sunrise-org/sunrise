@@ -240,4 +240,23 @@ mod tests {
         assert!(!staged.path().join("rust-toolchain").exists());
         assert!(!staged.path().join("rust-toolchain.toml").exists());
     }
+
+    #[test]
+    fn an_extracted_package_with_root_page_entries_stages_without_them() {
+        // An `.smod` packed before #5974 extracts with the registry page beside the source.
+        let dir = tempfile::tempdir().unwrap();
+        write_bundle(dir.path(), "example", "");
+        for name in ["page.toml", "page/runes.jpg", "src/page.rs"] {
+            let path = dir.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        let bundle = read(dir.path()).unwrap().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        copy_tool_input(&bundle, staged.path()).unwrap();
+        assert!(staged.path().join("src/lib.rs").is_file());
+        assert!(staged.path().join("src/page.rs").is_file());
+        assert!(!staged.path().join("page.toml").exists());
+        assert!(!staged.path().join("page").exists());
+    }
 }

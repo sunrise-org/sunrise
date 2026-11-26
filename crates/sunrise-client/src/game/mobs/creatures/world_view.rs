@@ -87,6 +87,7 @@ impl Game<'_> {
             mob_hooks: (self.native_authoritative()
                 && ([
                     mod_api::HookId::EndermanAnger,
+                    mod_api::HookId::GazeDisguise,
                     mod_api::HookId::EntityMobGriefing,
                     mod_api::HookId::LivingVisibility,
                     mod_api::HookId::LivingChangeTarget,

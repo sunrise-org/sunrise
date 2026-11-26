@@ -570,6 +570,8 @@ impl Game<'_> {
             &gui,
             self.res.try_block_entity_render(),
         );
+        // A resource reload reads the shader pack's files again too (its request for HDR).
+        self.native_shaders.pick_hdr.get_mut().forget();
         // Keep the working GPU resources, and hand its window surface over.
         if let Some(renderer) = &mut self.renderer {
             renderer.release_surface();
@@ -592,7 +594,7 @@ impl Game<'_> {
                     self.settings.sunrise.translucent_batching,
                     self.effective_vsync(),
                     &self.settings.sunrise,
-                    super::shader_packs::picked_pack_shape(&self.settings),
+                    self.picked_pack_shape(),
                     self.renderer
                         .as_ref()
                         .map(|r| r.display_reading())

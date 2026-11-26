@@ -46,6 +46,7 @@ mod page;
 mod registry_source;
 mod sdk_cmds;
 mod sdk_fetch;
+mod sdk_notes;
 mod self_update;
 mod uses_table;
 
@@ -1350,13 +1351,7 @@ mod tests {
         let names: Vec<_> = bundle.files.keys().map(String::as_str).collect();
         assert_eq!(
             names,
-            [
-                "Cargo.toml",
-                "README.md",
-                "page.toml",
-                "src/lib.rs",
-                "sunrise-mod.toml"
-            ]
+            ["Cargo.toml", "README.md", "src/lib.rs", "sunrise-mod.toml"]
         );
         assert!(path.join("sunrise-mod.toml").is_file());
         for old in [

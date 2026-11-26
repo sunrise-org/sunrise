@@ -130,6 +130,41 @@ impl Properties {
         self.get("separateAo").is_some_and(|v| v.trim() == "true")
     }
 
+    /// Sunrise's HDR extension, asked for by `sunrise.hdr = true`, and who owns the tone curve
+    /// (`sunrise.hdr.tonemap`, `pack` when absent). Not a key of the format: Sunrise's own,
+    /// which another loader does not read. A value of either key outside its set turns the
+    /// request off, with a note at its line naming the key and the value. `parse` checks
+    /// neither key: only what decides the frame reads them, so a pack read without Sunrise's
+    /// HDR logs nothing new.
+    pub fn sunrise_hdr(&self) -> (Option<Tonemap>, Vec<Note>) {
+        let mut notes = Vec::new();
+        let mut value = |key: &str, takes: &str, known: &dyn Fn(&str) -> bool| {
+            let entry = self.entry(key)?;
+            if !known(&entry.value) {
+                notes.push(Note {
+                    line: entry.line,
+                    message: format!(
+                        "`{key}` is `{}`, not {takes}: Sunrise's HDR stays off",
+                        entry.value
+                    ),
+                });
+            }
+            Some(entry.value.as_str())
+        };
+        let asked = value(HDR_KEY, "`true` or `false`", &|v| {
+            matches!(v, "true" | "false")
+        });
+        let tonemap = value(TONEMAP_KEY, "`pack` or `sunrise`", &|v| {
+            Tonemap::named(v).is_some()
+        });
+        let hdr = match (asked, tonemap) {
+            (Some("true"), None) => Some(Tonemap::Pack),
+            (Some("true"), Some(tonemap)) => Tonemap::named(tonemap),
+            _ => None,
+        };
+        (hdr, notes)
+    }
+
     fn insert(&mut self, entry: Entry) {
         if let Some(at) = self.entries.iter().position(|e| e.key == entry.key) {
             let first = self.entries.remove(at).line;
@@ -178,6 +213,28 @@ impl Properties {
     }
 }
 
+const HDR_KEY: &str = "sunrise.hdr";
+const TONEMAP_KEY: &str = "sunrise.hdr.tonemap";
+
+/// Who applies the tone curve to the light an HDR pack's `final` writes (`sunrise.hdr.tonemap`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tonemap {
+    /// `pack`: the pack's `final` writes display-referred light; Sunrise adds no curve.
+    Pack,
+    /// `sunrise`: the pack writes scene-referred light and Sunrise's curve maps it.
+    Sunrise,
+}
+
+impl Tonemap {
+    fn named(value: &str) -> Option<Self> {
+        match value {
+            "pack" => Some(Self::Pack),
+            "sunrise" => Some(Self::Sunrise),
+            _ => None,
+        }
+    }
+}
+
 /// An odd number of trailing backslashes: the last one joins the next line (`\\` is a literal).
 fn ends_with_continuation(line: &str) -> bool {
     line.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1
@@ -199,6 +256,91 @@ mod tests {
             .iter()
             .map(|e| (e.key.as_str(), e.value.as_str()))
             .collect()
+    }
+
+    /// `sunrise.hdr = true` asks; the tone curve is the pack's unless `sunrise.hdr.tonemap =
+    /// sunrise`. Absent, `false` or a tone curve without the request: nothing asked, no note.
+    #[test]
+    fn sunrise_hdr_is_asked_by_its_key() {
+        let asked = |text: &str| {
+            let (hdr, notes) = read(text).sunrise_hdr();
+            assert!(notes.is_empty(), "{text}: {notes:?}");
+            hdr
+        };
+        assert_eq!(asked("sunrise.hdr = true"), Some(Tonemap::Pack));
+        assert_eq!(
+            asked("sunrise.hdr.tonemap=pack\nsunrise.hdr=true"),
+            Some(Tonemap::Pack)
+        );
+        assert_eq!(
+            asked("sunrise.hdr = true\nsunrise.hdr.tonemap = sunrise"),
+            Some(Tonemap::Sunrise)
+        );
+        assert_eq!(asked("separateAo=true"), None);
+        assert_eq!(
+            asked("sunrise.hdr = false\nsunrise.hdr.tonemap = sunrise"),
+            None
+        );
+        assert_eq!(asked("sunrise.hdr.tonemap = sunrise"), None);
+        // The last of a duplicated key counts, as for any key.
+        assert_eq!(asked("sunrise.hdr=true\nsunrise.hdr=false"), None);
+    }
+
+    /// The request may sit behind the pack's own option, or a macro the file defines.
+    #[test]
+    fn sunrise_hdr_follows_the_conditionals_around_it() {
+        let text = "#ifdef HDR_OUTPUT\nsunrise.hdr=true\n#endif\n\
+                    #if QUALITY == 2\nsunrise.hdr.tonemap=sunrise\n#endif";
+        assert_eq!(read(text).sunrise_hdr().0, None);
+        let mut m = Macros::standard();
+        m.define("HDR_OUTPUT", "");
+        m.define("QUALITY", "2");
+        assert_eq!(
+            Properties::parse(text, &m).sunrise_hdr().0,
+            Some(Tonemap::Sunrise)
+        );
+        m.define("QUALITY", "1");
+        assert_eq!(
+            Properties::parse(text, &m).sunrise_hdr().0,
+            Some(Tonemap::Pack)
+        );
+        let defined = "#define WANT_HDR\n#ifdef WANT_HDR\nsunrise.hdr=true\n#endif";
+        assert_eq!(read(defined).sunrise_hdr().0, Some(Tonemap::Pack));
+    }
+
+    /// A value outside a key's set turns the request off, with a note at its line naming the
+    /// key and the value; a tone curve's unknown value is noted even without the request.
+    /// Reading the file notes neither: only the request's read does.
+    #[test]
+    fn an_unknown_sunrise_hdr_value_is_noted_by_the_request_only() {
+        let noted = |text: &str| {
+            let p = read(text);
+            assert!(p.notes.is_empty(), "{text}: {:?}", p.notes);
+            let (hdr, notes) = p.sunrise_hdr();
+            let notes: Vec<(u32, bool)> = notes
+                .iter()
+                .map(|n| {
+                    let entry = p.entries.iter().find(|e| e.line == n.line).unwrap();
+                    let named = n.message.contains(&format!("`{}`", entry.key))
+                        && n.message.contains(&format!("`{}`", entry.value));
+                    (n.line, named)
+                })
+                .collect();
+            (hdr, notes)
+        };
+        assert_eq!(noted("a=1\nsunrise.hdr = yes"), (None, vec![(2, true)]));
+        assert_eq!(noted("sunrise.hdr = TRUE"), (None, vec![(1, true)]));
+        assert_eq!(noted("sunrise.hdr ="), (None, vec![(1, true)]));
+        assert_eq!(
+            noted("sunrise.hdr = true\n\nsunrise.hdr.tonemap = aces"),
+            (None, vec![(3, true)])
+        );
+        assert_eq!(noted("sunrise.hdr.tonemap = Pack"), (None, vec![(1, true)]));
+        // Both unknown: one note each, at its own line.
+        assert_eq!(
+            noted("sunrise.hdr = 1\nsunrise.hdr.tonemap = 2").1,
+            [(1, true), (2, true)]
+        );
     }
 
     #[test]

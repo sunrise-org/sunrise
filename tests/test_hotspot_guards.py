@@ -1,6 +1,7 @@
 """tools/hotspots/check_guards.py: each guard fails on growth and lets what the base already has stand."""
 import io
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -96,7 +97,9 @@ class NotesGuard(Repository):
         self.commit("grow")
         blob = subprocess.run(["git", "rev-parse", f"main:{guards.NOTES}"], cwd=self.root, check=True,
                               capture_output=True, text=True).stdout.strip()
-        (self.root / ".git/objects" / blob[:2] / blob[2:]).unlink()
+        object_file = self.root / ".git/objects" / blob[:2] / blob[2:]
+        object_file.chmod(stat.S_IWRITE)  # git writes objects read-only, which Windows refuses to delete
+        object_file.unlink()
         with self.assertRaises(SystemExit) as stopped:
             self.run_guards()
         self.assertIn(f"{guards.NOTES} is at", str(stopped.exception))

@@ -296,7 +296,7 @@ impl crate::RegisterRenderPipelinesEvent<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BindEntry, BindingKind, RenderPipeline, SamplerAddress, SamplerFilter};
+    use crate::{BindEntry, BindingKind, RenderPipeline, Sampler, SamplerAddress, SamplerFilter};
 
     fn id(text: &str) -> Identifier {
         Identifier::parse(text).unwrap()
@@ -358,8 +358,7 @@ mod tests {
             BindGroupLayout::builder()
                 .sampler(
                     "Globals",
-                    SamplerFilter::Nearest,
-                    SamplerAddress::ClampToEdge
+                    Sampler::new(SamplerFilter::Nearest, SamplerAddress::ClampToEdge)
                 )
                 .build()
                 .is_err()

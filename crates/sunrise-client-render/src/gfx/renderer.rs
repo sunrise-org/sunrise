@@ -560,6 +560,9 @@ pub struct Renderer {
     pub screenshot: Option<ScreenshotRequest>,
     /// Readback outcome: CPU pixels for the game to approve before writing, or an error.
     pub screenshot_result: Option<std::result::Result<PendingScreenshot, String>>,
+    /// The shader pack's `sunrise.hdr` request this renderer's frame was made for (the game's
+    /// pick, before any program was read): a later read of the pack is checked against it.
+    pub pack_hdr: Option<sunrise_shaders::Tonemap>,
     pub(crate) screenshot_readbacks: screenshot_readback::Readbacks,
     /// Screenshot Quality (Sunrise setting): a `scaled` screenshot's frame is this many
     /// times the game's resolution (1, 2, 4 or 8).

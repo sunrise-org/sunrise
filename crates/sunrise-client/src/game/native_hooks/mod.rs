@@ -319,6 +319,7 @@ mod game_rule_changed;
 mod game_shutting_down;
 mod gather_effect_screen_tooltips;
 mod gather_skipped_attribute_tooltips;
+mod gaze_disguise;
 mod general_entity_tick;
 mod get_arm_pose;
 mod grindstone_place;

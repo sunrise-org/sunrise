@@ -1557,34 +1557,76 @@ impl Game<'_> {
             return;
         }
         if self.settings.chat_links_prompt {
-            self.open_screen_overlay("link_prompt", |game| game.link_prompt = Some(url));
+            self.open_screen_overlay("link_prompt", |game| game.link_prompt = Some(url.into()));
         } else {
             super::packs::open_uri(&url);
         }
     }
-    /// `ConfirmLinkScreen` (untrusted): the link and its warning over the
-    /// chat, answered yes to open it.
+    /// `ConfirmLinkScreen.confirmLinkNow` for a mod: the confirmation opens over whatever
+    /// screen is open, and either answer returns to it. The player's answer is the consent, so
+    /// the chat's link options do not apply (they gate chat click events only). Only http and
+    /// https pass, as `Util.parseAndValidateUntrustedUri` has it.
+    pub(in crate::game) fn confirm_link(
+        &mut self,
+        uri: &str,
+        trusted: bool,
+    ) -> Result<(), mod_api::OpenLinkError> {
+        use mod_api::OpenLinkError;
+        if !self.native_window() {
+            return Err(OpenLinkError::Unavailable);
+        }
+        if !sunrise_core::text::untrusted_http_url(uri) {
+            return Err(OpenLinkError::Invalid);
+        }
+        self.open_screen_overlay("link_prompt", |game| {
+            game.link_prompt = Some(LinkPrompt {
+                url: uri.to_owned(),
+                trusted,
+            });
+        });
+        Ok(())
+    }
+    /// `Blaze3D.openPath` for a mod: the desktop's handler at once, with no confirmation.
+    pub(in crate::game) fn open_path(&self, path: &Path) -> Result<(), mod_api::OpenPathError> {
+        use mod_api::OpenPathError;
+        if !self.native_window() {
+            return Err(OpenPathError::Unavailable);
+        }
+        sunrise_client::desktop::open_path(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                OpenPathError::NotFound
+            } else {
+                OpenPathError::Failed(error.to_string())
+            }
+        })
+    }
+    /// `ConfirmLinkScreen`: the link over the screen it was opened from, with its warning
+    /// unless trusted, answered yes to open it.
     fn link_prompt_layout(
         &self,
-        url: &str,
+        prompt: &LinkPrompt,
         size: (f32, f32),
     ) -> sunrise_client::confirm_screen::Choice {
-        let warning = Text::translate("chat.link.warning", &[]).with_color(0xFF_CCCC);
-        let message = Text::literal(url)
-            .append(Text::literal("\n"))
-            .append(warning);
+        let message = if prompt.trusted {
+            Text::literal(&prompt.url)
+        } else {
+            let warning = Text::translate("chat.link.warning", &[]).with_color(0xFF_CCCC);
+            Text::literal(&prompt.url)
+                .append(Text::literal("\n"))
+                .append(warning)
+        };
         // ConfirmLinkScreen.addButtons: yes, copy and no, 100 wide each.
         sunrise_client::confirm_screen::Choice::new(
             &self.gui.atlas.font,
             size,
-            &Text::translate("chat.link.confirm", &[]),
+            &Text::translate(prompt.title_key(), &[]),
             &message,
             3,
             100.0,
         )
     }
     pub(super) fn draw_link_prompt(&self, batch: &mut HudBatch) {
-        let Some(url) = &self.link_prompt else {
+        let Some(prompt) = &self.link_prompt else {
             return;
         };
         sunrise_client::widgets::cover_frame();
@@ -1593,46 +1635,42 @@ impl Game<'_> {
         sunrise_client::widgets::begin_screen(|| {
             super::screen_info::confirm(
                 "chat/confirm_link",
-                &super::screen_info::tr("chat.link.confirm", &[]),
-                url,
+                &super::screen_info::tr(prompt.title_key(), &[]),
+                &prompt.url,
             )
         });
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         sunrise_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
-        let labels = [
-            Text::translate("gui.yes", &[]),
-            Text::translate("chat.copy", &[]),
-            Text::translate("gui.no", &[]),
-        ];
-        let mut layout = self.link_prompt_layout(url, (w, h));
+        let labels = prompt.button_keys().map(|key| Text::translate(key, &[]));
+        let mut layout = self.link_prompt_layout(prompt, (w, h));
         layout.declare_no(2);
         layout.draw(batch, atlas, self.cursor, &labels);
         self.draw_overlay_mounted_widgets(batch, "link_prompt");
     }
     /// The prompt's answer: the link opens on yes; either way the chat is back.
     pub(super) fn answer_link_prompt(&mut self, yes: bool) {
-        let Some(url) = self.link_prompt.take() else {
+        let Some(prompt) = self.link_prompt.take() else {
             return;
         };
         self.refresh_screen_widgets();
         if yes {
-            super::packs::open_uri(&url);
+            super::packs::open_uri(&prompt.url);
         }
     }
     pub(super) fn link_prompt_click(&mut self) -> bool {
-        let Some(url) = self.link_prompt.clone() else {
+        let Some(prompt) = self.link_prompt.clone() else {
             return false;
         };
         let pressed = self
-            .link_prompt_layout(&url, self.gui_size())
+            .link_prompt_layout(&prompt, self.gui_size())
             .pressed_at(self.cursor);
         if let Some(button) = pressed {
             self.play_audio_button_click();
             if button == LINK_COPY {
                 // ConfirmLinkScreen.copyToClipboard, then the callback's no.
                 use sunrise_client::clipboard::Clipboard;
-                self.clipboard.set(&url);
+                self.clipboard.set(&prompt.url);
             }
             self.answer_link_prompt(button == LINK_YES);
         }
@@ -2462,6 +2500,51 @@ fn owner_permission(allow_commands: bool) -> u8 {
 /// `ConfirmLinkScreen`'s buttons, left to right: yes, copy, no.
 const LINK_YES: usize = 0;
 const LINK_COPY: usize = 1;
+
+/// A link waiting for the player's answer (`ConfirmLinkScreen`). `trusted` is vanilla's
+/// argument: it decides only the title, the warning line and the buttons' labels.
+#[derive(Clone)]
+pub(super) struct LinkPrompt {
+    url: String,
+    trusted: bool,
+}
+
+impl From<String> for LinkPrompt {
+    /// A chat click's link: untrusted.
+    fn from(url: String) -> Self {
+        Self {
+            url,
+            trusted: false,
+        }
+    }
+}
+
+impl From<&str> for LinkPrompt {
+    /// An untrusted link, as a chat click opens it.
+    fn from(url: &str) -> Self {
+        url.to_owned().into()
+    }
+}
+
+impl LinkPrompt {
+    /// `ConfirmLinkScreen.confirmMessage`'s title.
+    fn title_key(&self) -> &'static str {
+        if self.trusted {
+            "chat.link.confirmTrusted"
+        } else {
+            "chat.link.confirm"
+        }
+    }
+    /// The yes, copy and no labels: `GUI_YES` / `GUI_NO`, or `GUI_OPEN_IN_BROWSER` /
+    /// `GUI_CANCEL` when trusted; `GUI_COPY_TO_CLIPBOARD` either way.
+    fn button_keys(&self) -> [&'static str; 3] {
+        if self.trusted {
+            ["chat.link.open", "chat.copy", "gui.cancel"]
+        } else {
+            ["gui.yes", "chat.copy", "gui.no"]
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -3378,3 +3461,150 @@ mod damage_type_registry_tests {
 #[cfg(test)]
 #[path = "tests/end_clock_tests.rs"]
 mod end_clock_tests;
+
+#[cfg(test)]
+mod link_and_path_tests {
+    use super::*;
+    use mod_api::{ClientHost, ClientTickPreEvent, Hooks, ModEntry, OpenLinkError, OpenPathError};
+    use mod_platform::testing::with_mods;
+    use std::sync::{Arc, Mutex};
+
+    /// A mod that asks for a link from its client tick and keeps the answer.
+    struct Asker {
+        uri: &'static str,
+        trusted: bool,
+        answer: Arc<Mutex<Option<Result<(), OpenLinkError>>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Asker {
+        fn client_tick_pre(&self, host: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            *self.answer.lock().unwrap() = Some(host.confirm_link(self.uri, self.trusted));
+        }
+    }
+
+    /// Runs one client tick of a mod that asks for `uri`, in a client game, and hands the
+    /// game and the answer to `check`.
+    fn ask(
+        uri: &'static str,
+        trusted: bool,
+        check: impl FnOnce(&mut Game<'_>, Result<(), OpenLinkError>),
+    ) {
+        let answer = Arc::new(Mutex::new(None));
+        let mods: mod_api::Mods = vec![ModEntry::new(
+            "linker",
+            Box::new(Asker {
+                uri,
+                trusted,
+                answer: answer.clone(),
+            }),
+        )]
+        .into();
+        with_mods(mods, || {
+            super::super::native_entity_refs::tests::with_game(|game| {
+                game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
+                game.options.headless = true;
+                game.native_client_tick_pre();
+                let result = answer.lock().unwrap().take().unwrap();
+                check(game, result);
+            });
+        });
+    }
+
+    /// From a tick, the confirmation opens holding the link, titled and labelled by `trusted`;
+    /// No (or Cancel) closes it and opens nothing.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_asks_to_open_a_web_link() {
+        ask("https://example.com/a?b=c", false, |game, result| {
+            assert_eq!(result, Ok(()));
+            let prompt = game.link_prompt.clone().expect("the prompt opens");
+            assert_eq!(prompt.url, "https://example.com/a?b=c");
+            assert!(!prompt.trusted);
+            assert_eq!(prompt.title_key(), "chat.link.confirm");
+            assert_eq!(prompt.button_keys(), ["gui.yes", "chat.copy", "gui.no"]);
+            let was_playing = game.screen == Screen::Playing;
+            game.answer_link_prompt(false);
+            assert!(game.link_prompt.is_none());
+            assert_eq!(game.screen == Screen::Playing, was_playing);
+        });
+        ask("https://example.com/a?b=c", true, |game, result| {
+            assert_eq!(result, Ok(()));
+            let prompt = game.link_prompt.clone().expect("the prompt opens");
+            assert!(prompt.trusted);
+            assert_eq!(prompt.title_key(), "chat.link.confirmTrusted");
+            assert_eq!(
+                prompt.button_keys(),
+                ["chat.link.open", "chat.copy", "gui.cancel"]
+            );
+            game.answer_link_prompt(false);
+            assert!(game.link_prompt.is_none());
+        });
+    }
+
+    /// Only http and https open a prompt, the scheme in any case, whatever the chat's link
+    /// options say; nothing panics.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_link_must_be_http_or_https() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
+            game.options.headless = true;
+            (game.settings.chat_links, game.settings.chat_links_prompt) = (false, false);
+            assert_eq!(game.confirm_link("HTTPS://Example.com", false), Ok(()));
+            assert!(game.link_prompt.is_some());
+            game.answer_link_prompt(false);
+            for bad in [
+                "file:///etc/passwd",
+                "javascript:alert(1)",
+                "example.com",
+                "ftp://example.com",
+                "http://a b",
+            ] {
+                assert_eq!(
+                    game.confirm_link(bad, false),
+                    Err(OpenLinkError::Invalid),
+                    "{bad}"
+                );
+                assert!(game.link_prompt.is_none(), "{bad}");
+            }
+        });
+    }
+
+    /// A path that does not exist is refused before any process starts.
+    #[test]
+    #[ignore = "daily"]
+    fn open_path_refuses_a_missing_path() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
+            game.options.headless = true;
+            let missing = std::env::temp_dir().join("sunrise-open-path-missing/never-created");
+            assert_eq!(game.open_path(&missing), Err(OpenPathError::NotFound));
+        });
+    }
+
+    /// Without a native window both methods answer `Unavailable`.
+    #[test]
+    #[ignore = "daily"]
+    fn link_and_path_are_unavailable_without_a_window() {
+        for role in [
+            super::super::execution_role::ExecutionRole::IntegratedServer,
+            super::super::execution_role::ExecutionRole::DedicatedServer,
+        ] {
+            super::super::native_entity_refs::tests::with_game_role(
+                super::super::native_entity_refs::tests::fixture_root(),
+                role,
+                |game| {
+                    assert_eq!(
+                        game.confirm_link("https://example.com", false),
+                        Err(OpenLinkError::Unavailable)
+                    );
+                    assert!(game.link_prompt.is_none());
+                    assert_eq!(
+                        game.open_path(Path::new(".")),
+                        Err(OpenPathError::Unavailable)
+                    );
+                },
+            );
+        }
+    }
+}

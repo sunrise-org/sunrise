@@ -10,6 +10,7 @@ import textwrap
 import unittest
 from unittest import mock
 
+from tests.os_support import needs_runner_shell
 from tools.ci import nightly
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +68,7 @@ class DryStateTests(unittest.TestCase):
             update.assert_not_called()
             self.assertIs(build.call_args.args[-1], True)
 
+    @needs_runner_shell
     def test_cleanup_is_independent_of_pick_outputs_and_fails_on_api_errors(self):
         workflow = (ROOT / ".github/workflows/nightly-build.yml").read_text()
         job = workflow.split("\n  cleanup-dry-run:\n", 1)[1].split("\n  answer:", 1)[0]
@@ -93,6 +95,7 @@ class DryStateTests(unittest.TestCase):
                     self.assertIn(f"https://api.github.com/repos/arismoko/horizon/git/{endpoint}/heads/nightly/dry-run-123-{last_attempt}",
                                   (path / "request").read_text().splitlines())
 
+    @needs_runner_shell
     def test_failed_cleanup_retry_removes_the_producers_earlier_attempt_only(self):
         workflow = (ROOT / ".github/workflows/nightly-build.yml").read_text()
         job = workflow.split("\n  cleanup-dry-run:\n", 1)[1].split("\n  answer:", 1)[0]

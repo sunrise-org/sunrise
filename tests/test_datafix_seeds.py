@@ -124,7 +124,8 @@ class DatafixSeedKeyTests(unittest.TestCase):
 
     def test_default_java_identity_hashes_jdk_content_via_parity_shim(self):
         jdk = self.root / 'jdk'
-        launcher = jdk / 'bin' / 'java'
+        program = 'java.exe' if os.name == 'nt' else 'java'
+        launcher = jdk / 'bin' / program
         launcher.parent.mkdir(parents=True)
         launcher.write_bytes(b'#!/bin/sh\necho "openjdk version 25.0.5"\n')
         launcher.chmod(0o755)
@@ -148,7 +149,7 @@ class DatafixSeedKeyTests(unittest.TestCase):
         # A wrapper outside JAVA_HOME is refused rather than keyed only by its script text.
         wrapper_dir = self.root / 'wrappers'
         wrapper_dir.mkdir()
-        wrapper = wrapper_dir / 'java'
+        wrapper = wrapper_dir / program
         wrapper.write_bytes(b'#!/bin/sh\nexec "$JAVA_HOME/bin/java" "$@"\n')
         wrapper.chmod(0o755)
         with mock.patch.dict(os.environ, {'JAVA_HOME': str(jdk), 'PATH': str(wrapper_dir)}, clear=True):

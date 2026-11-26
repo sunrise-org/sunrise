@@ -658,7 +658,19 @@ pub(super) fn probe_render_capabilities(
         device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
+        multi_draw_indirect_count(&adapter.get_info(), device.features()),
     )
+}
+
+/// Whether a mod's indirect draw may read a GPU-written count: the device has
+/// `MULTI_DRAW_INDIRECT_COUNT`, and is not DirectX 12, whose count draws leave an indexed
+/// command's base vertex out of the vertex fetch (`gpu_culling::loses_base_vertex`).
+pub(super) fn multi_draw_indirect_count(
+    info: &wgpu::AdapterInfo,
+    features: wgpu::Features,
+) -> bool {
+    features.contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT)
+        && info.backend != wgpu::Backend::Dx12
 }
 
 impl super::mod_gpu::ModGpuResources {

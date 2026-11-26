@@ -27,7 +27,7 @@ exported, fails naming the note and the sha.
 """
 
 from argparse import ArgumentParser
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -111,16 +111,16 @@ def unpack(sha: str, into: Path, paths: tuple[str, ...] | None = None) -> None:
         raise subprocess.CalledProcessError(archive.returncode, "git archive")
 
 
-def base_tool(sha: str, work: Path) -> str:
-    """The base commit's own sunrise-stage: its whole tree, built as verify builds the head's (test profile)."""
+def base_tool(sha: str, work: Path) -> list[str]:
+    """The command of the base commit's own sunrise-stage: its whole tree, built as verify builds the head's (test profile)."""
     tree = work / f"base-tool-{sha[:12]}"
     tree.mkdir()
     unpack(sha, tree, ())
     return tree_tool(tree, work)
 
 
-def tree_tool(tree: Path, work: Path) -> str:
-    """The sunrise-stage of the whole source tree `tree`, built in the test profile in target/surface-base and
+def tree_tool(tree: Path, work: Path) -> list[str]:
+    """The command of the sunrise-stage of the whole source tree `tree`, built in the test profile in target/surface-base and
     copied into this run's `work`. The build directory is shared (and cached), so a lock held from the build to the
     copy keeps another audit's build from replacing the binary before this one has its copy."""
     try:
@@ -139,7 +139,7 @@ def tree_tool(tree: Path, work: Path) -> str:
         if built.returncode != 0:
             raise RuntimeError(f"building that tree's sunrise-stage failed: {last_line(built.stderr)}")
         shutil.copy2(target / "debug" / "sunrise-stage", tool)
-    return str(tool)
+    return [str(tool)]
 
 
 def last_line(text: str) -> str:
@@ -147,8 +147,8 @@ def last_line(text: str) -> str:
     return lines[-1] if lines else "no message"
 
 
-def export_surface(tool: str, tree: Path, output: Path, *flags: str) -> subprocess.CompletedProcess:
-    return subprocess.run([tool, "surface", str(tree), str(output), *flags], capture_output=True, text=True)
+def export_surface(tool: Sequence[str], tree: Path, output: Path, *flags: str) -> subprocess.CompletedProcess:
+    return subprocess.run([*tool, "surface", str(tree), str(output), *flags], capture_output=True, text=True)
 
 
 def audited_checkpoint(reset_path: Path, work: Path, old_hash: str) -> tuple[Path | None, str]:
@@ -179,9 +179,9 @@ def audited_checkpoint(reset_path: Path, work: Path, old_hash: str) -> tuple[Pat
                         "Checking all subsequent changes against that checkpoint.\n")
 
 
-def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool, *,
-           with_internals: bool = False, own_base_tool: Callable[[], str] | None = None,
-           own_head_tool: Callable[[], str] | None = None,
+def report(tool: Sequence[str], base: Path, head: Path, work: Path, gate_on: bool, *,
+           with_internals: bool = False, own_base_tool: Callable[[], Sequence[str]] | None = None,
+           own_head_tool: Callable[[], Sequence[str]] | None = None,
            notes: tuple[Path, Path] | None = None, landed: str | None = None,
            covered: tuple[Path, Path] | None = None) -> tuple[int, str]:
     """Export and compare the trees; return (exit code, report text).
@@ -237,7 +237,7 @@ def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool, *,
                 if checkpoint is None:
                     return 1, note
                 base = tree = checkpoint
-        catalogs_command = [tool, "surface-catalogs", str(tree), str(output)]
+        catalogs_command = [*tool, "surface-catalogs", str(tree), str(output)]
         if with_internals:
             catalogs_command.append("--with-internals")
         audited = subprocess.run(catalogs_command, capture_output=True, text=True)
@@ -248,13 +248,13 @@ def report(tool: str, base: Path, head: Path, work: Path, gate_on: bool, *,
     return code, note + text
 
 
-def compare(tool: str, base: Path, head: Path, work: Path, gate_on: bool, *,
+def compare(tool: Sequence[str], base: Path, head: Path, work: Path, gate_on: bool, *,
             with_internals: bool, notes: tuple[Path, Path] | None = None,
             landed: str | None = None, covered: tuple[Path, Path] | None = None) -> tuple[int, str]:
     """Run the gate on the exported documents and the change notes (the trees' own unless `notes` is given);
     `covered` is a (new, base) pair of note folders whose new notes count as coverage only."""
     new_notes, base_notes = notes or (head / NOTES, base / NOTES)
-    command = [tool, "surface-diff", str(work / "base.json"), str(work / "head.json"),
+    command = [*tool, "surface-diff", str(work / "base.json"), str(work / "head.json"),
                "--notes", str(new_notes), "--base-notes", str(base_notes), "--json", str(work / "diff.json")]
     if landed:
         command += ["--landed", landed]
@@ -292,8 +292,8 @@ def landed_notes(head: Path, base: Path) -> dict[str, list[str]]:
     return found
 
 
-def landed_check(tool: str, head: Path, base: Path, work: Path, shas: dict[str, list[str]], *,
-                 git_text=None, fetch=None, own_tool: Callable[[str], str] | None = None) -> tuple[int, str]:
+def landed_check(tool: Sequence[str], head: Path, base: Path, work: Path, shas: dict[str, list[str]], *,
+                 git_text=None, fetch=None, own_tool: Callable[[str], Sequence[str]] | None = None) -> tuple[int, str]:
     """Check each merge's notes against that merge's first parent and the merge; (exit code, text)."""
     git_text, fetch = git_text or git, fetch or unpack
     code, text = 0, ""
@@ -361,7 +361,7 @@ def main(argv=None) -> int:
     if args.build_base_tool and not args.trees:
         parser.error("--build-base-tool goes with --trees; CI builds the base commit's own tool by itself")
     started = time.monotonic()
-    tool = os.environ["SUNRISE_STAGE_TOOL"]
+    tool = [os.environ["SUNRISE_STAGE_TOOL"]]
     gate_on = gate(ROOT / "tools/ci/surface.toml")
     with tempfile.TemporaryDirectory(dir=os.environ.get("RUNNER_TEMP")) as directory:
         work = Path(directory)
@@ -381,9 +381,9 @@ def main(argv=None) -> int:
                 sha, why = None, f"the base could not be fetched: {error}"
             if sha:
                 fetched = time.monotonic() - started
-                built: dict[str, str] = {}
+                built: dict[str, Sequence[str]] = {}
 
-                def own(commit: str) -> str:
+                def own(commit: str) -> Sequence[str]:
                     """A commit's own sunrise-stage, built once per run: a landed note may name the base itself."""
                     if commit not in built:
                         built[commit] = base_tool(commit, work)

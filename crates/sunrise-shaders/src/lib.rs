@@ -59,7 +59,7 @@ pub use post::{
     dimension_folder, dimension_folder_named, load_post,
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
-pub use properties::{Entry, Note, Properties};
+pub use properties::{Entry, Note, Properties, Tonemap};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{
     CustomTexture, Dim as TextureDim, EVERY_STAGE, PngError, Texels, Texture, TextureSource,

@@ -250,7 +250,8 @@ impl HudBatch {
 }
 
 /// `ReloadableTexture.setSampler`: `blur` filters linearly, else nearest; `clamp` clamps to the
-/// edge, else repeats. One level: no mipmaps.
+/// edge, else repeats. Always level 0, even of a mipmapped dynamic texture: `lod_max_clamp`
+/// is 0 (no mip filter either), as the book page says.
 fn sampler(flags: TextureFlags) -> wgpu::SamplerDescriptor<'static> {
     let filter = match flags.blur {
         true => wgpu::FilterMode::Linear,
@@ -265,6 +266,7 @@ fn sampler(flags: TextureFlags) -> wgpu::SamplerDescriptor<'static> {
         min_filter: filter,
         address_mode_u: address,
         address_mode_v: address,
+        lod_max_clamp: 0.0,
         ..Default::default()
     }
 }
@@ -355,7 +357,8 @@ impl HudRenderer {
 
     /// Bind groups for the dynamic textures `batch` draws, made again for a texture that was
     /// made again; those no run of this frame draws are dropped (the textures stay in the
-    /// store). Sampled nearest with repeat, one mip level: `DynamicTexture`'s constructor.
+    /// store). Sampled nearest with repeat, at level 0 only, however many levels the texture has:
+    /// `DynamicTexture`'s constructor.
     pub(super) fn prepare_dynamic(
         &mut self,
         device: &wgpu::Device,

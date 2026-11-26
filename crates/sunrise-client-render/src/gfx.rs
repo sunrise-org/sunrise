@@ -247,6 +247,7 @@ pub mod mod_frame_graph;
 pub mod mod_gpu;
 pub mod mod_meshes;
 pub mod mod_pipelines;
+pub mod mod_readback;
 pub mod mod_render_targets;
 pub mod mod_storage;
 pub mod mod_uniforms;

@@ -84,6 +84,13 @@ fn face_bounds(positions: impl IntoIterator<Item = [f32; 3]>) -> [[f32; 3]; 2] {
 }
 
 impl StandaloneGeometry {
+    /// The standalone models and every block state's model of `pack`.
+    ///
+    /// With `block_entity_render`, a state whose block has a special renderer also records it
+    /// (`StateModel::special`) and widens its bounds by that part's default geometry. With `None`
+    /// no state records a special part and its bounds hold the block-state faces alone: only
+    /// for a caller that reads `prepared_upload`, which holds the standalone slots and no state.
+    /// A `Game` always passes its renderer, joined before the first world frame.
     pub(super) fn new(
         pack: &super::PackResources,
         gui: &super::UiResources,
@@ -150,17 +157,9 @@ impl StandaloneGeometry {
                         return None;
                     }
                     special_scratch.clear();
-                    super::minecarts::render_default_state(
-                        renderer,
-                        gui,
-                        world,
-                        0,
-                        false,
-                        id,
-                        Mat4::IDENTITY,
-                        0,
-                        &mut special_scratch,
-                    );
+                    super::minecarts::with_default_scene(gui, world, false, |scene| {
+                        renderer.render_state(scene, id.0, Mat4::IDENTITY, 0, &mut special_scratch);
+                    });
                     point_bounds(special_scratch.iter().map(|vertex| vertex.pos))
                 });
                 Self::bind_state(pack, &layer_sprites, id, special)
@@ -723,11 +722,6 @@ impl<'v> BlockEntityDraw<'v> {
         self.quad_capacity = quad_capacity;
         self.reserved_quads = reserved_quads;
         self
-    }
-
-    /// Device-derived entity quad capacity and reserved quad count for this draw.
-    pub(super) fn quad_budget(&self) -> (sunrise_client::gfx::EntityQuadCapacity, usize) {
-        (self.quad_capacity, self.reserved_quads)
     }
 
     /// Opens the renderer-owned scoped quad submission sink for this draw.
@@ -2228,27 +2222,28 @@ impl Game<'_> {
     /// packed `light`. It takes no tint and no hidden faces; `color` (`0xAARRGGBB`) multiplies
     /// it, and below opaque it blends as `entityTranslucent` does. The end portal and gateway
     /// draw their starfield whatever `color` is, as `rendertype_end_portal` does. Non-finite
-    /// quads are skipped individually and the contribution stays within `capacity` minus
-    /// `reserved_quads`.
-    #[allow(clippy::too_many_arguments)]
+    /// quads are skipped individually and the contribution stays within `scope`'s budget.
     pub(super) fn special_model_part(
         &self,
         state: BlockStateId,
         pose: Mat4,
         light: u32,
         color: u32,
-        out: &mut Vec<Vertex>,
-        capacity: sunrise_client::gfx::EntityQuadCapacity,
-        reserved_quads: usize,
+        scope: &mut sunrise_client::gfx::EntityQuadScope<'_>,
     ) {
         use sunrise_client::block_entity_render::{END_GATEWAY_LAYER, END_PORTAL_LAYER};
-        if !sunrise_client::gfx::EntityQuadScope::new(out, capacity, reserved_quads).has_room() {
+        if !scope.has_room() {
             return;
         }
-        let start = out.len();
-        self.special_block_model(state, pose, super::minecarts::special_light(light), out);
-        sunrise_client::gfx::EntityQuadScope::new(out, capacity, reserved_quads)
-            .retain_valid_since(start);
+        let start = scope.vertices_mut().len();
+        self.special_block_model(
+            state,
+            pose,
+            super::minecarts::special_light(light),
+            scope.vertices_mut(),
+        );
+        scope.retain_valid_since(start);
+        let out = scope.vertices_mut();
         if color != u32::MAX {
             for vertex in &mut out[start..] {
                 vertex.color =

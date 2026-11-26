@@ -6,12 +6,31 @@ use super::*;
 pub(super) struct FrameAttempt<K = FrameKey>(Option<K>);
 
 /// The frame the renderer would be made with (`Renderer::requested_frame`), the pick's path,
-/// whether the loader accepted it.
+/// whether the loader accepted it, and its HDR request (`PickedPack::hdr`).
 type FrameKey = (
     Option<sunrise_client::gfx::FrameConfiguration>,
     PathBuf,
     Option<bool>,
+    Option<sunrise_shaders::Tonemap>,
 );
+
+/// Whether the frame is looked at again: the frame a renderer made now would draw in (`wanted`),
+/// the pick's `path`, the loader's `outcome` for it or its HDR request (`hdr`,
+/// `PickedPack::hdr`) changed since the last attempt.
+fn look_again<C: PartialEq>(
+    attempts: &mut FrameAttempt<(
+        Option<C>,
+        PathBuf,
+        Option<bool>,
+        Option<sunrise_shaders::Tonemap>,
+    )>,
+    wanted: Option<C>,
+    path: PathBuf,
+    outcome: Option<bool>,
+    hdr: Option<sunrise_shaders::Tonemap>,
+) -> bool {
+    attempts.changed((wanted, path, outcome, hdr))
+}
 
 impl<K: PartialEq> FrameAttempt<K> {
     // Remember attempts, including failures, until the requested configuration changes.
@@ -49,7 +68,7 @@ impl Game<'_> {
             self.settings.sunrise.translucent_batching,
             self.effective_vsync(),
             &self.settings.sunrise,
-            shader_packs::picked_pack_shape(&self.settings),
+            self.picked_pack_shape(),
             self.renderer
                 .as_ref()
                 .map(|r| r.display_reading())
@@ -84,19 +103,20 @@ impl Game<'_> {
         };
         // The renderer's offer can change while the game runs (Vulkan's formats follow desktop
         // HDR and the window's output), and the frame with it.
-        let request = shader_packs::picked_pack_shape(&self.settings).frame();
+        let shape = self.picked_pack_shape();
+        let request = shape.frame();
         let wanted = self
             .renderer
             .as_ref()
             .map(|r| r.requested_frame(&self.settings.sunrise, request));
-        if !self.frame_attempted.changed((wanted, path, outcome)) {
+        if !look_again(&mut self.frame_attempted, wanted, path, outcome, shape.hdr) {
             return;
         }
-        if self
-            .renderer
-            .as_ref()
-            .is_none_or(|r| r.frame_follows(&self.settings.sunrise, request))
-        {
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let follows = renderer.frame_follows(&self.settings.sunrise, request);
+        if !shader_packs::reconcile_pack_hdr(follows, &mut renderer.pack_hdr, shape.hdr) {
             return;
         }
         if let Err(e) = self.rebuild_renderer() {
@@ -299,7 +319,32 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::FrameAttempt;
+    use super::{FrameAttempt, look_again};
+    use crate::game::shader_packs::reconcile_pack_hdr;
+    use std::path::PathBuf;
+    use sunrise_shaders::Tonemap;
+
+    /// Same frame, pick and loader outcome; only the pick's tone curve owner changes: the frame
+    /// is looked at again, and the renderer that keeps serving takes the new request.
+    #[test]
+    fn a_new_hdr_request_alone_is_looked_at_again() {
+        let mut attempts = FrameAttempt::default();
+        let path = PathBuf::from("pack");
+        let mut installed = Some(Tonemap::Pack);
+        let mut look =
+            |hdr| look_again(&mut attempts, Some("8-bit"), path.clone(), Some(true), hdr);
+        assert!(look(Some(Tonemap::Pack)));
+        assert!(!look(Some(Tonemap::Pack)));
+        assert!(look(Some(Tonemap::Sunrise)));
+        assert!(!reconcile_pack_hdr(
+            true,
+            &mut installed,
+            Some(Tonemap::Sunrise)
+        ));
+        assert_eq!(installed, Some(Tonemap::Sunrise));
+        assert!(!look(Some(Tonemap::Sunrise)));
+        assert!(look(None));
+    }
 
     #[test]
     fn failed_frame_attempt_waits_for_a_policy_or_setting_change() {

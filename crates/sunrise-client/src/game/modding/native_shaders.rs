@@ -34,10 +34,13 @@ pub(super) struct NativeShaders {
     pub picked: String,
     /// The pick of a pack in the removed WGSL format that already got its note in the chat.
     pub noted: String,
+    /// The pick's `sunrise.hdr` request as last read (`Game::picked_pack_shape`).
+    pub pick_hdr: std::cell::RefCell<super::shader_packs::PickHdr>,
 }
 
 /// `SUNRISE_HDR_FRAME=float`: the frame is float where the renderer is made with no pack picked,
-/// or one refused, as HDR without a pack is (`PickedPack::hdr_float`).
+/// one refused, or one asking for Sunrise's HDR, as HDR without a pack is
+/// (`PickedPack::hdr_float`).
 pub(super) fn linear_frame_switch() -> bool {
     std::env::var("SUNRISE_HDR_FRAME").is_ok_and(|v| v == "float")
 }

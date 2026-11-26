@@ -110,10 +110,17 @@ nightly-2026-11-20 (9a8b7c6)  does not fit: 2 items changed
 ## `pin`
 
 Before it repins a native mod, `pin` lists the items the mod uses that changed, their source lines, and any
-`migrate` lines from the change notes. For a removed item it suggests the closest one in the new build (one
+`migrate` lines from the change notes of every SDK between the old pin and the new one, each naming the build it
+came with. For a removed item it suggests the closest one in the new build (one
 with the same counterpart name first, then the nearest id and doc text). It then lists the game
 code the mod declares (mixin targets, loops, internals) that changed. A mod made for exactly one
 build is only named; its declared internals are checked as the pin moves.
+
+When `check` fails to compile a native mod, it keeps the compiler's error and adds the change notes (why and
+`migrate`) of the API items the mod's source names that the pinned build no longer has, from every SDK since the
+build the mod last compiled against (which `check` records in `.sunrise/built`; with none recorded, the pinned
+build's own notes). Each SDK's release page
+lists the notes since the SDK before it.
 
 The same checks without the tool, from a build's `surface.json` and a mod folder, are `sunrise-stage uses` and
 `sunrise-stage fits` ([Checking a mod against a build](../../how-to/native-mods/14-checking-a-mod-against-a-build.md)).

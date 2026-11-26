@@ -10,17 +10,13 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from tests.os_support import BASH, POSIX_BASH
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
     "sunrise-linux-x86_64.tar.gz", "sunrise-windows-x64.zip", "sunrise-macos-arm64.zip",
     "sunrise-server-linux-x86_64.tar.gz", "sunrise-source.tar.gz", "sunrise-release.json",
 }
-# The bash on PATH, as in test_pr_ready: Windows' CreateProcess looks in System32 before PATH, so a bare "bash"
-# there is WSL's, which gets none of the steps' env and none of the host's paths.
-BASH = shutil.which("bash")
-POSIX_BASH = BASH is not None and not (
-    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
 
 
 def run_step(containing):

@@ -348,6 +348,7 @@ impl Loading {
             renderer.release_surface();
         }
         let renderer_at = Instant::now();
+        let mut pick_hdr = shader_packs::PickHdr::default();
         let (renderer, required) = startup::time("renderer.world", || {
             build_renderer(
                 window.clone(),
@@ -363,7 +364,7 @@ impl Loading {
                 self.settings.sunrise.translucent_batching,
                 self.settings.vsync,
                 &self.settings.sunrise,
-                shader_packs::picked_pack_shape(&self.settings),
+                shader_packs::startup_pack_shape(&self.settings, &mut pick_hdr),
                 self.renderer
                     .as_ref()
                     .map(|r| r.display_reading())
@@ -418,6 +419,8 @@ impl Loading {
         let game_ms = game_at.elapsed().as_millis();
         game.fullscreen = self.fullscreen;
         game.panorama_rotation = self.panorama_rotation;
+        // The pick's HDR request as the renderer was made for it, with its notes already logged.
+        *game.native_shaders.pick_hdr.get_mut() = pick_hdr;
         self.menu.handoff(&mut game);
         game.apply_settings();
         if let Err(error) = required {

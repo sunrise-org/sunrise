@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.os_support import needs_runner_shell
 from tests.test_ci_concurrency import ROOT, yaml
 from tools import sunrise_mod_binstall
 from tools.ci import daily_summary as summary, parity_verdict
@@ -1121,11 +1122,14 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertIn("needs.summary.outputs.sdk_green == 'true'", jobs["sdk-publish"]["if"])
         self.assertNotIn("parity-report", jobs)
 
-    def test_every_writing_run_requires_parity_and_only_a_dry_run_leaves_it_out(self):
+    def test_the_parity_call_runs_when_the_resolve_job_requires_it(self):
         jobs = self.workflow["jobs"]
-        resolve = jobs["resolve"]
-        self.assertEqual(resolve["outputs"]["parity_required"], "${{ steps.commit.outputs.parity_required }}")
+        self.assertEqual(jobs["resolve"]["outputs"]["parity_required"], "${{ steps.commit.outputs.parity_required }}")
         self.assertIn("needs.resolve.outputs.parity_required == 'true'", jobs["parity"]["if"])
+
+    @needs_runner_shell
+    def test_every_writing_run_requires_parity_and_only_a_dry_run_leaves_it_out(self):
+        resolve = self.workflow["jobs"]["resolve"]
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             # A checked-in resolve job body exercised with a substitute git: an older commit of main writes too, so

@@ -76,12 +76,12 @@ def check(revision=None):
         except (yaml.YAMLError, UnicodeError, OSError) as error:
             mark = getattr(error, "problem_mark", None)
             line = mark.line + 1 if mark is not None else 1
-            print(f"repository hygiene: {path}:{line}: invalid workflow YAML: {error}",
+            print(f"repository hygiene: {path.as_posix()}:{line}: invalid workflow YAML: {error}",
                   file=sys.stderr)
             failed = True
             continue
         if not isinstance(document, dict):
-            print(f"repository hygiene: {path}:1: workflow must be a YAML mapping", file=sys.stderr)
+            print(f"repository hygiene: {path.as_posix()}:1: workflow must be a YAML mapping", file=sys.stderr)
             failed = True
     return int(failed)
 

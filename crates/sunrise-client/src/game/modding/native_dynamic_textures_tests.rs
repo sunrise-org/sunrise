@@ -85,7 +85,7 @@ fn a_dynamic_texture_draws_through_the_gui_texture_path_and_takes_a_region_updat
             let _event_loop = attach_renderer(game);
             let id = Identifier::parse("api-only:dynamic/panel").unwrap();
             as_mod("api-only", || {
-                game.create_dynamic_texture(&id, 4, 4, &GREEN.repeat(16))
+                game.create_dynamic_texture(&id, 4, 4, 1, &GREEN.repeat(16))
             })
             .unwrap();
             assert_eq!(
@@ -95,7 +95,7 @@ fn a_dynamic_texture_draws_through_the_gui_texture_path_and_takes_a_region_updat
             let dst = [16.0, 16.0, 32.0, 32.0];
             let first = frame(game, &[(&id, dst, [4, 4])]);
             as_mod("api-only", || {
-                game.update_dynamic_texture_region(&id, [1, 1], [2, 2], &RED.repeat(4))
+                game.update_dynamic_texture_region(&id, 0, [1, 1], [2, 2], &RED.repeat(4))
             })
             .unwrap();
             let second = frame(game, &[(&id, dst, [4, 4])]);
@@ -138,7 +138,7 @@ fn a_texture_released_after_its_draw_was_submitted_draws_the_missing_texture() {
             let _event_loop = attach_renderer(game);
             let id = Identifier::parse("api-only:dynamic/panel").unwrap();
             as_mod("api-only", || {
-                game.create_dynamic_texture(&id, 4, 4, &GREEN.repeat(16))
+                game.create_dynamic_texture(&id, 4, 4, 1, &GREEN.repeat(16))
             })
             .unwrap();
             let created = frame(game, &[]);
@@ -168,7 +168,7 @@ fn a_foreign_id_is_not_owned_before_the_resource_stack_is_asked() {
             let make = |game: &mut Game<'_>, id: &str| {
                 let id = Identifier::parse(id).unwrap();
                 as_mod("api-only", || {
-                    game.create_dynamic_texture(&id, 16, 16, &green)
+                    game.create_dynamic_texture(&id, 16, 16, 1, &green)
                 })
             };
             assert_eq!(
@@ -198,7 +198,7 @@ fn a_create_the_device_refuses_draws_the_missing_texture() {
             // reads the real limit again, after this create is queued.
             game.dynamic_textures.bind(store, wide);
             game.dynamic_textures
-                .create("api-only", &id, [wide, 1], &GREEN.repeat(wide as usize))
+                .create("api-only", &id, [wide, 1], 1, &GREEN.repeat(wide as usize))
                 .unwrap();
             let refused = frame(game, &[(&id, [16.0, 16.0, 32.0, 32.0], [wide as i32, 1])]);
             let frames = render_hud_frames(&[&refused], &game.gui.atlas, SIZE)

@@ -275,9 +275,11 @@ jobs:
             fi
             gh release delete "$TAG" --yes
           fi
+          body="$RUNNER_TEMP/sdk-body.md"
+          python3 tools/ci/nightly.py sdk-body dist/sdk.json "$body"
           gh release create "$TAG" dist/* --target "$COMMIT" --prerelease --latest=false ${DRAFT:+--draft} \
             --title "Mod SDK ${COMMIT::10}" \
-            --notes "The mod SDK of game build $COMMIT: sdk.json lists every asset; SHA256SUMS is signed for $TAG."
+            --notes-file "$body"
           mkdir -p "$released" && cp dist/sdk.json "$released/"
       - uses: actions/upload-artifact@v4
         if: env.PUBLISH == 'true'

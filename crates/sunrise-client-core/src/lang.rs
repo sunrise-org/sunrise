@@ -1645,7 +1645,7 @@ mod tests {
                 // A key is `sunrise.<group>.<name>`: lower-case letters, digits and `_`
                 // between the dots. A key built at run time has a brace; a file name
                 // has one dot; the server addresses that look like keys are listed.
-                const NOT_KEYS: &[&str] = &["sunrise.bunchy7s.dev"];
+                const NOT_KEYS: &[&str] = &["sunrise.bunchy7s.dev", "sunrise.hdr.tonemap"];
                 let key_like = key
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.".contains(&b));

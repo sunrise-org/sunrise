@@ -315,7 +315,7 @@ def dep_info(path: Path) -> list[str]:
 
 def root_forms(roots: list[Path], crate: Crate) -> list[str]:
     """How the in-tree build script names the checkout: through the crate (`<root>/<crate>/../..`) or directly."""
-    forms = {f"{root}/{crate.directory}/../.." for root in roots} | {str(root) for root in roots}
+    forms = {f"{root.as_posix()}/{crate.directory}/../.." for root in roots} | {root.as_posix() for root in roots}
     return sorted(forms, key=len, reverse=True)
 
 

@@ -45,7 +45,7 @@ pub(crate) enum Scanned {
 }
 
 /// The sources of the mod folder at `root`, or what the scan can answer without them.
-fn read(
+pub(crate) fn read(
     root: &Path,
     manifest: &Manifest,
 ) -> Result<Result<Vec<(String, String)>, Scanned>, String> {

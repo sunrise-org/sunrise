@@ -14,6 +14,8 @@
     nightly.py sdk-archives        the assets the SDK's packing legs make (tools/prebuilt_game.py gather), one per line
     nightly.py sdk-assets          every asset a complete sdk-<sha> release holds: those, sdk.json and the signed sums
     nightly.py sdk-index <sha> <out>     writes sdk-<sha>'s sdk.json to <out>, checked against its SHA256SUMS
+    nightly.py sdk-body <sdk.json> <out> writes the sdk-<sha> release body (the change notes since the previous SDK)
+                                   to <out>, as Markdown
     nightly.py sdk-previous <sha> <out>  prints the SDK published before <sha> on its history, and writes its
                                    surface.json to <out>, checked; prints nothing when there is none
     nightly.py stable-mod-api <sha> <tag> <notes>  checks the stable mod API step and appends changed mixin targets
@@ -482,6 +484,50 @@ def checked_index(sha: str, index: bytes) -> dict:
     if missing:
         raise SystemExit(f"sdk-{sha}'s {SDK_INDEX} does not list {', '.join(missing)}")
     return document
+
+
+# GitHub refuses a release body longer than this many characters (its documented limit, not ours).
+GITHUB_RELEASE_BODY_LIMIT = 125000
+
+
+def sdk_body(index: dict) -> str:
+    """The release body of the SDK `index` (its sdk.json) describes: what the build is, then the change notes since
+    the SDK it was compared with, those naming the earliest of `surface.changes` (breaking first) first. It stops at
+    a whole note before GitHub's limit."""
+    commit = index["build"]["commit"]
+    surface = index["surface"]
+    head = (f"The mod SDK of game build {commit}: {SDK_INDEX} lists every asset; "
+            f"SHA256SUMS is signed for sdk-{commit}.\n")
+    previous = surface.get("previous")
+    if not previous:
+        return head + "\nThis SDK has no comparison with an earlier one.\n"
+    # sdk.json leaves out an empty list; `source` is written with every `previous` (Index::compare).
+    changes = surface.get("changes", [])
+    notes = surface.get("notes", [])
+    position = {id: at for at, id in reversed(list(enumerate(changes)))}
+    notes = sorted(notes, key=lambda note: min((position.get(id, len(changes)) for id in note["ids"]),
+                                               default=len(changes)))
+    named = {id for note in notes for id in note["ids"]}
+    unnamed = len([id for id in changes if id not in named])
+    lines = [head, f"## Changes since sdk-{previous}\n",
+             f"Verdict: {surface['source']}; {len(changes)} records changed.\n"]
+    if unnamed:
+        lines.append(f"{unnamed} changed records are named by no note below; "
+                     "`cargo sunrise-mod sdk diff` lists them.\n")
+    body = "\n".join(lines)
+    for shown, note in enumerate(notes):
+        entry = f"\n- {note['why']}\n"
+        if note.get("migrate"):
+            entry += f"  Migrate: {note['migrate']}\n"
+        entry += "  " + ", ".join(f"`{id}`" for id in note["ids"]) + "\n"
+        left = len(notes) - shown
+        cut = f"\nThe remaining notes ({left}) are in {SDK_INDEX}'s `surface.notes`.\n"
+        # The last note needs no room for the cut line after it.
+        after = len(cut) if left > 1 else 0
+        if len(body) + len(entry) + after > GITHUB_RELEASE_BODY_LIMIT:
+            return body + cut
+        body += entry
+    return body
 
 
 def published_index(sha: str) -> bytes:
@@ -1235,6 +1281,9 @@ def main() -> None:
     previous = sub.add_parser("sdk-previous")
     previous.add_argument("sha")
     previous.add_argument("out", type=Path)
+    body = sub.add_parser("sdk-body")
+    body.add_argument("index", type=Path)
+    body.add_argument("out", type=Path)
     sums = sub.add_parser("verify-sums")
     sums.add_argument("--tag", required=True)
     sums.add_argument("--signature", default="SHA256SUMS.sig")
@@ -1272,6 +1321,8 @@ def main() -> None:
         print("\n".join(SDK_ASSETS))
     elif args.cmd == "sdk-index":
         args.out.write_bytes(published_index(args.sha))
+    elif args.cmd == "sdk-body":
+        args.out.write_text(sdk_body(json.loads(args.index.read_text())))
     elif args.cmd == "sdk-previous":
         if build := previous_sdk(args.sha):
             args.out.write_bytes(released(build, SDK_SURFACE))

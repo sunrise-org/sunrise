@@ -1,7 +1,10 @@
 //! A client mod's retained GPU storage buffers (`ClientRenderClientHost::create_storage_buffer`,
 //! `StorageBufferRef::write_range`, `size` and `release`): vanilla's `GpuBuffer` written through
 //! `CommandEncoder.writeToBuffer(GpuBufferSlice, ByteBuffer)` and bound by range
-//! (`GpuBuffer.slice`, `GpuBufferSlice`).
+//! (`GpuBuffer.slice`, `GpuBufferSlice`), and read back without waiting
+//! (`StorageBufferRef::request_readback`, `ReadbackTicket`): vanilla's
+//! `CommandEncoder.copyToBuffer(source, target)` into a `USAGE_MAP_READ` buffer, then
+//! `GpuBuffer.map(read)` once its fence has signalled.
 
 use super::render_pipeline::BufferError;
 
@@ -79,6 +82,33 @@ impl StorageBufferRef {
             .storage_buffer_release(self)
     }
 
+    /// Copy `len` bytes from `offset` of this buffer into a staging buffer, in the command order
+    /// of the call (vanilla's `CommandEncoder.copyToBuffer(source, target)`, which is an encoder
+    /// command at the caller's point), and return the [`ReadbackTicket`] that will hold them.
+    /// The buffer must have been created with [`StorageBufferDescriptor::copy_src`], `offset` and
+    /// `len` are multiples of 4 (`wgpu::COPY_BUFFER_ALIGNMENT`), `len` is not zero and the range
+    /// lies inside the buffer.
+    ///
+    /// Allowed only where compute is recorded: inside a frame-graph compute node's `record`
+    /// callback ([`crate::FrameGraphContext::add_compute_pass`]). The copy sees the writes of the
+    /// dispatches recorded before this call in that node and none of those recorded after it.
+    /// Anywhere else it is refused with [`BufferError::NotInFrame`].
+    ///
+    /// Nothing waits: the bytes come back through [`ReadbackTicket::poll_readback`] a frame or
+    /// more later. Running out of memory for the staging buffer is
+    /// [`BufferError::ExceedsDeviceLimit`]; there is no cap on tickets beyond the device's.
+    pub fn request_readback(
+        self,
+        host: &(impl StorageBufferContext + ?Sized),
+        offset: u64,
+        len: u64,
+    ) -> Result<ReadbackTicket, BufferError> {
+        host.storage_buffer_backend()
+            .ok_or(BufferError::Unavailable)?
+            .0
+            .storage_buffer_request_readback(self, offset, len)
+    }
+
     /// The range `offset..offset + length` of this buffer, to bind with
     /// [`crate::DrawBindings::storage_buffer`] (`GpuBuffer.slice`). The range is checked when
     /// it is bound, not here.
@@ -97,6 +127,58 @@ impl crate::__private::game::Fields for StorageBufferRef {
         crate::__private::game::ModelRefFields {
             generation: self.0,
             slot: self.1,
+        }
+    }
+}
+
+/// A pending readback of a storage buffer range, from [`StorageBufferRef::request_readback`].
+///
+/// Poll it each frame with [`Self::poll_readback`]. It is freed when its bytes are returned, by
+/// [`Self::release`], or when its mod unloads.
+// no wire: process-local handle to a pending GPU readback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// exhaustive: only the engine creates tickets.
+pub struct ReadbackTicket(pub(crate) u64);
+
+impl ReadbackTicket {
+    pub(crate) fn from_id(id: u64) -> Result<Self, &'static str> {
+        if id == 0 {
+            return Err("unpublished readback ticket");
+        }
+        Ok(Self(id))
+    }
+
+    /// The bytes of the requested range if the GPU has finished the copy (vanilla's `GpuFence`
+    /// checked without waiting, then `GpuBuffer.map(read)`): `Ok(None)` while it is in flight,
+    /// then `Ok(Some(bytes))` once, after which the ticket is spent. Never waits on the GPU.
+    /// A spent, released or unknown ticket, a copy the frame did not run, and a lost device are
+    /// [`BufferError::Unavailable`].
+    pub fn poll_readback(
+        self,
+        host: &(impl StorageBufferContext + ?Sized),
+    ) -> Result<Option<Vec<u8>>, BufferError> {
+        host.storage_buffer_backend()
+            .ok_or(BufferError::Unavailable)?
+            .0
+            .readback_poll(self)
+    }
+
+    /// Drop a ticket that is no longer wanted and free its staging buffer. An unknown or spent
+    /// ticket is [`BufferError::Unavailable`].
+    pub fn release(self, host: &(impl StorageBufferContext + ?Sized)) -> Result<(), BufferError> {
+        host.storage_buffer_backend()
+            .ok_or(BufferError::Unavailable)?
+            .0
+            .readback_release(self)
+    }
+}
+
+impl crate::__private::game::Fields for ReadbackTicket {
+    type Fields<'a> = crate::__private::game::ModelRefFields;
+    fn fields(&self) -> Self::Fields<'_> {
+        crate::__private::game::ModelRefFields {
+            generation: self.0,
+            slot: 0,
         }
     }
 }
@@ -128,6 +210,9 @@ pub struct StorageBufferDescriptor {
     /// Whether the buffer can also hold indirect draw or dispatch arguments (`wgpu`'s
     /// `BufferUsages::INDIRECT`; vanilla's `USAGE_INDIRECT_PARAMETERS`). Off by default.
     pub indirect: bool,
+    /// Whether the buffer can be read back ([`StorageBufferRef::request_readback`]; `wgpu`'s
+    /// `BufferUsages::COPY_SRC`; vanilla's `USAGE_COPY_SRC`). Off by default.
+    pub copy_src: bool,
 }
 
 impl StorageBufferDescriptor {
@@ -136,12 +221,19 @@ impl StorageBufferDescriptor {
         Self {
             size,
             indirect: false,
+            copy_src: false,
         }
     }
 
     /// Let the buffer also hold indirect draw or dispatch arguments.
     pub const fn indirect(mut self, indirect: bool) -> Self {
         self.indirect = indirect;
+        self
+    }
+
+    /// Let the buffer be read back with [`StorageBufferRef::request_readback`].
+    pub const fn copy_src(mut self) -> Self {
+        self.copy_src = true;
         self
     }
 }
@@ -153,8 +245,12 @@ mod tests {
     #[test]
     fn a_descriptor_starts_direct_and_a_slice_names_its_range() {
         let desc = StorageBufferDescriptor::new(64);
-        assert_eq!((desc.size, desc.indirect), (64, false));
+        assert_eq!(
+            (desc.size, desc.indirect, desc.copy_src),
+            (64, false, false)
+        );
         assert!(desc.indirect(true).indirect);
+        assert!(desc.copy_src().copy_src);
         let buffer = StorageBufferRef::from_parts(3, 1).unwrap();
         let slice = buffer.slice(16, 32);
         assert_eq!((slice.buffer, slice.offset, slice.length), (buffer, 16, 32));
@@ -176,6 +272,14 @@ mod tests {
         );
         assert_eq!(buf.size(&Bare), Err(BufferError::Unavailable));
         assert_eq!(buf.release(&Bare), Err(BufferError::Unavailable));
+        assert_eq!(
+            buf.request_readback(&Bare, 0, 16),
+            Err(BufferError::Unavailable)
+        );
+        let ticket = ReadbackTicket::from_id(1).unwrap();
+        assert!(ReadbackTicket::from_id(0).is_err());
+        assert_eq!(ticket.poll_readback(&Bare), Err(BufferError::Unavailable));
+        assert_eq!(ticket.release(&Bare), Err(BufferError::Unavailable));
 
         struct Recording {
             written: std::cell::RefCell<Option<(u64, Vec<u8>)>>,
@@ -206,6 +310,27 @@ mod tests {
             fn storage_buffer_release(&self, _: StorageBufferRef) -> Result<(), BufferError> {
                 Err(BufferError::Stale)
             }
+            fn storage_buffer_request_readback(
+                &self,
+                _: StorageBufferRef,
+                offset: u64,
+                len: u64,
+            ) -> Result<ReadbackTicket, BufferError> {
+                if offset == 0 && len == 16 {
+                    Ok(ReadbackTicket::from_id(7).unwrap())
+                } else {
+                    Err(BufferError::NotInFrame)
+                }
+            }
+            fn readback_poll(
+                &self,
+                ticket: ReadbackTicket,
+            ) -> Result<Option<Vec<u8>>, BufferError> {
+                Ok((ticket.0 == 7).then(|| vec![9; 4]))
+            }
+            fn readback_release(&self, _: ReadbackTicket) -> Result<(), BufferError> {
+                Err(BufferError::Unavailable)
+            }
         }
 
         let host = Recording {
@@ -215,5 +340,12 @@ mod tests {
         assert_eq!(*host.written.borrow(), Some((8, vec![1, 2, 3, 4])));
         assert_eq!(buf.size(&host), Ok(64));
         assert_eq!(buf.release(&host), Err(BufferError::Stale));
+        let ticket = buf.request_readback(&host, 0, 16).unwrap();
+        assert_eq!(ticket.poll_readback(&host), Ok(Some(vec![9; 4])));
+        assert_eq!(
+            buf.request_readback(&host, 4, 16),
+            Err(BufferError::NotInFrame)
+        );
+        assert_eq!(ticket.release(&host), Err(BufferError::Unavailable));
     }
 }

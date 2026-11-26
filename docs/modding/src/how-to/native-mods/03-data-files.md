@@ -115,6 +115,8 @@ A native package holds the manifest, an optional `icon.png`, `assets/` and `data
   is packaged whether or not it is tracked.
 - Files and folders whose name starts with `.` are skipped unless `[package] include` is set (then only `include`
   decides). `.git/`, `.cargo/` and `.sunrise/` are never packaged.
+- The root `page.toml` and `page/` are your [mod's page](../publish.md#your-mods-page), not source: `build` writes
+  them to `<id>.page.tar`, never into the `.smod`. A `src/page/` folder is source as usual.
 - Only the root `target/` is skipped.
 - A symlink is refused, not followed.
 - A `path` dependency that leaves the package, or names a folder the package leaves out, is refused by manifest and
@@ -138,9 +140,14 @@ configuration applies there as it does to plain `cargo`. A few old input paths s
 The tools that read source out of an archive (the registry's checks, the launcher's build) count the source entries
 and add up their declared sizes from the archive's directory before inflating any, and refuse more than the source
 file and size limits allow; they also refuse an entry that is not the manifest, `uses.json`, `icon.png`, `runtime/`,
-`assets/`, `data/` or a source file (a `target/` or `.cargo/` entry), by name. The game does neither: it never reads
-or compiles the source, so it does not check this list when it loads a package. It reads the manifest, the icon, the
-content and the runtime files, and skips the rest.
+`assets/`, `data/` or a source file (a `target/` or `.cargo/` entry), by name. A root `page.toml` or `page/` entry,
+which `build` packed as source for a while from Nov 25, is left out unread, with a warning naming the mod and the
+entry; this lasts until no published package carries one, and ends by 26.3-0.1.0 at the latest. The tools of builds
+before Nov 25 knew a shorter list of source names (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/**/*.rs` and
+`.toml`, and root `README*`, `LICENSE*`, `COPYING*` and `NOTICE*` files) and refuse any other entry as `unexpected
+package path`: rebuild a mod with the current tool to drop its page files before checking it against such a build.
+The game does neither: it never reads or compiles the source, so it does not check this list when it loads a
+package. It reads the manifest, the icon, the content and the runtime files, and skips the rest.
 
 A package does not carry prebuilt object code. A source file whose header is an ELF, Mach-O (also universal),
 PE or WebAssembly file, or an `ar` archive (`.a`, `.lib`), is refused by name when the package is packed or read by the

@@ -23,6 +23,11 @@ import urllib.request
 import uuid
 import zipfile
 
+try:
+    from . import file_lock
+except ImportError:
+    import file_lock
+
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
 LOCK = ROOT / "research-lock.json"
@@ -71,22 +76,23 @@ def parity_fixtures(default_features=True):
     variant's own hard link to its build, taken under a lock that covers the build, so another harness building the
     other variant never changes it."""
     if default_features not in _PARITY_FIXTURES:
-        import fcntl  # POSIX only, like the parity runner
         features = 'fixtures,client-defaults' if default_features else 'fixtures'
         command = ['cargo', 'build', '--locked', '--profile', 'test', '-p', 'sunrise-parity-fixtures',
                    '--features', features, '--bin', 'sunrise-parity-fixtures',
                    '--message-format=json-render-diagnostics']
         cargo_target().mkdir(parents=True, exist_ok=True)
         with open(cargo_target() / 'sunrise-parity-fixtures.lock', 'w') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            file_lock.lock(lock)
             built = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, text=True, check=True)
             executables = [row['executable'] for row in map(json.loads, filter(None, built.stdout.splitlines()))
                            if row.get('reason') == 'compiler-artifact' and row.get('executable')
                            and row['target']['name'] == 'sunrise-parity-fixtures']
             if len(executables) != 1:
                 raise RuntimeError(f'cargo reported {len(executables)} sunrise-parity-fixtures executables')
-            variant = Path(executables[0]).with_name(
-                'sunrise-parity-fixtures-' + ('client-defaults' if default_features else 'no-default-features'))
+            executable = Path(executables[0])
+            variant = executable.with_name('sunrise-parity-fixtures-'
+                                           + ('client-defaults' if default_features else 'no-default-features')
+                                           + executable.suffix)
             variant.unlink(missing_ok=True)
             os.link(executables[0], variant)
         _PARITY_FIXTURES[default_features] = variant

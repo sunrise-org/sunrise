@@ -79,9 +79,18 @@ pub trait ClientRenderClientHost {
     /// Vanilla's `TextureManager.register` of a `DynamicTexture` under `id`, then its `upload`:
     /// the calling mod's RGBA texture `id`, in its own namespace (`mymod:dynamic/panel`), made
     /// from `rgba`, `width * height` pixels of four bytes, row by row from the top left. The
-    /// texture is a GPU texture of its own, as `DynamicTexture` makes one: `RGBA8_UNORM`, one
-    /// mip level, sampled nearest with repeat, with no choice of format or sampler. Draw it with
-    /// [`GuiCanvas::texture`] under `id` (`region.tex` its size), from the next frame on; any mod
+    /// texture is a GPU texture of its own, as `DynamicTexture` makes one: `RGBA8_UNORM` (the
+    /// sRGB format is not offered: vanilla's dynamic textures and block atlas are UNORM),
+    /// sampled nearest with repeat by the GUI, with no choice of format. It has `mip_levels`
+    /// levels: 1 is vanilla's `DynamicTexture` and the default choice, and up to the full chain
+    /// (`32 - max(width, height).leading_zeros()`) is allowed. `rgba` fills level 0 only; the
+    /// other levels start empty and are filled from the CPU, as vanilla's `MipmapGenerator` does
+    /// for the block atlas, with one
+    /// [`update_dynamic_texture_region`](Self::update_dynamic_texture_region) per level (no
+    /// mipmap is generated on the GPU). Draw it with
+    /// [`GuiCanvas::texture`] under `id` (`region.tex` its size), from the next frame on, always
+    /// sampling level 0; a mod pipeline binds it by id (`TextureSource::DynamicTexture`) and
+    /// reads every level through a [`Sampler`] whose `max_lod` allows them. Any mod
     /// may draw the id, only the owner changes it. It survives resource reloads (F3+T, a pack
     /// change) and a world closing, and lasts until
     /// [`release_dynamic_texture`](Self::release_dynamic_texture) or the mod's unload; if the game loses its graphics device the texture is gone and the next update reads
@@ -92,20 +101,25 @@ pub trait ClientRenderClientHost {
     /// when nothing draws here, `NotOwned` for an id outside the mod's owned namespaces (its
     /// manifest namespaces or a content package it serves via `served_by`), `BadSize` for a side
     /// of 0 or pixels that are not `width * height * 4` bytes, `TooLarge` for a side past the
-    /// device's largest 2D texture, and `NameTaken` for an id that already names a dynamic
-    /// texture.
+    /// device's largest 2D texture, `BadMipLevels` for `mip_levels` of 0 or past the full
+    /// chain, and `NameTaken` for an id that already names a dynamic texture. Running out of
+    /// GPU memory is not seen here: the frame that makes the texture logs it, and the id draws
+    /// vanilla's missing texture.
     fn create_dynamic_texture(
         &mut self,
         id: &Identifier,
         width: u32,
         height: u32,
+        mip_levels: u32,
         rgba: &[u8],
     ) -> Result<(), DynamicTextureError>;
     /// Side: client.
     /// Vanilla's `DynamicTexture.upload` of new pixels: the calling mod's texture `id` takes
     /// `rgba`, `width * height` pixels of four bytes, from the next frame on. A different size
     /// makes a new texture under the same id, as registering a new `DynamicTexture` under an id
-    /// does. Writes apply in the order they were made, none merged. Send one when the texture
+    /// does, keeping its `mip_levels` (the new size's full chain must hold them, else
+    /// `BadMipLevels`), with level 0 holding `rgba` and the other levels empty. Writes apply in
+    /// the order they were made, none merged. Send one when the texture
     /// changed, not every frame; for a part of it, use
     /// [`update_dynamic_texture_region`](Self::update_dynamic_texture_region).
     ///
@@ -120,16 +134,20 @@ pub trait ClientRenderClientHost {
     ) -> Result<(), DynamicTextureError>;
     /// Side: client.
     /// `CommandEncoder.writeToTexture`'s region overload on the calling mod's texture `id`:
-    /// `rgba`, `size[0] * size[1]` pixels of four bytes, replaces the region of the texture
-    /// whose top left pixel is `origin`, from the next frame on, applied in the order the writes
-    /// were made. The rest of the texture is kept.
+    /// `rgba`, `size[0] * size[1]` pixels of four bytes, replaces the region of mip level
+    /// `mip_level` (0 is the full-size image) whose top left pixel is `origin`, from the next
+    /// frame on, applied in the order the writes were made. `origin` and `size` are in pixels of
+    /// that level, whose side is the texture's side shifted right by `mip_level`, at least 1.
+    /// The rest of the texture is kept.
     ///
     /// Refused by name, with nothing changed, as [`DynamicTextureError`] lists: `Unavailable`,
-    /// `NotOwned`, `Unknown`, `BadSize` for a side of 0 or pixels that are not
-    /// `size[0] * size[1] * 4` bytes, and `OutOfBounds` for a region not inside the texture.
+    /// `NotOwned`, `Unknown`, `BadMipLevels` for a `mip_level` the texture does not have,
+    /// `BadSize` for a side of 0 or pixels that are not `size[0] * size[1] * 4` bytes, and
+    /// `OutOfBounds` for a region not inside that level.
     fn update_dynamic_texture_region(
         &mut self,
         id: &Identifier,
+        mip_level: u32,
         origin: [u32; 2],
         size: [u32; 2],
         rgba: &[u8],
@@ -358,6 +376,22 @@ pub trait ClientRenderClientBackend {
     /// Writes queued for it and not yet applied are dropped.
     #[manual_handle]
     fn storage_buffer_release(&self, buffer: StorageBufferRef) -> Result<(), BufferError>;
+    /// Record a copy of a storage buffer range into a staging buffer at this point of the
+    /// compute node being recorded; called through [`StorageBufferRef::request_readback`].
+    #[manual_handle]
+    fn storage_buffer_request_readback(
+        &self,
+        buffer: StorageBufferRef,
+        offset: u64,
+        len: u64,
+    ) -> Result<ReadbackTicket, BufferError>;
+    /// The bytes of a finished readback, none while it is in flight; called through
+    /// [`ReadbackTicket::poll_readback`].
+    #[manual_handle]
+    fn readback_poll(&self, ticket: ReadbackTicket) -> Result<Option<Vec<u8>>, BufferError>;
+    /// Drop a pending readback; called through [`ReadbackTicket::release`].
+    #[manual_handle]
+    fn readback_release(&self, ticket: ReadbackTicket) -> Result<(), BufferError>;
     /// Resize a mod-owned offscreen render target (no-op if unchanged); called through
     /// [`RenderTargetRef::resize`].
     #[manual_handle]

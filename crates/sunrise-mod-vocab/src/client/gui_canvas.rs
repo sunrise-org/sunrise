@@ -212,8 +212,13 @@ pub trait GuiCanvas {
     /// Draw a sprite by its exact packed atlas name (not its GUI id) at `[x, y, w, h]`.
     fn atlas_sprite(&mut self, name: &str, dst: [f32; 4], argb: u32) -> Result<(), GuiDrawError>;
 
-    /// Draw a region of a raw texture (path under `textures/`, without `.png`, or a live or
-    /// registered texture id) at `[x, y, w, h]`. Accepts every [`Blend`].
+    /// Draw a region of a texture packed in the GUI atlas at `[x, y, w, h]`: `texture` is the
+    /// packed name (a path under `textures/`, without `.png`) or a registered atlas's sprite
+    /// (`mymod:gui/atlases/icons/mymod/heart`). Accepts every [`Blend`]. A live dynamic texture
+    /// or a standalone resource-pack texture is not in the atlas and is refused with
+    /// [`GuiDrawError::UnknownTexture`]: draw those with [`Self::texture`]. A non-finite `dst`
+    /// or `uv` is refused with [`GuiDrawError::NotFinite`] and a zero `tex` side with
+    /// [`GuiDrawError::BadBlitRegion`], before the name is looked up, as in [`Self::texture`].
     fn blit(
         &mut self,
         texture: &str,

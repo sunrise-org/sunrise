@@ -216,6 +216,19 @@ fn rect_end([x, y, w, h]: [f32; 4]) -> Result<[f32; 2], GuiDrawError> {
     }
 }
 
+/// The checks `blit` and `texture` share, before either looks its texture up: a finite
+/// destination rectangle and `uv`, and no zero `tex` side (the divisor of the UVs).
+fn check_blit_region(dst: [f32; 4], uv: [f32; 2], tex: [i32; 2]) -> Result<(), GuiDrawError> {
+    rect_end(dst)?;
+    if !uv.into_iter().all(f32::is_finite) {
+        return Err(GuiDrawError::NotFinite);
+    }
+    if tex.contains(&0) {
+        return Err(GuiDrawError::BadBlitRegion);
+    }
+    Ok(())
+}
+
 /// The API count is nonzero, but vanilla also treats air as an empty stack.
 fn drawable_stack(stack: &ItemStack) -> Result<Option<EngineStack>, GuiDrawError> {
     let stack = stack_value(stack).map_err(GuiDrawError::Stack)?;
@@ -474,13 +487,7 @@ impl GuiCanvas for GameGuiCanvas<'_, '_> {
         argb: u32,
         blend: Blend,
     ) -> Result<(), GuiDrawError> {
-        rect_end(dst)?;
-        if !uv.into_iter().all(f32::is_finite) {
-            return Err(GuiDrawError::NotFinite);
-        }
-        if tex.contains(&0) {
-            return Err(GuiDrawError::BadBlitRegion);
-        }
+        check_blit_region(dst, uv, tex)?;
         let rect = *self
             .atlas
             .blit_rect(texture)
@@ -502,13 +509,7 @@ impl GuiCanvas for GameGuiCanvas<'_, '_> {
         GuiBlitRegion { uv, src, tex }: GuiBlitRegion,
         argb: u32,
     ) -> Result<(), GuiDrawError> {
-        rect_end(dst)?;
-        if !uv.into_iter().all(f32::is_finite) {
-            return Err(GuiDrawError::NotFinite);
-        }
-        if tex.contains(&0) {
-            return Err(GuiDrawError::BadBlitRegion);
-        }
+        check_blit_region(dst, uv, tex)?;
         // A live dynamic texture first, then the resource stack, as one id space; an id in
         // neither is refused here, and only one released after this call draws the missing texture.
         let dynamic = self.game.and_then(|game| game.dynamic_textures.get(id));
@@ -672,6 +673,55 @@ mod tests {
                 assert!(glint.iter().all(|&color| color == abgr(tint)), "{item}");
             }
         });
+    }
+
+    /// `blit` and `texture` refuse a bad region the same way and before their lookup (#5994),
+    /// and `blit` refuses a name outside the atlas, which `texture` is for, as documented.
+    #[test]
+    fn blit_and_texture_share_their_region_checks() {
+        let atlas = HudAtlas::build(&ResourceSource::directory(
+            "/nonexistent/sunrise-test-assets".into(),
+        ))
+        .unwrap();
+        let id = mod_api::Identifier::parse("test:dynamic/panel").unwrap();
+        let region = |uv, tex| GuiBlitRegion {
+            uv,
+            src: [4, 4],
+            tex,
+        };
+        let cases = [
+            (
+                [0.0, 0.0, f32::NAN, 4.0],
+                region([0.0, 0.0], [4, 4]),
+                GuiDrawError::NotFinite,
+            ),
+            (
+                [0.0; 4],
+                region([f32::INFINITY, 0.0], [4, 4]),
+                GuiDrawError::NotFinite,
+            ),
+            (
+                [0.0; 4],
+                region([0.0, 0.0], [4, 0]),
+                GuiDrawError::BadBlitRegion,
+            ),
+            (
+                [0.0; 4],
+                region([0.0, 0.0], [4, 4]),
+                GuiDrawError::UnknownTexture,
+            ),
+        ];
+        for (dst, region, error) in cases {
+            let mut batch = HudBatch::scratch([320, 240]);
+            let blit = GameGuiCanvas::draw(&mut batch, &atlas, None, None, &mut |root| {
+                root.blit("test:dynamic/panel", dst, region, u32::MAX, Blend::Textured)
+            });
+            assert_eq!(blit, Err(error.clone()), "blit {dst:?}");
+            let texture = GameGuiCanvas::draw(&mut batch, &atlas, None, None, &mut |root| {
+                root.texture(&id, dst, region, u32::MAX)
+            });
+            assert_eq!(texture, Err(error), "texture {dst:?}");
+        }
     }
 
     #[test]

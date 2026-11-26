@@ -152,6 +152,12 @@ pub struct FramePassDescriptor {
     pub before: Vec<FramePassRef>,
     /// Disable dead-pass culling for this pass (`FramePass.disableCulling`).
     pub disable_culling: bool,
+    /// The mip level of a [`FrameTarget::Mod`] target's attachments the pass renders into
+    /// (default 0), at that level's size, as [`OffscreenPass::mip_level`]. Must be below the
+    /// target's [`RenderTargetDescriptor::mip_levels`](crate::RenderTargetDescriptor::mip_levels);
+    /// a transient target has one level. A level out of range refuses the pass with
+    /// [`FrameGraphError::InvalidTarget`] of [`RenderTargetError::InvalidMipLevels`].
+    pub mip_level: u32,
 }
 
 impl FramePassDescriptor {
@@ -171,6 +177,7 @@ impl FramePassDescriptor {
             after: Vec::new(),
             before: Vec::new(),
             disable_culling: false,
+            mip_level: 0,
         }
     }
 
@@ -190,6 +197,7 @@ impl FramePassDescriptor {
             after: Vec::new(),
             before: Vec::new(),
             disable_culling: false,
+            mip_level: pass.mip_level,
         }
     }
 
@@ -280,6 +288,12 @@ impl FramePassDescriptor {
     /// Disable dead-pass culling for this pass (`FramePass.disableCulling`).
     pub fn disable_culling(mut self) -> Self {
         self.disable_culling = true;
+        self
+    }
+
+    /// Render into mip level `level` of the target ([`Self::mip_level`]).
+    pub fn mip_level(mut self, level: u32) -> Self {
+        self.mip_level = level;
         self
     }
 }

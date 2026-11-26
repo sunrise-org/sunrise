@@ -388,18 +388,24 @@ pub mod built {
         read_write_storage: Vec<crate::RenderTargetFormat>,
         subgroup: bool,
         indirect_first_instance: bool,
+        multi_draw_indirect_count: bool,
     ) -> crate::RenderCapabilities {
         crate::RenderCapabilities {
             float32_filterable,
             read_write_storage,
             subgroup,
             indirect_first_instance,
+            multi_draw_indirect_count,
         }
     }
     /// Wrap a slot in the retained GPU storage buffer store.
     pub fn storage_buffer_ref(generation: u64, slot: u32) -> crate::StorageBufferRef {
         crate::StorageBufferRef::from_parts(generation, slot)
             .expect("published storage buffer generation")
+    }
+    /// Wrap a readback id in the pending readback table.
+    pub fn readback_ticket(id: u64) -> crate::ReadbackTicket {
+        crate::ReadbackTicket::from_id(id).expect("published readback ticket id")
     }
     /// Wrap a slot in the retained GPU uniform buffer store.
     pub fn uniform_buffer_ref(generation: u64, slot: u32) -> crate::UniformBufferRef {

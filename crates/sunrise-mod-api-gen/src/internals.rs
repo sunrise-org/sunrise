@@ -2703,8 +2703,7 @@ const LABEL: &str = "é"; struct AfterUnicode;
     }
 
     /// Only fragments some build compiles are opened, and only the standard `include!` is
-    /// followed; an inline module's fragments are widened with the module, and no file outside
-    /// the staging root is read or edited.
+    /// followed; an inline module's fragments are widened with the module.
     #[test]
     fn lower_scopes_follow_only_compilable_standard_includes_inside_the_root() {
         let fixture = Fixture::new("");
@@ -2741,9 +2740,16 @@ fn on_unix() {}
         pass.finish().unwrap();
         let child = fs::read_to_string(fixture.0.join("crates/lower/src/child.rs")).unwrap();
         assert_eq!(child, "pub fn helper() {}\n");
+    }
 
-        // A module reached from a fragment through a link out of the root is refused, and
-        // the file it names is left as it was.
+    /// A module reached from a fragment through a link out of the root is refused, and the file
+    /// it names is left as it was. Unix only: creating a link on Windows needs Developer Mode or
+    /// an administrator, so the test could not set its fixture up there.
+    #[cfg(unix)]
+    #[test]
+    fn a_module_reached_through_a_link_out_of_the_root_is_refused() {
+        let fixture = Fixture::new("");
+        fixture.lower();
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("elsewhere.rs");
         fs::write(&target, "fn far() {}\n").unwrap();

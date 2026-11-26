@@ -5,8 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -15,6 +15,79 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("surface_report", ROOT / "tools/ci/surface_report.py")
 surface_report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(surface_report)
+
+def python_stub(path, source, **values):
+    """Writes `source` as a script under `path`, `values` bound as names above it, and returns the command that runs
+    it with the Python running the tests: a stand-in `sunrise-stage` that every platform can run."""
+    path.write_text("".join(f"{name} = {value!r}\n" for name, value in values.items()) + source)
+    return [sys.executable, str(path)]
+
+
+STAGE_STUB = r"""
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with open(Path(WORK, "calls"), "a") as calls:
+    calls.write(" ".join(args) + "\n")
+if args[0] == "surface":
+    if args[1].endswith("base") and BASE_EXPORT != 0:
+        print("unclassified: x", file=sys.stderr)
+        print("sunrise-stage surface: unknown key `access`", file=sys.stderr)
+        sys.exit(1)
+    if args[1].endswith("head") and HEAD_EXPORT != 0:
+        print("sunrise-stage surface: a.rs: parse error", file=sys.stderr)
+        sys.exit(1)
+    Path(args[2]).write_text("{}\n")
+    sys.exit(0)
+if args[0] == "surface-catalogs":
+    sys.exit(0)
+print("Surface: report")
+if not DIFF_ERR and DIFF_EXIT != 0:
+    print("breaking change without a change note: fn:a", file=sys.stderr)
+if DIFF_ERR:
+    print(f"sunrise-stage: {args[1]}: {DIFF_ERR}", file=sys.stderr)
+sys.exit(DIFF_EXIT)
+"""
+
+# The base's own tool: it exports with the exit status OWN_EXPORT.
+OWN_STUB = r"""
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with open(Path(WORK, "calls"), "a") as calls:
+    calls.write("own " + " ".join(args) + "\n")
+if len(args) != 3:
+    sys.exit(2)
+if OWN_EXPORT != 0:
+    print("sunrise-stage surface: base.rs: older form", file=sys.stderr)
+    sys.exit(1)
+Path(args[2]).write_text("{}\n")
+"""
+
+# Records its arguments, the two documents it compares and the note folders it is given.
+LANDED_STUB = r"""
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with open(Path(WORK, "calls"), "a") as calls:
+    calls.write(" ".join(args) + "\n")
+if args[0] == "surface":
+    sys.exit(1)  # landed must not ask the current exporter to read a historical tree.
+if args[0] == "surface-catalogs":
+    sys.exit(0)
+Path(WORK, "compared").write_text(Path(args[1]).read_text() + Path(args[2]).read_text())
+for flag, value in zip(args, args[1:]):
+    if flag in ("--notes", "--base-notes", "--covered-by", "--covered-base"):
+        Path(WORK, "given" + flag[2:]).write_text("".join(name + "\n" for name in sorted(os.listdir(value))))
+if DIFF_EXIT != 0:
+    print("change note r61.toml names loop:a, which did not change", file=sys.stderr)
+sys.exit(DIFF_EXIT)
+"""
 
 MERGE = "tree t\nparent aaaa\nparent bbbb\nauthor x\n\nMerge bbbb into aaaa\n"
 SINGLE = "tree t\nparent aaaa\nauthor x\n\nA commit\n"
@@ -109,7 +182,6 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual((base / member / "src/nested.rs").read_text(), "pub struct Nested;\n")
 
 
-@unittest.skipUnless(shutil.which("bash"), "needs bash for the stub tool")
 class ReportTests(unittest.TestCase):
     """report() against a stub sunrise-stage whose behaviour each test sets."""
 
@@ -117,34 +189,14 @@ class ReportTests(unittest.TestCase):
                    with_internals=False, own_export=None):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            tool = work / "sunrise-stage"
-            tool.write_text(f"""#!/bin/bash
-echo "$@" >> {work}/calls
-if [ "$1" = surface ]; then
-  case "$2" in *base) [ {base_export} = 0 ] || {{ echo 'unclassified: x' >&2; echo 'sunrise-stage surface: unknown key `access`' >&2; exit 1; }};; esac
-  case "$2" in *head) [ {head_export} = 0 ] || {{ echo 'sunrise-stage surface: a.rs: parse error' >&2; exit 1; }};; esac
-  echo '{{}}' > "$3"; exit 0
-fi
-[ "$1" = surface-catalogs ] && exit 0
-echo "Surface: report"; [ -z "{diff_err}" ] && [ {diff_exit} != 0 ] && echo "breaking change without a change note: fn:a" >&2
-[ -n "{diff_err}" ] && echo "sunrise-stage: $2: {diff_err}" >&2
-exit {diff_exit}
-""")
-            tool.chmod(0o755)
-            # The base's own tool, when a test gives one: it exports with `own_export` as its exit status.
+            tool = python_stub(work / "stage.py", STAGE_STUB, WORK=str(work), BASE_EXPORT=base_export,
+                               HEAD_EXPORT=head_export, DIFF_EXIT=diff_exit, DIFF_ERR=diff_err)
             own = None
             if own_export is not None:
-                own_tool = work / "own-stage"
-                own_tool.write_text(f"""#!/bin/bash
-echo "own $@" >> {work}/calls
-[ "$#" = 3 ] || exit 2
-[ {own_export} = 0 ] || {{ echo 'sunrise-stage surface: base.rs: older form' >&2; exit 1; }}
-echo '{{}}' > "$3"
-""")
-                own_tool.chmod(0o755)
-                own = lambda: str(own_tool)  # noqa: E731
+                own_tool = python_stub(work / "own_stage.py", OWN_STUB, WORK=str(work), OWN_EXPORT=own_export)
+                own = lambda: own_tool  # noqa: E731
             (work / "base").mkdir()
-            code, text = surface_report.report(str(tool), work / "base", work / "head", work, gate_on,
+            code, text = surface_report.report(tool, work / "base", work / "head", work, gate_on,
                                                with_internals=with_internals, own_base_tool=own)
             return code, text, (work / "calls").read_text()
 
@@ -210,9 +262,9 @@ echo '{{}}' > "$3"
 
             with (mock.patch.object(surface_report.subprocess, "run", side_effect=export),
                   mock.patch.object(surface_report, "unpack") as unpack,
-                  mock.patch.object(surface_report, "tree_tool", return_value="checkpoint-tool") as tree_tool,
+                  mock.patch.object(surface_report, "tree_tool", return_value=["checkpoint-tool"]) as tree_tool,
                   mock.patch.object(surface_report, "compare", return_value=(1, "later change refused")) as compare):
-                code, text = surface_report.report("stage", base, head, work, True, own_base_tool=lambda: "old-tool")
+                code, text = surface_report.report(["stage"], base, head, work, True, own_base_tool=lambda: ["old-tool"])
                 self.assertEqual(code, 1)
                 self.assertIn("Audited schema 2 → 3 reset", text)
                 self.assertIn("later change refused", text)
@@ -224,7 +276,7 @@ echo '{{}}' > "$3"
                 audit["plain"]["old"] = "unrelated-base"
                 reset.write_text(json.dumps(audit))
                 compare.reset_mock()
-                code, text = surface_report.report("stage", base, head, work, True, own_base_tool=lambda: "old-tool")
+                code, text = surface_report.report(["stage"], base, head, work, True, own_base_tool=lambda: ["old-tool"])
                 self.assertEqual(code, 1)
                 self.assertIn("is not the audited schema-reset base", text)
                 compare.assert_not_called()
@@ -285,7 +337,7 @@ class EngineCatalogGateTests(unittest.TestCase):
                 changes = work / "head" / surface_report.NOTES
                 changes.mkdir(parents=True)
                 (changes / "engine-change.toml").write_text(f'ids = {json.dumps(notes)}\nwhy = "Use the new sites."\n')
-            return surface_report.compare(os.environ["SUNRISE_STAGE_TOOL"], work / "base", work / "head", work, True,
+            return surface_report.compare([os.environ["SUNRISE_STAGE_TOOL"]], work / "base", work / "head", work, True,
                                           with_internals=True)
 
     def test_undeclared_loop_removal_fails_and_declared_removal_passes(self):
@@ -434,7 +486,7 @@ class MainTests(unittest.TestCase):
                 compared.extend(json.loads(Path(path).read_text()) for path in (first, second))
             return subprocess.CompletedProcess(command, 0, "", "")
 
-        tree_tool = mock.Mock(return_value="base-stage")
+        tree_tool = mock.Mock(return_value=["base-stage"])
         with mock.patch.object(surface_report.subprocess, "run", side_effect=stage):
             code, out, _ = self.run_main(argv=["--trees", "before", "after", *flags], tool="head-stage",
                                          tree_tool=tree_tool)
@@ -458,31 +510,35 @@ class MainTests(unittest.TestCase):
         tree_tool.assert_called_once()
         self.assertEqual(tree_tool.call_args.args[0], Path("before"))
 
-    @unittest.skipUnless(shutil.which("bash"), "needs bash for the stub tools")
     def test_a_commit_both_comparisons_need_is_built_once(self):
         """A landed note may name the CI base itself: the base comparison and the landed one share its tool."""
         sha = "6" * 40
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
-            head_tool, own_tool = folder / "head-stage", folder / "own-stage"
             # The head's tool succeeds on the base, but produces the checkout's record instead of the base's.
-            head_tool.write_text(f"""#!/bin/bash
-if [ "$1" = surface ]; then
-  echo '{{"by": "checkout"}}' > "$3"; exit 0
-fi
-[ "$1" = surface-catalogs ] && exit 0
-cat "$2" "$3" >> {folder}/compared
+            head_tool = python_stub(folder / "head_stage.py", r"""
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[0] == "surface":
+    Path(args[2]).write_text('{"by": "checkout"}\n')
+elif args[0] != "surface-catalogs":
+    with open(Path(FOLDER, "compared"), "a") as compared:
+        compared.write(Path(args[1]).read_text() + Path(args[2]).read_text())
+""", FOLDER=str(folder))
+            own_tool = python_stub(folder / "own_stage.py", r"""
+import sys
+from pathlib import Path
+
+marker = Path(sys.argv[2], "marker").read_text()
+Path(sys.argv[3]).write_text('{"schema": 3, "by": "' + marker + '"}\n')
 """)
-            own_tool.write_text("""#!/bin/bash
-echo "{\\"schema\\": 3, \\"by\\": \\"$(cat "$2/marker")\\"}" > "$3"
-""")
-            head_tool.chmod(0o755)
-            own_tool.chmod(0o755)
             built = []
 
             def base_tool(commit, work):
                 built.append(commit)
-                return str(own_tool)
+                return own_tool
 
             def unpack(commit, into, paths=()):
                 (into / "marker").write_text(commit)
@@ -490,8 +546,13 @@ echo "{\\"schema\\": 3, \\"by\\": \\"$(cat "$2/marker")\\"}" > "$3"
             def git(*args):
                 return MERGE if args[0] == "cat-file" else ""
 
-            code, out, _ = self.run_main(tool=str(head_tool), base_commit=lambda *a: (sha, ""), unpack=unpack,
-                                         git=git, base_tool=base_tool, landed_notes=lambda head, base: {sha: ["n.toml"]})
+            # main wraps the environment's one path as a command; this stand-in is a command of two words.
+            report, landed_check = surface_report.report, surface_report.landed_check
+            code, out, _ = self.run_main(
+                base_commit=lambda *a: (sha, ""), unpack=unpack, git=git, base_tool=base_tool,
+                landed_notes=lambda head, base: {sha: ["n.toml"]},
+                report=lambda _tool, *a, **kw: report(head_tool, *a, **kw),
+                landed_check=lambda _tool, *a, **kw: landed_check(head_tool, *a, **kw))
             self.assertEqual(code, 0, out)
             self.assertEqual(built, [sha, "aaaa"])
             exports = [json.loads(line)["by"] for line in (folder / "compared").read_text().splitlines()]
@@ -517,10 +578,9 @@ echo "{\\"schema\\": 3, \\"by\\": \\"$(cat "$2/marker")\\"}" > "$3"
                 second = surface_report.tree_tool(Path("two"), work)
             # A later build of another tree replaces the shared binary, never a copy an audit already holds.
             self.assertNotEqual(first, second)
-            self.assertEqual((Path(first).read_text(), Path(second).read_text()), ("one", "two"))
+            self.assertEqual((Path(first[0]).read_text(), Path(second[0]).read_text()), ("one", "two"))
 
 
-@unittest.skipUnless(shutil.which("bash"), "needs bash for the stub tool")
 class LandedTests(unittest.TestCase):
     SHA = "6" * 40
 
@@ -533,17 +593,7 @@ class LandedTests(unittest.TestCase):
             (work / "head" / surface_report.NOTES / "r61.toml").write_text(
                 f'ids = ["loop:a"]\nwhy = "w"\nlanded = "{self.SHA}"\n')
             (work / "head" / surface_report.NOTES / "own.toml").write_text('ids = ["hook:b"]\nwhy = "w"\n')
-            tool = work / "sunrise-stage"
-            tool.write_text(f"""#!/bin/bash
-echo "$@" >> {work}/calls
-[ "$1" = surface ] && exit 1 # landed must not ask the current exporter to read a historical tree.
-[ "$1" = surface-catalogs ] && exit 0
-cat "$2" "$3" > {work}/compared
-while [ $# -gt 0 ]; do case "$1" in --notes|--base-notes|--covered-by|--covered-base) ls "$2" > {work}/given${{1#--}};; esac; shift; done
-if [ {diff_exit} != 0 ]; then echo "change note r61.toml names loop:a, which did not change" >&2; fi
-exit {diff_exit}
-""")
-            tool.chmod(0o755)
+            tool = python_stub(work / "stage.py", LANDED_STUB, WORK=str(work), DIFF_EXIT=diff_exit)
             shas = surface_report.landed_notes(work / "head", work / "base")
             fetched = []
 
@@ -557,16 +607,16 @@ exit {diff_exit}
 
             git_text = git_text or (lambda *a: MERGE if a[0] == "cat-file" else "")
             if own_tool is None and not without_own_tool:
-                exporter = work / "historical-stage"
-                exporter.write_text(f"""#!/bin/bash
-schema=3
-[ "$(cat "$2/marker")" != aaaa ] || schema={parent_schema}
-printf '{{"schema": %s, "hash": "from-historical-stage"}}\\n' "$schema" > "$3"
-""")
-                exporter.chmod(0o755)
-                own_tool = lambda _sha, _work: str(exporter)
+                exporter = python_stub(work / "historical_stage.py", r"""
+import sys
+from pathlib import Path
+
+schema = PARENT_SCHEMA if Path(sys.argv[2], "marker").read_text() == "aaaa" else 3
+Path(sys.argv[3]).write_text('{"schema": %s, "hash": "from-historical-stage"}\n' % schema)
+""", PARENT_SCHEMA=parent_schema)
+                own_tool = lambda _sha, _work: exporter
             code, text = surface_report.landed_check(
-                str(tool), work / "head", work / "base", work, shas, git_text=git_text, fetch=fetch,
+                tool, work / "head", work / "base", work, shas, git_text=git_text, fetch=fetch,
                 own_tool=(lambda sha: own_tool(sha, work)) if own_tool else None)
             calls = (work / "calls").read_text() if (work / "calls").exists() else ""
             for given in ("notes", "base-notes", "covered-by", "covered-base"):
@@ -610,13 +660,14 @@ printf '{{"schema": %s, "hash": "from-historical-stage"}}\\n' "$schema" > "$3"
 
         def own_tool(sha, work):
             built.append(sha)
-            tool = work / f"own-{sha}"
             # Says which commit's tool exported which tree.
-            tool.write_text(f"""#!/bin/bash
-echo "{{\\"schema\\": 3, \\"by\\": \\"{sha} tool, $(cat "$2/marker") tree\\"}}" > "$3"
-""")
-            tool.chmod(0o755)
-            return str(tool)
+            return python_stub(work / f"own-{sha}.py", r"""
+import sys
+from pathlib import Path
+
+marker = Path(sys.argv[2], "marker").read_text()
+Path(sys.argv[3]).write_text('{"schema": 3, "by": "' + SHA + ' tool, ' + marker + ' tree"}\n')
+""", SHA=sha)
 
         _, code, text, calls, _ = self.check(0, own_tool=own_tool)
         self.assertEqual(code, 0, text)

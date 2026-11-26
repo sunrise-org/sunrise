@@ -2900,33 +2900,22 @@ impl Game<'_> {
         light: u8,
         out: &mut Vec<Vertex>,
     ) {
-        render_default_state(
-            self.res.block_entity_render(),
-            &self.gui,
-            &self.world,
-            self.world.game_time,
-            self.nether_lighting(),
-            state,
-            m,
-            light,
-            out,
-        );
+        with_default_scene(&self.gui, &self.world, self.nether_lighting(), |scene| {
+            self.res
+                .block_entity_render()
+                .render_state(scene, state.0, m, light, out);
+        });
     }
 }
-/// What `renderer` draws for block state `state` with no block entity data, as
-/// [`Game::special_block_model`] does, in `world` at `game_time`: shared with
-/// `StandaloneGeometry`, which sizes the special part before any level is loaded.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn render_default_state(
-    renderer: &sunrise_client::block_entity_render::BlockEntityRenderer,
+/// Calls `render` with the scene of a block drawn with no block entity data: `world` at its own
+/// game time, no sign, banner or skull data and every chest lid shut. Shared by
+/// [`Game::special_block_model`] and `StandaloneGeometry`, which sizes the special part in an
+/// empty world before any level is loaded.
+pub(super) fn with_default_scene(
     gui: &super::UiResources,
     world: &sunrise_client::world::World,
-    game_time: i64,
     nether: bool,
-    state: BlockStateId,
-    m: glam::Mat4,
-    light: u8,
-    out: &mut Vec<Vertex>,
+    render: impl FnOnce(&sunrise_client::block_entity_render::Scene<'_>),
 ) {
     let lid = |_: [i32; 3]| 0.0;
     let scene = sunrise_client::block_entity_render::Scene {
@@ -2936,7 +2925,7 @@ pub(super) fn render_default_state(
         anim: &|_| sunrise_client::block_entity_render::BlockAnim::default(),
         texts: None,
         partial: 0.0,
-        game_time,
+        game_time: world.game_time,
         max_y: world.shape.max_y() - 1,
         world,
         sprites: &gui.atlas.sprites,
@@ -2954,7 +2943,7 @@ pub(super) fn render_default_state(
         inline_images: None,
         dynamic_visible: None,
     };
-    renderer.render_state(&scene, state.0, m, light, out);
+    render(&scene);
 }
 /// Packed vertex light as the level's `sky << 4 | block` byte that
 /// [`Game::special_block_model`] takes: the inverse of `block_entity_render::vertex_light`.
