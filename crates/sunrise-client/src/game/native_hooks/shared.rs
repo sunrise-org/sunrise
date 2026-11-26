@@ -97,6 +97,14 @@ enum ScreenDecision {
     Vanilla(ScreenTarget),
 }
 
+/// How a requested screen transition finished, independently of what is now visible.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScreenOpenOutcome {
+    Opened,
+    Redirected,
+    Vetoed,
+}
+
 /// The title screen a `ScreenOpening::Vanilla` target is (its id), or None
 /// for a world's screen.
 fn title_target_id(target: ScreenTarget) -> Option<&'static str> {
@@ -314,7 +322,7 @@ impl Game<'_> {
         screen: Screen,
         new_instance: bool,
         before: impl FnOnce(&mut Self, Option<Screen>),
-    ) {
+    ) -> ScreenOpenOutcome {
         let opening_native =
             screen == Screen::Inventory && self.active_native_screen().is_some_and(|s| !s.shown);
         let new_menu_gen = (screen == Screen::Inventory)
@@ -332,7 +340,7 @@ impl Game<'_> {
             if opening_native || menu_replaced {
                 self.apply_screen_with_mod_book(screen, None);
             }
-            return;
+            return ScreenOpenOutcome::Opened;
         }
         let mut screen = screen;
         let mut owner = None;
@@ -344,14 +352,7 @@ impl Game<'_> {
                 self.decide_screen(&current, &new, current.id != "playing", new_instance)
             };
             match decision {
-                ScreenDecision::Keep => {
-                    // Reject only the opening just staged, never the menu
-                    // that an unrelated veto is keeping on screen.
-                    if opening_native {
-                        self.remote_close_container();
-                    }
-                    return;
-                }
+                ScreenDecision::Keep => return ScreenOpenOutcome::Vetoed,
                 ScreenDecision::ModScreen(mod_id) => {
                     screen = Screen::Mod;
                     owner = Some(mod_id);
@@ -365,13 +366,13 @@ impl Game<'_> {
                         self.remote_close_container();
                     }
                     self.open_screen_target(target);
-                    return;
+                    return ScreenOpenOutcome::Redirected;
                 }
                 ScreenDecision::Open => {}
             }
         }
         if self.screen == screen && owner.is_none() && !new_instance {
-            return;
+            return ScreenOpenOutcome::Opened;
         }
         if new_instance {
             self.remove_replaced_overlays();
@@ -382,6 +383,11 @@ impl Game<'_> {
             self.ui.options.discard_draw();
         }
         self.apply_screen_with_mod_book(screen, owner);
+        if owner.is_some() {
+            ScreenOpenOutcome::Redirected
+        } else {
+            ScreenOpenOutcome::Opened
+        }
     }
 
     /// `Screen.removed` on accepted replacement. Do not run onClose actions
@@ -694,12 +700,20 @@ impl Game<'_> {
         id: &'static str,
         open: impl FnOnce(&mut Self),
     ) -> bool {
+        self.open_screen_overlay_outcome(id, open) == ScreenOpenOutcome::Opened
+    }
+
+    pub(super) fn open_screen_overlay_outcome(
+        &mut self,
+        id: &'static str,
+        open: impl FnOnce(&mut Self),
+    ) -> ScreenOpenOutcome {
         if !self.screen_hooks_heard() {
             open(self);
             self.release_mappings_on_screen_open();
             self.screen_state.build.reopened();
             self.commit_screen_transition();
-            return true;
+            return ScreenOpenOutcome::Opened;
         }
         // What changed earlier this frame is told first, so `screen_state`
         // is what shows now.
@@ -716,14 +730,14 @@ impl Game<'_> {
             self.decide_screen(from.as_ref().unwrap_or(&none), &to, from.is_some(), false)
         };
         match decision {
-            ScreenDecision::Keep => return false,
+            ScreenDecision::Keep => return ScreenOpenOutcome::Vetoed,
             ScreenDecision::ModScreen(mod_id) => {
                 self.apply_screen(Screen::Mod, Some(mod_id));
-                return false;
+                return ScreenOpenOutcome::Redirected;
             }
             ScreenDecision::Vanilla(target) => {
                 self.open_screen_target(target);
-                return false;
+                return ScreenOpenOutcome::Redirected;
             }
             ScreenDecision::Open => {}
         }
@@ -731,7 +745,7 @@ impl Game<'_> {
         self.release_mappings_on_screen_open();
         self.screen_state.build.reopened();
         self.commit_screen_transition();
-        true
+        ScreenOpenOutcome::Opened
     }
 
     /// What `observe_screen` compares with the last frame's.

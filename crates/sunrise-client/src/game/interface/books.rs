@@ -3,7 +3,7 @@
 //! pixels, 1024 characters, 100 pages), signing it into a written book,
 //! reading written books, and lecterns (placing a book, turning its pages
 //! with a redstone pulse, the comparator output and taking the book).
-use super::{Game, chat::PLAYER_NAME, screen_info};
+use super::{Game, chat::PLAYER_NAME, native_hooks::ScreenOpenOutcome, screen_info};
 use sunrise_client::{
     containers::{BlockEntity, Lectern},
     first_person::Hand,
@@ -350,12 +350,16 @@ impl Game<'_> {
     }
     /// Opens `screen` (through `open_screen_overlay`: a mod may keep it shut).
     pub(super) fn open_book(&mut self, screen: BookScreen) {
-        self.open_screen_overlay(screen.id(), |game| {
+        self.open_book_overlay(screen);
+    }
+
+    fn open_book_overlay(&mut self, screen: BookScreen) -> ScreenOpenOutcome {
+        self.open_screen_overlay_outcome(screen.id(), |game| {
             game.book = Some(screen);
             game.clear_device_keys();
             game.set_mapping_held("key.use", false);
             game.capture(false);
-        });
+        })
     }
     /// `BookEditScreen` to `BookSignScreen` and back, each a
     /// `Minecraft.setScreen` (through `open_screen_overlay`).
@@ -1168,12 +1172,12 @@ impl Game<'_> {
     }
     /// A server's `minecraft:lectern` menu: LecternScreen, its book and
     /// page to come (`remote_lectern_book`, `remote_lectern_page`).
-    pub(super) fn remote_open_lectern(&mut self, key: (i32, i32, i32)) {
-        self.open_book(BookScreen::View {
+    pub(super) fn remote_open_lectern(&mut self, key: (i32, i32, i32)) -> ScreenOpenOutcome {
+        self.open_book_overlay(BookScreen::View {
             pages: Vec::new(),
             page: 0,
             lectern: Some(key),
-        });
+        })
     }
     /// `LecternScreen.bookChanged`: the menu's book slot.
     pub(super) fn remote_lectern_book(&mut self, book: Option<ItemStack>) {

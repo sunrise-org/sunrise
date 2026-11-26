@@ -18,8 +18,12 @@ fn deliver(game: &mut Game<'_>, packet: C) {
 }
 
 fn chest(game: &Game<'_>) -> C {
+    open_window(game, 12, "minecraft:generic_9x3")
+}
+
+fn open_window(game: &Game<'_>, container: i32, name: &str) -> C {
     C::OpenScreen(play::OpenScreen {
-        container: 12,
+        container,
         menu: game
             .remote
             .as_ref()
@@ -27,10 +31,263 @@ fn chest(game: &Game<'_>) -> C {
             .builtin
             .get("minecraft:menu")
             .unwrap()
-            .id("minecraft:generic_9x3")
+            .id(name)
             .unwrap(),
         title: Tag::String("Test menu".into()),
     })
+}
+
+fn focus_receiver(game: &mut Game<'_>) -> sunrise_client::widgets::Target {
+    let target = sunrise_client::widgets::Target {
+        rect: [10.0, 20.0, 80.0, 20.0],
+        kind: sunrise_client::widgets::Kind::Button,
+    };
+    game.key_focus_adopt(target, false);
+    target
+}
+
+fn sent_close(reader: &mut sunrise_protocol::connection::ConnReader, container: i32) -> S {
+    let mut closes = sent(reader).into_iter().filter_map(|packet| match packet {
+        S::ContainerClose(close) => Some(close),
+        _ => None,
+    });
+    let close = closes.next().expect("the client sent ContainerClose");
+    assert_eq!(close.container, container);
+    assert!(closes.next().is_none(), "the window closed only once");
+    S::ContainerClose(close)
+}
+
+fn with_menu_veto<R>(
+    dest: &'static str,
+    test: impl FnOnce(&mut Game<'_>, &mut dyn FnMut()) -> R,
+) -> R {
+    use mod_api::{
+        ClientHost, Hooks, ModEntry, ScreenClosingEvent, ScreenInitPostEvent, ScreenOpening,
+        ScreenOpeningEvent,
+    };
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Probe {
+        armed: bool,
+        events: Vec<(&'static str, &'static str)>,
+    }
+    struct Veto(&'static str, Arc<Mutex<Probe>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Veto {
+        fn screen_opening(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ScreenOpeningEvent<'_>,
+        ) -> Option<ScreenOpening> {
+            let mut probe = self.1.lock().unwrap();
+            probe.events.push(("open", event.new.id));
+            (probe.armed && event.new.id == self.0).then_some(ScreenOpening::Cancel)
+        }
+        fn screen_closing(&self, _: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+            self.1
+                .lock()
+                .unwrap()
+                .events
+                .push(("close", event.screen.id));
+        }
+        fn screen_init_post(&self, _: &dyn ClientHost, event: &mut ScreenInitPostEvent<'_>) {
+            self.1
+                .lock()
+                .unwrap()
+                .events
+                .push(("init", event.screen.id));
+        }
+    }
+
+    let probe = Arc::new(Mutex::new(Probe::default()));
+    let mods = vec![ModEntry::new(
+        "menu_veto",
+        Box::new(Veto(dest, probe.clone())),
+    )];
+    let mut result = None;
+    mod_platform::testing::with_mods(mods.into(), || {
+        with_client_game(|game| {
+            result = Some(test(game, &mut || {
+                *probe.lock().unwrap() = Probe {
+                    armed: true,
+                    events: Vec::new(),
+                };
+            }));
+        });
+    });
+    assert_eq!(probe.lock().unwrap().events, [("open", dest)]);
+    result.unwrap()
+}
+
+#[test]
+#[ignore = "daily"]
+fn vetoed_chest_open_retires_its_window_on_both_sides() {
+    isolated("vetoed_chest_open_retires_its_window_on_both_sides", || {
+        use crate::game::{
+            native_entity_refs::tests::with_game,
+            native_item_places::tests::open_to_lan,
+            native_sound_refs::tests::{guest, packets},
+        };
+        use std::sync::Arc;
+        use sunrise_client::chunk::Chunk;
+
+        with_game(|server| {
+            open_to_lan(server);
+            let (guest, rx) = guest(1, 123, [0.5, 65.0, 0.5]);
+            server.lan.as_mut().unwrap().hub.guests.push(guest);
+            let key = (0, 64, 0);
+            server
+                .world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = server.level("minecraft:overworld").unwrap();
+            let state = server
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:chest")
+                .unwrap();
+            assert_eq!(
+                server.level_set_block(
+                    level,
+                    [0, 64, 0],
+                    state,
+                    mod_api::BlockUpdateFlags::NEIGHBORS
+                ),
+                Ok(true)
+            );
+            server
+                .world
+                .block_entities
+                .get_mut(&key)
+                .unwrap()
+                .slots_mut()[0] = Some(ItemStack::new("minecraft:apple", 4));
+            let _ = packets(&rx);
+            server.lan_open_container(1, key);
+            let hub = &mut server.lan.as_mut().unwrap().hub;
+            let window = hub.guest(1).unwrap().menu.as_ref().unwrap().window;
+            assert_ne!(window, 0);
+            assert_eq!(server.lid_openers.get(&key), Some(&1));
+            let carried = ItemStack::new("minecraft:dirt", 3);
+            hub.guests
+                .update(0, |guest| guest.carried = Some(carried.clone()));
+            hub.resend_menu(1, window, &server.world);
+            let mut queued = packets(&rx).into_iter();
+            let open = queued
+                .find_map(|p| match p {
+                    C::OpenScreen(open) => Some(open),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(open.container, window);
+            let content = queued
+                .find_map(|p| match p {
+                    C::ContainerSetContent(p) if p.container == window && p.carried.is_some() => {
+                        Some(p)
+                    }
+                    _ => None,
+                })
+                .expect("matching contents and cursor queued after OpenScreen");
+            assert_eq!(content.items[0].as_ref().unwrap().count, 4);
+            let close = with_menu_veto("inventory", |client, arm_veto| {
+                let mut reader = logged_in(client);
+                client.set_screen(Screen::Paused);
+                let focus = focus_receiver(client);
+                arm_veto();
+                let old_carried = Some(ItemStack::new("minecraft:stone", 2));
+                client.carried = old_carried.clone();
+                client.remote.as_mut().unwrap().state_id = 71;
+
+                deliver(client, C::OpenScreen(open));
+                assert_eq!(client.screen, Screen::Paused);
+                assert_eq!(client.pad.menu.focus, Some(focus));
+                assert_eq!(client.remote_menu().0, 0);
+                assert!(client.container.is_none());
+                deliver(client, C::ContainerSetContent(content));
+                assert_eq!(client.carried, old_carried);
+                assert_eq!(client.remote.as_ref().unwrap().state_id, 71);
+                sent_close(&mut reader, window)
+            });
+            server.lan_guest_packet(1, close);
+            let guest = server.lan.as_ref().unwrap().hub.guest(1).unwrap();
+            assert!(guest.menu.is_none());
+            assert_eq!(server.lid_openers.get(&key).copied().unwrap_or(0), 0);
+            assert!(
+                guest
+                    .inventory
+                    .iter()
+                    .flatten()
+                    .any(|stack| stack == &carried)
+            );
+            assert!(
+                !packets(&rx)
+                    .iter()
+                    .any(|p| matches!(p, C::ContainerClose(_)))
+            );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn vetoed_lectern_open_discards_queued_content_and_keeps_the_book_overlay() {
+    isolated(
+        "vetoed_lectern_open_discards_queued_content_and_keeps_the_book_overlay",
+        || {
+            use crate::game::books::BookScreen;
+            use sunrise_client::text::Text;
+
+            with_menu_veto("lectern", |game, arm_veto| {
+                let mut reader = logged_in(game);
+                game.set_screen(Screen::Paused);
+                let old_carried = Some(ItemStack::new("minecraft:stone", 2));
+                game.carried = old_carried.clone();
+                game.remote.as_mut().unwrap().state_id = 71;
+                let old_open = open_window(game, 16, "minecraft:lectern");
+                deliver(game, old_open);
+                assert_eq!(game.remote_menu().0, 16);
+                let mut old_book = ItemStack::new("minecraft:writable_book", 1);
+                old_book
+                    .data_mut()
+                    .writable_pages
+                    .push("The prior book".into());
+                game.remote_lectern_book(Some(old_book));
+                let focus = focus_receiver(game);
+                arm_veto();
+
+                let window = 17;
+                game.remote.as_mut().unwrap().use_target = Some([3, 64, 4]);
+                let open = open_window(game, window, "minecraft:lectern");
+                deliver(game, open);
+                assert_eq!(game.remote_menu().0, 0);
+                let book = game
+                    .to_network(&Some(ItemStack::new("minecraft:writable_book", 1)))
+                    .unwrap();
+                let carried = game
+                    .to_network(&Some(ItemStack::new("minecraft:dirt", 3)))
+                    .unwrap();
+                deliver(
+                    game,
+                    C::ContainerSetContent(play::ContainerSetContent {
+                        container: window,
+                        state: 4,
+                        items: vec![Some(book)],
+                        carried: Some(carried),
+                    }),
+                );
+                assert_eq!(game.screen, Screen::Paused);
+                assert_eq!(game.pad.menu.focus, Some(focus));
+                assert!(
+                    matches!(game.book.as_ref(), Some(BookScreen::View { pages, page: 0, lectern: Some((0, 0, 0)) })
+                        if pages.as_slice() == [Text::untrusted("The prior book")])
+                );
+                assert_eq!(game.carried, old_carried);
+                assert_eq!(game.remote.as_ref().unwrap().state_id, 71);
+                sent_close(&mut reader, window);
+            });
+        },
+    );
 }
 
 fn close(game: &mut Game<'_>) {
@@ -333,6 +590,7 @@ fn server_close_keeps_shown_native_screen_alive_for_closing_and_veto() {
             #[derive(Default)]
             struct Probe {
                 cancel_dead: bool,
+                cancel_native_open: bool,
                 closing: Vec<(Option<String>, Option<[i32; 3]>, Option<[f32; 2]>)>,
                 draws: Vec<Vec<i32>>,
             }
@@ -378,7 +636,9 @@ fn server_close_keeps_shown_native_screen_alive_for_closing_and_veto() {
                     _: &dyn ClientHost,
                     event: &mut ScreenOpeningEvent<'_>,
                 ) -> Option<ScreenOpening> {
-                    (event.new.id == "dead" && self.0.lock().unwrap().cancel_dead)
+                    let probe = self.0.lock().unwrap();
+                    ((event.new.id == "dead" && probe.cancel_dead)
+                        || (event.new.menu == Some(MENU) && probe.cancel_native_open))
                         .then_some(ScreenOpening::Cancel)
                 }
                 fn screen_closing(
@@ -541,6 +801,23 @@ fn server_close_keeps_shown_native_screen_alive_for_closing_and_veto() {
                                     .iter()
                                     .any(|p| matches!(p, S::ContainerClose(_)))
                             );
+
+                            // 3. A never-shown native opening doesn't own the pause screen's focus.
+                            game.set_screen(Screen::Paused);
+                            let focus = focus_receiver(game);
+                            {
+                                let mut probe = probe.lock().unwrap();
+                                probe.closing.clear();
+                                probe.cancel_native_open = true;
+                            }
+                            open_native(game, 16);
+                            assert_eq!(game.screen, Screen::Paused);
+                            assert_eq!(game.pad.menu.focus, Some(focus));
+                            assert_eq!(game.remote_menu().0, 0);
+                            assert!(game.active_native_screen().is_none());
+                            assert!(game.mod_screen.is_none());
+                            assert!(probe.lock().unwrap().closing.is_empty());
+                            sent_close(&mut reader, 16);
                         });
                     });
                 },

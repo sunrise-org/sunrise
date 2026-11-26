@@ -86,7 +86,7 @@ fn menu_title_snapshot_follows_packet_and_close_paths() {
                 .is_none()
         );
         open(game, chest, "before reject");
-        game.remote_reject_container(7);
+        game.remote_reject_container(7, false);
         assert!(
             game.remote
                 .as_ref()

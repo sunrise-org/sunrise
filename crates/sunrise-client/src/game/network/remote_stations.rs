@@ -7,6 +7,7 @@
 //! its data slots come in `ClientboundContainerSetDataPacket`.
 use super::{
     Game, Screen,
+    native_hooks::ScreenOpenOutcome,
     stations::{Kind, Station},
 };
 use sunrise_protocol::packets::play::{self, Serverbound as S};
@@ -21,12 +22,16 @@ impl Game<'_> {
         title: sunrise_client::text::Text,
         pos: [i32; 3],
     ) {
-        self.remote_set_menu(Some((container, menu)), Some(title));
-        self.craft_size = 2;
-        self.container = None;
-        self.station = Some(Station::new_kind(kind, pos));
-        self.set_screen(Screen::Inventory);
-        self.capture(false);
+        self.stage_remote_menu(container, menu, Some(title), |game| {
+            game.craft_size = 2;
+            game.container = None;
+            game.station = Some(Station::new_kind(kind, pos));
+            let outcome = game.transition_screen(Screen::Inventory, false, |_, _| {});
+            if outcome != ScreenOpenOutcome::Vetoed {
+                game.capture(false);
+            }
+            Some(outcome)
+        });
     }
 
     /// Window `container` is the server's workstation menu, open here.

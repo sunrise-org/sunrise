@@ -468,7 +468,11 @@ impl Game<'_> {
         });
     }
     /// A server's trading window (no mob here: the server keeps it).
-    pub(super) fn open_remote_merchant(&mut self, session: merchant::Session, name: Option<Text>) {
+    pub(super) fn open_remote_merchant(
+        &mut self,
+        session: merchant::Session,
+        name: Option<Text>,
+    ) -> super::native_hooks::ScreenOpenOutcome {
         self.open_merchant_state(MerchantState {
             session: Box::new(session),
             scroll: 0,
@@ -476,15 +480,21 @@ impl Game<'_> {
             focused: None,
             mob: None,
             name,
-        });
+        })
     }
-    fn open_merchant_state(&mut self, state: MerchantState) {
+    fn open_merchant_state(
+        &mut self,
+        state: MerchantState,
+    ) -> super::native_hooks::ScreenOpenOutcome {
         let mut s = Station::new_kind(Kind::Merchant, [0, 0, 0]);
         s.merchant = Some(Box::new(state));
         self.station = Some(s);
-        self.set_screen(super::Screen::Inventory);
-        self.capture(false);
-        self.set_mapping_held("key.use", false);
+        let outcome = self.transition_screen(super::Screen::Inventory, false, |_, _| {});
+        if outcome != super::native_hooks::ScreenOpenOutcome::Vetoed || self.remote.is_none() {
+            self.capture(false);
+            self.set_mapping_held("key.use", false);
+        }
+        outcome
     }
     /// The trading mob's random before a menu click (it ticks meanwhile).
     pub(super) fn merchant_sync_in(session: &mut merchant::Session, mob: Option<&Mob>) {

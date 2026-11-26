@@ -1,4 +1,5 @@
 use super::*;
+use crate::game::native_hooks::ScreenOpenOutcome;
 
 impl Game<'_> {
     /// `AbstractContainerMenu.setItem`/`initializeContents`: the state id a
@@ -671,13 +672,22 @@ impl Game<'_> {
         }));
         true
     }
-    pub(in crate::game) fn remote_reject_container(&mut self, container: i32) {
-        self.remote_close_local();
-        if self.screen == Screen::Inventory {
-            self.set_screen(Screen::Playing);
-            self.capture(true);
+    pub(super) fn remote_reject_container(&mut self, container: i32, keep_screen: bool) {
+        if keep_screen {
+            self.discard_remote_menu();
+        } else {
+            self.remote_close_local();
+            if self.screen == Screen::Inventory {
+                self.set_screen(Screen::Playing);
+                self.capture(true);
+            }
         }
         self.send(S::ContainerClose(play::ContainerClose { container }));
+    }
+
+    fn discard_remote_menu(&mut self) {
+        self.remote_set_menu(None, None);
+        self.clear_remote_menu();
     }
     pub(in crate::game) fn remote_close_local(&mut self) {
         self.remote_set_menu(None, None);
@@ -690,6 +700,10 @@ impl Game<'_> {
         // inventory moves the focus and closes the container in one press).
         self.pad_clear_focus();
         self.recipe_ui.reset_screen();
+        self.clear_remote_menu();
+    }
+
+    fn clear_remote_menu(&mut self) {
         if self.mod_screen.take().is_some() {
             self.clear_mod_book_placement_screen();
             self.screen_state.build.reopened();
@@ -711,6 +725,46 @@ impl Game<'_> {
             }
         }
     }
+    /// Install the window before its screen asks Opening, as in `MenuScreens.create`.
+    /// A veto retires only this opening, not the screen that remains visible.
+    /// `None` means screen construction failed before Opening could run.
+    pub(in crate::game) fn stage_remote_menu(
+        &mut self,
+        container: i32,
+        menu: String,
+        title: Option<sunrise_client::text::Text>,
+        open: impl FnOnce(&mut Self) -> Option<ScreenOpenOutcome>,
+    ) {
+        let replaces = self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.menu.as_ref().is_some())
+            || self.mod_screen.is_some();
+        if replaces {
+            // An in-place open has no intervening ContainerClose. Drop the old
+            // window's backing, but don't clear screen focus until acceptance.
+            self.discard_remote_menu();
+        }
+        self.recipe_ui.reset_screen();
+        self.remote_set_menu(Some((container, menu)), title);
+        let generation = self.remote.as_ref().map(|r| r.menu.generation);
+        match open(self) {
+            Some(ScreenOpenOutcome::Opened | ScreenOpenOutcome::Redirected) => {
+                if replaces {
+                    self.pad_clear_focus();
+                }
+            }
+            outcome => {
+                if self.remote.as_ref().is_some_and(|r| {
+                    Some(r.menu.generation) == generation
+                        && r.menu.as_ref().is_some_and(|m| m.0 == container)
+                }) {
+                    self.remote_reject_container(container, outcome.is_some());
+                }
+            }
+        }
+    }
+
     /// A server's trading window (MerchantScreen over a ClientSideMerchant).
     pub(in crate::game) fn remote_open_merchant(
         &mut self,
@@ -718,13 +772,16 @@ impl Game<'_> {
         title: String,
         text: sunrise_client::text::Text,
     ) {
-        self.remote_set_menu(
-            Some((container, "minecraft:merchant".to_owned())),
+        self.stage_remote_menu(
+            container,
+            "minecraft:merchant".to_owned(),
             Some(text.clone()),
+            |game| {
+                let mut session = sunrise_client::merchant::Session::new(Vec::new(), true);
+                session.client_side = true;
+                Some(game.open_remote_merchant(session, (!title.is_empty()).then_some(text)))
+            },
         );
-        let mut session = sunrise_client::merchant::Session::new(Vec::new(), true);
-        session.client_side = true;
-        self.open_remote_merchant(session, (!title.is_empty()).then_some(text));
     }
     /// ClientboundMerchantOffersPacket.
     pub(in crate::game) fn remote_merchant_offers(&mut self, p: play::MerchantOffers) {
@@ -802,18 +859,11 @@ impl Game<'_> {
             log::warn!("no screen factory for menu {menu}");
             return;
         }
-        if self.remote.as_ref().and_then(|r| r.menu.as_ref()).is_some() || self.mod_screen.is_some()
-        {
-            // An in-place open has no intervening ContainerClose packet. Drop
-            // the replaced menu's local state, not the screen or pointer grab.
-            self.remote_close_local();
-        } else {
-            self.recipe_ui.reset_screen();
-        }
         if menu == "minecraft:lectern" {
             // LecternScreen: the book and page come in the menu's content and data.
-            self.remote_set_menu(Some((p.container, menu)), None);
-            self.remote_open_lectern(target.unwrap_or_default());
+            self.stage_remote_menu(p.container, menu, None, |game| {
+                Some(game.remote_open_lectern(target.unwrap_or_default()))
+            });
             return;
         }
         if let Some(kind) = Self::remote_station_kind(&menu) {
@@ -897,7 +947,7 @@ impl Game<'_> {
             ))),
             _ => {
                 // Unsupported menu: tell the server we closed it.
-                self.remote_reject_container(p.container);
+                self.remote_reject_container(p.container, false);
                 self.add_chat_line(
                     sunrise_client::text::Text::literal(format!(
                         "(Sunrise cannot show {menu} screens yet)"
@@ -907,37 +957,38 @@ impl Game<'_> {
                 return;
             }
         };
-        let title = menu_title(&p.title);
-        self.remote_set_menu(Some((p.container, menu.clone())), Some(title));
-        self.craft_size = if menu == "minecraft:crafting" { 3 } else { 2 };
-        self.container = None;
-        if let Some(entity) = entity {
-            // The clicked block shows the menu when it holds that container;
-            // an ender chest's or a double chest's slots are no one block's,
-            // so they go under a key no block has.
-            let holds = |k: &(i32, i32, i32)| {
-                let name = &self.res.facts().get(self.world.block(k.0, k.1, k.2)).name;
-                BlockEntity::for_block(name).is_some_and(|e| {
-                    e.id() == entity.id() && e.slots().len() == entity.slots().len()
-                })
-            };
-            let key = target.filter(holds).unwrap_or((i32::MIN, 0, 0));
-            let backing_slots = entity.slots().len();
-            self.world.block_entities.insert(key, entity);
-            self.container = Some(key);
-            if !self.open_native_screen(key, target, backing_slots, extra) {
-                if mod_type.is_some() || key.0 == i32::MIN {
-                    self.world.block_entities.remove(&key);
+        let crafting = menu == "minecraft:crafting";
+        self.stage_remote_menu(p.container, menu, Some(menu_title(&p.title)), |game| {
+            game.craft_size = if crafting { 3 } else { 2 };
+            game.container = None;
+            if let Some(entity) = entity {
+                // The clicked block shows the menu when it holds that container;
+                // an ender chest's or a double chest's slots are no one block's,
+                // so they go under a key no block has.
+                let holds = |k: &(i32, i32, i32)| {
+                    let name = &game.res.facts().get(game.world.block(k.0, k.1, k.2)).name;
+                    BlockEntity::for_block(name).is_some_and(|e| {
+                        e.id() == entity.id() && e.slots().len() == entity.slots().len()
+                    })
+                };
+                let key = target.filter(holds).unwrap_or((i32::MIN, 0, 0));
+                let backing_slots = entity.slots().len();
+                game.world.block_entities.insert(key, entity);
+                game.container = Some(key);
+                if !game.open_native_screen(key, target, backing_slots, extra) {
+                    if mod_type.is_some() || key.0 == i32::MIN {
+                        game.world.block_entities.remove(&key);
+                    }
+                    return None;
                 }
-                self.remote_reject_container(p.container);
-                return;
             }
-        }
-        let native = self.mod_screen.is_some();
-        self.set_screen(Screen::Inventory);
-        if !native || self.native_screen_shown() {
-            self.capture(false);
-        }
+            let native = game.mod_screen.is_some();
+            let outcome = game.transition_screen(Screen::Inventory, false, |_, _| {});
+            if outcome != ScreenOpenOutcome::Vetoed && (!native || game.native_screen_shown()) {
+                game.capture(false);
+            }
+            Some(outcome)
+        });
     }
     /// `ClientPacketListener.handleMountScreenOpen`: only horses and nautiluses
     /// open a menu. A missing or different entity leaves the current menu alone.
