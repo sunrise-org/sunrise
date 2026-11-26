@@ -667,9 +667,9 @@ impl Game<'_> {
         let ticking = self.entity_ticking_area();
         let ids: Vec<u32> = self.bolts.iter().map(|b| b.id).collect();
         for id in ids {
-            let Some(i) = self.bolts.iter().position(|b| b.id == id) else {
+            if !self.bolts.iter().any(|b| b.id == id) {
                 continue;
-            };
+            }
             if told && let Some((round, visited)) = &mut client_tick {
                 visited.insert(id);
                 if !self.client_tick_pre_one(round, id, "minecraft:lightning_bolt") {
