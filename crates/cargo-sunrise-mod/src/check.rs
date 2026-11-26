@@ -747,6 +747,90 @@ mod tests {
         assert_eq!((count, refused), (1, Vec::<String>::new()));
     }
 
+    /// A vertex shader of the default format that writes what the fragment shaders below read.
+    const MOD_VSH: &str = "#version 330\n#include <minecraft:dynamictransforms.glsl>\n\
+        #include <minecraft:projection.glsl>\n\
+        in vec3 Position;\nin vec2 UV0;\nin vec4 Color;\n\
+        out vec2 texCoord0;\nout vec4 vertexColor;\n\
+        void main() { gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0); texCoord0 = UV0; vertexColor = Color; }\n";
+
+    /// The files of one program `m:core/blur` with the vertex shader above and `fsh`.
+    fn blur_program(fsh: &str) -> BTreeMap<String, Vec<u8>> {
+        [
+            ("assets/m/shaders/core/blur.vsh", MOD_VSH),
+            ("assets/m/shaders/core/blur.fsh", fsh),
+        ]
+        .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()))
+        .into()
+    }
+
+    /// A fragment shader whose set-1 uniform block and sampler stand as the mod's own layout
+    /// declares them passes, as the game binds them; the same shader with a syntax error in
+    /// `main` is refused at that line, and not for its bindings (#6022).
+    #[test]
+    fn a_set_1_block_and_sampler_pass_and_a_syntax_error_is_still_refused() {
+        let fsh = |statement_end: &str| {
+            format!(
+                "#version 330\nlayout(set = 1, binding = 0, std140) uniform Params {{ vec4 Strength; }};\n\
+                uniform sampler2D Noise;\n\
+                in vec2 texCoord0;\nin vec4 vertexColor;\nout vec4 fragColor;\n\
+                void main() {{ fragColor = vertexColor * Strength * texture(Noise, texCoord0){statement_end} }}\n"
+            )
+        };
+        let (count, refused) = pipeline_shaders(&blur_program(&fsh(";")), None);
+        assert_eq!((count, refused), (1, Vec::<String>::new()));
+
+        let (count, refused) = pipeline_shaders(&blur_program(&fsh("")), None);
+        assert_eq!(count, 1);
+        assert!(!refused.is_empty(), "a syntax error must be refused");
+        assert!(
+            refused[0].starts_with("assets/m/shaders/core/blur.fsh:7:"),
+            "{refused:?}"
+        );
+        assert!(
+            refused
+                .iter()
+                .all(|r| !r.contains("not a block or sampler")),
+            "{refused:?}"
+        );
+    }
+
+    /// The game binds a declaration whatever else is on its line and whatever qualifier stands
+    /// before `uniform`, so the check takes each as the mod's (#6022).
+    #[test]
+    fn declarations_the_game_binds_are_the_mods_whatever_their_line_looks_like() {
+        let programs = [
+            (
+                "a qualifier before uniform",
+                "uniform Scene { vec4 tint; };\nhighp uniform sampler2D Tex;",
+                "tint * texture(Tex, texCoord0)",
+            ),
+            (
+                "two samplers on one line",
+                "uniform sampler2D TexA; uniform sampler2D TexB;",
+                "texture(TexA, texCoord0) * texture(TexB, texCoord0)",
+            ),
+            (
+                "a block after a sampler on one line",
+                "uniform sampler2D TexA; uniform Scene { vec4 tint; };",
+                "tint * texture(TexA, texCoord0)",
+            ),
+            (
+                "a storage buffer after a sampler on one line",
+                "uniform sampler2D TexA; layout(std430) readonly buffer Data { vec4 d[]; };",
+                "d[0] * texture(TexA, texCoord0)",
+            ),
+        ];
+        for (what, declarations, colour) in programs {
+            let fsh = format!(
+                "#version 330\n{declarations}\nin vec2 texCoord0;\nin vec4 vertexColor;\n\
+                out vec4 fragColor;\nvoid main() {{ fragColor = vertexColor * {colour}; }}\n"
+            );
+            let (count, refused) = pipeline_shaders(&blur_program(&fsh), None);
+            assert_eq!((count, refused), (1, Vec::<String>::new()), "{what}");
+        }
+    }
+
     fn fixture(name: &str) -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../sunrise-mod-package/tests/index")
@@ -878,6 +962,64 @@ mod tests {
             assert!(text.contains(word), "{text}");
         }
         assert_eq!(report.json()["dependencies"], dependencies);
+    }
+
+    /// #6022: a shader using a set-1 uniform block and a sampler of the mod's own layout passes
+    /// `check`, declared in the shader or in an include, as the game accepts it; the same shader
+    /// with a real syntax error is still refused.
+    #[test]
+    fn pipeline_shaders_take_the_mods_own_set_1_block_and_sampler() {
+        const DECLARE: &str =
+            "layout(std140, set = 1, binding = 0) uniform SceneUniform { vec4 Tint; };
+layout(set = 1, binding = 1) uniform sampler2D SsaoTex;
+";
+        const BODY: &str = "in vec2 texCoord0;
+out vec4 fragColor;
+void main() { fragColor = Tint * texture(SsaoTex, texCoord0); }
+";
+        let check = |fsh: String| {
+            let mut files = BTreeMap::new();
+            files.insert(
+                "assets/example/shaders/core/ssao.fsh".to_owned(),
+                fsh.into_bytes(),
+            );
+            files.insert(
+                "assets/example/shaders/include/scene.glsl".to_owned(),
+                DECLARE.as_bytes().to_vec(),
+            );
+            pipeline_shaders(&files, None)
+        };
+        for fsh in [
+            format!(
+                "#version 330
+{DECLARE}{BODY}"
+            ),
+            format!(
+                "#version 330
+#moj_import <example:scene.glsl>
+{BODY}"
+            ),
+            format!(
+                "#version 330
+#include <example:scene.glsl>
+{BODY}"
+            ),
+        ] {
+            let (count, refused) = check(fsh.clone());
+            assert_eq!((count, refused), (1, Vec::<String>::new()), "{fsh}");
+        }
+        let broken = format!(
+            "#version 330
+{DECLARE}{}",
+            BODY.replace("Tint *", "Tint * *")
+        );
+        let (_, refused) = check(broken);
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with("assets/example/shaders/core/ssao.fsh:")
+                && !refused[0].contains("is not a block or sampler"),
+            "{refused:?}"
+        );
     }
 
     #[test]

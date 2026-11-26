@@ -91,8 +91,6 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// ClientLevel.tickEntities; a frozen level only ticks the players
-    /// (`TickRateManager.isEntityFrozen`).
     /// `GuardianRenderer.getEntityToLookAt`: a guardian's eye follows its
     /// synched attack target, else the camera.
     pub(in crate::game) fn tick_remote_guardian_eyes(&mut self, running: bool) {
@@ -128,7 +126,9 @@ impl Game<'_> {
         self.guardian_look_scratch = looks;
     }
 
-    /// `ClientLevel.tickEntities`: the section index takes each crossing at its entity's turn.
+    /// `ClientLevel.tickEntities`: a frozen level only ticks the players
+    /// (`TickRateManager.isEntityFrozen`), and the section index takes each crossing at its
+    /// entity's turn.
     pub(in crate::game) fn tick_remote_entities(&mut self, running: bool) {
         self.client_pick.sections.get_mut().begin_entity_ticks();
         self.tick_remote_entity_turns(running);

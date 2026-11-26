@@ -5,9 +5,9 @@ import subprocess
 import tempfile
 import unittest
 
-from native_hook_sources import native_hook_sources
+from tests.native_hook_sources import native_hook_sources
 
-from test_world_input_capture import method
+from tests.test_world_input_capture import method
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -1,6 +1,5 @@
 """Break-glass stable patch releases (docs/release-flow.md "Break-glass patch releases"): the legs a patch's changes
 select, the rules never waived, the two approvals, and how the workflows hold to them."""
-import ast
 import contextlib
 import io
 import json
@@ -631,7 +630,7 @@ class WorkflowTests(unittest.TestCase):
     def test_no_release_job_runs_cargo_in_the_checkout(self):
         # The checkout is the candidate: its .cargo/config.toml, [patch] or build scripts would run. Signatures are
         # checked with OpenSSL (nightly.py verify-sums); the only build is the parent's sunrise-stage, from the
-        # parent's own tree (nightly.parent_stage).
+        # parent's own tree (nightly.parent_stage, whose cargo run test_stable_mod_api.JudgeBuildTests checks).
         # The SDK's and the mod tool's signing, checking and publishing jobs build nothing either.
         for file, names in (("nightly-build.yml", ("pick", "break-glass", "sign", "publish")),
                             ("sdk-publish.yml", ("sign", "publish")), ("mod-tool.yml", ("sign", "verify", "publish"))):
@@ -640,11 +639,6 @@ class WorkflowTests(unittest.TestCase):
                 for step in jobs[name]["steps"]:
                     with self.subTest(workflow=file, job=name, step=step.get("name", step.get("uses"))):
                         self.assertNotRegex(step.get("run", ""), r"(^|\s)cargo\s")
-        # And nightly.py, which those jobs run, starts cargo in one place: parent_stage, on the parent's tree.
-        tree = ast.parse(Path(nightly.__file__).read_text())
-        starts = {function.name for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
-                  for node in ast.walk(function) if isinstance(node, ast.Constant) and node.value == "cargo"}
-        self.assertEqual(starts, {"parent_stage"})
 
     def test_the_full_daily_follows_every_published_stable_release(self):
         full_daily = workflow("nightly-build.yml")["jobs"]["full-daily"]

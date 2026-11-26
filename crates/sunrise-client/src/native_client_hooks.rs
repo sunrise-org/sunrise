@@ -21,6 +21,8 @@ pub struct NativeClientHooks {
     pub living_drown: fn(&LoopContext, u32, &str, &mut bool, &mut f32, &mut i32, &mut bool),
     pub living_fall: fn(&LoopContext, u32, &str, &mut f64, &mut f32, &mut bool),
     pub living_jump: fn(&LoopContext, u32, &str, [f64; 3]),
+    pub living_model_posed:
+        fn(&LoopContext, &mod_api::EntityRenderState, &str, &mut dyn mod_api::FrameModelPoseEdit),
     pub living_jump_power: fn(&LoopContext, LivingLend<'_>, &mut f32),
     pub living_speed: fn(&LoopContext, LivingLend<'_>, &mut f32),
     pub living_flying_speed: fn(&LoopContext, LivingLend<'_>, &mut f32),
@@ -213,6 +215,17 @@ pub(crate) fn living_fall(
 pub(crate) fn living_jump(context: &LoopContext, entity: u32, kind: &str, velocity: [f64; 3]) {
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_jump)(context, entity, kind, velocity);
+    }
+}
+
+pub(crate) fn living_model_posed(
+    context: &LoopContext,
+    entity: &mod_api::EntityRenderState,
+    layer: &str,
+    model: &mut dyn mod_api::FrameModelPoseEdit,
+) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.living_model_posed)(context, entity, layer, model);
     }
 }
 

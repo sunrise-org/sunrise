@@ -335,6 +335,14 @@ pub(crate) fn install_client_hooks() {
             let context = reader.context();
             mod_api::dispatch_living_jump(&context, entity, kind, velocity);
         },
+        living_model_posed: |context, entity, layer, model| {
+            if !mod_api::__private::listened(mod_api::HookId::LivingModelPosed) {
+                return;
+            }
+            let reader = sunrise_client_render::api_context::LoopReader(context);
+            let context = reader.context();
+            mod_api::dispatch_living_model_posed(&context, entity, layer, model);
+        },
         living_jump_power: |context, living, power| {
             if !mod_api::__private::listened(mod_api::HookId::LivingJumpPower) {
                 return;

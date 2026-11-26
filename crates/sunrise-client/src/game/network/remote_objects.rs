@@ -392,10 +392,9 @@ impl Game<'_> {
                 if Some(id) == driven {
                     return;
                 }
-                // AbstractBoat keeps a LinearInterpolationHandler: the new yaw is
+                // AbstractBoat keeps a LinearInterpolationHandler: a move's yaw is
                 // the target of the three-tick lerp (`tick_remote_objects`), not
-                // the boat's yaw at once.
-                let _ = yaw;
+                // the boat's yaw at once, so only its ground state is taken here.
                 b.ground.on_ground = on_ground;
             });
         } else if let Some(i) = self.carts.iter().position(|c| c.id == id)
@@ -477,13 +476,6 @@ impl Game<'_> {
                 if self.carts[cart].on_rails != on_rails {
                     self.carts.update(cart, |c| c.on_rails = on_rails);
                 }
-            }
-            if kind == super::minecarts::CartKind::Tnt && fuse {
-                self.particles.add(
-                    &ParticleOptions::simple(ParticleType::Smoke),
-                    [to.x, to.y + 0.5, to.z],
-                    [0.0; 3],
-                );
             }
             if kind == super::minecarts::CartKind::Furnace
                 && fuel > 0
@@ -689,6 +681,36 @@ fn painting_facing(direction: i32) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `MinecartTNT.tick` on the client (#6011): a primed TNT minecart counts its fuse down
+    /// and adds one smoke particle a tick, not two.
+    #[test]
+    #[ignore = "daily"]
+    fn a_primed_tnt_minecart_adds_one_smoke_particle_a_tick() {
+        use super::super::minecarts::{CartKind, Minecart};
+        use sunrise_client::motion::PlayerMotion;
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let at = Vec3::new(0.5, 64.0, 0.5);
+            game.player = Some(PlayerMotion::new(game.motion, at).unwrap());
+            let mut cart = Minecart::new(71, CartKind::Tnt, Vec3::new(2.5, 64.0, 0.5));
+            cart.fuse = 3;
+            game.carts.push(cart);
+            // Capture what the level is asked for, ahead of the camera-distance limiter.
+            game.particles.requested = Some(Vec::new());
+            let mut smoke = || {
+                game.tick_remote_objects(|_, p| p, |_, yaw| yaw, |_| false);
+                let asked = game.particles.requested.replace(Vec::new()).unwrap();
+                asked
+                    .iter()
+                    .filter(|(options, ..)| options.ty == ParticleType::Smoke)
+                    .count()
+            };
+            for tick in 0..3 {
+                assert_eq!(smoke(), 1, "smoke on tick {tick}");
+            }
+            assert_eq!(smoke(), 0, "no smoke once the fuse is out");
+        });
+    }
 
     #[test]
     fn rot_lerp_takes_the_short_way_round() {

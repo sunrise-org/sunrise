@@ -278,6 +278,15 @@ impl Poses {
     pub fn pose_of(&self, name: &str) -> Option<[f32; 9]> {
         self.pose_by_key(key(name)).copied()
     }
+    /// Overwrites the pose of the part keyed `key`; false when the model has no such part.
+    pub(super) fn set_pose_by_key(&mut self, key: u64, pose: [f32; 9]) -> bool {
+        let Some(entry) = self.map.get_mut(&key) else {
+            return false;
+        };
+        entry.pose = pose;
+        self.changed();
+        true
+    }
     pub(super) fn pose_by_key(&self, key: u64) -> Option<&[f32; 9]> {
         self.map.get(&key).map(|entry| &entry.pose)
     }

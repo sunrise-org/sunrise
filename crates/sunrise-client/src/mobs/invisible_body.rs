@@ -32,6 +32,7 @@ pub fn render_seen_invisible(
     render_visible(
         m,
         alpha,
+        Some(camera),
         [base_transform(m, alpha, camera)],
         atlas,
         light,

@@ -1,5 +1,4 @@
 """Unit tests for the keyed datafix input-seed cache (tools/datafix_seeds.py)."""
-import ast
 import hashlib
 import importlib
 import io
@@ -7,7 +6,9 @@ import json
 import os
 from pathlib import Path
 import sys
+import socket
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -115,12 +116,50 @@ class DatafixSeedKeyTests(unittest.TestCase):
             self.key()
 
     def test_lab_functions_are_the_ones_the_seed_tools_call(self):
-        called = set()
-        for rel in datafix_seeds.SOURCE_FILES:
-            tree = ast.parse((datafix_seeds.ROOT / rel).read_text(encoding='utf-8'))
-            called.update(node.attr for node in ast.walk(tree)
-                          if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == 'lab')
-        self.assertEqual(called, set(datafix_seeds.LAB_FUNCTIONS))
+        # A bot logging in to a server and a world build's port pick use lab through datafix_worlds; every lab name they
+        # reach must be one the key hashes, or a change to it would not regenerate the seed worlds.
+        from tools import datafix_worlds as worlds
+
+        class Spy:
+            used = set()
+
+            def __getattr__(self, name):
+                self.used.add(name)
+                return getattr(lab, name)
+
+        def fake_server(listener):
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(4096)  # the handshake and the login start
+                connection.sendall(b'\x01\x02')  # login success: packet 2, no body
+                connection.recv(4096)  # the login acknowledgement
+                connection.sendall(b'\x01\x03')  # configuration finished: packet 3
+                connection.recv(4096)
+
+        class Stop(Exception):
+            pass
+
+        def refuse_server(*args, **kwargs):
+            raise Stop
+
+        import lab
+        spy = Spy()
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            thread = threading.Thread(target=fake_server, args=(listener,))
+            thread.start()
+            with mock.patch.object(worlds, 'lab', spy), mock.patch.object(worlds.scene12, 'lab', spy):
+                bot = worlds.Bot(listener.getsockname()[1], 770, 'seedbot')
+                bot.leave()
+                thread.join()
+                with mock.patch.object(worlds, 'server_jar', return_value=(Path('server.jar'), 3105, 763)), \
+                        mock.patch.object(worlds, 'LOCAL', Path(self.temp.name)), \
+                        mock.patch.object(worlds, 'java', return_value='java'), \
+                        mock.patch.object(worlds, 'Server', refuse_server), \
+                        self.assertRaises(Stop):
+                    worlds.build('1.19', force=True)
+        self.assertEqual(spy.used, set(datafix_seeds.LAB_FUNCTIONS))
 
     def test_default_java_identity_hashes_jdk_content_via_parity_shim(self):
         jdk = self.root / 'jdk'

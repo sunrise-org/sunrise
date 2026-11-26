@@ -256,8 +256,8 @@ def validate(text, path, src, contents):
         target = target.resolve()
         assert target in contents or target.is_file(), f"{path}: missing link target {match[2]}"
         if url.fragment and target.suffix == ".md":
-            body = contents[target] if target in contents else target.read_text()
-            assert unquote(url.fragment) in {a for _, a in headings(body)}, f"{path}: missing anchor {match[2]}"
+            linked = contents[target] if target in contents else target.read_text()
+            assert unquote(url.fragment) in {a for _, a in headings(linked)}, f"{path}: missing anchor {match[2]}"
     for match in INCLUDE.finditer(text):
         name, _, anchor = match[2].partition(":")
         target = (src / path).parent / name

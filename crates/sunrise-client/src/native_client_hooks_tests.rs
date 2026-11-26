@@ -161,6 +161,7 @@ pub(crate) fn install() {
                     JUMPS.set(JUMPS.get() + 1);
                 }
             },
+            living_model_posed: |_, _, _, _| {},
             living_jump_power: |context, _, power| {
                 *power += context.setting("rules_mod", "stack").map_or(0.0, |_| 1.0);
             },

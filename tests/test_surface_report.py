@@ -559,7 +559,6 @@ Path(sys.argv[3]).write_text('{"schema": 3, "by": "' + marker + '"}\n')
             # The base against this checkout, then the landed merge against its first parent.
             self.assertEqual(exports, [sha, "checkout", "aaaa", sha])
 
-    @unittest.skipUnless(importlib.util.find_spec("fcntl"), "needs POSIX file locking")
     def test_each_base_tool_build_gets_its_own_copy(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)

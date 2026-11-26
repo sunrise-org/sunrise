@@ -40,6 +40,9 @@ import time
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools import file_lock
+
 ROOT = Path(__file__).resolve().parents[2]
 NOTES = "crates/sunrise-mod-vocab/changes"
 # Remove this audit and its gate branch after the first complete schema-3 SDK publishes.
@@ -123,16 +126,11 @@ def tree_tool(tree: Path, work: Path) -> list[str]:
     """The command of the sunrise-stage of the whole source tree `tree`, built in the test profile in target/surface-base and
     copied into this run's `work`. The build directory is shared (and cached), so a lock held from the build to the
     copy keeps another audit's build from replacing the binary before this one has its copy."""
-    try:
-        import fcntl  # Only this build needs it: a source-only audit runs anywhere.
-    except ImportError:
-        raise RuntimeError("building sunrise-stage from another tree requires POSIX file locking") from None
-
     target = ROOT / "target" / "surface-base"
     target.mkdir(parents=True, exist_ok=True)
     tool = work / f"base-stage-{len(list(work.glob('base-stage-*')))}"
-    with open(target / "surface-report.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with open(target / "surface-report.lock", "a") as lock:
+        file_lock.lock(lock)
         built = subprocess.run(["cargo", "build", "--locked", "--profile", "test",
                                 "--bin", "sunrise-stage", "--target-dir", str(target)],
                                cwd=tree, capture_output=True, text=True)

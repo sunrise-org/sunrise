@@ -3,7 +3,9 @@
 use super::{Atlas, RenderDataSource, body_with_variants, cem_key, cem_texture};
 use crate::fast_hash::FxHashMap;
 use crate::mobs::{Mob, MobData, MobType, Part, anim, cem};
-use mod_api::{__private::frame_model_part, FrameModel, FrameModelEdit, FrameModelPart};
+use mod_api::{
+    __private::frame_model_part, FrameModel, FrameModelEdit, FrameModelPart, FrameModelPoseEdit,
+};
 use std::{borrow::Cow, sync::Arc};
 
 /// The exact body selected for one draw, with an owned pack snapshot rather than a read lock.
@@ -168,33 +170,45 @@ pub struct FrameModelPose {
     pub(super) bind: bool,
 }
 
+/// A part of `layout` as `poses` pose it, or as its bind pose: the one reading both lent
+/// models share.
+fn view_part<'a>(
+    layout: &'a BakedFrameModel,
+    poses: &'a anim::Poses,
+    bind: bool,
+    index: usize,
+    node: &'a BakedFrameNode,
+) -> FrameModelPart<'a> {
+    let mut ancestor = poses.has_hidden_parts().then_some(index);
+    let mut visible = true;
+    while let Some(i) = ancestor {
+        let current = &layout.nodes[i];
+        if poses.is_hidden_at(i, current.anim_key) {
+            visible = false;
+            break;
+        }
+        ancestor = current.parent;
+    }
+    frame_model_part(
+        index,
+        &node.name,
+        node.parent,
+        node.first_child,
+        node.next_sibling,
+        if bind {
+            &node.bind_pose
+        } else {
+            poses
+                .pose_by_key(node.anim_key)
+                .expect("poses were reset from the baked model's tree")
+        },
+        visible,
+    )
+}
+
 impl FrameModelPose {
     fn view<'a>(&'a self, index: usize, node: &'a BakedFrameNode) -> FrameModelPart<'a> {
-        let mut ancestor = self.poses.has_hidden_parts().then_some(index);
-        let mut visible = true;
-        while let Some(i) = ancestor {
-            let current = &self.layout.nodes[i];
-            if self.poses.is_hidden_at(i, current.anim_key) {
-                visible = false;
-                break;
-            }
-            ancestor = current.parent;
-        }
-        frame_model_part(
-            index,
-            &node.name,
-            node.parent,
-            node.first_child,
-            node.next_sibling,
-            if self.bind {
-                &node.bind_pose
-            } else {
-                self.poses
-                    .pose_by_key(node.anim_key)
-                    .expect("poses were reset from the baked model's tree")
-            },
-            visible,
-        )
+        view_part(&self.layout, &self.poses, self.bind, index, node)
     }
 }
 
@@ -215,5 +229,65 @@ impl FrameModel for FrameModelPose {
 impl FrameModelEdit for FrameModelPose {
     fn hide(&mut self, index: usize) -> bool {
         self.poses.hide_frame_part(index)
+    }
+}
+
+/// The posed model a `living_model_posed` listener edits: the draw's own poses, borrowed for
+/// the callback, so the body or armour model draws with what the listeners leave.
+pub(super) struct PosedEdit<'a> {
+    layout: &'a BakedFrameModel,
+    poses: &'a mut anim::Poses,
+}
+
+impl<'a> PosedEdit<'a> {
+    pub(super) fn new(layout: &'a BakedFrameModel, poses: &'a mut anim::Poses) -> Self {
+        Self { layout, poses }
+    }
+}
+
+impl FrameModel for PosedEdit<'_> {
+    fn root(&self) -> FrameModelPart<'_> {
+        view_part(self.layout, self.poses, false, 0, &self.layout.nodes[0])
+    }
+
+    fn part(&self, name: &str) -> Option<FrameModelPart<'_>> {
+        self.part_at(self.layout.find(name)?)
+    }
+
+    fn part_at(&self, index: usize) -> Option<FrameModelPart<'_>> {
+        Some(view_part(
+            self.layout,
+            self.poses,
+            false,
+            index,
+            self.layout.nodes.get(index)?,
+        ))
+    }
+}
+
+impl FrameModelPoseEdit for PosedEdit<'_> {
+    fn set_pose(&mut self, index: usize, pose: mod_api::PartPose) -> bool {
+        let Some(node) = self.layout.nodes.get(index) else {
+            return false;
+        };
+        let values = [
+            pose.x,
+            pose.y,
+            pose.z,
+            pose.x_rot,
+            pose.y_rot,
+            pose.z_rot,
+            pose.x_scale,
+            pose.y_scale,
+            pose.z_scale,
+        ];
+        values.iter().all(|v| v.is_finite()) && self.poses.set_pose_by_key(node.anim_key, values)
+    }
+
+    fn reset_pose(&mut self, index: usize) -> bool {
+        let Some(node) = self.layout.nodes.get(index) else {
+            return false;
+        };
+        self.poses.set_pose_by_key(node.anim_key, node.bind_pose)
     }
 }

@@ -307,6 +307,7 @@ fn named_hidden_parts_leave_the_body_and_its_overlays_but_not_armour() {
         render_visible(
             mob,
             0.5,
+            None,
             [glam::Mat4::IDENTITY],
             &atlas,
             0xf0f0,

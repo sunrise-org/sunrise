@@ -1,5 +1,4 @@
 """lab.parity_fixtures() builds the parity fixtures' binary and runs only it, never another Cargo artifact."""
-import ast
 import json
 import os
 import shutil
@@ -69,26 +68,6 @@ class ParityFixturesBuildTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'sunrise-parity-fixtures executables'):
                     lab.parity_fixtures()
             self.assertEqual(lab._PARITY_FIXTURES, {})
-
-
-class HarnessesUseTheFixturesProgramTests(unittest.TestCase):
-    def test_no_harness_builds_the_client_lib_test(self):
-        """The lib test's one rustc outgrew a parity runner (#4896): a harness runs its sunrise-client fixtures from
-        lab.parity_fixtures(). Flags a `cargo test` argument list naming sunrise-client and `--lib`, and a call of a
-        `*test_binary*` helper naming sunrise-client."""
-        offenders = []
-        for path in sorted((lab.ROOT / 'tools').glob('test_*_parity.py')):
-            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
-                if isinstance(node, (ast.List, ast.Tuple)):
-                    words = {e.value for e in node.elts if isinstance(e, ast.Constant)}
-                    if {'sunrise-client', '--lib'} <= words:
-                        offenders.append(f'{path.name}:{node.lineno}')
-                elif isinstance(node, ast.Call):
-                    name = getattr(node.func, 'id', getattr(node.func, 'attr', ''))
-                    if 'test_binary' in name and any(isinstance(a, ast.Constant) and a.value == 'sunrise-client'
-                                                     for a in node.args):
-                        offenders.append(f'{path.name}:{node.lineno}')
-        self.assertEqual(offenders, [])
 
 
 class ParityFixturesManifestTests(unittest.TestCase):

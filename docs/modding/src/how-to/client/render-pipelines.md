@@ -673,7 +673,8 @@ offset is a multiple of 4 with the count's 4 bytes inside the buffer, or the dra
 `PipelineDrawError::InvalidIndirect`. Where the capability is false (no
 `MULTI_DRAW_INDIRECT_COUNT`, or DirectX 12, whose count draws drop an indexed command's
 `base_vertex`), a draw with a count buffer is refused with
-`PipelineDrawError::UnsupportedIndirectCount`.
+`PipelineDrawError::UnsupportedIndirectCount`. A draw with a count buffer in a translated shader
+pack's slot, where the pack's program is linked to the pipeline, counts the same way.
 
 - **Layout.** With a `MeshRef` that has an index buffer, each command is five 4-byte words
   (`index_count, instance_count, first_index, base_vertex, first_instance`; `INDIRECT_INDEXED_DRAW_SIZE`

@@ -1003,40 +1003,45 @@ class PrebuiltContentsTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def scripts_beside_a_pin(directory: str, *names: str) -> tuple[list[Path], Path]:
+    """Copies of the `tools/ci` scripts `names` and an empty `launcher-pin` beside them in a folder of `directory`: the
+    scripts read the pin beside themselves, so a test sets the pin without touching the tracked one."""
+    folder = Path(directory) / "ci"
+    folder.mkdir()
+    for name in names:
+        shutil.copy2(prebuilt_game.ROOT / "tools/ci" / name, folder / name)
+    return [folder / name for name in names], folder / "launcher-pin"
 
 
 class LauncherPinTests(unittest.TestCase):
     @needs_runner_shell
     def test_only_a_full_lowercase_sha_is_accepted_by_the_script_and_the_smoke(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (script,), pin = scripts_beside_a_pin(directory, "launcher_pin.sh")
+            with patch.object(prebuilt_game, "LAUNCHER_PIN", pin):
+                for value, accepted in (("a" * 40, True), ("A" * 40, False), ("a" * 39, False), ("main", False), ("a" * 41, False)):
+                    pin.write_text(value + "\n")
+                    shell = subprocess.run([str(script)], capture_output=True, text=True)
+                    self.assertEqual(shell.returncode == 0, accepted, value)
+                    if accepted:
+                        self.assertEqual(prebuilt_game.launcher_pin(), value)
+                    else:
+                        with self.assertRaises(SystemExit):
+                            prebuilt_game.launcher_pin()
+        # The tracked pin is read, never written: the script and the tool agree on it.
+        tracked = prebuilt_game.LAUNCHER_PIN.read_text().strip()
         script = prebuilt_game.ROOT / "tools/ci/launcher_pin.sh"
-        pin = prebuilt_game.ROOT / "tools/ci/launcher-pin"
-        original = pin.read_text()
-        try:
-            for value, accepted in (("a" * 40, True), ("A" * 40, False), ("a" * 39, False), ("main", False), ("a" * 41, False)):
-                pin.write_text(value + "\n")
-                shell = subprocess.run([str(script)], capture_output=True, text=True)
-                self.assertEqual(shell.returncode == 0, accepted, value)
-                if accepted:
-                    self.assertEqual(prebuilt_game.launcher_pin(), value)
-                else:
-                    with self.assertRaises(SystemExit):
-                        prebuilt_game.launcher_pin()
-        finally:
-            pin.write_text(original)
-        self.assertEqual(subprocess.run([str(script)], capture_output=True, text=True).stdout.strip(), original.strip())
+        self.assertEqual(subprocess.run([str(script)], capture_output=True, text=True).stdout.strip(), tracked)
+        self.assertEqual(prebuilt_game.launcher_pin(), tracked)
 
 
 class LauncherCheckoutTests(unittest.TestCase):
     @needs_runner_shell
     def test_checks_out_the_pinned_commit_detached_and_refuses_an_unfetchable_pin(self):
-        script = prebuilt_game.ROOT / "tools/ci/launcher_checkout.sh"
-        pin_file = prebuilt_game.ROOT / "tools/ci/launcher-pin"
-        original = pin_file.read_text()
         git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (script, _), pin_file = scripts_beside_a_pin(directory, "launcher_checkout.sh", "launcher_pin.sh")
             source = root / "source"
             subprocess.run(git + ["init", "-q", str(source)], check=True)
             commits = []
@@ -1047,18 +1052,15 @@ class LauncherCheckoutTests(unittest.TestCase):
                 commits.append(subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], check=True,
                                               capture_output=True, text=True).stdout.strip())
             env = {**os.environ, "LAUNCHER_URL": source.as_uri(), "GIT_CONFIG_GLOBAL": os.devnull}
-            try:
-                pin_file.write_text(commits[0] + "\n")
-                done = subprocess.run([str(script), str(root / "out")], env=env, capture_output=True, text=True)
-                self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertEqual((root / "out/file").read_text(), "one")
-                state = subprocess.run(["git", "-C", str(root / "out"), "symbolic-ref", "-q", "HEAD"], capture_output=True)
-                self.assertNotEqual(state.returncode, 0)  # detached
-                pin_file.write_text("f" * 40 + "\n")
-                done = subprocess.run([str(script), str(root / "out2")], env=env, capture_output=True, text=True)
-                self.assertNotEqual(done.returncode, 0)
-            finally:
-                pin_file.write_text(original)
+            pin_file.write_text(commits[0] + "\n")
+            done = subprocess.run([str(script), str(root / "out")], env=env, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual((root / "out/file").read_text(), "one")
+            state = subprocess.run(["git", "-C", str(root / "out"), "symbolic-ref", "-q", "HEAD"], capture_output=True)
+            self.assertNotEqual(state.returncode, 0)  # detached
+            pin_file.write_text("f" * 40 + "\n")
+            done = subprocess.run([str(script), str(root / "out2")], env=env, capture_output=True, text=True)
+            self.assertNotEqual(done.returncode, 0)
 
 
 class SmokeBuildTests(unittest.TestCase):
@@ -1069,7 +1071,7 @@ class SmokeBuildTests(unittest.TestCase):
             ("win32", []),
         ):
             with self.subTest(platform=platform), tempfile.TemporaryDirectory() as directory, \
-                 patch.object(prebuilt_game.sys, "platform", platform):
+                 patch.object(prebuilt_game, "PLATFORM", platform):
                 out = Path(directory) / "sdk"
                 out.mkdir()
                 write_build_data(out, {"facade_crates": [], "rustc": "release: fixture\n"})
@@ -1136,3 +1138,7 @@ class SmokeStartTests(unittest.TestCase):
                 environment = run.call_args.kwargs["env"]
                 for key in ("SUNRISE_HOME", "SUNRISE_LAUNCHER_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"):
                     self.assertTrue(Path(environment[key]).is_relative_to(root))
+
+
+if __name__ == "__main__":
+    unittest.main()

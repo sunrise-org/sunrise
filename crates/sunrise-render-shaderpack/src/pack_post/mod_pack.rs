@@ -289,11 +289,14 @@ pub enum ModDrawKind {
         base_vertex: i32,
     },
     /// `count` GPU-written commands from `offset` of `buffer`: indexed (20 bytes each) with the
-    /// index buffer and format in `index`, else non-indexed (16 bytes each).
+    /// index buffer and format in `index`, else non-indexed (16 bytes each). With `count_buffer`
+    /// (a buffer and the byte offset of a GPU-written `u32`), `count` is the most commands drawn
+    /// and the `u32` is how many are.
     Indirect {
         buffer: wgpu::Buffer,
         offset: u64,
         count: u32,
+        count_buffer: Option<(wgpu::Buffer, u64)>,
         index: Option<(wgpu::Buffer, wgpu::IndexFormat)>,
     },
 }

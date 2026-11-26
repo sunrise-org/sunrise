@@ -136,6 +136,25 @@ fn run_frame_and_sample(
     depth: &wgpu::TextureView,
     shadow_cache: bool,
 ) -> [u8; 4] {
+    run_frame_and_sample_at(
+        gpu,
+        post,
+        color,
+        depth,
+        shadow_cache,
+        &[[SIZE[0] / 2, SIZE[1] / 2]],
+    )[0]
+}
+
+/// Runs one frame and reads the final image at each `[x, y]` of `points`.
+fn run_frame_and_sample_at(
+    gpu: &Gpu,
+    post: &mut PackPost,
+    color: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    shadow_cache: bool,
+    points: &[[u32; 2]],
+) -> Vec<[u8; 4]> {
     let screen = gpu.texture(T::Rgba8Unorm);
     let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -190,13 +209,18 @@ fn run_frame_and_sample(
     slice.map_async(wgpu::MapMode::Read, |_| {});
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     let data = slice.get_mapped_range().unwrap();
-    let offset = (SIZE[1] / 2) as usize * stride as usize + (SIZE[0] / 2) as usize * 4;
-    let px = [
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ];
+    let px = points
+        .iter()
+        .map(|&[x, y]| {
+            let offset = y as usize * stride as usize + x as usize * 4;
+            [
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]
+        })
+        .collect();
     drop(data);
     read.unmap();
     px
@@ -1003,4 +1027,144 @@ fn mod_vertex_pack_fragment_reads_its_own_set_one_uniform_after_the_packs_sets()
     let px = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
     assert!((px[0] as i16 - 128).abs() <= 2, "red {px:?}");
     assert!((px[1] as i16 - 64).abs() <= 2, "green {px:?}");
+}
+
+/// A pack-linked `ModDrawKind::Indirect` draws two indexed commands, the left and the right half
+/// of the screen. Without a count buffer both draw; with one (where the adapter draws GPU-written
+/// counts, #5908) holding 1, only command 0 does.
+#[test]
+#[ignore = "daily"]
+fn mod_pack_indirect_draw_with_a_count_buffer_draws_only_the_counted_commands() {
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let Some(gpu) = Gpu::with_features(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT) else {
+        return;
+    };
+    let counts = crate::gfx::mod_render_targets::multi_draw_indirect_count(
+        &gpu.adapter.get_info(),
+        gpu.device.features(),
+    );
+    let files = vec![
+        (
+            "mod_terrain.vsh".to_owned(),
+            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}".to_owned(),
+        ),
+        (
+            "mod_terrain.fsh".to_owned(),
+            "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(1.0,0.0,0.0,1.0);}"
+                .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
+             void main(){gl_FragColor=texture2D(colortex0,uv);}"
+                .to_owned(),
+        ),
+    ];
+    let init = |contents: &[u8], usage| {
+        gpu.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Mod pack indirect test"),
+                contents,
+                usage,
+            })
+    };
+    // Two quads: x in -1..0 (vertices 0..4) and 0..1 (vertices 4..8).
+    let color = u32::from_le_bytes([255, 255, 255, 255]);
+    let vertex = |x: f32, y: f32| PipelineVertex {
+        pos: [x, y, -0.5],
+        uv: [0.5, 0.5],
+        color,
+    };
+    let vertices = [
+        vertex(-1.0, -1.0),
+        vertex(-1.0, 1.0),
+        vertex(0.0, 1.0),
+        vertex(0.0, -1.0),
+        vertex(0.0, -1.0),
+        vertex(0.0, 1.0),
+        vertex(1.0, 1.0),
+        vertex(1.0, -1.0),
+    ];
+    let vbuf = init(bytemuck::cast_slice(&vertices), wgpu::BufferUsages::VERTEX);
+    let vbuf_len = vbuf.size();
+    let indices: [u32; 12] = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+    let ibuf = init(bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX);
+    // `index_count, instance_count, first_index, base_vertex, first_instance`.
+    let commands: [[u32; 5]; 2] = [[6, 1, 0, 0, 0], [6, 1, 6, 0, 0]];
+    let command_buffer = init(
+        bytemuck::cast_slice(&commands),
+        wgpu::BufferUsages::INDIRECT,
+    );
+    let count_buffer = init(bytemuck::cast_slice(&[1u32]), wgpu::BufferUsages::INDIRECT);
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["mod_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: mod_gbuffers_inputs(),
+        default_blend: None,
+    }];
+    let runtime = OwnedModPackRuntime {
+        depth_targets: Vec::new(),
+        uniforms: Vec::new(),
+        pipelines: vec![ModPipelinePackSpec {
+            slot: 0,
+            pass_slot: ModPassSlot::AfterOpaqueGbuffers,
+            depth_target: None,
+            depth_write: true,
+            depth_test: true,
+            cull: false,
+            program_mode: Default::default(),
+        }],
+    };
+    // The final image at the middle of each half, drawn with `count_buffer`.
+    let draw = |count_buffer: Option<(wgpu::Buffer, u64)>| {
+        let (mut post, color, depth) =
+            load_with_mods(&gpu, files.clone(), requests.clone(), &runtime);
+        assert!(
+            post.is_mod_pipeline_bound(0),
+            "mod_terrain not bound: {:?}",
+            post.notes
+        );
+        post.set_mod_draws(vec![ModDrawChunk {
+            slot: 0,
+            vertex_buffers: vec![(0, vbuf.clone(), 0..vbuf_len)],
+            kind: ModDrawKind::Indirect {
+                buffer: command_buffer.clone(),
+                offset: 0,
+                count: 2,
+                count_buffer,
+                index: Some((ibuf.clone(), wgpu::IndexFormat::Uint32)),
+            },
+            instances: 0..1,
+            mod_bind_group: None,
+            mod_globals: None,
+        }]);
+        run_frame_and_sample_at(
+            &gpu,
+            &mut post,
+            &color,
+            &depth,
+            false,
+            &[[SIZE[0] / 4, SIZE[1] / 2], [SIZE[0] * 3 / 4, SIZE[1] / 2]],
+        )
+    };
+    let both = draw(None);
+    assert!(both[0][0] >= 250, "command 0 without a count: {both:?}");
+    assert!(both[1][0] >= 250, "command 1 without a count: {both:?}");
+    if !counts {
+        eprintln!(
+            "no count draws on {:?}: the counted draw is not run",
+            gpu.adapter.get_info()
+        );
+        return;
+    }
+    let counted = draw(Some((count_buffer, 0)));
+    assert!(counted[0][0] >= 250, "command 0 is counted: {counted:?}");
+    // Command 1 left the fixture's clear colour (`Gpu::clear`: 0.0625 per channel, 16 of 255).
+    assert_eq!(
+        counted[1],
+        [16, 16, 16, 255],
+        "command 1 is past the count of 1: {counted:?}"
+    );
 }

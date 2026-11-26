@@ -22,7 +22,7 @@ pub mod stubs;
 
 use crate::check::{Problem, located, problem, translate_backends};
 use naga::front::glsl::InterfaceLimits;
-use sunrise_glsl::{Glue, Includes, Inputs, Stages, Translated};
+use sunrise_glsl::{Glue, Includes, Inputs, ResourceKind, Stages, Translated};
 
 /// The folder under `assets/<namespace>/` holding core shader programs (`.vsh` and `.fsh`).
 pub const CORE_FOLDER: &str = "shaders/core";
@@ -310,11 +310,16 @@ pub fn assign_set1_bindings<'a>(
     out
 }
 
-/// Extract non-vanilla uniform blocks, `sampler2D`s, `isamplerBuffer`/`usamplerBuffer`s, and
-/// `layout(push_constant)` blocks from a mod shader pair for deviceless static checking
-/// (`cargo sunrise-mod check`). Reserved vanilla `BindGroupLayouts.java` names (plus
-/// `SpriteRect` when `textured`) are never extracted as mod bindings so undeclared vanilla
-/// names are still refused.
+/// The non-vanilla uniform blocks, `sampler2D`s, integer texel buffers, storage buffers and
+/// storage images a mod shader pair declares, and the push-constant size its
+/// `layout(push_constant)` block asks for ([`MAX_PUSH_CONSTANT_SIZE`], `0` without one), for
+/// deviceless static checking (`cargo sunrise-mod check`), which has no `BindGroupLayout` to ask.
+/// They are the declarations the translator binds, found by the same code
+/// ([`sunrise_glsl::resources`]), each name once in the order the vertex stage then the fragment
+/// stage first declares it. Reserved vanilla `BindGroupLayouts.java` names (plus `SpriteRect` when
+/// `textured`) are never mod bindings, so undeclared vanilla names are still refused. The stages
+/// are read as the translator reads them: with comments gone and includes inlined
+/// ([`extract_program_bindings`]).
 pub fn extract_mod_bindings(
     vertex: &str,
     fragment: &str,
@@ -325,105 +330,25 @@ pub fn extract_mod_bindings(
     let is_reserved = |name: &str| {
         VANILLA_BIND_GROUP_LAYOUT_NAMES.contains(&name) || (textured && name == "SpriteRect")
     };
-    for source in [vertex, fragment] {
-        let mut in_block_comment = false;
-        for raw_line in source.lines() {
-            let mut line = raw_line.trim();
-            if in_block_comment {
-                if let Some(end) = line.find("*/") {
-                    in_block_comment = false;
-                    line = line[end + 2..].trim();
-                } else {
-                    continue;
-                }
-            }
-            if let Some(start) = line.find("/*") {
-                if let Some(end) = line[start + 2..].find("*/") {
-                    let before = line[..start].trim();
-                    let after = line[start + 2 + end + 2..].trim();
-                    line = if before.is_empty() { after } else { before };
-                } else {
-                    in_block_comment = true;
-                    line = line[..start].trim();
-                }
-            }
-            if let Some(comment) = line.find("//") {
-                line = line[..comment].trim();
-            }
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some(image) = sunrise_glsl::storage_image(line) {
-                if !is_reserved(image.name) && !out.iter().any(|(n, _)| n == image.name) {
-                    out.push((
-                        image.name.to_owned(),
-                        ModBindingKind::StorageImage {
-                            access: sunrise_glsl::ImageAccess::of_qualifiers(&image.qualifiers),
-                        },
-                    ));
-                }
-                continue;
-            }
-            if let Some(block) = sunrise_glsl::storage_block(line) {
-                if !is_reserved(block.name) && !out.iter().any(|(n, _)| n == block.name) {
-                    out.push((
-                        block.name.to_owned(),
-                        ModBindingKind::StorageBuffer {
-                            read_only: block.qualifiers.contains(&"readonly"),
-                        },
-                    ));
-                }
-                continue;
-            }
-            let Some(at) = line.find("uniform") else {
-                continue;
-            };
-            let head = line[..at].trim();
-            if !(head.is_empty() || head.starts_with("layout")) {
-                continue;
-            }
-            // Check for layout(push_constant) uniform Name { ... }
-            if head.starts_with("layout")
-                && let Some(open) = head.find('(')
-                && let Some(close) = head[open + 1..].rfind(')')
-                && head[open + 1..open + 1 + close]
-                    .split(',')
-                    .any(|item| item.trim() == "push_constant")
-            {
+    for resource in [vertex, fragment]
+        .into_iter()
+        .flat_map(sunrise_glsl::resources)
+    {
+        let kind = match resource.kind {
+            ResourceKind::PushConstantBlock => {
                 push_constant_size = MAX_PUSH_CONSTANT_SIZE;
                 continue;
             }
-            let rest = line[at + "uniform".len()..].trim();
-            let first_end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            let first = &rest[..first_end];
-            let after_first = rest[first_end..].trim();
-            let (name, kind) = if matches!(first, "sampler2D" | "isamplerBuffer" | "usamplerBuffer")
-            {
-                let name_end = after_first
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                    .unwrap_or(after_first.len());
-                let name = &after_first[..name_end];
-                if name.is_empty() {
-                    continue;
-                }
-                let kind = if first == "sampler2D" {
-                    ModBindingKind::CombinedImageSampler
-                } else {
-                    ModBindingKind::TexelBuffer
-                };
-                (name, kind)
-            } else if !first.is_empty() && (after_first.is_empty() || after_first.starts_with('{'))
-            {
-                (first, ModBindingKind::UniformBuffer)
-            } else {
-                continue;
-            };
-            if is_reserved(name) || out.iter().any(|(n, _)| n == name) {
-                continue;
+            ResourceKind::UniformBlock => ModBindingKind::UniformBuffer,
+            ResourceKind::Sampler2D => ModBindingKind::CombinedImageSampler,
+            ResourceKind::TexelBuffer => ModBindingKind::TexelBuffer,
+            ResourceKind::StorageBuffer { read_only } => {
+                ModBindingKind::StorageBuffer { read_only }
             }
-            out.push((name.to_owned(), kind));
+            ResourceKind::StorageImage { access } => ModBindingKind::StorageImage { access },
+        };
+        if !is_reserved(resource.name) && !out.iter().any(|(name, _)| name == resource.name) {
+            out.push((resource.name.to_owned(), kind));
         }
     }
     (out, push_constant_size)
@@ -708,10 +633,11 @@ fn validate_vertex_inputs(
     Ok(())
 }
 
-/// [`extract_mod_bindings`] over a program's two stages with their `#include`s inlined under
-/// `defines`, as [`translate`] reads them: a uniform block, sampler or buffer an included file
-/// declares is the program's too (#5905). A stage whose includes cannot be expanded is scanned
-/// as written; [`translate`] then reports why.
+/// [`extract_mod_bindings`] over a program's two stages with their `#include`s inlined and
+/// comments removed under `defines`, as [`translate`] reads them: a uniform block, sampler or
+/// buffer an included file declares is the program's too (#5905), and one named only in a comment
+/// is not. A stage whose includes cannot be expanded is scanned as written; [`translate`] then
+/// refuses the program and reports why.
 pub fn extract_program_bindings(
     sources: &ProgramSources<'_>,
     textured: bool,
@@ -1940,5 +1866,24 @@ void main() {{
                 }
             )]
         );
+    }
+
+    /// The bindings come from the text the translator reads, where comments are gone: a
+    /// declaration named only in a line or a block comment is not the mod's.
+    #[test]
+    fn a_name_only_in_a_comment_is_not_a_mod_binding() {
+        let vsh = "#version 330\n// uniform sampler2D LineOnly;\nin vec3 Position;\n\
+            void main() { gl_Position = vec4(Position, 1.0); }\n";
+        let fsh = "#version 330\n/* uniform sampler2D Spanning;\n\
+            layout(std140) uniform Hidden { vec4 h; };\n*/\n\
+            uniform sampler2D Real; /* uniform sampler2D Trailing; */\n\
+            out vec4 fragColor;\nvoid main() { fragColor = texture(Real, vec2(0.0)); }\n";
+        let (bindings, push_constant_size) =
+            extract_program_bindings(&sources(vsh, fsh), false, &[], &stub_include);
+        assert_eq!(
+            bindings,
+            vec![("Real".to_owned(), ModBindingKind::CombinedImageSampler)]
+        );
+        assert_eq!(push_constant_size, 0);
     }
 }

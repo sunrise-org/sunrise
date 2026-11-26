@@ -263,6 +263,27 @@ class IgnoredTests(unittest.TestCase):
         self.assertEqual(ran, ["a", "b"])
         self.assertEqual(done.returncode, ignored_tests.TIMED_OUT)
 
+    def test_prebuilt_executables_get_their_folder_first_in_the_library_path_keeping_its_spelling(self):
+        seen = []
+
+        def execute(command, **kwargs):
+            seen.append(kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, "")
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(ignored_tests.ignored_shards, "workspace_members", return_value={"pkg": (folder, ".")}), \
+                patch.object(ignored_tests.subprocess, "run", side_effect=execute):
+            deps = Path(folder, "deps")
+            # Windows' variable is `PATH`, which its environment may spell `Path`: one entry, the old value kept after.
+            with patch.object(ignored_tests, "LIBRARY_PATH", "PATH"):
+                ignored_tests.run_binaries("pkg", {"lib": str(deps / "a")}, [], {"Path": "old"})
+            with patch.object(ignored_tests, "LIBRARY_PATH", "LD_LIBRARY_PATH"):
+                ignored_tests.run_binaries("pkg", {"lib": str(deps / "a")}, [], {})
+        expected = os.pathsep.join([str(deps), folder])
+        self.assertEqual(seen[0]["Path"], expected + os.pathsep + "old")
+        self.assertNotIn("PATH", seen[0])
+        self.assertEqual(seen[1]["LD_LIBRARY_PATH"], expected)
+
     def test_the_report_names_the_run_in_progress_before_it_ends(self):
         # A job stopped at its time limit kills this script too: what it wrote before the run is what is uploaded.
         with tempfile.TemporaryDirectory() as folder:
