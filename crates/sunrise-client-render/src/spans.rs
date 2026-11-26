@@ -551,10 +551,14 @@ pub mod timeline {
             let Some(mine) = mine.as_ref() else {
                 return;
             };
+            // Both ends are rounded down from the thread's origin, so a span that ends
+            // inside another also ends inside it in whole microseconds.
+            let start = started.saturating_duration_since(mine.origin);
+            let (start_us, end_us) = (start.as_micros(), (start + elapsed).as_micros());
             let event = Event {
                 name,
-                start_us: started.saturating_duration_since(mine.origin).as_micros() as u64,
-                dur_us: elapsed.as_micros().min(u128::from(u32::MAX)) as u32,
+                start_us: start_us as u64,
+                dur_us: (end_us - start_us).min(u128::from(u32::MAX)) as u32,
                 depth,
             };
             let mut thread = mine.thread.lock().unwrap_or_else(PoisonError::into_inner);
