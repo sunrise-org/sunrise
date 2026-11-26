@@ -242,23 +242,27 @@ pub(super) fn tick_remote_general(
     lerps: &mut HashMap<i32, Lerp>,
 ) {
     for (id, row) in rows.iter_mut() {
-        row.previous = row.position;
-        row.previous_rotation = row.rotation;
-        row.age = row.age.wrapping_add(1);
-        let Some(l) = lerps.get_mut(id).filter(|l| l.steps > 0) else {
-            continue;
-        };
-        let n = f64::from(l.steps);
-        for k in 0..3 {
-            row.position[k] += (l.target[k] - row.position[k]) / n;
-        }
-        if let Some((yaw, pitch)) = l.rotation {
-            row.rotation[0] =
-                crate::game::remote_objects::lerp_yaw_step(row.rotation[0], yaw, l.steps);
-            row.rotation[1] += (pitch - row.rotation[1]) / l.steps as f32;
-        }
-        l.steps -= 1;
+        tick_remote_general_one(row, lerps.get_mut(id));
     }
+}
+
+/// One client tick of a single mod general entity row.
+pub(super) fn tick_remote_general_one(row: &mut RemoteGeneral, lerp: Option<&mut Lerp>) {
+    row.previous = row.position;
+    row.previous_rotation = row.rotation;
+    row.age = row.age.wrapping_add(1);
+    let Some(l) = lerp.filter(|l| l.steps > 0) else {
+        return;
+    };
+    let n = f64::from(l.steps);
+    for k in 0..3 {
+        row.position[k] += (l.target[k] - row.position[k]) / n;
+    }
+    if let Some((yaw, pitch)) = l.rotation {
+        row.rotation[0] = crate::game::remote_objects::lerp_yaw_step(row.rotation[0], yaw, l.steps);
+        row.rotation[1] += (pitch - row.rotation[1]) / l.steps as f32;
+    }
+    l.steps -= 1;
 }
 
 #[cfg(test)]

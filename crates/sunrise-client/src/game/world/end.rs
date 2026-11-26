@@ -280,6 +280,18 @@ impl EndState {
             e.position += e.velocity;
         }
     }
+    /// Entity ids of the remote eyes of ender currently in flight.
+    pub(super) fn remote_eye_ids(&self) -> Vec<u32> {
+        self.eyes.iter().map(|e| e.id).collect()
+    }
+    /// One client tick of a single eye of ender by id.
+    pub(super) fn step_remote_eye(&mut self, id: u32) {
+        if let Some(e) = self.eyes.iter_mut().find(|e| e.id == id) {
+            e.previous = e.position;
+            e.life += 1;
+            e.position += e.velocity;
+        }
+    }
     /// A server's move: an eye has no interpolation handler, so
     /// `moveOrInterpolateTo` puts it there at once. False when `id` isn't one.
     pub(in crate::game) fn remote_eye_pose(&self, id: u32) -> Option<([f64; 3], [f64; 3])> {

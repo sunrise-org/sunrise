@@ -9,12 +9,13 @@ pub trait Hooks {
     /// (removing the `entity_tick_listened` opt-in poll hook, the `entity_tick_each` /
     /// `entity_tick_each_entity` registrar flags, and family batching) and carries one entity
     /// (`entity`, `kind`). Version 5 adds the server's frames, paintings, armor stands and thrown
-    /// tridents.
+    /// tridents. Version 6 adds, on a client, every entity it ticks and the local player, as
+    /// `entity_tick_pre` does.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_tick_post",
         dispatch = "flat",
         side = "both",
-        version = 5,
+        version = 6,
         contract = "listen",
         neoforge = "EntityTickEvent.Post",
         cancellable = false

@@ -209,13 +209,45 @@ impl Game<'_> {
     }
     /// `OminousItemSpawner.tick` on a client: `tickCount` and `tickClient`,
     /// the particles every 5 game ticks; only the server spawns the item.
+    #[cfg(test)]
     pub(super) fn tick_remote_ominous_item_spawners(&mut self) {
-        let at: Vec<[f64; 3]> = self.ominous_spawners.iter().map(|s| s.position).collect();
-        self.ominous_spawners.for_each_mut(|s| s.tick_count += 1);
-        if self.world.game_time % 5 == 0 {
-            for position in at {
-                self.ominous_spawner_particles(position);
+        let mut round = self.native_tick_round();
+        let mut visited = sunrise_client::fast_hash::FxHashSet::default();
+        self.tick_remote_ominous_item_spawners_with(&mut round, &mut visited);
+    }
+
+    pub(super) fn tick_remote_ominous_item_spawners_with(
+        &mut self,
+        round: &mut crate::game::native_ticks::TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
+        if !round.told_listening() {
+            let at: Vec<[f64; 3]> = self.ominous_spawners.iter().map(|s| s.position).collect();
+            self.ominous_spawners.for_each_mut(|s| s.tick_count += 1);
+            if self.world.game_time % 5 == 0 {
+                for position in at {
+                    self.ominous_spawner_particles(position);
+                }
             }
+            return;
+        }
+        let ids: Vec<u32> = self.ominous_spawners.iter().map(|s| s.id).collect();
+        let spawn_particles = self.world.game_time % 5 == 0;
+        for id in ids {
+            visited.insert(id);
+            if !self.client_tick_pre_one(round, id, "minecraft:ominous_item_spawner") {
+                continue;
+            }
+            if let Some(i) = self.ominous_spawners.iter().position(|s| s.id == id) {
+                let position = self.ominous_spawners.update(i, |s| {
+                    s.tick_count += 1;
+                    s.position
+                });
+                if spawn_particles {
+                    self.ominous_spawner_particles(position);
+                }
+            }
+            self.native_tick_post_one(round, id, "minecraft:ominous_item_spawner");
         }
     }
     /// `spawnItem`: a projectile shot down, or an item entity; level event

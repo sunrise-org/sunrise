@@ -211,6 +211,26 @@ impl Game<'_> {
         }
     }
 
+    /// `Entity.commonTick` and `native_entity_tick_pre` for one client entity about to tick:
+    /// a passenger counts before its Pre (`ClientLevel.tickPassenger` / `Entity.rideTick`),
+    /// a root counts once its Pre let it through (`ClientLevel.tickNonPassenger`).
+    pub(in crate::game) fn client_tick_pre_one(
+        &mut self,
+        round: &mut TickRound,
+        id: u32,
+        kind: &str,
+    ) -> bool {
+        let passenger = self.client_passenger(id);
+        if passenger {
+            self.count_client_tick(id);
+        }
+        let ticks = self.native_tick_pre_one(round, id, kind);
+        if ticks && !passenger {
+            self.count_client_tick(id);
+        }
+        ticks
+    }
+
     /// The entity the server keeps unsimulated at `others[i]` (`other_ticks`), at its own place
     /// in the join order: its Pre, then its Post, as nothing of it moves in between. One the Pre
     /// canceled or took out of the level hears no Post.
