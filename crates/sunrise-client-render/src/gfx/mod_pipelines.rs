@@ -95,8 +95,11 @@ pub struct IndirectSource {
     pub buffer: wgpu::Buffer,
     /// Byte offset of the first command, a multiple of 4 inside `buffer` for all `max_count`.
     pub offset: u64,
-    /// How many commands are drawn.
+    /// How many commands are drawn at most.
     pub max_count: u32,
+    /// The buffer and byte offset of the GPU-written `u32` count of commands to draw, itself
+    /// bounded by `max_count` (`multi_draw_indirect_count`); `None` draws `max_count`.
+    pub count: Option<(wgpu::Buffer, u64)>,
 }
 
 impl IndirectSource {
@@ -118,6 +121,7 @@ impl IndirectSource {
             buffer,
             offset,
             max_count,
+            count: None,
         };
         let stride = if source.index_buffer().is_some() {
             mod_api::INDIRECT_INDEXED_DRAW_SIZE
@@ -142,6 +146,30 @@ impl IndirectSource {
             return Err(mod_api::PipelineDrawError::InvalidIndirect);
         }
         Ok(source)
+    }
+
+    /// Take the number of commands from the `u32` at byte `offset` of `buffer` instead of
+    /// drawing `max_count` of them: refused with `UnsupportedFeature` unless the device has
+    /// `MULTI_DRAW_INDIRECT_COUNT` (`supported`, [`mod_api::RenderCapabilities::multi_draw_indirect_count`]),
+    /// and with `InvalidIndirect` unless `buffer` has `INDIRECT` usage and holds 4 bytes at a
+    /// 4-byte `offset`. The device reads `min(count, max_count)`, so no clamp is added.
+    pub fn with_count(
+        mut self,
+        supported: bool,
+        buffer: wgpu::Buffer,
+        offset: u64,
+    ) -> Result<Self, mod_api::PipelineDrawError> {
+        if !supported {
+            return Err(mod_api::PipelineDrawError::UnsupportedFeature);
+        }
+        if !buffer.usage().contains(wgpu::BufferUsages::INDIRECT)
+            || !offset.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+            || offset.checked_add(4).is_none_or(|end| end > buffer.size())
+        {
+            return Err(mod_api::PipelineDrawError::InvalidIndirect);
+        }
+        self.count = Some((buffer, offset));
+        Ok(self)
     }
 
     /// The index buffer and format that make the commands indexed, if any.
@@ -3253,6 +3281,7 @@ impl ModPipelines {
                                 buffer: indirect.buffer.clone(),
                                 offset: indirect.offset,
                                 count: indirect.max_count,
+                                count_buffer: indirect.count.clone(),
                                 index: indirect
                                     .index_buffer()
                                     .map(|(buf, format)| (buf.clone(), *format)),
@@ -4181,10 +4210,11 @@ impl ModPipelines {
                         pass.set_vertex_buffer(*binding, buf.slice(0..*len));
                     }
                 }
-                // One path on every backend: `max_count` commands, those the mod's culling
-                // shader zeroed (`instance_count = 0`) drawing nothing.
-                match indirect.index_buffer() {
-                    Some((ibuf, fmt)) => {
+                // `max_count` commands, those the mod's culling shader zeroed
+                // (`instance_count = 0`) drawing nothing; or, with a count buffer (only built on
+                // a device with `MULTI_DRAW_INDIRECT_COUNT`), the `u32` the GPU wrote there.
+                match (indirect.index_buffer(), &indirect.count) {
+                    (Some((ibuf, fmt)), None) => {
                         pass.set_index_buffer(ibuf.slice(..), *fmt);
                         pass.multi_draw_indexed_indirect(
                             &indirect.buffer,
@@ -4192,9 +4222,26 @@ impl ModPipelines {
                             indirect.max_count,
                         );
                     }
-                    None => pass.multi_draw_indirect(
+                    (Some((ibuf, fmt)), Some((count, count_offset))) => {
+                        pass.set_index_buffer(ibuf.slice(..), *fmt);
+                        pass.multi_draw_indexed_indirect_count(
+                            &indirect.buffer,
+                            indirect.offset,
+                            count,
+                            *count_offset,
+                            indirect.max_count,
+                        );
+                    }
+                    (None, None) => pass.multi_draw_indirect(
                         &indirect.buffer,
                         indirect.offset,
+                        indirect.max_count,
+                    ),
+                    (None, Some((count, count_offset))) => pass.multi_draw_indirect_count(
+                        &indirect.buffer,
+                        indirect.offset,
+                        count,
+                        *count_offset,
                         indirect.max_count,
                     ),
                 }
@@ -7089,6 +7136,244 @@ void main() {
                 .resolve_indirect(None, mesh, set.vertex_bindings(0).unwrap())
                 .unwrap_err(),
             mod_api::PipelineDrawError::Mesh(mod_api::MeshError::Stale)
+        );
+    }
+
+    /// One pipeline of flat-coloured triangles from `PackedPos` (pixels of the 64-wide frame) and
+    /// `PackedColor`, with a single vertex binding.
+    fn count_pipelines() -> Pipelines {
+        let vsh = "\
+#version 330
+in uvec4 PackedPos;
+in vec4 PackedColor;
+out vec4 vertexColor;
+void main() {
+    vec2 ndc = vec2(float(PackedPos.x) / 32.0 - 1.0, 1.0 - float(PackedPos.y) / 32.0);
+    gl_Position = vec4(ndc, 0.5, 1.0);
+    vertexColor = PackedColor;
+}
+";
+        let fsh = "\
+#version 330
+in vec4 vertexColor;
+out vec4 fragColor;
+void main() {
+    fragColor = vertexColor;
+}
+";
+        let fmt = VertexFormat::builder(VertexStepMode::Vertex)
+            .attribute("PackedPos", VertexAttributeFormat::Uint8x4)
+            .attribute("PackedColor", VertexAttributeFormat::Unorm8x4)
+            .build()
+            .unwrap();
+        let id = Identifier::parse("example:indirect_count").unwrap();
+        let reg = [RenderPipeline::new(
+            id.clone(),
+            id,
+            PipelineBlend::Opaque,
+            WorldDepth::ThroughWalls,
+        )
+        .topology(PrimitiveTopology::Triangles)
+        .vertex_binding(0, fmt)];
+        Pipelines::build(&reg, 1, |file| {
+            if file.ends_with(".vsh") {
+                Ok(Some(vsh.to_owned()))
+            } else if file.ends_with(".fsh") {
+                Ok(Some(fsh.to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        })
+        .unwrap()
+    }
+
+    /// A buffer made the way a mod's `indirect` storage buffer is, written with `bytes`.
+    fn indirect_buffer(
+        gpu: &(wgpu::Device, wgpu::Queue),
+        storage: &mut crate::gfx::mod_storage::ModStorageBuffers,
+        size: u64,
+        bytes: &[u8],
+    ) -> wgpu::Buffer {
+        let buffer = storage
+            .create(
+                &gpu.0,
+                None,
+                &mod_api::StorageBufferDescriptor::new(size).indirect(true),
+            )
+            .unwrap();
+        storage.write_range(None, buffer, 0, bytes).unwrap();
+        storage.flush(&gpu.0, &gpu.1);
+        storage.resolve_buffer(None, buffer).unwrap()
+    }
+
+    /// Ten valid indexed commands, each drawing its own quad, with a GPU-written count of 3 in a
+    /// second `indirect` buffer: exactly the first three quads are drawn, and the count buffer is
+    /// refused unless it is `indirect`, 4-aligned and holds 4 bytes at its offset.
+    #[test]
+    #[ignore = "daily"]
+    fn a_gpu_count_of_three_draws_three_of_ten_commands() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+        let features = adapter.features() & wgpu::Features::MULTI_DRAW_INDIRECT_COUNT;
+        if features.is_empty() {
+            eprintln!("skipped: the adapter has no MULTI_DRAW_INDIRECT_COUNT");
+            return;
+        }
+        let Some(gpu) = crate::gfx::test_gpu::optional_device_with(
+            &adapter,
+            &wgpu::DeviceDescriptor {
+                required_features: features,
+                ..Default::default()
+            },
+        ) else {
+            return;
+        };
+        let capabilities =
+            crate::gfx::mod_render_targets::probe_render_capabilities(&adapter, &gpu.0);
+        assert!(capabilities.multi_draw_indirect_count);
+        let set = count_pipelines();
+
+        // Ten green quads 5 pixels wide, 6 apart, at y 0..16; command `i` draws quad `i`.
+        let vertices: Vec<[u8; 8]> = (0..10u8)
+            .flat_map(|i| {
+                let x = i * 6;
+                [[x, 0], [x, 16], [x + 5, 16], [x + 5, 0]]
+                    .map(|[x, y]| [x, y, 0, 0, 0, 220, 40, 255])
+            })
+            .collect();
+        let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+        let vb_inits = [mod_api::MeshBufferInit::from_bytes(
+            8,
+            bytemuck::cast_slice(&vertices),
+        )];
+        let desc = mod_api::MeshDescriptor::new(&vb_inits).with_indices(
+            mod_api::MeshIndexInit::from_bytes(IndexFormat::Uint16, bytemuck::cast_slice(&indices)),
+        );
+        let mut meshes = crate::gfx::mod_meshes::ModMeshes::default();
+        let mesh = meshes.create_mesh(&gpu.0, &gpu.1, None, &desc).unwrap();
+        let resolved = meshes
+            .resolve_indirect(None, mesh, set.vertex_bindings(0).unwrap())
+            .unwrap();
+
+        let commands: Vec<[u32; 5]> = (0..10u32).map(|i| [6, 1, 0, 4 * i, 0]).collect();
+        let mut storage = crate::gfx::mod_storage::ModStorageBuffers::default();
+        let commands_buffer =
+            indirect_buffer(&gpu, &mut storage, 200, bytemuck::cast_slice(&commands));
+        let counts: [u32; 4] = [3, 0, 0, 0];
+        let counts_buffer = indirect_buffer(&gpu, &mut storage, 16, bytemuck::cast_slice(&counts));
+        let indirect = IndirectSource::new(
+            PrimitiveTopology::Triangles,
+            Some(resolved),
+            commands_buffer,
+            0,
+            10,
+        )
+        .unwrap();
+
+        let with_count = |buffer: &wgpu::Buffer, offset| {
+            indirect.clone().with_count(true, buffer.clone(), offset)
+        };
+        assert!(with_count(&counts_buffer, 0).is_ok());
+        assert!(with_count(&counts_buffer, 12).is_ok());
+        for offset in [2, 16, u64::MAX - 3] {
+            assert_eq!(
+                with_count(&counts_buffer, offset).map(|_| ()),
+                Err(mod_api::PipelineDrawError::InvalidIndirect),
+                "offset {offset}"
+            );
+        }
+        let plain = gpu.0.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        assert_eq!(
+            with_count(&plain, 0).map(|_| ()),
+            Err(mod_api::PipelineDrawError::InvalidIndirect)
+        );
+        let indirect = with_count(&counts_buffer, 0).unwrap();
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut primitives = WorldPrimitives::new(&gpu.0, (format, false));
+        let draw_cmd = PipelineDraw {
+            slot: 0,
+            stage: 4,
+            modifier_stack: 0,
+            draw: MeshDraw::vertices(0..0),
+            source: PipelineDrawSource::Indirect(indirect),
+            bindings: None,
+        };
+        let batch = Batch {
+            set: Some(&set),
+            draws: std::slice::from_ref(&draw_cmd),
+            time: 0.0,
+            ..Default::default()
+        };
+        let at = render(&gpu, &mut primitives, format, batch, STAGES - 1);
+        for quad in 0..10 {
+            let x = quad * 6 + 2;
+            if quad < 3 {
+                assert_near(
+                    at(x, 4),
+                    [0.0, 220.0, 40.0, 255.0],
+                    1.0,
+                    &format!("command {quad} is below the GPU count"),
+                );
+            } else {
+                assert_eq!(
+                    at(x, 4),
+                    at(x, 40),
+                    "command {quad} is past the GPU count of 3"
+                );
+            }
+        }
+    }
+
+    /// A device made without `MULTI_DRAW_INDIRECT_COUNT` reports it missing and refuses a count
+    /// buffer with `UnsupportedFeature`, for indexed and non-indexed commands alike.
+    #[test]
+    #[ignore = "daily"]
+    fn a_gpu_count_is_refused_without_the_device_feature() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((adapter, device, queue)) = crate::gfx::test_gpu::optional_device() else {
+            return;
+        };
+        let capabilities =
+            crate::gfx::mod_render_targets::probe_render_capabilities(&adapter, &device);
+        assert!(!capabilities.multi_draw_indirect_count);
+        let supported = capabilities.multi_draw_indirect_count;
+        let gpu = (device, queue);
+        let mut storage = crate::gfx::mod_storage::ModStorageBuffers::default();
+        let commands = indirect_buffer(&gpu, &mut storage, 40, &[0; 40]);
+        let counts = indirect_buffer(&gpu, &mut storage, 16, &[0; 16]);
+        let non_indexed =
+            IndirectSource::new(PrimitiveTopology::Triangles, None, commands.clone(), 0, 2)
+                .unwrap();
+        assert_eq!(
+            non_indexed
+                .with_count(supported, counts.clone(), 0)
+                .map(|_| ()),
+            Err(mod_api::PipelineDrawError::UnsupportedFeature)
+        );
+        let set = count_pipelines();
+        let vb_inits = [mod_api::MeshBufferInit::from_bytes(8, &[0u8; 24])];
+        let desc = mod_api::MeshDescriptor::new(&vb_inits).with_indices(
+            mod_api::MeshIndexInit::from_bytes(IndexFormat::Uint16, &[0u8; 12]),
+        );
+        let mut meshes = crate::gfx::mod_meshes::ModMeshes::default();
+        let mesh = meshes.create_mesh(&gpu.0, &gpu.1, None, &desc).unwrap();
+        let resolved = meshes
+            .resolve_indirect(None, mesh, set.vertex_bindings(0).unwrap())
+            .unwrap();
+        let indexed =
+            IndirectSource::new(PrimitiveTopology::Triangles, Some(resolved), commands, 0, 2)
+                .unwrap();
+        assert_eq!(
+            indexed.with_count(supported, counts, 0).map(|_| ()),
+            Err(mod_api::PipelineDrawError::UnsupportedFeature)
         );
     }
 

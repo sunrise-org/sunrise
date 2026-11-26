@@ -658,6 +658,9 @@ pub(super) fn probe_render_capabilities(
         device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
+        device
+            .features()
+            .contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT),
     )
 }
 

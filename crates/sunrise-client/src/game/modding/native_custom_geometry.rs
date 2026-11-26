@@ -546,7 +546,15 @@ impl Game<'_> {
     /// The optional device features of the active device; all off without one.
     pub(super) fn render_capabilities(&self) -> mod_api::RenderCapabilities {
         self.mod_gpu().map_or_else(
-            || mod_api::__private::built::render_capabilities(false, Vec::new(), false, false),
+            || {
+                mod_api::__private::built::render_capabilities(
+                    false,
+                    Vec::new(),
+                    false,
+                    false,
+                    false,
+                )
+            },
             |gpu| gpu.render_capabilities(),
         )
     }
@@ -1166,7 +1174,7 @@ impl Game<'_> {
     /// Check a GPU-driven [`mod_api::IndirectDraw`] against its pipeline, mesh and command
     /// buffer, before anything is recorded: the pipeline's vertex bindings against the mesh (a
     /// pipeline with bindings needs a mesh), the command buffer's handle, and the rest in
-    /// `IndirectSource::new`.
+    /// `IndirectSource::new`; a count buffer is resolved and checked by `IndirectSource::with_count`.
     fn resolve_indirect_draw(
         &self,
         slot: u32,
@@ -1188,13 +1196,26 @@ impl Game<'_> {
         let buffer = gpu
             .resolve_mod_storage_buffer(owner, draw.indirect_buffer)
             .map_err(PipelineDrawError::Buffer)?;
-        sunrise_client::gfx::mod_pipelines::IndirectSource::new(
+        let source = sunrise_client::gfx::mod_pipelines::IndirectSource::new(
             topology,
             mesh,
             buffer,
             draw.indirect_offset,
             draw.max_count,
-        )
+        )?;
+        match draw.count_buffer {
+            Some(counts) => {
+                let counts = gpu
+                    .resolve_mod_storage_buffer(owner, counts)
+                    .map_err(PipelineDrawError::Buffer)?;
+                source.with_count(
+                    gpu.render_capabilities().multi_draw_indirect_count,
+                    counts,
+                    draw.count_offset,
+                )
+            }
+            None => Ok(source),
+        }
     }
     /// Record a GPU-driven [`mod_api::IndirectDraw`] for the world pass, after checking it.
     pub(super) fn native_world_draw_indirect(

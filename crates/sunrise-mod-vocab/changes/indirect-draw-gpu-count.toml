@@ -1,0 +1,12 @@
+ids = [
+    "type:IndirectDraw",
+    "handle:IndirectDraw::with_count_buffer",
+    "type:PipelineDrawError",
+    "type:RenderCapabilities",
+]
+why = """Let an IndirectDraw take its number of commands from a GPU buffer (`multi_draw_indirect_count`: Vulkan's vkCmdDrawIndexedIndirectCount, Direct3D 12's ExecuteIndirect with a count buffer). IndirectDraw::with_count_buffer(buffer, offset) reads a u32 at `offset` of an `indirect` StorageBuffer and the device draws min(count, max_count) commands, so a compute culling pass can compact its visible commands instead of leaving one instance_count = 0 slot per culled section. The existing `StorageBufferDescriptor::indirect()` covers the count buffer; a count buffer that is not indirect, is misaligned or does not hold 4 bytes at the offset is PipelineDrawError::InvalidIndirect. RenderCapabilities gains `multi_draw_indirect_count` (the device feature MULTI_DRAW_INDIRECT_COUNT, exposed by wgpu on Vulkan and Direct3D 12 only), and a count buffer on a device without it is refused with the new PipelineDrawError::UnsupportedFeature: no emulation, no readback, no clamp pass. Vanilla 26.3 has only fixed-count drawIndexedIndirect; the count form is the graphics APIs' own."""
+migrate = """
+- Code that builds `RenderCapabilities` by hand adds the `multi_draw_indirect_count` field.
+- A `match` on `PipelineDrawError` adds the `UnsupportedFeature` arm.
+- To use a GPU count, check `RenderCapabilities::multi_draw_indirect_count` and keep the fixed-slot route (`instance_count = 0`) for the adapters without it.
+"""

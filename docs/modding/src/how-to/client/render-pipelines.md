@@ -632,9 +632,22 @@ ctx.draw_indirect(
 
 `draw_indirect` is on `WorldDrawContext`, `PrepareRenderBuffersContext` (with the stage, as
 `draw_mesh` is) and `OffscreenDrawContext`. It draws exactly `max_count` commands from
-`indirect_offset`, the same on every backend, as vanilla's `RenderPass.drawIndexedIndirect(commands,
-drawCount)` does. There is no GPU-written count: have the culling shader write `instance_count = 0`
-into each slot it drops, which draws nothing. A `max_count` of zero is a legal no-op.
+`indirect_offset`, as vanilla's `RenderPass.drawIndexedIndirect(commands, drawCount)` does: have
+the culling shader write `instance_count = 0` into each slot it drops, which draws nothing. A
+`max_count` of zero is a legal no-op.
+
+- **GPU count.** `IndirectDraw::with_count_buffer(buffer, offset)` makes the GPU decide how many
+  commands are drawn: the device reads the `u32` at `offset` of `buffer` and draws
+  `min(count, max_count)` commands, so a compute pass can compact the visible commands to the
+  front and nothing walks the culled slots. `buffer` is created with `indirect: true` like the
+  command buffer (the same flag covers both), `offset` is a multiple of 4 and `offset + 4` lies
+  inside it; anything else is `PipelineDrawError::InvalidIndirect` (a stale handle is
+  `PipelineDrawError::Buffer`). It needs `RenderCapabilities::multi_draw_indirect_count`, the
+  device feature `MULTI_DRAW_INDIRECT_COUNT`, which wgpu exposes on Vulkan and Direct3D 12 and not
+  on Metal or OpenGL (macOS, in particular, never has it). Without it the draw is refused with
+  `PipelineDrawError::UnsupportedFeature`: the engine neither emulates it nor reads the count back.
+  Check the capability once and choose the route: with it, a compacted buffer and a GPU count;
+  without it, the fixed slots above.
 
 - **Layout.** With a `MeshRef` that has an index buffer, each command is five 4-byte words
   (`index_count, instance_count, first_index, base_vertex, first_instance`; `INDIRECT_INDEXED_DRAW_SIZE`

@@ -1612,13 +1612,31 @@ impl PackPost {
                             buffer,
                             offset,
                             count,
+                            count_buffer,
                             index,
-                        } => match index {
-                            Some((index_buffer, format)) => {
+                        } => match (index, count_buffer) {
+                            (Some((index_buffer, format)), None) => {
                                 rp.set_index_buffer(index_buffer.slice(..), *format);
                                 rp.multi_draw_indexed_indirect(buffer, *offset, *count);
                             }
-                            None => rp.multi_draw_indirect(buffer, *offset, *count),
+                            (Some((index_buffer, format)), Some((counts, count_offset))) => {
+                                rp.set_index_buffer(index_buffer.slice(..), *format);
+                                rp.multi_draw_indexed_indirect_count(
+                                    buffer,
+                                    *offset,
+                                    counts,
+                                    *count_offset,
+                                    *count,
+                                );
+                            }
+                            (None, None) => rp.multi_draw_indirect(buffer, *offset, *count),
+                            (None, Some((counts, count_offset))) => rp.multi_draw_indirect_count(
+                                buffer,
+                                *offset,
+                                counts,
+                                *count_offset,
+                                *count,
+                            ),
                         },
                     }
                 }

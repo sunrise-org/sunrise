@@ -648,8 +648,10 @@ pub trait WorldDrawContext {
     /// (never panics, never triggers a GPU validation error): pipeline liveness
     /// ([`PipelineDrawError::Pipeline`]), mesh ownership, liveness and strides
     /// ([`PipelineDrawError::Mesh`]), the command buffer's handle ([`PipelineDrawError::Buffer`])
-    /// and its use as indirect arguments ([`PipelineDrawError::InvalidIndirect`]), and the
-    /// bindings. A `max_count` of zero is a legal no-op.
+    /// and its use as indirect arguments ([`PipelineDrawError::InvalidIndirect`]), a GPU count
+    /// buffer on an adapter without [`RenderCapabilities::multi_draw_indirect_count`]
+    /// ([`PipelineDrawError::UnsupportedFeature`]), and the bindings. A `max_count` of zero is a
+    /// legal no-op.
     fn draw_indirect(&mut self, draw: &IndirectDraw<'_>) -> Result<(), PipelineDrawError> {
         let _ = draw;
         Err(PipelineDrawError::Pipeline(RenderPipelineError::Invalid))

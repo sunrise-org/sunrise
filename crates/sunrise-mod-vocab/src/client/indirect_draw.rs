@@ -17,10 +17,19 @@ pub const INDIRECT_INDEXED_DRAW_SIZE: u64 = 20;
 /// [`crate::WorldDrawContext::draw_indirect`], [`crate::PrepareRenderBuffersContext::draw_indirect`]
 /// and [`crate::OffscreenDrawContext::draw_indirect`].
 ///
-/// The engine draws exactly `max_count` commands from `indirect_offset` (vanilla's
+/// By default the engine draws exactly `max_count` commands from `indirect_offset` (vanilla's
 /// `drawIndexedIndirect(commands, drawCount)`), the same on every backend. A command the mod's
 /// culling shader does not want drawn is left in place with `instance_count = 0`, which draws
-/// nothing; there is no separate GPU-written count.
+/// nothing.
+///
+/// [`Self::with_count_buffer`] makes the GPU decide how many are drawn instead: a compute shader
+/// writes a `u32` count into a buffer, and the device draws `min(count, max_count)` commands, so
+/// a culling pass can compact the visible commands to the front and the CPU never walks the
+/// culled slots. That is `multi_draw_indirect_count` (Vulkan's `vkCmdDrawIndexedIndirectCount`,
+/// Direct3D 12's `ExecuteIndirect` with a count buffer) and exists only where
+/// [`crate::RenderCapabilities::multi_draw_indirect_count`] is set; elsewhere the draw is refused
+/// with [`crate::PipelineDrawError::UnsupportedFeature`], never emulated, so check the capability
+/// and keep the fixed-slot route for the adapters without it.
 ///
 /// The command layout follows `mesh`: with a [`MeshRef`] that has an index buffer, each command is
 /// an indexed one of [`INDIRECT_INDEXED_DRAW_SIZE`] bytes and the index format is the mesh's
@@ -52,6 +61,11 @@ pub struct IndirectDraw<'a> {
     pub indirect_offset: u64,
     /// How many commands are drawn from `indirect_offset`. Zero is a legal no-op.
     pub max_count: u32,
+    /// The buffer holding the GPU-written command count, set by [`Self::with_count_buffer`].
+    pub count_buffer: Option<StorageBufferRef>,
+    /// Byte offset of the `u32` count in `count_buffer`: a multiple of 4, with
+    /// `count_offset + 4` inside the buffer. Ignored while `count_buffer` is `None`.
+    pub count_offset: u64,
     /// The pipeline's set-1 bindings for the draw.
     pub bindings: &'a DrawBindings<'a>,
 }
@@ -70,6 +84,8 @@ impl<'a> IndirectDraw<'a> {
             indirect_buffer,
             indirect_offset: 0,
             max_count,
+            count_buffer: None,
+            count_offset: 0,
             bindings,
         }
     }
@@ -83,6 +99,18 @@ impl<'a> IndirectDraw<'a> {
     /// Start at byte `offset` of the buffer.
     pub const fn with_offset(mut self, offset: u64) -> Self {
         self.indirect_offset = offset;
+        self
+    }
+
+    /// Draw `min(count, max_count)` commands, `count` being the `u32` the GPU wrote at byte
+    /// `offset` of `buffer`. `buffer` must have been created with
+    /// [`crate::StorageBufferDescriptor::indirect`], `offset` be a multiple of 4, and
+    /// `offset + 4` lie inside it; the commands still lie inside the command buffer for all
+    /// `max_count`. Refused with [`crate::PipelineDrawError::UnsupportedFeature`] unless
+    /// [`crate::RenderCapabilities::multi_draw_indirect_count`] is set.
+    pub const fn with_count_buffer(mut self, buffer: StorageBufferRef, offset: u64) -> Self {
+        self.count_buffer = Some(buffer);
+        self.count_offset = offset;
         self
     }
 }
@@ -104,5 +132,9 @@ mod tests {
         );
         let draw = draw.with_mesh(mesh).with_offset(40);
         assert_eq!((draw.mesh, draw.indirect_offset), (Some(mesh), 40));
+        assert_eq!((draw.count_buffer, draw.count_offset), (None, 0));
+        let counts = StorageBufferRef::from_parts(4, 1).unwrap();
+        let draw = draw.with_count_buffer(counts, 8);
+        assert_eq!((draw.count_buffer, draw.count_offset), (Some(counts), 8));
     }
 }

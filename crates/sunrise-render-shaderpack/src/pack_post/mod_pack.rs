@@ -288,12 +288,15 @@ pub enum ModDrawKind {
         indices: std::ops::Range<u32>,
         base_vertex: i32,
     },
-    /// `count` GPU-written commands from `offset` of `buffer`: indexed (20 bytes each) with the
-    /// index buffer and format in `index`, else non-indexed (16 bytes each).
+    /// Up to `count` GPU-written commands from `offset` of `buffer`: indexed (20 bytes each) with
+    /// the index buffer and format in `index`, else non-indexed (16 bytes each). With
+    /// `count_buffer` (a buffer and byte offset), the number drawn is the `u32` the GPU wrote
+    /// there, at most `count`.
     Indirect {
         buffer: wgpu::Buffer,
         offset: u64,
         count: u32,
+        count_buffer: Option<(wgpu::Buffer, u64)>,
         index: Option<(wgpu::Buffer, wgpu::IndexFormat)>,
     },
 }
