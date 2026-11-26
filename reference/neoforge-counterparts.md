@@ -6,7 +6,7 @@ The book build renders it directly from those declarations; there is no generate
 A key names the event class (`PlayerEvent.Clone`) or runtime callback (`IPayloadHandler.handle`);
 notes about cancelling or the event bus belong in the hook's `///` doc, not in the key.
 
-752 hooks: 453 name a counterpart, 294 say they have none.
+765 hooks: 455 name a counterpart, 301 say they have none.
 This is a declaration reference, not an independent verification of every mapping. Registration events and the
 callbacks they register are different moments: packet receipt names `IPayloadHandler.handle`, and per-draw item
 decoration names `IItemDecorator.render`, not their registration events. A `none` explains why no event or method
@@ -160,6 +160,7 @@ matches that hook's runtime contract.
 | `flip_frame` | client | `FlipFrameEvent` |
 | `fluid_place_block` | server | `BlockEvent.FluidPlaceBlockEvent` |
 | `fluid_tooltip` | client | `FluidTooltipEvent` |
+| `frame_graph_setup` | client | `FrameGraphSetupEvent` |
 | `friction` | both | `IBlockExtension.getFriction` |
 | `game_rule_changed` | server | `GameRuleChangedEvent` |
 | `game_shutting_down` | both | `GameShuttingDownEvent` |
@@ -372,6 +373,7 @@ matches that hook's runtime contract.
 | `register_model_loaders` | client | `ModelEvent.RegisterLoaders` |
 | `register_particle_groups` | client | `RegisterParticleGroupsEvent` |
 | `register_particle_providers` | client | `RegisterParticleProvidersEvent` |
+| `register_pipeline_modifiers` | client | `RegisterPipelineModifiersEvent` |
 | `register_preset_editors` | client | `RegisterPresetEditorsEvent` |
 | `register_range_select_item_model_property` | client | `RegisterRangeSelectItemModelPropertyEvent` |
 | `register_render_pipelines` | client | `RegisterRenderPipelinesEvent` |
@@ -530,11 +532,13 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `chat_recipient` | server | NeoForge has no per-receiver server chat event |
 | `chat_suggestion_applied` | client | vanilla command suggestions; NeoForge adds no event |
 | `client_block_changed` | client | vanilla ClientLevel.setBlock; NeoForge adds no client event for it |
+| `client_break_progress` | client | vanilla ClientLevel.destroyBlockProgress; NeoForge adds no client event for it |
 | `client_identity` | client | NeoForge patches ClientBrandRetriever.getClientModName to use BrandingControl.getClientBranding, without a per-address event |
 | `client_mining_predict` | client | client mining prediction |
 | `client_packet` | client | NeoForge has no raw play-packet receive event |
 | `client_packet_send` | client | NeoForge has no raw play-packet send event |
 | `client_pick` | client | vanilla Minecraft.pick, before tick inputs and frame extraction |
+| `client_take_item_entity` | client | vanilla ClientPacketListener.handleTakeItemEntity; NeoForge's pickup events are server-side |
 | `collision_shape` | both | vanilla BlockBehaviour.getCollisionShape with its CollisionContext; NeoForge adds no event or extension for it |
 | `component_hover` | client | vanilla GuiGraphicsExtractor.componentHoverEffect; NeoForge adds no event |
 | `compost_item` | server | NeoForge has no such event |
@@ -551,9 +555,12 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `destroy_progress` | both | vanilla BlockBehaviour.getDestroyProgress; NeoForge adds no event or extension for it |
 | `dispense_item` | server | vanilla DispenserBlock.getDispenseMethod; NeoForge adds no event or extension for it |
 | `dispense_method` | server | vanilla DispenserBlock.getDispenseMethod; NeoForge adds no event or extension for it |
-| `dragon_egg_form` | server | NeoForge has no such event |
+| `dragon_fight_tick` | server | NeoForge has no dragon fight event |
+| `dragon_fight_won` | server | NeoForge has no dragon fight event |
+| `dragon_respawn_stage` | server | NeoForge has no dragon fight event |
 | `emissive` | client | Sunrise-only; NeoForge has no counterpart |
 | `enchant_item` | server | NeoForge has no such event |
+| `end_crystal_destroyed` | server | NeoForge has no dragon fight event |
 | `entities_load` | server | NeoForge has no such event |
 | `entities_unload` | server | NeoForge has no such event |
 | `entity_break_door` | server | NeoForge has no such event |
@@ -616,6 +623,7 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `lightning_strike` | server | NeoForge has no such event |
 | `living_death_message` | server | vanilla TamableAnimal.die owner message; separate from living death |
 | `living_death_post` | server | LivingDeathEvent fires before the death |
+| `living_death_protection` | server | vanilla LivingEntity.checkTotemDeathProtection; accessory mods inject there |
 | `living_flying_speed` | both | vanilla LivingEntity.getFlyingSpeed; NeoForge adds no event or extension for it |
 | `living_jump_power` | both | vanilla LivingEntity.getJumpPower; not LivingEvent.LivingJumpEvent |
 | `living_speed` | both | vanilla LivingEntity.getSpeed; NeoForge adds no event or extension for it |
@@ -728,11 +736,12 @@ A hook with no NeoForge counterpart is judged on its merits like any other. The 
 | `section_visibility` | client | verified |
 | `server_tick_rate_changed` | server | vanilla MinecraftServer.onTickRateChanged; NeoForge adds no event or extension for it |
 | `set_placed_by` | server | vanilla Block.setPlacedBy |
-| `shader_params` | client | Sunrise-only; NeoForge has no counterpart |
 | `should_apply_effect_tick_this_tick` | server | vanilla MobEffect.shouldApplyEffectTickThisTick |
 | `should_redstone_wire_connect_to` | server | vanilla BlockBehaviour.shouldRedstoneWireConnectTo; NeoForge adds no event or extension for it |
 | `sign_changed` | server | NeoForge has no sign-editing event |
 | `sleep_skip_night` | server | SleepFinishedTimeEvent cancels only the clock move |
+| `sleep_status_announce` | server | NeoForge has no such event |
+| `sleepers_needed` | server | vanilla SleepStatus.sleepersNeeded; NeoForge adds no event |
 | `smoke_source` | both | vanilla CampfireBlock.isSmokeSource; NeoForge adds no event or extension for it |
 | `spawn_change` | server | NeoForge has no such event |
 | `sponge_absorb` | server | NeoForge has no such event |
