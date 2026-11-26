@@ -682,19 +682,30 @@ class PrReadyTests(unittest.TestCase):
                                   {"sunrise-world"}, {})
             self.assertIn("--changed-files", steps[-1].command)
 
-    def test_ci_s_rust_follows_the_six_week_train(self):
-        self.assertEqual(pr_ready.ci_rust(datetime.date(2025, 2, 20)), 85)
-        self.assertEqual(pr_ready.ci_rust(datetime.date(2025, 6, 26)), 88)
-        self.assertEqual(pr_ready.ci_rust(datetime.date(2026, 10, 31)), 99)
-        self.assertEqual(pr_ready.ci_rust(datetime.date(2026, 11, 12)), 100)
+    def test_ci_s_rust_is_the_pin_ci_installs(self):
+        pinned = pr_ready.ci_rust()
+        major, minor, patch = (int(part) for part in (pr_ready.ROOT / "tools/ci/rust-version").read_text().split("."))
+        self.assertEqual(pinned, (major, minor, patch))
+        with tempfile.TemporaryDirectory() as tmp:
+            pin = Path(tmp) / "rust-version"
+            pin.write_text("1.99.1\n")
+            self.assertEqual(pr_ready.ci_rust(pin), (1, 99, 1))
+            pin.write_text("1.100\n")
+            self.assertEqual(pr_ready.ci_rust(pin), (1, 100, 0))
+            pin.write_text("stable\n")
+            self.assertIsNone(pr_ready.ci_rust(pin))
+            self.assertIsNone(pr_ready.ci_rust(Path(tmp) / "missing"))
 
     def test_an_older_rust_warns_without_failing(self):
-        today = datetime.date(2026, 10, 31)
-        self.assertIsNone(pr_ready.old_rust((1, 99, 1), today))
-        self.assertIsNone(pr_ready.old_rust(None, today))
-        warning = pr_ready.old_rust((1, 97, 0), today)
-        self.assertIn("1.97.0 is older than CI's stable (1.99)", warning)
-        self.assertIn("`rustup update`", warning)
+        ci = (1, 99, 1)
+        self.assertIsNone(pr_ready.old_rust((1, 99, 1), ci))
+        self.assertIsNone(pr_ready.old_rust((1, 100, 0), ci))
+        self.assertIsNone(pr_ready.old_rust(None, ci))
+        self.assertIsNone(pr_ready.old_rust((1, 97, 0), None))
+        self.assertIn("1.99.0 is older than CI's pinned Rust (1.99.1", pr_ready.old_rust((1, 99, 0), ci))
+        warning = pr_ready.old_rust((1, 97, 0), ci)
+        self.assertIn("1.97.0 is older than CI's pinned Rust (1.99.1, tools/ci/rust-version)", warning)
+        self.assertIn("`rustup toolchain install 1.99.1`", warning)
         steps = pr_ready.plan(args(quick=True), "origin/main", {"crates/sunrise-core/src/jmath.rs"}, PACKAGES, LIBRARIES,
                               DEPENDENCIES)
         by_name = {step.name: step for step in steps}
