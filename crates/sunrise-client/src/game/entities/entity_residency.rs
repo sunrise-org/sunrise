@@ -369,6 +369,10 @@ mod tests {
             Attachments, HasAttachmentLifetime, index::AttachmentIndex,
         };
         with_game(|game| {
+            crate::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
+                game,
+                sunrise_core::position::ChunkPos::new(0, 0),
+            );
             game.reset_entity_residency();
             game.summon_with_nbt("minecraft:cushion", [0.5, 70.0, 0.5], "{}")
                 .unwrap();

@@ -123,9 +123,6 @@ pub fn snorm_format(
     (features.contains(needs) && renders).then_some(format)
 }
 
-/// The texture behind sampler `name` in a program of the shadow buffers (`shadow_space`: buffer
-/// n is shadowcolor n) or of the others, when the shadow pass runs (`shadow_pass`). `shadow` is
-/// `shadowtex1` when the program also declares `watershadow` (6.3).
 /// Whether a `ty` sampler can read a custom texture of `sample_type`: custom textures hold
 /// colours, never depth to compare against.
 pub fn fits(ty: &str, sample_type: wgpu::TextureSampleType) -> bool {
@@ -146,6 +143,9 @@ pub fn depth_linear(interface: &sunrise_shaders::Interface, linear: u8) -> [f32;
     [0, 1, usize::from(watershadow), 0].map(|n| f32::from(linear >> n & 1))
 }
 
+/// The texture behind sampler `name` in a program of the shadow buffers (`shadow_space`: buffer
+/// n is shadowcolor n) or of the others, when the shadow pass runs (`shadow_pass`). `shadow` is
+/// `shadowtex1` when the program also declares `watershadow` (6.3).
 pub fn source(name: &str, shadow_space: bool, shadow_pass: bool, watershadow: bool) -> Source {
     let shadow_color = sunrise_shaders::shadow_color(name);
     let shadow_depth = match name {
@@ -1191,11 +1191,6 @@ const POLYGON_OFFSET: wgpu::DepthBiasState = wgpu::DepthBiasState {
     clamp: 0.0,
 };
 
-/// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
-/// wgpu refuses it or it writes nothing. `formats` are its buffers' (for a program of the shadow
-/// buffers, buffer n is shadowcolor n); `shadow` the shadowcolor formats when the shadow pass
-/// runs. `water_mask` and `polygon_offset` also make the pass's depth-only pipeline
-/// (`Pass::water_mask`) and its polygon-offset one (`Pass::polygon_offset`).
 /// Match a pass's declared GLSL uniforms against mod-declared per-frame uniforms.
 /// Incompatible GLSL types leave the uniform unbound, record a note, and log a warning once
 /// per `(name, declared_ty)` without panicking.
@@ -1234,6 +1229,11 @@ fn resolve_mod_uniforms<'a>(
     (bound, handled)
 }
 
+/// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
+/// wgpu refuses it or it writes nothing. `formats` are its buffers' (for a program of the shadow
+/// buffers, buffer n is shadowcolor n); `shadow` the shadowcolor formats when the shadow pass
+/// runs. `water_mask` and `polygon_offset` also make the pass's depth-only pipeline
+/// (`Pass::water_mask`) and its polygon-offset one (`Pass::polygon_offset`).
 pub fn build_pass(
     device: &wgpu::Device,
     p: sunrise_shaders::PostProgram,
@@ -2831,11 +2831,7 @@ impl PackPost {
                     pages: false,
                 };
                 pack.mod_depth_target.set(active_depth);
-                pack.depth_compare.set(if spec.depth_test {
-                    wgpu::CompareFunction::LessEqual
-                } else {
-                    wgpu::CompareFunction::Always
-                });
+                pack.depth_compare.set(spec.depth_compare);
                 *pack.mod_vertex.borrow_mut() = own_stage.cloned();
                 let built_pass = build(program, Some(&mod_geometry));
                 pack.mod_vertex.borrow_mut().take();

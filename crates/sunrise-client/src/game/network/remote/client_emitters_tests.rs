@@ -275,6 +275,7 @@ fn replacing_a_general_entity_keeps_its_emitters_separate() {
                         mod_api::GeneralSavePolicy::Save,
                         true,
                         true,
+                        false,
                         None,
                         8,
                         1,

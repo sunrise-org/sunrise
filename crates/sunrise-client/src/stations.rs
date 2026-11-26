@@ -14,8 +14,9 @@ use sunrise_world::native_load_context::LoopContext;
 #[cfg(test)]
 mod grindstone_part_tests;
 mod models;
+#[cfg(test)]
+mod recipe_load_tests;
 pub use models::{AnvilResult, EnchantmentRow};
-use serde_json::Value;
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 /// Everything the workstation menus read, loaded once with the resources.
@@ -648,7 +649,7 @@ pub fn anvil_result(
 /// `ItemStack.getMaxStackSize`: the stack's `MAX_STACK_SIZE` component (a
 /// removed one is vanilla's default of 1), else the item's default.
 fn max_stack_size(items: &Items, stack: &ItemStack) -> u32 {
-    crate::menu::item_max_stack(items, stack)
+    crate::items::item_max_stack(items, stack)
 }
 /// `GrindstoneMenu` slot filter: damageable or enchanted, with the damageable test
 /// `ItemStack.canGrindstoneRepair`'s ([`can_grindstone_repair`]).
@@ -804,126 +805,8 @@ pub fn grindstone_experience(
     grindstone_xp_roll(grindstone_xp_base(e, input, additional), random)
 }
 
-// ---------------------------------------------------------------- smithing & stonecutting
-
-#[derive(Clone, Debug)]
-pub enum Smithing {
-    Transform {
-        id: String,
-        template: Option<Ingredient>,
-        base: Ingredient,
-        addition: Option<Ingredient>,
-        result: crate::crafting::Template,
-    },
-    Trim {
-        id: String,
-        template: Ingredient,
-        base: Ingredient,
-        addition: Ingredient,
-        pattern: crate::crafting::RecipeTrimPattern,
-    },
-}
-#[derive(Clone, Debug)]
-pub struct Stonecutting {
-    pub id: String,
-    pub input: Ingredient,
-    pub result: ItemStack,
-}
-/// One canonical parse shared by the station tables and the mod recipe view.
-#[derive(Clone, Debug)]
-pub(crate) enum ParsedStationRecipe {
-    Smithing(Smithing),
-    Stonecutting(Stonecutting),
-}
-impl ParsedStationRecipe {
-    pub(crate) fn parse(
-        id: String,
-        v: &Value,
-        ingredient: impl Fn(&Value) -> Option<Ingredient>,
-    ) -> Option<Self> {
-        match v["type"].as_str().unwrap_or("") {
-            "minecraft:smithing_transform" => {
-                // Only omitted ingredients mean empty slots; malformed present
-                // ingredients invalidate the recipe rather than becoming optional.
-                let parse_optional = |key: &str| match v.get(key) {
-                    None => Some(None),
-                    Some(value) => ingredient(value).map(Some),
-                };
-                Some(Self::Smithing(Smithing::Transform {
-                    id,
-                    template: parse_optional("template")?,
-                    base: ingredient(&v["base"])?,
-                    addition: parse_optional("addition")?,
-                    result: crate::crafting::Template::parse(&v["result"])?,
-                }))
-            }
-            "minecraft:smithing_trim" => Some(Self::Smithing(Smithing::Trim {
-                id,
-                template: ingredient(&v["template"])?,
-                base: ingredient(&v["base"])?,
-                addition: ingredient(&v["addition"])?,
-                // Use the same holder codec as item components, collapsing
-                // unstyled literal text once at the recipe boundary before
-                // publishing the typed snapshot.
-                pattern: match crate::item_data::trim::pattern_from_nbt(
-                    &crate::crafting::json_tag(v.get("pattern")?),
-                )? {
-                    crate::item_data::trim::Holder::Named(id) => {
-                        crate::crafting::RecipeTrimPattern::Reference(id.to_string())
-                    }
-                    crate::item_data::trim::Holder::Direct(pattern) => {
-                        crate::crafting::RecipeTrimPattern::Inline {
-                            asset_id: pattern.asset_id.to_string(),
-                            description: pattern.description,
-                            decal: pattern.decal,
-                        }
-                    }
-                },
-            })),
-            "minecraft:stonecutting" => Some(Self::Stonecutting(Stonecutting {
-                id,
-                input: ingredient(&v["ingredient"])?,
-                result: crate::crafting::Template::parse(&v["result"])
-                    .filter(|template| template.item.is_some())?
-                    .create(),
-            })),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn rule(&self) -> crate::crafting::RecipeRule {
-        match self {
-            Self::Stonecutting(recipe) => crate::crafting::RecipeRule::Stonecutting {
-                input: recipe.input.clone(),
-                result: recipe.result.clone(),
-            },
-            Self::Smithing(Smithing::Transform {
-                template,
-                base,
-                addition,
-                result,
-                ..
-            }) => crate::crafting::RecipeRule::SmithingTransform {
-                template: template.clone(),
-                base: base.clone(),
-                addition: addition.clone(),
-                result: result.view(),
-            },
-            Self::Smithing(Smithing::Trim {
-                template,
-                base,
-                addition,
-                pattern,
-                ..
-            }) => crate::crafting::RecipeRule::SmithingTrim {
-                template: template.clone(),
-                base: base.clone(),
-                addition: addition.clone(),
-                pattern: pattern.clone(),
-            },
-        }
-    }
-}
+pub(crate) use crate::crafting::ParsedStationRecipe;
+pub use crate::crafting::{Smithing, Stonecutting};
 #[derive(Clone, Default)]
 pub struct StationRecipes {
     pub smithing: Vec<Smithing>,
@@ -2555,167 +2438,6 @@ mod tests {
             Some(&sunrise_core::nbt::Tag::String("trim.example.wave".into()))
         );
         assert!(decal);
-    }
-
-    #[test]
-    fn smithing_transform_overlay_matches_optional_inputs_and_takes_template_result() {
-        use crate::{banner::Banners, brewing::Brewing, crafting::Recipes, creative::Names, menu};
-        let root = std::env::temp_dir().join(format!("sunrise-smithing-{}", std::process::id()));
-        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
-        fs::write(
-            root.join("items.json"),
-            r#"{
-            "minecraft:stick":{"minecraft:max_stack_size":64},
-            "minecraft:diamond":{"minecraft:max_stack_size":64},
-            "minecraft:emerald":{"minecraft:max_stack_size":64},
-            "minecraft:diamond_sword":{"minecraft:max_stack_size":1,"minecraft:max_damage":1561}
-        }"#,
-        )
-        .unwrap();
-        let context = crate::test_resources::server_load();
-        let ctx = crate::test_resources::server_loop_context();
-        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
-        let recipe = serde_json::json!({"type":"minecraft:smithing_transform",
-            "base":"minecraft:stick", "addition":"minecraft:diamond",
-            "result":{"id":"minecraft:emerald","count":3,
-                "components":{"minecraft:custom_name":"Upgraded","minecraft:repair_cost":0}}});
-        let files = vec![(
-            "recipe/test:upgrade".to_owned(),
-            vec![serde_json::to_vec(&recipe).unwrap()],
-        )];
-        let overlay = PackOverlay::new(&files);
-        let stations = StationRecipes::load(&root, &items, &overlay, &context).unwrap();
-        let e = sample();
-        let mut base = ItemStack::new("minecraft:stick", 2);
-        base.data_mut()
-            .set_loot_name("minecraft:custom_name", &serde_json::json!("Original"));
-        base.data_mut().repair_cost = 7;
-        base.data_mut().set_loot_component(
-            "minecraft:custom_data",
-            &Some(sunrise_core::json_nbt::json_to_tag(&serde_json::json!({"kept":1})).unwrap()),
-        );
-        let addition = ItemStack::new("minecraft:diamond", 2);
-        let result = stations
-            .smithing_result(ctx, &e, None, Some(&base), Some(&addition))
-            .expect("omitted template accepts an empty slot");
-        assert_eq!(
-            (&*result.item, result.count, result.repair_cost()),
-            ("minecraft:emerald", 3, 0)
-        );
-        assert_eq!(
-            result.data().unwrap().custom_name,
-            Some(sunrise_core::nbt::Tag::String("Upgraded".into()))
-        );
-        assert!(
-            result
-                .data()
-                .unwrap()
-                .other("minecraft:custom_data")
-                .is_some()
-        );
-        assert!(
-            stations
-                .smithing_result(ctx, &e, Some(&addition), Some(&base), Some(&addition))
-                .is_none()
-        );
-        assert!(
-            stations
-                .smithing_result(ctx, &e, None, Some(&base), None)
-                .is_none()
-        );
-        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE, &context).unwrap();
-        let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
-        let banners = Banners::load(&root, &defaults);
-        let names = Names::default();
-        let env = menu::Env {
-            crafting_remainder: None,
-            player: None,
-            player_entity_id: None,
-            loop_context: ctx,
-            items: &items,
-            recipes: &recipes,
-            brewing: &brewing,
-            banners: &banners,
-            station_recipes: &stations,
-            enchantments: &e,
-            names: &names,
-            trade: None,
-            maps: None,
-            limited_crafting: false,
-            can_equip: None,
-            known_recipes: None,
-            slot_rules: None,
-            stacked: None,
-        };
-        let mut menu = menu::Menu::new(menu::Kind::Smithing);
-        menu.set_slot(&env, 1, Some(base));
-        menu.set_slot(&env, 2, Some(addition));
-        assert_eq!(menu.slot(3), Some(&result));
-        menu.click(&env, 3, 0, menu::Input::Pickup).unwrap();
-        assert_eq!(menu.carried.as_ref(), Some(&result));
-        assert!(menu.slot(0).is_none());
-        assert_eq!(menu.slot(1).unwrap().count, 1);
-        assert_eq!(menu.slot(2).unwrap().count, 1);
-        assert_eq!(menu.crafted[0].0, "test:upgrade");
-        for (result, malformed) in [
-            (
-                serde_json::json!({"id":"minecraft:emerald","count":0}),
-                true,
-            ),
-            (
-                serde_json::json!({"id":"minecraft:emerald","count":100}),
-                true,
-            ),
-            (
-                serde_json::json!({"id":"minecraft:diamond_sword","count":2}),
-                false,
-            ),
-            (
-                serde_json::json!({"id":"minecraft:emerald","components":{"minecraft:max_damage":10}}),
-                false,
-            ),
-        ] {
-            let mut invalid = recipe.clone();
-            invalid["result"] = result;
-            let files = vec![(
-                "recipe/test:invalid".to_owned(),
-                vec![serde_json::to_vec(&invalid).unwrap()],
-            )];
-            let candidate =
-                StationRecipes::load(&root, &items, &PackOverlay::new(&files), &context);
-            if malformed {
-                let error = candidate.err().unwrap().to_string();
-                assert!(error.contains("data/test/recipe/invalid.json"), "{error}");
-                assert!(
-                    error.contains("invalid ingredients or required fields"),
-                    "{error}"
-                );
-            } else {
-                assert!(
-                    candidate
-                        .unwrap()
-                        .smithing_result(ctx, &e, None, menu.slot(1), menu.slot(2))
-                        .is_none(),
-                    "{invalid}"
-                );
-            }
-        }
-        for key in ["template", "base", "addition"] {
-            let mut invalid = recipe.clone();
-            invalid[key] = Value::Null;
-            let files = vec![(
-                "recipe/test:invalid".to_owned(),
-                vec![serde_json::to_vec(&invalid).unwrap()],
-            )];
-            let error = StationRecipes::load(&root, &items, &PackOverlay::new(&files), &context)
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(error.contains("data/test/recipe/invalid.json"), "{error}");
-            assert!(error.contains("invalid ingredient: null"), "{error}");
-        }
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -113,7 +113,7 @@ LevelStorageSource.LevelStorageAccess.releaseTemporarilyAndRun	skip:other	-	used
 LevelStorageSource.LevelStorageAccess.safeClose	skip:other	-	closes the session lock and logs a failure; Sunrise releases its lock when the session drops
 LevelStorageSource.LevelStorageAccess.getLevelPath	skip:other	-	path helper for level resources; Sunrise builds these paths where they are used (save.rs::saved_data_path)
 LevelStorageSource.LevelStorageAccess.collectIssues	port	crates/sunrise-client/src/save/level_dat.rs::level_dat_issue	the issue line of each file on RecoverWorldDataScreen (title.rs)
-LevelStorageSource.LevelStorageAccess.fixAndGetSummaryFromTag	port	crates/sunrise-client/src/title.rs::list_worlds	gap: minor: the world list reads name and last played directly, without a data fix first
+LevelStorageSource.LevelStorageAccess.fixAndGetSummaryFromTag	port	crates/sunrise-client/src/save/worlds.rs::list_worlds	gap: minor: the world list reads name and last played directly, without a data fix first
 LevelStorageSource.LevelStorageAccess.getUnfixedDataTagWithFallback	port	crates/sunrise-client/src/save/level_dat.rs::fall_back_to_level_dat_old	the dedicated server (Main) takes level.dat_old and restores it; the client asks on RecoverWorldDataScreen instead (WorldOpenFlows)
 LevelStorageSource.LevelStorageAccess.getUnfixedDataTag	inline	crates/sunrise-client/src/save/level.rs::Level::read	the Data compound of level.dat is read inside Level::read
 LevelStorageSource.LevelStorageAccess.saveDataTag	inline	crates/sunrise-client/src/save/level.rs::Level::write	level.dat is written inside Level::write
@@ -123,7 +123,7 @@ LevelStorageSource.LevelStorageAccess.renameLevel	port	crates/sunrise-client/src
 LevelStorageSource.LevelStorageAccess.renameAndDropPlayer	port	crates/sunrise-client/src/realms/download.rs::rename_and_drop_player	when a downloaded Realms world has no links: level.dat's LevelName becomes the folder's name and singleplayer_uuid is dropped; a failure only logs
 LevelStorageSource.LevelStorageAccess.modifyLevelDataWithoutDatafix	inline	crates/sunrise-client/src/title/world_management.rs::rename	read, change the Data compound and write back; rename is the only edit Sunrise makes
 LevelStorageSource.LevelStorageAccess.makeWorldBackup	port	crates/sunrise-client/src/title/world_management.rs::backup	-
-LevelStorageSource.LevelStorageAccess.hasWorldData	inline	crates/sunrise-client/src/title.rs::list_worlds	gap: minor: a folder counts as a world only when its level.dat reads; level.dat_old is not checked
+LevelStorageSource.LevelStorageAccess.hasWorldData	inline	crates/sunrise-client/src/save/worlds.rs::list_worlds	gap: minor: listing checks for a regular level.dat or level.dat_old rather than mere existence; only level.dat is read for a normal summary
 LevelStorageSource.LevelStorageAccess.restoreLevelDataFromOld	port	crates/sunrise-client/src/save/level_dat.rs::restore_level_data_from_old	keeps the broken file as level.dat_corrupted_<time>; gap: minor: a failed move puts level.dat back and reports the failure (vanilla reports success with noRollback)
 PlayerDataStorage.backup	port	crates/sunrise-client/src/save/level_dat.rs::back_up_unreadable_player	a player file that does not read is copied to <uuid>_corrupted_<time>.dat before the save writes over it
 SavedDataStorage.getDataFile	port	crates/sunrise-client/src/save/saved_data.rs::saved_data_path	gap: minor: no check that the path stays inside the data folder; the names come from fixed callers

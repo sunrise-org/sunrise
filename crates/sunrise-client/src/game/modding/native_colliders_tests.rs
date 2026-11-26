@@ -1317,6 +1317,7 @@ fn a_client_descending_collider_carries_the_local_player_without_sideways_drift(
                 mod_api::GeneralSavePolicy::Save,
                 true,
                 false,
+                false,
                 Some(mod_api::PushReaction::IgnoreEntity),
                 8,
                 1,

@@ -127,6 +127,7 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 medium: None,
                 lerp: HookLerp::default(),
                 random: LegacyRandom::new(42),
+                base: Default::default(),
             };
             let mods = mode
                 .map(|m| {

@@ -674,7 +674,9 @@ published shape, is read without a call. It reverses the rule above for those bl
 `event.query` is a `CollisionQuery`, vanilla's `EntityCollisionContext` as it was when the query
 was made: `entity()` (the entity's id, `None` for the empty, position and cache contexts),
 `kind()`, `is_descending()`, `is_placement()`, `always_collide_with_fluid()`,
-`is_above(shape, pos, default)`, `is_holding_item(item)` and `can_stand_on_fluid(above, fluid)`.
+`is_above(shape, pos, default)`, `is_holding_item(item)` and `can_stand_on_fluid(above, fluid)`;
+and `dimension()`, the dimension id of the level the query is in (the `level` vanilla's
+`getCollisionShape` gets), `None` only for a query a mod built by hand.
 
 - **Ordering.** `None`, the starting value, keeps whatever the block would otherwise have: its
   declared shape, a context-keyed one, or the one its block entity published. `Some` replaces
@@ -695,7 +697,9 @@ was made: `entity()` (the entity's id, `None` for the empty, position and cache 
 - **No `Host`.** A move holds the level's collision data and cannot lend a `Host`, as for
   `entity_move`. The part answers from the query and from state it keeps itself. A
   rule that needs more (a belt's set of carried entities; powder snow's fall distance) tracks that
-  state in the mod, keyed by `query.entity()`. If a mod needs an entity read it cannot track, one
+  state in the mod, keyed by `query.entity()`. State kept by position (a block whose shape
+  depends on data the mod stores for that spot) is keyed by `event.pos` and `query.dimension()`,
+  since one position exists in every dimension. If a mod needs an entity read it cannot track, one
   captured field is added to `CollisionQuery`; the `Host` is not reopened.
 - **The client must sync that state.** The client asks the same question for its own prediction,
   so a mod whose rule reads its own state must send it to the client. If the two disagree the

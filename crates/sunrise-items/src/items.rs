@@ -6501,6 +6501,23 @@ pub fn take_held_drop(
     }
     Some(thrown)
 }
+
+/// How many of `stack` one slot holds: the `minecraft:max_stack_size` patch
+/// when the data carries one (`!minecraft:max_stack_size` pinning it to 1),
+/// else the item's own maximum and 64 for an item the registry does not know.
+pub fn item_max_stack(items: &Items, stack: &ItemStack) -> u32 {
+    let patched = stack.data().and_then(|d| {
+        if d.other("!minecraft:max_stack_size").is_some() {
+            return Some(1);
+        }
+        match d.other("minecraft:max_stack_size") {
+            Some(sunrise_core::nbt::Tag::Int(n)) if (1..=99).contains(n) => Some(*n as u32),
+            _ => None,
+        }
+    });
+    patched.unwrap_or_else(|| items.get(&stack.item).map_or(64, |i| i.max_stack))
+}
+
 #[cfg(test)]
 mod held_drop_tests {
     use super::*;

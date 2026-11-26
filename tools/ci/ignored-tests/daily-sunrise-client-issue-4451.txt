@@ -1291,12 +1291,9 @@ sunrise-client game::native_entity_sounds::tests::game_and_entity_events_come_fr
 sunrise-client game::native_entity_sounds::tests::only_a_spectator_player_is_a_spectator lib daily resources
 sunrise-client game::native_entity_sounds::tests::play_sound_queues_at_the_entity_in_its_source lib daily resources
 sunrise-client game::native_entity_sounds::tests::sound_sources_follow_the_entity_class lib daily resources
-sunrise-client game::native_entity_state::tests::fire_ticks_reads_supported_entities_and_refuses_others lib daily resources
 sunrise-client game::native_entity_state::tests::mob_setters_update_stored_state lib daily resources
 sunrise-client game::native_entity_state::tests::player_frozen_write_updates_server_state lib daily resources
-sunrise-client game::native_entity_state::tests::player_glowing_write_is_refused lib daily resources
 sunrise-client game::native_entity_state::tests::player_invisibility_write_is_refused lib daily resources
-sunrise-client game::native_entity_state::tests::player_no_gravity_write_is_refused lib daily resources
 sunrise-client game::native_entity_state::tests::portal_cooldown_reads_simulated_kinds_and_refuses_others lib daily resources
 sunrise-client game::native_entity_state::tests::portal_cooldown_write_blocks_entry_and_counts_down lib daily resources
 sunrise-client game::native_entity_state::tests::portal_cooldown_write_is_refused_for_a_falling_block lib daily resources

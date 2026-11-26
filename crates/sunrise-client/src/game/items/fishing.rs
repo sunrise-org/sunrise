@@ -137,6 +137,8 @@ pub(super) struct Hook {
     /// The position a server's update put it heading for.
     lerp: HookLerp,
     pub(super) random: LegacyRandom,
+    /// `Entity`'s base state (#5082); a bobber is never saved, so it lives only here.
+    pub(super) base: super::native_entity_base::EntityBase,
 }
 /// What a hook keeps of the mod's fishing medium it floats in, on the server.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -657,6 +659,7 @@ impl Game<'_> {
                 medium: None,
                 lerp: HookLerp::default(),
                 random,
+                base: Default::default(),
             });
             // FishingRodItem.use counts a cast, not a reel-in.
             self.award_stat("used", &stack.item, 1);
@@ -1882,6 +1885,23 @@ impl Game<'_> {
             EntityLookup::Taken | EntityLookup::Missing => None,
         }
     }
+    /// The cast hook of `caster`, the one whose turn it is or a guest's.
+    pub(in crate::game) fn caster_hook_mut(
+        &mut self,
+        caster: super::commands::Target,
+    ) -> Option<&mut Hook> {
+        match caster {
+            super::commands::Target::Guest(conn) if Some(conn) != self.lan_acting => self
+                .lan
+                .as_mut()
+                .and_then(|host| host.play.get_mut(&conn))
+                .and_then(|play| play.hook.as_mut()),
+            super::commands::Target::Player | super::commands::Target::Guest(_) => {
+                self.hook.as_mut()
+            }
+            _ => None,
+        }
+    }
     /// Update a cast bobber's support in the level that owns the hook.
     pub(super) fn set_fishing_hook_ground(
         &mut self,
@@ -1905,18 +1925,7 @@ impl Game<'_> {
             None,
             sunrise_client::motion::BodyMotion::entity_context(id, at),
         );
-        let hook = match caster {
-            super::commands::Target::Guest(conn) if Some(conn) != self.lan_acting => self
-                .lan
-                .as_mut()
-                .and_then(|host| host.play.get_mut(&conn))
-                .and_then(|play| play.hook.as_mut()),
-            super::commands::Target::Player | super::commands::Target::Guest(_) => {
-                self.hook.as_mut()
-            }
-            _ => None,
-        };
-        let Some(hook) = hook else {
+        let Some(hook) = self.caster_hook_mut(caster) else {
             return Ok(false);
         };
         hook.ground = ground;
@@ -2141,6 +2150,7 @@ impl Hook {
             medium: None,
             lerp: HookLerp::default(),
             random,
+            base: Default::default(),
         }
     }
     /// `FishingHook`'s entity for the players tracking it: the owner's id in
@@ -3072,6 +3082,10 @@ mod fishing_catch_tests;
 #[cfg(test)]
 #[path = "fishing_tests/fishing_medium_tests.rs"]
 mod fishing_medium_tests;
+
+#[cfg(test)]
+#[path = "fishing_tests/fishing_find_tests.rs"]
+mod fishing_find_tests;
 
 #[cfg(test)]
 #[path = "fishing_tests/fishing_targets_tests.rs"]

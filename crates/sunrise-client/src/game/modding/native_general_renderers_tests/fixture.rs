@@ -50,6 +50,7 @@ pub fn register(registrar: &mut dyn Registrar, keys: &Keys) {
             GeneralSavePolicy::Save,
             true,
             false,
+            false,
             None,
             8,
             1,

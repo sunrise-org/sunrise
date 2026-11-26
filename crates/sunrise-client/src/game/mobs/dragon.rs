@@ -285,7 +285,7 @@ pub(super) struct Crystal {
     /// moves itself; a client's copy eases to where the server sends it.
     pub previous: Vec3,
     pub rotation: [f32; 2],
-    pub fire: i16,
+    pub fire: i32,
     pub show_bottom: bool,
     /// EndCrystal.time (the bob and spin), starting random.
     pub time: i32,
@@ -4699,7 +4699,7 @@ impl Crystal {
             raw,
         );
         if let Tag::Compound(map) = &mut tag {
-            map.insert("Fire".into(), Tag::Short(self.fire));
+            map.insert("Fire".into(), Tag::Short(self.fire as i16));
             map.insert("ShowBottom".into(), Tag::Byte(i8::from(self.show_bottom)));
             if let Some(b) = self.beam {
                 map.insert("beam_target".into(), Tag::IntArray(b.to_vec()));
@@ -4729,7 +4729,7 @@ impl Crystal {
             position,
             previous: position,
             rotation: sunrise_client::entity_nbt::loaded_rotation(tag),
-            fire,
+            fire: i32::from(fire),
             show_bottom: sunrise_client::entity_nbt::flag_or(tag, "ShowBottom", true),
             time,
             beam: match tag.get("beam_target") {

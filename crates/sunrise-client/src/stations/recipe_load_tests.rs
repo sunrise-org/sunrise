@@ -1,6 +1,20 @@
-use super::*;
+use crate::crafting::{Recipes, ResolvedSources};
+use crate::enchant::Enchantments;
+use crate::items::{ItemStack, Items};
+use crate::stations::StationRecipes;
+use serde_json::Value;
+use serde_json::json;
 use std::cell::Cell;
-use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs, LoopSide};
+use std::collections::HashMap;
+use std::fs;
+use sunrise_world::loot::PackOverlay;
+use sunrise_world::native_load_context::{
+    DataLoadOrigin, LoadContext, LoadInputs, LoopContext, LoopSide,
+};
+
+fn lc() -> &'static LoopContext {
+    crate::test_resources::server_loop_context()
+}
 thread_local! { static CALLS: Cell<usize> = const { Cell::new(0) }; }
 
 fn empty_ingredient_recipes_retain_predicates_but_not_placement() {
@@ -535,4 +549,329 @@ fn cooking_indexes_empty_predicate_descendants_once_in_registration_order_with_a
         .into(),
         cooking_indexes_empty_predicate_descendants_once_in_registration_order,
     );
+}
+
+// ---- station tables built from loaded recipes
+
+#[test]
+fn brewing_recipes_decode_once_by_type_preserving_potions_and_result_components() {
+    let root = tempfile::tempdir().unwrap();
+    let items = Items::for_tests(HashMap::new());
+    let load = crate::test_resources::server_load();
+    let recipe = serde_json::json!({
+        "type": "minecraft:brewing",
+        "input": {
+            "item": "minecraft:potion",
+            "potion_contents": {"potions": "minecraft:water"}
+        },
+        "reagent": {"item": "minecraft:blaze_powder"},
+        "output": {
+            "id": "minecraft:potion",
+            "count": 1,
+            "components": {
+                "minecraft:potion_contents": {"potion": "minecraft:strength"},
+                "minecraft:repair_cost": 3
+            }
+        }
+    });
+    let sources = ResolvedSources::resolve(
+        vec![("example:custom_elixir".into(), recipe)],
+        &items,
+        &load,
+    )
+    .unwrap();
+    let recipes =
+        Recipes::from_resolved(root.path(), &items, &PackOverlay::NONE, &sources).unwrap();
+    fs::write(root.path().join("items.json"), b"{}").unwrap();
+    let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
+    let stations = crate::stations::StationData::from_sources(
+        root.path(),
+        &items,
+        &PackOverlay::NONE,
+        crate::banner::Banners::load(root.path(), &defaults),
+        (&sources, &recipes),
+    )
+    .unwrap();
+    assert_eq!(stations.brewing.recipes.len(), 1);
+    assert_eq!(stations.brewing.recipes[0].id, "example:custom_elixir");
+    assert!(stations.brewing.reagents.contains("minecraft:blaze_powder"));
+    assert!(stations.brewing.inputs.contains("minecraft:potion"));
+    let water = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water");
+    let awkward = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward");
+    let reagent = ItemStack::new("minecraft:blaze_powder", 1);
+    assert!(stations.brewing.find(&awkward, &reagent).is_none());
+    let matched = stations.brewing.find(&water, &reagent).unwrap();
+    assert_eq!(matched.output.potion(), Some("minecraft:strength"));
+    assert_eq!(matched.output.data().map(|d| d.repair_cost), Some(3));
+}
+
+#[test]
+fn recipe_rule_views_share_station_and_crafting_parses() {
+    mod_platform::testing::with_recipe_types(&["example:machine"], || {
+        let named = |name: &str, json: &str| {
+            (
+                name.to_owned(),
+                serde_json::from_str::<Value>(json).unwrap(),
+            )
+        };
+        let mut raw = vec![
+            named(
+                "cut",
+                r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:stone","result":{"id":"minecraft:stick","count":2}}"#,
+            ),
+            named(
+                "invalid",
+                r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:stone","result":{"id":"minecraft:stick","count":100}}"#,
+            ),
+            named(
+                "smith",
+                r#"{"type":"minecraft:smithing_transform","template":"minecraft:stick","base":"minecraft:stone","addition":"minecraft:iron_ingot","result":{"id":"minecraft:diamond"}}"#,
+            ),
+            named(
+                "transmute",
+                r#"{"type":"minecraft:crafting_transmute","input":"minecraft:stone","material":"minecraft:stick","material_count":{"min":2,"max":4},"add_material_count_to_result":true,"result":{"id":"minecraft:diamond","count":2,"components":{"minecraft:damage":0,"!minecraft:custom_name":{}}}}"#,
+            ),
+            named(
+                "trim",
+                r#"{"type":"minecraft:smithing_trim","template":"minecraft:stick","base":"minecraft:stone","addition":"minecraft:iron_ingot","pattern":"minecraft:coast"}"#,
+            ),
+            named("custom", r#"{"type":"example:machine","value":42}"#),
+        ];
+        let items = Items::for_tests(HashMap::new());
+        let load = crate::test_resources::server_load();
+        let root = std::env::temp_dir();
+        let sources = ResolvedSources::resolve_collecting(raw.clone(), &items, &load).unwrap();
+        let error = Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &sources)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("data/minecraft/recipe/invalid.json"),
+            "{error}"
+        );
+        raw.remove(1);
+        let sources = ResolvedSources::resolve(raw, &items, &load).unwrap();
+        let recipes = Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &sources).unwrap();
+        let stations = crate::stations::StationRecipes::from_sources(&items, &sources);
+        let cuts = &recipes.by_type["minecraft:stonecutting"];
+        assert_eq!(cuts.len(), 1);
+        let Some(crate::crafting::RecipeRule::Stonecutting { input, result }) = &cuts[0].rule
+        else {
+            panic!("missing stonecutting rule")
+        };
+        assert_eq!(input.order, ["minecraft:stone"]);
+        assert_eq!(result.count, 2);
+        assert_eq!(stations.stonecutting[0].result, *result);
+        let smith = &serialized(&recipes, "minecraft:smithing_transform")[0];
+        let Some(crate::crafting::RecipeRule::SmithingTransform { base, result, .. }) = &smith.rule
+        else {
+            panic!("missing smithing rule")
+        };
+        assert_eq!(base.order, ["minecraft:stone"]);
+        assert_eq!(result.item.as_deref(), Some("minecraft:diamond"));
+        assert!(
+            smith.results.is_empty(),
+            "smithing output inherits components"
+        );
+        let transmute = &serialized(&recipes, "minecraft:crafting_transmute")[0];
+        let Some(crate::crafting::RecipeRule::Transmute {
+            min,
+            max,
+            add_count,
+            result,
+            ..
+        }) = &transmute.rule
+        else {
+            panic!("missing transmute rule")
+        };
+        assert_eq!((*min, *max, *add_count), (2, 4, true));
+        assert_eq!(result.item.as_deref(), Some("minecraft:diamond"));
+        let patch = result
+            .components
+            .as_ref()
+            .expect("component patch retained");
+        assert!(patch.get("minecraft:damage").is_some());
+        assert!(patch.get("!minecraft:custom_name").is_some());
+        let trim = &serialized(&recipes, "minecraft:smithing_trim")[0];
+        let Some(crate::crafting::RecipeRule::SmithingTrim {
+            pattern, addition, ..
+        }) = &trim.rule
+        else {
+            panic!("missing smithing trim rule")
+        };
+        assert!(
+            matches!(pattern, crate::crafting::RecipeTrimPattern::Reference(id) if id == "minecraft:coast")
+        );
+        assert_eq!(addition.order, ["minecraft:iron_ingot"]);
+        assert!(trim.results.is_empty());
+        assert!(
+            transmute.results.is_empty(),
+            "grid-dependent output is not fixed"
+        );
+        let grid = [
+            Some(ItemStack::new("minecraft:stone", 1)),
+            Some(ItemStack::new("minecraft:stick", 1)),
+            Some(ItemStack::new("minecraft:stick", 1)),
+            None,
+        ];
+        let output = recipes.craft(lc(), &grid, 2).expect("transmute matches");
+        assert_eq!(output.item.as_ref(), "minecraft:diamond");
+        assert_eq!(output.count, 4);
+        let custom = &recipes.by_type["example:machine"][0];
+        assert!(custom.rule.is_none());
+        assert_eq!(custom.json["value"], 42);
+    });
+}
+
+fn serialized<'a>(
+    recipes: &'a crate::crafting::Recipes,
+    serializer: &str,
+) -> Vec<&'a crate::crafting::RecipeSnapshot> {
+    recipes
+        .by_type
+        .values()
+        .flat_map(|entries| entries.iter())
+        .filter(|recipe| recipe.json["type"] == serializer)
+        .collect()
+}
+
+// ---- every projection uses the same priority order
+// The fixture helpers below are local copies of the priority file's; the
+// originals stay in `crafting/priorities/tests.rs` with their own tests.
+fn layer(pack: &str, bytes: &[u8]) -> sunrise_world::loot::RecipePriorityLayer {
+    sunrise_world::loot::RecipePriorityLayer {
+        pack: pack.into(),
+        path: sunrise_mod_package::content::RECIPE_PRIORITIES_PATH,
+        contents: Ok(bytes.to_vec()),
+    }
+}
+
+struct Fixture(std::path::PathBuf);
+impl Fixture {
+    fn new(name: &str) -> Self {
+        let root =
+            std::env::temp_dir().join(format!("sunrise-priorities-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        Self(root)
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn every_projection_uses_the_same_priority_order() {
+    mod_platform::testing::with_recipe_types(&["test:crusher"], projections_follow_one_order);
+}
+
+fn projections_follow_one_order() {
+    let root = Fixture::new("projections");
+    let items = Items::for_tests(HashMap::new());
+    let mut sources = Vec::new();
+    let mut entries = serde_json::Map::new();
+    for suffix in ["a", "b", "c"] {
+        for kind in [
+            "smelting",
+            "blasting",
+            "smoking",
+            "campfire_cooking",
+            "smithing_transform",
+            "stonecutting",
+            "crusher",
+        ] {
+            let id = format!("test:{kind}_{suffix}");
+            let recipe = match kind {
+                "smithing_transform" => {
+                    json!({"type":"minecraft:smithing_transform", "base":"minecraft:stone", "result":{"id":"minecraft:diamond"}})
+                }
+                "stonecutting" => {
+                    json!({"type":"minecraft:stonecutting", "ingredient":"minecraft:stone", "result":{"id":"minecraft:diamond"}})
+                }
+                "crusher" => json!({"type":"test:crusher", "output":suffix}),
+                _ => {
+                    json!({"type":format!("minecraft:{kind}"), "ingredient":"minecraft:stone", "result":{"id":"minecraft:diamond"}})
+                }
+            };
+            entries.insert(id.clone(), json!(if suffix == "a" { -1 } else { 5 }));
+            sources.push((id, recipe));
+        }
+    }
+    let priority_layers = [layer(
+        "projection",
+        &serde_json::to_vec(&json!({"entries": entries})).unwrap(),
+    )];
+    let overlay = PackOverlay {
+        priority_layers: &priority_layers,
+        ..PackOverlay::default()
+    };
+    ResolvedSources::order_by_priority(&mut sources, &root.0, &overlay).unwrap();
+    let resolved =
+        ResolvedSources::resolve_collecting(sources, &items, &crate::test_resources::server_load())
+            .unwrap()
+            .checked()
+            .unwrap();
+    let recipes = Recipes::from_resolved(&root.0, &items, &overlay, &resolved).unwrap();
+    let stations = StationRecipes::from_sources(&items, &resolved);
+    let context = crate::test_resources::server_loop_context();
+    let stone = ItemStack::new("minecraft:stone", 1);
+    for kind in ["smelting", "blasting", "smoking", "campfire_cooking"] {
+        assert_eq!(
+            recipes
+                .cook(context, &format!("minecraft:{kind}"), &stone)
+                .unwrap()
+                .id,
+            format!("test:{kind}_b")
+        );
+    }
+    assert_eq!(
+        stations
+            .smithing_recipe(context, &Enchantments::default(), None, Some(&stone), None)
+            .unwrap()
+            .0,
+        "test:smithing_transform_b"
+    );
+    assert_eq!(
+        stations
+            .stonecutter(context, &stone)
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "test:stonecutting_b",
+            "test:stonecutting_c",
+            "test:stonecutting_a"
+        ]
+    );
+    assert_eq!(
+        recipes.by_type["test:crusher"]
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect::<Vec<_>>(),
+        ["test:crusher_b", "test:crusher_c", "test:crusher_a"]
+    );
+    // Smithing's serializers share one recipe type.
+    for (kind, recipe_type) in [
+        ("smelting", "minecraft:smelting"),
+        ("blasting", "minecraft:blasting"),
+        ("smoking", "minecraft:smoking"),
+        ("campfire_cooking", "minecraft:campfire_cooking"),
+        ("smithing_transform", "minecraft:smithing"),
+        ("stonecutting", "minecraft:stonecutting"),
+    ] {
+        let ids: Vec<_> = recipes.by_type[recipe_type]
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                format!("test:{kind}_b"),
+                format!("test:{kind}_c"),
+                format!("test:{kind}_a")
+            ]
+        );
+    }
 }

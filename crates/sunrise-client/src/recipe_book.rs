@@ -4,10 +4,11 @@
 //! craftable stack), where a recipe goes in a grid (`PlaceRecipeHelper`) and
 //! the book's saved settings.
 use crate::{
-    crafting::{Ingredient, Placement, Recipe, Recipes},
+    crafting::{Ingredient, IngredientInput, Placement, Recipe, Recipes, ResolvedSources},
     items::{ItemStack, Items},
 };
 pub use mod_api::item::recipe_book::RecipeBookCategory;
+use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
 use sunrise_core::nbt::Tag;
 use sunrise_protocol::packets::recipes::{HolderSet, RecipeBookEntry, RecipeDisplay, SlotDisplay};
@@ -180,18 +181,7 @@ impl Tab {
     }
 }
 
-/// `RecipeDisplay`: how a recipe is laid out.
-#[derive(Clone, Debug)]
-pub enum Display {
-    Shaped {
-        width: usize,
-        height: usize,
-        cells: Vec<Option<Ingredient>>,
-    },
-    Shapeless(Vec<Ingredient>),
-    /// A smelting-type recipe: its input; the fuel is any fuel.
-    Furnace(Ingredient),
-}
+pub use crate::crafting::Display;
 /// One recipe of the book (`RecipeDisplayEntry`).
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -1223,17 +1213,7 @@ impl Book {
 pub struct RecipeIndex {
     recipes: std::collections::BTreeMap<String, Known>,
 }
-#[derive(Clone, Debug)]
-pub(crate) struct KnownEntry {
-    pub(crate) special: bool,
-    pub(crate) displays: usize,
-    /// `RecipeDisplay.craftingStation`: the workstation item of its displays.
-    pub(crate) station: &'static str,
-    /// `Recipe.showNotification`: unlocking it shows the `RecipeToast`.
-    pub(crate) notify: bool,
-    /// `result.id`, for the recipes the book doesn't list.
-    pub(crate) result: Option<String>,
-}
+pub(crate) use crate::crafting::KnownEntry;
 #[derive(Clone, Debug)]
 struct Known {
     special: bool,
@@ -1246,17 +1226,44 @@ struct Known {
     /// `result.id`, for the recipes the book doesn't list.
     result: Option<String>,
 }
-/// `RecipeDisplay.craftingStation` of a recipe type.
-pub(crate) fn crafting_station(kind: &str) -> &'static str {
-    match kind {
-        "minecraft:smelting" => "minecraft:furnace",
-        "minecraft:blasting" => "minecraft:blast_furnace",
-        "minecraft:smoking" => "minecraft:smoker",
-        "minecraft:campfire_cooking" => "minecraft:campfire",
-        "minecraft:stonecutting" => "minecraft:stonecutter",
-        "minecraft:brewing" => "minecraft:brewing_stand",
-        "minecraft:smithing_transform" | "minecraft:smithing_trim" => "minecraft:smithing_table",
-        _ => "minecraft:crafting_table",
+pub(crate) use crate::crafting::crafting_station;
+
+impl Recipes {
+    /// Decode the incoming recipes once. Local recipes of other types keep their
+    /// existing resolved ingredients and loaded native serializer values.
+    pub fn with_recipe_content(
+        &self,
+        items: &Items,
+        received: Vec<(String, Value)>,
+        types: &[String],
+    ) -> crate::Result<(Self, RecipeIndex)> {
+        let received = received
+            .into_iter()
+            .map(|(id, file)| {
+                let id = match id.strip_prefix("minecraft:") {
+                    Some(name) => name.to_owned(),
+                    None => id,
+                };
+                (id, file)
+            })
+            .collect();
+        let mut sources = ResolvedSources::decode(received, items, IngredientInput::Network(types));
+        sources.check()?;
+        sources.property_additions = self.property_additions.clone();
+        sources.recipes.extend(
+            self.sources
+                .iter()
+                .filter(|recipe| {
+                    !recipe
+                        .recipe_type
+                        .as_ref()
+                        .is_some_and(|kind| types.contains(kind))
+                })
+                .cloned(),
+        );
+        let recipes = Self::from_decoded(items, self.curses.clone(), &sources);
+        let index = RecipeIndex::from_recipes(&recipes);
+        Ok((recipes, index))
     }
 }
 impl RecipeIndex {
@@ -2731,5 +2738,87 @@ mod tests {
         assert_eq!(first("minecraft:b_huge"), Some(3));
         assert_eq!(first("minecraft:d_exact"), Some(11));
         assert_eq!(first("minecraft:e_shaped"), Some(12));
+    }
+
+    fn ingredient_of(source: &str, items: &Items) -> Ingredient {
+        Ingredient::parse(&serde_json::from_str(source).unwrap(), items).unwrap()
+    }
+
+    fn load_ctx() -> sunrise_world::native_load_context::LoadContext {
+        sunrise_world::native_load_context::LoadContext::new(
+            sunrise_world::native_load_context::DataLoadOrigin::ServerDataLoad,
+            std::sync::Arc::new(sunrise_world::native_load_context::LoadInputs::new(
+                Default::default(),
+                Default::default(),
+            )),
+            [],
+        )
+    }
+
+    #[test]
+    fn custom_display_matches_base_but_shows_another_item() {
+        let items = Items::empty();
+        let ingredient = ingredient_of(
+            r#"{"type":"neoforge:custom_display","base":"minecraft:apple","display":{"type":"minecraft:item","item":"minecraft:diamond"}}"#,
+            &items,
+        );
+        let load = load_ctx();
+        let context = load.loop_context(sunrise_world::native_load_context::LoopSide::Server, []);
+        assert!(ingredient.test_in(&context, &ItemStack::new("minecraft:apple", 1)));
+        assert!(!ingredient.test_in(&context, &ItemStack::new("minecraft:diamond", 1)));
+        assert!(ingredient.is_simple());
+        assert_eq!(
+            crate::recipe_book::Book::default().items_of(&ingredient),
+            ["minecraft:diamond"]
+        );
+        assert_eq!(ingredient.order, ["minecraft:apple"]);
+        let placement = crate::crafting::Placement::of(vec![Some(ingredient)], None);
+        assert_eq!(placement.ingredients[0].order, ["minecraft:apple"]);
+        // 26.3 TagSlotDisplay carries an item HolderSet, including the # prefix.
+        let tags = Items::for_tests(std::collections::HashMap::from([(
+            "minecraft:planks".into(),
+            std::collections::HashSet::from(["minecraft:oak_planks".into()]),
+        )]));
+        let tagged = ingredient_of(
+            r##"{"type":"neoforge:custom_display","base":"minecraft:apple","display":{"type":"minecraft:tag","tag":"#minecraft:planks"}}"##,
+            &tags,
+        );
+        assert_eq!(
+            crate::recipe_book::Book::default().items_of(&tagged),
+            ["minecraft:oak_planks"]
+        );
+    }
+
+    #[test]
+    fn recipe_book_and_placement_use_component_ingredient_item_lists() {
+        use crate::recipe_book::{Book, Category, Display, Entry};
+        let items = Items::empty();
+        let ingredient = ingredient_of(
+            r#"{"type":"neoforge:components","items":"minecraft:diamond_sword","components":{"minecraft:damage":5}}"#,
+            &items,
+        );
+        let entry = Entry {
+            id: "fixture:components".into(),
+            display_id: -1,
+            category: Category::CraftingEquipment,
+            group: None,
+            display: Display::Shapeless(vec![ingredient.clone()]),
+            result: ItemStack::new("minecraft:diamond", 1),
+            variants: Vec::new(),
+            stacks: Vec::new(),
+        };
+        let mut book = Book::default();
+        let placement = crate::crafting::Placement::of(vec![Some(ingredient)], None);
+        book.placements.insert(entry.id.clone(), placement.clone());
+        let mut stock = crate::menu::place::Stacked::default();
+        // An undamaged sword cannot satisfy the concrete recipe, but the book and
+        // placement intentionally account only for its item holder.
+        stock.account(&std::sync::Arc::from("minecraft:diamond_sword"), 1);
+        assert!(book.can_craft(&entry, &stock));
+        assert!(stock.can_craft(&placement.ingredients.iter().collect::<Vec<_>>()));
+        assert_eq!(
+            book.items_of(&placement.ingredients[0]),
+            ["minecraft:diamond_sword"]
+        );
     }
 }

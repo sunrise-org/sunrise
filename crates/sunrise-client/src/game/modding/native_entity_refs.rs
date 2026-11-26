@@ -1699,7 +1699,7 @@ mod general_handle_tests {
             fall_distance: fall,
             custom_name: None,
             custom_name_visible: false,
-            no_gravity: false,
+            base: Default::default(),
             on_ground: false,
             tick_count: 0,
             no_physics: false,
@@ -2267,6 +2267,16 @@ pub(super) mod tests {
 
     pub(in crate::game) fn with_game(test: impl FnOnce(&mut super::Game<'_>)) {
         with_game_at(fixture_root(), test);
+    }
+
+    /// [`with_game`] with column (0, 0) and its neighbours loaded and ticking: entities are
+    /// found in resident columns only (`Visibility.isAccessible`), so a fixture that pushes a
+    /// body at the origin starts here.
+    pub(in crate::game) fn with_resident_game(test: impl FnOnce(&mut super::Game<'_>)) {
+        with_game(|game| {
+            prepare_entity_ticking_neighborhood(game, sunrise_core::position::ChunkPos::new(0, 0));
+            test(game);
+        });
     }
 
     pub(in crate::game) fn fixture_root() -> std::path::PathBuf {

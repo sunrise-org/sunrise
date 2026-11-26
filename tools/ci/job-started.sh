@@ -12,7 +12,8 @@ case ${GITHUB_EVENT_NAME:-} in
     fi;;
 esac
 if [ -n "${CARGO_TARGET_DIR:-}" ] && [ -d "$CARGO_TARGET_DIR" ]; then
-  size=$(du -s --block-size=1G "$CARGO_TARGET_DIR" | cut -f1)
+  # A failed size check is housekeeping, not a failed job; leave the folder alone.
+  size=$(du -s --block-size=1G "$CARGO_TARGET_DIR" | cut -f1) || size=0
   if [ "$size" -gt "${MAX_TARGET_GB:-40}" ]; then
     echo "Cargo target folder at ${size} GB (over ${MAX_TARGET_GB:-40}): emptied, this job builds from scratch"
     rm -rf "${CARGO_TARGET_DIR:?}"

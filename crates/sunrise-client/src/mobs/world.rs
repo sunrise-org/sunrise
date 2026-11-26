@@ -1301,11 +1301,11 @@ mod scaffolding_sight_tests {
                 assert!(!see());
                 // Opted in, the part lets this viewer through: the fast path asked it.
                 marked.set_part_states([glass]);
-                parts.begin_tick(&std::sync::Arc::new(loop_context()));
+                parts.begin_tick(&std::sync::Arc::new(loop_context()), "minecraft:overworld");
                 assert!(see());
                 // Opted in, the part keeps the shape: sight is blocked again.
                 COLLISION_ANSWER.with_borrow_mut(|answer| *answer = Some(Box::new(|_| None)));
-                parts.begin_tick(&std::sync::Arc::new(loop_context()));
+                parts.begin_tick(&std::sync::Arc::new(loop_context()), "minecraft:overworld");
                 assert!(!see());
                 marked.set_part_states([]);
             },

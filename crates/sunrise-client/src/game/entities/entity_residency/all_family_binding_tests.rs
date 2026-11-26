@@ -133,7 +133,7 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 fall_distance: 0.0,
                 custom_name: None,
                 custom_name_visible: false,
-                no_gravity: false,
+                base: Default::default(),
                 on_ground: false,
                 tick_count: 0,
                 no_physics: false,

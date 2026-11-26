@@ -312,7 +312,8 @@ name = "containers"
 about = "menus, inventories, crafting, the recipe book, workstations"
 paths = [
   "crates/sunrise-client/src/menu.rs", "crates/sunrise-client/src/container_screen.rs", "crates/sunrise-client/src/creative.rs",
-  "crates/sunrise-client/src/crafting.rs", "crates/sunrise-client/src/recipe_book*", "crates/sunrise-client/src/stations.rs",
+  "crates/sunrise-client/src/crafting.rs", "crates/sunrise-client/src/crafting/*", "crates/sunrise-client/src/recipe_book*",
+  "crates/sunrise-client/src/stations.rs", "crates/sunrise-client/src/stations/recipe_load_tests.rs",
   "crates/sunrise-client-render/src/containers.rs", "crates/sunrise-world/src/simple_container.rs",
   "crates/sunrise-client/src/game/interface/container_*",
   "crates/sunrise-client/src/game/interface/extras/mouse_tweaks.rs",
@@ -320,6 +321,9 @@ paths = [
 cargo = [
   { package = "sunrise-client-lib", target = "lib", filter = "menu::" },
   { package = "sunrise-client-lib", target = "lib", filter = "crafting::" },
+  { package = "sunrise-client-lib", target = "lib", filter = "stations::recipe_load_tests::" },
+  { package = "sunrise-client-lib", target = "lib", filter = "recipe_book::tests::custom_display_matches_base_but_shows_another_item" },
+  { package = "sunrise-client-lib", target = "lib", filter = "recipe_book::tests::recipe_book_and_placement_use_component_ingredient_item_lists" },
   { package = "sunrise-client", target = "lib", filter = "game::container_hooks::" },
   { package = "sunrise-client", target = "lib", filter = "game::extras::mouse_tweaks::" },
 ]

@@ -209,31 +209,14 @@ jobs:
           if grep -q "lab.parity_fixtures(default_features=False)" "${scripts[@]}"; then
             cargo build --locked --profile test -p sunrise-parity-fixtures --features fixtures --bin sunrise-parity-fixtures
           fi
-      - name: Build parity probes
-        id: probes
-        run: |
-          exec > "$PARITY_LOG_DIR/probes.log" 2>&1
-          cargo build --release --bin sunrise-parity
-          cargo build --release --bin sunrise-tick-parity
-          cargo build --release --bin sunrise-geometry-parity
-          cargo build --release --bin sunrise-noise-parity
-          cargo build --release --bin sunrise-density-parity
-          cargo build --release --bin sunrise-worldgen-parity
-          cargo build --release --bin sunrise-float-log-parity
-          cargo build --release -p sunrise-core --example generation_tick_fixture
-          cargo build --release -p sunrise-core --example biome_zoom_fixture
-          cargo build --release -p sunrise-world --bin sunrise-world --example world_probe
-          cargo build --release -p sunrise-world --example world_probe
       # The build logs stay private, beside the prepared vanilla data. A failed build shows only what a daily test
       # build shows (tools/ci/ignored_tests.py compile_diagnostics): fixed error headings and tracked locations.
       - name: Show a failed probe build's compiler errors
-        if: failure() && (steps.game-probes.outcome == 'failure' || steps.probes.outcome == 'failure')
-        env:
-          FAILED: ${{ steps.game-probes.outcome == 'failure' && 'game-probes' || 'probes' }}
+        if: failure() && steps.game-probes.outcome == 'failure'
         run: |
-          echo "$FAILED failed:"
+          echo "game-probes failed:"
           python3 -c 'import sys; from tools.ci.ignored_tests import compile_diagnostics; compile_diagnostics(open(sys.argv[1], errors="replace").read())' \
-            "$PARITY_LOG_DIR/$FAILED.log"
+            "$PARITY_LOG_DIR/game-probes.log"
       # Keep complete legacy datafix seed inputs in $DYNA_CI_KEEP/datafix-seeds/<key> so each share
       # copies immutable inputs instead of regenerating every legacy server inside the harness timeout.
       # Failure is passed via steps.datafix-seeds.outcome so other harnesses in this share still run

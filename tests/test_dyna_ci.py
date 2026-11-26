@@ -767,7 +767,6 @@ class ParityWorkflowTests(unittest.TestCase):
     def test_a_failed_probe_build_shows_its_error_headings_not_its_text(self):
         step = self.steps["Show a failed probe build's compiler errors"]
         self.assertEqual(self.steps["Build the daily harnesses' game probes"]["id"], "game-probes")
-        self.assertEqual(self.steps["Build parity probes"]["id"], "probes")
         self.assertIn("steps.game-probes.outcome == 'failure'", step["if"])
         self.initialise()
         (self.slot / "game-probes.log").write_text(
@@ -776,7 +775,7 @@ class ParityWorkflowTests(unittest.TestCase):
             "error[E0609]: no field `PRIVATE`\n  --> crates/sunrise-client/src/untracked_generated_probe.rs:3:9\n"
             "error: could not compile\n")
         result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=ROOT, capture_output=True, text=True,
-                                env=dict(self.env, FAILED="game-probes"))
+                                env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("game-probes failed:", result.stdout)
         self.assertIn("compiler: error[E0425]: custom diagnostic payload withheld", result.stdout)

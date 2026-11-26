@@ -152,7 +152,7 @@ pub struct SlotContext<'a> {
     pub container: MenuContainer,
     pub(crate) slots: &'a [Option<ItemStack>],
     pub(crate) slots_second: &'a [Option<ItemStack>],
-    pub(crate) linked: Option<crate::lan::menu::LinkedSlots<'a>>,
+    pub(crate) linked: Option<super::LinkedSlots<'a>>,
     /// A flattened LAN container stores grid/result values in Main's unused positions.
     /// These positions are empty in the prediction's separate Main container.
     pub(crate) main_crafting: Option<crate::containers::ModCrafting>,
@@ -163,6 +163,16 @@ pub struct SlotContext<'a> {
     pub(crate) player_offhand: Option<&'a Option<ItemStack>>,
     /// A hosted rule sees the tentative slot as well as the stack being checked.
     pub(crate) staged_slot: Option<(MenuContainer, usize, Option<&'a ItemStack>)>,
+}
+
+/// What a blockless menu reads of a guest's live slots when it asks the slot
+/// rules: the identity the parts see and the containers the menu shows.
+pub trait MenuGuest {
+    fn uuid(&self) -> u128;
+    fn native_menu(&self) -> &[Option<ItemStack>];
+    fn inventory(&self) -> &[Option<ItemStack>];
+    fn armor(&self) -> &[Option<ItemStack>; 4];
+    fn offhand(&self) -> &Option<ItemStack>;
 }
 
 /// `menu_slot_rules` inside a menu click, which cannot reach the game: the game lends the menu

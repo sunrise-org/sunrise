@@ -332,16 +332,7 @@ fn project_book_recipe(recipe: &ResolvedRecipe) -> BookRecipe {
     }
 }
 
-/// For each item, the packet's matching holder-set entries in button order. Values are
-/// actual server recipe IDs, not a promise that the item's full stack passes the predicate.
-#[derive(Debug, Default, PartialEq)]
-pub struct StonecutterButtons(HashMap<Arc<str>, Vec<Arc<str>>>);
-
-impl StonecutterButtons {
-    pub fn recipe(&self, input: &str, index: usize) -> Option<&str> {
-        self.0.get(input)?.get(index).map(AsRef::as_ref)
-    }
-}
+pub use crate::menu::StonecutterButtons;
 
 /// The packet's payload and its stonecutter button map, built directly from
 /// the decoded recipes in `sources`.

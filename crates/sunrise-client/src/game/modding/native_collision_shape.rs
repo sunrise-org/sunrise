@@ -55,10 +55,10 @@ fn mark_part_states(collision: &BlockCollisionRegistry<'_>) {
 }
 
 /// The parts that answer collision queries on this thread for a tick of the level `context`
-/// belongs to, until the guard drops: none when no installed part answers them, so the tick pays
-/// nothing. `collision_shape` is a Part method only (no `Hooks` method subscribes a mod to it),
+/// belongs to, whose dimension id is `dimension`, until the guard drops: none when no installed
+/// part answers them, so the tick pays nothing. `collision_shape` is a Part method only (no `Hooks` method subscribes a mod to it),
 /// so the gate is the part table's, as its dispatch's is, not a mod's subscription.
-fn enter_parts(context: &Arc<LoopContext>) -> Option<InParts> {
+fn enter_parts(context: &Arc<LoopContext>, dimension: &str) -> Option<InParts> {
     mod_api::__private::has_scoped_hook(mod_api::HookId::CollisionShape).then(|| {
         let parts = PARTS.with_borrow_mut(|slot| {
             let parts = slot.get_or_insert_with(|| {
@@ -66,7 +66,7 @@ fn enter_parts(context: &Arc<LoopContext>) -> Option<InParts> {
                     context,
                 )))
             });
-            parts.begin_tick(context);
+            parts.begin_tick(context, dimension);
             Rc::clone(parts)
         });
         InParts::enter(parts)
@@ -83,7 +83,7 @@ impl Game<'_> {
     /// The parts that answer this tick's collision queries, until the guard drops: none when no
     /// mod has a part that answers them, so the tick pays nothing.
     pub(in crate::game) fn collision_parts(&self) -> Option<InParts> {
-        enter_parts(&self.loop_context)
+        enter_parts(&self.loop_context, self.dim.id())
     }
 }
 
@@ -284,7 +284,8 @@ mod tests {
     /// A mod as a real one is built: a `Hooks` impl that only registers, and a block part whose
     /// one method is `collision_shape`, so no `Hooks` method subscribes the mod to the hook. The
     /// game's own gate and marking decide whether a player's move asks the part: stone opens
-    /// for entity 7 only, as a per-player barrier does.
+    /// for entity 7 only, as a per-player barrier does, and only in the overworld (#6034: the
+    /// query names the level's dimension).
     #[test]
     fn a_registered_part_gives_a_moving_entity_its_shape() {
         use sunrise_client::{chunk::Chunk, collisions::SceneCollisions, world::World};
@@ -305,6 +306,7 @@ mod tests {
                 ASKED.fetch_add(1, Ordering::SeqCst);
                 if event.query.kind() == mod_api::CollisionEntityKind::Player
                     && event.query.entity() == Some(7)
+                    && event.query.dimension() == Some("minecraft:overworld")
                 {
                     *event.shape = Some(mod_api::VoxelShape::empty());
                 }
@@ -386,7 +388,7 @@ mod tests {
             };
             ASKED.store(0, Ordering::SeqCst);
             // The level tick's parts, as the client and the server enter them.
-            let parts = enter_parts(&context);
+            let parts = enter_parts(&context, "minecraft:overworld");
             assert!(
                 parts.is_some(),
                 "a part that answers collision_shape opens the tick's parts"
@@ -397,6 +399,10 @@ mod tests {
             assert_eq!(walk(7), 1.0, "the barrier is open for player 7");
             assert_eq!(walk(8), TO_THE_FACE, "player 8 stops at the stone's face");
             assert!(ASKED.load(Ordering::SeqCst) > 0);
+            drop(parts);
+            // The same position in another level is another block to the part.
+            let parts = enter_parts(&context, "minecraft:the_nether");
+            assert_eq!(walk(7), TO_THE_FACE, "the barrier is the overworld's");
             // Outside the tick's parts the stone is its own cube for everyone, and the part is
             // not asked.
             drop(parts);

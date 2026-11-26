@@ -247,17 +247,18 @@ class Server:
         out = self.wait(marker, timeout)
         return [re.sub(r'^\[[0-9:]+\] \[[^\]]*\]: ', '', l) for l in out[:-1]]
 
-    def stop(self):
+    def stop(self, *, save=True):
+        """Stop the server; with save=False, keep the last explicit save instead of making another."""
         try:
-            # A server already gone is not asked again: datafix_scene_12.populate kills its own once the world is
-            # saved, and closes its stdin.
-            if self.process.poll() is None:
+            if save and self.process.poll() is None:
                 self.process.stdin.write('stop\n')
                 self.process.stdin.flush()
                 self.process.wait(120)
         finally:
-            self.process.kill()   # a no-op once it has exited; after a failed stop the error still reaches the caller
-            self.process.wait()   # the world folder and port are reused only once the process is gone
+            if self.process.poll() is None:
+                self.process.kill()
+                self.process.wait()   # the world folder and port are reused only once the process is gone
+            self.process.stdin.close()
 
 
 def failed(lines):
@@ -340,6 +341,8 @@ class Bot:
                 break
 
     def leave(self):
+        if self.stop.is_set():
+            return
         self.stop.set()
         time.sleep(1.5)
         self.sock.close()
@@ -510,19 +513,23 @@ def build(name, force=False):
             problems.append((command[:160], bad[:2]))
         return out
 
+    legacy_scene = data_version < 1631 and not props
+    save_on_stop = True
     try:
         try:
-            if data_version < 1631 and not props:   # 1.12 and older: tools/datafix_scene_12.py builds the scene and saves the world itself
-                scene12.populate(server, JoinedBot, port, protocol, BOT, problems)
+            if legacy_scene:
+                scene12.populate(server, JoinedBot, port, protocol, BOT, problems, mcstring=mcstring)
+                save_on_stop = False  # a second save would overwrite the transient states in the last explicit save
             else:
                 build_scene(server, run, JoinedBot, port, protocol, props, era, data_version, states)
         finally:
             for bot in bots:
                 bot.leave()
-        time.sleep(2)
+        if save_on_stop:
+            time.sleep(2)
     finally:
-        server.stop()   # a failed stop still raises, after the bots are closed
-    if data_version < 1631 and not props:
+        server.stop(save=save_on_stop)
+    if legacy_scene:
         scene12.fixtures(work / 'world')   # the few statistics a passive bot cannot cause, written by hand
     # Copy aside, then rename: an interrupted copy must not look like a finished world.
     partial = target.with_name(target.name + '.partial')

@@ -41,16 +41,20 @@ the player's sprint key: a player's own client sets its flag again from its inpu
 ## No gravity
 
 `EntityRef::no_gravity(host)` reads `Entity.isNoGravity` and
-`EntityRef::set_no_gravity(host, enabled)` sets it on the server. Both cover mobs and live
-dropped items, including an `EntityRef` resolved from `ItemPart::on_entity_item_update`; an
-item honours the flag in its own tick. Stale handles and other kinds read `None` and refuse
-the write. The write marks the item for its next sync, as it does for a mob.
+`EntityRef::set_no_gravity(host, enabled)` sets it on the server. Both cover every kind of
+entity, saved as `NoGravity`, including an `EntityRef` resolved from
+`ItemPart::on_entity_item_update`; an item honours the flag in its own tick. Only a stale
+handle reads `None` and refuses the write, and so do a fishing bobber, a leash knot and a
+dragon's part, which keep no entity data. The write marks the item for its next sync, as it
+does for a mob. `is_silent`, `glowing` and `permanently_invulnerable` and their setters
+(`Silent`, `Glowing`, `Invulnerable`) work the same way for every kind.
 
 ## Fire, water and consumption
 
 `EntityRef::is_on_fire(host)` reads vanilla `Entity.isOnFire` on either side: an entity that is not
-fire immune and has positive fire ticks or, on a client, synced shared flag 0. It covers players,
-mobs, armor stands, dropped items and tracked remote players. On a client it reads that
+fire immune and has positive fire ticks or, on a client, synced shared flag 0. It covers every kind of
+entity, and every entity a client tracks (a general entity's `Fire`, with `fire_ticks` and
+`set_remaining_fire_ticks`, is synced as bit 0 of the shared flags). On a client it reads that
 client's copy, including the local player's predicted timer, not a server query.
 
 `EntityRef::fire_immune(host)` reads type immunity or a live grant on that side, not

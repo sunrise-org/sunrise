@@ -17,12 +17,10 @@ use crate::{
     items::{ItemStack, Items},
 };
 pub use mod_api::item::menu::{LogicalSide, MenuButtonContext};
-#[cfg(test)]
-use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs};
 use sunrise_world::native_load_context::{LoopContext, LoopSide};
 mod models;
 pub use models::{
-    AnvilCraftSnapshot, AnvilUpdateInputs, GrindstonePlaceEdits, GrindstoneTakeEdits,
+    AnvilCraftSnapshot, AnvilUpdateInputs, GrindstonePlaceEdits, GrindstoneTakeEdits, MenuGuest,
     PendingGrindstoneTake, QuickCraftDrag, SlotContext, SlotRules, SlotView, StackedClick,
     StackedEdit, StackedEditPolicy, StackedOutcome, StackedResume, StackedSlotKind,
     StackedSlotTarget,
@@ -30,10 +28,12 @@ pub use models::{
 mod slot_context;
 use equippable::limit_slot_max_for;
 pub use slot_context::{LiveSlotRules, apply_menu_slot_rules, lan_container};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 mod bundle;
 pub use bundle::{vanilla_carried_override, vanilla_clicked_override};
+pub(crate) mod linked;
+pub use linked::{LinkedSlots, linked_slot_count};
 pub mod container_items;
 pub use container_items::fits_inside_container_items;
 mod click;
@@ -570,6 +570,18 @@ pub struct Anvil {
     pub renamed: Vec<String>,
 }
 
+/// For each item, the stonecutter packet's matching holder-set entries in button order.
+/// Values are actual server recipe IDs, not a promise that the item's full stack passes the
+/// predicate. Built by `lan::recipes::update_recipes`, read by the stonecutter menu.
+#[derive(Debug, Default, PartialEq)]
+pub struct StonecutterButtons(pub(crate) HashMap<Arc<str>, Vec<Arc<str>>>);
+
+impl StonecutterButtons {
+    pub fn recipe(&self, input: &str, index: usize) -> Option<&str> {
+        self.0.get(input)?.get(index).map(AsRef::as_ref)
+    }
+}
+
 /// `StonecutterMenu`'s state besides its slots and `selectedRecipeIndex`.
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Stonecutter {
@@ -580,7 +592,7 @@ pub struct Stonecutter {
     /// The full stack checked by the projected server menu's ingredient predicates.
     server_input: Option<ItemStack>,
     /// The button map sent to the guest of this server menu, pinned until close.
-    pub server_buttons: Option<Arc<crate::lan::recipes::StonecutterButtons>>,
+    pub server_buttons: Option<Arc<StonecutterButtons>>,
     /// `ResultContainer.recipeUsed`.
     pub used: Option<usize>,
 }
@@ -1864,7 +1876,7 @@ impl Menu {
     /// Slot `s`'s `mayPlace`, the parts' `mayPickup` (true unless they refuse) and
     /// `getMaxStackSize` for `stack`: its own answers, then the parts' on a registered menu
     /// type, all from one ask.
-    fn slot_rules(&self, env: &Env, s: usize, stack: &ItemStack) -> (bool, bool, u32) {
+    pub(crate) fn slot_rules(&self, env: &Env, s: usize, stack: &ItemStack) -> (bool, bool, u32) {
         self.slot_rules_with(env, env.can_equip, s, stack)
     }
 
@@ -2225,18 +2237,7 @@ impl Menu {
 
 /// `ItemStack.getMaxStackSize`: the stack's component, else the item's; a removed
 /// component (`!minecraft:max_stack_size`) uses vanilla's fallback of one.
-pub fn item_max_stack(items: &Items, stack: &ItemStack) -> u32 {
-    let patched = stack.data().and_then(|d| {
-        if d.other("!minecraft:max_stack_size").is_some() {
-            return Some(1);
-        }
-        match d.other("minecraft:max_stack_size") {
-            Some(sunrise_core::nbt::Tag::Int(n)) if (1..=99).contains(n) => Some(*n as u32),
-            _ => None,
-        }
-    });
-    patched.unwrap_or_else(|| items.get(&stack.item).map_or(64, |i| i.max_stack))
-}
+pub use sunrise_items::items::item_max_stack;
 
 /// Whether a stack can merge in the player's inventory.
 fn stackable(items: &Items, stack: &ItemStack) -> bool {
@@ -3723,7 +3724,7 @@ pub(crate) mod tests {
         bare_env_in(&crate::test_resources::loop_context(LoopSide::Server), test)
     }
 
-    pub(super) fn bare_env_in(loop_context: &LoopContext, test: impl FnOnce(&Env)) {
+    pub(crate) fn bare_env_in(loop_context: &LoopContext, test: impl FnOnce(&Env)) {
         static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("sunrise-bare-{}-{run}", std::process::id()));
@@ -4533,450 +4534,6 @@ pub(crate) mod tests {
             menu.set_slot(env, 0, None);
             assert!(!menu.slot_rules(&other, 1, &stack).0);
         });
-    }
-
-    #[test]
-    fn installed_slot_rules_change_mod_menu_placement() {
-        use crate::native_client_hooks::test_hooks::{JUMPS, STILL_VALID_ASKED};
-        crate::native_client_hooks::test_hooks::install();
-        JUMPS.set(0);
-        STILL_VALID_ASKED.set(0);
-        let kind = Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
-            id: "test:rules",
-            owner: "test",
-            slots: 1,
-            player_inventory: true,
-            data_slots: 0,
-            owned_slots: None,
-            results: vec![],
-            inputs: Vec::new(),
-            links: None,
-            crafting: None,
-        })));
-        let mut menu = Menu::new(kind);
-        menu.set_registry_id(Some("test:rules"));
-        let stack = ItemStack::new("minecraft:stone", 1);
-        // A `/reload` builds the next context from the settings then on disk; the
-        // next call sees it, and the one before it keeps its own.
-        let settings = std::env::temp_dir().join(format!("sunrise-rules-{}", std::process::id()));
-        let file = settings.join("rules_mod/stack");
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let inputs = Arc::new(LoadInputs::new(Default::default(), settings.clone()));
-        let load = LoadContext::new(DataLoadOrigin::ServerDataLoad, inputs, []);
-        let before = load.loop_context(LoopSide::Server, []);
-        assert_eq!(before.setting("rules_mod", "stack"), None);
-        bare_env_in(&before, |env| {
-            assert_eq!(menu.slot_rules(env, 0, &stack), (true, true, 7));
-        });
-        std::fs::write(&file, "3").unwrap();
-        let after = load.loop_context(LoopSide::Server, ["rules_mod"]);
-        bare_env_in(&after, |env| {
-            assert_eq!(menu.slot_rules(env, 0, &stack), (true, true, 3));
-            // Slot 28 is hotbar 0 in this one-slot mod menu; both indices
-            // refer to inventory cell 0 and the rule caps that cell at three.
-            menu.set_player_item(0, Some(ItemStack::new("minecraft:stone", 8)));
-            menu.click(env, 28, 0, Input::Swap).unwrap();
-            assert_eq!(menu.player_item(0).unwrap().count, 8);
-            assert_eq!(
-                (0..menu.slot_count())
-                    .filter_map(|i| menu.slot(i))
-                    .map(|s| s.count)
-                    .sum::<u32>(),
-                8
-            );
-            // The container's index 0 is distinct, despite the same index.
-            menu.load_slot(0, Some(ItemStack::new("minecraft:dirt", 2)));
-            menu.click(env, 0, 0, Input::Swap).unwrap();
-            assert_eq!(menu.slot(0).unwrap().count, 3);
-            assert_eq!(menu.player_item(0).unwrap().count, 5);
-            assert_eq!(
-                (0..menu.slot_count())
-                    .filter_map(|i| menu.slot(i))
-                    .map(|s| s.count)
-                    .sum::<u32>(),
-                10
-            );
-        });
-        bare_env_in(&before, |env| {
-            assert_eq!(menu.slot_rules(env, 0, &stack), (true, true, 7));
-        });
-        // The other loop hooks read the same context: before the reload the
-        // setting is missing, after it every one sees it.
-        let name = |context: &LoopContext| {
-            let mut displayname = crate::text::Text::literal("Alex");
-            crate::lan::hub::native_player_name_format(
-                context,
-                &crate::text::Text::literal("Alex"),
-                &mut displayname,
-            );
-            displayname.plain()
-        };
-        let tab_list = |context: &LoopContext| {
-            let mut display_name = None;
-            crate::lan::hub::native_player_tab_list_name_format(
-                context,
-                1,
-                "Alex",
-                &mut display_name,
-            );
-            display_name.map(|text| text.plain())
-        };
-        assert_eq!(name(&before), "Alex");
-        assert_eq!(tab_list(&before), None);
-        assert_eq!(name(&after), "3");
-        assert_eq!(tab_list(&after), Some("3".to_owned()));
-        // The motion value hooks read it too, and change nothing without it.
-        let cow = crate::mobs::Mob::new(
-            1,
-            crate::mobs::sensor_scan_tests::kind(),
-            sunrise_core::geometry::Vec3::ZERO,
-            0.0,
-        );
-        let values = |context: &LoopContext| {
-            let (mut jump, mut speed, mut flying) = (0.5, 0.1, 0.02);
-            let cow = crate::health::LivingLend::mob(&cow, &|| None);
-            crate::motion::native_living_jump_power(context, cow, &mut jump);
-            crate::motion::native_living_speed(context, cow, &mut speed);
-            crate::motion::native_living_flying_speed(context, cow, &mut flying);
-            (jump, speed, flying)
-        };
-        assert_eq!(values(&before), (0.5, 0.1, 0.02));
-        assert_eq!(values(&after), (1.5, 2.1, 3.02));
-        // The block factors a part edits read it too, and are as the block's own without it.
-        let factors = |context: &LoopContext| {
-            use sunrise_world::movement_properties::BlockFactorEdits;
-            let edits = crate::motion::ModBlockFactors(context);
-            let state = sunrise_world::registry::BlockStateId(0);
-            (edits.jump(state, 0.5), edits.speed(state, 0.4))
-        };
-        assert_eq!(factors(&before), (0.5, 0.4));
-        assert_eq!(factors(&after), (4.5, 5.4));
-        // The ladder test of a block reads it too.
-        let ladder = |context: &LoopContext| {
-            let mut ladder = false;
-            crate::motion::native_is_ladder(
-                context,
-                1,
-                sunrise_core::position::BlockPos::new(0, 0, 0),
-                sunrise_world::registry::BlockStateId(0),
-                &mut ladder,
-            );
-            ladder
-        };
-        assert!(!ladder(&before));
-        assert!(ladder(&after));
-        // So does the block under an open trapdoor.
-        let trapdoor_ladder = |context: &LoopContext| {
-            let mut climbable = false;
-            crate::motion::ladder::native_makes_open_trapdoor_above_climbable(
-                context,
-                sunrise_world::registry::BlockStateId(0),
-                sunrise_core::position::BlockPos::new(0, 0, 0),
-                sunrise_world::registry::BlockStateId(0),
-                &mut climbable,
-            );
-            climbable
-        };
-        assert!(!trapdoor_ladder(&before));
-        assert!(trapdoor_ladder(&after));
-        // A block's friction reads it too; an answer that is NaN keeps the block's own
-        // and a finite one is used as given.
-        let friction = |context: &LoopContext, kind: &str| {
-            use sunrise_world::registry::BlockStateId;
-            let world = crate::world::World::new(BlockStateId(0), 0);
-            crate::motion::read_friction(
-                crate::motion::FrictionLevel {
-                    context,
-                    world: &world,
-                    registry: crate::test_fixtures::air_registry(),
-                    side: crate::motion::dry_side(),
-                    coefficient: &|_| Some(0.6),
-                },
-                Some((1, kind)),
-                sunrise_core::position::BlockPos::new(0, 0, 0),
-                BlockStateId(0),
-                0.6,
-            )
-            .unwrap()
-        };
-        assert_eq!(friction(&before, "minecraft:player"), 0.6);
-        assert_eq!(friction(&after, "minecraft:player"), 0.98);
-        assert_eq!(friction(&after, "minecraft:cow"), 0.6);
-        assert_eq!(friction(&after, "minecraft:item"), 3.0);
-        // The edge backoff and the fluid current read it too.
-        let movement = |context: &LoopContext| {
-            let (mut staying, mut flow) = (false, [0.25, 0.0, 0.0]);
-            crate::motion::native_player_stays_on_ground_surface(context, 1, &mut staying);
-            crate::motion::native_fluid_flow(
-                context,
-                "minecraft:water",
-                sunrise_core::position::BlockPos::new(0, 0, 0),
-                &mut flow,
-            );
-            (staying, flow[0])
-        };
-        assert_eq!(movement(&before), (false, 0.25));
-        assert_eq!(movement(&after), (true, 1.25));
-        // A block's sound type reads it too, with the entity and the cause it was asked for.
-        let key = |name| mod_api::SoundEventKey::parse(name).unwrap();
-        let stone = mod_api::BlockSoundType {
-            identity: mod_api::BlockSoundTypeIdentity::Other,
-            volume: 1.0,
-            pitch: 1.0,
-            break_sound: key("block.stone.break"),
-            step: key("block.stone.step"),
-            place: key("block.stone.place"),
-            hit: key("block.stone.hit"),
-            fall: key("block.stone.fall"),
-        };
-        let step = |context: &LoopContext, kind: &str, cause| {
-            let world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
-            let answer = crate::block_sounds::native_sound_type(
-                crate::motion::FrictionLevel {
-                    context,
-                    world: &world,
-                    registry: crate::test_fixtures::air_registry(),
-                    side: crate::motion::dry_side(),
-                    coefficient: &|_| None,
-                },
-                sunrise_core::position::BlockPos::new(0, 0, 0),
-                sunrise_world::registry::BlockStateId(0),
-                Some((1, kind)),
-                cause,
-                &stone,
-            );
-            let sound = answer.as_ref().unwrap_or(&stone);
-            (sound.step.as_str().to_owned(), sound.volume)
-        };
-        let (own, answered) = (
-            ("minecraft:block.stone.step".to_owned(), 1.0),
-            ("rules_mod:block.rules.step".to_owned(), 2.0),
-        );
-        use mod_api::BlockSoundCause::{Place, Step};
-        assert_eq!(step(&before, "minecraft:player", Step), own);
-        assert_eq!(step(&after, "minecraft:player", Step), answered);
-        assert_eq!(step(&after, "minecraft:cow", Step), own);
-        assert_eq!(step(&after, "minecraft:player", Place), own);
-        // Fall, jump and the ender teleport read it as well.
-        let landing = |context: &LoopContext| {
-            let (mut distance, mut multiplier, mut cancel) = (3.0, 1.0, false);
-            crate::landing::native_living_fall(
-                context,
-                1,
-                "minecraft:cow",
-                &mut distance,
-                &mut multiplier,
-                &mut cancel,
-            );
-            let (mut target, mut teleport) = ([1.0, 2.0, 3.0], false);
-            crate::mobs::enderman::native_ender_entity_teleport(
-                context,
-                1,
-                "minecraft:enderman",
-                [0.0; 3],
-                &mut target,
-                &mut teleport,
-            );
-            crate::motion::native_living_jump(context, 1, "minecraft:cow", [0.0, 0.42, 0.0]);
-            (distance, multiplier, cancel, target, teleport)
-        };
-        assert_eq!(landing(&before), (3.0, 1.0, false, [1.0, 2.0, 3.0], false));
-        assert_eq!(landing(&after), (4.0, 2.0, false, [1.0, 3.0, 3.0], true));
-        assert_eq!(JUMPS.get(), 2);
-        // Heal and drown read it as well.
-        let health = |context: &LoopContext| {
-            let (mut amount, mut cancel) = (2.0, false);
-            let healed_mob = crate::mobs::Mob::new(
-                1,
-                crate::mobs::sensor_scan_tests::kind(),
-                sunrise_core::geometry::Vec3::ZERO,
-                0.0,
-            );
-            let healed = crate::health::LivingLend::mob(&healed_mob, &|| None);
-            crate::hunger::native_living_heal(context, healed, &mut amount, &mut cancel);
-            let (mut drowning, mut damage, mut cancel_drown) = (false, 2.0, false);
-            crate::breathing::native_living_drown(
-                context,
-                1,
-                "minecraft:zombie",
-                &mut drowning,
-                &mut damage,
-                &mut 8,
-                &mut cancel_drown,
-            );
-            (amount, cancel, drowning, damage)
-        };
-        assert_eq!(health(&before), (2.0, false, false, 2.0));
-        assert_eq!(health(&after), (3.0, true, true, 3.0));
-        // A listener that sets `bubble_count` to 0: a drowning player takes the
-        // damage and shows no bubbles (`drown_bubbles` sends nothing for 0).
-        let gasp = crate::breathing::Breath {
-            can_breathe: false,
-            consume: 1,
-            refill: 0,
-        };
-        let mut air = -19;
-        let drowned =
-            crate::breathing::drown(&after, 3, "minecraft:player", &mut air, 300, gasp, true)
-                .unwrap();
-        assert_eq!((drowned.damage, drowned.bubbles, air), (Some(3.0), 0, 0));
-        // A listener's `consume` of `i32::MAX` saturates instead of overflowing;
-        // water animals at or below -20 air drown and reset their air to zero.
-        assert_eq!(
-            crate::breathing::apply(
-                -19,
-                300,
-                crate::breathing::Breath {
-                    can_breathe: false,
-                    consume: i32::MAX,
-                    refill: 0,
-                },
-            ),
-            (0, true)
-        );
-        // Water animals out of water: the mods' damage comes back and the air is zero.
-        let out_of_water = |kind: &str, max: i32| {
-            let mut air = -19;
-            let step = crate::breathing::AirStep::own(air, max, false);
-            let hurt = step
-                .finish(&after, 4, kind, &mut air, step.vanilla)
-                .and_then(|drowning| drowning.damage);
-            (hurt, air)
-        };
-        assert_eq!(out_of_water("minecraft:salmon", 300), (Some(3.0), 0));
-        assert_eq!(out_of_water("minecraft:dolphin", 4800), (Some(3.0), 0));
-        // A server's block menu: the game's `stillValid` answer arrives first and
-        // the parts on its mod menu type may change it; a vanilla menu type never
-        // asks them, and a menu whose block entity is gone closes without asking.
-        let mod_type: &'static crate::containers::ModMenuType =
-            Box::leak(Box::new(crate::containers::ModMenuType {
-                id: "test:rules",
-                owner: "test",
-                slots: 27,
-                player_inventory: true,
-                data_slots: 0,
-                owned_slots: None,
-                results: vec![],
-                inputs: Vec::new(),
-                links: None,
-                crafting: None,
-            }));
-        let still_valid = |context: &LoopContext,
-                           mod_type: Option<&'static crate::containers::ModMenuType>,
-                           registry_id: &str,
-                           k: (i32, i32, i32),
-                           entity: bool| {
-            let mut world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
-            if entity {
-                world
-                    .block_entities
-                    .insert(k, crate::containers::BlockEntity::Chest(vec![None; 27]));
-            }
-            let guest = crate::lan::menu::tests::guest();
-            let menu = crate::lan::menu::Menu {
-                window: 1,
-                kind: 2,
-                pos: Some(k),
-                slots: crate::lan::menu::Slots::Block(k),
-                size: 27,
-                state: 0,
-                sent: Vec::new(),
-                drag: None,
-                sent_data: Vec::new(),
-                reported_unsent_data_len: None,
-                blockless_data: Vec::new(),
-                mod_type,
-                registry_id: registry_id.into(),
-                craft: None,
-                links: Vec::new(),
-                asks_still_valid: crate::lan::menu::asks_still_valid(mod_type, registry_id),
-                opening_item: None,
-                opener_block: None,
-                removed: false,
-                slot_changed_seen: None,
-            };
-            menu.still_valid(context, &world, &guest)
-        };
-        let asked = || STILL_VALID_ASKED.get();
-        // The guest's eyes are at (0, 65.62, 0), its reach 4.5 plus 4: a chest 3
-        // blocks away stays open, one 20 blocks away closes, and a vanilla menu
-        // type asks no part either way, though one answers for it.
-        assert!(crate::lan::menu::asks_still_valid(
-            Some(mod_type),
-            "minecraft:generic_9x3"
-        ));
-        let (near, far) = ((0, 64, 3), (0, 64, 20));
-        assert!(still_valid(
-            &after,
-            None,
-            "minecraft:generic_9x3",
-            near,
-            true
-        ));
-        assert!(!still_valid(
-            &after,
-            None,
-            "minecraft:generic_9x3",
-            far,
-            true
-        ));
-        assert_eq!(asked(), 0);
-        // The part keeps the far menu open, or closes the near one.
-        assert!(still_valid(&after, Some(mod_type), "test:rules", far, true));
-        assert!(!still_valid(
-            &before,
-            Some(mod_type),
-            "test:rules",
-            near,
-            true
-        ));
-        assert_eq!(asked(), 2);
-        // Gone: closed whatever the part would answer, and the part is not asked.
-        assert!(!still_valid(
-            &after,
-            Some(mod_type),
-            "test:rules",
-            far,
-            false
-        ));
-        assert_eq!(asked(), 2);
-        // A mod menu with no backing block (`Slots::Native`) is asked too, with no position even
-        // though its opener supplied a screen position, and the part's answer decides.
-        let blockless = |context: &LoopContext| {
-            let world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
-            let guest = crate::lan::menu::tests::guest();
-            let menu = crate::lan::menu::Menu {
-                window: 1,
-                kind: 2,
-                pos: Some(far),
-                slots: crate::lan::menu::Slots::Native,
-                size: 27,
-                state: 0,
-                sent: Vec::new(),
-                drag: None,
-                sent_data: Vec::new(),
-                reported_unsent_data_len: None,
-                blockless_data: Vec::new(),
-                mod_type: Some(mod_type),
-                registry_id: "test:rules".into(),
-                craft: None,
-                links: Vec::new(),
-                asks_still_valid: crate::lan::menu::asks_still_valid(Some(mod_type), "test:rules"),
-                opening_item: None,
-                opener_block: None,
-                removed: false,
-                slot_changed_seen: None,
-            };
-            menu.still_valid(context, &world, &guest)
-        };
-        assert!(blockless(&after));
-        assert!(!blockless(&before));
-        assert_eq!(asked(), 4);
-        assert_eq!(
-            crate::native_client_hooks::test_hooks::STILL_VALID_POS.get(),
-            None
-        );
-        std::fs::remove_dir_all(&settings).unwrap();
     }
 
     /// A deferred anvil take (`anvil_hook = true`): taking slot 2 captures the
@@ -5959,6 +5516,170 @@ pub(crate) mod tests {
     }
     #[path = "../dfa_tests.rs"]
     mod dfa;
+    #[test]
+    fn smithing_transform_overlay_matches_optional_inputs_and_takes_template_result() {
+        use crate::creative::Names;
+        use crate::enchant::tests::sample;
+        use crate::stations::StationRecipes;
+        use serde_json::Value;
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("sunrise-smithing-{}", std::process::id()));
+        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{
+            "minecraft:stick":{"minecraft:max_stack_size":64},
+            "minecraft:diamond":{"minecraft:max_stack_size":64},
+            "minecraft:emerald":{"minecraft:max_stack_size":64},
+            "minecraft:diamond_sword":{"minecraft:max_stack_size":1,"minecraft:max_damage":1561}
+        }"#,
+        )
+        .unwrap();
+        let context = crate::test_resources::server_load();
+        let ctx = crate::test_resources::server_loop_context();
+        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
+        let recipe = serde_json::json!({"type":"minecraft:smithing_transform",
+            "base":"minecraft:stick", "addition":"minecraft:diamond",
+            "result":{"id":"minecraft:emerald","count":3,
+                "components":{"minecraft:custom_name":"Upgraded","minecraft:repair_cost":0}}});
+        let files = vec![(
+            "recipe/test:upgrade".to_owned(),
+            vec![serde_json::to_vec(&recipe).unwrap()],
+        )];
+        let overlay = PackOverlay::new(&files);
+        let stations = StationRecipes::load(&root, &items, &overlay, &context).unwrap();
+        let e = sample();
+        let mut base = ItemStack::new("minecraft:stick", 2);
+        base.data_mut()
+            .set_loot_name("minecraft:custom_name", &serde_json::json!("Original"));
+        base.data_mut().repair_cost = 7;
+        base.data_mut().set_loot_component(
+            "minecraft:custom_data",
+            &Some(sunrise_core::json_nbt::json_to_tag(&serde_json::json!({"kept":1})).unwrap()),
+        );
+        let addition = ItemStack::new("minecraft:diamond", 2);
+        let result = stations
+            .smithing_result(ctx, &e, None, Some(&base), Some(&addition))
+            .expect("omitted template accepts an empty slot");
+        assert_eq!(
+            (&*result.item, result.count, result.repair_cost()),
+            ("minecraft:emerald", 3, 0)
+        );
+        assert_eq!(
+            result.data().unwrap().custom_name,
+            Some(sunrise_core::nbt::Tag::String("Upgraded".into()))
+        );
+        assert!(
+            result
+                .data()
+                .unwrap()
+                .other("minecraft:custom_data")
+                .is_some()
+        );
+        assert!(
+            stations
+                .smithing_result(ctx, &e, Some(&addition), Some(&base), Some(&addition))
+                .is_none()
+        );
+        assert!(
+            stations
+                .smithing_result(ctx, &e, None, Some(&base), None)
+                .is_none()
+        );
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE, &context).unwrap();
+        let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
+        let banners = Banners::load(&root, &defaults);
+        let names = Names::default();
+        let env = Env {
+            crafting_remainder: None,
+            player: None,
+            player_entity_id: None,
+            loop_context: ctx,
+            items: &items,
+            recipes: &recipes,
+            brewing: &brewing,
+            banners: &banners,
+            station_recipes: &stations,
+            enchantments: &e,
+            names: &names,
+            trade: None,
+            maps: None,
+            limited_crafting: false,
+            can_equip: None,
+            known_recipes: None,
+            slot_rules: None,
+            stacked: None,
+        };
+        let mut menu = Menu::new(Kind::Smithing);
+        menu.set_slot(&env, 1, Some(base));
+        menu.set_slot(&env, 2, Some(addition));
+        assert_eq!(menu.slot(3), Some(&result));
+        menu.click(&env, 3, 0, Input::Pickup).unwrap();
+        assert_eq!(menu.carried.as_ref(), Some(&result));
+        assert!(menu.slot(0).is_none());
+        assert_eq!(menu.slot(1).unwrap().count, 1);
+        assert_eq!(menu.slot(2).unwrap().count, 1);
+        assert_eq!(menu.crafted[0].0, "test:upgrade");
+        for (result, malformed) in [
+            (
+                serde_json::json!({"id":"minecraft:emerald","count":0}),
+                true,
+            ),
+            (
+                serde_json::json!({"id":"minecraft:emerald","count":100}),
+                true,
+            ),
+            (
+                serde_json::json!({"id":"minecraft:diamond_sword","count":2}),
+                false,
+            ),
+            (
+                serde_json::json!({"id":"minecraft:emerald","components":{"minecraft:max_damage":10}}),
+                false,
+            ),
+        ] {
+            let mut invalid = recipe.clone();
+            invalid["result"] = result;
+            let files = vec![(
+                "recipe/test:invalid".to_owned(),
+                vec![serde_json::to_vec(&invalid).unwrap()],
+            )];
+            let candidate =
+                StationRecipes::load(&root, &items, &PackOverlay::new(&files), &context);
+            if malformed {
+                let error = candidate.err().unwrap().to_string();
+                assert!(error.contains("data/test/recipe/invalid.json"), "{error}");
+                assert!(
+                    error.contains("invalid ingredients or required fields"),
+                    "{error}"
+                );
+            } else {
+                assert!(
+                    candidate
+                        .unwrap()
+                        .smithing_result(ctx, &e, None, menu.slot(1), menu.slot(2))
+                        .is_none(),
+                    "{invalid}"
+                );
+            }
+        }
+        for key in ["template", "base", "addition"] {
+            let mut invalid = recipe.clone();
+            invalid[key] = Value::Null;
+            let files = vec![(
+                "recipe/test:invalid".to_owned(),
+                vec![serde_json::to_vec(&invalid).unwrap()],
+            )];
+            let error = StationRecipes::load(&root, &items, &PackOverlay::new(&files), &context)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains("data/test/recipe/invalid.json"), "{error}");
+            assert!(error.contains("invalid ingredient: null"), "{error}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

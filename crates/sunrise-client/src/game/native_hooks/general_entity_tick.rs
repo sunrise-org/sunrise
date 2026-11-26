@@ -212,7 +212,7 @@ mod tests {
                         fall_distance: 6.0,
                         custom_name: None,
                         custom_name_visible: false,
-                        no_gravity: false,
+                        base: Default::default(),
                         on_ground: false,
                         tick_count: 0,
                         no_physics: false,

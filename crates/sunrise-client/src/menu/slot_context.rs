@@ -1,7 +1,7 @@
 //! The live slot view lent to a `menu_slot_rules` ask.
 use super::{
-    CONTAINER_MAX, Env, GRID, ItemStack, Kind, MAIN, Menu, PLAYER, RESULT, Role, Slot, SlotContext,
-    SlotRules, item_max_stack, limit_slot_max_for, vanilla_may_pickup_for_role,
+    CONTAINER_MAX, Env, GRID, ItemStack, Kind, LinkedSlots, MAIN, Menu, PLAYER, RESULT, Role, Slot,
+    SlotContext, SlotRules, item_max_stack, limit_slot_max_for, vanilla_may_pickup_for_role,
     vanilla_may_place_for_role, vanilla_slot_max_for_role,
 };
 use mod_api::MenuContainer;
@@ -28,23 +28,23 @@ pub fn lan_container(i: usize, container: Option<&[Option<ItemStack>]>) -> MenuC
 impl<'a> SlotContext<'a> {
     /// A blockless menu's live backing and player slots, borrowed for one slot-policy question.
     pub fn blockless(
-        guest: &'a crate::lan::guest::Guest,
+        guest: &'a impl super::MenuGuest,
         pos: Option<[i32; 3]>,
         container: MenuContainer,
     ) -> Self {
         Self {
-            player: Some(guest.uuid),
+            player: Some(guest.uuid()),
             pos,
             container,
-            slots: &guest.native_menu,
+            slots: guest.native_menu(),
             slots_second: &[],
             linked: None,
             main_crafting: None,
             grid: &[],
             result: &[],
-            player_slots: &guest.inventory,
-            player_armor: Some(&guest.armor),
-            player_offhand: Some(&guest.offhand),
+            player_slots: guest.inventory(),
+            player_armor: Some(guest.armor()),
+            player_offhand: Some(guest.offhand()),
             staged_slot: None,
         }
     }
@@ -128,7 +128,7 @@ pub struct LiveSlotRules<'a> {
     pub pos: Option<[i32; 3]>,
     pub main: &'a [Option<ItemStack>],
     pub main_second: &'a [Option<ItemStack>],
-    pub linked: Option<crate::lan::menu::LinkedSlots<'a>>,
+    pub linked: Option<LinkedSlots<'a>>,
     pub grid: &'a [Option<ItemStack>],
     pub result: &'a [Option<ItemStack>],
     pub player_slots: &'a [Option<ItemStack>],

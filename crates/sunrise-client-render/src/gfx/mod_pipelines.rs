@@ -15,13 +15,12 @@ use super::expression_blocks::{VANILLA_OFFSETS, VANILLA_SIZES, block_entry};
 use super::mod_meshes::{ResolvedMeshDraw, wgpu_index_format};
 use super::mod_render_targets::{TargetMips, TargetUse};
 use super::world_primitives::{Upload, VertexPages};
-use crate::mod_pipelines::{Built, BuiltTexture, ModifierStacks, Pipelines};
+use crate::mod_pipelines::{Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare};
 use glam::Mat4;
 use mod_api::{
-    BindingKind, BlendFactor, BlendOp, ColorTargetState, ColorWrite, DepthCompare, DrawRange,
-    Identifier, IndexFormat, MeshDraw, PipelineBlend, PipelineState, PolygonMode,
-    PrimitiveTopology, Sampler, SamplerAddress, SamplerFilter, VertexAttributeFormat, VertexFormat,
-    VertexStepMode,
+    BindingKind, BlendFactor, BlendOp, ColorTargetState, ColorWrite, DrawRange, Identifier,
+    IndexFormat, MeshDraw, PipelineBlend, PipelineState, PolygonMode, PrimitiveTopology, Sampler,
+    SamplerAddress, SamplerFilter, VertexAttributeFormat, VertexFormat, VertexStepMode,
 };
 use std::collections::{HashMap, HashSet};
 use sunrise_mod_pipeline::{
@@ -380,20 +379,6 @@ struct TargetState<'a> {
     force_depth_attachment: bool,
     standard_z: bool,
     write_mask: wgpu::ColorWrites,
-}
-
-fn wgpu_compare(compare: DepthCompare) -> wgpu::CompareFunction {
-    match compare {
-        DepthCompare::Always => wgpu::CompareFunction::Always,
-        DepthCompare::Less => wgpu::CompareFunction::Less,
-        DepthCompare::LessEqual => wgpu::CompareFunction::LessEqual,
-        DepthCompare::Equal => wgpu::CompareFunction::Equal,
-        DepthCompare::NotEqual => wgpu::CompareFunction::NotEqual,
-        DepthCompare::GreaterEqual => wgpu::CompareFunction::GreaterEqual,
-        DepthCompare::Greater => wgpu::CompareFunction::Greater,
-        DepthCompare::Never => wgpu::CompareFunction::Never,
-        _ => wgpu::CompareFunction::GreaterEqual,
-    }
 }
 
 fn wgpu_blend_factor(factor: BlendFactor) -> wgpu::BlendFactor {
@@ -4591,7 +4576,7 @@ mod tests {
     }
     use crate::gfx::world_primitives::{self, STAGES, WorldPrimitives};
     use glam::Vec3;
-    use mod_api::{BlendFunction, Identifier, RenderPipeline, WorldDepth};
+    use mod_api::{BlendFunction, DepthCompare, Identifier, RenderPipeline, WorldDepth};
 
     const SIZE: u32 = 64;
     /// The frame before any quad: a quarter grey, stored as 64 in 8 bits.

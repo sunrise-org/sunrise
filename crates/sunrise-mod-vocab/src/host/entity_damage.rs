@@ -9,11 +9,9 @@ pub trait EntityDamageBackend {
     /// Side: server.
     /// `Entity.isPermanentlyInvulnerable`: the `Invulnerable` flag, which
     /// only damage that bypasses invulnerability (the void, `/kill`) or a
-    /// creative player gets past. Mobs keep it on themselves (saved with
-    /// them), players on their body (not saved: Sunrise's player save
-    /// keeps no such field), the other kinds in the saved `Invulnerable`
-    /// tag of their entity data — the tag the item damage path
-    /// already refuses by.
+    /// creative player gets past. Every kind of entity keeps it, saved as
+    /// `Invulnerable`; a player's is not saved (Sunrise's player save keeps no such
+    /// field).
     fn entity_permanently_invulnerable(&self, entity: EntityRef) -> Option<bool>;
     /// Side: both.
     /// `Entity.invulnerableTime`: the entity-level invulnerability
@@ -93,8 +91,8 @@ pub trait EntityDamageBackendMut {
         last_damage_player: Option<PlayerRef>,
     ) -> Result<Vec<ItemStack>, DeathLootError>;
     /// Side: server.
-    /// `Entity.setInvulnerable`: sets a mob's `Invulnerable` flag, saved
-    /// with it. False for the other kinds.
+    /// `Entity.setInvulnerable`: sets the `Invulnerable` flag, for every kind of entity.
+    /// False for a stale handle.
     fn entity_set_invulnerable(&mut self, entity: EntityRef, invulnerable: bool) -> bool;
     /// Side: server.
     /// Sets `LivingEntity.damageCooldownTime`, as mods do to let rapid hits
@@ -117,6 +115,8 @@ pub trait EntityDamageBackendMut {
     /// without any (a heart-bound creaking's reaction, a ghast's reflected
     /// large fireball on hurt cooldown).
     /// Stale direct or causing handles are treated as absent.
+    /// A general entity refuses (`Some(false)`) until it has a hurt Part (#5084), and so
+    /// does every kind that has no hurt path yet.
     fn entity_hurt(
         &mut self,
         entity: EntityRef,

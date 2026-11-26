@@ -74,6 +74,9 @@ pub struct GeneralEntityTypeDeclaration {
     pub summonable: bool,
     /// Whether the client can target the row for use and attack (`Entity.isPickable`).
     pub pickable: bool,
+    /// Whether instances are immune to fire (`EntityType.Builder.fireImmune`), which
+    /// `Entity.fireImmune` answers and `Entity.isOnFire` honours.
+    pub fire_immune: bool,
     /// How instances respond to a piston. The vanilla default is `PushPull`.
     pub piston_push_reaction: crate::PushReaction,
     /// Tracking distance in chunks, stored directly like vanilla's signed integer.
@@ -104,6 +107,7 @@ impl Default for GeneralEntityTypeDeclaration {
             save_policy: GeneralSavePolicy::Save,
             summonable: true,
             pickable: false,
+            fire_immune: false,
             piston_push_reaction: crate::PushReaction::PushPull,
             tracking_chunks: 5,
             update_interval: 3,
@@ -148,7 +152,8 @@ pub trait GeneralTypesRegistrar {
     /// this mod's namespace (`robot` of `mymod` is `mymod:robot`), while an
     /// explicit valid `namespace:path` keeps its namespace. Supply its category, its
     /// finite `width` and `height` in blocks, its passenger attachment, its save and
-    /// summon policy, whether it is pickable, its signed integer tracking distance and
+    /// summon policy, whether it is pickable, whether it is fire immune
+    /// (`EntityType.Builder.fireImmune`), its signed integer tracking distance and
     /// update interval, its payload schema version and the Minecraft feature flags
     /// (`FeatureFlag`) it requires (`EntityType.Builder.requiredFeatures`).
     /// A `tracking_chunks` value of zero keeps instances in server simulation
@@ -160,6 +165,8 @@ pub trait GeneralTypesRegistrar {
     /// Pass `false` for vanilla's plain `Entity.isPickable` default. Pass `true`
     /// to let the player's crosshair target the declared box for use and attack.
     /// This does not make the box solid or give it a middle-click item.
+    /// Pass `false` for `fire_immune` unless the type should never burn (vanilla's builder
+    /// default). Instances of an immune type read `fire_immune` as `true` and are never on fire.
     /// `piston_push_reaction` defaults to vanilla's `PushPull` when omitted (`None`).
     ///
     /// `passenger_attachment` is the finite `[x, y, z]` passenger point in vehicle-local
@@ -185,6 +192,7 @@ pub trait GeneralTypesRegistrar {
         save_policy: GeneralSavePolicy,
         summonable: bool,
         pickable: bool,
+        fire_immune: bool,
         piston_push_reaction: Option<crate::PushReaction>,
         tracking_chunks: i32,
         update_interval: i32,

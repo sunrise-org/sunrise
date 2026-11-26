@@ -1244,6 +1244,11 @@ mod native_dynamic_textures_tests;
 mod native_effect_category;
 #[path = "game/modding/native_entities.rs"]
 mod native_entities;
+#[path = "game/modding/native_entity_base.rs"]
+mod native_entity_base;
+#[cfg(test)]
+#[path = "game/modding/native_entity_base_tests.rs"]
+mod native_entity_base_tests;
 #[path = "game/modding/native_entity_commands.rs"]
 mod native_entity_commands;
 #[path = "game/modding/native_entity_data.rs"]

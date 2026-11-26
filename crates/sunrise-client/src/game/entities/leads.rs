@@ -132,6 +132,11 @@ impl Game<'_> {
             id,
             join: Default::default(),
             fence,
+            fire_ticks: 0,
+            invulnerable: false,
+            no_gravity: false,
+            silent: false,
+            glowing: false,
         });
         self.uuid_for(id);
         id

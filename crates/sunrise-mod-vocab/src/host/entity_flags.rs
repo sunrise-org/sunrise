@@ -7,15 +7,14 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait EntityFlagsBackend {
     /// Side: server.
-    /// Whether the mob makes no sounds (`Entity.isSilent`, its `Silent`
-    /// tag); false for a player.
+    /// Whether the entity makes no sounds (`Entity.isSilent`, its `Silent` tag), for every
+    /// kind of entity.
     fn entity_is_silent(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
-    /// Returns the mob's persistent glowing tag (`Entity.hasGlowingTag`).
+    /// Returns the persistent glowing tag (`Entity.hasGlowingTag`), for every kind of entity.
     fn entity_glowing(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
-    /// Returns the mob's, dropped item's or general entity row's no-gravity flag
-    /// (`Entity.isNoGravity`).
+    /// Returns the no-gravity flag (`Entity.isNoGravity`), for every kind of entity.
     fn entity_no_gravity(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
     /// Whether the entity's model is hidden (`Entity.isInvisible`): the
@@ -29,16 +28,16 @@ pub trait EntityFlagsBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait EntityFlagsBackendMut {
     /// Side: server.
-    /// Silences the mob or lets it make sounds again (`Entity.setSilent`).
-    /// False for the other kinds.
+    /// Silences the entity or lets it make sounds again (`Entity.setSilent`), for every
+    /// kind of entity. Saved as `Silent`. False for a stale handle.
     fn entity_set_silent(&mut self, entity: EntityRef, silent: bool) -> bool;
     /// Side: server.
-    /// Sets the mob's persistent glowing tag (`Entity.setGlowingTag`). Returns false for players and guests.
+    /// Sets the persistent glowing tag (`Entity.setGlowingTag`), saved as `Glowing`, for
+    /// every kind of entity. False for a stale handle.
     fn entity_set_glowing(&mut self, entity: EntityRef, glowing: bool) -> bool;
     /// Side: server.
-    /// Sets the mob's, dropped item's or general entity row's no-gravity flag
-    /// (`Entity.setNoGravity`).
-    /// Returns false for players and guests.
+    /// Sets the no-gravity flag (`Entity.setNoGravity`), saved as `NoGravity`, for every
+    /// kind of entity. False for a stale handle.
     fn entity_set_no_gravity(&mut self, entity: EntityRef, no_gravity: bool) -> bool;
     /// Side: server.
     /// Sets the entity's shared invisibility flag (`Entity.setInvisible`) on a mob, an armor

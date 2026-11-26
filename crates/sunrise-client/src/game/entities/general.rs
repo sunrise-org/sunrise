@@ -13,6 +13,7 @@ use super::Game;
 use super::commands::Target;
 use super::entity::Entity;
 use super::entity_initialization::TransferredEntityState;
+use super::native_entity_base::{EntityBase, owned};
 use super::persist::ChunkKey;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -45,8 +46,8 @@ pub struct GeneralEntityRecord {
     pub custom_name: Option<Text>,
     /// `Entity.isCustomNameVisible`, saved as `CustomNameVisible`; absent means false.
     pub custom_name_visible: bool,
-    /// `Entity.isNoGravity`, saved as `NoGravity`; absent means false.
-    pub no_gravity: bool,
+    /// The `Entity` base state: `Fire`, `Invulnerable`, `NoGravity`, `Silent`, `Glowing`.
+    pub base: EntityBase,
     /// `Entity.onGround`, saved as `OnGround`; absent means false.
     pub on_ground: bool,
     /// `Entity.fallDistance`, saved as `fall_distance`; absent or not a number means zero.
@@ -240,8 +241,6 @@ mod format {
     pub const CUSTOM_NAME: &str = "CustomName";
     /// `CustomNameVisible`: written only when set (`Entity.saveWithoutId`).
     pub const CUSTOM_NAME_VISIBLE: &str = "CustomNameVisible";
-    /// `NoGravity`: written only when set (`Entity.saveWithoutId`).
-    pub const NO_GRAVITY: &str = "NoGravity";
     /// `OnGround`: always written (`Entity.saveWithoutId`).
     pub const ON_GROUND: &str = "OnGround";
     /// `fall_distance`: a double, always written (`Entity.saveWithoutId`).
@@ -311,9 +310,7 @@ impl GeneralEntityRecord {
         if self.custom_name_visible {
             map.insert(format::CUSTOM_NAME_VISIBLE.into(), Tag::Byte(1));
         }
-        if self.no_gravity {
-            map.insert(format::NO_GRAVITY.into(), Tag::Byte(1));
-        }
+        self.base.write(&mut map, owned::ALL);
         map.insert(format::ON_GROUND.into(), Tag::Byte(self.on_ground.into()));
         map.insert(
             format::FALL_DISTANCE.into(),
@@ -469,7 +466,6 @@ fn read_general_record(
         .get(format::CUSTOM_NAME)
         .and_then(sunrise_client::entity_nbt::decode_custom_name_text);
     let custom_name_visible = sunrise_client::entity_nbt::flag(tag, format::CUSTOM_NAME_VISIBLE);
-    let no_gravity = sunrise_client::entity_nbt::flag(tag, format::NO_GRAVITY);
     // `Entity.load`: `getBooleanOr("OnGround", false)` and `getDoubleOr("fall_distance", 0.0)`,
     // which read any number and default on a missing key or another tag.
     let (on_ground, fall_distance) = sunrise_client::entity_nbt::ground_from_nbt(tag);
@@ -514,7 +510,7 @@ fn read_general_record(
         owner,
         custom_name,
         custom_name_visible,
-        no_gravity,
+        base: EntityBase::read(Some(tag)),
         on_ground,
         fall_distance,
         envelope: GeneralTypeEnvelope {
@@ -616,6 +612,13 @@ impl GeneralTypeCatalog {
         self.entries[slot].pickable
     }
 
+    /// Whether the type was declared fire immune (`EntityType.fireImmune`).
+    pub(in crate::game) fn fire_immune(&self, slot: usize) -> bool {
+        self.entries
+            .get(slot)
+            .is_some_and(|entry| entry.fire_immune)
+    }
+
     pub(in crate::game) fn piston_push_reaction(
         &self,
         slot: usize,
@@ -710,9 +713,6 @@ pub struct GeneralRow {
     /// `Entity.fallDistance`: saved as `fall_distance`, accumulated by a collided move and
     /// reset or halved by the base tick's fluid step.
     pub fall_distance: f64,
-    /// `Entity.isNoGravity`, saved as `NoGravity`; synced as `Entity.DATA_NO_GRAVITY`. The
-    /// engine never applies gravity itself: the type's tick reads this and moves the row.
-    pub no_gravity: bool,
     /// `Entity.onGround`, saved as `OnGround`; a collided move writes it.
     pub on_ground: bool,
     /// `Entity.tickCount`: counted by the base tick, wraps as Java's `int` does, not saved.
@@ -735,6 +735,10 @@ pub struct GeneralRow {
     pub custom_name: Option<Text>,
     /// `Entity.isCustomNameVisible`; synced as `Entity.DATA_CUSTOM_NAME_VISIBLE`.
     pub custom_name_visible: bool,
+    /// The `Entity` base state (`Entity.saveWithoutId`'s `Fire`, `Invulnerable`, ...). Its
+    /// `no_gravity` is `Entity.isNoGravity`, synced as `Entity.DATA_NO_GRAVITY`: the engine never
+    /// applies gravity itself, the type's tick reads it and moves the row.
+    pub base: EntityBase,
     /// The payload's schema version, as the record carried it and the writer
     /// returns it: no decoder owns it before stage 4.
     pub payload_version: u16,
@@ -1036,7 +1040,7 @@ impl Game<'_> {
             owner: row.owner,
             custom_name: row.custom_name.clone(),
             custom_name_visible: row.custom_name_visible,
-            no_gravity: row.no_gravity,
+            base: row.base,
             on_ground: row.on_ground,
             fall_distance: row.fall_distance,
             envelope: GeneralTypeEnvelope {
@@ -1481,7 +1485,7 @@ impl Game<'_> {
             fall_distance: record.fall_distance,
             custom_name: record.custom_name,
             custom_name_visible: record.custom_name_visible,
-            no_gravity: record.no_gravity,
+            base: record.base,
             on_ground: record.on_ground,
             tick_count: 0,
             no_physics: false,
@@ -1684,7 +1688,7 @@ mod tests {
             owner: None,
             custom_name: None,
             custom_name_visible: false,
-            no_gravity: false,
+            base: Default::default(),
             on_ground: false,
             fall_distance: 0.0,
             uuid,
@@ -1856,6 +1860,7 @@ mod tests {
             save_policy: mod_api::GeneralSavePolicy::Save,
             summonable: true,
             pickable: false,
+            fire_immune: false,
             piston_push_reaction: mod_api::PushReaction::PushPull,
             tracking_chunks: 8,
             update_interval: 3,
@@ -1978,7 +1983,7 @@ mod tests {
             fall_distance: 0.0,
             custom_name: None,
             custom_name_visible: false,
-            no_gravity: false,
+            base: Default::default(),
             on_ground: false,
             tick_count: 0,
             no_physics: false,

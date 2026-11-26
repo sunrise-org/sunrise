@@ -258,12 +258,24 @@ impl Game<'_> {
                 )
             },
         );
-        if alive {
+        if !alive {
+            match epoch {
+                Some(epoch) => {
+                    self.remove_target_now(EntityRef::new(epoch, id), Target::General(id))
+                }
+                None => self.persist.removals.push(Target::General(id)),
+            }
             return;
         }
-        match epoch {
-            Some(epoch) => self.remove_target_now(EntityRef::new(epoch, id), Target::General(id)),
-            None => self.persist.removals.push(Target::General(id)),
+        // `Entity.baseTick`: a fire immune type puts the fire out, any other burns down. The
+        // damage every twentieth tick is vanilla's `hurt`, which general entities refuse until
+        // they have a hurt Part (#5084).
+        if row.base.fire_ticks > 0 {
+            row.base.fire_ticks = if general_type_catalog().fire_immune(row.type_slot) {
+                0
+            } else {
+                row.base.fire_ticks - 1
+            };
         }
     }
 

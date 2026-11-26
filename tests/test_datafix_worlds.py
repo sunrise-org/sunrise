@@ -86,7 +86,7 @@ class ServerStopTests(unittest.TestCase):
         self.assertEqual(calls, [120, None])
 
     def test_a_server_already_killed_with_its_stdin_closed_stops_without_an_error(self):
-        # What datafix_scene_12.populate leaves for build() and build_flat() to stop.
+        # A server may exit on its own before cleanup.
         server = worlds.Server.__new__(worlds.Server)
         server.process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=subprocess.PIPE, text=True)
         self.addCleanup(server.process.kill)
@@ -122,6 +122,20 @@ class KnownPacksTests(unittest.TestCase):
     def test_a_protocol_with_no_known_id_is_refused(self):
         with self.assertRaisesRegex(ValueError, 'protocol 999'):
             self.configure(999, [])
+
+
+class BotLeaveTests(unittest.TestCase):
+    def test_second_leave_skips_the_wait_and_socket_close(self):
+        bot = worlds.Bot.__new__(worlds.Bot)
+        bot.stop = threading.Event()
+        bot.sock = mock.Mock()
+        sleep = mock.Mock()
+        with mock.patch.object(worlds, 'time', SimpleNamespace(sleep=sleep)):
+            bot.leave()
+            bot.leave()
+        self.assertTrue(bot.stop.is_set())
+        sleep.assert_called_once_with(1.5)
+        bot.sock.close.assert_called_once_with()
 
 
 class BotFailedJoinTests(unittest.TestCase):
@@ -182,7 +196,7 @@ class BuildCleanupTests(unittest.TestCase):
             def __init__(self, *args):
                 pass
 
-            def stop(self):
+            def stop(self, *, save):
                 events.append('stopped')
                 if stop_error:
                     raise stop_error
@@ -195,6 +209,7 @@ class BuildCleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(worlds, 'LOCAL', Path(temp)), \
                 mock.patch.object(worlds, 'server_jar', return_value=(Path('server.jar'), 3700, 770)), \
                 mock.patch.object(worlds, 'java', return_value='java'), mock.patch.object(worlds, 'Server', FakeServer), \
+                mock.patch.object(worlds, 'free_port', return_value=12345), \
                 mock.patch.object(worlds, 'Bot', FakeBot), mock.patch.object(worlds, 'build_scene', scene), \
                 mock.patch.object(worlds, 'time', SimpleNamespace(sleep=lambda seconds: None)):
             try:
@@ -218,24 +233,20 @@ class BuildFlatCleanupTests(unittest.TestCase):
     def build_flat(self, fail_in):
         events = []
 
-        class FakeBot:
+        class FakeBot(worlds.Bot):
             def __init__(self, port, protocol, name):
                 events.append('joined')
-
-            def leave(self):
-                events.append('left')
+                self.stop = threading.Event()
+                self.sock = SimpleNamespace(close=lambda: events.append('left'))
 
         class FakeServer:
-            def _pump(self):
+            def __init__(self, *args, **kwargs):
                 pass
 
-            def wait(self, *args):
-                pass
-
-            def stop(self):
+            def stop(self, *, save):
                 events.append('stopped')
 
-        def populate(server, Bot, *args):
+        def populate(server, Bot, *args, **kwargs):
             Bot(1, 340, 'x')
             raise ValueError('populate failed')
 
@@ -243,12 +254,12 @@ class BuildFlatCleanupTests(unittest.TestCase):
             if fail_in == 'visit' and commands[0].startswith('tp '):
                 raise ValueError('visit failed')
 
+        clock = SimpleNamespace(sleep=lambda seconds: None)
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(worlds, 'LOCAL', Path(temp)), \
                 mock.patch.object(worlds, 'server_jar', return_value=(Path('server.jar'), 1343, 340)), \
                 mock.patch.object(worlds, 'java', return_value='java'), mock.patch.object(worlds, 'Server', FakeServer), \
-                mock.patch.object(worlds, 'Bot', FakeBot), mock.patch.object(worlds, 'subprocess', mock.MagicMock()), \
-                mock.patch.object(worlds.scene12, 'populate', populate), mock.patch.object(worlds.scene12, 'batch', batch), \
-                mock.patch.object(worlds.scene12, 'time', SimpleNamespace(sleep=lambda seconds: None)):
+                mock.patch.object(worlds, 'Bot', FakeBot), mock.patch.object(worlds, 'time', clock), \
+                mock.patch.multiple(worlds.scene12, populate=populate, batch=batch, time=clock, free_port=lambda: 12345):
             with self.assertRaises(ValueError) as caught:
                 worlds.scene12.build_flat(worlds)
         return events, str(caught.exception)
@@ -258,7 +269,70 @@ class BuildFlatCleanupTests(unittest.TestCase):
 
     def test_a_scene_that_fails_closes_every_bot_and_stops_the_server(self):
         events, error = self.build_flat('populate')
-        self.assertEqual((events, error), (['joined', 'left', 'joined', 'left', 'left', 'stopped'], 'populate failed'))
+        self.assertEqual((events, error), (['joined', 'left', 'joined', 'left', 'stopped'], 'populate failed'))
+
+
+class LegacyBuildTests(unittest.TestCase):
+    def setUp(self):
+        work = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+        def start(*args, cwd, **kwargs):
+            (cwd / 'world').mkdir()
+            process.returncode = None
+            return process
+
+        self.process = process = mock.Mock(stdout=['Done (\n'], returncode=None)
+        process.poll.side_effect = lambda: process.returncode
+        process.kill.side_effect = lambda: setattr(process, 'returncode', 1)
+        self.stop = stop = mock.Mock()
+
+        class RecordingServer(worlds.Server):
+            def stop(self, *args, **kwargs):
+                stop(*args, **kwargs)
+                super().stop(*args, **kwargs)
+
+        self.enterContext(mock.patch.multiple(
+            worlds, LOCAL=work, server_jar=mock.Mock(return_value=(Path('server.jar'), 1343, 340)),
+            java=mock.Mock(return_value='java'), free_port=lambda: 12345,
+            subprocess=SimpleNamespace(Popen=start, PIPE=subprocess.PIPE, STDOUT=subprocess.STDOUT),
+            Server=RecordingServer, time=SimpleNamespace(sleep=lambda seconds: None, time=worlds.time.time)))
+        self.lab_actions = mock.Mock()
+        self.batch = mock.Mock(return_value=[['Time is 12'], ['Time is 12']])
+        self.enterContext(mock.patch.multiple(
+            worlds.scene12, time=worlds.time, lab_actions=self.lab_actions, batch=self.batch,
+            free_port=lambda: 12345, make_player=lambda *args: lambda *args: mock.Mock()))
+
+    def assert_saved_shutdown(self):
+        self.stop.assert_called_once_with(save=False)
+        self.process.kill.assert_called_once_with()
+        self.process.wait.assert_called_once_with()
+        self.process.stdin.close.assert_called_once_with()
+        self.process.stdin.write.assert_not_called()  # a graceful stop would save over the last tick
+
+    def test_legacy_world_owner_ends_the_server_once_without_resaving(self):
+        worlds.build('1.12.2')
+        self.assert_saved_shutdown()
+
+    def test_flat_world_owner_ends_the_server_once_without_resaving(self):
+        worlds.scene12.build_flat(worlds)
+        self.assert_saved_shutdown()
+
+    def test_older_world_does_not_change_the_next_worlds_origin_or_items(self):
+        worlds.server_jar.side_effect = [(Path('server.jar'), 922, 316), (Path('server.jar'), 1343, 340)]
+        with mock.patch.multiple(worlds.scene12, spawn_origin=lambda *args: (-32, 96), probe_items=lambda *args: {'stick'}):
+            worlds.build('1.11.2')
+            worlds.build('1.12.2')
+        commands = [command for call in self.batch.call_args_list for command in call.args[1]]
+        self.assertEqual([c for c in commands if c.startswith('spawnpoint ')],
+                         ['spawnpoint Upgrader -32 100 96', 'spawnpoint Upgrader 144 100 144'])
+        self.assertEqual([c for c in commands if c.startswith('replaceitem entity Upgrader slot.hotbar.0 ')],
+                         ['replaceitem entity Upgrader slot.hotbar.0 minecraft:stick 1 0',
+                          'replaceitem entity Upgrader slot.hotbar.0 minecraft:map 1 0'])
+
+    def test_lab_actions_oserror_reaches_the_caller(self):
+        self.lab_actions.side_effect = ConnectionResetError('lab bot disconnected')
+        with self.assertRaisesRegex(ConnectionResetError, 'lab bot disconnected'):
+            worlds.build('1.12.2')
 
 
 if __name__ == '__main__':

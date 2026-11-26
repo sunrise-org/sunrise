@@ -485,9 +485,11 @@ impl Game<'_> {
                 self.bolt_tag(b, uuid, include_id)
             }
             // LeashFenceKnotEntity saves nothing of its own: the common
-            // entity fields, as an explicitly summoned knot's.
+            // entity fields, as an explicitly summoned knot's, with the base state
+            // a mod set (`Entity.saveWithoutId`).
             Target::Knot(id) => {
                 let fence = self.natural_knot(id)?;
+                let base = self.read_entity_base(Target::Knot(id))?.base;
                 let uuid = *self.persist.uuids.get(&id)?;
                 let knot = super::OtherEntity {
                     size_answer: None,
@@ -505,10 +507,10 @@ impl Game<'_> {
                     eye: None,
                 };
                 let mut tag = self.other_to_nbt(&knot, uuid);
-                // Entity.saveWithoutId writes `remainingFireTicks` always; the
-                // knot's never changes (BlockAttachedEntity.tick has no
-                // baseTick).
-                set_key(&mut tag, "Fire", Tag::Short(0));
+                // BlockAttachedEntity.tick has no baseTick: only a mod changes the fire.
+                if let Tag::Compound(map) = &mut tag {
+                    base.write(map, crate::game::native_entity_base::owned::ALL);
+                }
                 tag
             }
         };
@@ -1187,7 +1189,7 @@ impl Game<'_> {
             .state(state)
             .map_or_else(|| "minecraft:air".into(), |s| s.name.to_string())
     }
-    fn raw_mut(&mut self, t: Target) -> Option<&mut Tag> {
+    pub(in crate::game) fn raw_mut(&mut self, t: Target) -> Option<&mut Tag> {
         match t {
             Target::Player => Some(self.level.player_extra.get_or_insert_with(empty)),
             Target::Guest(conn) => self

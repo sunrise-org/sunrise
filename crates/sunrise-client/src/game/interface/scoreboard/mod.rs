@@ -291,9 +291,10 @@ impl Game<'_> {
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
         self.target_with_uuid(uuid)
     }
-    /// The saved `Tags` list read by commands and native entity handles.
-    pub(super) fn saved_entity_tags(&self, t: Target) -> EntityTags<'_> {
-        let raw = match t {
+    /// The compound Sunrise keeps for the entity `t` names: what it was loaded with and
+    /// commands and native handles have written since. None for a kind that keeps none.
+    pub(in crate::game) fn saved_entity_compound(&self, t: Target) -> Option<&Tag> {
+        match t {
             Target::Mob(id)
             | Target::Item(id)
             | Target::Stand(id)
@@ -331,7 +332,12 @@ impl Game<'_> {
                 .and_then(|f| f.saved.as_ref().map(|s| &s.1)),
             // A natural knot keeps no saved compound: it has no tags.
             Target::Knot(_) => None,
-        };
+        }
+    }
+
+    /// The saved `Tags` list read by commands and native entity handles.
+    pub(super) fn saved_entity_tags(&self, t: Target) -> EntityTags<'_> {
+        let raw = self.saved_entity_compound(t);
         let tags = match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(tags)) => tags.as_slice(),
             _ => &[],

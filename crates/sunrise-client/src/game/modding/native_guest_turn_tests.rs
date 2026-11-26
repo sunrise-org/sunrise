@@ -22,6 +22,18 @@ pub(in crate::game) fn with_guests(test: impl FnOnce(&mut super::Game<'_>)) {
     with_guests_at(super::native_entity_refs::tests::fixture_root(), test);
 }
 
+/// [`with_guests`] with column (0, 0) and its neighbours loaded and ticking, as
+/// `with_resident_game` does: a body pushed at the origin is found.
+pub(in crate::game) fn with_resident_guests(test: impl FnOnce(&mut super::Game<'_>)) {
+    with_guests(|game| {
+        super::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
+            game,
+            sunrise_core::position::ChunkPos::new(0, 0),
+        );
+        test(game);
+    });
+}
+
 pub(in crate::game) fn with_guests_at(
     root: std::path::PathBuf,
     test: impl FnOnce(&mut super::Game<'_>),

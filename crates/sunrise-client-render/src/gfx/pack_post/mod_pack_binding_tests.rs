@@ -285,7 +285,7 @@ fn mod_pack_program_draws_aux_depth_and_tracks_previous_uniform() {
             pass_slot: ModPassSlot::AfterOpaqueGbuffers,
             depth_target: Some(0),
             depth_write: true,
-            depth_test: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             cull: false,
             program_mode: Default::default(),
         }],
@@ -340,6 +340,115 @@ fn mod_pack_program_draws_aux_depth_and_tracks_previous_uniform() {
 
 #[test]
 #[ignore = "daily"]
+fn mod_pack_linked_pass_honors_depth_compare_and_write() {
+    use crate::mod_pipelines::{pack_program_requests_of, pack_runtime_specs_of};
+    use mod_api::{
+        DepthCompare, Identifier, PackBinding, PackDepthTarget, PackPassSlot, PipelineBlend,
+        RenderPipeline, WorldDepth,
+    };
+
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let Some(gpu) = Gpu::new() else {
+        return;
+    };
+    let files = [
+        (
+            "mod_depth.vsh",
+            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}",
+        ),
+        (
+            "mod_depth.fsh",
+            "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(1.0,0.0,0.0,1.0);}",
+        ),
+        ("final.vsh", VERTEX),
+        (
+            "final.fsh",
+            "#version 120\n\
+             uniform sampler2D colortex0;\n\
+             uniform sampler2D depthtex0;\n\
+             varying vec2 uv;\n\
+             void main(){\n\
+                 bool drew = texture2D(colortex0, uv).r > 0.5;\n\
+                 float depth = texture2D(depthtex0, uv).r;\n\
+                 gl_FragColor = vec4(drew ? 1.0 : 0.0, depth == 0.5 ? 1.0 : 0.0,\n\
+                                     depth == 0.75 ? 1.0 : 0.0, 1.0);\n\
+             }",
+        ),
+    ]
+    .map(|(name, source)| (name.into(), source.into()))
+    .into();
+    // All declarations draw in the same slot. A late pass without an explicit target may
+    // test against main depth but cannot write it, even if it requests a write.
+    let states = [
+        (DepthCompare::Equal, false, true),
+        (DepthCompare::Never, false, true),
+        (DepthCompare::Less, false, true),
+        (DepthCompare::Greater, false, true),
+        (DepthCompare::Always, true, true),
+        (DepthCompare::Always, true, false),
+    ];
+    let pipelines: Vec<_> = states
+        .iter()
+        .enumerate()
+        .map(|(slot, &(compare, write, names_main))| {
+            let id = Identifier::parse(&format!("example:linked_depth_{slot}")).unwrap();
+            let mut binding = PackBinding::new()
+                .program("mod_depth")
+                .slot(PackPassSlot::AfterTranslucentGbuffers);
+            if names_main {
+                binding = binding.depth_target(PackDepthTarget::Main);
+            }
+            RenderPipeline::new(id.clone(), id, PipelineBlend::Opaque, WorldDepth::Tested)
+                .pack_binding(binding)
+                .depth_compare(compare)
+                .depth_write(write)
+        })
+        .collect();
+    let (mut post, color, depth) = load_with_mods(
+        &gpu,
+        files,
+        pack_program_requests_of(&pipelines),
+        &pack_runtime_specs_of(&pipelines),
+    );
+    for slot in 0..pipelines.len() {
+        assert!(
+            post.is_mod_pipeline_bound(slot),
+            "slot {slot}: {:?}",
+            post.notes
+        );
+    }
+
+    // Seed 0.5 anew each frame. GL clip-space z in [-1, 1] maps to pack depth in [0, 1].
+    // Read red for a draw, green for the seed depth and blue for the far draw's depth.
+    for (name, slot, clip_z, drew, stored_far) in [
+        ("Equal at seed", 0, 0.0, true, false),
+        ("Equal nearer", 0, -0.5, false, false),
+        ("Never nearer", 1, -0.5, false, false),
+        ("Less farther (reversed-Z)", 2, 0.5, true, false),
+        ("Greater farther (reversed-Z)", 3, 0.5, false, false),
+        ("Greater nearer without write", 3, -0.5, true, false),
+        ("Always farther with write", 4, 0.5, true, true),
+        ("Always farther in read-only slot", 5, 0.5, true, false),
+    ] {
+        gpu.clear(&color, &depth, 0.5);
+        let (vertices, indices) = mod_quad_buffers(&gpu.device, clip_z);
+        post.set_mod_draws(vec![ModDrawChunk::quads(slot, vertices, indices, 0..1)]);
+        let pixel = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
+        assert_eq!(
+            pixel,
+            [
+                if drew { 255 } else { 0 },
+                if stored_far { 0 } else { 255 },
+                if stored_far { 255 } else { 0 },
+                255,
+            ],
+            "{name}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "daily"]
 fn mod_pack_falls_back_to_gbuffers_terrain_when_custom_program_absent() {
     let _gpu_guard = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else {
@@ -378,7 +487,7 @@ fn mod_pack_falls_back_to_gbuffers_terrain_when_custom_program_absent() {
             pass_slot: ModPassSlot::AfterOpaqueGbuffers,
             depth_target: None,
             depth_write: true,
-            depth_test: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             cull: false,
             program_mode: Default::default(),
         }],
@@ -442,7 +551,7 @@ fn mod_pack_aux_depth_is_lazy_when_pack_never_samples_it() {
             pass_slot: ModPassSlot::AfterOpaqueGbuffers,
             depth_target: Some(0),
             depth_write: true,
-            depth_test: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             cull: false,
             program_mode: Default::default(),
         }],
@@ -520,7 +629,7 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
                 pass_slot: ModPassSlot::AfterOpaqueGbuffers,
                 depth_target: None,
                 depth_write: true,
-                depth_test: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 cull: false,
                 program_mode: Default::default(),
             },
@@ -529,7 +638,7 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
                 pass_slot: ModPassSlot::AfterOpaqueGbuffers,
                 depth_target: None,
                 depth_write: true,
-                depth_test: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 cull: false,
                 program_mode: Default::default(),
             },
@@ -606,7 +715,7 @@ fn mod_shadow_pass_geometry_is_drawn_and_invalidates_the_shadow_cache() {
                 pass_slot: ModPassSlot::Shadow,
                 depth_target: None,
                 depth_write: true,
-                depth_test: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 cull: false,
                 program_mode: Default::default(),
             }],
@@ -750,7 +859,7 @@ fn own_stage_runtime() -> (
             pass_slot: ModPassSlot::AfterOpaqueGbuffers,
             depth_target: None,
             depth_write: true,
-            depth_test: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             cull: false,
             program_mode: ModProgramMode::ModVertexPackFragment,
         }],
@@ -940,7 +1049,7 @@ fn mod_vertex_pack_fragment_against_a_geometry_stage_program_is_unbound_with_a_n
             pass_slot: ModPassSlot::Shadow,
             depth_target: None,
             depth_write: true,
-            depth_test: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             cull: false,
             program_mode: ModProgramMode::ModVertexPackFragment,
         }],
@@ -1112,7 +1221,7 @@ fn mod_pack_indirect_draw_with_a_count_buffer_draws_only_the_counted_commands() 
             pass_slot: ModPassSlot::AfterOpaqueGbuffers,
             depth_target: None,
             depth_write: true,
-            depth_test: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
             cull: false,
             program_mode: Default::default(),
         }],

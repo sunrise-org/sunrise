@@ -710,6 +710,9 @@ include!("save/preset_generation.rs");
 mod level;
 pub use level::*;
 
+mod worlds;
+pub use worlds::{WorldEntry, list_worlds};
+
 #[cfg(test)]
 mod tests;
 

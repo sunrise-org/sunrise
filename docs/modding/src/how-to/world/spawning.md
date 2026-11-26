@@ -499,7 +499,9 @@ the declared box as soon as the row spawns on the client. The ordinary use and
 attack packets name that row, and the existing `entity_interact` and
 `attack_entity` hooks receive its id and declared kind. Without a listener's
 response, use on the row passes and the row declines damage. This does not make
-the box solid or give it a middle-click item. The next argument declares how the
+the box solid or give it a middle-click item. The next argument, `fire_immune`,
+is vanilla's `EntityType.fireImmune()`: with `true`, the row never reads as
+burning and its fire ticks are put out each tick. The argument after it declares how the
 row reacts to pistons: pass `None` for `PushReaction::PushPull`, or
 `Some(PushReaction::IgnoreEntity)` to leave the row in place. The declared
 reaction is readable on either side.

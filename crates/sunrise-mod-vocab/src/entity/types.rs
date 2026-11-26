@@ -195,6 +195,15 @@ pub struct EntityUuid(pub u128);
 /// of an entity that is gone, or used on a client. `Host::entity` makes a server
 /// handle from an event's entity id; `ClientHost::crosshair_target` supplies a
 /// client handle for an entity hit.
+///
+/// The base state vanilla gives every `Entity` is read and written through one rule for
+/// every kind: the remaining fire ticks and `isOnFire`, `fireImmune`, `isSilent`,
+/// `hasGlowingTag`, `isNoGravity` and `isInvulnerable`, saved as `Fire`, `Silent`,
+/// `Glowing`, `NoGravity` and `Invulnerable` as `Entity.saveWithoutId` writes them. `None`
+/// or `false` from them means a stale handle, a non-finite input or the wrong side. The
+/// exceptions are a fishing bobber, a leash knot and a dragon's part, which keep no entity
+/// data: they read the defaults and refuse writes. Kinds the game keeps as saved data hold
+/// `Fire` as the saved short.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct EntityRef {

@@ -190,9 +190,9 @@ pub struct ModPipelinePackSpec {
     pub pass_slot: ModPassSlot,
     /// Optional index into `ModPackRuntime::depth_targets`.
     pub depth_target: Option<usize>,
-    /// Whether the pipeline tests depth (`LessEqual` vs `Always`).
-    pub depth_test: bool,
-    /// Whether the pipeline writes depth.
+    /// Declared depth comparison lowered to the pack's standard-Z depth plane.
+    pub depth_compare: wgpu::CompareFunction,
+    /// Whether the pipeline requested depth writes and its target and slot allow them.
     pub depth_write: bool,
     /// Whether back faces are culled (`PipelineState::cull`).
     pub cull: bool,
