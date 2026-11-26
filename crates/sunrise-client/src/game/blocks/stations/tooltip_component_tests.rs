@@ -2642,26 +2642,35 @@ fn only_hovered_slots_check_show_tooltip_with_item_in_hand() {
         );
 
         use sunrise_client::merchant::{ItemCost, MerchantOffer, Session};
-        game.open_remote_merchant(
-            Session::new(
-                vec![MerchantOffer {
-                    base_cost_a: ItemCost {
-                        stack: ItemStack::new("minecraft:stick", 1),
-                    },
-                    cost_b: None,
-                    result: ItemStack::new("minecraft:bread", 1),
-                    uses: 0,
-                    max_uses: 12,
-                    reward_exp: true,
-                    special_price_diff: 0,
-                    demand: 0,
-                    price_multiplier: 0.0,
-                    xp: 1,
-                }],
-                true,
-            ),
-            None,
+        let session = Session::new(
+            vec![MerchantOffer {
+                base_cost_a: ItemCost {
+                    stack: ItemStack::new("minecraft:stick", 1),
+                },
+                cost_b: None,
+                result: ItemStack::new("minecraft:bread", 1),
+                uses: 0,
+                max_uses: 12,
+                reward_exp: true,
+                special_price_diff: 0,
+                demand: 0,
+                price_multiplier: 0.0,
+                xp: 1,
+            }],
+            true,
         );
+        game.station = Some(
+            crate::game::trading::MerchantState {
+                session: Box::new(session),
+                scroll: 0,
+                dragging: false,
+                focused: None,
+                mob: None,
+                name: None,
+            }
+            .into_station(),
+        );
+        game.transition_screen(crate::game::Screen::Inventory, false, |_, _| {});
         game.carried = Some(ItemStack::new("minecraft:stone", 1));
         let mut batch = HudBatch::scratch([512, 512]);
         let (ox, oy) = game.inventory_origin(&batch);

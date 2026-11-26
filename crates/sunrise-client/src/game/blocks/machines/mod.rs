@@ -2422,8 +2422,12 @@ impl Game<'_> {
         if self.native_screen_inventory_y().is_some() {
             return None;
         }
+        self.machine_screen_for(key, self.remote_menu_type())
+    }
+
+    fn machine_screen_for(&self, key: Pos, menu: Option<&str>) -> Option<Screen> {
         // A server's menu shows by its type, whatever block (or minecart) holds it.
-        if let Some(menu) = self.remote_menu_type() {
+        if let Some(menu) = menu {
             return match menu {
                 "minecraft:hopper" => Some(Screen::Hopper),
                 "minecraft:generic_3x3" => Some(Screen::Dispenser),
@@ -2431,11 +2435,10 @@ impl Game<'_> {
             };
         }
         if key.1 == super::minecarts::CART_KEY_Y {
-            return (self.open_cart_kind() == Some(super::minecarts::CartKind::Hopper))
+            return (self.cart_container_kind(key) == Some(super::minecarts::CartKind::Hopper))
                 .then_some(Screen::Hopper);
         }
-        let state = self.world.block(key.0, key.1, key.2);
-        match &*self.res.facts().get(state).name {
+        match self.container_block_at(key) {
             "minecraft:hopper" => Some(Screen::Hopper),
             "minecraft:dispenser" => Some(Screen::Dispenser),
             "minecraft:dropper" => Some(Screen::Dropper),
@@ -2444,24 +2447,33 @@ impl Game<'_> {
     }
     /// `imageHeight` of the open screen (HopperScreen is 133 tall).
     pub(super) fn screen_height(&self) -> f32 {
-        if let Some(height) = self.native_screen_height() {
-            return height;
-        }
-        if self
-            .station
-            .as_ref()
-            .is_some_and(|s| s.kind == super::stations::Kind::Beacon)
-        {
-            return super::beacon::HEIGHT;
-        }
-        if let Some(rows) = self.chest_rows() {
+        self.native_screen_height().unwrap_or_else(|| {
+            self.stock_container_height(
+                self.station.as_ref().map(|s| s.kind),
+                self.remote_menu_type(),
+                self.container,
+                self.container_kind(),
+            )
+        })
+    }
+
+    /// Select the stock panel from its own menu and backing, whether staged or installed.
+    pub(super) fn stock_container_height(
+        &self,
+        station: Option<super::stations::Kind>,
+        menu: Option<&str>,
+        key: Option<Pos>,
+        entity: Option<&BlockEntity>,
+    ) -> f32 {
+        if station == Some(super::stations::Kind::Beacon) {
+            super::beacon::HEIGHT
+        } else if let Some(rows) = self.chest_rows_for(menu, key, entity) {
             // ContainerScreen: 114 + 18 per row.
-            return 114.0 + rows as f32 * 18.0;
-        }
-        if self.container_block_is_shulker() {
-            return 167.0;
-        }
-        if self.machine_screen() == Some(Screen::Hopper) {
+            114.0 + rows as f32 * 18.0
+        } else if key.is_some_and(|key| is_shulker_box(self.container_block_at(key))) {
+            167.0
+        } else if key.is_some_and(|key| self.machine_screen_for(key, menu) == Some(Screen::Hopper))
+        {
             133.0
         } else {
             166.0

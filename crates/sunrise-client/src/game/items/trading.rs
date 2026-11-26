@@ -73,6 +73,12 @@ pub(super) fn merchant_title(progress: bool, level: i32, name: Text) -> Text {
     Text::translate_with_fallback("merchant.title", "%s - %s", &[name, level])
 }
 impl MerchantState {
+    pub(super) fn into_station(self) -> Station {
+        let mut station = Station::new_kind(Kind::Merchant, [0, 0, 0]);
+        station.merchant = Some(Box::new(self));
+        station
+    }
+
     /// `Merchant.showProgressBar`: villagers only.
     pub(super) fn progress(&self) -> bool {
         self.session.show_progress()
@@ -467,24 +473,13 @@ impl Game<'_> {
             name: None,
         });
     }
-    /// A server's trading window (no mob here: the server keeps it).
-    pub(super) fn open_remote_merchant(&mut self, session: merchant::Session, name: Option<Text>) {
-        self.open_merchant_state(MerchantState {
-            session: Box::new(session),
-            scroll: 0,
-            dragging: false,
-            focused: None,
-            mob: None,
-            name,
-        });
-    }
     fn open_merchant_state(&mut self, state: MerchantState) {
-        let mut s = Station::new_kind(Kind::Merchant, [0, 0, 0]);
-        s.merchant = Some(Box::new(state));
-        self.station = Some(s);
-        self.set_screen(super::Screen::Inventory);
-        self.capture(false);
-        self.set_mapping_held("key.use", false);
+        self.station = Some(state.into_station());
+        let outcome = self.transition_screen(super::Screen::Inventory, false, |_, _| {});
+        if outcome != super::native_hooks::ScreenOpenOutcome::Vetoed || self.remote.is_none() {
+            self.capture(false);
+            self.set_mapping_held("key.use", false);
+        }
     }
     /// The trading mob's random before a menu click (it ticks meanwhile).
     pub(super) fn merchant_sync_in(session: &mut merchant::Session, mob: Option<&Mob>) {

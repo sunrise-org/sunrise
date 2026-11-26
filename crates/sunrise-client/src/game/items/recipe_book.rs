@@ -238,6 +238,16 @@ impl RecipeUi {
         self.last_clicked = None;
         self.custom = mod_screen::ModRecipeUi::default();
     }
+
+    #[cfg(test)]
+    pub(super) fn set_test_tab_page(&mut self, tab: Option<Tab>, page: usize) {
+        (self.tab, self.page) = (tab, page);
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_tab_page(&self) -> (Option<Tab>, usize) {
+        (self.tab, self.page)
+    }
 }
 
 fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {

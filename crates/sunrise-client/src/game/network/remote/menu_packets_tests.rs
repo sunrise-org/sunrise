@@ -33,11 +33,31 @@ fn packets_through_pong(game: &mut Game<'_>, reader: &mut ConnReader) -> Vec<S> 
 #[test]
 #[ignore = "daily"]
 fn rejected_menu_packets_retire_the_previous_client_menu() {
+    use crate::game::{RenderSnapshot, native_hotbar_slot::hotbar_slot_tests::logged_in};
+    use mod_api::{ClientHost, Hooks, ModEntry, ScreenOpening, ScreenOpeningEvent};
+    use std::sync::{Arc, Mutex};
+
+    struct ObserveShulker(Arc<Mutex<Option<[f32; 4]>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for ObserveShulker {
+        fn screen_opening(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut ScreenOpeningEvent<'_>,
+        ) -> Option<ScreenOpening> {
+            if event.new.menu == Some("minecraft:shulker_box") {
+                *self.0.lock().unwrap() = Some(event.new.rect);
+            }
+            None
+        }
+    }
+
     in_own_process(
         "game::remote::tests::menu_packets_tests::rejected_menu_packets_retire_the_previous_client_menu",
         || {
             with_game(|game| {
-                let (mut reader, _writer) = connect_menu_test(game);
+                let mut reader = logged_in(game);
+                game.remote.as_mut().unwrap().level_load.finish();
                 let remote = game.remote.as_mut().unwrap();
                 remote.menu.set(Some((7, "minecraft:generic_9x3".into())));
                 let generation = remote.menu.generation;
@@ -59,6 +79,44 @@ fn rejected_menu_packets_retire_the_previous_client_menu() {
                         .into_iter()
                         .any(|p| { matches!(p, S::ContainerClose(close) if close.container == 7) })
                 );
+
+                // A subsequent valid packet can open a shulker menu without a backing block.
+                game.title = None;
+                game.render_snapshot.set(Some(RenderSnapshot {
+                    framebuffer: game.gui_frame_now().0,
+                    prepared_generation: None,
+                    staged_prepared_draws: 0,
+                }));
+                let menu = game
+                    .remote
+                    .as_ref()
+                    .unwrap()
+                    .builtin
+                    .get("minecraft:menu")
+                    .unwrap()
+                    .id("minecraft:shulker_box")
+                    .unwrap();
+                let opening = Arc::new(Mutex::new(None));
+                let mods = vec![ModEntry::new(
+                    "shulker_observer",
+                    Box::new(ObserveShulker(opening.clone())),
+                )];
+                mod_platform::testing::with_mods(mods.into(), || {
+                    let packet = C::OpenScreen(OpenScreen {
+                        container: 8,
+                        menu,
+                        title: Tag::String("Shulker".into()),
+                    })
+                    .encode();
+                    let mut reader = sunrise_protocol::buf::Reader::new(&packet);
+                    game.handle_packet(C::decode(reader.varint().unwrap(), reader.rest()).unwrap())
+                        .unwrap();
+                    assert_eq!(game.remote_menu().0, 8);
+                    let accepted = game.screen_state.observed.as_ref().unwrap();
+                    assert_eq!(accepted.menu.as_deref(), Some("minecraft:shulker_box"));
+                    assert_eq!(accepted.rect[2..], [176.0, 166.0]);
+                    assert_eq!(*opening.lock().unwrap(), Some(accepted.rect));
+                });
             });
         },
     );
@@ -157,8 +215,11 @@ fn a_mount_chest_beyond_the_slot_range_ends_the_connection() {
 #[test]
 #[ignore = "daily"]
 fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
-    use mod_api::{ClientHost, Hooks, ModEntry, ScreenInitPostEvent};
+    use mod_api::{ClientHost, Hooks, ModEntry, ScreenInitPostEvent, client::widgets::TextField};
     use std::sync::{Arc, Mutex};
+    use sunrise_client::widgets::{Kind, Target};
+
+    const FOCUS_RECT: [f32; 4] = [10.0, 20.0, 80.0, 20.0];
 
     // Listening only to Init.Post leaves screen_opening disabled. The menu
     // must still be installed when Gui.setScreen publishes the new view.
@@ -171,6 +232,8 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     .lock()
                     .unwrap()
                     .push(event.screen.menu.map(str::to_owned));
+                let widget = event.widgets.add_text_field(TextField::new(FOCUS_RECT, 32));
+                assert!(event.widgets.set_initial_focus(widget));
             }
         }
     }
@@ -198,6 +261,7 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     }))
                     .unwrap();
                     game.remote.as_mut().unwrap().level_load.finish();
+                    game.pad.menu.keyboard = true;
                     let open = |game: &mut Game<'_>, container, entity, species, columns| {
                         let ty = game.res.mob_types().get(species).unwrap().clone();
                         game.mobs.push(Mob::new(entity as u32, ty, Vec3::ZERO, 0.0));
@@ -238,10 +302,31 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     assert!(packets.into_iter().any(|p| matches!(p,
                     S::ContainerClick(click) if (click.container, click.state, click.slot) == (8, 5, 19))));
 
-                    game.set_screen(Screen::Playing);
-                    // `HorseInventoryMenu` adds its chest slots only `if (inventoryColumns > 0)`:
-                    // a count whose size wraps positive (`-1431655764 * 3` is 4 as Java's `int`) lays out none.
+                    let previous = game.screen_state.widgets.focused_id().unwrap();
+                    assert_eq!(game.remote_menu().0, 8);
+                    // Replace window 8 in place. `HorseInventoryMenu` lays out no
+                    // chest for negative columns, even when its backing size wraps positive.
                     open(game, 10, 43, "minecraft:horse", -1431655764);
+                    assert_eq!(
+                        *observed.lock().unwrap(),
+                        [
+                            Some("sunrise:mount6".to_owned()),
+                            Some("sunrise:mount0".to_owned())
+                        ]
+                    );
+                    let current = game.screen_state.widgets.focused_id().unwrap();
+                    assert_ne!(current, previous);
+                    assert_eq!(
+                        game.pad.menu.focus,
+                        Some(Target {
+                            rect: FOCUS_RECT,
+                            kind: Kind::Mounted {
+                                id: current.raw(),
+                                field: true
+                            },
+                        })
+                    );
+                    assert_eq!(game.pad.menu.origin, Some(FOCUS_RECT));
                     assert_eq!(game.mount_menu_columns(), Some(0));
                     assert_eq!(game.slot_count(), 38);
                     assert_eq!(game.mount_slot_position(CHEST), None);

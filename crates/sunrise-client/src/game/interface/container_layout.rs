@@ -1,7 +1,7 @@
 //! Container geometry constructed by the screen build seam.
 use super::screen_build::ContainerLayout;
-use super::{Creative, Game, Screen};
-use sunrise_client::inventory_effects::EffectsLayout;
+use super::{Creative, Game, Screen, beacon, stations};
+use sunrise_client::{hud::HudBatch, inventory_effects::EffectsLayout};
 
 #[cfg(test)]
 thread_local! {
@@ -25,6 +25,44 @@ pub(super) struct SlotInputs {
 }
 
 impl Game<'_> {
+    /// Inventory origin and image rectangle from a panel size and explicit layout shifts.
+    /// Opening's staged panel passes zero shifts; only a live screen asks for room.
+    pub(super) fn inventory_panel(
+        batch: &HudBatch,
+        width: Option<f32>,
+        height: f32,
+        station: Option<stations::Kind>,
+        [book, room]: [f32; 2],
+    ) -> ((f32, f32), [f32; 4]) {
+        let width = width.unwrap_or(176.0);
+        let (x, y) = batch.centered_origin(width, height);
+        let x = x + book - room;
+        let (offset, width) = match station {
+            Some(stations::Kind::Merchant) => (-50.0, 276.0),
+            Some(stations::Kind::Beacon) => (beacon::SHIFT, 230.0),
+            _ => (0.0, width),
+        };
+        ((x, y), [x + offset, y, width, height])
+    }
+
+    /// Geometry of the live container, including its book and mod room shifts.
+    pub(super) fn container_panel(&self, batch: &HudBatch) -> ((f32, f32), [f32; 4]) {
+        if self.screen == Screen::Creative {
+            let (x, y) = Self::creative_origin(batch);
+            return ((x, y), [x, y, Creative::WIDTH, Creative::HEIGHT]);
+        }
+        Self::inventory_panel(
+            batch,
+            self.native_screen_width(),
+            self.screen_height(),
+            self.station.as_ref().map(|s| s.kind),
+            [
+                self.recipe_book_shift(batch.width),
+                self.screen_room_shift(batch),
+            ],
+        )
+    }
+
     fn native_slot_inputs(&self) -> Option<(u64, u32, Option<f32>, Option<f32>)> {
         self.shown_native_screen().map(|s| {
             (
@@ -87,8 +125,7 @@ impl Game<'_> {
         &self,
         batch: &sunrise_client::hud::HudBatch,
     ) -> ContainerLayout {
-        let image = self.container_image_parts(batch);
-        let origin = self.inventory_origin_unbuilt(batch);
+        let (origin, image) = self.container_panel(batch);
         // A title over the inventory draws no book or effects of its own.
         let covered = self.screen == Screen::Inventory && self.title.is_some();
         let book = (!covered).then(|| self.recipe_book_rect(batch)).flatten();

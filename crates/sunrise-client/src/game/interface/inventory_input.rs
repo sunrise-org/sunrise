@@ -474,25 +474,8 @@ impl Game<'_> {
     ) -> sunrise_client::container_screen::Image {
         match self.built_container(batch) {
             Some(layout) => Self::image_of(layout.image),
-            None => Self::image_of(self.container_image_parts(batch)),
+            None => Self::image_of(self.container_panel(batch).1),
         }
-    }
-    /// `leftPos`, `topPos`, `imageWidth`, `imageHeight` from the game's state
-    /// alone: the container build's own arithmetic, and the fallback when no
-    /// build holds this size.
-    pub(super) fn container_image_parts(&self, batch: &HudBatch) -> [f32; 4] {
-        let (ox, oy) = self.inventory_origin_unbuilt(batch);
-        let (shift, width, height) = if self.screen == Screen::Creative {
-            (0.0, Creative::WIDTH, Creative::HEIGHT)
-        } else {
-            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-                Some(stations::Kind::Merchant) => (-50.0, 276.0),
-                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230.0),
-                _ => (0.0, self.native_screen_width().unwrap_or(176.0)),
-            };
-            (shift, width, self.screen_height())
-        };
-        [ox + shift, oy, width, height]
     }
     /// The build's panel as `AbstractContainerScreen`'s `leftPos`/`topPos`/
     /// `imageWidth`/`imageHeight`, the shape `hasClickedOutside` reads.

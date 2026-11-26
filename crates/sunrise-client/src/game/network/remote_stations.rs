@@ -5,30 +5,10 @@
 //! `MultiPlayerGameMode.handleContainerInput` and `handleInventoryButtonClick`
 //! do. The menu's client-side `slotsChanged` follows the server's slots, and
 //! its data slots come in `ClientboundContainerSetDataPacket`.
-use super::{
-    Game, Screen,
-    stations::{Kind, Station},
-};
+use super::{Game, stations::Kind};
 use sunrise_protocol::packets::play::{self, Serverbound as S};
 
 impl Game<'_> {
-    /// The server opened workstation menu `menu` in window `container`.
-    pub(super) fn remote_open_station(
-        &mut self,
-        container: i32,
-        menu: String,
-        kind: Kind,
-        title: sunrise_client::text::Text,
-        pos: [i32; 3],
-    ) {
-        self.remote_set_menu(Some((container, menu)), Some(title));
-        self.craft_size = 2;
-        self.container = None;
-        self.station = Some(Station::new_kind(kind, pos));
-        self.set_screen(Screen::Inventory);
-        self.capture(false);
-    }
-
     /// Window `container` is the server's workstation menu, open here.
     pub(super) fn remote_station_open(&self, container: i32) -> bool {
         self.station.is_some()
