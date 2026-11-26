@@ -332,6 +332,33 @@ class DatafixSeedSnapshotTests(unittest.TestCase):
         self.assertEqual([p.name for p in keep.iterdir()], [datafix_seeds.LOCK_NAME])
         self.assertEqual(list(dest.iterdir()), [])
 
+    def test_a_failed_generation_is_not_repeated_within_its_run(self):
+        keep = self.base / 'keep'
+        key = '6' * 64
+        calls = []
+
+        def partial_generate(scratch, _manifest_path):
+            calls.append(scratch)
+            make_world(scratch, 'worlds', '1.19', '1.19', 3105)
+
+        for share in ('a', 'b'):
+            with self.assertRaisesRegex(RuntimeError, 'complete 3-world snapshot'):
+                datafix_seeds.prepare(self.base / share, keep, key=key, expected=self.expected,
+                                      generate=partial_generate, run='7-1')
+        self.assertEqual(len(calls), 1)
+        self.assertFalse((keep / key).exists())
+        # A new attempt or run generates again, and a success there publishes as usual.
+        res = datafix_seeds.prepare(self.base / 'c', keep, key=key, expected=self.expected,
+                                    generate=lambda scratch, _m: self.populate(scratch), run='7-2')
+        self.assertEqual(res['status'], 'miss')
+        self.assertTrue(datafix_seeds.snapshot_complete(keep / key, self.expected, strict_top=True))
+        # The marker is pruned with the stale staging folders.
+        marker = keep / f'.{key}.failed-7-1'
+        old = time.time() - datafix_seeds.STALE_STAGING_SECONDS - 60
+        os.utime(marker, (old, old))
+        datafix_seeds.prune_seed_keep(keep)
+        self.assertFalse(marker.exists())
+
     def test_corrupted_kept_snapshot_is_replaced(self):
         keep = self.base / 'keep'
         dest = self.base / 'job' / 'datafix'

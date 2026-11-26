@@ -248,7 +248,8 @@ jobs:
             exit 0
           fi
           export SUNRISE_DATAFIX_SEED_KEEP="$DYNA_CI_KEEP/datafix-seeds"
-          python3 tools/datafix_seeds.py > "$PARITY_LOG_DIR/datafix-seeds.log" 2>&1
+          python3 tools/datafix_seeds.py --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            > "$PARITY_LOG_DIR/datafix-seeds.log" 2>&1
       - name: Run every automatic harness
         env:
           PARITY_HOSTS: ''

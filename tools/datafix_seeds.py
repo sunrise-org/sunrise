@@ -11,6 +11,12 @@ keep by age and byte budget.
 Outputs, `build/`, `run/`, downloaded jars and legacy JVMs stay out of the keep; both engines
 still upgrade and compare every world fresh inside each job's private root. When
 SUNRISE_DATAFIX_SEED_KEEP is unset, callers take the existing local generation path unchanged.
+
+A generation that fails is not run again by the run's other shares: they wait on the same lock, and each used to
+generate the same failing seeds again in turn (daily 45034357785: the fourth share waited 159 minutes). Given the CI
+run (`--run`, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT in parity.yml), the first failure leaves `.KEY.failed-RUN/` with
+its reason, and the others fail at once with that reason. The next run generates again; the marker goes with the
+stale staging folders.
 """
 import argparse
 import ast
@@ -328,14 +334,15 @@ def _run_generator(scratch, manifest_path):
     subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py')], cwd=ROOT, env=env, check=True)
 
 
-def prepare(dest_root, keep_dir, *, key=None, manifest=None, expected=None, generate=None):
+def prepare(dest_root, keep_dir, *, key=None, manifest=None, expected=None, generate=None, run=None):
     """Ensure dest_root holds a complete private copy of the keyed seed snapshot.
 
     Under the keep's exclusive lock: a complete kept snapshot is touched and copied/reflinked into
     dest_root. On a miss, seeds are generated into disposable private scratch, verified complete,
     staged with only worlds/ and worlds-pre-1.17/, atomically published, and copied into dest_root.
     The keep is pruned after copying so the caller always receives its private copy even if a
-    snapshot exceeds the keep budget.
+    snapshot exceeds the keep budget. With `run`, a failed generation is recorded for that run, and the run's
+    later calls for the same key fail with its reason instead of generating again.
     """
     dest = Path(dest_root).expanduser().resolve()
     keep = keep_root(keep_dir)
@@ -356,6 +363,10 @@ def prepare(dest_root, keep_dir, *, key=None, manifest=None, expected=None, gene
             copy_snapshot(snapshot_dir, dest)
             prune_seed_keep(keep)
             return {'key': key, 'status': 'hit', 'worlds': len(expected), 'elapsed': time.monotonic() - started}
+        failed = keep / f'.{key}.failed-{run}' if run else None
+        if failed and failed.is_dir():
+            reason = (failed / 'reason').read_text(encoding='utf-8')
+            raise RuntimeError(f'datafix seed generation already failed for this key in this run: {reason}')
         if snapshot_dir.exists():
             shutil.rmtree(snapshot_dir, ignore_errors=True)
         scratch = Path(tempfile.mkdtemp(prefix='.seed-gen.', dir=dest))
@@ -374,8 +385,11 @@ def prepare(dest_root, keep_dir, *, key=None, manifest=None, expected=None, gene
             os.rename(staging, snapshot_dir)
             copy_snapshot(snapshot_dir, dest)
             prune_seed_keep(keep)
-        except Exception:
+        except Exception as error:
             shutil.rmtree(staging, ignore_errors=True)
+            if failed:
+                failed.mkdir(exist_ok=True)
+                (failed / 'reason').write_text(f'{type(error).__name__}: {error}', encoding='utf-8')
             raise
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
@@ -386,10 +400,11 @@ def main(arguments=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--keep', default=os.environ.get(KEEP_VARIABLE),
                         help=f'seed keep directory (default: ${KEEP_VARIABLE})')
+    parser.add_argument('--run', help='the CI run (id and attempt) whose shares share one generation attempt')
     args = parser.parse_args(arguments)
     if not args.keep:
         raise SystemExit(f'{KEEP_VARIABLE} is not set and --keep was not given')
-    result = prepare(datafix_paths.writable_root(), args.keep)
+    result = prepare(datafix_paths.writable_root(), args.keep, run=args.run)
     print(f'datafix seeds: {result["status"]} {result["key"][:12]} ({result["worlds"]} worlds in {result["elapsed"]:.1f}s)',
           flush=True)
 
