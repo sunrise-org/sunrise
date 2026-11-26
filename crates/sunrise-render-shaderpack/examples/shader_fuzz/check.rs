@@ -9,13 +9,18 @@ use std::path::Path;
 use sunrise_render_shaderpack::pack_atlas::{TerrainDraws, deviceless_game_inputs};
 use sunrise_shaders::{Macros, Pack, Post, PostProgram, Properties};
 
-use crate::cases::{self, DIMENSIONS};
+use crate::cases::{self, DIMENSIONS, Mode};
+use crate::core_shader;
 
 /// What a case asks of the checker besides its files.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Request {
     pub dim: usize,
     pub flat: bool,
+    pub mode: Mode,
+    /// The core programs a `Mode::Core` request translates; none for a pack, whose load takes
+    /// every program of the dimension's folder.
+    pub programs: Vec<String>,
     /// Programs that must load or be named by a note: the unmutated case loaded them and only
     /// their own stage files changed (see `expect` in main.rs).
     pub expect: Vec<String>,
@@ -155,7 +160,7 @@ impl std::fmt::Write for HashWriter {
     }
 }
 
-fn hash(value: &dyn std::fmt::Debug) -> u64 {
+pub fn hash(value: &dyn std::fmt::Debug) -> u64 {
     let mut w = HashWriter(std::hash::DefaultHasher::new());
     let _ = write!(w, "{value:?}");
     w.0.finish()
@@ -360,11 +365,17 @@ pub fn oversized(dir: &Path, request: &Request) -> Vec<Failure> {
         .collect()
 }
 
-/// The case in `dir` checked: no panic, every program valid, every refusal named, the same
-/// output twice, stage files within the size limit. Time and memory bounds are the worker's.
+/// The case in `dir` checked (a `Mode::Core` case through `sunrise_glsl::translate`): no panic,
+/// every program valid, every refusal named, the same output twice, stage files within the size
+/// limit. Time and memory bounds are the worker's.
 pub fn check(dir: &Path, request: &Request) -> Outcome {
-    let once =
-        || catch_unwind(AssertUnwindSafe(|| observe(&load(dir, request)))).map_err(panic_text);
+    let once = || {
+        catch_unwind(AssertUnwindSafe(|| match request.mode {
+            Mode::Pack => observe(&load(dir, request)),
+            Mode::Core => core_shader::observe(dir, request),
+        }))
+        .map_err(panic_text)
+    };
     let first = once();
     let second = if first.is_ok() {
         once()
@@ -373,7 +384,11 @@ pub fn check(dir: &Path, request: &Request) -> Outcome {
     };
     let mut outcome = judge(first, second, request);
     if outcome.failures.iter().all(|f| f.invariant != "panic") {
-        match catch_unwind(AssertUnwindSafe(|| oversized(dir, request))) {
+        let over = || match request.mode {
+            Mode::Pack => oversized(dir, request),
+            Mode::Core => core_shader::oversized(dir, request),
+        };
+        match catch_unwind(AssertUnwindSafe(over)) {
             Ok(over) => outcome.failures.extend(over),
             Err(p) => outcome.failures.push(Failure::new("panic", panic_text(p))),
         }
@@ -389,6 +404,8 @@ mod tests {
         Request {
             dim: 0,
             flat: true,
+            mode: Mode::Pack,
+            programs: Vec::new(),
             expect: expect.iter().map(|s| (*s).to_owned()).collect(),
             size_limit: 1 << 24,
         }

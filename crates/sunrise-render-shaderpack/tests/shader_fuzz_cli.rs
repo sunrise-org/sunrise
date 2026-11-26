@@ -326,6 +326,25 @@ fn every_child_process_is_closed_and_waited_for() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Vanilla's core programs (`--core`, from `SUNRISE_TEST_RESOURCES`): the unmutated programs
+/// translate through `sunrise_glsl::translate` and hold every invariant, mutated ones too, and a
+/// run replays with `--core` again.
+#[test]
+#[ignore = "daily"]
+fn vanillas_core_programs_hold_every_invariant() {
+    let dir = temp();
+    let smoke = run(&dir.join("smoke"), &["--core", "--smoke"]);
+    assert_eq!(smoke.code, Some(0), "{}", smoke.errors);
+    assert!(smoke.report["cases"].as_u64().unwrap() > 0);
+    let fuzzed = run(
+        &dir.join("fuzzed"),
+        &["--core", "--seed", "1", "--count", "40", "--jobs", "2"],
+    );
+    assert_eq!(fuzzed.code, Some(0), "{}", fuzzed.report["groups"]);
+    assert_eq!(fuzzed.report["cases"], 40);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The strings of a JSON array.
 fn strings(v: &serde_json::Value) -> Vec<String> {
     v.as_array()

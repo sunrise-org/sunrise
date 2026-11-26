@@ -5593,6 +5593,7 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "sunrise-core",
+ "sunrise-glsl",
  "sunrise-render-core",
  "sunrise-shaders",
  "tempfile",
