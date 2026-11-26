@@ -290,6 +290,67 @@ fn vetoed_lectern_open_discards_queued_content_and_keeps_the_book_overlay() {
     );
 }
 
+#[test]
+#[ignore = "daily"]
+fn vetoed_mount_open_discards_queued_content_and_keeps_focus() {
+    isolated(
+        "vetoed_mount_open_discards_queued_content_and_keeps_focus",
+        || {
+            use sunrise_client::mobs::Mob;
+            use sunrise_core::geometry::Vec3;
+
+            with_menu_veto("inventory", |game, arm_veto| {
+                let mut reader = logged_in(game);
+                let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
+                let entity = 41;
+                game.mobs
+                    .push(Mob::new(entity as u32, horse, Vec3::ZERO, 0.0));
+                game.set_screen(Screen::Paused);
+                let focus = focus_receiver(game);
+                arm_veto();
+
+                let old_stack = Some(ItemStack::new("minecraft:stone", 2));
+                game.carried = old_stack.clone();
+                game.inventory[9] = old_stack.clone();
+                game.remote.as_mut().unwrap().state_id = 71;
+                let window = 18;
+                deliver(
+                    game,
+                    C::MountScreenOpen(play::MountScreenOpen {
+                        container: window,
+                        columns: 1,
+                        entity,
+                    }),
+                );
+                assert_eq!(game.remote_menu().0, 0);
+                assert!(game.mount_menu.opened_mob().is_none());
+
+                let new_stack = game
+                    .to_network(&Some(ItemStack::new("minecraft:dirt", 3)))
+                    .unwrap();
+                let mut items = vec![None; 41];
+                items[2] = Some(new_stack.clone()); // First chest slot.
+                items[5] = Some(new_stack.clone()); // First player inventory slot.
+                deliver(
+                    game,
+                    C::ContainerSetContent(play::ContainerSetContent {
+                        container: window,
+                        state: 4,
+                        items,
+                        carried: Some(new_stack),
+                    }),
+                );
+                assert_eq!(game.screen, Screen::Paused);
+                assert_eq!(game.pad.menu.focus, Some(focus));
+                assert_eq!(game.carried, old_stack);
+                assert_eq!(game.inventory[9], old_stack);
+                assert_eq!(game.remote.as_ref().unwrap().state_id, 71);
+                sent_close(&mut reader, window);
+            });
+        },
+    );
+}
+
 fn close(game: &mut Game<'_>) {
     deliver(
         game,

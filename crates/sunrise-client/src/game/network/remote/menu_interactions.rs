@@ -1023,9 +1023,6 @@ impl Game<'_> {
         else {
             return Ok(());
         };
-        if self.mod_screen.is_some() {
-            self.remote_close_local();
-        }
         // `HorseInventoryMenu` lays out its chest slots only `if (inventoryColumns > 0)`
         // and a `NautilusInventoryMenu` has none: no chest slot addresses the container then.
         let chest = if sunrise_client::mobs::nautilus::is_nautilus(species) || columns == 0 {
@@ -1035,10 +1032,12 @@ impl Game<'_> {
         };
         items.resize(chest, None);
         let columns = if chest == 0 { 0 } else { columns };
-        // Install the window before opening its screen, including when a mod
-        // replaces the requested screen with the player's own inventory.
-        self.remote_set_menu(Some((p.container, format!("{MOUNT_MENU}{columns}"))), None);
-        self.open_remote_mount_menu(entity, species, items);
+        self.stage_remote_menu(
+            p.container,
+            format!("{MOUNT_MENU}{columns}"),
+            None,
+            |game| Some(game.open_remote_mount_menu(entity, species, items)),
+        );
         Ok(())
     }
     /// The type of the menu a server opened (`MenuType`'s id).

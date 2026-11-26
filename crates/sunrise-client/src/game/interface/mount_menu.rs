@@ -9,6 +9,7 @@
 //! from game/network/lan_mount_menu.rs.
 use super::{
     Game, Screen,
+    native_hooks::ScreenOpenOutcome,
     transactions::{After, SaveChunkScope},
 };
 use sunrise_client::{
@@ -78,14 +79,14 @@ impl Game<'_> {
         });
         self.show_mount_menu();
     }
-    /// Open the screen for the server's already installed mount window. Its
-    /// equipment and chest stacks arrive in the menu's content packets.
+    /// Open the screen for the server's staged mount window. Its equipment
+    /// and chest stacks arrive in the menu's content packets.
     pub(super) fn open_remote_mount_menu(
         &mut self,
         entity: u32,
         species: Species,
         items: Vec<Option<ItemStack>>,
-    ) {
+    ) -> ScreenOpenOutcome {
         let columns = items.len() / 3;
         self.mount_menu.open = Some(Open {
             mob: entity,
@@ -97,17 +98,21 @@ impl Game<'_> {
             show_saddle: shows_saddle(species),
             show_armor: shows_body(species),
         });
-        self.show_mount_menu();
+        self.show_mount_menu()
     }
-    fn show_mount_menu(&mut self) {
-        if self.remote.is_none() && self.lan_acting.is_none() {
+    fn show_mount_menu(&mut self) -> ScreenOpenOutcome {
+        let local = self.remote.is_none();
+        if local && self.lan_acting.is_none() {
             self.carried = None;
         }
         self.station = None;
         self.container = None;
         self.craft_size = 2;
-        self.set_screen(Screen::Inventory);
-        self.capture(false);
+        let outcome = self.transition_screen(Screen::Inventory, false, |_, _| {});
+        if local || outcome != ScreenOpenOutcome::Vetoed {
+            self.capture(false);
+        }
+        outcome
     }
     /// E while riding a tamed mount opens its inventory instead of the player's.
     pub(super) fn open_ridden_mount_menu(&mut self) -> bool {
