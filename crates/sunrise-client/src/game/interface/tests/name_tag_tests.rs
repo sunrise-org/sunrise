@@ -247,8 +247,18 @@ fn a_trades_title_draws_the_names_style() {
     // `MerchantScreen.extractLabels` draws the menu's title, the merchant's
     // `getDisplayName()`: a name with a colour keeps it, instead of coming out
     // in the screen's grey (-12566464).
-    let session = sunrise_client::merchant::Session::new(Vec::new(), true);
-    game.open_remote_merchant(session, Some(Text::colored("Bob", 0xFF_0000)));
+    game.station = Some(
+        trading::MerchantState {
+            session: Box::new(sunrise_client::merchant::Session::new(Vec::new(), true)),
+            scroll: 0,
+            dragging: false,
+            focused: None,
+            mob: None,
+            name: Some(Text::colored("Bob", 0xFF_0000)),
+        }
+        .into_station(),
+    );
+    game.transition_screen(Screen::Inventory, false, |_, _| {});
     let mut batch = HudBatch::new([854, 480], game.settings.gui_scale_inputs());
     assert!(game.draw_merchant(&mut batch));
     let (_, oy) = game.inventory_origin(&batch);
