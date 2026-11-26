@@ -382,7 +382,7 @@ cargo = [
 ]
 harnesses = [
   "*render*", "*model*", "*particle*", "*sound*", "sound_*", "ambient_sound", "audio_attributes", "music",
-  "situational_music", "subtitle", "source_silence", "zombie_cure_sound", "camera", "first_person", "frame_*",
+  "situational_music", "subtitle", "source_silence", "zombie_cure_sound", "camera", "camera_effects", "first_person", "frame_*",
   "hud", "tab_list", "locator_bar", "chat_screen", "screen_build", "title_debug", "options", "toggle_keys",
   "interaction_input", "game_loop", "mipmap", "sprite_animation", "gui_sprite_scaling", "resource_pack", "pack_*", "server_resource_pack",
   "translucency", "block_tint", "face_visibility", "breaking_model", "crack_feedback", "stack_foil", "text_*",

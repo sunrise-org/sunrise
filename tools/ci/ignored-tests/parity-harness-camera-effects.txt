@@ -1,0 +1,3 @@
+# The camera effects parity harness (#4126) records VanillaCameraEffectsOracle's witness and runs this fixture
+# against it with SUNRISE_CAMERA_EFFECTS_WITNESS set; the ignored-tests job skips it.
+sunrise-client cut_layout::game::remote::camera_view_tests::the_camera_entitys_effects_match_vanilla_frame_by_frame tools/test_camera_effects_parity.py harness

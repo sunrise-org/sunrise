@@ -576,3 +576,106 @@ pub(crate) fn framed(
     .unwrap();
     seen.expect("no frame was built")
 }
+
+/// #4126: the camera entity's `blindness`, `nightVision` and `darknessFactor` against vanilla
+/// 26.3's, frame by frame. `tools/test_camera_effects_parity.py` runs
+/// `VanillaCameraEffectsOracle` on its corpus (effect packets added and removed, ticks in a
+/// running and a frozen level, the player mounting the camera entity) and hands this fixture the
+/// witness in `SUNRISE_CAMERA_EFFECTS_WITNESS`: each case's steps go through this client's packet
+/// handlers and its entity tick, and after each step the view is read at each partial tick and
+/// compared with vanilla's float bits exactly.
+#[test]
+#[ignore = "run by tools/test_camera_effects_parity.py"]
+fn the_camera_entitys_effects_match_vanilla_frame_by_frame() {
+    run_the_camera_entitys_effects_match_vanilla_frame_by_frame();
+}
+
+pub(crate) fn run_the_camera_entitys_effects_match_vanilla_frame_by_frame() {
+    use serde_json::Value;
+    let path = std::env::var_os("SUNRISE_CAMERA_EFFECTS_WITNESS").unwrap_or_else(|| {
+        panic!(
+            "SUNRISE_CAMERA_EFFECTS_WITNESS is unset; run through tools/test_camera_effects_parity.py, which records the 26.3 witness"
+        )
+    });
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", std::path::Path::new(&path).display()));
+    let witness: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(witness["minecraft"].as_str(), Some("26.3"));
+    let cases = witness["cases"].as_array().unwrap();
+    assert!(!cases.is_empty(), "the witness holds no case");
+    let int = |v: &Value| i32::try_from(v.as_i64().unwrap()).unwrap();
+    let bits = |v: &Value| u32::try_from(v.as_u64().unwrap()).unwrap();
+    let mut frames = 0;
+    with_spectator(|game| {
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let id = int(&case["id"]);
+            let kind = format!("minecraft:{}", case["entity"].as_str().unwrap());
+            add(game, id, &kind, [2.5, 64.0, 2.5]);
+            set_camera(game, id);
+            let scale = case["darkness_scale"].as_f64().unwrap();
+            game.client
+                .settings
+                .file
+                .set("darknessEffectScale", V::Double(scale));
+            let partials: Vec<f32> = case["partials"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| f32::from_bits(bits(p)))
+                .collect();
+            let steps = case["steps"].as_array().unwrap();
+            let reads = case["reads"].as_array().unwrap();
+            assert_eq!(steps.len(), reads.len(), "{name}");
+            for (n, (step, read)) in steps.iter().zip(reads).enumerate() {
+                let effect = |step: &Value| step["effect"].as_str().unwrap().to_owned();
+                match step["op"].as_str().unwrap() {
+                    "update" => {
+                        let effect = registry_id(game, "minecraft:mob_effect", &effect(step));
+                        game.handle_packet(C::UpdateMobEffect(play::UpdateMobEffect {
+                            id,
+                            effect,
+                            amplifier: int(&step["amplifier"]),
+                            duration: int(&step["duration"]),
+                            flags: i8::try_from(int(&step["flags"])).unwrap(),
+                        }))
+                        .unwrap();
+                    }
+                    "remove" => remove(game, id, &effect(step)),
+                    "tick" => game.tick_remote_entities(!step["frozen"].as_bool().unwrap()),
+                    "carry" => {
+                        let on = step["on"].as_bool().unwrap();
+                        ride(game, id, if on { vec![OWN] } else { Vec::new() });
+                    }
+                    other => panic!("{name}: unknown step {other}"),
+                }
+                let expected = read.as_array().unwrap();
+                assert_eq!(expected.len(), partials.len(), "{name} step {n}");
+                for (&partial, frame) in partials.iter().zip(expected) {
+                    let want: Vec<u32> = frame.as_array().unwrap().iter().map(bits).collect();
+                    let v = game.pack_view_entity(glam::DVec3::new(0.5, 65.62, 0.5), partial);
+                    let got = vec![
+                        v.blindness.to_bits(),
+                        v.night_vision.to_bits(),
+                        v.darkness.to_bits(),
+                    ];
+                    assert_eq!(
+                        got,
+                        want,
+                        "{name}, after step {n} ({step}), partial {partial}: \
+                         [blindness, nightVision, darknessFactor] {:?}, vanilla {:?}",
+                        got.iter().map(|b| f32::from_bits(*b)).collect::<Vec<_>>(),
+                        want.iter().map(|b| f32::from_bits(*b)).collect::<Vec<_>>(),
+                    );
+                    frames += 1;
+                }
+            }
+            ride(game, id, Vec::new());
+            set_camera(game, OWN);
+        }
+    });
+    println!(
+        "camera effects: {} cases, {frames} frames match vanilla",
+        cases.len()
+    );
+}

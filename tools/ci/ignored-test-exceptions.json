@@ -1470,5 +1470,13 @@
     "path": "crates/sunrise-render-shaderpack/tests/spirv_dump.rs",
     "reason": "needs SUNRISE_TEST_SHADER_PACKS",
     "rationale": "Explicit manual runner by-hand in tools/ci/ignored-tests/manual-sunrise-render-shaderpack-spirv-dump.txt: needs SUNRISE_TEST_SHADER_PACKS (real packs, never committed) and a new SUNRISE_SPIRV_DUMP_OUT folder. Not selected by daily shards; the committed packs' dump runs in verify (spirv_dump_matches_the_committed_manifests)."
+  },
+  {
+    "package": "sunrise-client",
+    "target": "lib",
+    "test": "cut_layout::game::remote::camera_view_tests::the_camera_entitys_effects_match_vanilla_frame_by_frame",
+    "path": "crates/sunrise-client/src/cut_layout/game/network/remote/camera_view_tests.rs",
+    "reason": "run by tools/test_camera_effects_parity.py",
+    "rationale": "Parity-harness step in tools/ci/ignored-tests/parity-harness-camera-effects.txt; tools/test_camera_effects_parity.py records the vanilla 26.3 camera-effects witness into .local and runs this test against it through SUNRISE_CAMERA_EFFECTS_WITNESS, so no recorded vanilla data is committed."
   }
 ]
