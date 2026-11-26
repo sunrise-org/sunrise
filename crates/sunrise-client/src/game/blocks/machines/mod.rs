@@ -2447,21 +2447,31 @@ impl Game<'_> {
         if let Some(height) = self.native_screen_height() {
             return height;
         }
-        if self
+        let beacon = self
             .station
             .as_ref()
-            .is_some_and(|s| s.kind == super::stations::Kind::Beacon)
-        {
-            return super::beacon::HEIGHT;
-        }
-        if let Some(rows) = self.chest_rows() {
+            .is_some_and(|s| s.kind == super::stations::Kind::Beacon);
+        let rows = (!beacon).then(|| self.chest_rows()).flatten();
+        let shulker = !beacon && rows.is_none() && self.container_block_is_shulker();
+        let hopper =
+            !beacon && rows.is_none() && !shulker && self.machine_screen() == Some(Screen::Hopper);
+        Self::stock_container_height(beacon, rows, shulker, hopper)
+    }
+
+    pub(super) fn stock_container_height(
+        beacon: bool,
+        rows: Option<usize>,
+        shulker: bool,
+        hopper: bool,
+    ) -> f32 {
+        if beacon {
+            super::beacon::HEIGHT
+        } else if let Some(rows) = rows {
             // ContainerScreen: 114 + 18 per row.
-            return 114.0 + rows as f32 * 18.0;
-        }
-        if self.container_block_is_shulker() {
-            return 167.0;
-        }
-        if self.machine_screen() == Some(Screen::Hopper) {
+            114.0 + rows as f32 * 18.0
+        } else if shulker {
+            167.0
+        } else if hopper {
             133.0
         } else {
             166.0

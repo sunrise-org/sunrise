@@ -27,7 +27,7 @@ pub(super) use sunrise_gameplay::mount_rules::{
 /// The open mount menu: copies of the mount's slots, written back on every change.
 #[derive(Default)]
 pub(super) struct MountMenu {
-    open: Option<Open>,
+    pub(super) open: Option<OpenMountMenu>,
 }
 impl MountMenu {
     /// The mount whose menu is open.
@@ -35,7 +35,7 @@ impl MountMenu {
         self.open.as_ref().map(|o| o.mob)
     }
 }
-struct Open {
+pub(super) struct OpenMountMenu {
     mob: u32,
     species: Species,
     columns: usize,
@@ -45,6 +45,26 @@ struct Open {
     /// `shouldRenderSaddleSlot` / `shouldRenderArmorSlot`.
     show_saddle: bool,
     show_armor: bool,
+}
+
+impl OpenMountMenu {
+    /// Client backing for a server's mount window; stacks arrive in its content packets.
+    pub(super) fn remote(mob: u32, species: Species, items: Vec<Option<ItemStack>>) -> Self {
+        Self {
+            mob,
+            species,
+            columns: items.len() / 3,
+            saddle: None,
+            armor: None,
+            items,
+            show_saddle: shows_saddle(species),
+            show_armor: shows_body(species),
+        }
+    }
+
+    pub(super) fn slot_count(&self) -> usize {
+        36 + usize::from(self.show_saddle) + usize::from(self.show_armor) + self.columns * 3
+    }
 }
 
 impl Game<'_> {
@@ -65,7 +85,7 @@ impl Game<'_> {
         let mut items = m.extra.items.clone();
         items.resize(CHEST_SIZE, None);
         let show_armor = shows_body(species);
-        self.mount_menu.open = Some(Open {
+        self.mount_menu.open = Some(OpenMountMenu {
             mob: m.id,
             species,
             columns: mount_columns(m),
@@ -79,28 +99,7 @@ impl Game<'_> {
         });
         self.show_mount_menu();
     }
-    /// Open the screen for the server's staged mount window. Its equipment
-    /// and chest stacks arrive in the menu's content packets.
-    pub(super) fn open_remote_mount_menu(
-        &mut self,
-        entity: u32,
-        species: Species,
-        items: Vec<Option<ItemStack>>,
-    ) -> ScreenOpenOutcome {
-        let columns = items.len() / 3;
-        self.mount_menu.open = Some(Open {
-            mob: entity,
-            species,
-            columns,
-            saddle: None,
-            armor: None,
-            items,
-            show_saddle: shows_saddle(species),
-            show_armor: shows_body(species),
-        });
-        self.show_mount_menu()
-    }
-    fn show_mount_menu(&mut self) -> ScreenOpenOutcome {
+    fn show_mount_menu(&mut self) {
         let local = self.remote.is_none();
         if local && self.lan_acting.is_none() {
             self.carried = None;
@@ -112,7 +111,6 @@ impl Game<'_> {
         if local || outcome != ScreenOpenOutcome::Vetoed {
             self.capture(false);
         }
-        outcome
     }
     /// E while riding a tamed mount opens its inventory instead of the player's.
     pub(super) fn open_ridden_mount_menu(&mut self) -> bool {
@@ -308,7 +306,7 @@ impl Game<'_> {
             .open
             .as_ref()
             .filter(|_| self.mount_active())?;
-        Some(36 + usize::from(open.show_saddle) + usize::from(open.show_armor) + open.columns * 3)
+        Some(open.slot_count())
     }
     pub(super) fn mount_layout_inputs(&self) -> Option<(usize, bool, bool)> {
         self.mount_menu

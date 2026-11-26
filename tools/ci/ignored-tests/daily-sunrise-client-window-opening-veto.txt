@@ -1,4 +1,5 @@
 # Decoded staged menu veto regressions (prepared client and server resources).
 sunrise-client game::remote::tests::client_close_tests::vetoed_chest_open_retires_its_window_on_both_sides lib daily resources
 sunrise-client game::remote::tests::client_close_tests::vetoed_lectern_open_discards_queued_content_and_keeps_the_book_overlay lib daily resources
+sunrise-client game::remote::tests::client_close_tests::vetoed_lectern_open_keeps_the_observed_inventory_and_recipe_book lib daily resources
 sunrise-client game::remote::tests::client_close_tests::vetoed_mount_open_discards_queued_content_and_keeps_focus lib daily resources

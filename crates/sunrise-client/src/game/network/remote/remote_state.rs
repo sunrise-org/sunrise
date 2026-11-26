@@ -11,9 +11,19 @@ impl Remote {
             .remove(&(id as i32))
             .map(|l| (l.target, l.rotation, l.steps))
     }
+    #[cfg(test)]
     pub(in crate::game) fn set_menu_title(&mut self, title: Option<sunrise_client::text::Text>) {
-        self.menu_title_snapshot = title.try_into_api().ok().flatten().map(Arc::new);
+        let snapshot = title.try_into_api().ok().flatten().map(Arc::new);
+        self.set_prepared_menu_title(title, snapshot);
+    }
+
+    pub(super) fn set_prepared_menu_title(
+        &mut self,
+        title: Option<sunrise_client::text::Text>,
+        snapshot: Option<Arc<mod_api::Text>>,
+    ) {
         self.menu_title = title;
+        self.menu_title_snapshot = snapshot;
     }
 
     pub(in crate::game) fn menu_title_snapshot(&self) -> Option<&mod_api::Text> {

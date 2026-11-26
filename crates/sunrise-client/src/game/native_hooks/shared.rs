@@ -323,8 +323,21 @@ impl Game<'_> {
         new_instance: bool,
         before: impl FnOnce(&mut Self, Option<Screen>),
     ) -> ScreenOpenOutcome {
-        let opening_native =
-            screen == Screen::Inventory && self.active_native_screen().is_some_and(|s| !s.shown);
+        self.transition_screen_with_view(screen, new_instance, None, before)
+    }
+
+    /// A packet's candidate has its own view, but its backing is not live until `before`.
+    pub(in crate::game) fn transition_screen_with_view(
+        &mut self,
+        screen: Screen,
+        new_instance: bool,
+        opening: Option<(ScreenView<'_>, bool)>,
+        before: impl FnOnce(&mut Self, Option<Screen>),
+    ) -> ScreenOpenOutcome {
+        let opening_native = opening.as_ref().map_or_else(
+            || screen == Screen::Inventory && self.active_native_screen().is_some_and(|s| !s.shown),
+            |(_, native)| *native,
+        );
         let new_menu_gen = (screen == Screen::Inventory)
             .then(|| self.remote.as_ref().map(|r| r.menu.generation))
             .flatten();
@@ -337,7 +350,11 @@ impl Game<'_> {
                 .and_then(|o| o.menu_generation)
                 != new_menu_gen;
         if self.screen == screen && !new_instance {
-            if opening_native || menu_replaced {
+            let staged = opening.is_some();
+            if staged {
+                before(self, Some(screen));
+            }
+            if staged || opening_native || menu_replaced {
                 self.apply_screen_with_mod_book(screen, None);
             }
             return ScreenOpenOutcome::Opened;
@@ -348,7 +365,9 @@ impl Game<'_> {
             let decision = {
                 let observed = new_instance.then(|| self.observed_screen_view()).flatten();
                 let current = observed.unwrap_or_else(|| self.screen_change_view(self.screen));
-                let new = self.screen_change_view(screen);
+                let new = opening
+                    .map(|(view, _)| view)
+                    .unwrap_or_else(|| self.screen_change_view(screen));
                 self.decide_screen(&current, &new, current.id != "playing", new_instance)
             };
             match decision {
@@ -700,46 +719,43 @@ impl Game<'_> {
         id: &'static str,
         open: impl FnOnce(&mut Self),
     ) -> bool {
-        self.open_screen_overlay_outcome(id, open) == ScreenOpenOutcome::Opened
+        self.open_screen_overlay_with(id, |_| {}, open) == ScreenOpenOutcome::Opened
     }
 
-    pub(super) fn open_screen_overlay_outcome(
+    pub(super) fn open_screen_overlay_with(
         &mut self,
         id: &'static str,
+        before: impl FnOnce(&mut Self),
         open: impl FnOnce(&mut Self),
     ) -> ScreenOpenOutcome {
-        if !self.screen_hooks_heard() {
-            open(self);
-            self.release_mappings_on_screen_open();
-            self.screen_state.build.reopened();
-            self.commit_screen_transition();
-            return ScreenOpenOutcome::Opened;
-        }
-        // What changed earlier this frame is told first, so `screen_state`
-        // is what shows now.
-        self.observe_screen();
-        let decision = {
+        let decision = if self.screen_hooks_heard() {
+            // Tell what changed earlier this frame, before the candidate publishes anything.
+            self.observe_screen();
             let none = self.screen_change_view(Screen::Playing);
             let from = self
                 .screen_state
                 .observed
                 .as_ref()
-                .filter(|old| old.overlay);
-            let from = from.map(ObservedScreen::view);
+                .filter(|old| old.overlay)
+                .map(ObservedScreen::view);
             let to = screen_view_with_id(&none, id);
             self.decide_screen(from.as_ref().unwrap_or(&none), &to, from.is_some(), false)
+        } else {
+            ScreenDecision::Open
         };
         match decision {
             ScreenDecision::Keep => return ScreenOpenOutcome::Vetoed,
             ScreenDecision::ModScreen(mod_id) => {
+                before(self);
                 self.apply_screen(Screen::Mod, Some(mod_id));
                 return ScreenOpenOutcome::Redirected;
             }
             ScreenDecision::Vanilla(target) => {
+                before(self);
                 self.open_screen_target(target);
                 return ScreenOpenOutcome::Redirected;
             }
-            ScreenDecision::Open => {}
+            ScreenDecision::Open => before(self),
         }
         open(self);
         self.release_mappings_on_screen_open();
@@ -1196,7 +1212,7 @@ impl Game<'_> {
 }
 
 impl OpenNativeScreen {
-    fn layout(&self) -> &mod_api::MenuScreenLayout {
+    pub(super) fn layout(&self) -> &mod_api::MenuScreenLayout {
         self.screen.layout()
     }
 

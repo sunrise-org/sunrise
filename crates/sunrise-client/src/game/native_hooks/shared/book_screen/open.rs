@@ -17,26 +17,20 @@ impl Game<'_> {
         let (opens, _) = mod_menu(container.menu.as_deref()?)?;
         (opens == menu).then_some(block.as_ref())
     }
-    /// Stage the current remote opening's screen for the window. Its slots
-    /// are stored under `key`; `extra` was already matched to this opening.
-    /// The packet handler checked for required factories before changing menus.
-    /// False refuses the opening; an ordinary stock menu needs no mod screen.
-    pub(in crate::game) fn open_native_screen(
-        &mut self,
+    /// Construct a candidate using packet data, without publishing its backing or owner.
+    /// `Ok(None)` is an ordinary stock menu with no factory; `Err(())` refuses it.
+    pub(in crate::game) fn prepare_native_screen(
+        &self,
+        (window, name): (i32, &str),
+        title: Option<&mod_api::Text>,
         key: Pos,
         target: Option<Pos>,
         backing_slots: usize,
         extra: Option<sunrise_protocol::menu_extra::Message>,
-    ) -> bool {
+    ) -> Result<Option<OpenNativeScreen>, ()> {
         if self.is_logical_server() || self.lan_acting.is_some() {
-            return false;
+            return Err(());
         }
-        let Some(remote) = self.remote.as_ref() else {
-            return false;
-        };
-        let Some((window, name)) = remote.menu.as_ref() else {
-            return false;
-        };
         let mod_type = sunrise_client::containers::mod_menu_type(name);
         let block = target.and_then(|pos| self.menu_opener_block(pos, name));
         let binding = mod_api::RecipeBookLayout::registered(name);
@@ -52,11 +46,11 @@ impl Game<'_> {
             |extra| extra.pos,
         );
         let open = mod_api::MenuScreenOpen {
-            window: *window,
+            window,
             menu: name,
             block,
             pos,
-            title: remote.menu_title_snapshot(),
+            title,
             backing_slots,
             player_slots: mod_type
                 .map_or(36, sunrise_client::containers::ModMenuType::player_slots),
@@ -67,17 +61,17 @@ impl Game<'_> {
         // Opening bytes are construction-only; the result owns its presentation.
         drop(extra);
         let Some((owner, created)) = created else {
-            return true;
+            return Ok(None);
         };
         let mut instance = match created {
             Ok(Some(instance)) => instance,
             Ok(None) => {
                 log::warn!("mod {owner} declined to create a screen for {of}");
-                return false;
+                return Err(());
             }
             Err(reason) => {
                 log::error!("mod {owner} screen for {of}: {reason}");
-                return false;
+                return Err(());
             }
         };
         let screen = instance.layout_mut();
@@ -85,7 +79,7 @@ impl Game<'_> {
             && screen.recipe_book.as_ref() != Some(book)
         {
             log::error!("screen for {of}: expected the menu's bound recipe book {book:?}");
-            return false;
+            return Err(());
         }
         if ![screen.width, screen.height]
             .into_iter()
@@ -103,11 +97,11 @@ impl Game<'_> {
                 .all(f32::is_finite)
         {
             log::error!("screen for {of}: invalid dimensions or coordinates");
-            return false;
+            return Err(());
         }
         if screen.slots.len() > backing_slots {
             log::error!("screen for {of}: layout is longer than its {backing_slots} backing slots");
-            return false;
+            return Err(());
         }
         // Every slot uses its backing index; `None` (including omitted trailing
         // entries) marks an initially inactive slot (`Slot.isActive()`).
@@ -116,32 +110,69 @@ impl Game<'_> {
                 && !slot.position.into_iter().all(f32::is_finite)
             {
                 log::error!("screen for {of}: nonfinite slot {index} coordinates");
-                return false;
+                return Err(());
             }
         }
         screen.slots.resize_with(backing_slots, || None);
-        let title = remote.menu_title_snapshot().cloned();
-        self.mod_screen = Some(OpenNativeScreen {
+        Ok(Some(OpenNativeScreen {
             menu: OpenNativeMenu {
                 key,
-                window: *window,
-                generation: remote.menu.generation,
-                name: name.clone(),
-                title,
+                window,
+                // Ownership is bound only in install_native_screen.
+                generation: 0,
+                name: name.to_owned(),
+                title: title.cloned(),
                 block: block.map(str::to_owned),
                 pos,
                 mod_type,
                 data: Vec::new(),
             },
             slot_moves: Default::default(),
-            layout_revision: {
-                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            },
+            layout_revision: 0,
             screen: instance,
             shown: false,
             detached: false,
-        });
+        }))
+    }
+
+    pub(in crate::game) fn install_native_screen(
+        &mut self,
+        mut screen: OpenNativeScreen,
+        generation: u64,
+    ) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        screen.layout_revision = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        screen.menu.generation = generation;
+        self.mod_screen = Some(screen);
+    }
+
+    #[cfg(test)]
+    pub(in crate::game) fn open_native_screen(
+        &mut self,
+        key: Pos,
+        target: Option<Pos>,
+        backing_slots: usize,
+        extra: Option<sunrise_protocol::menu_extra::Message>,
+    ) -> bool {
+        let Some(remote) = self.remote.as_ref() else {
+            return false;
+        };
+        let Some((window, menu)) = remote.menu.as_ref() else {
+            return false;
+        };
+        let generation = remote.menu.generation;
+        match self.prepare_native_screen(
+            (*window, menu),
+            remote.menu_title_snapshot(),
+            key,
+            target,
+            backing_slots,
+            extra,
+        ) {
+            Ok(Some(screen)) => self.install_native_screen(screen, generation),
+            Ok(None) => (),
+            Err(()) => return false,
+        }
         true
     }
 }

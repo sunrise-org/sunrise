@@ -485,14 +485,20 @@ impl Game<'_> {
         let (shift, width, height) = if self.screen == Screen::Creative {
             (0.0, Creative::WIDTH, Creative::HEIGHT)
         } else {
-            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-                Some(stations::Kind::Merchant) => (-50.0, 276.0),
-                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230.0),
-                _ => (0.0, self.native_screen_width().unwrap_or(176.0)),
-            };
+            let (shift, width) = Self::inventory_image_width(
+                self.station.as_ref().map(|s| s.kind),
+                self.native_screen_width().unwrap_or(176.0),
+            );
             (shift, width, self.screen_height())
         };
         [ox + shift, oy, width, height]
+    }
+    pub(super) fn inventory_image_width(station: Option<stations::Kind>, width: f32) -> (f32, f32) {
+        match station {
+            Some(stations::Kind::Merchant) => (-50.0, 276.0),
+            Some(stations::Kind::Beacon) => (beacon::SHIFT, 230.0),
+            _ => (0.0, width),
+        }
     }
     /// The build's panel as `AbstractContainerScreen`'s `leftPos`/`topPos`/
     /// `imageWidth`/`imageHeight`, the shape `hasClickedOutside` reads.
