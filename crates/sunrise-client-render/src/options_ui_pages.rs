@@ -1,6 +1,7 @@
 //! The pages crates add to the options screens: a native mod's settings page (its keys and
 //! buttons), and the pages crates above the engine register (`sunrise_hooks::pages`, docs/layers.md
-//! "Platform registries") with their entries on Sunrise Settings. Kept out of options_ui.rs.
+//! "Platform registries"), whose entries are on Sunrise Settings' Extras page (`sunrise_ui`). Kept
+//! out of options_ui.rs.
 use super::*;
 use sunrise_hooks::pages as added;
 
@@ -52,8 +53,9 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// The pages crates registered.
-fn registered() -> &'static [&'static dyn added::Page] {
+/// The pages crates registered: Sunrise Settings' Extras page opens those for it
+/// (`Page::Added`, by their index here).
+pub(super) fn registered() -> &'static [&'static dyn added::Page] {
     #[cfg(test)]
     if let Some(pages) = TEST_PAGES.get() {
         return pages;
@@ -114,13 +116,9 @@ pub(super) fn sunrise_page_tooltip(page: Page) -> Option<&'static str> {
     Some(match page {
         Page::Sunrise => "sunrise.pages.settings.tooltip",
         Page::Studio => "sunrise.pages.studio.tooltip",
-        Page::Graphics => "sunrise.pages.graphics.tooltip",
-        Page::GraphicsAdvanced => "sunrise.pages.graphics_advanced.tooltip",
         Page::Controller => "sunrise.pages.controller.tooltip",
-        Page::Extras => "sunrise.pages.extras.tooltip",
         Page::Pvp => "sunrise.pages.pvp.tooltip",
         Page::Agent => "sunrise.pages.agent.tooltip",
-        Page::ShaderPacks => "sunrise.pages.shader_packs.tooltip",
         Page::Mods => "sunrise.pages.mods.tooltip",
         Page::Music => "sunrise.pages.music.tooltip",
         _ => return None,
@@ -135,45 +133,6 @@ fn label_text(label: added::Label) -> Text {
 }
 
 impl OptionsUi {
-    /// Sunrise Settings: its pages, then the pages crates registered for it.
-    pub(super) fn sunrise_rows(&self, s: &Settings) -> Vec<Row> {
-        // Two to a row, as vanilla's OptionsList.addSmall lays out
-        // buttons; each opens one of Sunrise's settings pages. Each page has
-        // one way in: graphics and shader packs are Extras' (Sunrise Graphics), the
-        // controller is Controls', mods are the Options screen's.
-        let open = |key: &str, page: Page| button(0.0, 0.0, 150.0, tr(key), Act::Push(page));
-        let mut rows: Vec<Row> = vec![
-            Row::Buttons(
-                open("sunrise.pages.open.extras", Page::Extras),
-                Some(open("sunrise.pages.open.pvp", Page::Pvp)),
-            ),
-            Row::Buttons(open("sunrise.pages.open.studio", Page::Studio), None),
-            // No AI hides the AI Agent page and everything AI.
-            if s.extras.no_ai {
-                Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
-            } else {
-                Row::Buttons(
-                    open("sunrise.pages.open.agent", Page::Agent),
-                    Some(self.extra_button(s, crate::extras::Item::NoAi)),
-                )
-            },
-        ];
-        self.added_entries(&mut rows);
-        rows
-    }
-
-    /// The entries of the pages registered for Sunrise Settings, two to a row like the engine's.
-    fn added_entries(&self, rows: &mut Vec<Row>) {
-        let mut entries = registered()
-            .iter()
-            .enumerate()
-            .filter(|(_, page)| page.place() == added::Place::SunriseSettings)
-            .map(|(i, page)| button(0.0, 0.0, 150.0, tr(page.title()), Act::Push(Page::Added(i))));
-        while let Some(first) = entries.next() {
-            rows.push(Row::Buttons(first, entries.next()));
-        }
-    }
-
     /// A registered page's rows, asked of it each time the page is drawn.
     pub(super) fn added_rows(&self, page: usize) -> Vec<Row> {
         let Some(registered) = registered().get(page) else {
@@ -424,8 +383,14 @@ mod tests {
         let mut s = Settings::default();
         TEST_PAGES.set(Some(&PAGES));
         let mut ui = OptionsUi::default();
+        // Its row on Sunrise Settings' Extras page opens it.
         ui.show(Page::Sunrise);
-        press(&mut ui, &mut s, Act::Push(Page::Added(0)), false);
+        ui.sunrise.show(crate::sunrise_ui::Tab::Extras);
+        let size = (480.0, 240.0);
+        let row = crate::sunrise_ui::SunriseRow::Open(Page::Added(0));
+        let at = ui.sunrise.point_at(&s, size, row);
+        let atlas = super::super::tests::atlas();
+        ui.click(&mut s, &atlas, at.0, at.1, size, [480, 240], false, false);
         assert_eq!(ui.page(), Page::Added(0));
         // Rows: the heading (0), the switch (1), the step (2), the key (3).
         let events = press(&mut ui, &mut s, Act::PageRow(0, 1), false);
@@ -441,13 +406,11 @@ mod tests {
         assert_eq!(*SAMPLE.step.lock().unwrap(), -1, "Shift steps back");
         // A key row waits for the next key, as on Key Binds, and the page gets its name.
         press(&mut ui, &mut s, Act::PageRow(0, 3), false);
-        let atlas = super::super::tests::atlas();
         let events = ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyZ, None);
         assert_eq!(events, [Event::Changed]);
         assert_eq!(*SAMPLE.key.lock().unwrap(), "key.keyboard.z");
         assert_eq!(ui.selected_key, None);
         // The volume is one of the screen's own sliders: dragged to its middle, then let go.
-        let size = (480.0, 240.0);
         let (widgets, ..) = ui.layout(&s, size.0, size.1);
         let slider = widgets
             .iter()
@@ -638,7 +601,7 @@ mod tests {
         }
     }
 
-    /// A key row on the Extras page waits by its page and row; the next key goes to it.
+    /// A key row on the Gameplay page waits by its page and row; the next key goes to it.
     #[test]
     fn a_page_key_capture_binds_the_rows_key() {
         use crate::settings_shell::{Capture, Output};
@@ -722,8 +685,8 @@ mod tests {
         );
     }
 
-    /// A key row greyed while it waits on the Extras page, no registered page open, stops waiting when the next key
-    /// arrives, and that key is not swallowed.
+    /// A key row greyed while it waits on the Gameplay page, no registered page open, stops
+    /// waiting when the next key arrives, and that key is not swallowed.
     #[test]
     fn a_waiting_key_row_greyed_off_its_own_page_stops_waiting() {
         use crate::settings_shell::{Capture, Output};

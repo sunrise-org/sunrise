@@ -3021,7 +3021,7 @@ def wheel_fast(game, slot, steps):
 
 
 def set_mouse_tweaks(game, on):
-    """The Extras page's switch, as a player flips it."""
+    """The switch on Sunrise Settings' Gameplay page, as a player flips it."""
     game('options', page='extras')
     switch = next(w for w in game.raw('ui')['widgets'] if w.get('label', '').startswith('Mouse Tweaks controls'))
     if switch['label'].endswith('On') != on:

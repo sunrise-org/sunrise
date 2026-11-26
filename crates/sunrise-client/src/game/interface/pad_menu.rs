@@ -1389,6 +1389,21 @@ impl Game<'_> {
         if self.pad.menu.held[0] || self.pad.menu.armed.is_some() {
             return;
         }
+        // A settings screen whose page list scrolls: every page in list order, those out of view
+        // too, which have no tab on the screen.
+        if self.screen == Screen::Options {
+            let size = self.gui_size();
+            if let Some(rect) = self.ui.options.step_page(&self.settings, size, next) {
+                self.play_audio_button_click();
+                if self.pad_focus_mode() {
+                    self.pad.menu.focus = Some(Target {
+                        rect,
+                        kind: Kind::Tab(true),
+                    });
+                }
+                return;
+            }
+        }
         let tabs: Vec<(Rect, bool)> = self
             .pad_targets()
             .into_iter()

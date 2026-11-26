@@ -682,7 +682,6 @@ impl Game<'_> {
         m.extra.using_item = using;
         m.extra.using_off_hand = using_off_hand;
         m.extra.use_animation = use_animation;
-        m.extra.held_arm_pose = [None; 2];
         m.extra.charged = charged;
         m.extra.ints[5] = charge_duration;
         m.extra.elytra.tick(fall_flying, crouching, velocity);
@@ -697,9 +696,22 @@ impl Game<'_> {
         m.extra.swing_right_arm = swing_right_arm;
         m.extra.swing_stab = self.swing.current.is_some_and(|c| c.animation.kind == 2);
         m.hurt_time = hurt;
+    }
+    /// `AvatarRenderer.extractRenderState` → `getArmPose`, once per frame before the frame's
+    /// draws: every humanoid's held poses are selected from the swing and use state the draw
+    /// then poses with.
+    pub(super) fn extract_arm_poses(&mut self) {
+        self.extract_player_arm_pose();
+        self.extract_remote_arm_poses();
+    }
+    /// The held poses of the window's own player model.
+    pub(super) fn extract_player_arm_pose(&mut self) {
+        let Some(model) = self.player_model.as_ref() else {
+            return;
+        };
         let poses = self.held_arm_poses_with_stacks(
             self.own_entity_id() as u32,
-            self.player_model.as_ref().unwrap(),
+            model,
             [self.selected, super::shield::OFFHAND_SLOT].map(|slot| self.stack_in(slot)),
         );
         self.player_model.as_mut().unwrap().extra.held_arm_pose = poses;
@@ -1462,6 +1474,7 @@ impl Game<'_> {
             }),
             ticks_using_item: m.extra.using_item,
             use_animation: m.extra.use_animation,
+            is_swinging: m.is_swinging(),
             main_arm_pose: main_arm_pose.try_into_api().unwrap(),
             off_arm_pose: off_arm_pose.try_into_api().unwrap(),
         };

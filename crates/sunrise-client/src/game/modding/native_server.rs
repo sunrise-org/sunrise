@@ -35,7 +35,7 @@ use super::{Dim, Game, respawn_anchor::RespawnConfig};
 pub(super) use argument_kinds::{CommandArguments, command_arguments};
 use argument_kinds::{
     UNCENTERED, argument_type, bounded_parser, custom_parser, custom_value, dimension_value,
-    nbt_value, parsed_type, parser, positional_value, resource_parser,
+    nbt_value, parsed_type, parser, positional_value, resource_or_tag_parser, resource_parser,
 };
 use mod_api::__private::game::*;
 pub(super) use registered_commands::{
@@ -125,10 +125,15 @@ fn usage_nodes(
             .strip_prefix("resource:")
             .map(|registry| resource_parser(registry).map_err(|e| format!("`{usage}`: {e}")))
             .transpose()?;
+        let resource_or_tag = kind
+            .strip_prefix("resource_or_tag:")
+            .map(|registry| resource_or_tag_parser(registry).map_err(|e| format!("`{usage}`: {e}")))
+            .transpose()?;
         let bounded = bounded_parser(kind)
             .transpose()
             .map_err(|e| format!("`{usage}`: {e}"))?;
         let builtin = resource
+            .or(resource_or_tag)
             .or(bounded)
             .or_else(|| parser(kind).map(|(parser, properties, _)| (parser, properties)));
         let (parser, properties, greedy, custom) = match builtin {
@@ -2652,6 +2657,16 @@ impl Game<'_> {
                     .try_into_api()
                     .expect("command item validation resolves registered items"),
             ),
+            // `ResourceOrTagKeyArgument.Result`: `#` names a tag, else a resource.
+            Arg::Resource(id) if matches!(ty, Some(ArgType::ResOrTagKey(_))) => {
+                let (tag, name) = id
+                    .strip_prefix('#')
+                    .map_or((false, &*id), |name| (true, name));
+                Value::ResourceOrTag {
+                    tag,
+                    id: mod_api::Identifier::parse(name).map_err(|_| err("command.failed", &[]))?,
+                }
+            }
             Arg::Resource(id) => {
                 Value::Id(mod_api::Identifier::parse(&id).map_err(|_| err("command.failed", &[]))?)
             }
@@ -6297,6 +6312,16 @@ mod tests {
                 event
                     .commands
                     .push(mod_api::Command::op("cop", 2).executes_client(|_, _| Some(1)));
+                let tagged = self.heard.clone();
+                event.commands.push(
+                    mod_api::Command::new(
+                        "cbiome <biome:resource_or_tag:minecraft:worldgen/biome>",
+                    )
+                    .executes_client(move |_, invocation| {
+                        tagged.lock().unwrap().push(invocation.clone());
+                        Some(1)
+                    }),
+                );
                 event.commands.push(
                     mod_api::Command::new("cserver <target:player>")
                         .executes_client(|_, _| Some(1)),
@@ -6330,7 +6355,9 @@ mod tests {
                     assert!(chat_tree.find("cmach").is_some());
                     assert!(chat_tree.find("cpanic").is_some());
                     assert!(chat_tree.find("csibling").is_some());
-                    assert!(chat_tree.find("cop").is_none());
+                    // An operator-level client usage is in the tree behind its level (#5654).
+                    let cop = chat_tree.find("cop").expect("an operator client command");
+                    assert_eq!(chat_tree.nodes[cop].permission, 2);
                     assert!(chat_tree.find("cserver").is_none());
                     let tp = chat_tree.find("tp").expect("tp redirect preserved");
                     let tp_target = chat_tree.nodes[tp].redirect.expect("tp redirect preserved");
@@ -6339,8 +6366,36 @@ mod tests {
 
                     // Unregistered or rejected roots return false so they proceed to the server.
                     assert_eq!(game.run_client_native_command("unknown_root foo"), None);
+                    // Below its level the local player can't run it; at the level it runs.
+                    game.ui.registries.permission = 0;
                     assert_eq!(game.run_client_native_command("cop"), None);
+                    game.ui.registries.permission = 2;
+                    assert_eq!(
+                        game.run_client_native_command("cop"),
+                        Some(ClientCommandOutcome::Success(1))
+                    );
+                    game.ui.registries.permission = 0;
                     assert_eq!(game.run_client_native_command("cserver @a"), None);
+                    // A resource-or-tag argument tells a `#tag` from an id (#5654).
+                    for (text, tag, id) in [
+                        ("cbiome #minecraft:is_ocean", true, "minecraft:is_ocean"),
+                        ("cbiome minecraft:plains", false, "minecraft:plains"),
+                    ] {
+                        assert_eq!(
+                            game.run_client_native_command(text),
+                            Some(ClientCommandOutcome::Success(1)),
+                            "{text}"
+                        );
+                        let invocation = heard.lock().unwrap().pop().unwrap();
+                        assert_eq!(
+                            invocation.argument("biome"),
+                            Some(&mod_api::CommandArgumentValue::ResourceOrTag {
+                                tag,
+                                id: mod_api::Identifier::parse(id).unwrap(),
+                            }),
+                            "{text}"
+                        );
+                    }
 
                     // Typed client invocation parses custom arguments, coordinates and optionals.
                     assert_eq!(

@@ -1,7 +1,7 @@
 //! Sunrise's optional extras (lighting, inventory tools): their
 //! settings, kept in `sunrise-extras.txt` next to `options.txt` so that file
 //! stays exactly vanilla's, and the logic behind them. Every extra is off by
-//! default; see `docs/extras.md`. Sunrise's own switches outside the Extras page
+//! default; see `docs/extras.md`. Sunrise's own switches outside the Gameplay page
 //! (No AI, Agent Control) are kept here too.
 use std::{collections::VecDeque, path::Path};
 
@@ -84,7 +84,7 @@ pub struct Extras {
     pub own_name_tag: bool,
     /// NeoForge's `skipModdedSplashesIfVanillaModified`, on by default: a
     /// pack's own `minecraft` splashes replace every namespace's
-    /// (`sunrise_client::splashes::pool`). No Extras page entry.
+    /// (`sunrise_client::splashes::pool`). No Gameplay page entry.
     pub skip_modded_splashes_if_vanilla_modified: bool,
     /// No particles from breaking or mining a block (other particles stay).
     pub hide_block_particles: bool,
@@ -457,7 +457,7 @@ impl Cps {
         self.clicks.len()
     }
 }
-/// The settings the Extras page shows, one per row.
+/// The settings Sunrise Settings' Gameplay page shows, one per row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Fullbright,
@@ -471,13 +471,13 @@ pub enum Item {
     MouseTweaksWheel,
     Sort,
     SortKey,
-    /// Turns the picked shader pack off and on, from the Extras page's key.
+    /// Turns the picked shader pack off and on: its key is on Sunrise Settings' Shaders page.
     ShaderPackKey,
     /// A new chat line slides in and fades in (`Chat::layout`).
     ChatAnimation,
     /// The coloured bar at the left of a chat line.
     ChatIndicator,
-    /// Not on the Extras page: Sunrise Settings shows No AI, its AI Agent page Agent Control.
+    /// Not on the Gameplay page: the AI Agent page shows No AI and Agent Control.
     NoAi,
     AgentControl,
     /// On the AI Agent page, next to Agent Control: the F3 recording shortcuts.
@@ -489,7 +489,7 @@ pub enum Item {
     /// On the PvP & HUD page (`pvp::rows`).
     Pvp(crate::pvp::Opt),
 }
-/// The Extras page: headers (language keys) and items.
+/// Sunrise Settings' Gameplay page: headers (language keys) and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
     use Item::*;
     // Fullbright, Dynamic lights and Hide block-break particles change the picture: they
@@ -508,7 +508,6 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(ChatIndicator),
         Err("sunrise.extras.header.world"),
         Ok(Pregen),
-        Ok(ShaderPackKey),
         Err("sunrise.extras.header.multiplayer"),
         Err("sunrise.extras.header.sound"),
         Ok(UiSoundReserve),

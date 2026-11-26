@@ -77,6 +77,19 @@ pub(super) fn resource_parser(name: &str) -> Result<(&'static str, Value), Strin
     Ok(("minecraft:resource_key", json!({ "registry": name })))
 }
 
+/// The Brigadier parser and properties of `resource_or_tag:<registry>`: vanilla's
+/// `ResourceOrTagKeyArgument` (`minecraft:resource_or_tag_key`), so the chat box completes
+/// the registry's ids and `#` tags itself. Neither is checked against the registry when parsed,
+/// as in vanilla; the registry's name must be a `namespace:path` resource location.
+pub(super) fn resource_or_tag_parser(name: &str) -> Result<(&'static str, Value), String> {
+    if mod_api::Identifier::parse_namespaced(name).is_none() {
+        return Err(format!(
+            "registry `{name}` is not a `namespace:path` resource location"
+        ));
+    }
+    Ok(("minecraft:resource_or_tag_key", json!({ "registry": name })))
+}
+
 /// What a mod receives for a custom argument: `mod_id` as the plain package id, a mod's own type
 /// with its id.
 pub(super) fn custom_value(kind: &str, value: String) -> mod_api::CommandArgumentValue {
@@ -372,6 +385,12 @@ fn refused_argument_text(error: mod_api::CommandArgumentError) -> Text {
 /// The dispatcher type of one validated tree node: a vanilla kind, or the mod's registered
 /// argument type with its parser and suggestions.
 pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgType {
+    if node["parser"] == "minecraft:resource_or_tag_key" {
+        let registry = node["properties"]["registry"].as_str().unwrap_or_default();
+        return ArgType::ResOrTagKey(
+            RegistryId::parse(registry).expect("native command tree names validated registries"),
+        );
+    }
     if node["parser"] == "minecraft:resource_key" {
         let registry = node["properties"]["registry"].as_str().unwrap_or_default();
         return ArgType::Res(

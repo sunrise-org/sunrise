@@ -20,8 +20,7 @@ impl OptionsUi {
     pub fn discard_draw(&mut self) {
         if let Some(FrameDraw::Shell(page)) = self.frame_draw.take() {
             let hosted: &mut dyn shell::Hosted = match page {
-                Page::Extras => &mut self.extras,
-                page if Self::graphics_page(page).is_some() => &mut self.graphics,
+                page if Self::sunrise_tab(page).is_some() => &mut self.sunrise,
                 Page::ControllerRadial => &mut self.radial,
                 Page::ControllerRadialPick => &mut self.radial_pick,
                 page if Self::controller_page(page).is_some() => &mut self.controller,

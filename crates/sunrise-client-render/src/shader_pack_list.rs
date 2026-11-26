@@ -1,5 +1,5 @@
 //! The shader packs in the `shaderpacks` folder beside `options.txt`, as Options > Sunrise
-//! Settings > Shader Packs lists them: those in the `shaders/` format. Sunrise's own WGSL packs
+//! Settings > Shaders lists them: those in the `shaders/` format. Sunrise's own WGSL packs
 //! (a folder with `sunrise-shaders.toml`, or a `.sshader`) are no longer run: they are left out
 //! of the list with a note (`UNSUPPORTED_NOTE`).
 

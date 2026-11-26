@@ -576,6 +576,11 @@ impl Mob {
             .swing_right_arm
             .is_some_and(|right| right == self.main_arm_left())
     }
+    /// `LivingEntity.isSwinging`: a swing is under way, whichever hand it names. The local
+    /// player's model mirrors its swing through `swing_right_arm` only.
+    pub fn is_swinging(&self) -> bool {
+        self.ai.swinging || self.extra.swing_right_arm.is_some()
+    }
     /// LivingEntity.swing
     pub fn swing(&mut self) {
         if self.start_swing(6) {

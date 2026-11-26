@@ -126,7 +126,7 @@ impl OptionsUi {
                     ("options.skinCustomisation", Some(Page::Skin)),
                     ("options.sounds", Some(Page::Sound)),
                     // OptionsScreen's Video Settings button: VideoSettingsScreen. Sunrise's
-                    // graphics screen opens from the Extras page.
+                    // graphics settings are on Sunrise Settings.
                     ("options.video", Some(Page::Video)),
                     ("options.controls", Some(Page::Controls)),
                     ("options.language", Some(Page::Language)),

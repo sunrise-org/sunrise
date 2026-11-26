@@ -406,3 +406,47 @@ fn a_release_from_a_screen_can_not_strand_the_pads_attack() {
         );
     });
 }
+
+/// On Sunrise Settings, whose page list scrolls in a 427x240 GUI (1280x720 at GUI scale 3), a
+/// controller's bumpers open every page in list order, those out of view too, and wrap: RB from
+/// General round to it, LB the other way, each press leaving the pad's focus on a page tab.
+#[test]
+#[ignore = "daily"]
+fn bumpers_walk_every_page_of_sunrise_settings_and_wrap() {
+    use sunrise_client::options_ui::Page;
+    use sunrise_client::widgets::Kind;
+    const PAGES: [&str; 10] = [
+        "General",
+        "Quality",
+        "Performance",
+        "Shaders",
+        "Resource Pack Options",
+        "Advanced",
+        "HDR",
+        "Gameplay",
+        "Tools",
+        "Extras",
+    ];
+    playing(|game| {
+        game.settings.gui_scale = 3;
+        assert_eq!(game.gui_size(), (427.0, 240.0));
+        game.screen = Screen::Options;
+        game.ui.options.open_at(false, Page::Sunrise);
+        let walk = |game: &mut Game, button: Button| -> Vec<String> {
+            (0..PAGES.len())
+                .map(|_| {
+                    game.pad_menu_button(&NoEventLoop, button, true).unwrap();
+                    game.pad_menu_button(&NoEventLoop, button, false).unwrap();
+                    let focus = game.pad.menu.focus.map(|f| f.kind);
+                    assert_eq!(focus, Some(Kind::Tab(true)), "{button:?}");
+                    game.ui.options.shell_page_name().unwrap()
+                })
+                .collect()
+        };
+        let mut next: Vec<&str> = PAGES[1..].to_vec();
+        next.push(PAGES[0]);
+        assert_eq!(walk(game, Button::RightBumper), next);
+        let back: Vec<&str> = PAGES.iter().rev().copied().collect();
+        assert_eq!(walk(game, Button::LeftBumper), back);
+    });
+}

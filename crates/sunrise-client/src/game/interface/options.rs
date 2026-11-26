@@ -22,6 +22,12 @@ pub(super) const CONTROL_HELP: &[&str] = &[
     "options-set KEY VALUE          set an option (enums by name, keys as key.keyboard.w, lists as JSON), apply and save it",
 ];
 
+/// The Max Framerate option's "Unlimited" (`Options.framerateLimit`'s 260).
+const UNLIMITED_FRAMERATE: i32 = 260;
+/// How often the loop comes round while a mod skips every frame's render (`framerate_limit`
+/// 0): vanilla's limit for a minimised window (`FramerateLimitTracker`'s 10).
+const SKIPPED_FRAME_RATE: i32 = 10;
+
 impl Game<'_> {
     pub(super) fn save_title_options(&mut self) {
         if let Some(title) = &self.title
@@ -725,9 +731,9 @@ impl Game<'_> {
         self.settings.save(&Self::options_path());
         self.apply_ui_settings();
     }
-    /// The Extras page's shader pack key: turns the picked pack off, or asks for the last
-    /// pick again. The same persistent pick the Shader Packs screen writes: turning off keeps
-    /// the last non-empty pick, resuming restores it, and the off state survives a restart.
+    /// The shader pack key (Sunrise Settings' Shaders page): turns the picked pack off, or asks
+    /// for the last pick again. The same persistent pick the Shaders page writes: turning off
+    /// keeps the last non-empty pick, resuming restores it, and the off state survives a restart.
     /// With `SUNRISE_SHADER_PACK` set the developer override wins and the key does nothing.
     /// Invalidation stays with the normal selection path: the next frame's `shader_pack_inputs`
     /// sees the changed pick and drops or loads the pack itself.
@@ -769,7 +775,8 @@ impl Game<'_> {
         }
     }
     /// `FramerateLimitTracker.getFramerateLimit`: the Max Framerate option,
-    /// throttled when minimised, idle, or in a menu without a world.
+    /// throttled when minimised, idle, or in a menu without a world, then a mod's
+    /// `framerate_limit` answer in its place. 0 is a mod's skip of the frame's render.
     pub(super) fn framerate_limit(&self) -> i32 {
         let context = FrameContext {
             inactivity: if self.settings.inactivity_fps_limit == "minimized" {
@@ -798,7 +805,9 @@ impl Game<'_> {
             .settings
             .sunrise
             .battery_limit(limit, self.title.is_none(), self.focused);
-        // A native mod may only lower it (`native_framerate_limit`).
+        // A native mod's answer takes its place, raised to at most unlimited (260) or
+        // lowered, 0 skipping the frame's render; below 0 keeps the game's own
+        // (`native_framerate_limit`).
         let mut hooked = limit;
         self.native_framerate_limit(
             self.focused,
@@ -806,8 +815,8 @@ impl Game<'_> {
             self.title.is_none(),
             &mut hooked,
         );
-        if hooked >= 1 {
-            hooked.min(limit)
+        if hooked >= 0 {
+            hooked.min(UNLIMITED_FRAMERATE)
         } else {
             limit
         }
@@ -815,11 +824,17 @@ impl Game<'_> {
     /// `Minecraft.runTick`'s frame limiter: `FramerateLimiter.limitDisplayFPS`
     /// below 260 frames per second, sleeping then spin-waiting until the
     /// frame's slot ends (not in scripted frame-count runs).
-    pub(super) fn limit_frame(&mut self) {
+    /// `limit` is this frame's `framerate_limit`: a frame a mod skipped (0) waits as one at
+    /// `SKIPPED_FRAME_RATE` would, so the loop goes on ticking without spinning.
+    pub(super) fn limit_frame(&mut self, limit: i32) {
         if self.options.frames.is_some() {
             return;
         }
-        let limit = self.framerate_limit();
+        let limit = if limit == 0 {
+            SKIPPED_FRAME_RATE
+        } else {
+            limit
+        };
         match self.settings.sunrise.pacing {
             sunrise_client::graphics::Pacing::Precise => {
                 sunrise_client::window::end_frame(&mut self.limiter, limit, &mut self.frame_clock)

@@ -518,6 +518,44 @@ pub(super) mod tests {
         mod_api::__private::block_key("minecraft:air").unwrap()
     }
 
+    /// `Streaming::meshed_columns` (#5911): a column is listed once its sections are meshed and
+    /// leaves the list when it unloads.
+    #[test]
+    #[ignore = "daily"]
+    fn a_meshed_column_is_listed_until_it_unloads() {
+        use crate::mesher::SectionPlanBuilder;
+
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            let (mut world, mut streaming, stone) = fixture();
+            let base = world.bottom_y();
+            let mut centre = Chunk::empty(0, 0);
+            centre.set(8, base + 4, 8, stone);
+            streaming.insert_remote(&mut world, centre);
+            assert!(streaming.meshed_columns().next().is_none());
+            streaming.refresh_section_visibility(&mut world, true);
+            let mut meshed = false;
+            for _ in 0..100 {
+                let (uploads, _) = streaming.update(&mut world);
+                for request in streaming.take_visibility_requests() {
+                    let plan = SectionPlanBuilder::new().finish();
+                    streaming.submit_visibility_answer(&mut world, request, plan);
+                }
+                meshed |= uploads.iter().any(|upload| upload.key == CENTRE);
+                streaming.free(uploads);
+                if meshed {
+                    break;
+                }
+                streaming.wait(Duration::from_millis(20));
+            }
+            assert!(meshed, "the centre column was meshed");
+            assert!(streaming.meshed_columns().any(|column| column == (0, 0)));
+            let gone = [(0, 0)].into_iter().collect();
+            Streaming::take_remote_columns(&mut world, &gone);
+            streaming.forget_columns(&mut world, &gone);
+            assert!(!streaming.meshed_columns().any(|column| column == (0, 0)));
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn remote_column_arrival_and_unload_remesh_the_actual_halo() {

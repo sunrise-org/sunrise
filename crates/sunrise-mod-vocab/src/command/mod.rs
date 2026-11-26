@@ -122,6 +122,16 @@ pub enum CommandArgumentValue {
     },
     /// A `resource:<registry>` argument: an id present in that registry (static or data pack).
     Id(Identifier),
+    /// A `resource_or_tag:<registry>` argument (`ResourceOrTagKeyArgument.Result`): `tag` true
+    /// for `#namespace:path`, a tag key of that registry, false for a resource key. `id` is the
+    /// identifier without the `#`. Neither is checked against the registry when parsed, as in
+    /// vanilla: look it up when the command runs.
+    ResourceOrTag {
+        /// Whether the text named a tag (`#minecraft:is_ocean`).
+        tag: bool,
+        /// The resource or tag identifier, without the `#`.
+        id: Identifier,
+    },
     /// A `game_profile` argument: UUID and account name for each result, in selector order.
     /// A plain name can also select an offline player whose profile is still in the user cache.
     /// Never asks the profile service. Side: server.

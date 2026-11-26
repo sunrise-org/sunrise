@@ -181,13 +181,6 @@ impl Game<'_> {
                 &command.usage,
                 call,
             );
-            if command.level != 0 {
-                log::warn!(
-                    "Sunrise: mod {owner} client command `{}` was left out: it has an operator level",
-                    command.usage
-                );
-                continue;
-            }
             usages.push(command);
             executors.push(Some(executor));
         }

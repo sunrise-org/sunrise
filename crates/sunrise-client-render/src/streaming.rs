@@ -1656,6 +1656,13 @@ impl Streaming {
         chunks
     }
 
+    /// The columns whose sections have been queued for meshing since they loaded, `(x, z)` in
+    /// chunk coordinates, in no order. A column leaves it when it unloads or drops past the
+    /// render distance.
+    pub fn meshed_columns(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.meshed.iter().copied()
+    }
+
     /// Clear streaming state after resident remote columns have been removed.
     pub fn forget_columns(&mut self, world: &mut World, gone: &FxHashSet<(i32, i32)>) {
         // Every column held (a far teleport): no pending section is left to keep, and a

@@ -162,7 +162,7 @@ pending install journal unchanged, even if the new archive has not appeared yet.
 - **Install** picks the newest version that runs, then its required dependencies, checked before any download: a
   dependency that isn't a pack Sunrise loads (a Java mod) stops the install. Dependencies go in first. A resource
   pack still has to be turned on in the game's Resource Packs screen, as in vanilla, and a shader pack picked in
-  the game's Shader Packs page.
+  Sunrise Settings › Shaders in the game.
 - **Update** installs the newer version and removes the old file.
 - **Update all** does the same for each pack with a newer version (`sunrise-launcher mods update` with no pack name).
 - **Remove** deletes the file and its entry. Packs installed as dependencies stay.

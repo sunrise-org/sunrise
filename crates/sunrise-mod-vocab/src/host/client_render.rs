@@ -53,6 +53,21 @@ pub trait ClientRenderClientHost {
     /// outside the level's height, are skipped.
     fn set_blocks_dirty(&mut self, min: [i32; 3], max: [i32; 3]);
     /// Side: client.
+    /// Visits the chunk columns of the level the client shows whose sections the level renderer
+    /// has queued for meshing, `[x, z]` in chunk coordinates (block X and Z shifted right by 4),
+    /// in no particular order: the loaded footprint of vanilla terrain, which a distant-terrain
+    /// mod rasterizes to meet it without a seam. A column joins once its sections are queued for
+    /// meshing after it loads, and leaves when it unloads or falls past the render distance.
+    /// Its meshes may still be in flight for a frame or two after it joins. Every section of a
+    /// listed column, from the level's bottom to its top, is in the footprint.
+    /// Return `ControlFlow::Break(())` to stop; the walk returns what the last call returned,
+    /// `Continue(())` when it visited every column, including none. Nothing is visited before a
+    /// level is shown.
+    fn visit_rendered_chunk_columns(
+        &self,
+        visit: &mut dyn FnMut([i32; 2]) -> core::ops::ControlFlow<()>,
+    ) -> core::ops::ControlFlow<()>;
+    /// Side: client.
     /// Asks `biome_colors` again for every biome and, when the colours
     /// differ from those in use, rebuilds every loaded section and the far
     /// terrain with them (`LevelRenderer.allChanged`, as changing Biome Blend

@@ -157,6 +157,7 @@ pub mod sprites;
 pub mod streaming;
 pub mod structure_block;
 pub(crate) mod studio_ui;
+pub(crate) mod sunrise_ui;
 pub mod tab_list;
 pub mod test_block;
 pub mod test_instance_block;

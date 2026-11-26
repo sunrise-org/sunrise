@@ -1596,13 +1596,13 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
         m.extra.using_item = 12;
         m.extra.using_off_hand = true;
         let baseline: Vec<_> = game.mobs.iter().map(arms).collect();
-        game.tick_remote_arm_poses();
+        game.extract_remote_arm_poses();
         assert_eq!(game.mobs.iter().map(arms).collect::<Vec<_>>(), baseline);
         let calls = Arc::new(AtomicUsize::new(0));
         with_mods(
             vec![ModEntry::new("mob-pose", Box::new(MobPose(calls.clone())))].into(),
             || {
-                game.tick_remote_arm_poses();
+                game.extract_remote_arm_poses();
                 assert_eq!(
                     game.mobs[0].extra.held_arm_pose,
                     [Some(sunrise_core::arm_pose::ArmPose::ThrowTrident), None]
@@ -1616,7 +1616,7 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
                 let empty = Mob::new(60, game.mobs[0].kind.clone(), Vec3::ZERO, 0.0);
                 assert_eq!(game.held_arm_poses(60, &empty), [None; 2]);
                 // The local player's extraction also exposes its actual off-hand stack.
-                game.tick_player_model();
+                game.extract_player_arm_pose();
                 let own = game.player_model.as_ref().unwrap();
                 assert_eq!(
                     anim::humanoid_arm_poses(own, own.extra.held_arm_pose, 0.0),
@@ -1625,7 +1625,7 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
             },
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
-        game.tick_remote_arm_poses();
+        game.extract_remote_arm_poses();
         assert_eq!(game.mobs.iter().map(arms).collect::<Vec<_>>(), baseline);
     });
 }

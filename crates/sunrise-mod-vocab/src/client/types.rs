@@ -462,6 +462,10 @@ pub struct HumanoidRenderState<'a> {
     pub ticks_using_item: i32,
     /// Animation of the item currently being used.
     pub use_animation: UseAnimation,
+    /// Whether the entity is swinging an arm (`LivingEntity.isSwinging`, the swing state
+    /// itself, not the interpolated animation progress), as extracted for this draw. Both
+    /// hands see the same flag, from the first tick of a swing. False for armor stands.
+    pub is_swinging: bool,
     /// Selected main-hand pose before any hook answers.
     pub main_arm_pose: ArmPose,
     /// Selected off-hand pose before any hook answers.

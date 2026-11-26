@@ -404,9 +404,9 @@ pub enum Act { Press, PressBack, Slide(f32), Bind(String), Edit(String), Submit 
 pub fn connect(address: impl Into<String>);                   // from a Title page's act: join that server
 ```
 
-- `SunriseSettings`: a row of the Sunrise Settings page, after the engine's own pages. `Title` and `Pause`: a
-  button on the title screen or the pause menu that opens the page. These buttons exist only when something
-  registered, so the vanilla menus keep vanilla's look. The page is drawn with the same widgets, tooltips,
+- `SunriseSettings`: a row on Sunrise Settings' Extras page, after PvP & HUD's, that opens the page.
+  `Title` and `Pause`: a button on the title screen or the pause menu that opens the page. These buttons
+  exist only when something registered, so the vanilla menus keep vanilla's look. The page is drawn with the same widgets, tooltips,
   narration, controller focus and `sunrise-ctl` ids as the engine's pages.
 - `Button` and `Text` are built with `Row::button` and `Row::text` and their options: `.active(false)` greys a
   button, `.half()` puts two side by side, `.footer()` sets one beside Done on a page drawn as its own screen,

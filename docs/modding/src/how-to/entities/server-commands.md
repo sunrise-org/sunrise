@@ -87,6 +87,12 @@ usage with a reason in the log. Registry names have no separate registration bud
 vanilla command-tree string frame applies on the wire. Block positions are resolved and
 floored from the source's world, relative or local coordinates without loading chunks.
 
+`resource_or_tag:<registry>`, such as `<biome:resource_or_tag:minecraft:worldgen/biome>`, takes an id
+or a `#tag` of that registry (vanilla's `ResourceOrTagKeyArgument`, `minecraft:resource_or_tag_key` on
+the wire, so the chat box completes both). It delivers `CommandArgumentValue::ResourceOrTag { tag, id }`:
+`tag` is true for `#namespace:path`, and `id` comes without the `#`. As in vanilla, neither is checked
+against the registry when parsed; look it up when the command runs. It works in client commands too.
+
 `id` is a free identifier: vanilla's `minecraft:resource_location` argument, lowercase letters,
 digits and `_ - . : /`, canonicalised to `namespace:path` with `minecraft` when the namespace is
 left out, and checked against no registry. `Command::new("map fullrender <world:id>")` takes
@@ -591,8 +597,10 @@ event.commands.push(mod_api::Command::new("count").executes_client(move |_, _| {
 ```
 
 The executor receives a `ClientHost` and a typed `CommandInvocation`. Return
-`Some(result)` on success or `None` to report failure locally. Use level zero and
-client-safe argument kinds; player, entity and dimension handles and custom
+`Some(result)` on success or `None` to report failure locally. A usage's level is checked
+against the local player's permission level, the one the server's entity events 24 to 28 set
+(NeoForge's `ClientCommandHandler` source): below it, the usage is neither completed nor run, and
+the line goes to the server as an unknown command would. Use client-safe argument kinds; player, entity and dimension handles and custom
 argument types complete through the same `suggest`. The chat display
 combines local and server branches, but dispatch is separate: only an unknown local
 command or argument goes to the server.

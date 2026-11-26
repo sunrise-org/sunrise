@@ -43,7 +43,7 @@ a telemetry placeholder or an official-build promotion in the options screen.
 | Discord Rich Presence and its switch | crate `sunrise-discord` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
 | Play with Friends | hosting: `game/friends.rs`, `game/friends/screen.rs`; joining: crate `sunrise-friends` (`game`) | hosting: the `friends` feature (`game/friends_off.rs` stands in); joining: only the official executable registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
 | The anonymous "I'm playing" ping | crate `sunrise-heartbeat` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
-| The performance overlay (frames per second, frame times and their graph) and its Performance Overlay row on the Extras page | crate `sunrise-perf-overlay` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
+| The performance overlay (frames per second, frame times and their graph) and its Performance Overlay row on Sunrise Settings' Gameplay page | crate `sunrise-perf-overlay` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
 
 Credits & Attribution then says where the official build is (`sunrise.plain.official`).
 

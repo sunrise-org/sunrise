@@ -67,7 +67,10 @@ pub fn split_client_command_registration(
 /// `entity`, `entities`, `item`, `block_pos`, `vec3` (a point, `Vec3Argument.vec3()`; delivered
 /// as `Vec3`), `id` (a free `namespace:path` identifier, delivered as that canonical string),
 /// `mod_id` (a loaded package id, delivered as a string), `resource:<registry>` (an id that
-/// registry holds, delivered as `Id`: `<kind:resource:minecraft:entity_type>`), or a command
+/// registry holds, delivered as `Id`: `<kind:resource:minecraft:entity_type>`),
+/// `resource_or_tag:<registry>` (vanilla's `ResourceOrTagKeyArgument`: an id or a `#tag` of
+/// that registry, completed by the chat box and delivered as `ResourceOrTag`, unchecked
+/// against the registry: `<biome:resource_or_tag:minecraft:worldgen/biome>`), or a command
 /// argument type a mod registered with `Registrar::register_command_argument`, named by its namespaced id:
 /// `machine use <machine:mymod:machine>`. Usages of one command share their
 /// words; the server merges them into one tree. A public `foo bar` lets everyone traverse
@@ -90,8 +93,8 @@ pub fn split_client_command_registration(
 /// others in its console handling), so a mod word merged under one of those is reached by players
 /// and functions but not from that console.
 ///
-/// A `resource:<registry>` usage requires a `namespace:path` registry name; an invalid name
-/// refuses the usage. There is no separate registration budget for registry names.
+/// A `resource:<registry>` or `resource_or_tag:<registry>` usage requires a `namespace:path`
+/// registry name; an invalid name refuses the usage. There is no separate registration budget for registry names.
 ///
 /// Side: server. Selector arguments use vanilla's source position, permissions,
 /// cardinality and selection order; `player`/`entity` require one result and

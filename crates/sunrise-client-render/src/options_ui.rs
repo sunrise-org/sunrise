@@ -37,8 +37,8 @@ mod wheel;
 pub(crate) use wheel::slider_unsnapped;
 
 /// `Options.renderDistance`'s upper bound in 26.3 (`IntRange(2, 32)`; 16 below 1 GiB of JVM heap).
-/// Sunrise has no JVM heap to size it by, so the classic page takes the 32; Sunrise Graphics goes
-/// to `MAX_RENDER_DISTANCE`.
+/// Sunrise has no JVM heap to size it by, so the classic page takes the 32; Sunrise Settings'
+/// General page goes to `MAX_RENDER_DISTANCE`.
 pub(crate) const VANILLA_MAX_RENDER_DISTANCE: i32 = 32;
 
 fn tr(key: &str) -> Text {
@@ -150,6 +150,16 @@ pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::RotateWithMinecarts,
     Opt::HighContrastBlockOutlines,
 ];
+
+/// The pages crates registered (`sunrise_hooks::pages`), as `Page::Added` indexes them.
+pub(crate) fn registered_pages() -> &'static [&'static dyn sunrise_hooks::pages::Page] {
+    pages::registered()
+}
+
+/// What a button opening one of Sunrise's pages says (a language key), where it says something.
+pub(crate) fn page_tooltip(page: Page) -> Option<&'static str> {
+    pages::sunrise_page_tooltip(page)
+}
 
 /// `ControlsScreen.options`: the controls added by Java Edition 26.3, in
 /// their vanilla order. The macOS-only Control-click switch is omitted on
@@ -394,7 +404,7 @@ impl Opt {
                 crate::options_file::MAX_RENDER_DISTANCE as f64,
             ),
             // `IntRange(2, 32).toSliderValue`: the ends at 0 and 1, every value between them at
-            // its bin's centre. A Sunrise Graphics distance past 32 shows as 32 and stays saved.
+            // its bin's centre. A Sunrise Settings distance past 32 shows as 32 and stays saved.
             Opt::VanillaRenderDistance => {
                 Kind::Slider(match s.render_distance.min(VANILLA_MAX_RENDER_DISTANCE) {
                     d if d <= 2 => 0.0,
@@ -1524,13 +1534,15 @@ pub enum Page {
     NativeMod(usize),
     /// A page a crate registered (`sunrise_hooks::pages`): its index in `OptionsUi::pages`.
     Added(usize),
-    /// The shader packs (`shader_pack_list`).
+    /// Sunrise Settings at its Shaders page, which lists the shader packs (`shader_pack_list`), as
+    /// `sunrise-ctl options shader-packs` opens it.
     ShaderPacks,
     /// The picked pack's options: the shader screen (`shader_ui`) at the pack's main screen.
     ShaderOptions,
     /// The selected resource packs' Polytone options (`pack_options_ui`), from the pack screen.
     PackOptions,
-    /// Sunrise's graphics settings (`graphics_ui`).
+    /// Sunrise Settings at its General, Advanced and HDR pages (`graphics_ui`'s), as
+    /// `sunrise-ctl options graphics|graphics-advanced|graphics-hdr` opens it.
     Graphics,
     GraphicsAdvanced,
     GraphicsHdr,
@@ -1544,13 +1556,14 @@ pub enum Page {
     ControllerRadialName,
     /// The list of every action for one of its slots.
     ControllerRadialPick,
+    /// Sunrise Settings at its Gameplay page (the extras, `extras_ui`).
     Extras,
     /// PvP & HUD (`pvp`): the extras a PvP player sets, on their own page.
     Pvp,
     /// CreditsAndAttributionScreen.
     Credits,
-    /// Sunrise Settings: every page Sunrise adds, as a mod's settings
-    /// screen hangs off vanilla's Options.
+    /// Sunrise Settings (`sunrise_ui`): one screen of every page Sunrise adds, as a mod's
+    /// settings screen hangs off vanilla's Options.
     Sunrise,
     /// Replay Studio: saved recordings browser and 3D video editor launcher.
     Studio,
@@ -1722,7 +1735,8 @@ pub enum Event {
     /// Accessibility's Help link: confirm and open
     /// `CommonLinks.ACCESSIBILITY_HELP` over the options screen.
     AccessibilityHelp,
-    /// The Shader Packs page opened: list `shaderpacks/` into `shader_packs`.
+    /// Sunrise Settings opened (its Shaders page lists the packs): list `shaderpacks/` into
+    /// `shader_packs`.
     ListShaderPacks,
     /// A shader pack was picked or turned off: save and apply it.
     ShaderPack,
@@ -1847,11 +1861,11 @@ pub struct OptionsUi {
     /// The output of the renderer the options are drawn for, as of the last draw. It lives
     /// here, not on the graphics screen, which opening resets: `shell_mut` hands it over.
     output: crate::gfx::EffectiveOutput,
-    graphics: shell::Shell<crate::graphics_ui::GraphicsScreen>,
+    /// Sunrise Settings, on the settings shell: the graphics screen's pages, the extras and
+    /// the ways to Sunrise's other pages (`sunrise_ui`).
+    sunrise: shell::Shell<crate::sunrise_ui::SunriseScreen>,
     /// Controller Settings, on the settings shell.
     controller: shell::Shell<crate::controller_ui::ControllerScreen>,
-    /// Sunrise Extras, on the settings shell.
-    extras: shell::Shell<crate::extras_ui::ExtrasScreen>,
     /// The radial menu's pages, on the settings shell.
     radial: shell::Shell<crate::radial_editor::RadialScreen>,
     /// The list of actions for one of the radial menu's slots.
@@ -1948,9 +1962,8 @@ impl Default for OptionsUi {
             minecart_improvements: false,
             center_language: false,
             output: crate::gfx::EffectiveOutput::NONE,
-            graphics: Default::default(),
+            sunrise: Default::default(),
             controller: Default::default(),
-            extras: Default::default(),
             radial: Default::default(),
             radial_pick: Default::default(),
             shader: Default::default(),
@@ -2279,7 +2292,7 @@ impl OptionsUi {
             shell.blur_search();
         }
     }
-    /// A switch of `sunrise-extras.txt` as the Extras page draws it: "Caption: On".
+    /// A switch of `sunrise-extras.txt` as the Gameplay page draws it: "Caption: On".
     fn extra_button(&self, s: &Settings, item: crate::extras::Item) -> Widget {
         let label = Text::option_name_value(
             Text::literal(item.caption_text()),
@@ -2447,8 +2460,8 @@ impl OptionsUi {
         if let Some(at) = Self::shader_page(page) {
             self.shader.show(at);
         }
-        if let Some(at) = Self::graphics_page(page) {
-            self.graphics.show(at);
+        if let Some(at) = Self::sunrise_tab(page) {
+            self.sunrise.show(at);
         }
         if let Some(at) = Self::controller_page(page) {
             self.controller.show(at);
@@ -2462,6 +2475,21 @@ impl OptionsUi {
     pub fn reveal(&mut self, s: &Settings, size: (f32, f32), rect: [f32; 4]) -> Option<f32> {
         self.shell_mut()?.reveal(s, size, rect)
     }
+    /// The name of the page a settings screen on the shell shows (`Hosted::open_page_name`).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shell_page_name(&self) -> Option<String> {
+        self.shell()?.open_page_name()
+    }
+    /// A controller's bumper on a shell screen whose page list scrolls: the next page (or the one
+    /// before) opens, in list order and wrapping, scrolled into view. Where its tab is now; `None`
+    /// where the pages are all tabs on the screen, which the bumpers pick among.
+    pub fn step_page(&mut self, s: &Settings, size: (f32, f32), next: bool) -> Option<[f32; 4]> {
+        // A failed resource reload's message takes every input until it is dismissed.
+        if self.resource_error.is_some() {
+            return None;
+        }
+        self.shell_mut()?.step_page(s, size, next)
+    }
     /// Capture `(textureFiltering, maxAnisotropyBit, mipmapLevels)` when entering video settings.
     pub fn capture_video_atlas(&mut self, s: &Settings) {
         if self.stack.iter().any(|&p| Self::is_video_page(p)) && self.video_atlas_snapshot.is_none()
@@ -2469,22 +2497,34 @@ impl OptionsUi {
             self.video_atlas_snapshot = Some(s.texture_atlas_settings());
         }
     }
+    /// Vanilla's Video Settings or Sunrise Settings, which has the graphics settings: the
+    /// texture settings are compared when the last of them closes.
     fn is_video_page(page: Page) -> bool {
-        page == Page::Video || Self::graphics_page(page).is_some()
+        page == Page::Video || Self::sunrise_tab(page).is_some()
     }
-    /// Whether a video settings screen is open, Sunrise's or vanilla's: the fullscreen mode
-    /// waits for it to close, and Ctrl with the wheel steps the GUI scale.
+    /// Whether a video settings screen is open, vanilla's or Sunrise Settings, which holds the
+    /// graphics settings: the fullscreen mode waits for it to close, and Ctrl with the wheel
+    /// steps the GUI scale.
     pub fn video_open(&self) -> bool {
         Self::is_video_page(self.page())
     }
-    /// Where the graphics screen opens for `page`, if it is one of its pages.
-    fn graphics_page(page: Page) -> Option<crate::graphics_ui::Page> {
+    /// Where Sunrise Settings opens for `page`, if it is one of its pages: its own, or a page
+    /// `sunrise-ctl options` names (the graphics screen's and the extras' before they were one).
+    fn sunrise_tab(page: Page) -> Option<crate::sunrise_ui::Tab> {
+        use crate::{graphics_ui::Page as G, sunrise_ui::Tab};
         match page {
-            Page::Graphics => Some(crate::graphics_ui::Page::General),
-            Page::GraphicsAdvanced => Some(crate::graphics_ui::Page::Advanced),
-            Page::GraphicsHdr => Some(crate::graphics_ui::Page::Hdr),
+            Page::Sunrise | Page::Graphics => Some(Tab::Graphics(G::General)),
+            Page::GraphicsAdvanced => Some(Tab::Graphics(G::Advanced)),
+            Page::GraphicsHdr => Some(Tab::Graphics(G::Hdr)),
+            Page::Extras => Some(Tab::Gameplay),
+            Page::ShaderPacks => Some(Tab::Graphics(G::Shaders)),
             _ => None,
         }
+    }
+    /// Whether opening `page` lists the shader packs and reads the picked one's options:
+    /// Sunrise Settings', whose Shaders page lists them.
+    pub fn lists_shader_packs(page: Page) -> bool {
+        Self::sunrise_tab(page).is_some()
     }
     fn title(page: Page) -> &'static str {
         match page {
@@ -2504,20 +2544,22 @@ impl OptionsUi {
             Page::Mods => "sunrise.pages.mods",
             Page::NativeMod(_) => "Mod Settings",
             Page::Added(i) => pages::title(i),
-            Page::ShaderPacks => "sunrise.pages.shader_packs",
             Page::ShaderOptions => "sunrise.pages.shader_options",
             Page::PackOptions => "sunrise.pack.options.title",
-            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr | Page::HdrCalibration => {
-                "options.videoTitle"
-            }
+            Page::HdrCalibration => "options.videoTitle",
             Page::Controller | Page::PadBinds => "sunrise.pages.controller",
             Page::ControllerRadial => "sunrise.pages.controller_radial",
             Page::ControllerRadialName => "sunrise.radial.name_title",
             Page::ControllerRadialPick => "sunrise.radial.pick_title",
-            Page::Extras => "sunrise.pages.extras",
             Page::Pvp => "sunrise.pages.pvp",
             Page::Credits => "credits_and_attribution.screen.title",
-            Page::Sunrise => "sunrise.pages.settings",
+            // `sunrise-ctl options` names some of its pages by what they were before.
+            Page::Sunrise
+            | Page::Graphics
+            | Page::GraphicsAdvanced
+            | Page::GraphicsHdr
+            | Page::Extras
+            | Page::ShaderPacks => "sunrise.pages.settings",
             Page::Studio => "sunrise.pages.studio",
             Page::Agent => "sunrise.pages.agent",
             Page::Music => "sunrise.pages.music",
@@ -2679,9 +2721,15 @@ impl OptionsUi {
                 flush(&mut rows, &mut section);
                 rows
             }
-            Page::Sunrise => self.sunrise_rows(s),
             Page::Agent => {
-                let mut rows = vec![Row::Buttons(
+                // No AI first: it hides every AI feature, so with it on it is all the page has,
+                // and turns them back on from here.
+                let no_ai = self.extra_button(s, crate::extras::Item::NoAi);
+                let mut rows = vec![Row::Buttons(no_ai, None)];
+                if s.extras.no_ai {
+                    return rows;
+                }
+                rows.push(Row::Buttons(
                     self.extra_button(s, crate::extras::Item::AgentControl),
                     Some(button(
                         0.0,
@@ -2690,7 +2738,7 @@ impl OptionsUi {
                         tr("sunrise.agent.copy_details"),
                         Act::CopyAgentDetails,
                     )),
-                )];
+                ));
                 rows.push(Row::Buttons(
                     button(
                         0.0,
@@ -2720,7 +2768,7 @@ impl OptionsUi {
             }
             Page::Video => {
                 // Vanilla's VideoSettingsScreen as vanilla lays it out: what Video Settings...
-                // opens. Sunrise's graphics screen is `Page::Graphics`, from the Extras page.
+                // opens. Sunrise's graphics settings are Sunrise Settings' first pages.
                 let mut rows = vec![Row::Header("options.video.display.header")];
                 rows.push(Row::Big(Opt::ExclusiveMode));
                 rows.extend(pairs(&[
@@ -3344,7 +3392,7 @@ impl OptionsUi {
                     events.push(Event::ButtonClick);
                     match act {
                         Act::Push(p) => {
-                            if *p == Page::ShaderPacks {
+                            if Self::lists_shader_packs(*p) {
                                 // The pack list, and the picked pack's own settings with it.
                                 events.push(Event::ListShaderPacks);
                                 s.shader_options = None;
@@ -3864,7 +3912,16 @@ impl OptionsUi {
                 let screen = std::mem::take(&mut self.pack_options.screen);
                 events.extend(screen.finished());
             }
-            Page::ShaderOptions | Page::ShaderPacks => {
+            // Sunrise Settings lists the packs as the pack list does, and closes as it does.
+            // Back on Sunrise Settings, which lists the packs, the options stay read (saved and
+            // read again when they changed): its Shaders page opens them.
+            Page::ShaderOptions if Self::lists_shader_packs(self.page()) => {
+                if s.shader_options.as_ref().is_some_and(|o| o.changed) {
+                    events.push(Event::ShaderOptions);
+                    events.push(Event::OpenShaderOptions);
+                }
+            }
+            page if page == Page::ShaderOptions || Self::lists_shader_packs(page) => {
                 if s.shader_options.as_ref().is_some_and(|o| o.changed) {
                     events.push(Event::ShaderOptions);
                 } else {
@@ -4430,7 +4487,7 @@ impl OptionsUi {
                             self.focus = None;
                             self.focus_from_keyboard = false;
                             self.can_change_value = false;
-                            if p == Page::ShaderPacks {
+                            if Self::lists_shader_packs(p) {
                                 // The pack list, and the picked pack's own settings with it.
                                 events.push(Event::ListShaderPacks);
                                 s.shader_options = None;
@@ -4546,6 +4603,8 @@ mod tests {
     use super::*;
     use crate::extras_ui::ExtraRow;
     use crate::gfx::EffectiveOutput;
+    use crate::graphics_ui::GraphicsScreen;
+    use crate::sunrise_ui::{SunriseRow, Tab};
 
     /// A renderer whose destination offers nothing and whose display reports nothing.
     const NONE: EffectiveOutput = EffectiveOutput::NONE;
@@ -5085,7 +5144,7 @@ mod tests {
     #[test]
     fn video_settings_render_distance_stops_at_vanilla_range_and_keeps_saved_value() {
         let mut s = Settings::default();
-        // Sunrise Graphics' slider still reaches the extended range.
+        // Sunrise Settings' slider still reaches the extended range.
         set_slider(Opt::RenderDistance, &mut s, 1.0);
         assert_eq!(s.render_distance, crate::options_file::MAX_RENDER_DISTANCE);
         // The classic page's slider stops at 32, reached from inside its range.
@@ -5174,7 +5233,7 @@ mod tests {
     /// Picking another pack keeps the last one's changed options before the next one's are
     /// read, and leaving the shader screen applies them.
     #[test]
-    fn the_shader_screen_saves_changed_options_before_reading_the_next_packs() {
+    fn picking_a_pack_saves_changed_options_before_reading_the_next_packs() {
         use crate::shader_pack_list::Entry;
         let entry = |file: &str| Entry { file: file.into() };
         let mut s = Settings {
@@ -5195,9 +5254,8 @@ mod tests {
         ui.open(false);
         ui.push(Page::ShaderPacks);
         let size = (854.0, 480.0);
-        let (x, y) = ui
-            .shader
-            .point_at(&s, size, crate::shader_ui::Item::Pack(1));
+        let pack = SunriseRow::Pack(crate::shader_ui::Item::Pack(1));
+        let (x, y) = ui.sunrise.point_at(&s, size, pack);
         let events = ui.click(&mut s, &atlas(), x, y, size, [1708, 960], false, false);
         assert!(matches!(
             events[..],
@@ -5260,9 +5318,24 @@ mod tests {
             vec![Event::ButtonClick]
         );
         assert!(ui.resource_error.is_none());
+        // A controller's bumper on Sunrise Settings, whose page list scrolls at this size, is
+        // blocked too: the page stays.
+        ui.show(Page::Sunrise);
+        ui.resource_error = Some("broken pack".into());
+        let short = (427.0, 240.0);
+        assert_eq!(ui.step_page(&settings, short, true), None);
+        assert_eq!(
+            ui.sunrise.open_page(),
+            Some(Tab::Graphics(crate::graphics_ui::Page::General))
+        );
+        ui.resource_error = None;
+        assert!(
+            ui.step_page(&settings, short, true).is_some(),
+            "it steps once dismissed"
+        );
     }
 
-    /// The Extras page joins caption and value with the language's `options.generic_value`
+    /// The Gameplay page joins caption and value with the language's `options.generic_value`
     /// (26.3's templates), not an English ": " (#6072).
     #[test]
     fn extras_captions_use_the_languages_separator() {
@@ -5309,8 +5382,15 @@ mod tests {
                 if ui.controller_open() {
                     texts.extend(ui.controller.row_names(&s));
                 }
-                if ui.page() == Page::Extras {
-                    texts.extend(ui.extras.row_labels(&s));
+                // Sunrise Settings: every page's name, then every page's rows.
+                if OptionsUi::sunrise_tab(ui.page()).is_some() {
+                    let sheets = crate::settings_shell::Screen::sheets(&ui.sunrise.screen, &s);
+                    let tabs: Vec<Tab> = sheets.iter().map(|sheet| sheet.id).collect();
+                    texts.extend(sheets.into_iter().map(|sheet| sheet.name));
+                    for tab in tabs {
+                        ui.sunrise.show(tab);
+                        texts.extend(ui.sunrise.row_labels(&s));
+                    }
                 }
             }
             texts
@@ -5333,11 +5413,39 @@ mod tests {
         // Every key these pages ask for is in the table; vanilla's own keys (`options.*`,
         // `key.*`: dotted ids without spaces) come from the prepared resources, which this
         // language does not have.
+        // Sunrise Settings holds the graphics screen too, whose values go through the table
+        // as words ("64 Chunks") and whose descriptions are English texts as keys: its own test
+        // covers those (`graphics_ui`). Its `sunrise.*` keys are checked here.
+        let s = Settings::default();
+        let graphics = || crate::settings_shell::Screen::sheets(&GraphicsScreen::default(), &s);
+        let de = || lang::Language::load(&[], "de_de");
+        let (_, graphics) = lang::scoped(de(), graphics);
         let missed: Vec<_> = missed
             .into_iter()
             .filter(|k| k.starts_with("sunrise.") || k.contains(' ') || !k.contains('.'))
+            .filter(|k| k.starts_with("sunrise.") || !graphics.contains(k))
             .collect();
         assert_eq!(missed, Vec::<String>::new());
+        // Every page's name and the rows that open Sunrise's other pages are there, in the
+        // table's words, not as their keys.
+        let (opens, _) = lang::scoped(de(), || {
+            let keys = [
+                "sunrise.settings.tab.tools",
+                "sunrise.settings.tab.extras",
+                "sunrise.pages.open.studio",
+                "sunrise.pages.open.agent",
+                "sunrise.pages.open.pvp",
+            ];
+            keys.map(lang::get)
+        });
+        for text in &opens {
+            assert!(!text.starts_with("sunrise."), "{text}");
+            assert!(texts.contains(text), "{text:?} not in {texts:?}");
+        }
+        assert!(
+            !texts.iter().any(|t| t.starts_with("sunrise.")),
+            "{texts:?}"
+        );
         let (texts, _) = page_texts("pl_pl", &[Page::Extras, Page::PadBinds]);
         for want in [
             "Płynny czat: Wył.",
@@ -6322,12 +6430,11 @@ mod tests {
         let mut ui = OptionsUi::default();
         ui.show(Page::Extras);
         let english = || lang::Language::load(&[], "en_us");
-        // Without the mod, Extras says where it is installed (a note, not a second way into
-        // Options > Mods).
-        let labels = lang::scoped(english(), || ui.extras.row_labels(&s)).0;
+        // Without the mod, Gameplay shows nothing for it.
+        let labels = lang::scoped(english(), || ui.sunrise.row_labels(&s)).0;
         assert!(
-            labels.iter().any(|l| l == "Zoom: install from Mods"),
-            "Extras has no hint for the Zoom mod: {labels:?}"
+            !labels.iter().any(|l| l.starts_with("Zoom")),
+            "Gameplay shows Zoom without the mod: {labels:?}"
         );
         // Built in, Zoom's settings live on its page: Extras opens that page.
         s.mods.installed.push(crate::mod_list::Installed {
@@ -6348,19 +6455,23 @@ mod tests {
                 own_screen: false,
             }),
         });
-        let labels = lang::scoped(english(), || ui.extras.row_labels(&s)).0;
+        let labels = lang::scoped(english(), || ui.sunrise.row_labels(&s)).0;
         assert!(labels.iter().any(|l| l == "Settings"), "{labels:?}");
         // The mod's switch is beside it, so Extras keeps the Zoom setting it had.
         assert!(labels.iter().any(|l| l.starts_with("Zoom: ")), "{labels:?}");
         let size = (480.0, 480.0);
         let on = s.mods.is_on(0);
-        let at = ui.extras.point_at(&s, size, ExtraRow::Zoom(0));
+        let at = ui
+            .sunrise
+            .point_at(&s, size, SunriseRow::Extra(ExtraRow::Zoom(0)));
         assert_eq!(
             ui.click(&mut s, &atlas, at.0, at.1, size, [960, 960], false, false),
             vec![Event::ButtonClick, Event::Changed]
         );
         assert_ne!(s.mods.is_on(0), on);
-        let at = ui.extras.point_at(&s, size, ExtraRow::ZoomSettings(0));
+        let at = ui
+            .sunrise
+            .point_at(&s, size, SunriseRow::Extra(ExtraRow::ZoomSettings(0)));
         assert_eq!(
             ui.click(&mut s, &atlas, at.0, at.1, size, [960, 960], false, false),
             vec![
@@ -6373,11 +6484,10 @@ mod tests {
     }
 
     /// OptionsScreen's Video Settings button opens VideoSettingsScreen, not Sunrise's graphics
-    /// screen, which has its own row on the Extras page.
+    /// settings, which are Sunrise Settings' first pages.
     #[test]
-    fn extras_opens_sunrise_graphics_and_video_settings_opens_vanilla() {
-        let atlas = atlas();
-        let mut s = Settings::default();
+    fn sunrise_settings_opens_on_graphics_and_video_settings_opens_vanilla() {
+        let s = Settings::default();
         let mut ui = OptionsUi::default();
         let (widgets, _, _, _) = ui.layout(&s, 427.0, 240.0);
         let video = widgets.iter().find(|w| match &w.kind {
@@ -6402,11 +6512,16 @@ mod tests {
                 ..
             }
         )));
-        ui.show(Page::Extras);
+        // Sunrise Settings opens straight on the graphics screen's first page.
+        ui.show(Page::Sunrise);
         let size = (480.0, 480.0);
-        let at = ui.extras.point_at(&s, size, ExtraRow::Graphics);
-        ui.click(&mut s, &atlas, at.0, at.1, size, [960, 960], false, false);
-        assert_eq!(ui.page(), Page::Graphics);
+        let distance = SunriseRow::Graphics(crate::graphics_ui::Item::Vanilla(Opt::RenderDistance));
+        let general = Tab::Graphics(crate::graphics_ui::Page::General);
+        assert!(ui.sunrise.listed(&s, size).contains(&(general, distance)));
+        // All of it is the video screen, as the graphics screen was: Ctrl with the wheel steps
+        // the GUI scale on any of its pages.
+        ui.sunrise.show(Tab::Tools);
+        assert!(ui.video_open());
     }
 
     #[test]
@@ -6787,7 +6902,7 @@ mod tests {
     }
 
     #[test]
-    fn extras_from_sunrise_settings_edit_shared_settings_and_return() {
+    fn gameplay_on_sunrise_settings_edits_shared_settings_and_returns() {
         let atlas = atlas();
         let mut s = Settings::default();
         let mut ui = OptionsUi::default();
@@ -6811,20 +6926,25 @@ mod tests {
                 false,
             )
         };
-        for page in [Page::Sunrise, Page::Extras] {
-            assert_eq!(
-                click(&mut ui, &mut s, Act::Push(page)),
-                vec![Event::ButtonClick]
-            );
-            assert_eq!(ui.page(), page);
-        }
+        // Sunrise Settings lists the shader packs on its Shaders page: opening it reads them.
         assert_eq!(
-            ui.extras.row_labels(&s).len(),
-            // And the note about the Zoom mod and the Sunrise Graphics row over them.
-            2 + crate::extras::rows().iter().filter(|r| r.is_ok()).count()
+            click(&mut ui, &mut s, Act::Push(Page::Sunrise)),
+            vec![
+                Event::ButtonClick,
+                Event::ListShaderPacks,
+                Event::OpenShaderOptions
+            ]
+        );
+        assert_eq!(ui.page(), Page::Sunrise);
+        ui.sunrise.show(Tab::Gameplay);
+        assert_eq!(
+            ui.sunrise.row_labels(&s).len(),
+            crate::extras::rows().iter().filter(|r| r.is_ok()).count()
         );
         let press = |ui: &mut OptionsUi, s: &mut Settings, item: crate::extras::Item| {
-            let at = ui.extras.point_at(s, size, ExtraRow::Item(item));
+            let at = ui
+                .sunrise
+                .point_at(s, size, SunriseRow::Extra(ExtraRow::Item(item)));
             ui.click(s, &atlas, at.0, at.1, size, [960, 960], false, false)
         };
         assert_eq!(
@@ -6855,7 +6975,8 @@ mod tests {
             ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
             vec![Event::Changed]
         );
-        assert_eq!(ui.page(), Page::Sunrise);
+        // Not waiting, Escape leaves Sunrise Settings for the Options screen.
+        assert_eq!(ui.page(), Page::Main);
     }
 
     /// A Bindings row pressed waits for a controller button: the next click or key cancels the
@@ -6905,12 +7026,12 @@ mod tests {
         let short = (480.0, 180.0);
         let inside = (240.0, 90.0);
         ui.wheel(&mut s, short, inside, [960, 360], -1.0);
-        let one = ui.extras.scroll_amount();
+        let one = ui.sunrise.scroll_amount();
         assert!(one > 0.0);
         ui.scroll_at(&s, short, inside, -1.0);
-        assert_eq!(ui.extras.scroll_amount(), 2.0 * one);
+        assert_eq!(ui.sunrise.scroll_amount(), 2.0 * one);
         ui.scroll_at(&s, short, inside, 2.0);
-        assert_eq!(ui.extras.scroll_amount(), 0.0);
+        assert_eq!(ui.sunrise.scroll_amount(), 0.0);
     }
 
     #[test]
@@ -7827,47 +7948,92 @@ mod tests {
 
     /// Every setting a player reaches, from the Options screen through every button that opens
     /// a page, is in one place, and every page has one way in. Vanilla's own repeats stay as
-    /// vanilla has them; Video Settings is vanilla's own screen, and Sunrise's graphics screen
-    /// (opened from Extras) repeats its options, so they are not counted twice (Menu Background
-    /// Blur is in two of vanilla's). Vanilla's Video Settings rows are all on the graphics screen.
+    /// vanilla has them; Video Settings is vanilla's own screen, and Sunrise Settings' graphics
+    /// pages repeat its options, so they are not counted twice (Menu Background Blur is in two
+    /// of vanilla's). Vanilla's Video Settings rows are all on Sunrise Settings but its preset.
     #[test]
     fn every_setting_and_page_is_reached_from_one_place() {
         use std::collections::{BTreeMap, BTreeSet};
         let mut s = Settings::default();
         // The Music page shows once its extra is on.
         s.extras.music_page = true;
+        // A shader pack picked, with its options read: the shader screen (Shader Options) has
+        // its pages.
+        s.shader_packs = vec![crate::shader_pack_list::Entry {
+            file: "A.zip".into(),
+        }];
+        s.sunrise.shader_pack = "A.zip".into();
+        s.shader_options = Some(crate::shader_options::ShaderOptions::new(
+            "A.zip".into(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ));
         let mut ui = OptionsUi::default();
         let mut places: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut ways_in: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut put = |id: String, page: &str| {
             places.entry(id).or_default().insert(page.to_owned());
         };
-        // The graphics screen, drawn by `graphics_ui`.
+        // Sunrise Settings, on the settings shell: the graphics screen's rows, the extras', and
+        // its rows that open other pages.
         let mut graphics_rows = BTreeSet::new();
-        for (page, groups) in crate::graphics_ui::rows() {
-            for row in groups.into_iter().flat_map(|(_, rows)| rows) {
-                use crate::graphics_ui::{H, Item};
-                let id = match row.item {
-                    // Vanilla's Graphics API button sets the same setting.
-                    Item::Sunrise(H::GraphicsApi) => "graphics-api".to_owned(),
-                    Item::Sunrise(H::ShaderPacks) => {
-                        ways_in
-                            .entry(format!("{:?}", Page::ShaderPacks))
-                            .or_default()
-                            .insert(format!("Graphics/{page:?}"));
-                        continue;
+        let mut todo = vec![Page::Main];
+        {
+            use crate::graphics_ui::{H, Item};
+            use crate::settings_shell::Screen;
+            for sheet in crate::sunrise_ui::SunriseScreen::default().sheets(&s) {
+                let tab = sheet.id;
+                for row in sheet.groups.into_iter().flat_map(|g| g.rows) {
+                    let id = match row.id {
+                        // Vanilla's Graphics API button sets the same setting.
+                        SunriseRow::Graphics(Item::Sunrise(H::GraphicsApi)) => {
+                            "graphics-api".to_owned()
+                        }
+                        SunriseRow::Graphics(Item::Vanilla(o)) => format!("{o:?}"),
+                        SunriseRow::Graphics(Item::Sunrise(h)) => format!("graphics:{h:?}"),
+                        SunriseRow::Graphics(Item::Extra(e))
+                        | SunriseRow::Extra(ExtraRow::Item(e)) => format!("extra:{e:?}"),
+                        SunriseRow::Pack(item) => format!("shader:{item:?}"),
+                        SunriseRow::ShaderOptions => {
+                            let way = format!("Sunrise/{tab:?}");
+                            ways_in
+                                .entry("ShaderOptions".into())
+                                .or_default()
+                                .insert(way);
+                            continue;
+                        }
+                        SunriseRow::Open(page) => {
+                            ways_in
+                                .entry(format!("{page:?}"))
+                                .or_default()
+                                .insert("Sunrise".to_owned());
+                            todo.push(page);
+                            continue;
+                        }
+                        _ => continue,
+                    };
+                    if matches!(row.id, SunriseRow::Graphics(_)) {
+                        graphics_rows.insert(id.clone());
                     }
-                    Item::Vanilla(o) => format!("{o:?}"),
-                    Item::Sunrise(h) => format!("graphics:{h:?}"),
-                    Item::Extra(e) => format!("extra:{e:?}"),
-                };
-                graphics_rows.insert(id.clone());
-                put(id, "Graphics");
+                    put(id, "Sunrise");
+                }
+            }
+            // Shader Options, on the settings shell: the picked pack's own rows, and no pack
+            // list of its own (Sunrise Settings' Shaders page has the one).
+            let shader = crate::shader_ui::ShaderScreen::default().sheets(&s);
+            assert!(!shader.is_empty(), "the picked pack's screens");
+            for row in shader
+                .into_iter()
+                .flat_map(|sheet| sheet.groups)
+                .flat_map(|g| g.rows)
+            {
+                put(format!("shader:{:?}", row.id), "ShaderOptions");
             }
         }
         // Every page from the Options screen, through its buttons.
         let mut seen = BTreeSet::new();
-        let mut todo = vec![Page::Main];
         while let Some(page) = todo.pop() {
             if !seen.insert(format!("{page:?}")) {
                 continue;
@@ -7890,8 +8056,8 @@ mod tests {
                                 .entry(format!("{to:?}"))
                                 .or_default()
                                 .insert(name.clone());
-                            // The graphics screen's pages are one screen, listed above.
-                            if OptionsUi::graphics_page(*to).is_none() {
+                            // Sunrise Settings' pages are one screen, listed above.
+                            if OptionsUi::sunrise_tab(*to).is_none() {
                                 todo.push(*to);
                             }
                             continue;
@@ -7905,15 +8071,9 @@ mod tests {
                 }
             }
         }
-        // The Extras page's Sunrise Graphics row opens the graphics screen (its shell has no
-        // widgets here; `extras_opens_sunrise_graphics_and_video_settings_opens_vanilla`).
-        ways_in
-            .entry(format!("{:?}", Page::Graphics))
-            .or_default()
-            .insert("Extras".to_owned());
         // Vanilla's own: the same option on two of its screens.
         let vanilla_repeats: BTreeMap<&str, &[&str]> = [
-            ("MenuBlur", &["Accessibility", "Graphics"][..]),
+            ("MenuBlur", &["Accessibility", "Sunrise"][..]),
             ("ShowSubtitles", &["Accessibility", "Sound"][..]),
             ("Narrator", &["Accessibility", "Chat"][..]),
             ("ChatOpacity", &["Accessibility", "Chat"][..]),
@@ -7936,8 +8096,11 @@ mod tests {
                 _ => assert_eq!(from.len(), 1, "{page} opens from {from:?}"),
             }
         }
+        // The packs are listed on Sunrise Settings' Shaders page; the pick's settings open
+        // from there.
+        assert_eq!(ways_in.get("ShaderPacks"), None, "{ways_in:?}");
         assert_eq!(
-            ways_in.get("ShaderPacks").map(|f| f.len()),
+            ways_in.get("ShaderOptions").map(|f| f.len()),
             Some(1),
             "{ways_in:?}"
         );
@@ -7962,8 +8125,9 @@ mod tests {
                     Opt::VanillaRenderDistance => "RenderDistance".to_owned(),
                     o => format!("{o:?}"),
                 };
-                // macOS has one graphics API: the graphics screen leaves the row out.
-                if id == "graphics-api" && cfg!(target_os = "macos") {
+                // macOS has one graphics API: the graphics screen leaves the row out. Sunrise
+                // Settings has no preset row: vanilla's stays on its own Video Settings.
+                if (id == "graphics-api" && cfg!(target_os = "macos")) || id == "Preset" {
                     continue;
                 }
                 assert!(
@@ -7999,24 +8163,51 @@ mod tests {
             &main[main.len() - 3..],
             [Page::Sunrise, Page::Mods, Page::Credits]
         );
-        // Video Settings... is vanilla's VideoSettingsScreen; the graphics screen is Extras'.
+        // Video Settings... is vanilla's VideoSettingsScreen; the graphics settings are Sunrise
+        // Settings'.
         assert!(main.contains(&Page::Video) && !main.contains(&Page::Graphics));
-        ui.push(Page::Sunrise);
+        // Sunrise Settings' rows that open Sunrise's other pages: Tools', then Extras'.
+        let opens = |s: &Settings| -> Vec<(Tab, Page)> {
+            use crate::settings_shell::Screen;
+            let sheets = crate::sunrise_ui::SunriseScreen::default().sheets(s);
+            let rows = sheets.into_iter().flat_map(|sheet| {
+                let tab = sheet.id;
+                sheet.groups.into_iter().flat_map(move |g| {
+                    g.rows.into_iter().filter_map(move |r| match r.id {
+                        SunriseRow::Open(page) => Some((tab, page)),
+                        _ => None,
+                    })
+                })
+            });
+            rows.collect()
+        };
         assert_eq!(
-            pushes(&mut ui),
-            [Page::Extras, Page::Pvp, Page::Studio, Page::Agent,]
+            opens(&s),
+            [
+                (Tab::Tools, Page::Studio),
+                (Tab::Tools, Page::Agent),
+                (Tab::Extras, Page::Pvp)
+            ]
         );
-        // No AI hides the AI Agent page.
+        // No AI keeps the way to the AI Agent page, where it is turned off again.
         let mut no_ai = Settings::default();
         no_ai.extras.no_ai = true;
+        assert_eq!(opens(&no_ai), opens(&s));
+        ui.push(Page::Agent);
         let (widgets, _, _, _) = ui.layout(&no_ai, 427.0, 240.0);
-        assert!(!widgets.iter().any(|w| matches!(
-            &w.kind,
-            WKind::Button {
-                act: Act::Push(Page::Agent),
-                ..
-            }
-        )));
+        let acts: Vec<&Act> = widgets
+            .iter()
+            .filter_map(|w| match &w.kind {
+                WKind::Button { act, .. } if *act != Act::Done => Some(act),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            acts,
+            [&Act::Extra(crate::extras::Item::NoAi)],
+            "with No AI on, the page has No AI alone"
+        );
+        ui.stack.pop();
         // The AI Agent page: the switch, Copy and the status the game sets.
         ui.push(Page::Agent);
         ui.agent_status = vec!["Waiting for an agent.".into()];
@@ -8160,9 +8351,8 @@ mod tests {
         );
         ui.show(Page::Extras);
         settings.extras.wheel_cycles_settings = true;
-        let cursor = ui
-            .extras
-            .point_at(&settings, gui, ExtraRow::Item(crate::extras::Item::Sort));
+        let sort = SunriseRow::Extra(ExtraRow::Item(crate::extras::Item::Sort));
+        let cursor = ui.sunrise.point_at(&settings, gui, sort);
         assert!(!settings.extras.sort);
         assert!(
             ui.wheel_input(&mut settings, gui, cursor, [480, 600], 1.0)
@@ -8215,37 +8405,39 @@ mod tests {
         let mut s = Settings::default();
         let mut ui = OptionsUi::default();
 
-        // 1. Extras page: with the wheel extra on, the wheel on the Sort switch cycles it
+        // 1. Gameplay page: with the wheel extra on, the wheel on the Sort switch cycles it
         s.extras.wheel_cycles_settings = true;
         ui.show(Page::Extras);
         let size = (480.0, 600.0);
-        let cursor = ui
-            .extras
-            .point_at(&s, size, ExtraRow::Item(crate::extras::Item::Sort));
+        let sort = SunriseRow::Extra(ExtraRow::Item(crate::extras::Item::Sort));
+        let cursor = ui.sunrise.point_at(&s, size, sort);
         assert!(!s.extras.sort);
         ui.wheel(&mut s, size, cursor, [854, 480], 1.0);
         assert!(s.extras.sort);
         ui.wheel(&mut s, size, cursor, [854, 480], 1.0);
         assert!(!s.extras.sort);
 
-        // 2. Sunrise Graphics page through OptionsUi:
+        // 2. Sunrise Settings' Performance page through OptionsUi:
         // Tab onto ChunkUpdates slider, ArrowRight adjusts value, Space toggles can_change_value
         ui.show(Page::Graphics);
-        ui.graphics.show(crate::graphics_ui::Page::Performance);
+        ui.sunrise
+            .show(Tab::Graphics(crate::graphics_ui::Page::Performance));
         s.sunrise.chunk_updates = 10;
-        let chunk_updates = crate::graphics_ui::Item::Sunrise(crate::graphics_ui::H::ChunkUpdates);
+        let chunk_updates = SunriseRow::Graphics(crate::graphics_ui::Item::Sunrise(
+            crate::graphics_ui::H::ChunkUpdates,
+        ));
         ui.size = size;
         ui.framebuffer = [854, 480];
 
         // Tab into controls
         for _ in 0..80 {
             ui.key(&mut s, &atlas, K::Tab, None);
-            if ui.graphics.focused_row() == Some(chunk_updates) {
+            if ui.sunrise.focused_row() == Some(chunk_updates) {
                 break;
             }
         }
-        assert_eq!(ui.graphics.focused_row(), Some(chunk_updates));
-        assert!(ui.graphics.changes_value());
+        assert_eq!(ui.sunrise.focused_row(), Some(chunk_updates));
+        assert!(ui.sunrise.changes_value());
 
         // Right arrow steps ChunkUpdates to 11
         let events = ui.key(&mut s, &atlas, K::ArrowRight, None);
@@ -8254,7 +8446,7 @@ mod tests {
 
         // Space toggles can_change_value to false
         ui.key(&mut s, &atlas, K::Space, None);
-        assert!(!ui.graphics.changes_value());
+        assert!(!ui.sunrise.changes_value());
 
         // ArrowRight does not change ChunkUpdates when can_change_value is false
         ui.key(&mut s, &atlas, K::ArrowRight, None);
@@ -8726,7 +8918,7 @@ mod tests {
         let events = ui.back(&mut s);
         assert!(events.contains(&Event::ReloadTextures));
 
-        // Changing maxAnisotropyBit on Sunrise Graphics triggers ReloadTextures.
+        // Changing maxAnisotropyBit on Sunrise Settings triggers ReloadTextures.
         ui.open_at(true, Page::Graphics);
         ui.capture_video_atlas(&s);
         s.file

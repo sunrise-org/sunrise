@@ -212,7 +212,7 @@ pub struct Settings {
     pub extras: crate::extras::Extras,
     /// The Sunrise mods turned on (`sunrise-mods.txt`), all off by default.
     pub mods: crate::mod_list::ModList,
-    /// The packs in `shaderpacks/`, listed when the Shader Packs page opens; the pick is
+    /// The packs in `shaderpacks/`, listed when Sunrise Settings opens (Shaders); the pick is
     /// `sunrise.shader_pack`.
     pub shader_packs: Vec<crate::shader_pack_list::Entry>,
     /// The picked pack's options while its Shader Options page is open.

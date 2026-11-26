@@ -312,6 +312,8 @@ mod fluid_rules;
 mod fluid_tick;
 mod fluid_tooltip;
 mod frame_graph_setup;
+#[cfg(test)]
+mod framerate_limit_tests;
 mod friction;
 mod game_rule_changed;
 mod game_shutting_down;
@@ -571,6 +573,9 @@ mod screen_transparent_background;
 mod screenshot;
 mod section_visibility;
 mod server_chat;
+pub(in crate::game) mod server_level_event;
+#[cfg(test)]
+mod server_level_event_tests;
 mod server_tick_rate_changed;
 mod set_placed_by;
 mod should_cause_block_break_reset;

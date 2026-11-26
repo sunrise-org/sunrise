@@ -37,7 +37,6 @@ impl Game<'_> {
         self.tick_end_flash();
         self.player_border();
         self.tick_remote_entities(running);
-        self.tick_remote_arm_poses();
         self.tick_random_textures();
         // Breeze.tick's block dust: drawn by each client for the breezes it sees.
         if running {
@@ -1885,8 +1884,9 @@ impl Game<'_> {
         }
     }
 
-    /// Humanoid held arm poses, once the tick has set equipment and use state.
-    pub(in crate::game) fn tick_remote_arm_poses(&mut self) {
+    /// Humanoid held arm poses, selected at the frame's extraction from the equipment and use state
+    /// the tick set (`AvatarRenderer.extractRenderState` → `getArmPose`).
+    pub(in crate::game) fn extract_remote_arm_poses(&mut self) {
         for i in 0..self.mobs.len() {
             let m = &self.mobs[i];
             if !sunrise_client::mobs::anim::extracts_humanoid(m) {

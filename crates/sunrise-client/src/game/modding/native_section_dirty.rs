@@ -1,9 +1,21 @@
 //! `ClientRenderClientHost::set_section_dirty` and `set_blocks_dirty`: a client mod asks the
 //! mesher to rebuild loaded sections (`LevelExtractor.setSectionDirty`,
-//! `ClientLevel.setSectionDirtyWithNeighbors`, `LevelExtractor.setBlocksDirty`).
+//! `ClientLevel.setSectionDirtyWithNeighbors`, `LevelExtractor.setBlocksDirty`); and
+//! `visit_rendered_chunk_columns`, the columns the mesher has meshed.
 use super::Game;
 
 impl Game<'_> {
+    /// The meshed columns of the level in place (`Streaming::meshed_columns`), until `visit`
+    /// breaks.
+    pub(in crate::game) fn visit_rendered_chunk_columns(
+        &self,
+        visit: &mut dyn FnMut([i32; 2]) -> std::ops::ControlFlow<()>,
+    ) -> std::ops::ControlFlow<()> {
+        for (x, z) in self.streaming.meshed_columns() {
+            visit([x, z])?;
+        }
+        std::ops::ControlFlow::Continue(())
+    }
     /// Queues section `(cx, section_y, cz)` (vanilla section coordinates) for remeshing when its
     /// column is loaded and the level holds that height. Whether it was queued.
     fn mark_section_dirty(&mut self, cx: i32, section_y: i32, cz: i32) -> bool {

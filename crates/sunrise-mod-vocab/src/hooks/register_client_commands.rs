@@ -8,8 +8,10 @@ pub trait Hooks {
     /// own tree. Client and server branches can share a root in the chat's
     /// display tree, but run in separate dispatchers. Only an unknown command
     /// or argument in the client dispatcher proceeds to the server.
-    /// A client command has no operator level: one with a nonzero
-    /// `level` is left out, and server-only handle argument kinds (`player`,
+    /// A usage's `level` is checked against the local player's permission level, as
+    /// NeoForge's `ClientCommandHandler.getSource` builds its source with
+    /// `player.permissions()` (the level the server's entity events 24 to 28 set): below it,
+    /// the usage is neither completed nor run. Server-only handle argument kinds (`player`,
     /// `players`, `entity`, `entities`, `dimension`) are refused.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_register_client_commands",
@@ -19,7 +21,7 @@ pub trait Hooks {
         out = "commands",
         answered_by = "mod",
         neoforge = "RegisterClientCommandsEvent",
-        version = 2
+        version = 3
     )]
     fn register_client_commands(
         commands: &mut Vec<mod_api::Answered<mod_api::ClientCommandRegistration>>,

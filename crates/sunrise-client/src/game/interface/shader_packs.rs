@@ -1,4 +1,4 @@
-//! Shader packs: the one picked on Options > Sunrise Settings > Shader Packs, or
+//! Shader packs: the one picked on Options > Sunrise Settings > Shaders, or
 //! `SUNRISE_SHADER_PACK=<name>` (development; it wins over the pick), runs `shaderpacks/<name>`
 //! (a folder or a zip beside `options.txt`) over the world. The programs of the current
 //! dimension's folder are loaded when the dimension changes (spec 1.2). A pick in the removed
@@ -137,9 +137,9 @@ pub(super) fn plan_shader_toggle(
     TogglePlan::On(last.to_owned())
 }
 
-/// The Extras page's shader pack key, by identity: the translated key's vanilla name against
-/// the bound one, so a rebind never becomes another mapping's default (Replay Studio's
-/// camera-keyframe shortcut stays physical K's).
+/// The shader pack key (Sunrise Settings' Shaders page), by identity: the translated key's
+/// vanilla name against the bound one, so a rebind never becomes another mapping's default
+/// (Replay Studio's camera-keyframe shortcut stays physical K's).
 impl Game<'_> {
     pub(super) fn shader_pack_key_press(&mut self, name: &str) -> bool {
         if self.screen != Screen::Playing

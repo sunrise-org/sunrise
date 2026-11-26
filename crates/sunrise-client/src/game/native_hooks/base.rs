@@ -736,7 +736,7 @@ impl Game<'_> {
     /// when a connection starts and again when the server sends its own tree,
     /// so chat can display the branches from both trees. Only a command or
     /// argument unknown to the client dispatcher proceeds to the server.
-    /// A client command has no operator level: one with a nonzero level is left out.
+    /// A usage's level is checked against the local player's permission level.
     pub(in crate::game) fn native_register_client_commands(
         &mut self,
         commands: &mut Vec<mod_api::Answered<mod_api::ClientCommandRegistration>>,

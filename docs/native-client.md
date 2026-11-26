@@ -281,7 +281,7 @@ While Discord runs on the same computer, the player's Discord profile shows
 "Playing Sunrise" and what they are doing: "In the menus", "Singleplayer",
 "Multiplayer" or "Hosting a world" (with the party size, of 8), the dimension
 ("In the Nether") and the time since they entered the world. It never shows a
-world's name or a server's address. The switch is on the Extras page, in its
+world's name or a server's address. The switch is on Sunrise Settings' Gameplay page, in its
 Multiplayer group (**Discord Rich Presence**, on by default; `discordPresence`
 in `sunrise-extras.txt`), and
 `SUNRISE_NO_DISCORD=1` turns it off for one run.

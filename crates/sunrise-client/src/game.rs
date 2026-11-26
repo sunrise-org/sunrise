@@ -6344,7 +6344,19 @@ impl Game<'_> {
     }
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
-        let events = std::mem::take(&mut self.level_events);
+        let mut events = std::mem::take(&mut self.level_events);
+        // A mod's `server_level_event` may keep a level event from going out.
+        if self.is_logical_server()
+            && mod_api::__private::listened(mod_api::HookId::ServerLevelEvent)
+            && !native_hooks::server_level_event::LevelEventsAsked::marked()
+        {
+            events.retain(|event| match *event {
+                LevelEvent::LevelEvent { id, pos, data, .. } => {
+                    !self.server_level_event_canceled(id, [pos.x, pos.y, pos.z], data, false)
+                }
+                _ => true,
+            });
+        }
         self.lan_record_events(&events);
         dispense_fixture::record_events(&events);
         for event in events {
@@ -11411,6 +11423,7 @@ impl Game<'_> {
         ) -> Result<bool>,
     ) -> Result<bool> {
         self.begin_frame_draws();
+        self.extract_arm_poses();
         let prepare = spans::guard("prepare");
         let mut pr = spans::laps();
         // The window's GPU holds the atlas: its copy in memory is kept
@@ -13692,7 +13705,9 @@ impl Game<'_> {
                     self.advance_flight();
                     self.tick_world_icon();
                     let ticked = Instant::now();
-                    let rendered = self.render_and_flip(elapsed)?;
+                    // A mod's `framerate_limit` of 0 skips this frame's render.
+                    let limit = self.framerate_limit();
+                    let rendered = limit != 0 && self.render_and_flip(elapsed)?;
                     self.native_frame_end()?;
                     // Drain once for both the raw flight and the slow-frame/capture route.
                     let frame_spans = if sunrise_client::spans::recording_here() {
@@ -13756,7 +13771,7 @@ impl Game<'_> {
                         self.frame_stats.record_gpu(&r.gpu_times);
                         r.gpu_times.clear();
                     }
-                    self.limit_frame();
+                    self.limit_frame(limit);
                     let paused = self.pauses_game();
                     if paused != self.pause {
                         let mut cancel = false;

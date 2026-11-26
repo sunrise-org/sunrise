@@ -325,7 +325,7 @@ playsunrise.net", and the console says which client it was. The check reads the 
 by (`minecraft:brand`), which any client can fake: it keeps out players who didn't install Sunrise, not
 cheaters. The server's own checks (reach, movement) are what protect it.
 
-Sunrise clients can get their far terrain (Sunrise Graphics → LOD Distance) from the server: set
+Sunrise clients can get their far terrain (Sunrise Settings → General → LOD Distance) from the server: set
 `sunrise-lod-distance` under `[properties]` to how far, in chunks (1024 at most), and the server samples the
 tiles each player's client asks for out to there. It is off (0) by default: far tiles show the world's terrain
 far past the view distance, which helps players find the seed. A player's own LOD Distance applies when it is

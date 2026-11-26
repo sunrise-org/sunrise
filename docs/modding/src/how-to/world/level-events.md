@@ -127,3 +127,12 @@ block, including its `minecraft:tool` component rules and default speed. It does
 not include Efficiency, player attributes, effects, fluid/airborne penalties or
 block hardness. Bare hands return `1.0`; an unavailable position returns `None`.
 This read takes an immutable host and does not modify blocks or tools.
+
+## Hearing and cancelling the server's level events
+
+`server_level_event` is asked for every level event the server sends, the game's and the mods' alike,
+before it goes out: the level, the event id, its position and data, and whether it is a global event
+(`global_level_event` while the `global_sound_events` rule is on). Return `Flow::Cancel` and nobody
+gets it: no packet is sent, and the world's own player neither hears nor sees it. To narrow an event,
+for example a wither's spawn heard only nearby, cancel it and play your own sound for the players you
+choose with `PlayerRef::play_sound`. Check the id first: the hook is asked for every event.
