@@ -2492,6 +2492,9 @@ mod world_session;
 #[cfg(test)]
 #[path = "game/blocks/world_test_def_tests.rs"]
 mod world_test_def_tests;
+#[cfg(test)]
+#[path = "game/interface/world_text_frame_tests.rs"]
+mod world_text_frame_tests;
 #[path = "game/world/world_update.rs"]
 mod world_update;
 #[path = "game/items/worn_boots.rs"]
@@ -2529,6 +2532,7 @@ pub(crate) use api_values::{block_jump_factor, block_speed_factor, is_ladder};
 pub(crate) use launch_options::Options;
 pub use native_block_entity_draw::BlockEntityDraw;
 pub use native_data_maps::DataMapType;
+pub(crate) use native_hooks::is_scaffolding;
 pub use native_hooks::{PhantomSpawnResult, SleepProblem};
 pub(crate) use native_living_body::with_lent_view;
 pub use native_mob_draw::{MobRender, PlayerRender};
@@ -3765,6 +3769,9 @@ struct Game<'a> {
     /// `Renderer::render` so `ClientHost` queries still see framebuffer size and
     /// prepared-model limits.
     render_snapshot: std::cell::Cell<Option<RenderSnapshot>>,
+    /// A session VSync change came while `Renderer::render` had the renderer out: the surface
+    /// is reconfigured once it is back (`apply_pending_present_mode`).
+    present_mode_pending: bool,
     /// The shader pack's state and bound mod pipeline slots as the latest frame's render
     /// callbacks read them, set before `Renderer::render` takes `self.renderer` away
     /// (`ClientOptionsClientHost::shader_pack_state`, `RenderAssets::pipeline_pack_bound`).
@@ -12435,6 +12442,7 @@ impl Game<'_> {
         };
         drop(frame);
         self.renderer = renderer_slot;
+        self.apply_pending_present_mode();
         self.requested_post_effects_buf = requested_post_effects;
         prepared_draws.clear();
         *self.prepared_model_draws.borrow_mut() = prepared_draws;
@@ -14581,6 +14589,7 @@ impl<'a> Game<'a> {
             model_copy_order: Default::default(),
             world_geometry: Some(Default::default()),
             render_snapshot: std::cell::Cell::new(None),
+            present_mode_pending: false,
             pack_frame_state: std::cell::Cell::new(None),
             pack_frame_slots: Default::default(),
             debug_renderers: Vec::new(),

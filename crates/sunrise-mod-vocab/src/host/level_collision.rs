@@ -43,25 +43,34 @@ pub trait LevelCollisionBackend {
         visit: &mut dyn FnMut([f64; 6]) -> core::ops::ControlFlow<()>,
     ) -> Option<core::ops::ControlFlow<()>>;
     /// Side: both.
-    /// Clip an empty-context ray from `from` to `to` against collider, outline or visual shapes
+    /// Clip a ray from `from` to `to` against collider, outline or visual shapes
     /// (`ClipContext.Block.COLLIDER`, `OUTLINE`, `VISUAL`) and fluids (`BlockGetter.clip` /
     /// `BlockGetter.clipWithInteractionOverride`, not `CollisionGetter.clipIncludingBorder`).
     /// `fluids` selects which fluid states stop the ray (`ClipFluid`), using
     /// `FluidState.getShape` with neighbour-dependent height; in each cell, block and fluid hits
     /// compare squared distance at the actual hit point and the block wins a tie. No traversal
-    /// cell cap or entity reach limit is applied.
+    /// cell cap or length limit is applied.
     ///
-    /// Reads the named resident world without loading chunks: on a client (including a viewed
-    /// level from `host.level`), missing columns read as empty chunks
-    /// (`ClientChunkCache.getChunk(..., true)`); on a server (including a parked level), the
-    /// immutable resident view reads empty outside resident data
-    /// (`PathNavigationRegion.getBlockState`/`getChunk`). Cells outside build height read as
-    /// air. Collider mode uses the full collision registry and context shapes; outline mode
-    /// returns `None` when a block has dynamic outline geometry without an outline
-    /// implementation. Visual mode reads `BlockState.getVisualShape` (see `ClipBlock::Visual`):
-    /// a block that keeps vanilla's default clips as in collider mode, a block whose visual
-    /// shape is its outline as in outline mode. Also returns `None` for a stale or unavailable
-    /// level, non-finite endpoints, or a shape query error.
+    /// `context` is the collision context block shapes answer to: `CollisionContext::Empty` is
+    /// `CollisionContext.empty()`, `CollisionContext::Entity(entity)` is
+    /// `CollisionContext.of(entity)`, so scaffolding, powder snow and a mod's
+    /// `BlockPart::collision_shape` answer for that entity. Collider mode reads dynamic collision
+    /// shapes too (bamboo, shulker boxes, moving pistons, published block-entity shapes).
+    ///
+    /// Reads the named resident world and loads nothing. Cells above or below build height read
+    /// as air (`BlockGetter.getBlockState`). A cell in a column that is not loaded stops the
+    /// ray at once with [`ClipOutcome::Unloaded`], naming that cell: it is neither a miss nor
+    /// air. This holds on a client (including a viewed level from `host.level`) and on a
+    /// server (including a parked level). Collider mode uses the full collision registry;
+    /// visual mode reads `BlockState.getVisualShape` (see `ClipBlock::Visual`): a block that
+    /// keeps vanilla's default clips as in collider mode, a block whose visual shape is its
+    /// outline as in outline mode.
+    ///
+    /// `Err(ClipError::NonFiniteRay)` when an endpoint is NaN or infinite.
+    /// `Err(ClipError::StaleLevel)` for a stale or unreadable level or a stale entity in
+    /// `context`, and for a ray that reaches
+    /// a shape the level cannot answer (outline mode on a block with dynamic outline geometry
+    /// and no outline implementation, or a shape query error): no miss is invented for it.
     fn level_clip(
         &self,
         level: LevelRef,
@@ -69,7 +78,8 @@ pub trait LevelCollisionBackend {
         to: [f64; 3],
         blocks: ClipBlock,
         fluids: ClipFluid,
-    ) -> Option<ClipHit>;
+        context: CollisionContext,
+    ) -> Result<ClipOutcome, ClipError>;
     /// Side: both.
     /// `BlockState.isFaceSturdy` in an open server level or the current client level,
     /// including shapes published by local block entities. None for stale or unavailable
@@ -102,11 +112,12 @@ pub trait LevelCollisionBackend {
     ) -> Option<std::ops::ControlFlow<()>>;
     /// Side: server.
     /// Whether nothing solid lies on the segment `from`..`to`: delegates to
-    /// [`LevelRef::clip`] with `ClipBlock::Collider` and `ClipFluid::None`, returning
-    /// `hit.miss`. This two-position empty-context query has no 128-block entity distance
-    /// check (unlike `LivingEntity.hasLineOfSight(Entity)`). Fluids, entities and the world
-    /// border do not block it; missing chunks and out-of-height cells read as air without
-    /// loading chunks. Returns `None` under the same conditions as `clip`.
+    /// [`LevelRef::clip`] with `ClipBlock::Collider`, `ClipFluid::None` and
+    /// `CollisionContext::Empty`: true for `ClipOutcome::Miss`, false for a hit. This
+    /// two-position empty-context query has no 128-block entity distance check (unlike
+    /// `LivingEntity.hasLineOfSight(Entity)`). Fluids, entities and the world border do not
+    /// block it; out-of-height cells read as air. Returns `None` when `clip` returns an error
+    /// or `ClipOutcome::Unloaded`: an unloaded column is not an answer either way.
     fn level_line_of_sight(&self, level: LevelRef, from: [f64; 3], to: [f64; 3]) -> Option<bool>;
     /// Side: both.
     /// Whether the block collision walk finds a shape for `aabb` (`[min_x, min_y, min_z,

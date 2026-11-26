@@ -293,6 +293,7 @@ impl Game<'_> {
                 tables: &self.pack.context.tables,
                 registry: self.pack.assets.registry,
             }),
+            report_unloaded: false,
         };
         view.align_with_entity_angles(
             &source.entity,

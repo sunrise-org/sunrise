@@ -1788,8 +1788,8 @@ pub enum MoveCause {
     /// `MoverType.SHULKER`: a shulker mob's opening lid pushes it away.
     Shulker,
     /// Sunrise's own: a moving collider (an entity's `set_collider`) carries a body standing on
-    /// it or shoves a body swept by its translation, after the level's entities tick. Vanilla
-    /// has no such mover.
+    /// it or shoves a body in the swept path of its translation and rotation, after the level's
+    /// entities tick. Vanilla has no such mover.
     Carried,
 }
 

@@ -3,21 +3,7 @@
 //! `living_travel` hook (#2414, PR 2) fires at this family's branch selection.
 use super::{MotionEvent, MotionWorld, Result, fall_flying_movement};
 use sunrise_core::{geometry::Vec3, position::BlockPos};
-use sunrise_world::{
-    living_air::{self, TravelInput},
-    move_gate::MoveGate,
-};
-
-/// How the server's own travel changes the movement the client may report.
-#[derive(Clone, Copy)]
-pub enum ServerTravel {
-    /// The usual client-reported movement stands.
-    Continue,
-    /// Reject new position reports until the next server travel decision.
-    Veto,
-    /// Commit the authoritative position and send it with the body's velocity.
-    Replace { position: Vec3, on_ground: bool },
-}
+use sunrise_world::{living_air, move_gate::MoveGate};
 
 #[derive(Clone, Copy)]
 enum TravelBranch {
@@ -31,7 +17,7 @@ enum TravelBranch {
 impl MotionWorld<'_, '_, '_> {
     /// Player.travel: swim steering, then LivingEntity.travel (fluids first,
     /// then gliding, then air), keeping 0.6 of the vertical speed while flying.
-    pub(super) fn player_travel(&mut self, requested_input: Vec3) -> Result<ServerTravel> {
+    pub(super) fn player_travel(&mut self, mut input: Vec3) -> Result<()> {
         if self.player.swimming {
             let look_y =
                 sunrise_world::view_direction::view_vector(self.player.pitch, self.player.yaw).y;
@@ -49,45 +35,32 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         let branch = self.travel_branch()?;
-        let requested_velocity = self.player.velocity;
-        let mut input = requested_input;
-        let mut velocity = requested_velocity;
-        if !self.player.replaying
-            && !crate::travel_gate::decide(
-                self.loop_context,
-                self.player.entity_id as u32,
-                "minecraft:player",
-                || {
-                    use sunrise_world::travel::TravelMode;
-                    match branch {
-                        TravelBranch::Water => TravelMode::Water,
-                        TravelBranch::Lava => TravelMode::Lava,
-                        TravelBranch::Glide => TravelMode::Glide,
-                        _ if self.player.flying => TravelMode::Flying,
-                        _ => TravelMode::Air,
-                    }
-                },
-                &mut input,
-                &mut velocity,
-            )
-        {
-            return Ok(ServerTravel::Veto);
+        let mut velocity = self.player.velocity;
+        if !crate::travel_gate::decide(
+            self.loop_context,
+            self.player.entity_id as u32,
+            "minecraft:player",
+            || {
+                use sunrise_world::travel::TravelMode;
+                match branch {
+                    TravelBranch::Water => TravelMode::Water,
+                    TravelBranch::Lava => TravelMode::Lava,
+                    TravelBranch::Glide => TravelMode::Glide,
+                    _ if self.player.flying => TravelMode::Flying,
+                    _ => TravelMode::Air,
+                }
+            },
+            &mut input,
+            &mut velocity,
+        ) {
+            return Ok(());
         }
 
         self.player.set_velocity(velocity);
-        let velocity_changed =
-            self.player.server_copy && !same_vector(self.player.velocity, requested_velocity);
-        let input = TravelInput {
-            applied: input,
-            original: (self.player.server_copy
-                && !velocity_changed
-                && !same_vector(input, requested_input))
-            .then_some(requested_input),
-        };
         // Creative flight damps the accepted vertical speed, not the speed
         // left by the branch after the move.
         let flying_y = self.player.flying.then_some(self.player.velocity.y);
-        let input_changed = self.apply_travel_branch(branch, &mut MoveGate::new(), input)?;
+        self.apply_travel_branch(branch, &mut MoveGate::new(), input)?;
         if let Some(y) = flying_y {
             self.player.set_velocity(Vec3::new(
                 self.player.velocity.x,
@@ -95,22 +68,14 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.velocity.z,
             ));
         }
-        Ok(if velocity_changed || input_changed {
-            ServerTravel::Replace {
-                position: self.player.position,
-                on_ground: self.player.ground.on_ground,
-            }
-        } else {
-            ServerTravel::Continue
-        })
+        Ok(())
     }
 
     /// `LivingEntity.travel` without `Player.travel`'s swim steering, hook and
     /// flight damping (the rider's route).
     pub(super) fn living_travel(&mut self, gate: &mut MoveGate, input: Vec3) -> Result<()> {
         let branch = self.travel_branch()?;
-        self.apply_travel_branch(branch, gate, input.into())?;
-        Ok(())
+        self.apply_travel_branch(branch, gate, input)
     }
 
     fn travel_branch(&mut self) -> Result<TravelBranch> {
@@ -135,22 +100,20 @@ impl MotionWorld<'_, '_, '_> {
         &mut self,
         branch: TravelBranch,
         gate: &mut MoveGate,
-        input: TravelInput,
-    ) -> Result<bool> {
+        input: Vec3,
+    ) -> Result<()> {
         match branch {
             TravelBranch::Water | TravelBranch::Lava => {
-                sunrise_world::living_fluid::travel_in_fluid(self, gate, input)
+                sunrise_world::living_fluid::travel_in_fluid(self, gate, input.into())?;
+                Ok(())
             }
-            TravelBranch::Glide => {
-                self.travel_fall_flying(gate)?;
-                Ok(false) // Flight ignores the travel input.
-            }
+            TravelBranch::Glide => self.travel_fall_flying(gate),
             TravelBranch::EndGlide | TravelBranch::Air => {
-                let input_changed = living_air::travel_in_air(self, gate, input)?;
+                living_air::travel_in_air(self, gate, input.into())?;
                 if matches!(branch, TravelBranch::EndGlide) {
                     self.player.fall_flying = false;
                 }
-                Ok(input_changed)
+                Ok(())
             }
         }
     }
@@ -226,10 +189,6 @@ impl MotionWorld<'_, '_, '_> {
     }
 }
 
-fn same_vector(a: Vec3, b: Vec3) -> bool {
-    a.components().map(f64::to_bits) == b.components().map(f64::to_bits)
-}
-
 #[cfg(test)]
 mod tests {
     use crate::motion::{MotionWorld, PlayerMotion, dry_side};
@@ -303,12 +262,13 @@ mod tests {
         assert_eq!(velocity, Vec3::new(0.2, 0.5, 0.0));
     }
 
-    /// A replayed tick never reaches a listener: its cancel does not hold the
-    /// travel, which moves the player along its velocity.
+    /// A simulated (replayed) tick fires `living_travel`: its cancel holds the
+    /// travel, leaving the player at its starting position and velocity.
     #[test]
     #[ignore = "daily"]
-    fn a_replayed_travel_ignores_a_cancel() {
-        let (position, _, start) = flying_travel(Decide(Flow::Cancel, None), true);
-        assert_ne!(position, start);
+    fn a_replayed_travel_hears_a_cancel() {
+        let (position, velocity, start) = flying_travel(Decide(Flow::Cancel, None), true);
+        assert_eq!(position, start);
+        assert_eq!(velocity, Vec3::new(0.2, 0.5, 0.0));
     }
 }

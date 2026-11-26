@@ -482,6 +482,11 @@ impl Game<'_> {
         self.reload_overlay = Some(ReloadOverlay::default());
         Ok(())
     }
+    /// `ScreensClientHost::reload_overlay_visible`: a pack reload's `LoadingOverlay` is up,
+    /// from the reload's start until it has faded out (`Gui.overlay()`).
+    pub(in crate::game) fn reload_overlay_visible(&self) -> bool {
+        self.pack_reload.is_some() || self.reload_overlay.is_some()
+    }
     /// One frame of the pack reload's `LoadingOverlay`: its bar eased toward
     /// the reload's progress (all of it once applied) and how far it has
     /// faded. `None`, and the overlay dropped, once it has faded out.
@@ -1285,6 +1290,31 @@ mod tests {
             staged.err().as_deref(),
             Some("the pack reload worker panicked")
         );
+    }
+
+    /// `ScreensClientHost::reload_overlay_visible` (#5555): false with no reload, true
+    /// while a reload stages and while its overlay fades out, false once it has faded.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_reads_whether_the_reload_overlay_is_up() {
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            let visible = |game: &Game<'_>| {
+                <Game<'_> as mod_api::prelude::ScreensClientHost>::reload_overlay_visible(game)
+            };
+            assert!(!visible(game));
+            game.pack_reload = Some(
+                PackReload::spawn_holding(ReloadKind::Selection, Duration::ZERO, |_| {
+                    Err("staged".into())
+                })
+                .unwrap(),
+            );
+            game.reload_overlay = Some(ReloadOverlay::default());
+            assert!(visible(game), "staging");
+            game.pack_reload = None;
+            assert!(visible(game), "fading out after the reload");
+            game.reload_overlay = None;
+            assert!(!visible(game), "faded out");
+        });
     }
 
     /// `LoadingOverlay.isReadyToFadeOut`: a reload that stages at once still

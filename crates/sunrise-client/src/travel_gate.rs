@@ -73,15 +73,32 @@ pub fn decide(
     input: &mut Vec3,
     velocity: &mut Vec3,
 ) -> bool {
+    decide_controlled(context, entity, kind, mode, input, velocity, false)
+}
+
+/// [`decide`] with an explicit `client_controlled` flag for a body a client
+/// controls (a player, or a vehicle a player is driving): `side = "server"`
+/// listeners are skipped for those bodies.
+#[inline(never)]
+pub fn decide_controlled(
+    context: &LoopContext,
+    entity: u32,
+    kind: &str,
+    mode: impl FnOnce() -> GameTravelMode,
+    input: &mut Vec3,
+    velocity: &mut Vec3,
+    client_controlled: bool,
+) -> bool {
     if !mod_api::__private::listened(mod_api::HookId::LivingTravel) {
         return true;
     }
+    let client_controlled = client_controlled || kind == "minecraft:player";
     let mode = mode_of(mode());
     let mut replaced_input = [input.x, input.y, input.z];
     let mut replaced_velocity = [velocity.x, velocity.y, velocity.z];
     let mut canceled = false;
     let reader = sunrise_client_render::api_context::LoopReader(context);
-    mod_api::dispatch_living_travel(
+    mod_api::dispatch_living_travel_for(
         &reader.context(),
         entity,
         kind,
@@ -89,6 +106,7 @@ pub fn decide(
         &mut replaced_input,
         &mut replaced_velocity,
         &mut canceled,
+        client_controlled,
     );
     if canceled {
         return false;

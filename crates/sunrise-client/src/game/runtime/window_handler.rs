@@ -175,6 +175,11 @@ impl Game<'_> {
         if !ours {
             return;
         }
+        // A drop belongs to the screen it was dropped on (`MouseHandler.onDrop`): its files
+        // reach that screen before any later event of this pass can change the screen.
+        if !matches!(event, WindowEvent::DroppedFile(_)) {
+            self.fire_dropped_files();
+        }
         // The window's state, not input: kept whoever's turn it is.
         track_window_state(
             origin,

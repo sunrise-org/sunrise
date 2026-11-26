@@ -1288,7 +1288,7 @@ pub enum Despawn {
     Deny,
 }
 
-/// Block shape used by an empty-context level ray (`ClipContext.Block`).
+/// Block shape used by a level ray (`ClipContext.Block`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 pub enum ClipBlock {
@@ -1320,8 +1320,9 @@ pub enum ClipFluid {
     Water,
 }
 
-/// Result of a block ray (`BlockGetter.clip`), including the vanilla miss result
-/// (`BlockHitResult.miss`).
+/// Result of a block ray (`BlockGetter.clip`). `LevelRef::clip` returns it in
+/// [`ClipOutcome::Hit`] with `miss` unset; `EntityRef::pick` also returns the vanilla miss result
+/// (`BlockHitResult.miss`) with it set.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
@@ -1341,6 +1342,56 @@ pub struct ClipHit {
     /// Whether the hit is the world border (`false` for `LevelRef::clip`, which follows
     /// `BlockGetter.clip`, not `CollisionGetter.clipIncludingBorder`).
     pub world_border: bool,
+}
+
+/// Whose collision context a level ray reads block shapes with (`CollisionContext.empty()` or
+/// `CollisionContext.of(entity)`). It is the part of vanilla's `ClipContext` that varies for a
+/// mod; the ray's endpoints, block shape and fluid mode are `LevelRef::clip`'s other arguments.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+pub enum CollisionContext {
+    /// `CollisionContext.empty()`: no entity, so shapes that depend on who asks (scaffolding,
+    /// powder snow, a mod `BlockPart::collision_shape`) answer their default.
+    Empty,
+    /// `CollisionContext.of(entity)`: shapes answer for this entity, as for its own movement.
+    Entity(EntityRef),
+}
+
+/// What a level ray found (`BlockGetter.clip`), or where it had to stop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum ClipOutcome {
+    /// The ray stopped on a block or fluid.
+    Hit(ClipHit),
+    /// The ray reached its end through loaded columns and out-of-height cells and hit nothing
+    /// (`BlockHitResult.miss`).
+    Miss,
+    /// The ray entered a column that is not loaded before it found a hit or its end. Nothing
+    /// is loaded and no answer is guessed past it.
+    Unloaded {
+        /// The first cell of the ray inside the unloaded column.
+        at: [i32; 3],
+    },
+}
+
+/// Why `LevelRef::clip` could not run the ray at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(sunrise_mod_api_macros::Wire)]
+pub enum ClipError {
+    /// The level handle (or the entity of the `CollisionContext`) is gone or belongs to an
+    /// earlier open of the world, the level is not readable from this host, or the ray reached a
+    /// shape the level cannot answer (no outline implementation for a dynamic block).
+    StaleLevel,
+    /// An endpoint has a NaN or infinite coordinate.
+    NonFiniteRay,
+}
+
+impl crate::NoBackend for ClipError {
+    fn no_backend() -> Self {
+        Self::StaleLevel
+    }
 }
 
 /// The world's respawn data (`LevelData.RespawnData`): where a player without a spawn point of

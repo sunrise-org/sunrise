@@ -20,13 +20,18 @@ use crate::*;
 pub struct ModEntry {
     pub(crate) id: &'static str,
     pub(crate) hooks: Box<dyn Hooks>,
+    pub(crate) side: crate::Side,
 }
 
 impl ModEntry {
     /// Bind a hook implementation to its nonempty bundle id.
     pub fn new(id: &'static str, hooks: Box<dyn Hooks>) -> Self {
         assert!(!id.is_empty(), "native mod id must not be empty");
-        Self { id, hooks }
+        Self {
+            id,
+            hooks,
+            side: crate::Side::Both,
+        }
     }
 
     /// Marks the thread as inside this mod's `hook` until the guard drops, so a panic in it

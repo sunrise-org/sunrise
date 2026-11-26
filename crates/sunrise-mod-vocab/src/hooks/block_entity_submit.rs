@@ -16,7 +16,9 @@ pub trait Hooks {
     /// tick, the game time and the block's light.
     /// When `DrawContext::draw_scene` reuses this renderer, `entity` is supplied
     /// by the scene, the draw is full bright, and `pos` is scene-local, not a
-    /// position to look up in the client level.
+    /// position to look up in the client level. `BlockEntityDrawContext::block_entity` reuses it
+    /// the same way for a block entity a mod carries: `entity` is the `SceneBlockEntity`, `pos`
+    /// is the draw's own block, and `draw` is one level deep (a nested `block_entity` is refused).
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_block_entity_submit",
         receiver = "read",

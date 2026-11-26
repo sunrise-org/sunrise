@@ -49,8 +49,11 @@ mod tests {
         let registry = BlockRegistry::from_facts_json(reordered.as_bytes()).unwrap();
         super::super::resolve_block_definitions(&registry).unwrap();
 
-        let entity =
-            SceneBlockEntity::new(Identifier::parse("test:scene").unwrap(), Default::default());
+        let entity = SceneBlockEntity::new(
+            Identifier::parse("test:scene").unwrap(),
+            east,
+            Default::default(),
+        );
         let mut scene = vec![
             mod_api::SceneBlock::new([0, 0, 0], north, None),
             mod_api::SceneBlock::new([1, 0, 0], east, Some(entity)),

@@ -117,8 +117,9 @@ mod tests {
         viewed_worlds::tests::{client, close, column, layered, open, run, spawn},
     };
     use mod_api::{
-        BlockFace, BlockState, BlockUpdateFlags, ClipBlock, ClipFluid, Host, LevelReadError,
-        LevelRef, LevelWriteError, LightLayer, WorldEpoch,
+        BlockFace, BlockState, BlockUpdateFlags, ClipBlock, ClipError, ClipFluid, ClipHit,
+        ClipOutcome, CollisionContext, Host, LevelReadError, LevelRef, LevelWriteError, LightLayer,
+        WorldEpoch,
     };
     use std::ops::ControlFlow;
     use sunrise_protocol::packets::play::{self, Clientbound as C};
@@ -159,6 +160,14 @@ mod tests {
                 .find(|&id| api(id) == read)
                 .expect("air or stone"),
         )
+    }
+
+    /// The hit of a ray that found one.
+    fn hit_of(outcome: Result<ClipOutcome, ClipError>) -> ClipHit {
+        match outcome {
+            Ok(ClipOutcome::Hit(hit)) => hit,
+            other => panic!("expected a hit, got {other:?}"),
+        }
     }
 
     fn api(id: u32) -> BlockState {
@@ -248,14 +257,30 @@ mod tests {
         let (own, viewed) = viewing(&mut game);
         let (from, to) = ([8.5, 90.5, 8.5], [8.5, 75.5, 8.5]);
         for mode in [ClipBlock::Collider, ClipBlock::Outline] {
-            let hit = viewed.clip(&game, from, to, mode, ClipFluid::None).unwrap();
+            let hit = hit_of(viewed.clip(
+                &game,
+                from,
+                to,
+                mode,
+                ClipFluid::None,
+                CollisionContext::Empty,
+            ));
             assert!(!hit.miss);
             assert_eq!(hit.block, [8, 79, 8]);
             assert_eq!(hit.face, BlockFace::Up);
             assert_eq!(hit.location, [8.5, 80.0, 8.5]);
             assert!(!hit.inside && !hit.world_border);
-            let miss = own.clip(&game, from, to, mode, ClipFluid::None).unwrap();
-            assert!(miss.miss);
+            assert_eq!(
+                own.clip(
+                    &game,
+                    from,
+                    to,
+                    mode,
+                    ClipFluid::None,
+                    CollisionContext::Empty
+                ),
+                Ok(ClipOutcome::Miss)
+            );
         }
     }
 
@@ -380,8 +405,9 @@ mod tests {
         );
     }
 
-    /// Missing columns refuse direct reads, read as empty chunks for `clip`, and are skipped by
-    /// the block collision scan, without mutating either client world.
+    /// Missing columns refuse direct reads, stop a `clip` at the first cell inside them and are
+    /// skipped by the block collision scan, without mutating either client world. Cells out of
+    /// build height are air whatever the column holds.
     #[test]
     #[ignore = "daily"]
     fn a_column_the_viewed_world_does_not_hold_is_none() {
@@ -389,147 +415,133 @@ mod tests {
         let mut game = client(&mut resources);
         let (own, viewed) = viewing(&mut game);
         assert_eq!(state(&game, viewed, [20, 70, 5]), None);
-        // Through the air above the stone: misses inside column 0 and across missing column 1.
-        let ray = |game: &Game<'_>, to: f64| {
-            viewed.clip(
+        let ray = |level: LevelRef, game: &Game<'_>, y: f64, to: f64| {
+            level.clip(
                 game,
-                [8.5, 85.5, 8.5],
-                [to, 85.5, 8.5],
+                [8.5, y, 8.5],
+                [to, y, 8.5],
                 ClipBlock::Collider,
                 ClipFluid::None,
+                CollisionContext::Empty,
             )
         };
-        let inside_miss = ray(&game, 15.5).unwrap();
-        assert!(inside_miss.miss);
-        assert_eq!(inside_miss.block, [15, 85, 8]);
-        assert_eq!(inside_miss.face, BlockFace::West);
-        assert_eq!(inside_miss.location, [15.5, 85.5, 8.5]);
-        let missing_miss = ray(&game, 24.5).unwrap();
-        assert!(missing_miss.miss);
-        assert_eq!(missing_miss.block, [24, 85, 8]);
-        assert_eq!(missing_miss.face, BlockFace::West);
-        assert_eq!(missing_miss.location, [24.5, 85.5, 8.5]);
-        assert!(!missing_miss.inside && !missing_miss.world_border);
-        let above_miss = viewed
-            .clip(
-                &game,
-                [8.5, 325.5, 8.5],
-                [24.5, 325.5, 8.5],
-                ClipBlock::Collider,
-                ClipFluid::None,
-            )
-            .unwrap();
-        assert!(above_miss.miss);
-        assert_eq!(above_miss.block, [24, 325, 8]);
-        assert_eq!(above_miss.face, BlockFace::West);
-        assert_eq!(above_miss.location, [24.5, 325.5, 8.5]);
-        let own_miss = own
-            .clip(
-                &game,
-                [8.5, 85.5, 8.5],
-                [24.5, 85.5, 8.5],
-                ClipBlock::Collider,
-                ClipFluid::None,
-            )
-            .unwrap();
-        assert!(own_miss.miss);
-        assert_eq!(own_miss.block, [24, 85, 8]);
-        assert_eq!(own_miss.face, BlockFace::West);
-        assert_eq!(own_miss.location, [24.5, 85.5, 8.5]);
+        // Through the air above the stone: a miss inside column 0, and a stop at the first cell
+        // of missing column 1.
+        assert_eq!(ray(viewed, &game, 85.5, 15.5), Ok(ClipOutcome::Miss));
+        assert_eq!(
+            ray(viewed, &game, 85.5, 24.5),
+            Ok(ClipOutcome::Unloaded { at: [16, 85, 8] })
+        );
+        assert_eq!(
+            ray(own, &game, 85.5, 24.5),
+            Ok(ClipOutcome::Unloaded { at: [16, 85, 8] })
+        );
+        // Above build height every cell is air, so the unloaded column is never read.
+        assert_eq!(ray(viewed, &game, 325.5, 24.5), Ok(ClipOutcome::Miss));
         let across = [15.25, 85.25, 8.25, 32.75, 85.75, 8.75];
         assert!(collect_collision_boxes(&game, viewed, across).is_empty());
         assert_eq!(viewed.has_collisions(&game, across), Some(false));
 
-        game.handle_packet(run(1, &[layered(2, 0, 0), set([32, 85, 8], 1)]))
-            .unwrap();
+        game.handle_packet(run(
+            1,
+            &[layered(1, 0, 0), layered(2, 0, 0), set([32, 85, 8], 1)],
+        ))
+        .unwrap();
         assert_eq!(
             collect_collision_boxes(&game, viewed, across),
             [[32.0, 85.0, 8.0, 33.0, 86.0, 9.0]]
         );
         assert_eq!(viewed.has_collisions(&game, across), Some(true));
         for mode in [ClipBlock::Collider, ClipBlock::Outline] {
-            let after_gap = viewed
-                .clip(
-                    &game,
-                    [8.5, 85.5, 8.5],
-                    [34.5, 85.5, 8.5],
-                    mode,
-                    ClipFluid::None,
-                )
-                .unwrap();
+            let after_gap = hit_of(viewed.clip(
+                &game,
+                [8.5, 85.5, 8.5],
+                [34.5, 85.5, 8.5],
+                mode,
+                ClipFluid::None,
+                CollisionContext::Empty,
+            ));
             assert!(!after_gap.miss);
             assert_eq!(after_gap.block, [32, 85, 8]);
             assert_eq!(after_gap.face, BlockFace::West);
             assert_eq!(after_gap.location, [32.0, 85.5, 8.5]);
             assert!(!after_gap.inside && !after_gap.world_border);
         }
-        let from_east = viewed
-            .clip(
-                &game,
-                [34.5, 85.5, 8.5],
-                [8.5, 85.5, 8.5],
-                ClipBlock::Collider,
-                ClipFluid::None,
-            )
-            .unwrap();
+        let from_east = hit_of(viewed.clip(
+            &game,
+            [34.5, 85.5, 8.5],
+            [8.5, 85.5, 8.5],
+            ClipBlock::Collider,
+            ClipFluid::None,
+            CollisionContext::Empty,
+        ));
         assert!(!from_east.miss);
         assert_eq!(from_east.block, [32, 85, 8]);
         assert_eq!(from_east.face, BlockFace::East);
         assert_eq!(from_east.location, [33.0, 85.5, 8.5]);
 
-        // Straight ray hitting beyond 4096 cells in a viewed world across missing columns.
-        game.handle_packet(run(1, &[layered(300, 0, 0), set([4805, 85, 8], 1)]))
-            .unwrap();
-        let far_hit = viewed
-            .clip(
-                &game,
-                [33.5, 85.5, 8.5],
-                [4810.5, 85.5, 8.5],
-                ClipBlock::Collider,
-                ClipFluid::None,
-            )
-            .unwrap();
+        // A straight ray through more than 4096 cells has no length cap: it hits the stone at the
+        // end of 300 loaded columns, and misses the row above it.
+        let mut columns: Vec<_> = (1..=300).map(|x| layered(x, 0, 0)).collect();
+        columns.push(set([4805, 85, 8], 1));
+        game.handle_packet(run(1, &columns)).unwrap();
+        let far_hit = hit_of(viewed.clip(
+            &game,
+            [33.5, 85.5, 8.5],
+            [4810.5, 85.5, 8.5],
+            ClipBlock::Collider,
+            ClipFluid::None,
+            CollisionContext::Empty,
+        ));
         assert!(!far_hit.miss);
         assert_eq!(far_hit.block, [4805, 85, 8]);
         assert_eq!(far_hit.face, BlockFace::West);
         assert_eq!(far_hit.location, [4805.0, 85.5, 8.5]);
         assert!(!far_hit.inside && !far_hit.world_border);
-        let far_miss = viewed
-            .clip(
+        assert_eq!(
+            viewed.clip(
                 &game,
                 [33.5, 86.5, 8.5],
                 [4810.5, 86.5, 8.5],
                 ClipBlock::Collider,
                 ClipFluid::None,
-            )
-            .unwrap();
-        assert!(far_miss.miss);
-        assert_eq!(far_miss.block, [4810, 86, 8]);
-        assert_eq!(far_miss.face, BlockFace::West);
-        assert_eq!(far_miss.location, [4810.5, 86.5, 8.5]);
+                CollisionContext::Empty,
+            ),
+            Ok(ClipOutcome::Miss)
+        );
         let world = &game.remote.as_ref().unwrap().viewed.get(1).unwrap().world;
-        assert!(!world.chunks.contains_key(&(1, 0)));
-        assert!(!world.chunks.contains_key(&(3, 0)));
-        assert_eq!(world.chunks.len(), 3);
+        assert!(!world.chunks.contains_key(&(301, 0)));
+        assert_eq!(world.chunks.len(), 301);
 
-        // The client's own world also hits after a missing-column gap without loading the gap.
+        // The client's own world also hits once the gap is loaded, and stops at it before.
         game.handle_packet(layered(2, 0, 0)).unwrap();
         game.handle_packet(set([32, 85, 8], 1)).unwrap();
-        let own_hit = own
-            .clip(
+        assert_eq!(
+            own.clip(
                 &game,
                 [8.5, 85.5, 8.5],
                 [34.5, 85.5, 8.5],
                 ClipBlock::Collider,
                 ClipFluid::None,
-            )
-            .unwrap();
+                CollisionContext::Empty,
+            ),
+            Ok(ClipOutcome::Unloaded { at: [16, 85, 8] })
+        );
+        game.handle_packet(layered(1, 0, 0)).unwrap();
+        let own_hit = hit_of(own.clip(
+            &game,
+            [8.5, 85.5, 8.5],
+            [34.5, 85.5, 8.5],
+            ClipBlock::Collider,
+            ClipFluid::None,
+            CollisionContext::Empty,
+        ));
         assert!(!own_hit.miss);
         assert_eq!(own_hit.block, [32, 85, 8]);
         assert_eq!(own_hit.face, BlockFace::West);
         assert_eq!(own_hit.location, [32.0, 85.5, 8.5]);
-        assert!(!game.world.chunks.contains_key(&(1, 0)));
-        assert_eq!(game.world.chunks.len(), 2);
+        assert!(!game.world.chunks.contains_key(&(3, 0)));
+        assert_eq!(game.world.chunks.len(), 3);
     }
 
     /// Writes, server-only reads and the entity reads refuse a viewed level, which keeps its
@@ -587,8 +599,9 @@ mod tests {
             [8.5, 75.5, 8.5],
             ClipBlock::Collider,
             ClipFluid::None,
+            CollisionContext::Empty,
         );
-        assert_eq!(ray, None);
+        assert_eq!(ray, Err(ClipError::StaleLevel));
         // The same-level Respawn retains the epoch, but not the previous world's blocks.
         game.handle_packet(open(1, NETHER)).unwrap();
         game.handle_packet(run(1, &[layered(0, 0, 0)])).unwrap();

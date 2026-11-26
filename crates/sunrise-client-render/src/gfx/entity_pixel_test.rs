@@ -427,6 +427,7 @@ fn render_layers_lit(
             .materials;
         let draws = super::world_views::EntityDraws {
             ordinary,
+            name_tags: 0..0,
             foil: batch.armor_foil,
         };
         (
@@ -2370,6 +2371,8 @@ pub fn render_entity_world(draw: EntityWorldDraw<'_>) -> std::result::Result<Vec
         dynamic_solid_quads,
         dynamic_cutout_quads,
         dynamic_translucent_quads,
+        name_tag_solid_quads,
+        name_tag_quads,
     ] = counts;
     let text_solid_quads = text_offset_solid_quads + text_normal_solid_quads;
     let world_quads: u32 = counts.iter().sum();
@@ -2387,7 +2390,9 @@ pub fn render_entity_world(draw: EntityWorldDraw<'_>) -> std::result::Result<Vec
         - dynamic_translucent_quads
         - banner_pattern_quads
         - glint_only_quads
-        - text_solid_quads;
+        - text_solid_quads
+        - name_tag_solid_quads
+        - name_tag_quads;
     let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&batch.combined),
@@ -2515,8 +2520,13 @@ pub fn render_entity_world(draw: EntityWorldDraw<'_>) -> std::result::Result<Vec
                 pass.set_pipeline(&banner_pattern_pipeline);
                 pass.draw_indexed(
                     0..banner_pattern_quads * 6,
-                    ((world_quads - text_solid_quads - glint_only_quads - banner_pattern_quads) * 4)
-                        as i32,
+                    ((world_quads
+                        - name_tag_solid_quads
+                        - name_tag_quads
+                        - text_solid_quads
+                        - glint_only_quads
+                        - banner_pattern_quads)
+                        * 4) as i32,
                     0..1,
                 );
             }
@@ -2524,7 +2534,12 @@ pub fn render_entity_world(draw: EntityWorldDraw<'_>) -> std::result::Result<Vec
                 pass.set_pipeline(&glint_only_pipeline);
                 pass.draw_indexed(
                     0..glint_only_quads * 6,
-                    ((world_quads - text_solid_quads - glint_only_quads) * 4) as i32,
+                    ((world_quads
+                        - name_tag_solid_quads
+                        - name_tag_quads
+                        - text_solid_quads
+                        - glint_only_quads)
+                        * 4) as i32,
                     0..1,
                 );
             }
@@ -3114,7 +3129,10 @@ mod dynamic_quads {
             let counts = batch
                 .update_within(vertices, &[], &[], &[], &[], false, usize::MAX)
                 .materials;
-            let [.., solid, cutout, translucent] = counts;
+            let [solid, cutout, translucent] = counts[crate::gfx::entity_batch::DYNAMIC_MATERIALS]
+            else {
+                unreachable!("three dynamic-texture materials")
+            };
             // The dynamic materials are the only ones here, so they start the buffer.
             dynamic.prepare(
                 &device,

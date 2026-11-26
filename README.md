@@ -10,7 +10,10 @@
   <a href="#download"><b>Download</b></a> ·
   <a href="https://playsunrise.net/docs/"><b>Docs</b></a> ·
   <a href="ROADMAP.md"><b>Roadmap</b></a> ·
-  <a href="#contributing"><b>Contributing</b></a>
+  <a href="#contributing"><b>Contributing</b></a> ·
+  <a href="https://x.com/sunriserust"><b>X</b></a> ·
+  <a href="https://www.instagram.com/sunrise.rust/"><b>Instagram</b></a> ·
+  <a href="https://www.youtube.com/@playsunrise"><b>YouTube</b></a>
 </p>
 
 <p align="center">

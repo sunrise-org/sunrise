@@ -50,14 +50,27 @@ pub(super) struct ClipData<'a, 'r> {
     pub tables: &'a sunrise_client::mesher::MeshTables,
     pub registry: &'r sunrise_world::registry::BlockRegistry,
 }
-/// `BlockGetter.clip` over a resident [`World`](sunrise_client::world::World):
-/// out-of-height cells and missing columns read as `world.air` without loading
-/// chunks (`ClientChunkCache.getChunk(..., true)` on clients and viewed worlds,
-/// and `PathNavigationRegion.getBlockState`/`getChunk` on immutable server views).
+/// A ray read a cell inside a column that is not loaded while [`ColliderRays::report_unloaded`]
+/// is set. `clip` turns it into `ClipOutcome::Unloaded`.
+#[derive(Debug)]
+pub(super) struct UnloadedColumn(pub BlockPos);
+impl std::fmt::Display for UnloadedColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "column of {:?} is not loaded", self.0)
+    }
+}
+impl std::error::Error for UnloadedColumn {}
+
+/// `BlockGetter.clip` over a resident [`World`](sunrise_client::world::World): out-of-height
+/// cells read as `world.air` (`BlockGetter.getBlockState`) and loads nothing. A missing column
+/// reads as `world.air` too (`ClientChunkCache.getChunk(..., true)` on clients and viewed worlds,
+/// and `PathNavigationRegion.getBlockState`/`getChunk` on immutable server views), unless
+/// `report_unloaded` asks for the ray to stop there with [`UnloadedColumn`].
 pub(super) struct ColliderRays<'a, 'r> {
     pub scene: SceneCollisions<'a, 'r>,
-    pub context: CollisionContext<'static>,
+    pub context: CollisionContext<'a>,
     pub clip_data: Option<ClipData<'a, 'r>>,
+    pub report_unloaded: bool,
 }
 impl RayWorld for ColliderRays<'_, '_> {
     type Error = io::Error;
@@ -68,11 +81,15 @@ impl RayWorld for ColliderRays<'_, '_> {
         if !world.shape.contains_y(p.y) {
             return Ok(world.air);
         }
-        Ok(world
-            .chunks
-            .get(&(p.x >> 4, p.z >> 4))
-            .filter(|chunk| chunk.section_index(p.y).is_some())
-            .map_or(world.air, |chunk| chunk.block(p.x & 15, p.y, p.z & 15)))
+        match world.chunks.get(&(p.x >> 4, p.z >> 4)) {
+            Some(chunk) => Ok(if chunk.section_index(p.y).is_some() {
+                chunk.block(p.x & 15, p.y, p.z & 15)
+            } else {
+                world.air
+            }),
+            None if self.report_unloaded => Err(io::Error::other(UnloadedColumn(p))),
+            None => Ok(world.air),
+        }
     }
     fn fluid_state(&mut self, _: BlockPos) -> io::Result<()> {
         Ok(())
@@ -589,6 +606,7 @@ impl Game<'_> {
                 },
                 false,
             ),
+            report_unloaded: false,
         };
         let (mut hits, mut count) = (0, 0);
         let mut xx = 0.0;

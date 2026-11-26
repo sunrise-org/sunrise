@@ -226,6 +226,7 @@
     "default": 2
   },
   "pick_item": "minecraft:glowstone_dust",
+  "use_block_description_prefix": false,
   "components": {
     "minecraft:max_stack_size": 11,
     "minecraft:rarity": "rare",

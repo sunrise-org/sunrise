@@ -228,3 +228,58 @@ fn a_block_part_answers_fire_odds_for_one_face() {
         });
     });
 }
+
+/// `LevelRef::fire_odds` reads the odds fire itself uses: the Part's answer for the face it
+/// answers, vanilla's table for the other faces and for blocks without a Part, and a stale level
+/// is refused.
+#[test]
+#[ignore = "daily"]
+fn the_fire_odds_read_takes_the_parts_answer_then_vanillas_table() {
+    use super::api_values::TryIntoApi;
+    use std::sync::Arc;
+    use sunrise_client::chunk::Chunk;
+
+    let mods: mod_api::Mods =
+        vec![mod_api::ModEntry::new("fire_odds", Box::new(FireOddsMod))].into();
+    mod_platform::testing::with_mods(mods.clone(), || {
+        crate::game::api_values::install_parts(&mods).unwrap();
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let registry = game.pack.assets.registry;
+            let state = |name: &str| -> mod_api::BlockState {
+                registry
+                    .default_state(name)
+                    .unwrap()
+                    .try_into_api()
+                    .unwrap()
+            };
+            let level = game.level(game.dim.id()).unwrap();
+            let glass = state("minecraft:glass");
+            let odds = |game: &super::Game<'_>, state, face| {
+                level.fire_odds(game, [1, 65, 0], state, face)
+            };
+            assert_eq!(odds(game, glass, Direction::West), Ok((5, 0)));
+            assert_eq!(odds(game, glass, Direction::East), Ok((0, 0)));
+            // FireBlock.bootStrap: planks 5 and 20, wool 30 and 60.
+            assert_eq!(
+                odds(game, state("minecraft:oak_planks"), Direction::Up),
+                Ok((5, 20))
+            );
+            assert_eq!(
+                odds(game, state("minecraft:white_wool"), Direction::Up),
+                Ok((30, 60))
+            );
+            let stale = mod_api::LevelRef::new(
+                mod_api::WorldEpoch::new(level.epoch().get() + 1),
+                level.dimension(),
+            );
+            assert_eq!(
+                stale.fire_odds(game, [1, 65, 0], glass, Direction::West),
+                Err(mod_api::LevelReadError::Stale)
+            );
+        });
+    });
+}

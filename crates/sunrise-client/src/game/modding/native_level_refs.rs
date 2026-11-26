@@ -6,9 +6,9 @@ use super::Game;
 use core::ops::ControlFlow;
 use mod_api::world::mod_chunk_tickets::ModTicket;
 use mod_api::{
-    BlockHit, BlockTransformPreview, ChunkRef, ChunkStatus, ClipBlock, ClipFluid, GlobalPos, Hand,
-    Identifier, LevelReadError, LevelRef, LightLayer, MapState, PlayerRef, RespawnData,
-    TicketController, TicketOwner, Vec3,
+    BlockHit, BlockTransformPreview, ChunkRef, ChunkStatus, ClipBlock, ClipFluid, ClipOutcome,
+    CollisionContext, GlobalPos, Hand, Identifier, LevelReadError, LevelRef, LightLayer, MapState,
+    PlayerRef, RespawnData, TicketController, TicketOwner, Vec3,
 };
 use sunrise_client::{streaming::Streaming, world::World};
 use sunrise_core::{geometry::Direction, position::BlockPos};
@@ -1014,17 +1014,31 @@ impl Game<'_> {
         self.after_commit(super::transactions::After::Capabilities((x, y, z)));
         true
     }
-    /// Two-position empty-context collider segment clip (`level_clip` with `ClipBlock::Collider`
-    /// and `ClipFluid::None`): whether it misses, with no `LivingEntity.hasLineOfSight(Entity)`
-    /// 128-block entity admission check. None as for `level_clip`.
+    /// Two-position empty-context collider segment clip (`level_clip` with `ClipBlock::Collider`,
+    /// `ClipFluid::None` and `CollisionContext::Empty`): whether it misses, with no
+    /// `LivingEntity.hasLineOfSight(Entity)` 128-block entity admission check. None when the
+    /// clip is an error or runs into a column that is not loaded.
     pub(super) fn level_line_of_sight(
         &self,
         level: LevelRef,
         from: [f64; 3],
         to: [f64; 3],
     ) -> Option<bool> {
-        let hit = self.level_clip(level, from, to, ClipBlock::Collider, ClipFluid::None)?;
-        Some(hit.miss)
+        match self
+            .level_clip(
+                level,
+                from,
+                to,
+                ClipBlock::Collider,
+                ClipFluid::None,
+                CollisionContext::Empty,
+            )
+            .ok()?
+        {
+            ClipOutcome::Miss => Some(true),
+            ClipOutcome::Hit(_) => Some(false),
+            _ => None,
+        }
     }
     /// Whether `level` is a current handle on the server: what the world's own data (its
     /// respawn data and maps, shared by its levels) needs.

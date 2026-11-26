@@ -916,15 +916,7 @@ impl Game<'_> {
             return BlockAnim::default();
         }
         let sherds = if &*self.res.facts().get(state).name == "minecraft:decorated_pot" {
-            let sherds = self.saved_tag(pos).and_then(|t| t.get("sherds"));
-            ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
-                // An item id, or the item stack the processed templates hold.
-                Some(Tag::String(id)) => Some(id.to_string_lossy()),
-                Some(stack) => {
-                    sunrise_client::save::item_from_nbt(stack).map(|s| s.item.to_string())
-                }
-                None => None,
-            })
+            pot_sherds(self.saved_tag(pos))
         } else {
             Default::default()
         };
@@ -949,6 +941,10 @@ impl Game<'_> {
         else {
             return None;
         };
+        self.skull_skin(skull)
+    }
+    /// [`Self::skull_skin_at`] for a skull that is not in the level, as a carried one.
+    pub(super) fn skull_skin(&self, skull: &sunrise_client::containers::Skull) -> Option<String> {
         let skin = skull.skin.as_ref()?;
         // PlayerSkin.Patch: a `texture` override replaces the profile's skin.
         if let Some(texture) = &skin.texture
@@ -986,6 +982,17 @@ impl Game<'_> {
         }
         Some(skin.fallback.to_owned())
     }
+}
+
+/// The sherds (item ids: back, left, right, front) in the saved tag of a decorated pot.
+pub(super) fn pot_sherds(saved: Option<&Tag>) -> [Option<String>; 4] {
+    let sherds = saved.and_then(|t| t.get("sherds"));
+    ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
+        // An item id, or the item stack the processed templates hold.
+        Some(Tag::String(id)) => Some(id.to_string_lossy()),
+        Some(stack) => sunrise_client::save::item_from_nbt(stack).map(|s| s.item.to_string()),
+        None => None,
+    })
 }
 
 /// `Entity.isInRain`'s two positions: `blockPosition()` and the same column at the box's top.

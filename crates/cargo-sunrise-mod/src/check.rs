@@ -476,7 +476,7 @@ pub fn pipeline_shaders(
                 .map(|(n, t)| (n.as_str(), t.as_str()))
                 .collect();
             let (extracted_bindings, pc_size) =
-                sunrise_mod_pipeline::extract_mod_bindings(&vsh_text, dummy_fsh, textured);
+                sunrise_mod_pipeline::extract_program_bindings(&sources, textured, &[], &include);
             let mod_bindings: Vec<sunrise_mod_pipeline::ModBinding<'_>> = extracted_bindings
                 .iter()
                 .map(|(name, kind)| sunrise_mod_pipeline::ModBinding {
@@ -582,7 +582,7 @@ pub fn pipeline_shaders(
             .map(|(n, t)| (n.as_str(), t.as_str()))
             .collect();
         let (extracted_bindings, pc_size) =
-            sunrise_mod_pipeline::extract_mod_bindings(&vsh_text, &fsh_text, textured);
+            sunrise_mod_pipeline::extract_program_bindings(&sources, textured, &[], &include);
         let mod_bindings: Vec<sunrise_mod_pipeline::ModBinding<'_>> = extracted_bindings
             .iter()
             .map(|(name, kind)| sunrise_mod_pipeline::ModBinding {
@@ -718,6 +718,33 @@ mod tests {
             refused[0].starts_with("assets/m/shaders/core/broken.fsh:3:"),
             "{refused:?}"
         );
+    }
+
+    /// A uniform block and a sampler that an `#include` file declares are the program's own, as
+    /// they are once the game inlines the include: the check takes them as the mod's bindings
+    /// rather than refusing them (#5905).
+    #[test]
+    fn a_block_and_sampler_an_include_declares_are_the_programs() {
+        let vsh = "#version 330\n#include <minecraft:dynamictransforms.glsl>\n\
+            #include <minecraft:projection.glsl>\n\
+            in vec3 Position;\nin vec2 UV0;\nin vec4 Color;\n\
+            out vec2 texCoord0;\nout vec4 vertexColor;\n\
+            void main() { gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0); texCoord0 = UV0; vertexColor = Color; }\n";
+        let fsh = "#version 330\n#include <m:params.glsl>\n\
+            in vec2 texCoord0;\nin vec4 vertexColor;\nout vec4 fragColor;\n\
+            void main() { fragColor = vertexColor * Strength * texture(Noise, texCoord0); }\n";
+        let files: BTreeMap<String, Vec<u8>> = [
+            (
+                "assets/m/shaders/include/params.glsl",
+                "layout(std140) uniform Params {\n    vec4 Strength;\n};\nuniform sampler2D Noise;\n",
+            ),
+            ("assets/m/shaders/core/blur.vsh", vsh),
+            ("assets/m/shaders/core/blur.fsh", fsh),
+        ]
+        .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()))
+        .into();
+        let (count, refused) = pipeline_shaders(&files, None);
+        assert_eq!((count, refused), (1, Vec::<String>::new()));
     }
 
     fn fixture(name: &str) -> std::path::PathBuf {

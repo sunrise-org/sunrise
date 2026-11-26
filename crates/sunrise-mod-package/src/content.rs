@@ -605,6 +605,8 @@ struct BlockFile {
     base_block: Option<String>,
     #[serde(default = "yes")]
     item: bool,
+    #[serde(default = "yes")]
+    use_block_description_prefix: bool,
     #[serde(default, deserialize_with = "GateSound::deserialize_open")]
     open_sound: Option<GateSound>,
     #[serde(default, deserialize_with = "GateSound::deserialize_close")]
@@ -706,6 +708,10 @@ pub struct Block {
     pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
+    /// The block item is named by its own key, `item.<namespace>.<path>`, not the block's
+    /// `block.<namespace>.<path>`: a mod whose `Item.Properties` do not call
+    /// `useBlockDescriptionPrefix`. False, the block's key, as vanilla's `Items.registerBlock`.
+    pub own_item_name: bool,
     /// A fence gate's opening sounds (`WoodType.fenceGateOpen`). `All` replaces
     /// every site; `Sites` keeps the template wood's sound for each missing site.
     /// Needs a `*_fence_gate` template.
@@ -1894,6 +1900,7 @@ impl Content {
                 state_properties: file.state_properties,
                 default_state: file.default_state,
                 item: file.item,
+                own_item_name: !file.use_block_description_prefix,
                 open_sound: file.open_sound,
                 close_sound: file.close_sound,
                 block_item: file.block_item,
@@ -3244,6 +3251,7 @@ capabilities = ["registries"]
                     ..BlockProperties::default()
                 },
                 item: true,
+                own_item_name: false,
                 open_sound: None,
                 close_sound: None,
                 block_item: None,

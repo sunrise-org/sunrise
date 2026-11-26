@@ -40,6 +40,57 @@ enum Answer {
 /// What the probe heard: entity, mode, and the resolved input and velocity.
 type Heard = Vec<(u32, TravelMode, [f64; 3], [f64; 3])>;
 
+/// A `side = "server"` mod's `living_travel` listener fires for a zombie and
+/// not for a player or a player-driven mount.
+#[test]
+fn server_only_mod_hears_zombie_and_skips_player_and_driven_mount() {
+    let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+    struct KindProbe(Arc<Mutex<Vec<String>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for KindProbe {
+        fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
+            self.0.lock().unwrap().push(event.kind.to_owned());
+            Flow::Continue
+        }
+    }
+    let mods: mod_api::Mods = vec![mod_api::__private::with_mod_side(
+        mod_api::ModEntry::new("server-only", Box::new(KindProbe(Arc::clone(&heard)))),
+        mod_api::Side::Server,
+    )]
+    .into();
+    let context = server_context();
+    mod_platform::testing::with_mods(mods, || {
+        let mut input = Vec3::ZERO;
+        let mut velocity = Vec3::ZERO;
+        assert!(sunrise_client::travel_gate::decide(
+            &context,
+            1,
+            "minecraft:zombie",
+            || sunrise_world::travel::TravelMode::Air,
+            &mut input,
+            &mut velocity,
+        ));
+        assert!(sunrise_client::travel_gate::decide(
+            &context,
+            2,
+            "minecraft:player",
+            || sunrise_world::travel::TravelMode::Air,
+            &mut input,
+            &mut velocity,
+        ));
+        assert!(sunrise_client::travel_gate::decide_controlled(
+            &context,
+            3,
+            "minecraft:horse",
+            || sunrise_world::travel::TravelMode::Air,
+            &mut input,
+            &mut velocity,
+            true,
+        ));
+    });
+    assert_eq!(*heard.lock().unwrap(), vec!["minecraft:zombie"]);
+}
+
 /// A listener that records the travel it heard and answers `Answer`.
 struct Probe {
     answer: Answer,

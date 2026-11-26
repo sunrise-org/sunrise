@@ -822,6 +822,19 @@ impl Game<'_> {
         // pick whose block has a part, for the game to call it there (`mod_animate_tick`); the
         // context borrows the game, so it is made again for the rest of the tick.
         let mut rain_sounds = Vec::new();
+        // A mod's `tick_weather_effects` may take this tick's weather effects over.
+        let weather_canceled = mod_api::__private::listened(mod_api::HookId::TickWeatherEffects)
+            && {
+                let mut canceled = false;
+                self.native_tick_weather_effects(
+                    self.dim.id(),
+                    self.world.game_time,
+                    cam_pos,
+                    rain,
+                    &mut canceled,
+                );
+                canceled
+            };
         loop {
             let marker_options = |state| {
                 // BlockMarker: the particle sprite, untinted.
@@ -958,7 +971,7 @@ impl Game<'_> {
                 }
                 laps.lap("tp_animate");
                 // The Sunrise Weather option off means no rain visuals or sounds at all.
-                if rain > 0.0 && self.settings.sunrise.weather {
+                if !weather_canceled && rain > 0.0 && self.settings.sunrise.weather {
                     let weather_block = cam_pos.map(|v| v.floor() as i32);
                     // ClientLevel.tickWeatherEffects: rain splashes around the camera, and the rain sound.
                     let mut random =

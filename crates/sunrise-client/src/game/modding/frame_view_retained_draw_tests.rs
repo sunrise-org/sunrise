@@ -215,15 +215,13 @@ fn block_entity_entity_renderer_scene_and_two_view_isolation() {
             // Draw the same block entity in a screen scene: camera_entity_eye must be None
             // and view must carry the scene's camera and clock.
             let mut batch = HudBatch::new([800, 600], game.settings.gui_scale_inputs());
+            let scene_state = stone_state.try_into_api().unwrap();
             let scene_entity = SceneBlockEntity::new(
                 Identifier::parse("view_observer:observer").unwrap(),
+                scene_state,
                 Default::default(),
             );
-            let scene_block = SceneBlock::new(
-                [0, 0, 0],
-                stone_state.try_into_api().unwrap(),
-                Some(scene_entity),
-            );
+            let scene_block = SceneBlock::new([0, 0, 0], scene_state, Some(scene_entity));
             let scene = Scene::new(vec![scene_block])
                 .with_clock(SceneClock::new(7, 55, 0.5).animate_blocks(false));
             let scene_view = SceneView::new([0.5, 0.5, 0.5], 45.0, 25.0, 16.0);

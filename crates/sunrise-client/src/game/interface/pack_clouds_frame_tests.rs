@@ -24,7 +24,7 @@ const OIT_INCLUDES: [&str; 7] = [
 ];
 
 /// A pack of vanilla's `oit.glsl` includes and `own` files.
-fn pack(own: &[(&str, &str)]) -> ResourceSource {
+pub(super) fn pack(own: &[(&str, &str)]) -> ResourceSource {
     let root = ResourceSource::directory(fixture_root());
     let mut files: std::collections::BTreeMap<String, Resource> = OIT_INCLUDES
         .iter()

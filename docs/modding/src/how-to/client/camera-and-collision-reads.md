@@ -203,10 +203,10 @@ open. Its block reads read the viewed level's own world, never the player's: `bl
 `has_collisions`, `visit_block_collision`, `get_enchant_power_bonus`, and the fluid reads built on `block_state` (`fluid_shape`, `fluid_height`,
 `fluid_height_for_camera`, `fluid_can_be_replaced_with`). So a mod can aim a ray or collide a box
 through a portal. `brightness` also reads the viewed level's own sky or block light, as sent by the
-server, not the light of the shown level. These reads never load a column. Direct block reads return
-`None` for a column the client doesn't hold; `clip` reads missing columns and out-of-height cells as
-air (`ClientChunkCache.getChunk(..., true)`), and `visit_block_collisions` and `has_collisions` skip
-missing columns and keep scanning the loaded ones.
+server, not the light of the shown level. These reads never load a column. Direct block reads return `None` for a column the client doesn't hold; `clip` stops at the first
+cell of a column the client doesn't hold with `ClipOutcome::Unloaded { at }`, reads out-of-height
+cells as air, and returns `Err(ClipError::StaleLevel)` for a stale handle; `visit_block_collisions`
+and `has_collisions` skip missing columns and keep scanning the loaded ones.
 
 `host.level` returns `None` while the server has the level closed, and reads from a retained handle
 return `None`. If the server reopens the level within the same client level, the old handle reads

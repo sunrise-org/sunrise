@@ -402,12 +402,14 @@ impl Game<'_> {
         }
     }
 
-    pub(in crate::game) fn native_level_can_survive(
+    /// The open level, its signal ticks and the position a read-only block query at `[x, y, z]`
+    /// for `state` reads: a loaded, in-bounds position of a current level and a known state.
+    fn native_level_block_query(
         &self,
         level: LevelRef,
         [x, y, z]: [i32; 3],
         state: BlockStateId,
-    ) -> Result<bool, LevelReadError> {
+    ) -> Result<(&World, &Ticks, BlockPos), LevelReadError> {
         let world = self.native_level_read_world(level).ok_or_else(|| {
             if self.level_handle_current(level) {
                 LevelReadError::Unavailable
@@ -427,7 +429,16 @@ impl Game<'_> {
         {
             return Err(LevelReadError::Unavailable);
         }
-        let pos = BlockPos::new(x, y, z);
+        Ok((world, ticks, BlockPos::new(x, y, z)))
+    }
+
+    pub(in crate::game) fn native_level_can_survive(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<bool, LevelReadError> {
+        let (world, ticks, pos) = self.native_level_block_query(level, pos, state)?;
         let _query =
             super::super::native_hooks::enter_survival_query(world as *const _, pos, state)
                 .ok_or(LevelReadError::Unavailable)?;
@@ -441,5 +452,30 @@ impl Game<'_> {
             .res
             .behaviours()
             .can_survive_read_only(&mut query, ticks, pos, state))
+    }
+
+    /// `FireBlock.getIgniteOdds` and `getBurnOdds` of `state` at `pos` from its side `face`, as
+    /// fire reads them, the mods' `fire_odds` answers included.
+    pub(in crate::game) fn native_level_fire_odds(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockStateId,
+        face: sunrise_core::geometry::Direction,
+    ) -> Result<(i32, i32), LevelReadError> {
+        let (world, ticks, pos) = self.native_level_block_query(level, pos, state)?;
+        let _query =
+            super::super::native_hooks::enter_survival_query(world as *const _, pos, state)
+                .ok_or(LevelReadError::Unavailable)?;
+        let read = ReadLevel::new(self, level, world);
+        let mut query = SurvivalReadLevel {
+            read,
+            signal_ticks: ticks,
+            random: LegacyRandom::new(0),
+        };
+        Ok(self
+            .res
+            .behaviours()
+            .fire_odds_read_only(&mut query, ticks, pos, state, face))
     }
 }

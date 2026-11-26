@@ -305,10 +305,22 @@ impl GoalCx<'_, '_> {
         } else {
             mod_api::ClipFluid::None
         };
-        mod_api::__private::backend_read(self.host, |backend| {
-            backend.level_clip(level, from, to, mod_api::ClipBlock::Outline, fluids)
-        })
-        .flatten()
+        match mod_api::__private::backend_read(self.host, |backend| {
+            backend.level_clip(
+                level,
+                from,
+                to,
+                mod_api::ClipBlock::Outline,
+                fluids,
+                mod_api::CollisionContext::Empty,
+            )
+        })? {
+            Ok(mod_api::ClipOutcome::Hit(hit)) => Some(hit),
+            Ok(mod_api::ClipOutcome::Miss) => {
+                Some(crate::game::native_entity_refs::miss_hit(from, to))
+            }
+            _ => None,
+        }
     }
 }
 

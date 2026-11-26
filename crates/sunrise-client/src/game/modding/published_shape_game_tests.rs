@@ -7,6 +7,14 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;
 
+/// The hit a ray found: `None` for a miss, an unloaded column or an unanswerable shape.
+fn found(outcome: Result<ClipOutcome, ClipError>) -> Option<ClipHit> {
+    match outcome {
+        Ok(ClipOutcome::Hit(hit)) => Some(hit),
+        _ => None,
+    }
+}
+
 pub(super) const BUS: &str = "shapes:bus";
 /// A flagged block on a template with a dynamic shape and a random outline offset
 /// (`minecraft:bamboo`).
@@ -174,13 +182,14 @@ fn collision_selection_and_support_read_the_published_shape() {
         let level = game.level(game.dim.id()).unwrap();
         let entity = place(game, BUS, pos);
         let outline_hit = |game: &Game<'_>| {
-            game.level_clip(
+            found(game.level_clip(
                 level,
                 [2.5, 66.0, 2.5],
                 [2.5, 63.0, 2.5],
                 ClipBlock::Outline,
                 ClipFluid::None,
-            )
+                CollisionContext::Empty,
+            ))
             .map(|hit| hit.location[1])
         };
         assert_eq!(
@@ -224,13 +233,14 @@ fn collision_selection_and_support_read_the_published_shape() {
         );
         assert_eq!(boxes, [[2.0, 64.0, 2.0, 3.0, 64.5, 3.0]]);
         let down = |game: &Game<'_>, blocks| {
-            game.level_clip(
+            found(game.level_clip(
                 level,
                 [2.5, 66.0, 2.5],
                 [2.5, 63.0, 2.5],
                 blocks,
                 ClipFluid::None,
-            )
+                CollisionContext::Empty,
+            ))
             .map(|hit| (hit.miss, hit.block, hit.location))
         };
         assert_eq!(
@@ -343,17 +353,18 @@ fn a_published_shape_stands_over_a_dynamic_template_and_takes_its_offset() {
                 [0.5, 63.0, 9.5],
                 ClipBlock::Collider,
                 ClipFluid::None,
+                CollisionContext::Empty,
             )
         };
         let entity = place(game, TUFT, [0, 64, 9]);
-        assert!(down(game).is_none(), "refused before the first publish");
+        assert!(down(game).is_err(), "refused before the first publish");
         assert_eq!(
             game.block_entity_set_shapes(entity, Some(shapes(&[HALF], &[THIN]))),
             Ok(true)
         );
-        assert_eq!(down(game).map(|hit| hit.location[1]), Some(64.5));
+        assert_eq!(found(down(game)).map(|hit| hit.location[1]), Some(64.5));
         assert_eq!(game.block_entity_set_shapes(entity, None), Ok(true));
-        assert!(down(game).is_none(), "refused again once cleared");
+        assert!(down(game).is_err(), "refused again once cleared");
         let mut offset_seen = false;
         for x in 0..8 {
             let pos = [x, 64, 6];
@@ -368,29 +379,29 @@ fn a_published_shape_stands_over_a_dynamic_template_and_takes_its_offset() {
             assert_eq!(y1, 64.25, "{pos:?}: the offset is horizontal only");
             let (cx, cz) = ((x0 + x1) / 2.0, (z0 + z1) / 2.0);
             offset_seen |= (cx - f64::from(x) - 0.5).abs() > 0.06 || (cz - 6.5).abs() > 0.06;
-            let hit = game
-                .level_clip(
-                    level,
-                    [cx, 66.0, cz],
-                    [cx, 63.0, cz],
-                    ClipBlock::Outline,
-                    ClipFluid::None,
-                )
-                .map(|hit| (hit.miss, hit.block, hit.location));
+            let hit = found(game.level_clip(
+                level,
+                [cx, 66.0, cz],
+                [cx, 63.0, cz],
+                ClipBlock::Outline,
+                ClipFluid::None,
+                CollisionContext::Empty,
+            ))
+            .map(|hit| (hit.miss, hit.block, hit.location));
             assert_eq!(
                 hit,
                 Some((false, pos, [cx, y1, cz])),
                 "{pos:?}: the offset outline"
             );
-            let collider = game
-                .level_clip(
-                    level,
-                    [f64::from(x) + 0.5, 66.0, 6.5],
-                    [f64::from(x) + 0.5, 63.0, 6.5],
-                    ClipBlock::Collider,
-                    ClipFluid::None,
-                )
-                .map(|hit| hit.location[1]);
+            let collider = found(game.level_clip(
+                level,
+                [f64::from(x) + 0.5, 66.0, 6.5],
+                [f64::from(x) + 0.5, 63.0, 6.5],
+                ClipBlock::Collider,
+                ClipFluid::None,
+                CollisionContext::Empty,
+            ))
+            .map(|hit| hit.location[1]);
             assert_eq!(collider, Some(64.5), "{pos:?}: the published collision");
         }
         assert!(offset_seen, "some column's outline is offset");
@@ -417,9 +428,15 @@ fn inherited_published_outline_hits_at_the_template_column() {
         let z = 2.3166666701436043;
         let level = game.level(game.dim.id()).unwrap();
         let ray = |mode| {
-            game.level_clip(level, [x, 66.0, z], [x, 63.0, z], mode, ClipFluid::None)
-                .filter(|hit| !hit.miss)
-                .map(|hit| (hit.block, hit.location))
+            found(game.level_clip(
+                level,
+                [x, 66.0, z],
+                [x, 63.0, z],
+                mode,
+                ClipFluid::None,
+                CollisionContext::Empty,
+            ))
+            .map(|hit| (hit.block, hit.location))
         };
         assert_eq!(ray(ClipBlock::Outline), Some((pos, [x, 64.25, z])));
         assert_eq!(ray(ClipBlock::Collider), Some((pos, [x, 64.5, z])));

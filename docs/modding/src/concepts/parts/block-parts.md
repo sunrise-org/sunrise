@@ -354,6 +354,28 @@ Bookshelf slot-occupancy flags and the last-interacted slot are transactional st
 not notification effects. Aborting restores them with the items. Changed observers, comparator
 ticks and data-send requests already issued still survive that abort.
 
+## Climbing and scaffolding
+
+`BlockPart::is_ladder` is asked for the block a living entity stands in, and `BlockPart::is_scaffolding` for the block a
+player on a climbable stands in. Both fire on both sides, are `listen`, and must be pure functions of the event: set the
+field to decide, and a block with no part keeps vanilla's answer.
+
+| Part | Starts as | Effect of the answer |
+|---|---|---|
+| `is_ladder` | The block is in `#minecraft:climbable` | `true` climbs like a ladder, `false` refuses a tagged block |
+| `is_scaffolding` | The state is `minecraft:scaffolding` | While sneaking, `true` lets the player keep sliding down the climbable, `false` stops the slide |
+
+`is_scaffolding` is asked for players only; mobs never ask it. The player's id, the block its position is in and that
+block's state are passed.
+
+## Map colour
+
+`BlockPart::map_color` sets the map colour a block shows at a position, as NeoForge's `IBlockExtension.getMapColor`
+does. It is `collect`, server only, and read-only: set `color` to a `MapColor` id from 0 to 61, starting from the state's
+own colour. Map updates ask it for the dirt and stone noise under a ceiling, for every step of the scan down from the
+surface (0 keeps the scan going) and for the colour a scanned block, or its fluid's block, finally draws as. An answer
+above 61 is refused: the block keeps its own colour, and the refusal is logged once per block.
+
 ## Fluid faces beside a block
 
 Client `BlockPart` methods change how a fluid draws its faces against your block. They are `collect`: set the field to

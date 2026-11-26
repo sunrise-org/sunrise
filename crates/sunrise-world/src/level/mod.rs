@@ -1920,6 +1920,21 @@ impl Behaviours {
         sim.signal_reads = Some(signal_reads);
         sim.can_survive(state, pos)
     }
+    /// `FireBlock.getIgniteOdds` and `getBurnOdds` of `state` at `pos`, asked from its side
+    /// `face`, as fire itself reads them: `(ignite, burn)`.
+    pub fn fire_odds_read_only<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        signal_reads: &Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        face: Direction,
+    ) -> (i32, i32) {
+        let mut ticks = Ticks::default();
+        let mut sim = self.sim(level, &mut ticks);
+        sim.signal_reads = Some(signal_reads);
+        sim.fire_odds(state, pos, face)
+    }
     /// `BlockState.updateShape(level, ticks, pos, direction, neighbourPos,
     /// neighbourState, random)`: the state `state` at `pos` would take after its
     /// neighbour in `direction` became `neighbour` (ticks it requests are queued).

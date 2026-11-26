@@ -503,6 +503,34 @@ draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options
   Valid quads are submitted individually up to the device's vertex and index buffer capacity for
   the combined entity batch without artificial coordinate or quad caps.
 
+## Carried block entities
+
+A mod that moves blocks (a contraption drawn from an entity renderer) draws the block entities
+they carry with `draw.block_entity(&entity)`, vanilla's `BlockEntityRenderDispatcher` extract and
+submit. `entity` is a `SceneBlockEntity`: the type id, the block state and the saved fields. Build
+it once and again whenever its data changes; nothing ticks it.
+
+```rust,ignore
+draw.push();
+draw.translate(offset);
+draw.set_light(sampled_light); // the caller samples light itself
+draw.block_entity(&carried)?;
+draw.pop();
+```
+
+- The pose and light are `draw`'s; the overlay is vanilla's `NO_OVERLAY`. The block entity's own
+  position is never read, and the dispatcher's `shouldRender` culling is skipped: the caller's
+  entity was already culled.
+- A vanilla block entity draws through the engine's renderer for its block state, a mod's through
+  its `BlockEntityPart` submit. A type with no renderer draws nothing.
+- Without a level a double chest draws as a single closed chest, an enchanting table as its
+  closed book, a conduit inactive, an end portal and gateway on every face with no beam, and a
+  beacon with no beam. Chest lids, the bell's shake, the enchanting book and conduit rotation stay
+  at rest.
+- One level of nesting: a `block_entity` call from inside a submit that `block_entity` itself
+  dispatched returns `BlockEntityDrawRefusal::Nested`, because input a mod controls must never
+  recurse without end.
+
 ## Before and after a living entity draws
 
 Each mob and player in view gets the render hook pair once a frame, NeoForge's

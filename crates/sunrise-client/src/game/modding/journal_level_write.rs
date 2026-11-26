@@ -117,8 +117,38 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
                 data: old.0 as i32,
             });
         }
+        let collected = if drop {
+            self.drop_resources(pos, old, tool, breaker, collect)
+        } else {
+            Vec::new()
+        };
+        // Only storage (not listeners) is touched by this already-validated write.
+        if !self.replace_block(pos, old, replacement, flags::UPDATE_ALL) {
+            return None;
+        }
+        self.game.after_commit(After::DestroyBlockGameEvent {
+            pos,
+            state: old,
+            breaker,
+        });
+        Some(collected)
+    }
+
+    /// `Block.dropResources` of `old` at `pos` inside the transaction, the block left as it
+    /// is: the loot is rolled against the block now, and its item entities and experience
+    /// spawn at commit. Nothing under `doTileDrops` false. With `collect`, the stacks come
+    /// back instead of spawning.
+    pub(super) fn drop_resources(
+        &mut self,
+        pos: [i32; 3],
+        old: BlockStateId,
+        tool: Option<&sunrise_client::items::ItemStack>,
+        breaker: Option<mod_api::EntityRef>,
+        collect: bool,
+    ) -> Vec<sunrise_client::items::ItemStack> {
+        let [x, y, z] = pos;
         let mut collected = Vec::new();
-        if drop && self.game.level_rules().block_drops {
+        if self.game.level_rules().block_drops {
             self.game.journal_block_loot_random();
             // First access to container loot can fill the inventory and consume its loot table.
             let key = (x, y, z);
@@ -156,16 +186,7 @@ impl<'g, 'a> JournalLevelWrite<'g, 'a> {
                 self.game.after_commit(After::BlockDropSpawns(items, orbs));
             }
         }
-        // Only storage (not listeners) is touched by this already-validated write.
-        if !self.replace_block(pos, old, replacement, flags::UPDATE_ALL) {
-            return None;
-        }
-        self.game.after_commit(After::DestroyBlockGameEvent {
-            pos,
-            state: old,
-            breaker,
-        });
-        Some(collected)
+        collected
     }
 
     fn queue(&mut self, write: PendingWrite) -> bool {

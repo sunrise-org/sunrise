@@ -273,7 +273,8 @@ impl Required {
 
 /// `core/text`'s required pipelines, in `RenderPipelines`' order, each program once: `TEXT_POLYGON_OFFSET`
 /// is `TEXT`'s program and `OIT_TEXT_POLYGON_OFFSET` `OIT_TEXT`'s (with `IS_GRAYSCALE` alike).
-/// Sunrise draws [`TEXT_WORLD`], [`TEXT_GUI`] and [`TEXT_SEE_THROUGH`] with the pack's shader.
+/// Sunrise draws [`TEXT_WORLD`], [`TEXT_GUI`], [`TEXT_SEE_THROUGH`] and [`TEXT_OIT`] with the
+/// pack's shader.
 pub(crate) const TEXT: [Required; 12] = {
     let world = &crate::gfx::core_text::WORLD_GLUE;
     let see_through = &crate::gfx::core_text::SEE_THROUGH_GLUE;
@@ -357,6 +358,16 @@ pub(crate) const TEXT: [Required; 12] = {
 pub(crate) const TEXT_WORLD: usize = 0;
 pub(crate) const TEXT_GUI: usize = 4;
 pub(crate) const TEXT_SEE_THROUGH: usize = 10;
+/// `OIT_TEXT`'s stages, in `OitStage`'s order.
+pub(crate) const TEXT_OIT: [usize; 3] = [1, 2, 3];
+const _: () = assert!(
+    matches!(TEXT[TEXT_OIT[0]].oit, Some(0))
+        && matches!(TEXT[TEXT_OIT[1]].oit, Some(1))
+        && matches!(TEXT[TEXT_OIT[2]].oit, Some(2))
+        && TEXT[TEXT_OIT[0]].defines.is_empty()
+        && TEXT[TEXT_OIT[1]].defines.is_empty()
+        && TEXT[TEXT_OIT[2]].defines.is_empty()
+);
 
 /// `core/rendertype_lines`' required pipelines, each program once: `LINES`' (also
 /// `LINES_TRANSLUCENT`'s, `LINES_DEPTH_BIAS`' and `SECONDARY_BLOCK_OUTLINE`'s, which Sunrise
@@ -628,28 +639,41 @@ pub(super) fn load_shaders(
     let configs = crate::packs::polytone_configs(&crate::packs::Source::Opened(root.clone()));
     let modifiers = crate::polytone_post::ShaderModifiers::read(root, configs);
     let packs = (root, defaults, &modifiers);
-    // The GUI's, the world's and the see-through text: one shader, three drawn programs.
+    // The GUI's, the world's, the see-through text and Improved Transparency's three stages:
+    // one shader, six drawn programs.
     let text_id = crate::gfx::expression_blocks::TEXT[0];
-    let mut text: [Option<Loaded>; 3] = Default::default();
+    let mut text: [Option<Loaded>; 6] = Default::default();
     let own = [sunrise_polytone::globals::BLOCK];
     let blocks = (&modifiers, (text_id, text_id), &own[..]);
     if let Some(programs) = translate_required(root, defaults, ("text", "text"), &TEXT, blocks)? {
         let mut programs: Vec<Option<Checked>> = programs.into_iter().map(Some).collect();
-        // In `RenderPipelines`' order.
-        for (slot, index) in text
-            .iter_mut()
-            .zip([TEXT_WORLD, TEXT_GUI, TEXT_SEE_THROUGH])
-        {
+        // Each program Sunrise draws, by its place in `TEXT`.
+        for (slot, index) in text.iter_mut().zip([
+            TEXT_WORLD,
+            TEXT_GUI,
+            TEXT_SEE_THROUGH,
+            TEXT_OIT[0],
+            TEXT_OIT[1],
+            TEXT_OIT[2],
+        ]) {
             let program = programs[index].take().expect("each drawn program once");
             *slot = loaded(program, TEXT[index].pipeline);
         }
     }
-    let [world, gui, see_through] = text;
+    let [world, gui, see_through, oit @ ..] = text;
     let shaders = &mut atlas.text_shaders;
     let expressions = &mut shaders.expressions;
     (shaders.gui, expressions.gui) = unzip_or_default(gui);
     (shaders.world, expressions.world) = unzip_or_default(world);
     (shaders.see_through, expressions.see_through) = unzip_or_default(see_through);
+    // The stages draw together or not at all.
+    shaders.oit = match oit {
+        [Some(a), Some(b), Some(c)] => Some(Box::new(crate::gfx::core_text::OitPrograms {
+            programs: [a.0, b.0, c.0],
+            expressions: [a.1, b.1, c.1],
+        })),
+        _ => None,
+    };
     atlas.clouds_shader = load_clouds(root, defaults)?;
     let lines = crate::gfx::expression_blocks::LINES[0];
     (atlas.lines_shader, atlas.lines_expressions) =

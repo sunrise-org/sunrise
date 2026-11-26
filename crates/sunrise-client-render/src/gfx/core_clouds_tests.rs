@@ -425,27 +425,6 @@ fn a_clouds_shader_that_reads_no_faces_still_draws_a_quad_a_face() {
     }
 }
 
-/// A device with Improved Transparency (`oit::features`), or none (said on stderr).
-fn oit_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let adapter = crate::gfx::test_gpu::adapter()?;
-    let features = super::super::oit::features(&adapter);
-    if !features.contains(wgpu::Features::FLOAT32_BLENDABLE) {
-        eprintln!(
-            "skipped: no Improved Transparency on {:?}",
-            adapter.get_info()
-        );
-        return None;
-    }
-    eprintln!("adapter {:?}", adapter.get_info());
-    crate::gfx::test_gpu::optional_device_with(
-        &adapter,
-        &wgpu::DeviceDescriptor {
-            required_features: features,
-            ..Default::default()
-        },
-    )
-}
-
 /// A vertex stage covering the target with each face's quad at device depth 0.5, wound so fancy
 /// clouds keep it, handing `clouds.fsh` a fog distance of 0 and the colour 0.25, 0.5, 0.75, 1.
 const OIT_VSH: &str = "#version 330\n\
@@ -648,7 +627,7 @@ fn vanillas_clouds_fragment_shader_draws_each_improved_transparency_stage() {
             .ok()
     };
     let programs = oit_programs(&fragment, &include);
-    let Some((device, queue)) = oit_device() else {
+    let Some((device, queue)) = crate::gfx::test_gpu::oit_device() else {
         return;
     };
     let mut core = CoreClouds::new(
@@ -792,7 +771,7 @@ fn a_clouds_shader_ignoring_the_stage_defines_draws_location_0_in_each_stage() {
         layout(location = 1) in vec4 vertexColor;\nlayout(location = 0) out vec4 fragColor;\n\
         void main() {\n    fragColor = vertexColor;\n}\n";
     let programs = oit_programs(fragment, &|_| None);
-    let Some((device, queue)) = oit_device() else {
+    let Some((device, queue)) = crate::gfx::test_gpu::oit_device() else {
         return;
     };
     let mut core = CoreClouds::new(
@@ -897,7 +876,7 @@ fn the_improved_transparency_groups_follow_new_targets_and_a_grown_faces_buffer(
         return;
     }
     let programs = oit_programs_of(FACES_VSH, fragment, &include);
-    let Some((device, queue)) = oit_device() else {
+    let Some((device, queue)) = crate::gfx::test_gpu::oit_device() else {
         return;
     };
     let mut core = CoreClouds::new(
@@ -1027,7 +1006,7 @@ fn the_native_clouds_draw_in_the_frames_path_without_a_pack() {
 #[ignore = "daily"]
 fn linear_light_links_the_required_programs_before_suppressing_the_draw() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some((device, _queue)) = oit_device() else {
+    let Some((device, _queue)) = crate::gfx::test_gpu::oit_device() else {
         return;
     };
     let frame = super::super::FrameConfiguration {

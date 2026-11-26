@@ -31,9 +31,24 @@ impl Game<'_> {
             .clouds
             .unwrap_or(self.settings.clouds.as_str())
     }
-    /// `Options.enableVsync` for this session only, and the surface reconfigured at once.
+    /// `Options.enableVsync` for this session only, and the surface reconfigured at once, or,
+    /// from a frame callback while `Renderer::render` has the renderer out, as soon as it is
+    /// back ([`Self::apply_pending_present_mode`]).
     pub(in crate::game) fn set_session_vsync(&mut self, vsync: Option<bool>) {
         self.session_video.vsync = vsync;
+        let vsync = self.effective_vsync();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_present_mode(vsync, self.settings.sunrise.present_mode);
+        } else if self.render_snapshot.get().is_some() {
+            self.present_mode_pending = true;
+        }
+    }
+    /// Reconfigures the surface for a VSync change made while `Renderer::render` had the
+    /// renderer out; `Game::render` calls it once the renderer is back.
+    pub(in crate::game) fn apply_pending_present_mode(&mut self) {
+        if !std::mem::take(&mut self.present_mode_pending) {
+            return;
+        }
         let vsync = self.effective_vsync();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_present_mode(vsync, self.settings.sunrise.present_mode);
@@ -200,6 +215,51 @@ fn resolved_gui_scale(framebuffer: Option<[u32; 2]>, gui_scale: u32, unicode: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame callback's VSync change, while `Renderer::render` has the renderer out, waits for
+    /// the renderer to come back instead of being lost; outside a frame there is nothing to
+    /// wait for (#5864).
+    #[test]
+    #[ignore = "daily"]
+    fn a_vsync_change_during_a_frame_waits_for_the_renderer() {
+        use mod_api::prelude::ClientOptionsClientHost;
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            assert!(game.renderer.is_none());
+            ClientOptionsClientHost::set_session_vsync(game, Some(false));
+            assert!(!game.present_mode_pending, "no frame runs: nothing waits");
+            game.render_snapshot.set(Some(crate::game::RenderSnapshot {
+                framebuffer: [800, 600],
+                prepared_generation: None,
+                staged_prepared_draws: 0,
+            }));
+            ClientOptionsClientHost::set_session_vsync(game, Some(true));
+            assert!(game.present_mode_pending);
+            assert!(ClientOptionsClientHost::graphics_options(game).vsync);
+            game.render_snapshot.set(None);
+            game.apply_pending_present_mode();
+            assert!(!game.present_mode_pending, "applied once the frame ends");
+        });
+    }
+
+    /// The creative inventory's exclusion areas (its tab rows) are read during a frame, while
+    /// `Renderer::render` has the renderer out, from the framebuffer it left behind (#5864).
+    #[test]
+    #[ignore = "daily"]
+    fn screen_exclusion_is_read_during_a_frame() {
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            game.screen = crate::game::Screen::Creative;
+            assert!(game.screen_exclusion().is_empty(), "no window, no screen");
+            game.render_snapshot.set(Some(crate::game::RenderSnapshot {
+                framebuffer: [800, 600],
+                prepared_generation: None,
+                staged_prepared_draws: 0,
+            }));
+            let batch = crate::game::HudBatch::new([800, 600], game.settings.gui_scale_inputs());
+            let own = game.screen_own_exclusion(&batch);
+            assert!(!own.is_empty());
+            assert_eq!(game.screen_exclusion(), own);
+        });
+    }
 
     /// Session-only VSync, clouds and view bobbing take effect in the host's reads and never reach
     /// the player's options or `options.txt`; `None` goes back to the option. No renderer runs

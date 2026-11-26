@@ -275,6 +275,11 @@ impl DynamicTextures {
         true
     }
 
+    /// The live textures, `(id, handle)` in id order.
+    pub fn live(&self) -> impl Iterator<Item = (&Identifier, u64)> {
+        self.images.iter().map(|(id, image)| (id, image.handle))
+    }
+
     /// Move the queued commands, in order, into `out` for this frame.
     pub fn take_commands(&mut self, out: &mut Vec<Command>) {
         out.append(&mut self.queue);
@@ -346,6 +351,80 @@ impl Store {
                 None => out.push((handle, None)),
             }
         }
+    }
+
+    /// `DynamicTexture.dumpContents` of each texture in `textures` (`F3 + S`): read back from the
+    /// GPU and written to `dir` as a PNG named after its id with `/` and `:` as `_`
+    /// (`Identifier.toDebugFileName`). A texture with no GPU texture (its creation failed, or its
+    /// commands have not reached the render thread yet) is skipped. Returns the files written.
+    pub fn dump_contents<'a>(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textures: impl IntoIterator<Item = (&'a Identifier, u64)>,
+        dir: &std::path::Path,
+    ) -> std::io::Result<Vec<std::path::PathBuf>> {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut reads = Vec::new();
+        {
+            let gpu = self.lock();
+            for (id, handle) in textures {
+                let Some(gpu) = gpu.get(&handle) else {
+                    continue;
+                };
+                let (width, height) = (gpu.texture.width(), gpu.texture.height());
+                let padded = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Dynamic texture dump"),
+                    size: u64::from(padded) * u64::from(height),
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_texture_to_buffer(
+                    gpu.texture.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(padded),
+                            rows_per_image: Some(height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                let name = id.to_string().replace(['/', ':'], "_");
+                reads.push((name, width, height, padded, buffer));
+            }
+        }
+        if reads.is_empty() {
+            return Ok(Vec::new());
+        }
+        queue.submit([encoder.finish()]);
+        for (_, _, _, _, buffer) in &reads {
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        }
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(std::io::Error::other)?;
+        let mut written = Vec::with_capacity(reads.len());
+        for (name, width, height, padded, buffer) in reads {
+            let data = buffer
+                .slice(..)
+                .get_mapped_range()
+                .map_err(std::io::Error::other)?;
+            let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+            for row in data.chunks(padded as usize) {
+                pixels.extend_from_slice(&row[..width as usize * 4]);
+            }
+            written.push(super::atlas::write_dump_png(
+                dir, &name, width, height, &pixels,
+            )?);
+        }
+        Ok(written)
     }
 
     /// Apply `commands` in order into `encoder`, ahead of the frame's draws. `atlas` is the HUD
@@ -494,6 +573,55 @@ mod tests {
         let mut out = Vec::new();
         textures.take_commands(&mut out);
         out
+    }
+
+    /// `F3 + S` reads each live texture back from its own GPU texture and writes it under its
+    /// id's debug file name (`DynamicTexture.dumpContents`); one the render thread has not made
+    /// yet is skipped.
+    #[test]
+    #[ignore = "daily"]
+    fn a_dump_writes_each_live_texture_from_the_gpu() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((_, device, queue)) = crate::gfx::test_gpu::optional_device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let store = Store::default();
+        let mut textures = DynamicTextures::default();
+        textures.bind(store.id(), 128);
+        // Three pixels wide: each row is padded to 256 bytes on the GPU.
+        let rgba: Vec<u8> = (0..3 * 2 * 4).map(|i| (i * 9) as u8).collect();
+        textures
+            .create("mod", &id("mod:dyn/icon"), [3, 2], &rgba)
+            .unwrap();
+        let mut uploads = crate::gfx::upload::Uploads::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        store.apply(
+            &device,
+            &mut uploads,
+            &mut encoder,
+            None,
+            &commands(&mut textures),
+        );
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        textures
+            .create("mod", &id("mod:pending"), [1, 1], &[0; 4])
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let written = store
+            .dump_contents(&device, &queue, textures.live(), dir.path())
+            .unwrap();
+        assert_eq!(written, [dir.path().join("mod_dyn_icon.png")]);
+        let bytes = std::fs::read(&written[0]).unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!((frame.width, frame.height), (3, 2));
+        assert_eq!(&pixels[..frame.buffer_size()], &rgba[..]);
     }
 
     #[test]

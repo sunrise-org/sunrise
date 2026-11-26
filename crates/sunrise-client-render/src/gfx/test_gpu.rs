@@ -76,6 +76,28 @@ pub(crate) fn optional_device_with(
 }
 
 #[cfg(test)]
+/// A device with Improved Transparency (`oit::features`), or none (said on stderr).
+pub(crate) fn oit_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let adapter = adapter()?;
+    let features = crate::gfx::oit::features(&adapter);
+    if !features.contains(wgpu::Features::FLOAT32_BLENDABLE) {
+        eprintln!(
+            "skipped: no Improved Transparency on {:?}",
+            adapter.get_info()
+        );
+        return None;
+    }
+    eprintln!("adapter {:?}", adapter.get_info());
+    optional_device_with(
+        &adapter,
+        &wgpu::DeviceDescriptor {
+            required_features: features,
+            ..Default::default()
+        },
+    )
+}
+
+#[cfg(test)]
 /// Check format usages before constructing a pipeline that needs them.
 pub(crate) fn supports_texture_usage(
     adapter: &wgpu::Adapter,

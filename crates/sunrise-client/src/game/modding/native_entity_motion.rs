@@ -5,8 +5,9 @@
 //! stale handle. On a client (API @API:client_entity_refs@) they read the
 //! entities the server shows the window, and nothing moves one.
 use super::entity::{Entity as _, EntityHandle, with_entity, with_entity_mut};
+use super::native_entity_refs::ClipRay;
 use super::{Game, commands::Target};
-use mod_api::{ClipBlock, ClipFluid, ClipHit, EntityRef, LevelWriteError};
+use mod_api::{ClipBlock, ClipFluid, ClipHit, CollisionContext, EntityRef, LevelWriteError};
 use std::ops::ControlFlow;
 use sunrise_client::{collisions::SceneCollisions, motion::player_context};
 use sunrise_core::geometry::{Aabb, Axis, Vec3};
@@ -501,13 +502,17 @@ impl Game<'_> {
         } else {
             ClipFluid::None
         };
-        self.level_clip(
+        match self.level_clip_ray(
             self.entity_level(entity)?,
             from,
             to,
             ClipBlock::Outline,
             fluids,
-        )
+            CollisionContext::Empty,
+        ) {
+            Ok(ClipRay::Reached(hit)) => Some(hit),
+            Ok(ClipRay::Unloaded(_)) | Err(_) => None,
+        }
     }
     /// The square of the distance from the entity's feet to `pos`
     /// (`Entity.distanceToSqr`). API 379.
@@ -691,6 +696,10 @@ mod tests {
             assert!(game.entity_pick(entity, 1.0, false).unwrap().miss);
             game.mobs[0].position = Vec3::new(5.5, 65.0, 0.5);
             assert!(game.entity_pick(entity, 3.0, false).unwrap().miss);
+            // A ray into a column that is not loaded has no answer, neither a miss nor a hit.
+            game.mobs[0].position = Vec3::new(5.5, 65.0, 14.5);
+            assert!(game.entity_pick(entity, 3.0, false).is_none());
+            game.mobs[0].position = Vec3::new(5.5, 65.0, 0.5);
             // Looking straight down from the stand hits the top of its support.
             game.mobs[0].position = Vec3::new(1.5, 65.0, 0.5);
             game.mobs[0].head_pitch = 90.0;

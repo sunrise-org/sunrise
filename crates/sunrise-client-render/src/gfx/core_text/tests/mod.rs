@@ -102,7 +102,12 @@ pub(super) fn draw(
     });
     let mut uploads = super::super::upload::Uploads::new(device);
     let mut encoder = device.create_command_encoder(&Default::default());
-    text.prepare(&mut uploads, &mut encoder, &[0u8; 1024], [[0.0; 4]; 2]);
+    text.prepare(
+        &mut uploads,
+        &mut encoder,
+        &[0u8; 1024],
+        ([[0.0; 4]; 2], false),
+    );
     {
         let color_view = color.create_view(&Default::default());
         let depth_view = depth.create_view(&Default::default());
@@ -201,7 +206,7 @@ fn a_pack_text_shader_reads_the_light_as_vanilla_does() {
 
 #[test]
 #[ignore = "daily"]
-fn vanillas_text_shader_makes_both_world_text_pipelines() {
+fn vanillas_text_shader_makes_every_world_text_pipeline() {
     let _gpu = crate::gfx::test_gpu::lock();
     let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
         .map(std::path::PathBuf::from)
@@ -223,7 +228,10 @@ fn vanillas_text_shader_makes_both_world_text_pipelines() {
     };
     let world = translate(&[], &WORLD_GLUE);
     let see_through = translate(&["IS_SEE_THROUGH"], &SEE_THROUGH_GLUE);
-    let (device, queue) = device().expect("a GPU");
+    // Improved Transparency's stages need its device features, where the adapter has them.
+    let (device, queue) = (crate::gfx::test_gpu::oit_device())
+        .or_else(device)
+        .expect("a GPU");
     let (atlas, lightmap) = (
         texture(&device, &queue, [0; 4]),
         texture(&device, &queue, [0; 4]),
@@ -242,6 +250,32 @@ fn vanillas_text_shader_makes_both_world_text_pipelines() {
     let world = text.world.as_ref().expect("world text pipelines");
     assert!(world.mark_normal.is_some() && world.mark_polygon_offset.is_some());
     assert!(text.see_through.is_some());
+    // `OIT_TEXT`'s three stages, where the device has Improved Transparency.
+    if !crate::gfx::oit::supported(&device) {
+        eprintln!("skipped: no Improved Transparency on this adapter");
+        return;
+    }
+    // Each stage gives its own samplers (`OitRenderPassProvider`).
+    let stages: [_; 3] = std::array::from_fn(|i| {
+        let stage = &crate::gfx::core_clouds::OIT_STAGES[i];
+        crate::core_shader::translate_core_with(
+            &vertex,
+            &fragment,
+            stage.defines,
+            &include,
+            &WORLD_GLUE,
+            &|name| stage.samplers.contains(&name),
+        )
+        .expect("vanilla's text shader translates for each stage")
+    });
+    let oit = super::oit::OitPart::new(
+        &device,
+        std::array::from_fn(|i| (&stages[i], &[][..])),
+        &atlas,
+        (&lightmap, &sampler),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(oit.is_some(), "the Improved Transparency text pipelines");
 }
 
 #[test]
@@ -369,7 +403,12 @@ fn pack_world_text_shades_both_normal_and_polygon_offset_depth_modes() {
     });
     let mut uploads = super::super::upload::Uploads::new(&device);
     let mut encoder = device.create_command_encoder(&Default::default());
-    text.prepare(&mut uploads, &mut encoder, &[0u8; 1024], [[0.0; 4]; 2]);
+    text.prepare(
+        &mut uploads,
+        &mut encoder,
+        &[0u8; 1024],
+        ([[0.0; 4]; 2], false),
+    );
     {
         let cv = color.create_view(&Default::default());
         let dv = depth.create_view(&Default::default());
@@ -534,7 +573,7 @@ fn pack_world_text_hdr_mark_marks_only_drawn_fragments() {
         let mut uploads = super::super::upload::Uploads::new(&device);
         let mut encoder = device.create_command_encoder(&Default::default());
         let windows = [[0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]];
-        text.prepare(&mut uploads, &mut encoder, &[0u8; 1024], windows);
+        text.prepare(&mut uploads, &mut encoder, &[0u8; 1024], (windows, false));
         {
             let cv = color.create_view(&Default::default());
             let dv = depth.create_view(&Default::default());

@@ -399,6 +399,9 @@ pub(crate) fn install_client_hooks() {
                 within,
             );
         },
+        is_scaffolding: |context, entity, pos, state, scaffolding| {
+            crate::game::is_scaffolding(context, entity, pos, state, scaffolding);
+        },
         makes_open_trapdoor_above_climbable:
             crate::game::native_trapdoor_ladder::makes_open_trapdoor_above_climbable,
         friction: crate::game::native_surface::friction,

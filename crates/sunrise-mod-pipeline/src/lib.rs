@@ -708,6 +708,46 @@ fn validate_vertex_inputs(
     Ok(())
 }
 
+/// [`extract_mod_bindings`] over a program's two stages with their `#include`s inlined under
+/// `defines`, as [`translate`] reads them: a uniform block, sampler or buffer an included file
+/// declares is the program's too (#5905). A stage whose includes cannot be expanded is scanned
+/// as written; [`translate`] then reports why.
+pub fn extract_program_bindings(
+    sources: &ProgramSources<'_>,
+    textured: bool,
+    defines: &[&str],
+    include: &dyn Fn(&str) -> Result<Option<String>, String>,
+) -> (Vec<(String, ModBindingKind)>, u32) {
+    let read = |id: &str| -> Result<Option<String>, String> {
+        if id == SPRITE_INCLUDE {
+            return if textured {
+                Ok(Some(PIPELINE_SPRITE_GLSL.to_owned()))
+            } else {
+                Err(format!("{SPRITE_INCLUDE} requires a sprite texture"))
+            };
+        }
+        include(id)
+    };
+    let includes = Includes {
+        read: &read,
+        namespace: "minecraft",
+        folder: INCLUDE_FOLDER,
+        once: &["moj_import"],
+    };
+    let defines = effective_defines(defines);
+    let expand = |text: &str, file: &str, dir: &str| {
+        sunrise_glsl::expand_includes(text, file, dir, &includes, Some(&defines))
+            .map_or_else(|_| text.to_owned(), |expanded| expanded.text().to_owned())
+    };
+    let vertex = expand(sources.vertex, sources.vertex_file, sources.vertex_dir);
+    let fragment = expand(
+        sources.fragment,
+        sources.fragment_file,
+        sources.fragment_dir,
+    );
+    extract_mod_bindings(&vertex, &fragment, textured)
+}
+
 /// Prepend [`DEPTH_ZERO_TO_ONE`] to caller-supplied defines.
 fn effective_defines<'a>(defines: &[&'a str]) -> Vec<&'a str> {
     std::iter::once(DEPTH_ZERO_TO_ONE)

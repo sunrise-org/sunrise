@@ -91,9 +91,15 @@ follows its vehicle. The server carries the entities it simulates, and each Sunr
 After carrying, a collider that moved or turned shoves bodies in the simultaneous swept path of its
 boxes (conservative advancement over linear pivot motion and shortest-arc rotation together). This
 also uses `MoveCause::Carried`. Changing a box's bounds does not sweep that box between the old and
-new shape. A shove does not cancel velocity into the collider; the ordinary entity move handles
-velocity when the body hits an obstacle. The client predicts a shove for its own player, and ordinary
-server movement checks still apply.
+new shape.
+
+The velocity response follows Create's `ContraptionCollider.collideEntities`. Once a shove actually moves
+a body, the component of its velocity pointing into the shove is removed; velocity along the shove and
+tangential to it stay. An upward shove never lowers vertical velocity below the collider's own vertical
+speed, so a body already rising faster keeps it. Riders already carried by the collider are not shoved
+again. Vanilla pistons and shulkers keep their ordinary velocity behaviour. The server shoves non-player
+entities and never a player; the client predicts the shove for its own player, and ordinary server
+movement checks still apply.
 
 Neither carrying nor shoving pushes through a wall, and the collider is never stopped by a body in
 its way. A squeezed body stays where the collision leaves it. A living body still takes `in_wall`

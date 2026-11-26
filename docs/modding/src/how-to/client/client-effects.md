@@ -327,6 +327,15 @@ die sooner, as in a real room. The line lengths set how dense the echoes are. Th
 once, when the sound system starts, and about 1.1 MiB is used whatever the device's rate. A reverb nothing is sent to
 costs nothing once its tail has died away. Mod-set reverb parameters are not available yet.
 
+## Replacing the weather effects
+
+Each client tick `tick_weather_effects` is asked before vanilla's weather effects run
+(`ClientLevel.tickWeatherEffects`): the rain splash particles around the camera, the smoke where rain
+falls on lava, magma and lit campfires, and the ambient rain sound. It gets the level, its clock, the
+camera's position and the rain level. Return `Flow::Cancel` to skip all of it for that tick, sound timer
+included, and draw and play your own weather instead (NeoForge's `CustomWeatherEffectRenderer.tickRain`).
+The rain columns drawn each frame are separate.
+
 ## Narrating a line
 
 A client mod has the player's narrator say a line with `ClientNarratorClientHost::narrate`,

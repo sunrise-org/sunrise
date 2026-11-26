@@ -1075,12 +1075,13 @@ impl Game<'_> {
             border: Some((self.border.geometry(), [b.position.x, b.position.z])),
         };
         let movement = b.take_movement();
-        let mut gate = sunrise_client::move_gate::armed_with(
+        let mut gate = sunrise_client::move_gate::armed_with_controlled(
             &self.loop_context,
             b.id,
             || std::borrow::Cow::Owned(b.entity_type()),
             sunrise_world::entity_move::MoverType::SelfMovement,
             movement,
+            controlled,
         );
         let movement = gate.delta();
         if let Ok(moved) = sunrise_client::move_gate::entities_resolve(

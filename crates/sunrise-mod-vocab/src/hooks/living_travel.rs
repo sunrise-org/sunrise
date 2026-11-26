@@ -2,12 +2,13 @@
 //! reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// Before the server's `Player.travel` branch (after swim steering) or a
-    /// mob's `LivingEntity.travel` branch. `entity`, `kind` and `mode` identify
-    /// the body and the branch it is about to run, including species overrides.
-    /// A body that doesn't travel, such as a shulker, fires no hook. Neither does
-    /// a replayed player tick. A branch that calls `entity_move` can still meet
-    /// a move veto there.
+    /// Movement phase 2 (Travel start, `LivingEntity.travel` branch pick): before
+    /// the `Player.travel` branch (after swim steering) or a mob's
+    /// `LivingEntity.travel` branch. `entity`, `kind` and `mode` identify the
+    /// body and the branch it is about to run, including species overrides. A
+    /// body that doesn't travel, such as a shulker, fires no hook. Simulated
+    /// (replayed) player ticks fire the hook as real ticks do. A branch that
+    /// calls `entity_move` can still meet a move veto there.
     ///
     /// Replace `input` or `velocity` to change the branch's starting values,
     /// not the branch itself. Edits and cancellation are independent: there is
@@ -33,21 +34,17 @@ pub trait Hooks {
     /// It runs on both peers: the client's own movement fires it with the same
     /// inputs the server has that tick, so a mod installed on both sides gets
     /// the same edit or veto in the client's prediction as the server applies.
-    /// The server keeps its movement checks, and its position wins over the
-    /// client's prediction.
-    ///
-    /// For a player on the server, the veto takes effect at the server's travel boundary:
-    /// reports it already accepted are not rewound. While the veto stands,
-    /// the server corrects new movement reports to its accepted position.
-    /// An edit that changes the stored velocity or the acceleration the
-    /// chosen branch applies sends one correction, even if collision absorbs
-    /// it, if the player remains eligible and no correction awaits
-    /// acknowledgement. The server compares the inputs at `moveRelative`
-    /// using the branch's own speed and yaw; inputs that have the same effect
-    /// or are unused by the branch do not trigger a correction. A separate
-    /// teleport in the same tick takes priority. The correction carries the
-    /// live server position and velocity.
+    /// The server keeps vanilla's movement checks, and its position wins over
+    /// the client's prediction. A `side = "server"` mod's listener is not called
+    /// for a body a client controls (a player, or a vehicle a player is driving)
+    /// and runs normally for every other body.
     /// Beyond NeoForge: there is no counterpart.
+    ///
+    /// Version 5: the server no longer sends a position correction for a
+    /// listener's edit or clamps later movement reports on a veto (vanilla's
+    /// ordinary movement checks decide), simulated (replayed) player ticks fire
+    /// the hook, and a `side = "server"` mod's listener is skipped for a body a
+    /// client controls (a player or a vehicle a player is driving).
     ///
     /// Version 4: fires on the client's own movement as well as the server's
     /// (`side = "both"`); a client without the mod sees no change.
@@ -63,7 +60,7 @@ pub trait Hooks {
         out = "canceled",
         context = "loop",
         cancellable = true,
-        version = 4,
+        version = 5,
         neoforge = "none (fork addition, #2308)",
         target = "sunrise_client_lib::travel_gate::native_living_travel"
     )]

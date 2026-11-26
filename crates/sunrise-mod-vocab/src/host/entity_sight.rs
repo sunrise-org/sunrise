@@ -32,7 +32,8 @@ pub trait EntitySightBackend {
     /// and must be finite. A miss is the hit with `miss` set. This clips blocks
     /// and fluids only; for entities, use [`LevelRef::ray_trace_nearest_entity`]
     /// or [`LevelRef::ray_trace_entities`]. Returns `None` for a stale handle,
-    /// a non-finite `distance`, or when `LevelRef::clip` returns `None`.
+    /// a non-finite `distance`, or when `LevelRef::clip` returns an error or
+    /// `ClipOutcome::Unloaded`.
     fn entity_pick(
         &self,
         entity: EntityRef,

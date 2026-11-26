@@ -1093,6 +1093,71 @@ fn block_items_patch_their_template_item() {
     fs::remove_dir_all(scratch).unwrap();
 }
 
+/// A block's item takes the block's name key by default (`useBlockDescriptionPrefix`, as
+/// vanilla's `Items.registerBlock`), and its own `item.<namespace>.<path>` with
+/// `"use_block_description_prefix": false` (#5574); a name the patch sets wins either way.
+#[test]
+fn a_block_item_takes_its_own_name_key_when_the_block_says_so() {
+    let scratch = std::env::temp_dir().join(format!("sunrise-item-name-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let base = scratch.join("base");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join("facts.json"),
+        r#"{"states": [["minecraft:iron_block"]], "defaults": {"minecraft:iron_block": 0}}"#,
+    )
+    .unwrap();
+    fs::write(
+        base.join("gameplay-facts.json"),
+        r#"{"states": [{"item": "minecraft:iron_block"}]}"#,
+    )
+    .unwrap();
+    let items = r#"{"minecraft:iron_block": {"minecraft:max_stack_size": 64,
+        "minecraft:item_name": {"translate": "block.minecraft.iron_block"}}}"#;
+    fs::write(base.join("items.json"), items).unwrap();
+    let name = |dir: &str, extra: &str| {
+        let mods = [folder_mod(
+            &scratch.join(dir),
+            &[
+                ("sunrise-mod.toml", &manifest("bridges", "")),
+                (
+                    "data/bridges/sunrise/block/oak/log_bridge.json",
+                    &format!(r#"{{"template": "minecraft:iron_block"{extra}}}"#),
+                ),
+            ],
+        )];
+        let mut doc: J = serde_json::from_str(items).unwrap();
+        Plan::new(&base, &mods)
+            .unwrap()
+            .json("items.json", &mut doc)
+            .unwrap();
+        let doc: serde_json::Value = serde_json::to_value(&doc).unwrap();
+        doc["bridges:oak/log_bridge"]["minecraft:item_name"].clone()
+    };
+    let translate = |key: &str| serde_json::json!({"translate": key});
+    assert_eq!(
+        name("default", ""),
+        translate("block.bridges.oak.log_bridge")
+    );
+    assert_eq!(
+        name("prefix", r#", "use_block_description_prefix": true"#),
+        translate("block.bridges.oak.log_bridge")
+    );
+    assert_eq!(
+        name("own", r#", "use_block_description_prefix": false"#),
+        translate("item.bridges.oak.log_bridge")
+    );
+    assert_eq!(
+        name(
+            "patched",
+            r#", "use_block_description_prefix": false,
+                "components": {"minecraft:item_name": {"translate": "bridges.named"}}"#
+        ),
+        translate("bridges.named")
+    );
+    fs::remove_dir_all(scratch).unwrap();
+}
+
 #[test]
 fn a_mods_atlas_sources_follow_vanillas() {
     let vanilla = r#"{"sources": [{"type": "directory", "source": "block", "prefix": "block/"}]}"#;

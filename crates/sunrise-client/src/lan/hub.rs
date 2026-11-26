@@ -2275,58 +2275,6 @@ impl Hub {
         });
     }
 
-    /// Publish the server's travel decision at the end of this player's body
-    /// tick. A separate teleport during the tick owns the new position instead.
-    /// Returns whether a travel correction already sent the body's velocity.
-    pub fn apply_server_travel(
-        &mut self,
-        conn: u32,
-        teleport_counter: i32,
-        decision: crate::motion::ServerTravel,
-    ) -> bool {
-        use crate::motion::ServerTravel;
-        let Some(i) = self.guests.connection_index(conn) else {
-            return false;
-        };
-        let g = &self.guests[i];
-        let eligible = g.teleport_counter == teleport_counter
-            && g.client_loaded()
-            && !g.dead
-            && !g.spectator()
-            && !g.sleeping
-            && g.vehicle.is_none();
-        let veto = eligible && matches!(decision, ServerTravel::Veto);
-        if self.guests[i].travel_vetoed != veto {
-            self.guests.update(i, |g| g.travel_vetoed = veto);
-        }
-        let g = &self.guests[i];
-        // The in-flight target and its velocity belong to the ordinary
-        // acknowledgement and resend path. No travel result publishes over it.
-        if !eligible || g.awaiting_teleport.is_some() {
-            return false;
-        }
-        let ServerTravel::Replace {
-            position,
-            on_ground,
-        } = decision
-        else {
-            return false;
-        };
-        let Some(velocity) = g.motion.as_ref().map(|b| b.velocity.components()) else {
-            return false;
-        };
-        let position = position.components();
-        let carried = g.on_collider;
-        self.guests.update(i, |g| {
-            g.on_ground = on_ground;
-            g.moved = true;
-            g.known_movement = [0, 1, 2].map(|axis| position[axis] - g.position[axis]);
-        });
-        self.send_position_correction(i, Some(position), 0, [0.0; 3], Some(velocity));
-        self.keep_carried_at(i, carried, position);
-        true
-    }
-
     /// ClientboundSetDefaultSpawnPositionPacket for the world's respawn data:
     /// the world spawn in `dimension`, its level, wherever the player is.
     pub fn default_spawn(&self, spawn: [f64; 3], angle: [f32; 2], dimension: &str) -> C {
@@ -4880,17 +4828,6 @@ impl Hub {
                 return;
             }
         };
-        // A veto applies from the last server travel onward, not to reports
-        // already committed before it. Do not correct a report that stays put.
-        let g = &self.guests[i];
-        if g.travel_vetoed && to != start && !g.spectator() {
-            let velocity = g.motion.as_ref().map(|body| body.velocity.components());
-            let carried = g.on_collider;
-            self.guests.update(i, |g| (g.yaw, g.pitch) = (yaw, pitch));
-            self.send_position_correction(i, Some(start), 0, [0.0; 3], velocity);
-            self.keep_carried(i, carried, Some(start));
-            return;
-        }
         // The confirmation of a teleport (a carried player's correction included) is committed in
         // place against the world as it stands.
         let (wrongly, refused, stands) = if hearing == Hearing::Confirmation {

@@ -90,6 +90,7 @@ impl Game<'_> {
                 tables: &self.pack.context.tables,
                 registry: self.pack.assets.registry,
             }),
+            report_unloaded: false,
         };
         let (bottom_y, top_y) = (self.world.bottom_y(), self.world.top_y());
         let (state, hit) = traverse_blocks_window(clip_from, walk_to, window, usize::MAX, |p| {

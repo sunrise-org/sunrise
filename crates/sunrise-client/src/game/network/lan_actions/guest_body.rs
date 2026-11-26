@@ -3,7 +3,7 @@ use super::*;
 use sunrise_client::{
     lan::{guest::Guest, hub::CommittedMove},
     landing::PlayerLandingPause,
-    motion::{MotionResources, PlayerMotion, ServerTravel},
+    motion::{MotionResources, PlayerMotion},
 };
 use sunrise_core::geometry::Vec3;
 
@@ -35,10 +35,10 @@ macro_rules! settle_guest_hit {
     ($game:ident, $side:ident, $world:ident, $id:ident) => {
         if $world.player.health.damage_completion.is_some() {
             if let Err(collected) = $game.finish_guest_damage_before_resume() {
-                return (collected, None, ServerTravel::Continue);
+                return (collected, None);
             }
             let Some(player) = $game.player.as_mut().filter(|p| p.entity_id as u32 == $id) else {
-                return (Vec::new(), None, ServerTravel::Continue);
+                return (Vec::new(), None);
             };
             $side = game_side!($game);
             $world = motion_world!($game, $side, player);
@@ -337,7 +337,6 @@ impl Game<'_> {
             return;
         }
         let at = g.position;
-        let travel_teleport = g.teleport_counter;
         let dimensions = g.dimensions();
         let (sneaking, sleeping) = (g.sneaking, g.sleeping);
         let riding = g.vehicle.is_some();
@@ -356,7 +355,7 @@ impl Game<'_> {
             let boat = game.riding_boat_fluid_box();
             let swim_listener = game.has_swim_eligibility_listener();
             let Some(player) = game.player.as_mut() else {
-                return (Vec::new(), None, ServerTravel::Continue);
+                return (Vec::new(), None);
             };
             player.fluids.boat = boat;
             player.leather_boots = leather_boots;
@@ -367,7 +366,7 @@ impl Game<'_> {
                 let decision = if swim_listener { w.swim_entry() } else { None };
                 let answer = game.ask_swim_entry(decision);
                 let Some(player) = game.player.as_mut().filter(|p| p.entity_id as u32 == id) else {
-                    return (Vec::new(), None, ServerTravel::Continue);
+                    return (Vec::new(), None);
                 };
                 side = game_side!(game);
                 w = motion_world!(game, side, player);
@@ -443,7 +442,7 @@ impl Game<'_> {
                 let _ = side;
                 game.flush_player_inside(inside_effects);
                 let Some(player) = game.player.as_mut() else {
-                    return (collected, None, ServerTravel::Continue);
+                    return (collected, None);
                 };
                 collected.append(&mut player.events);
                 player.events = collected;
@@ -465,7 +464,7 @@ impl Game<'_> {
                     step => step.map(|step| (step, step.vanilla)),
                 };
                 let Some(player) = game.player.as_mut() else {
-                    return (collected, None, ServerTravel::Continue);
+                    return (collected, None);
                 };
                 collected.append(&mut player.events);
                 player.events = collected;
@@ -505,7 +504,7 @@ impl Game<'_> {
             // attributes refresh in `LivingEntity.tick`. `Player.tick` then
             // chooses its pose, including for a passenger (#4509 / #3308).
             let Some(player) = game.player.as_mut() else {
-                return (events, None, ServerTravel::Continue);
+                return (events, None);
             };
             let side = game_side!(game);
             let mut w = motion_world!(game, side, player);
@@ -519,7 +518,7 @@ impl Game<'_> {
             game.update_soul_speed_location();
             game.handle_shoulder_entities();
             let Some(player) = game.player.as_mut() else {
-                return (Vec::new(), None, ServerTravel::Continue);
+                return (Vec::new(), None);
             };
             let _ = player.peaceful_regeneration(
                 &game.loop_context,
@@ -540,14 +539,12 @@ impl Game<'_> {
             );
             game.finish_guest_damage();
             let Some(player) = game.player.as_mut().filter(|p| p.entity_id as u32 == id) else {
-                return (events, None, ServerTravel::Continue);
+                return (events, None);
             };
             events.append(&mut player.events);
             player.carry_client_movement(tick_movement);
             let side = game_side!(game);
-            let travel = motion_world!(game, side, player)
-                .server_travel()
-                .unwrap_or(ServerTravel::Continue);
+            let _ = motion_world!(game, side, player).server_travel();
             game.finish_guest_damage();
             // Player.aiStep's entity contacts run with the player's body,
             // even when the level and its mobs are frozen. Flush their damage
@@ -555,7 +552,7 @@ impl Game<'_> {
             game.touch_pufferfish();
             let blocking = body && game.player_blocking_component().is_some();
             let Some(player) = game.player.as_mut() else {
-                return (events, None, ServerTravel::Continue);
+                return (events, None);
             };
             if body {
                 let movement = player.position.subtract(vector(at));
@@ -575,15 +572,11 @@ impl Game<'_> {
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
             game.record_guest_motion_combat(&events);
-            (events, velocity, travel)
+            (events, velocity)
         });
-        let Some((events, marked, travel)) = events else {
+        let Some((events, marked)) = events else {
             return;
         };
-        let travel_synced = self
-            .lan
-            .as_mut()
-            .is_some_and(|host| host.hub.apply_server_travel(conn, travel_teleport, travel));
 
         self.as_guest(conn, |game| {
             game.sculk_step_on_player();
@@ -606,9 +599,7 @@ impl Game<'_> {
             {
                 self.native_player_velocity(uuid, &name, [v.x, v.y, v.z]);
             }
-            if !travel_synced
-                && let Some(g) = self.lan.as_ref().and_then(|host| host.hub.guest(conn))
-            {
+            if let Some(g) = self.lan.as_ref().and_then(|host| host.hub.guest(conn)) {
                 g.send(&C::SetEntityMotion(play::SetEntityMotion {
                     id: g.entity_id,
                     velocity: [v.x, v.y, v.z],

@@ -458,6 +458,8 @@ pub struct BlockEntityDraw<'v> {
     quad_capacity: sunrise_client::gfx::EntityQuadCapacity,
     /// Complete quads already reserved by other draw sources in the same combined batch.
     reserved_quads: usize,
+    /// Inside a mod's submit that `block_entity` dispatched: another `block_entity` is refused.
+    nested: bool,
 }
 
 /// One element (`block`, `model`, `terrain_model`, `cube` or `quad`) drawn under
@@ -702,6 +704,7 @@ impl<'v> BlockEntityDraw<'v> {
             records: Vec::new(),
             quad_capacity: sunrise_client::gfx::EntityQuadCapacity::default_device(),
             reserved_quads: 0,
+            nested: false,
         }
     }
 
@@ -900,6 +903,24 @@ impl<'v> BlockEntityDraw<'v> {
             self.normal_pose = normals;
             self.local_light_translation = light_translation;
         }
+    }
+    /// `Err` inside a submit that [`Self::one_level`] runs: a carried block entity is drawn one
+    /// level deep, so input a mod controls cannot recurse without end.
+    fn refuse_nested(&self) -> Result<(), mod_api::BlockEntityDrawRefusal> {
+        if self.nested {
+            Err(mod_api::BlockEntityDrawRefusal::Nested)
+        } else {
+            Ok(())
+        }
+    }
+    /// Runs `submit` as a carried block entity's: under its own pose level, with
+    /// [`Self::refuse_nested`] refusing what it draws that way.
+    fn one_level(&mut self, submit: impl FnOnce(&mut Self)) {
+        self.nested = true;
+        self.push();
+        submit(self);
+        self.pop();
+        self.nested = false;
     }
     /// Moves what is drawn next by `by`, in blocks.
     fn translate(&mut self, by: [f32; 3]) {
@@ -1656,6 +1677,7 @@ impl Game<'_> {
                 records: Vec::new(),
                 quad_capacity: self.entity_quad_capacity(),
                 reserved_quads: self.entity_batch_reserved_quads(),
+                nested: false,
             };
             let now = view.game_time;
             let mut kept = self.kept_block_entities.borrow_mut();
@@ -2071,6 +2093,115 @@ impl Game<'_> {
         );
         draw.drawn_since(start, BlockEntityDraw::cell_centre, draw.light & 0xffff);
         true
+    }
+
+    /// `BlockEntityRenderDispatcher`'s extract and submit for `entity`, a block entity of
+    /// block state `state` (None: the state is not in the registry) that the caller carries
+    /// (`BlockEntityDrawContext::block_entity`), under `draw`'s pose and light, with no overlay
+    /// (`NO_OVERLAY`). The entity's own position is never read and `shouldRender`'s culling is
+    /// skipped: the caller's entity was culled already.
+    ///
+    /// A state with a vanilla renderer draws through `BlockEntityRenderer::render_state`
+    /// (`sunrise_client::block_entity_render`), the renderer's no-level form, from the data in
+    /// `entity.fields.nbt`; any other state's mod Part submits, one level deep, with the entity
+    /// as its data. A state with neither draws nothing.
+    pub(super) fn native_draw_block_entity(
+        &self,
+        draw: &mut BlockEntityDraw,
+        state: Option<BlockStateId>,
+        entity: &mod_api::SceneBlockEntity,
+    ) -> Result<(), mod_api::BlockEntityDrawRefusal> {
+        draw.refuse_nested()?;
+        let Some(state) = state else {
+            return Ok(());
+        };
+        let block = &*self.res.facts().get(state).name;
+        let renderer = self.res.block_entity_render();
+        if !renderer.renders(state.0) {
+            draw.one_level(|draw| {
+                self.native_block_entity_submit(
+                    draw.block,
+                    block,
+                    state,
+                    mod_api::BlockEntityDataView::new(entity),
+                    draw,
+                );
+            });
+            return Ok(());
+        }
+        // The saved tag as `BlockEntity.loadWithComponents` reads it, at the origin.
+        let mut fields = entity.fields.nbt.clone();
+        fields.insert(
+            "id".into(),
+            sunrise_core::nbt::Tag::String(entity.id.as_str().into()),
+        );
+        for key in ["x", "y", "z"] {
+            fields.insert(key.into(), sunrise_core::nbt::Tag::Int(0));
+        }
+        let saved = sunrise_core::nbt::Tag::Compound(fields);
+        let decoded = sunrise_client::save::decode_block_entity_for_block(&saved, block)
+            .map(|(_, entity)| entity);
+        let anim = sunrise_client::block_entity_render::BlockAnim {
+            sherds: if block == "minecraft:decorated_pot" {
+                super::block_entity_anims::pot_sherds(Some(&saved))
+            } else {
+                Default::default()
+            },
+            ..Default::default()
+        };
+        let banner = match &decoded {
+            Some(BlockEntity::Banner(banner)) => {
+                super::banners::layer_textures(&self.stations().banners, &banner.layers)
+            }
+            _ => Vec::new(),
+        };
+        let skin = match &decoded {
+            Some(BlockEntity::Skull(skull)) => self.skull_skin(skull),
+            _ => None,
+        };
+        let gui = &self.gui;
+        let scene = sunrise_client::block_entity_render::Scene {
+            camera: DVec3::ZERO,
+            sign_outline: sunrise_client::block_entity_render::SignOutline::None,
+            orientation: Quat::IDENTITY,
+            anim: &|_| anim.clone(),
+            texts: None,
+            partial: draw.view.partial_tick,
+            game_time: draw.view.game_time,
+            max_y: self.world.shape.max_y() - 1,
+            world: &self.world,
+            sprites: &gui.atlas.sprites,
+            emissive: &gui.atlas.emissive,
+            translucent_sprites: &gui.atlas.translucent,
+            atlas_revision: gui.atlas.revision,
+            nether: self.nether_lighting(),
+            lid: &|_| 0.0,
+            sign: &|_| match &decoded {
+                Some(BlockEntity::Sign(sign)) => Some(sign),
+                _ => None,
+            },
+            inline_images: None,
+            banner: &|_| banner.clone(),
+            skull: &|_| skin.clone(),
+            glyph: &|c| gui.atlas.glyph_cell(c),
+            glyphs: gui.atlas.font.epoch(),
+            font: Some(&gui.atlas.font),
+            dynamic_visible: None,
+        };
+        if !draw.quad_scope().has_room() {
+            return Ok(());
+        }
+        let start = draw.vertices.len();
+        renderer.render_state(
+            &scene,
+            state.0,
+            draw.pose(),
+            super::minecarts::special_light(draw.light),
+            &mut draw.vertices,
+        );
+        draw.quad_scope().retain_valid_since(start);
+        draw.drawn_since(start, BlockEntityDraw::cell_centre, draw.light & 0xffff);
+        Ok(())
     }
 
     /// Resolved block state `id` as one model: what `native_draw_block` draws
@@ -4848,5 +4979,242 @@ mod tests {
             4
         );
         assert_eq!(submits.get(), 3);
+    }
+
+    /// A carried block entity's submit draws one level deep: inside it `refuse_nested` refuses,
+    /// and the pose and the guard are back as they were once it ends.
+    #[test]
+    fn a_carried_submit_refuses_a_nested_one_and_restores_the_pose() {
+        let mut d = draw();
+        let pose = d.pose();
+        assert_eq!(d.refuse_nested(), Ok(()));
+        let mut inside = None;
+        d.one_level(|d| {
+            d.translate([1.0, 2.0, 3.0]);
+            inside = Some(d.refuse_nested());
+        });
+        assert_eq!(inside, Some(Err(mod_api::BlockEntityDrawRefusal::Nested)));
+        assert_eq!(d.refuse_nested(), Ok(()));
+        assert_eq!(d.pose(), pose);
+    }
+
+    /// `BlockEntityDrawContext::block_entity` draws a chest, a sign, a banner, a shulker box,
+    /// a skull and a mod's block entity into pixels, draws nothing for a bed (its renderer is
+    /// its block model) and for a type nobody renders, and refuses a call from inside its own
+    /// dispatch of a mod's submit.
+    #[test]
+    #[ignore = "daily"]
+    fn carried_block_entities_draw_visible_pixels() {
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::native_block_entity_draw::tests::carried_block_entities_draw_visible_pixels",
+            "SUNRISE_CARRIED_BLOCK_ENTITY_CHILD",
+            &["carried"],
+        ) {
+            return;
+        }
+        use super::super::{api_values::TryIntoApi, host::draw::GameBlockEntityDrawContext};
+        use mod_api::{
+            BlockEntityDrawContext, BlockEntityDrawRefusal, BlockEntityPart,
+            BlockEntitySubmitEvent, BlockPart, ClientHost, Hooks, ModEntry, Mods, Registrar,
+            RegistrationContext, SceneBlockEntity,
+        };
+        use std::sync::{Arc, Mutex};
+        use sunrise_core::nbt::{Compound, Tag};
+
+        struct Carried {
+            inner: Arc<Mutex<Option<SceneBlockEntity>>>,
+            nested: Arc<Mutex<Option<Result<(), BlockEntityDrawRefusal>>>>,
+        }
+        #[mod_api::sunrise_part]
+        impl BlockPart for Carried {}
+        #[mod_api::sunrise_part]
+        impl BlockEntityPart for Carried {
+            fn block_entity_submit(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut BlockEntitySubmitEvent<'_>,
+            ) {
+                let _ = event.draw.quad(
+                    "block/stone",
+                    [[0.0, 1.0, 0.0], [0.0; 3], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+                    [0.0, 0.0, 16.0, 16.0],
+                    0xFF_FFFF,
+                );
+                if let Some(inner) = self.inner.lock().unwrap().clone() {
+                    *self.nested.lock().unwrap() = Some(event.draw.block_entity(&inner));
+                }
+            }
+        }
+        struct CarriedMod {
+            inner: Arc<Mutex<Option<SceneBlockEntity>>>,
+            nested: Arc<Mutex<Option<Result<(), BlockEntityDrawRefusal>>>>,
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for CarriedMod {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                let kind = r
+                    .block_entity_type("carried")
+                    .blocks(&["minecraft:stone"])
+                    .build();
+                r.block_entity_part(
+                    &kind,
+                    Carried {
+                        inner: self.inner.clone(),
+                        nested: self.nested.clone(),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let inner = Arc::new(Mutex::new(None));
+        let nested = Arc::new(Mutex::new(None));
+        let mods: Mods = vec![ModEntry::new(
+            "carried_be",
+            Box::new(CarriedMod {
+                inner: inner.clone(),
+                nested: nested.clone(),
+            }),
+        )]
+        .into();
+        crate::game::api_values::install_parts(&mods).unwrap();
+
+        mod_platform::testing::with_mods(mods, || {
+            super::super::native_entity_refs::tests::with_client_game(|game| {
+                let game: &Game<'_> = game;
+                let entity = |game: &Game<'_>, id: &str, block: &str, nbt: Compound| {
+                    let state = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state(block)
+                        .unwrap_or_else(|| panic!("no block {block}"))
+                        .try_into_api()
+                        .unwrap();
+                    SceneBlockEntity::new(
+                        Identifier::parse(id).unwrap(),
+                        state,
+                        mod_api::item::containers::ModBlockEntityFields {
+                            nbt,
+                            items: Vec::new(),
+                            data: Vec::new(),
+                        },
+                    )
+                };
+                // The vertices `block_entity` adds under an identity pose, lit fully.
+                let drawn = |entity: &SceneBlockEntity| {
+                    let mut surface = draw();
+                    surface.pose = Mat4::IDENTITY;
+                    surface.light = 240 | 240 << 8;
+                    let result = GameBlockEntityDrawContext {
+                        game,
+                        surface: &mut surface,
+                    }
+                    .block_entity(entity);
+                    (result, surface.vertices)
+                };
+                // Lit pixels of a 64 by 64 picture of `vertices` over a white atlas.
+                let lit_pixels = |vertices: &[Vertex]| {
+                    let atlas = &game.gui.atlas;
+                    let white = vec![255; (atlas.width * atlas.height * 4) as usize];
+                    let view = Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.5, 0.5, 0.2),
+                        Quat::IDENTITY,
+                        Vec3::new(-0.25, -0.5, 0.4),
+                    );
+                    let rendered = sunrise_client::gfx::entity_pixel_test::render(
+                        vertices,
+                        [atlas.width, atlas.height],
+                        &white,
+                        view,
+                        false,
+                    )
+                    .expect("software Vulkan entity pixels");
+                    rendered
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
+                        .count()
+                };
+
+                let mut sign = Compound::new();
+                let mut front = Compound::new();
+                front.insert(
+                    "messages".into(),
+                    Tag::List(vec![
+                        Tag::String("carried".into()),
+                        Tag::String("".into()),
+                        Tag::String("".into()),
+                        Tag::String("".into()),
+                    ]),
+                );
+                // Black text (the default) is the picture's own black: dye it so it shows.
+                front.insert("color".into(), Tag::String("white".into()));
+                sign.insert("front_text".into(), Tag::Compound(front));
+                let rendered = [
+                    ("minecraft:chest", "minecraft:chest", Compound::new()),
+                    ("minecraft:sign", "minecraft:oak_sign", sign),
+                    ("minecraft:banner", "minecraft:red_banner", Compound::new()),
+                    (
+                        "minecraft:shulker_box",
+                        "minecraft:shulker_box",
+                        Compound::new(),
+                    ),
+                    (
+                        "minecraft:skull",
+                        "minecraft:skeleton_skull",
+                        Compound::new(),
+                    ),
+                    ("carried_be:carried", "minecraft:stone", Compound::new()),
+                ];
+                for (id, block, nbt) in rendered {
+                    let carried = entity(game, id, block, nbt);
+                    let (result, vertices) = drawn(&carried);
+                    assert_eq!(result, Ok(()), "{id}");
+                    let pixels = lit_pixels(&vertices);
+                    assert!(pixels >= 8, "{id} on {block} drew {pixels} pixels");
+                }
+
+                // A bed's renderer is its block model, and a stone block entity of another
+                // mod has no Part: both draw nothing and are no error.
+                for (id, block) in [
+                    ("minecraft:bed", "minecraft:red_bed"),
+                    ("other_mod:machine", "minecraft:dirt"),
+                ] {
+                    let (result, vertices) = drawn(&entity(game, id, block, Compound::new()));
+                    assert_eq!(result, Ok(()), "{id}");
+                    assert!(vertices.is_empty(), "{id} drew {} vertices", vertices.len());
+                }
+
+                // The mod's submit draws a chest of its own: that is the nested call, refused,
+                // while the same chest drawn from outside draws.
+                *inner.lock().unwrap() = Some(entity(
+                    game,
+                    "minecraft:chest",
+                    "minecraft:chest",
+                    Compound::new(),
+                ));
+                let carried = entity(
+                    game,
+                    "carried_be:carried",
+                    "minecraft:stone",
+                    Compound::new(),
+                );
+                let (result, vertices) = drawn(&carried);
+                assert_eq!(result, Ok(()));
+                assert_eq!(
+                    *nested.lock().unwrap(),
+                    Some(Err(BlockEntityDrawRefusal::Nested))
+                );
+                let (_, chest) = drawn(&inner.lock().unwrap().clone().unwrap());
+                assert_eq!(
+                    vertices.len(),
+                    4,
+                    "only the mod's quad: the nested chest drew nothing, a chest alone {}",
+                    chest.len()
+                );
+                assert!(!chest.is_empty());
+            });
+        });
     }
 }

@@ -4,7 +4,7 @@
 //! (`shader_modifiers`, wiki "Expression Uniforms on Any Shader"), resolved when the shader
 //! loaded (`polytone_post::ShaderModifiers::resolve`), each a block of one float holding its
 //! program's value this frame. The lightmap, sky, stars and block outline pipelines lay theirs out
-//! with this, and the GUI's, the world's and the see-through text pipelines too, through
+//! with this, and the text pipelines too, through
 //! [`bindings`] and [`sampler_bindings`]; any other pack core shader pipeline can.
 
 use crate::polytone_post::ExpressionUniform;
@@ -15,9 +15,9 @@ pub const LINES: [&str; 1] = ["minecraft:core/rendertype_lines"];
 /// The sky disc's and the stars' shaders.
 pub const SKY: [&str; 1] = ["minecraft:core/sky"];
 pub const STARS: [&str; 1] = ["minecraft:core/stars"];
-/// The text's shader, one for the GUI's, the world's and the see-through text
-/// (`polytone/shader_modifiers/core/text.json`). Each of those three pipelines binds its blocks
-/// with [`bindings`] and its samplers with [`sampler_bindings`].
+/// The text's shader, one for the GUI's, the world's, the see-through text and Improved
+/// Transparency's stages (`polytone/shader_modifiers/core/text.json`). Each of those pipelines
+/// binds its blocks with [`bindings`] and its samplers with [`sampler_bindings`].
 pub(crate) const TEXT: [&str; 1] = ["minecraft:core/text"];
 
 /// An expression uniform's block: one float, as std140 rounds a block.

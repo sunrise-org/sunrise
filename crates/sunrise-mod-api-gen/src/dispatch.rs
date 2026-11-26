@@ -1092,7 +1092,9 @@ pub(super) fn emit<'a>(
                 .as_ref()
                 .is_some_and(|(_, param)| param.ty == "LevelRandomSide");
         let filtered_subscribers = name == "add_pack_finders";
+        let movement_side_filter = matches!(name, "entity_move" | "living_travel");
         let allow_subscriber = fresh_name("allow", &mut used);
+        let client_controlled = fresh_name("client_controlled", &mut used);
         let invoke_part = fresh_name("invoke_part", &mut used);
         let invoke = call_args.join(", ");
         let trait_params = trait_params.join(", ");
@@ -1839,10 +1841,17 @@ pub(super) fn emit<'a>(
                     format!("super::listening(HookId::{hook_id})")
                 };
                 let active = enter_active(&format!("{mod_entry}.id"));
+                let side_guard = if movement_side_filter {
+                    format!(
+                        "if {client_controlled} && {mod_entry}.side == super::Side::Server {{ continue; }}\n"
+                    )
+                } else {
+                    String::new()
+                };
                 (
                     String::new(),
                     format!(
-                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in {each} {{ if {accepted} && !{receives} {{ continue; }} {active} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {cancel_step} {publish_each} }} }} {publish_end}"
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in {each} {{ {side_guard}if {accepted} && !{receives} {{ continue; }} {active} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {cancel_step} {publish_each} }} }} {publish_end}"
                     ),
                 )
             }
@@ -2025,6 +2034,24 @@ pub(super) fn emit<'a>(
             let (part_trait, _) = scoped.as_ref().unwrap();
             dispatch.push_str(&format!(
                 "#[doc(hidden)] pub fn dispatch_{name}({dispatch_signature}, mut {invoke_part}: impl FnMut(&dyn {part_trait}, LevelRandomSide<'_>, &mut {event_type}{elided})) {{ {unpack}{early_return}\n{body} }}\n"
+            ));
+        } else if movement_side_filter {
+            let wrapper_params = dispatch_params
+                .iter()
+                .map(|param| param.trim().strip_prefix("mut ").unwrap_or(param.trim()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let args = dispatch_params
+                .iter()
+                .map(|param| {
+                    let binding = param.split_once(':').unwrap().0.trim();
+                    binding.strip_prefix("mut ").unwrap_or(binding)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            dispatch.push_str(&format!(
+                "#[doc(hidden)] pub fn dispatch_{name}({wrapper_params}) {{ dispatch_{name}_for({args}, kind == \"minecraft:player\"); }}\n\
+                 #[doc(hidden)] pub fn dispatch_{name}_for({dispatch_signature}, {client_controlled}: bool) {{ {unpack}{early_return}\n{body} }}\n"
             ));
         } else if filtered_subscribers {
             let wrapper_params = dispatch_params

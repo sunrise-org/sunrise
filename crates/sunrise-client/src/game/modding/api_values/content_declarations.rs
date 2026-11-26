@@ -195,6 +195,7 @@ impl TryIntoEngine<()> for mod_api::Block {
                 .collect(),
             default_state: self.default_state.clone(),
             item: self.item,
+            own_item_name: !self.use_block_description_prefix,
             open_sound: self
                 .open_sound
                 .as_ref()

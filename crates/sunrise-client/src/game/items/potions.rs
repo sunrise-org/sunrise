@@ -58,7 +58,7 @@ impl CloudSettings {
 #[derive(Clone, Debug)]
 pub(super) struct ThrownPotion {
     /// Its entity id once a server's clients track it (0 until then).
-    id: u32,
+    pub(in crate::game) id: u32,
     stack: ItemStack,
     /// The position before the last tick, for drawing between ticks.
     previous: Vec3,

@@ -506,6 +506,12 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_, '_> {
         self.game
             .native_draw_fluid_box(&mut *self.surface, stack, bounds, options)
     }
+    #[inline]
+    fn block_entity(&mut self, entity: &SceneBlockEntity) -> Result<(), BlockEntityDrawRefusal> {
+        let state = entity.state.try_into_engine(&()).ok();
+        self.game
+            .native_draw_block_entity(&mut *self.surface, state, entity)
+    }
 }
 impl HandDrawContext for GameBlockEntityDrawContext<'_, '_, '_> {
     #[inline]
