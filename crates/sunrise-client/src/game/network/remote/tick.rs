@@ -152,12 +152,16 @@ impl Game<'_> {
                 })
                 .unwrap_or_default()
         };
-        // Entity.commonTick's tickCount, at each entity's own visit. The kinds a client tells
-        // their tick (mobs and players, projectiles, tridents, text displays) count in their own
-        // loops (`count_client_tick`): a root once its Pre let it through, a passenger at its
-        // ride visit whatever either Pre answers. The others are visited here, where their
-        // setOldPosAndRot runs.
-        self.count_untold_client_ticks(running, &frozen_ticking);
+        // EntityTickEvent.Pre and .Post bracket every entity the client ticks individually
+        // right before and right after its own turn. When neither hook is subscribed, every
+        // ticking tracked entity (except text displays, which filter by chunk) counts once here
+        // with zero hook preparation.
+        let mut round = self.native_tick_round();
+        let told = round.told_listening();
+        let mut visited = sunrise_client::fast_hash::FxHashSet::default();
+        if !told {
+            self.count_unsubscribed_client_ticks(running, &frozen_ticking);
+        }
         self.tick_text_displays(running);
         if running {
             // Entity.commonTick's setOldPosAndRot for each entity the level ticks.
@@ -171,7 +175,7 @@ impl Game<'_> {
             for i in self.interactions.values_mut() {
                 i.snapshot_previous();
             }
-            self.tick_remote_ominous_item_spawners();
+            self.tick_remote_ominous_item_spawners_with(&mut round, &mut visited);
         } else {
             // ClientLevel.tickPassenger: non-players in a player-bearing passenger tree still tick.
             if let Some(r) = self.remote.as_mut() {
@@ -189,13 +193,20 @@ impl Game<'_> {
                 }
             }
         }
-        // EntityTickEvent.Pre and .Post bracket each mob and remote player individually right
-        // before and right after its own turn below.
-        let mut round = self.native_tick_round();
-        // The mount this client moves ticks in `remote_ride` instead, as its
-        // authoritative side (LivingEntity.tick with travelRidden).
-        let driven = self.driven_mount().map(|m| m.id);
-        let told = round.told_listening();
+        // The mount or boat this client moves ticks in `tick_driven_vehicle` before the local
+        // player's own Pre (when loaded and alive), as its authoritative side.
+        let own_drives = self.player.is_some()
+            && self.screen != Screen::Dead
+            && self.remote.as_ref().is_some_and(|r| r.loaded_sent);
+        let driven = own_drives
+            .then(|| self.driven_mount().map(|m| m.id))
+            .flatten();
+        let driven_boat = own_drives
+            .then(|| {
+                self.riding
+                    .filter(|&id| self.boats.iter().any(|b| b.id == id) && self.controls_boat(id))
+            })
+            .flatten();
         // EntityFluidInteraction.update for the entities this window only displays: the
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
         // tropical fish lie on their side without `in_water`, #1591).
@@ -386,13 +397,18 @@ impl Game<'_> {
             if !running && !ticks_frozen {
                 continue;
             }
-            // The mount this client drives ticks in `remote_ride`, told nothing: its visit.
+            // The mount this client drives ticks in `tick_driven_vehicle` before the local player.
             if driven == Some(id) {
-                self.count_client_tick(id);
+                if told {
+                    visited.insert(id);
+                }
                 continue;
             }
+            if told {
+                visited.insert(id);
+            }
             // A passenger's ride visit counts it before its own Pre is told, whatever it answers.
-            let passenger = self.client_passenger(id);
+            let passenger = told && self.client_passenger(id);
             if passenger {
                 self.count_client_tick(id);
             }
@@ -430,7 +446,7 @@ impl Game<'_> {
                 );
             }
             // A root's own visit, once its Pre let it through.
-            if !passenger {
+            if told && !passenger {
                 self.count_client_tick(id);
             }
             let animation = if player && self.mobs[i].extra.using_item > 0 {
@@ -720,8 +736,6 @@ impl Game<'_> {
         // push out of a block, which are the server's): gravity, buoyancy,
         // collisions and the pull of the nearest player between the server's
         // updates; the server removes it on pickup.
-        let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
-        let border = Some(self.border.geometry());
         let mut lava_random = None;
         let mut next_float = || {
             lava_random
@@ -729,77 +743,163 @@ impl Game<'_> {
                 .next_float()
         };
         if running {
-            let sections = self.client_pick.sections.get_mut();
-            self.orbs.retain_mut(|o| {
-                let distance = |feet: &[f64; 3]| -> f64 {
-                    (feet[0] - o.position.x).powi(2)
-                        + (feet[1] - o.position.y).powi(2)
-                        + (feet[2] - o.position.z).powi(2)
-                };
-                let target = followed
-                    .iter()
-                    .filter(|(feet, _)| distance(feet) < 64.0)
-                    .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
-                    .map(|(_, target)| *target);
-                // Entity.commonTick: setOldPosAndRot, then
-                // LinearInterpolationHandler.doInterpolate moves 1/remaining of
-                // the way to the server's position, so the frame draws the step
-                // from the old position.
-                let old = o.position;
-                if let Some(l) = self
-                    .remote
-                    .as_mut()
-                    .and_then(|r| r.lerps.get_mut(&(o.id as i32)))
-                    .filter(|l| l.steps > 0)
-                {
-                    let alpha = 1.0 / f64::from(l.steps);
-                    o.position = Vec3::new(
-                        o.position.x + (l.target[0] - o.position.x) * alpha,
-                        o.position.y + (l.target[1] - o.position.y) * alpha,
-                        o.position.z + (l.target[2] - o.position.z) * alpha,
+            if !told {
+                let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
+                let border = Some(self.border.geometry());
+                let sections = self.client_pick.sections.get_mut();
+                self.orbs.retain_mut(|o| {
+                    let distance = |feet: &[f64; 3]| -> f64 {
+                        (feet[0] - o.position.x).powi(2)
+                            + (feet[1] - o.position.y).powi(2)
+                            + (feet[2] - o.position.z).powi(2)
+                    };
+                    let target = followed
+                        .iter()
+                        .filter(|(feet, _)| distance(feet) < 64.0)
+                        .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
+                        .map(|(_, target)| *target);
+                    // Entity.commonTick: setOldPosAndRot, then
+                    // LinearInterpolationHandler.doInterpolate moves 1/remaining of
+                    // the way to the server's position, so the frame draws the step
+                    // from the old position.
+                    let old = o.position;
+                    if let Some(l) = self
+                        .remote
+                        .as_mut()
+                        .and_then(|r| r.lerps.get_mut(&(o.id as i32)))
+                        .filter(|l| l.steps > 0)
+                    {
+                        let alpha = 1.0 / f64::from(l.steps);
+                        o.position = Vec3::new(
+                            o.position.x + (l.target[0] - o.position.x) * alpha,
+                            o.position.y + (l.target[1] - o.position.y) * alpha,
+                            o.position.z + (l.target[2] - o.position.z) * alpha,
+                        );
+                        l.steps -= 1;
+                        sections.move_id(o.id, o.position.components());
+                    }
+                    let before = o.position;
+                    let side = game_side!(self);
+                    let kept = o.tick(
+                        world,
+                        facts,
+                        collision,
+                        target,
+                        false,
+                        &mut next_float,
+                        border,
+                        &self.res.motion().fluids,
+                        &self.loop_context,
+                        Some(&self.res.motion().blocks),
+                        &side,
+                        &mut |_, _| {},
                     );
-                    l.steps -= 1;
-                    sections.move_id(o.id, o.position.components());
+                    // `tick` set `previous` to the stepped position: keep the
+                    // pre-step one, as `xo` is in vanilla.
+                    o.previous = old;
+                    // AbstractInterpolationHandler.applyPredictedMovement: the orb's
+                    // own move carries the target along (vanilla also checks the
+                    // moved target for collisions; that check is left out here).
+                    if let Some(l) = self
+                        .remote
+                        .as_mut()
+                        .and_then(|r| r.lerps.get_mut(&(o.id as i32)))
+                        .filter(|l| l.steps > 0)
+                    {
+                        l.target[0] += o.position.x - before.x;
+                        l.target[1] += o.position.y - before.y;
+                        l.target[2] += o.position.z - before.z;
+                    }
+                    if kept {
+                        sections.move_id(o.id, o.position.components());
+                    } else {
+                        sections.remove(o.id);
+                    }
+                    kept
+                });
+            } else {
+                let mut i = 0;
+                while i < self.orbs.len() {
+                    let id = self.orbs[i].id;
+                    visited.insert(id);
+                    if !self.client_tick_pre_one(&mut round, id, "minecraft:experience_orb") {
+                        i += 1;
+                        continue;
+                    }
+                    let kept = {
+                        let (world, facts, collision) =
+                            (&self.world, self.res.facts(), self.collision);
+                        let border = Some(self.border.geometry());
+                        let sections = self.client_pick.sections.get_mut();
+                        let o = &mut self.orbs[i];
+                        let distance = |feet: &[f64; 3]| -> f64 {
+                            (feet[0] - o.position.x).powi(2)
+                                + (feet[1] - o.position.y).powi(2)
+                                + (feet[2] - o.position.z).powi(2)
+                        };
+                        let target = followed
+                            .iter()
+                            .filter(|(feet, _)| distance(feet) < 64.0)
+                            .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
+                            .map(|(_, target)| *target);
+                        let old = o.position;
+                        if let Some(l) = self
+                            .remote
+                            .as_mut()
+                            .and_then(|r| r.lerps.get_mut(&(o.id as i32)))
+                            .filter(|l| l.steps > 0)
+                        {
+                            let alpha = 1.0 / f64::from(l.steps);
+                            o.position = Vec3::new(
+                                o.position.x + (l.target[0] - o.position.x) * alpha,
+                                o.position.y + (l.target[1] - o.position.y) * alpha,
+                                o.position.z + (l.target[2] - o.position.z) * alpha,
+                            );
+                            l.steps -= 1;
+                            sections.move_id(o.id, o.position.components());
+                        }
+                        let before = o.position;
+                        let side = game_side!(self);
+                        let kept = o.tick(
+                            world,
+                            facts,
+                            collision,
+                            target,
+                            false,
+                            &mut next_float,
+                            border,
+                            &self.res.motion().fluids,
+                            &self.loop_context,
+                            Some(&self.res.motion().blocks),
+                            &side,
+                            &mut |_, _| {},
+                        );
+                        o.previous = old;
+                        if let Some(l) = self
+                            .remote
+                            .as_mut()
+                            .and_then(|r| r.lerps.get_mut(&(o.id as i32)))
+                            .filter(|l| l.steps > 0)
+                        {
+                            l.target[0] += o.position.x - before.x;
+                            l.target[1] += o.position.y - before.y;
+                            l.target[2] += o.position.z - before.z;
+                        }
+                        if kept {
+                            sections.move_id(o.id, o.position.components());
+                        } else {
+                            sections.remove(o.id);
+                        }
+                        kept
+                    };
+                    if kept {
+                        i += 1;
+                    } else {
+                        self.orbs.remove(i);
+                    }
+                    self.native_tick_post_one(&round, id, "minecraft:experience_orb");
                 }
-                let before = o.position;
-                let side = game_side!(self);
-                let kept = o.tick(
-                    world,
-                    facts,
-                    collision,
-                    target,
-                    false,
-                    &mut next_float,
-                    border,
-                    &self.res.motion().fluids,
-                    &self.loop_context,
-                    Some(&self.res.motion().blocks),
-                    &side,
-                    &mut |_, _| {},
-                );
-                // `tick` set `previous` to the stepped position: keep the
-                // pre-step one, as `xo` is in vanilla.
-                o.previous = old;
-                // AbstractInterpolationHandler.applyPredictedMovement: the orb's
-                // own move carries the target along (vanilla also checks the
-                // moved target for collisions; that check is left out here).
-                if let Some(l) = self
-                    .remote
-                    .as_mut()
-                    .and_then(|r| r.lerps.get_mut(&(o.id as i32)))
-                    .filter(|l| l.steps > 0)
-                {
-                    l.target[0] += o.position.x - before.x;
-                    l.target[1] += o.position.y - before.y;
-                    l.target[2] += o.position.z - before.z;
-                }
-                if kept {
-                    sections.move_id(o.id, o.position.components());
-                } else {
-                    sections.remove(o.id);
-                }
-                kept
-            });
+            }
         }
         // ItemEntity.tick runs on a client too: gravity, collisions and
         // friction move the item between the server's updates (every 20
@@ -812,7 +912,7 @@ impl Game<'_> {
             .retain(|_, (_, steps)| *steps > 0);
         let mut entered = Vec::new();
         if running {
-            entity_section_steps::tick_items(self, &mut entered);
+            entity_section_steps::tick_items(self, &mut entered, &mut round, &mut visited);
         }
         // Entity.doWaterSplashEffect on this window: Level.addParticle draws
         // the bubbles and splashes. ClientLevel.playSeededSound drops
@@ -842,45 +942,99 @@ impl Game<'_> {
         if running {
             self.guardian_bubbles();
             // The dragon: LivingEntity's interpolation, inside its aiStep.
-            let dragon_lerp = self
-                .dragon
-                .as_ref()
-                .and_then(|d| lerps.get_mut(&(d.id as i32)))
-                .filter(|l| l.steps > 0)
-                .map(|l| {
-                    let steps = l.steps;
-                    l.steps -= 1;
-                    (l.target, l.rotation.map(|r| r.0), steps)
-                });
-            self.tick_remote_dragon(dragon_lerp);
-            if let Some(dragon) = self.dragon.as_ref() {
-                self.pick_section_move(dragon.id, dragon.position.components());
+            if let Some(dragon_id) = self.dragon.as_ref().map(|d| d.id) {
+                if told {
+                    visited.insert(dragon_id);
+                }
+                let dragon_ticks = !told
+                    || self.client_tick_pre_one(&mut round, dragon_id, "minecraft:ender_dragon");
+                if dragon_ticks {
+                    let dragon_lerp = lerps
+                        .get_mut(&(dragon_id as i32))
+                        .filter(|l| l.steps > 0)
+                        .map(|l| {
+                            let steps = l.steps;
+                            l.steps -= 1;
+                            (l.target, l.rotation.map(|r| r.0), steps)
+                        });
+                    self.tick_remote_dragon(dragon_lerp);
+                    if let Some(dragon) = self.dragon.as_ref() {
+                        self.pick_section_move(dragon.id, dragon.position.components());
+                    }
+                    if told {
+                        self.native_tick_post_one(&round, dragon_id, "minecraft:ender_dragon");
+                    }
+                }
             }
             // A mod's general rows: the non-living interpolation, and no mod code.
-            if let Some(r) = self.remote.as_mut() {
-                general::tick_remote_general(&mut r.general.rows, &mut lerps);
+            if !told {
+                if let Some(r) = self.remote.as_mut() {
+                    general::tick_remote_general(&mut r.general.rows, &mut lerps);
+                }
+            } else {
+                let general_ids: Vec<(i32, String)> = self
+                    .remote
+                    .as_ref()
+                    .map(|r| {
+                        r.general
+                            .rows
+                            .keys()
+                            .copied()
+                            .map(|id| {
+                                let kind = r
+                                    .entities
+                                    .get(&id)
+                                    .map(|t| t.kind.clone())
+                                    .unwrap_or_default();
+                                (id, kind)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for (id, kind) in general_ids {
+                    visited.insert(id as u32);
+                    if !self.client_tick_pre_one(&mut round, id as u32, &kind) {
+                        continue;
+                    }
+                    if let Some(r) = self.remote.as_mut()
+                        && let Some(row) = r.general.rows.get_mut(&id)
+                    {
+                        general::tick_remote_general_one(row, lerps.get_mut(&id));
+                    }
+                    self.native_tick_post_one(&round, id as u32, &kind);
+                }
             }
             // Armor stands: ClientLevel.tickNonPassenger's setOldPosAndRot,
             // then their SteppedInterpolationHandler's step, as the mobs'.
-            if let Some(r) = self.remote.as_mut() {
-                for a in &mut self.armor_stands {
-                    let step = r
-                        .stepped
-                        .get_mut(&(a.id as i32))
-                        .and_then(|h| h.interpolate());
-                    a.interpolate(step.map(|at| {
-                        let p = at.position;
-                        (Vec3::new(p[0], p[1], p[2]), at.yaw, at.pitch)
-                    }));
-                    // LivingEntity.baseTick's tickEffects.
-                    super::super::potions::client_tick_effects(
-                        &mut a.client_effects,
-                        &mut a.darkness_blend,
-                    );
-                    self.client_pick
-                        .sections
-                        .get_mut()
-                        .move_id(a.id, a.position.components());
+            for i in 0..self.armor_stands.len() {
+                let id = self.armor_stands[i].id;
+                if told {
+                    visited.insert(id);
+                    if !self.client_tick_pre_one(&mut round, id, "minecraft:armor_stand") {
+                        continue;
+                    }
+                }
+                let step = self
+                    .remote
+                    .as_mut()
+                    .and_then(|r| r.stepped.get_mut(&(id as i32)))
+                    .and_then(|h| h.interpolate());
+                let a = &mut self.armor_stands[i];
+                a.interpolate(step.map(|at| {
+                    let p = at.position;
+                    (Vec3::new(p[0], p[1], p[2]), at.yaw, at.pitch)
+                }));
+                // LivingEntity.baseTick's tickEffects.
+                super::super::potions::client_tick_effects(
+                    &mut a.client_effects,
+                    &mut a.darkness_blend,
+                );
+                self.client_pick
+                    .sections
+                    .get_mut()
+                    .move_id(id, a.position.components());
+                if told {
+                    self.native_tick_post_one(&round, id, "minecraft:armor_stand");
                 }
             }
             // The yaw of a boat eases toward the server's over the same steps
@@ -904,7 +1058,7 @@ impl Game<'_> {
                 }
                 _ => at,
             };
-            self.tick_remote_objects(
+            self.tick_remote_objects_with(
                 &mut step,
                 |id, yaw| {
                     turns.get(&(id as i32)).map_or(yaw, |&(target, steps)| {
@@ -916,35 +1070,53 @@ impl Game<'_> {
                         .get_mut(&(c.id as i32))
                         .is_some_and(|l| l.tick(c))
                 },
+                driven_boat,
+                &mut round,
+                &mut visited,
             );
-            self.tick_remote_projectiles(&mut step);
+            self.tick_remote_projectiles_with(&mut step, &mut round, &mut visited);
             // LightningBolt.tick on a client.
-            self.tick_bolts();
+            self.tick_remote_bolts(&mut round, &mut visited);
         } else if !frozen_ticking.is_empty() {
             let ticking_set: sunrise_client::fast_hash::FxHashSet<u32> =
                 frozen_ticking.iter().map(|&id| id as u32).collect();
-            if let Some(r) = self.remote.as_mut() {
-                for a in &mut self.armor_stands {
-                    if !ticking_set.contains(&a.id) {
+            if let Some(id) = driven_boat
+                && told
+            {
+                visited.insert(id);
+            }
+            for i in 0..self.armor_stands.len() {
+                let id = self.armor_stands[i].id;
+                if !ticking_set.contains(&id) {
+                    continue;
+                }
+                if told {
+                    visited.insert(id);
+                    if !self.client_tick_pre_one(&mut round, id, "minecraft:armor_stand") {
                         continue;
                     }
-                    let step = r
-                        .stepped
-                        .get_mut(&(a.id as i32))
-                        .and_then(|h| h.interpolate());
-                    a.interpolate(step.map(|at| {
-                        let p = at.position;
-                        (Vec3::new(p[0], p[1], p[2]), at.yaw, at.pitch)
-                    }));
-                    // LivingEntity.baseTick's tickEffects.
-                    super::super::potions::client_tick_effects(
-                        &mut a.client_effects,
-                        &mut a.darkness_blend,
-                    );
-                    self.client_pick
-                        .sections
-                        .get_mut()
-                        .move_id(a.id, a.position.components());
+                }
+                let step = self
+                    .remote
+                    .as_mut()
+                    .and_then(|r| r.stepped.get_mut(&(id as i32)))
+                    .and_then(|h| h.interpolate());
+                let a = &mut self.armor_stands[i];
+                a.interpolate(step.map(|at| {
+                    let p = at.position;
+                    (Vec3::new(p[0], p[1], p[2]), at.yaw, at.pitch)
+                }));
+                // LivingEntity.baseTick's tickEffects.
+                super::super::potions::client_tick_effects(
+                    &mut a.client_effects,
+                    &mut a.darkness_blend,
+                );
+                self.client_pick
+                    .sections
+                    .get_mut()
+                    .move_id(id, a.position.components());
+                if told {
+                    self.native_tick_post_one(&round, id, "minecraft:armor_stand");
                 }
             }
         }
@@ -957,43 +1129,74 @@ impl Game<'_> {
                 r.cart_lerps.entry(id).or_insert(l);
             }
         }
+        if told {
+            self.tick_remaining_client_entities(running, &frozen_ticking, &visited, &mut round);
+        }
     }
-    /// The visit of each entity of the client level whose kind is told no tick
-    /// (`tick_remote_entities`): its `Entity.commonTick` counts it here. A frozen level visits
-    /// only the players and what carries them.
-    fn count_untold_client_ticks(&mut self, running: bool, frozen_ticking: &[i32]) {
-        let Some(mut r) = self.remote.take() else {
-            return;
+
+    /// Fires `entity_tick_pre` / `.post` (and counts `Entity.commonTick`) for any ticking
+    /// client entity not visited by a dedicated family loop (interactions, markers, cushions,
+    /// leash knots, pending items, and non-mob frozen-ticking vehicles such as a minecart
+    /// carrying a player while the level is frozen).
+    fn tick_remaining_client_entities(
+        &mut self,
+        running: bool,
+        frozen_ticking: &[i32],
+        visited: &sunrise_client::fast_hash::FxHashSet<u32>,
+        round: &mut crate::game::native_ticks::TickRound,
+    ) {
+        let mut remaining: Vec<(u32, String)> = {
+            let Some(r) = self.remote.as_ref() else {
+                return;
+            };
+            if running {
+                r.entities
+                    .iter()
+                    .filter(|&(&id, _)| {
+                        !visited.contains(&(id as u32)) && !self.text_displays.contains_key(&id)
+                    })
+                    .map(|(&id, t)| (id as u32, t.kind.clone()))
+                    .collect()
+            } else {
+                frozen_ticking
+                    .iter()
+                    .filter(|&&id| {
+                        !visited.contains(&(id as u32)) && !self.text_displays.contains_key(&id)
+                    })
+                    .filter_map(|&id| r.entities.get(&id).map(|t| (id as u32, t.kind.clone())))
+                    .collect()
+            }
         };
-        let flying: sunrise_client::fast_hash::FxHashSet<u32> = self
-            .creatures
-            .projectiles
-            .iter()
-            .map(|p| p.id)
-            .chain(self.tridents.iter().map(|t| t.id))
-            .collect();
-        let told = |id: i32| {
-            let id = id as u32;
-            self.mob_index.get_ref(&self.mobs, id).is_some()
-                || self.text_displays.contains_key(&(id as i32))
-                || flying.contains(&id)
+        remaining.sort_unstable_by_key(|(id, _)| *id);
+        for (id, kind) in remaining {
+            if self.client_tick_pre_one(round, id, &kind) {
+                self.native_tick_post_one(round, id, &kind);
+            }
+        }
+    }
+
+    /// `Entity.commonTick`'s tickCount when neither `entity_tick_pre` nor `entity_tick_post` is
+    /// subscribed: every ticking tracked entity except text displays (which filter by chunk in
+    /// `tick_text_displays`) counts here with no allocations.
+    fn count_unsubscribed_client_ticks(&mut self, running: bool, frozen_ticking: &[i32]) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
         };
         if running {
             for (&id, t) in r.entities.iter_mut() {
-                if !told(id) {
+                if !self.text_displays.contains_key(&id) {
                     t.tick_count = t.tick_count.wrapping_add(1);
                 }
             }
         } else {
             for &id in frozen_ticking {
-                if !told(id)
+                if !self.text_displays.contains_key(&id)
                     && let Some(t) = r.entities.get_mut(&id)
                 {
                     t.tick_count = t.tick_count.wrapping_add(1);
                 }
             }
         }
-        self.remote = Some(r);
     }
     /// `Entity.commonTick`'s tickCount for an entity of the client level at its own visit: a
     /// root once its `EntityTickEvent.Pre` let it through (`tickNonPassenger`), a passenger at
@@ -1030,11 +1233,29 @@ impl Game<'_> {
     /// `fall_flying_before_hooks` is the flag from before the tick's hooks when the caller
     /// took it before them: a glide a `player_tick_pre` listener starts is then reported as
     /// this tick's start, as a jump-started glide is.
+    #[cfg(test)]
     pub(super) fn tick_local_player(
         &mut self,
         entity_collisions: Vec<sunrise_core::geometry::Aabb>,
         sprint_window: i32,
         fall_flying_before_hooks: Option<bool>,
+    ) -> Result<Option<u8>> {
+        self.tick_local_player_inner(
+            entity_collisions,
+            sprint_window,
+            fall_flying_before_hooks,
+            true,
+        )
+    }
+
+    /// `tick_vehicle` is false when `tick_driven_vehicle` ran the vehicle this client drives
+    /// before the local player's Pre.
+    fn tick_local_player_inner(
+        &mut self,
+        entity_collisions: Vec<sunrise_core::geometry::Aabb>,
+        sprint_window: i32,
+        fall_flying_before_hooks: Option<bool>,
+        tick_vehicle: bool,
     ) -> Result<Option<u8>> {
         // Player.tick's ItemCooldowns.tick, after Pre and after
         // handleKeybinds: this path replaces `tick_world`'s for a server's
@@ -1095,7 +1316,7 @@ impl Game<'_> {
         if self.jumpable_mount().is_none() {
             self.mount.jump_scale = 0.0;
         }
-        let riding = self.screen != Screen::Dead && self.remote_ride(keys);
+        let riding = self.screen != Screen::Dead && self.remote_ride_inner(keys, tick_vehicle);
         let mut rider_movement = None;
         // LocalPlayer.isShiftKeyDown is the input's sneak, riding or not: the tick after a
         // dismount crouches (a passenger never does) on the sneak held to get off.
@@ -1580,6 +1801,11 @@ impl Game<'_> {
             let pushed = self.remote_pushes(true);
             self.apply_remote_push(pushed);
         }
+        // The vehicle this client drives ticks before its passenger (`ClientLevel.tickNonPassenger`),
+        // so its EntityTickEvent.Pre/Post finish before the local player's own Pre.
+        if loaded && self.screen != Screen::Dead {
+            self.tick_driven_vehicle();
+        }
         // NeoForge's ClientLevel.tickNonPassenger: Pre, then unless it was canceled
         // Entity.commonTick, LocalPlayer.tick and Post. A passenger's tickPassenger runs
         // commonTick first and tells Pre inside Entity.rideTick, so it counts whatever Pre
@@ -1618,10 +1844,11 @@ impl Game<'_> {
                 self.native_player_tick_pre(mod_api::__private::PlayerTickPreCall { player });
             }
             self.native_local_player_fit_sizes();
-            let result = self.tick_local_player(
+            let result = self.tick_local_player_inner(
                 entity_collisions,
                 sprint_window,
                 Some(fall_flying_before_hooks),
+                false,
             );
             // `EntityEvent.Size` for the pose the tick set.
             self.native_local_player_size();
@@ -1630,6 +1857,11 @@ impl Game<'_> {
             }
             result
         } else {
+            // NeoForge's Entity.rideTick still calls vehicle.positionRider(this) when
+            // EntityTickEvent.Pre is canceled.
+            if !ticks && loaded && self.riding.is_some() {
+                self.position_riders();
+            }
             Ok(None)
         };
         if ticks && let Some(id) = own {

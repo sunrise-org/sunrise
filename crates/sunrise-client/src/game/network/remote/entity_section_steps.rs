@@ -87,36 +87,75 @@ pub(super) fn player_teleport(game: &mut Game<'_>, had_player: bool, from: Vec3,
 pub(super) fn tick_items(
     game: &mut Game<'_>,
     entered: &mut Vec<sunrise_client::entities::ItemSplash>,
+    round: &mut crate::game::native_ticks::TickRound,
+    visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
 ) {
-    let mut items = game.dropped.lift();
-    let mut i = 0;
-    while i < items.len() {
-        let (_, discarded) = game.tick_item_with_block_contacts(
-            &mut items[i],
-            None,
-            &[],
-            true,
-            None,
-            &mut |splash| entered.push(splash),
-        );
-        let from = items[i].previous;
-        let to = items[i].position;
-        if !discarded {
-            let live = game.entity_section_step_visible(
-                items[i].id,
-                [from.x, from.y, from.z],
-                [to.x, to.y, to.z],
+    if !round.told_listening() {
+        let mut items = game.dropped.lift();
+        let mut i = 0;
+        while i < items.len() {
+            let (_, discarded) = game.tick_item_with_block_contacts(
+                &mut items[i],
+                None,
+                &[],
+                true,
+                None,
+                &mut |splash| entered.push(splash),
             );
-            if !live {
+            let from = items[i].previous;
+            let to = items[i].position;
+            if !discarded {
+                let live = game.entity_section_step_visible(
+                    items[i].id,
+                    [from.x, from.y, from.z],
+                    [to.x, to.y, to.z],
+                );
+                if !live {
+                    items.remove(i);
+                    continue;
+                }
+            }
+            if discarded {
                 items.remove(i);
-                continue;
+            } else {
+                i += 1;
             }
         }
-        if discarded {
-            items.remove(i);
-        } else {
-            i += 1;
-        }
+        game.put_back_dropped(items);
+        return;
     }
-    game.put_back_dropped(items);
+    let ids: Vec<u32> = game.dropped.iter().map(|d| d.id).collect();
+    for id in ids {
+        visited.insert(id);
+        if !game.client_tick_pre_one(round, id, crate::game::native_ticks::ITEM) {
+            continue;
+        }
+        let mut items = game.dropped.lift();
+        if let Some(i) = items.iter().position(|d| d.id == id) {
+            let (_, discarded) = game.tick_item_with_block_contacts(
+                &mut items[i],
+                None,
+                &[],
+                true,
+                None,
+                &mut |splash| entered.push(splash),
+            );
+            let from = items[i].previous;
+            let to = items[i].position;
+            let live = if !discarded {
+                game.entity_section_step_visible(
+                    items[i].id,
+                    [from.x, from.y, from.z],
+                    [to.x, to.y, to.z],
+                )
+            } else {
+                false
+            };
+            if discarded || !live {
+                items.remove(i);
+            }
+        }
+        game.put_back_dropped(items);
+        game.native_tick_post_one(round, id, crate::game::native_ticks::ITEM);
+    }
 }

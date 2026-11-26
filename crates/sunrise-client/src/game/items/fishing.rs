@@ -2255,45 +2255,93 @@ impl Game<'_> {
     /// server's last update, then its own movement between the tracker's
     /// updates (every five ticks), floating in water and riding what it
     /// hooked, as the server's does.
-    pub(super) fn tick_remote_hooks(&mut self) {
+    pub(super) fn tick_remote_hooks_with(
+        &mut self,
+        round: &mut crate::game::native_ticks::TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
         if self.remote.is_none() {
             return;
         }
-        if let Some(mut h) = self.hook.extract() {
-            h.previous = h.position;
-            h.position = h.lerp.step(h.position);
-            let before = h.position;
-            let owner = self.player.as_ref().map(|p| p.position);
-            (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
-                h.id,
-                owner,
-                true,
-                (h.position, h.velocity, h.state, h.ground),
-                &mut h.random,
-            );
-            h.lerp.moved(h.position.subtract(before));
-            self.hook.put_back(h);
+        let told = round.told_listening();
+        if let Some(id) = self.hook.as_ref().map(|h| h.id) {
+            if told {
+                visited.insert(id);
+            }
+            let ticks = !told || self.client_tick_pre_one(round, id, "minecraft:fishing_bobber");
+            if ticks {
+                if let Some(mut h) = self.hook.extract() {
+                    h.previous = h.position;
+                    h.position = h.lerp.step(h.position);
+                    let before = h.position;
+                    let owner = self.player.as_ref().map(|p| p.position);
+                    (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
+                        h.id,
+                        owner,
+                        true,
+                        (h.position, h.velocity, h.state, h.ground),
+                        &mut h.random,
+                    );
+                    h.lerp.moved(h.position.subtract(before));
+                    self.hook.put_back(h);
+                }
+                if told {
+                    self.native_tick_post_one(round, id, "minecraft:fishing_bobber");
+                }
+            }
         }
-        let mut hooks = std::mem::take(&mut self.remote_hooks);
-        for h in &mut hooks {
-            h.previous = h.position;
-            h.position = h.lerp.step(h.position);
-            let before = h.position;
-            let owner = self
-                .mobs
-                .iter()
-                .find(|m| m.id == h.owner)
-                .map(|m| m.position);
-            (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
-                h.id,
-                owner,
-                false,
-                (h.position, h.velocity, h.state, h.ground),
-                &mut h.random,
-            );
-            h.lerp.moved(h.position.subtract(before));
+        if !told {
+            let mut hooks = std::mem::take(&mut self.remote_hooks);
+            for h in &mut hooks {
+                h.previous = h.position;
+                h.position = h.lerp.step(h.position);
+                let before = h.position;
+                let owner = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == h.owner)
+                    .map(|m| m.position);
+                (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
+                    h.id,
+                    owner,
+                    false,
+                    (h.position, h.velocity, h.state, h.ground),
+                    &mut h.random,
+                );
+                h.lerp.moved(h.position.subtract(before));
+            }
+            self.remote_hooks = hooks;
+            return;
         }
-        self.remote_hooks = hooks;
+        let ids: Vec<u32> = self.remote_hooks.iter().map(|h| h.id).collect();
+        for id in ids {
+            visited.insert(id);
+            if !self.client_tick_pre_one(round, id, "minecraft:fishing_bobber") {
+                continue;
+            }
+            if let Some(i) = self.remote_hooks.iter().position(|h| h.id == id) {
+                let mut hooks = std::mem::take(&mut self.remote_hooks);
+                let h = &mut hooks[i];
+                h.previous = h.position;
+                h.position = h.lerp.step(h.position);
+                let before = h.position;
+                let owner = self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == h.owner)
+                    .map(|m| m.position);
+                (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
+                    h.id,
+                    owner,
+                    false,
+                    (h.position, h.velocity, h.state, h.ground),
+                    &mut h.random,
+                );
+                h.lerp.moved(h.position.subtract(before));
+                self.remote_hooks = hooks;
+            }
+            self.native_tick_post_one(round, id, "minecraft:fishing_bobber");
+        }
     }
 
     /// The fishing medium a mod says the hook `id` at `position` floats in

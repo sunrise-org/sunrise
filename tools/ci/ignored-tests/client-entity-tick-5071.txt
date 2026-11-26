@@ -1,0 +1,3 @@
+# Client entity_tick_pre/post coverage for all client-ticked entities and driven vehicles (#5071).
+sunrise-client game::remote::tests::client_vanilla_reads_tests::client_driven_boat_ticks_before_local_player_and_canceling_rider_keeps_vehicle lib daily resources
+sunrise-client game::remote::tests::client_vanilla_reads_tests::client_entity_tick_hears_items_orbs_tnt_falling_and_tracked_entities lib daily resources

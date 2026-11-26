@@ -429,6 +429,78 @@ impl Game<'_> {
     /// Tick the local player's vehicle before the player tick:
     /// false when it rides nothing.
     pub(super) fn remote_ride(&mut self, keys: Keys) -> bool {
+        self.remote_ride_inner(keys, true)
+    }
+
+    /// Tick the vehicle this client drives (mount or boat) before the local player's own
+    /// `EntityTickEvent.Pre`, bracketing the vehicle with `entity_tick_pre` / `.post`
+    /// (`ClientLevel.tickNonPassenger` runs the vehicle's full turn before `tickPassenger`).
+    pub(super) fn tick_driven_vehicle(&mut self) {
+        let Some(id) = self.riding else {
+            return;
+        };
+        if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+            if self.drives(&self.mobs[i]) {
+                self.tick_driven_mount_told(i);
+            }
+            return;
+        }
+        if let Some(i) = self.boats.iter().position(|b| b.id == id)
+            && self.controls_boat(id)
+        {
+            self.tick_driven_boat_told(i);
+        }
+    }
+
+    fn tick_driven_mount_told(&mut self, i: usize) {
+        let mut round = self.native_tick_round();
+        let told = round.told_listening();
+        let id = self.mobs[i].id;
+        let kind = told.then(|| self.mobs[i].kind.clone());
+        if let Some(kind) = &kind
+            && !self.client_tick_pre_one(&mut round, id, &kind.id)
+        {
+            return;
+        }
+        if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+            self.tick_driven_mount_body(i);
+        }
+        if let Some(kind) = &kind {
+            self.native_tick_post_one(&round, id, &kind.id);
+        }
+    }
+
+    fn tick_driven_boat_told(&mut self, i: usize) {
+        let mut round = self.native_tick_round();
+        let told = round.told_listening();
+        let id = self.boats[i].id;
+        let kind = told.then(|| self.boats[i].shared_type_name());
+        if let Some(kind) = &kind
+            && !self.client_tick_pre_one(&mut round, id, kind)
+        {
+            return;
+        }
+        if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+            let mut b = self.boats[i].clone();
+            // A boat taken over while it eased toward the server's position keeps
+            // easing (the handler stays the entity's), and reports where it goes.
+            if let Some((to, rotation, steps)) =
+                self.remote.as_mut().and_then(|r| r.take_object_lerp(id))
+            {
+                let rotation = rotation.unwrap_or((b.yaw, b.pitch));
+                b.go_on_easing(Vec3::new(to[0], to[1], to[2]), rotation, steps);
+            }
+            b = self.tick_boat(b, true);
+            self.store_boat_back(i, b);
+        }
+        if let Some(kind) = &kind {
+            self.native_tick_post_one(&round, id, kind);
+        }
+    }
+
+    /// Rider tick against the vehicle; when `tick_vehicle` is false, `tick_driven_vehicle`
+    /// already ran the driven mount or boat's own turn before the local player's Pre.
+    pub(super) fn remote_ride_inner(&mut self, keys: Keys, tick_vehicle: bool) -> bool {
         let Some(id) = self.riding else {
             return false;
         };
@@ -439,7 +511,12 @@ impl Game<'_> {
             // LocalPlayer.aiStep: the jump bar charges while jump is held.
             let jump = self.charge_mount_jump(i, keys);
             if self.drives(&self.mobs[i]) {
-                self.drive_mount(i, keys, jump);
+                if tick_vehicle {
+                    self.tick_driven_mount_told(i);
+                }
+                if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+                    self.latch_mount_input(i, keys, jump);
+                }
             }
             // Another animal moves on the server with the rider's input
             // (PlayerInput); the rider sits where `positionRider` puts it.
@@ -494,25 +571,26 @@ impl Game<'_> {
             // It steers with the input `LocalPlayer.rideTick` latched on the
             // previous tick, so the paddle packet describes the motion the
             // server is sent; this tick's keys are latched after it ticked.
-            let mut b = self.boats[i].clone();
             if self.controls_boat(id) {
-                // A boat taken over while it eased toward the server's position keeps
-                // easing (the handler stays the entity's), and reports where it goes.
-                if let Some((to, rotation, steps)) =
-                    self.remote.as_mut().and_then(|r| r.take_object_lerp(id))
-                {
-                    let rotation = rotation.unwrap_or((b.yaw, b.pitch));
-                    b.go_on_easing(Vec3::new(to[0], to[1], to[2]), rotation, steps);
+                if tick_vehicle {
+                    self.tick_driven_boat_told(i);
                 }
-                b = self.tick_boat(b, true);
-                b.input = [keys.left, keys.right, keys.forward, keys.backward];
+                if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+                    self.boats.update(i, |b| {
+                        b.input = [keys.left, keys.right, keys.forward, keys.backward];
+                    });
+                }
             }
-            // positionRider turns and clamps the rider's yaw without changing yRotO.
-            self.yaw += b.delta_rotation;
-            self.yaw = sunrise_client::camera::clamp_boat_rotation(self.yaw, b.yaw).0;
-            self.store_boat_back(i, b);
-            // In front of a mob that shares the boat.
-            Some(self.player_boat_seat(i))
+            if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+                // positionRider turns and clamps the rider's yaw without changing yRotO.
+                self.yaw += self.boats[i].delta_rotation;
+                self.yaw =
+                    sunrise_client::camera::clamp_boat_rotation(self.yaw, self.boats[i].yaw).0;
+                // In front of a mob that shares the boat.
+                Some(self.player_boat_seat(i))
+            } else {
+                None
+            }
         } else if self.carts.iter().any(|c| c.id == id) {
             // Minecart.positionRider runs on the client after the cart tick.
             // The offset belongs to the cart, so switching vehicles cannot
@@ -749,7 +827,18 @@ impl Game<'_> {
     /// dragged by a column it is inside) and `tickBubbleColumn`'s wobble from
     /// the synched bubble time, followed by the oars on boats this client does not drive.
     pub(super) fn tick_remote_boat_bubbles(&mut self) {
+        let round = crate::game::native_ticks::TickRound::default();
+        self.tick_remote_boat_bubbles_with(&round);
+    }
+
+    pub(super) fn tick_remote_boat_bubbles_with(
+        &mut self,
+        round: &crate::game::native_ticks::TickRound,
+    ) {
         for i in 0..self.boats.len() {
+            if round.canceled(self.boats[i].id) {
+                continue;
+            }
             let driven = self.controls_boat(self.boats[i].id);
             if !driven {
                 // `AbstractBoat.tick`: the non-authoritative copy carries no
@@ -823,7 +912,16 @@ impl Game<'_> {
     /// aiStep read the keys, send a released jump (`sendRidingJump`) and run
     /// `onPlayerJump`, for the mount's next tick. Moving on this tick's keys
     /// put every ridden move a tick ahead of the server's view of the input.
+    #[cfg(test)]
     fn drive_mount(&mut self, i: usize, keys: Keys, jump: f32) {
+        let id = self.mobs[i].id;
+        self.tick_driven_mount_body(i);
+        if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+            self.latch_mount_input(i, keys, jump);
+        }
+    }
+
+    fn tick_driven_mount_body(&mut self, i: usize) {
         let old_pose = self.interpolate_driven_mount(i);
         let steer = self.steers_mount(&self.mobs[i]);
         let (yaw, pitch) = (self.yaw, self.pitch);
@@ -872,6 +970,14 @@ impl Game<'_> {
             mob.previous_head_pitch = pitch;
         }
         self.mobs.insert(i, mob);
+        // #4821: footstep, gallop, breathe, splash and landing sounds from mob.tick
+        let _ = self.handle_mob_events(events);
+    }
+
+    fn latch_mount_input(&mut self, i: usize, keys: Keys, jump: f32) {
+        let steer = self.steers_mount(&self.mobs[i]);
+        let (yaw, pitch) = (self.yaw, self.pitch);
+        let sprint = self.player.as_ref().is_some_and(|p| p.sprinting);
         // LocalPlayer.aiStep, after the vehicle's tick.
         if jump > 0.0
             && let Some(id) = self.remote.as_ref().map(|r| r.entity_id)
@@ -899,8 +1005,6 @@ impl Game<'_> {
             sneak: keys.shift,
             client: false,
         });
-        // #4821: footstep, gallop, breathe, splash and landing sounds from mob.tick
-        let _ = self.handle_mob_events(events);
     }
 
     /// The level a mount this client predicts is hurt in, with the client's hooks (`hooks`)

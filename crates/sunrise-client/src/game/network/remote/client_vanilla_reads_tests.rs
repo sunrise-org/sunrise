@@ -248,6 +248,7 @@ fn the_client_count_follows_the_entity_tick_not_the_motion() {
                             .collect::<Vec<_>>()
                     };
                     assert_eq!(of(20), [Some(0), Some(1)]);
+                    assert_eq!(of(21), [Some(0), Some(1), Some(2)]);
                     assert_eq!(of(PLAYER), [Some(0), Some(1), Some(2), Some(3), Some(3)]);
                 });
             });
@@ -729,6 +730,278 @@ fn a_client_reads_hardcore_from_the_login_for_the_level_it_is_in() {
                     assert_eq!(elsewhere.is_hardcore(game as &dyn ClientHost), None);
                 });
             }
+        },
+    );
+}
+
+/// Client `entity_tick_pre` and `entity_tick_post` fire for every entity the client ticks
+/// (`ClientLevel.tickNonPassenger`), including items, experience orbs, primed TNT, falling
+/// blocks, minecarts, armor stands, tracked non-simulated entities (interactions), and the
+/// local player. Canceling a root item's Pre skips its tick, suppresses its Post, and leaves
+/// its `tickCount` unchanged.
+#[test]
+#[ignore = "daily"]
+fn client_entity_tick_hears_items_orbs_tnt_falling_and_tracked_entities() {
+    use mod_api::{EntityTickPostEvent, EntityTickPreEvent, HostSide};
+    use std::sync::{Arc, Mutex};
+    use sunrise_protocol::{
+        entity_data::{Value, serializer},
+        item::Stack,
+    };
+    const ITEM: u32 = 30;
+    const CANCELED_ITEM: u32 = 31;
+    const ORB: u32 = 32;
+    const TNT: u32 = 33;
+    const FALLING: u32 = 34;
+    const CART: u32 = 35;
+    const STAND: u32 = 36;
+    const INTERACTION: u32 = 37;
+    crate::game::in_own_process(
+        "game::remote::tests::client_vanilla_reads_tests::client_entity_tick_hears_items_orbs_tnt_falling_and_tracked_entities",
+        || {
+            type Log = Arc<Mutex<Vec<(&'static str, u32, String)>>>;
+            struct Listener(Log);
+            #[mod_api::__subscriptions]
+            impl mod_api::Hooks for Listener {
+                fn entity_tick_pre(
+                    &self,
+                    host: HostSide<'_>,
+                    event: &mut EntityTickPreEvent<'_>,
+                ) -> mod_api::Flow {
+                    if !matches!(host, HostSide::Client(_)) {
+                        return mod_api::Flow::Continue;
+                    }
+                    self.0
+                        .lock()
+                        .unwrap()
+                        .push(("pre", event.entity, event.kind.to_owned()));
+                    if event.entity == CANCELED_ITEM {
+                        mod_api::Flow::Cancel
+                    } else {
+                        mod_api::Flow::Continue
+                    }
+                }
+                fn entity_tick_post(
+                    &self,
+                    host: HostSide<'_>,
+                    event: &mut EntityTickPostEvent<'_>,
+                ) {
+                    if !matches!(host, HostSide::Client(_)) {
+                        return;
+                    }
+                    self.0
+                        .lock()
+                        .unwrap()
+                        .push(("post", event.entity, event.kind.to_owned()));
+                }
+            }
+            let log: Log = Arc::default();
+            let mods = vec![mod_api::ModEntry::new(
+                "client-tick-all",
+                Box::new(Listener(log.clone())),
+            )]
+            .into();
+            mod_platform::testing::with_mods(mods, || {
+                with_client_game(|game| {
+                    let _connection = join(game);
+                    let stone = game
+                        .remote
+                        .as_ref()
+                        .unwrap()
+                        .builtin
+                        .get("minecraft:item")
+                        .unwrap()
+                        .id("minecraft:stone")
+                        .unwrap();
+                    add(game, ITEM, "minecraft:item");
+                    add(game, CANCELED_ITEM, "minecraft:item");
+                    for id in [ITEM, CANCELED_ITEM] {
+                        game.handle_packet(C::SetEntityData(play::SetEntityData {
+                            id: id as i32,
+                            values: vec![(
+                                8,
+                                serializer::ITEM_STACK,
+                                Value::Item(Some(Stack::new(stone, 1))),
+                            )],
+                        }))
+                        .unwrap();
+                    }
+                    add(game, ORB, "minecraft:experience_orb");
+                    add(game, TNT, "minecraft:tnt");
+                    add(game, FALLING, "minecraft:falling_block");
+                    add(game, CART, "minecraft:minecart");
+                    add(game, STAND, "minecraft:armor_stand");
+                    add(game, INTERACTION, "minecraft:interaction");
+
+                    game.tick_remote().unwrap();
+
+                    assert_eq!(tick_count(game, ITEM), Some(1));
+                    assert_eq!(tick_count(game, CANCELED_ITEM), Some(0));
+                    assert_eq!(tick_count(game, ORB), Some(1));
+                    assert_eq!(tick_count(game, TNT), Some(1));
+                    assert_eq!(tick_count(game, FALLING), Some(1));
+                    assert_eq!(tick_count(game, CART), Some(1));
+                    assert_eq!(tick_count(game, STAND), Some(1));
+                    assert_eq!(tick_count(game, INTERACTION), Some(1));
+                    assert_eq!(tick_count(game, PLAYER), Some(1));
+
+                    let events = log.lock().unwrap();
+                    for (id, kind) in [
+                        (ITEM, "minecraft:item"),
+                        (ORB, "minecraft:experience_orb"),
+                        (TNT, "minecraft:tnt"),
+                        (FALLING, "minecraft:falling_block"),
+                        (CART, "minecraft:minecart"),
+                        (STAND, "minecraft:armor_stand"),
+                        (INTERACTION, "minecraft:interaction"),
+                        (PLAYER, "minecraft:player"),
+                    ] {
+                        let pre_idx = events
+                            .iter()
+                            .position(|(phase, eid, k)| *phase == "pre" && *eid == id && k == kind)
+                            .unwrap_or_else(|| panic!("missing pre for {id} ({kind})"));
+                        assert_eq!(
+                            events
+                                .get(pre_idx + 1)
+                                .map(|(p, e, k)| (*p, *e, k.as_str())),
+                            Some(("post", id, kind)),
+                            "pre/post must bracket {id} ({kind}) without nesting"
+                        );
+                    }
+                    assert!(events.iter().any(|(p, e, k)| *p == "pre"
+                        && *e == CANCELED_ITEM
+                        && k == "minecraft:item"));
+                    assert!(
+                        !events
+                            .iter()
+                            .any(|(p, e, _)| *p == "post" && *e == CANCELED_ITEM)
+                    );
+                });
+            });
+        },
+    );
+}
+
+/// A driven boat finishes its own `entity_tick_pre` / `entity_tick_post` before its local
+/// player passenger's `entity_tick_pre` / `player_tick_pre` (`ClientLevel.tickNonPassenger`
+/// -> `tickPassenger` -> `Entity.rideTick`), without nesting. Canceling the local player's
+/// `entity_tick_pre` while riding still lets the boat tick, still counts the passenger's
+/// `commonTick`, and skips `player_tick_pre`, `player_tick_post`, and the player's
+/// `entity_tick_post`.
+#[test]
+#[ignore = "daily"]
+fn client_driven_boat_ticks_before_local_player_and_canceling_rider_keeps_vehicle() {
+    use mod_api::{
+        EntityTickPostEvent, EntityTickPreEvent, HostSide, PlayerTickPostEvent, PlayerTickPreEvent,
+    };
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    const BOAT: u32 = 40;
+    crate::game::in_own_process(
+        "game::remote::tests::client_vanilla_reads_tests::client_driven_boat_ticks_before_local_player_and_canceling_rider_keeps_vehicle",
+        || {
+            type Log = Arc<Mutex<Vec<(&'static str, u32)>>>;
+            struct Listener {
+                log: Log,
+                cancel_player: Arc<AtomicBool>,
+            }
+            #[mod_api::__subscriptions]
+            impl mod_api::Hooks for Listener {
+                fn entity_tick_pre(
+                    &self,
+                    host: HostSide<'_>,
+                    event: &mut EntityTickPreEvent<'_>,
+                ) -> mod_api::Flow {
+                    if !matches!(host, HostSide::Client(_)) {
+                        return mod_api::Flow::Continue;
+                    }
+                    self.log.lock().unwrap().push(("entity_pre", event.entity));
+                    if event.entity == PLAYER && self.cancel_player.load(Ordering::Relaxed) {
+                        mod_api::Flow::Cancel
+                    } else {
+                        mod_api::Flow::Continue
+                    }
+                }
+                fn entity_tick_post(
+                    &self,
+                    host: HostSide<'_>,
+                    event: &mut EntityTickPostEvent<'_>,
+                ) {
+                    if !matches!(host, HostSide::Client(_)) {
+                        return;
+                    }
+                    self.log.lock().unwrap().push(("entity_post", event.entity));
+                }
+                fn player_tick_pre(&self, host: HostSide<'_>, event: &mut PlayerTickPreEvent) {
+                    if !matches!(host, HostSide::Client(_)) {
+                        return;
+                    }
+                    self.log
+                        .lock()
+                        .unwrap()
+                        .push(("player_pre", event.player.entity().id()));
+                }
+                fn player_tick_post(&self, host: HostSide<'_>, event: &mut PlayerTickPostEvent) {
+                    if !matches!(host, HostSide::Client(_)) {
+                        return;
+                    }
+                    self.log
+                        .lock()
+                        .unwrap()
+                        .push(("player_post", event.player.entity().id()));
+                }
+            }
+            let log: Log = Arc::default();
+            let cancel_player = Arc::new(AtomicBool::new(false));
+            let mods = vec![mod_api::ModEntry::new(
+                "client-driven-boat-tick",
+                Box::new(Listener {
+                    log: log.clone(),
+                    cancel_player: cancel_player.clone(),
+                }),
+            )]
+            .into();
+            mod_platform::testing::with_mods(mods, || {
+                with_client_game(|game| {
+                    let _connection = join(game);
+                    add(game, BOAT, "minecraft:oak_boat");
+                    game.handle_packet(C::SetPassengers(play::SetPassengers {
+                        vehicle: BOAT as i32,
+                        passengers: vec![PLAYER as i32],
+                    }))
+                    .unwrap();
+
+                    game.tick_remote().unwrap();
+                    assert_eq!(
+                        std::mem::take(&mut *log.lock().unwrap()),
+                        vec![
+                            ("entity_pre", BOAT),
+                            ("entity_post", BOAT),
+                            ("entity_pre", PLAYER),
+                            ("player_pre", PLAYER),
+                            ("player_post", PLAYER),
+                            ("entity_post", PLAYER),
+                        ]
+                    );
+                    assert_eq!(tick_count(game, BOAT), Some(1));
+                    assert_eq!(tick_count(game, PLAYER), Some(1));
+
+                    cancel_player.store(true, Ordering::Relaxed);
+                    game.tick_remote().unwrap();
+                    assert_eq!(
+                        std::mem::take(&mut *log.lock().unwrap()),
+                        vec![
+                            ("entity_pre", BOAT),
+                            ("entity_post", BOAT),
+                            ("entity_pre", PLAYER),
+                        ]
+                    );
+                    assert_eq!(tick_count(game, BOAT), Some(2));
+                    assert_eq!(tick_count(game, PLAYER), Some(2));
+                });
+            });
         },
     );
 }

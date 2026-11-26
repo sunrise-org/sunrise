@@ -139,25 +139,66 @@ impl Game<'_> {
 
     /// `EvokerFangs.tick`: clients only advance animation, never damage or discard.
     /// At life 14, twelve `crit` particles (`ATTACK_TRIGGER_TICKS`).
-    pub(super) fn tick_remote_fangs(&mut self) {
-        let mut bursts = Vec::new();
-        self.fangs.list.for_each_mut(|f| {
-            if f.started {
-                f.life -= 1;
-                if f.life == 14 {
-                    let mut crits = Vec::with_capacity(12);
-                    for _ in 0..12 {
-                        crits.push(fang_crit(&mut f.random, f.pos));
+    pub(super) fn tick_remote_fangs_with(
+        &mut self,
+        round: &mut crate::game::native_ticks::TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
+        if !round.told_listening() {
+            let mut bursts = Vec::new();
+            self.fangs.list.for_each_mut(|f| {
+                if f.started {
+                    f.life -= 1;
+                    if f.life == 14 {
+                        let mut crits = Vec::with_capacity(12);
+                        for _ in 0..12 {
+                            crits.push(fang_crit(&mut f.random, f.pos));
+                        }
+                        bursts.push(crits);
                     }
-                    bursts.push(crits);
+                }
+            });
+            let crit = ParticleOptions::simple(ParticleType::Crit);
+            for crits in bursts {
+                for (at, velocity) in crits {
+                    self.particles.add(&crit, at, velocity);
                 }
             }
-        });
+            return;
+        }
+        let ids: Vec<u32> = self.fangs.list.iter().map(|f| f.id).collect();
         let crit = ParticleOptions::simple(ParticleType::Crit);
-        for crits in bursts {
-            for (at, velocity) in crits {
-                self.particles.add(&crit, at, velocity);
+        for id in ids {
+            visited.insert(id);
+            if !self.client_tick_pre_one(round, id, "minecraft:evoker_fangs") {
+                continue;
             }
+            let burst = self
+                .fangs
+                .list
+                .iter()
+                .position(|f| f.id == id)
+                .and_then(|i| {
+                    self.fangs.list.update(i, |f| {
+                        if f.started {
+                            f.life -= 1;
+                            if f.life == 14 {
+                                let mut crits = Vec::with_capacity(12);
+                                for _ in 0..12 {
+                                    crits.push(fang_crit(&mut f.random, f.pos));
+                                }
+                                return Some(crits);
+                            }
+                        }
+                        None
+                    })
+                });
+            if let Some(crits) = burst {
+                for (at, velocity) in crits {
+                    self.particles.add(&crit, at, velocity);
+                }
+            }
+            self.native_tick_post_one(round, id, "minecraft:evoker_fangs");
         }
     }
 

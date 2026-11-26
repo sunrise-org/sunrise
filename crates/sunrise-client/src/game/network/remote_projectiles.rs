@@ -556,87 +556,206 @@ impl Game<'_> {
         {
             return;
         }
-        let mut rockets = self.rockets.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::OwnRocket);
-        for r in rockets.iter_mut().filter(|r| r.attached_to == Some(me)) {
-            self.follow_own_player(r);
-            self.pick_section_move(r.id, r.position.components());
-            self.rocket_spark(r);
+        let mut round = self.native_tick_round();
+        if !round.told_listening() {
+            let mut rockets = self.rockets.lift();
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::OwnRocket);
+            for r in rockets.iter_mut().filter(|r| r.attached_to == Some(me)) {
+                r.remote_step(self.body_motion(&game_side!(self)));
+                self.follow_own_player(r);
+                self.pick_section_move(r.id, r.position.components());
+                self.rocket_spark(r);
+            }
+            self.rockets.restore(
+                rockets,
+                sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
+            );
+            return;
         }
-        self.rockets.restore(
-            rockets,
-            sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
-        );
+        let ids: Vec<u32> = self
+            .rockets
+            .iter()
+            .filter(|r| r.attached_to == Some(me))
+            .map(|r| r.id)
+            .collect();
+        for id in ids {
+            if !self.client_tick_pre_one(&mut round, id, "minecraft:firework_rocket") {
+                continue;
+            }
+            let mut rockets = self.rockets.lift();
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::OwnRocket);
+            if let Some(r) = rockets.iter_mut().find(|r| r.id == id) {
+                r.remote_step(self.body_motion(&game_side!(self)));
+                self.follow_own_player(r);
+                self.pick_section_move(r.id, r.position.components());
+                self.rocket_spark(r);
+            }
+            self.rockets.restore(
+                rockets,
+                sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
+            );
+            self.native_tick_post_one(&round, id, "minecraft:firework_rocket");
+        }
     }
 
     /// One tick of interpolation, as `tick_remote_objects`.
-    pub(super) fn tick_remote_projectiles(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
-        self.tick_remote_fangs();
+    #[cfg(test)]
+    pub(super) fn tick_remote_projectiles(&mut self, step: impl FnMut(u32, Vec3) -> Vec3) {
+        let mut round = self.native_tick_round();
+        let mut visited = sunrise_client::fast_hash::FxHashSet::default();
+        self.tick_remote_projectiles_with(step, &mut round, &mut visited);
+    }
+
+    pub(super) fn tick_remote_projectiles_with(
+        &mut self,
+        mut step: impl FnMut(u32, Vec3) -> Vec3,
+        round: &mut TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
+        let told = round.told_listening();
+        self.tick_remote_fangs_with(round, visited);
         // PrimedTnt.tick runs on a client too: it falls, bounces and burns its
         // fuse down (the swell and flash follow it) between the server's
         // updates (every 10 ticks), and a client discards it when the fuse
         // runs out; only the server explodes it.
-        let (world, collision, assets, facts, fluids, border, blocks) = (
-            &self.world,
-            self.collision,
-            &self.pack.assets,
-            self.res.facts(),
-            &self.res.motion().fluids,
-            Some(self.border.geometry()),
-            Some(&self.res.motion().blocks),
-        );
-        let side = game_side!(self);
-        let sections = self.client_pick.sections.get_mut();
-        self.tnts.retain_mut(|t| {
-            // A fluid lookup that fails leaves it where its move put it.
-            let _ = t.tick_among(
-                world,
-                collision,
-                assets,
-                facts,
-                fluids,
-                &self.loop_context,
-                border,
-                blocks,
-                Some(&side),
-                &[],
+        if !told {
+            let (world, collision, assets, facts, fluids, border, blocks) = (
+                &self.world,
+                self.collision,
+                &self.pack.assets,
+                self.res.facts(),
+                &self.res.motion().fluids,
+                Some(self.border.geometry()),
+                Some(&self.res.motion().blocks),
             );
-            let kept = t.fuse > 0;
-            if kept {
-                sections.move_id(t.id, t.position.components());
-            } else {
-                sections.remove(t.id);
+            let side = game_side!(self);
+            let sections = self.client_pick.sections.get_mut();
+            self.tnts.retain_mut(|t| {
+                // A fluid lookup that fails leaves it where its move put it.
+                let _ = t.tick_among(
+                    world,
+                    collision,
+                    assets,
+                    facts,
+                    fluids,
+                    &self.loop_context,
+                    border,
+                    blocks,
+                    Some(&side),
+                    &[],
+                );
+                let kept = t.fuse > 0;
+                if kept {
+                    sections.move_id(t.id, t.position.components());
+                } else {
+                    sections.remove(t.id);
+                }
+                kept
+            });
+            // PrimedTnt.tick: while the fuse is still lit, a client adds one SMOKE
+            // particle at (x, y + 0.5, z). The server's Level.addParticle never
+            // reaches this window.
+            let smoking: Vec<Vec3> = self.tnts.iter().map(|t| t.position).collect();
+            let smoke = ParticleOptions::simple(ParticleType::Smoke);
+            for p in smoking {
+                self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
             }
-            kept
-        });
-        // PrimedTnt.tick: while the fuse is still lit, a client adds one SMOKE
-        // particle at (x, y + 0.5, z). The server's Level.addParticle never
-        // reaches this window.
-        let smoking: Vec<Vec3> = self.tnts.iter().map(|t| t.position).collect();
-        let smoke = ParticleOptions::simple(ParticleType::Smoke);
-        for p in smoking {
-            self.particles.add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
+        } else {
+            let smoke = ParticleOptions::simple(ParticleType::Smoke);
+            let mut i = 0;
+            while i < self.tnts.len() {
+                let id = self.tnts[i].id;
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, "minecraft:tnt") {
+                    i += 1;
+                    continue;
+                }
+                let (kept, pos) = {
+                    let (world, collision, assets, facts, fluids, border, blocks) = (
+                        &self.world,
+                        self.collision,
+                        &self.pack.assets,
+                        self.res.facts(),
+                        &self.res.motion().fluids,
+                        Some(self.border.geometry()),
+                        Some(&self.res.motion().blocks),
+                    );
+                    let side = game_side!(self);
+                    let sections = self.client_pick.sections.get_mut();
+                    let t = &mut self.tnts[i];
+                    let _ = t.tick_among(
+                        world,
+                        collision,
+                        assets,
+                        facts,
+                        fluids,
+                        &self.loop_context,
+                        border,
+                        blocks,
+                        Some(&side),
+                        &[],
+                    );
+                    let kept = t.fuse > 0;
+                    if kept {
+                        sections.move_id(t.id, t.position.components());
+                    } else {
+                        sections.remove(t.id);
+                    }
+                    (kept, t.position)
+                };
+                if kept {
+                    self.particles
+                        .add(&smoke, [pos.x, pos.y + 0.5, pos.z], [0.0; 3]);
+                    i += 1;
+                } else {
+                    self.tnts.remove(i);
+                }
+                self.native_tick_post_one(round, id, "minecraft:tnt");
+            }
         }
         // Clients simulate motion and drag; only the server places/removes the landing block.
-        let mut falling = self.falling.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Falling);
-        falling.for_each_mut(|f| {
-            let _ = self.fall_step(f, false, &[]);
-            self.pick_section_move(f.id, f.position.components());
-        });
-        self.falling.restore(
-            falling,
-            sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
-        );
+        if !told {
+            let mut falling = self.falling.lift();
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Falling);
+            falling.for_each_mut(|f| {
+                let _ = self.fall_step(f, false, &[]);
+                self.pick_section_move(f.id, f.position.components());
+            });
+            self.falling.restore(
+                falling,
+                sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
+            );
+        } else {
+            let ids: Vec<u32> = self.falling.iter().map(|f| f.id).collect();
+            for id in ids {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, "minecraft:falling_block") {
+                    continue;
+                }
+                let mut falling = self.falling.lift();
+                #[cfg(test)]
+                nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Falling);
+                if let Some(i) = falling.iter().position(|f| f.id == id) {
+                    falling.update(i, |f| {
+                        let _ = self.fall_step(f, false, &[]);
+                        self.pick_section_move(f.id, f.position.components());
+                    });
+                }
+                self.falling.restore(
+                    falling,
+                    sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
+                );
+                self.native_tick_post_one(round, id, "minecraft:falling_block");
+            }
+        }
         // Projectiles tick on the client too and fly on between the tracker's
         // updates (10 to 20 ticks apart); a block stops them there, and only
         // the server decides what they hit. EntityTickEvent.Pre and .Post bracket each remote
         // projectile and trident individually when subscribed; when unsubscribed, the fast loop
         // runs with zero hand-backs.
-        let mut round = self.native_tick_round();
-        let told = round.told_listening();
         let mut projectiles = self.creatures.projectiles.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Projectile);
@@ -649,37 +768,26 @@ impl Game<'_> {
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Trident);
         let mut arrow_events = Vec::new();
         if told {
-            (projectiles, tridents) = self.tick_remote_projectiles_told(
-                projectiles,
-                tridents,
-                &mut round,
-                &mut arrow_events,
-            );
+            visited.extend(projectiles.iter().map(|p| p.id));
+            visited.extend(tridents.iter().map(|t| t.id));
+            (projectiles, tridents) =
+                self.tick_remote_projectiles_told(projectiles, tridents, round, &mut arrow_events);
         } else {
-            // Their visits, counted once the loop hands the game back: no hook runs between.
-            let mut visited = Vec::new();
-            {
-                let rain = self.arrow_rain();
-                let arrow_scene = self.arrow_scene(&rain);
-                let w = self.mob_world_base(&[]);
-                let world = super::creatures::ProjWorld {
-                    w: &w,
-                    targets: &[],
-                    border: Some(self.border.bounds()),
-                };
-                projectiles.for_each_mut(|p| {
-                    visited.push(p.id);
-                    remote_projectile_step(p, &arrow_scene, &world, &mut arrow_events);
-                    self.pick_section_move(p.id, p.position.components());
-                });
-                for t in &mut tridents {
-                    visited.push(t.id);
-                    super::trident::remote_tick(t, &world, self.remote_eye(t.owner));
-                    self.pick_section_move(t.id, t.position.components());
-                }
-            }
-            for id in visited {
-                self.count_client_tick(id);
+            let rain = self.arrow_rain();
+            let arrow_scene = self.arrow_scene(&rain);
+            let w = self.mob_world_base(&[]);
+            let world = super::creatures::ProjWorld {
+                w: &w,
+                targets: &[],
+                border: Some(self.border.bounds()),
+            };
+            projectiles.for_each_mut(|p| {
+                remote_projectile_step(p, &arrow_scene, &world, &mut arrow_events);
+                self.pick_section_move(p.id, p.position.components());
+            });
+            for t in &mut tridents {
+                super::trident::remote_tick(t, &world, self.remote_eye(t.owner));
+                self.pick_section_move(t.id, t.position.components());
             }
         }
         self.creatures.projectiles.restore(
@@ -708,18 +816,22 @@ impl Game<'_> {
         // FireworkRocketEntity.tick: a rocket attached to another entity
         // follows it, and every rocket leaves its spark trail on a client. One
         // boosting this client's own player ticks after it (`tick_own_rockets`).
-        let me = self.remote_player_id();
-        let mut rockets = self.rockets.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::RemoteRocket);
-        for r in &mut rockets {
-            r.remote_step(self.body_motion(&game_side!(self)));
-            if let Some(target) = r.attached_to {
-                if me == Some(target) {
+        let own_me = self
+            .remote_player_id()
+            .filter(|_| self.clock.runs_normally() && self.player.is_some());
+        if !told {
+            let mut rockets = self.rockets.lift();
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::RemoteRocket);
+            for r in &mut rockets {
+                if own_me.is_some() && r.attached_to == own_me {
                     self.pick_section_move(r.id, r.position.components());
                     continue;
                 }
-                if let Some(m) = self.mobs.iter().find(|m| m.id == target) {
+                r.remote_step(self.body_motion(&game_side!(self)));
+                if let Some(target) = r.attached_to
+                    && let Some(m) = self.mobs.iter().find(|m| m.id == target)
+                {
                     // Another player's motion is not known here: its step.
                     r.velocity = Vec3::new(
                         m.position.x - r.previous.x,
@@ -728,39 +840,124 @@ impl Game<'_> {
                     );
                     r.position = m.position;
                 }
+                self.pick_section_move(r.id, r.position.components());
+                self.rocket_spark(r);
             }
-            self.pick_section_move(r.id, r.position.components());
-            self.rocket_spark(r);
+            self.rockets.restore(
+                rockets,
+                sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
+            );
+        } else {
+            let ids: Vec<(u32, Option<u32>)> =
+                self.rockets.iter().map(|r| (r.id, r.attached_to)).collect();
+            for (id, attached_to) in ids {
+                visited.insert(id);
+                if own_me.is_some() && attached_to == own_me {
+                    continue;
+                }
+                if !self.client_tick_pre_one(round, id, "minecraft:firework_rocket") {
+                    continue;
+                }
+                let mut rockets = self.rockets.lift();
+                #[cfg(test)]
+                nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::RemoteRocket);
+                if let Some(r) = rockets.iter_mut().find(|r| r.id == id) {
+                    r.remote_step(self.body_motion(&game_side!(self)));
+                    if let Some(target) = r.attached_to
+                        && let Some(m) = self.mobs.iter().find(|m| m.id == target)
+                    {
+                        // Another player's motion is not known here: its step.
+                        r.velocity = Vec3::new(
+                            m.position.x - r.previous.x,
+                            m.position.y - r.previous.y,
+                            m.position.z - r.previous.z,
+                        );
+                        r.position = m.position;
+                    }
+                    self.pick_section_move(r.id, r.position.components());
+                    self.rocket_spark(r);
+                }
+                self.rockets.restore(
+                    rockets,
+                    sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
+                );
+                self.native_tick_post_one(round, id, "minecraft:firework_rocket");
+            }
         }
-        self.rockets.restore(
-            rockets,
-            sunrise_client::join_seq::RestoreOrder::SurvivorsFirst,
-        );
-        for c in &mut self.crystals {
+        for i in 0..self.crystals.len() {
+            let id = self.crystals[i].id;
+            if told {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, "minecraft:end_crystal") {
+                    continue;
+                }
+            }
+            let c = &mut self.crystals[i];
             // ClientLevel.tickNonPassenger's setOldPosAndRot, then the interpolation step.
             c.previous = c.position;
             c.time += 1;
             c.position = step(c.id, c.position);
+            if told {
+                self.native_tick_post_one(round, id, "minecraft:end_crystal");
+            }
         }
-        self.step_remote_thrown();
-        self.tick_remote_hooks();
-        self.end.step_remote_eyes();
-        self.tick_remote_clouds();
+        self.step_remote_thrown_with(round, visited);
+        self.tick_remote_hooks_with(round, visited);
+        if !told {
+            self.end.step_remote_eyes();
+        } else {
+            for id in self.end.remote_eye_ids() {
+                visited.insert(id);
+                if self.client_tick_pre_one(round, id, "minecraft:eye_of_ender") {
+                    self.end.step_remote_eye(id);
+                    self.native_tick_post_one(round, id, "minecraft:eye_of_ender");
+                }
+            }
+        }
+        self.tick_remote_clouds_with(round, visited);
     }
 
     /// `AreaEffectCloud.clientTick` for each cloud a server tracks.
-    fn tick_remote_clouds(&mut self) {
-        let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
-        for c in &mut self.potions.clouds {
-            cloud_client_tick(
-                &mut self.particles,
-                &level,
-                c.at,
-                c.radius,
-                c.waiting,
-                &c.particle,
-                &mut c.random,
-            );
+    fn tick_remote_clouds_with(
+        &mut self,
+        round: &mut TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
+        if !round.told_listening() {
+            let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
+            for c in &mut self.potions.clouds {
+                cloud_client_tick(
+                    &mut self.particles,
+                    &level,
+                    c.at,
+                    c.radius,
+                    c.waiting,
+                    &c.particle,
+                    &mut c.random,
+                );
+            }
+            return;
+        }
+        let ids: Vec<u32> = self.potions.clouds.iter().map(|c| c.id).collect();
+        for id in ids {
+            visited.insert(id);
+            if !self.client_tick_pre_one(round, id, "minecraft:area_effect_cloud") {
+                continue;
+            }
+            if let Some(i) = self.potions.clouds.iter().position(|c| c.id == id) {
+                let level = ParticleLevel::new(&self.world, self.res.facts(), self.collision);
+                let c = &mut self.potions.clouds[i];
+                cloud_client_tick(
+                    &mut self.particles,
+                    &level,
+                    c.at,
+                    c.radius,
+                    c.waiting,
+                    &c.particle,
+                    &mut c.random,
+                );
+            }
+            self.native_tick_post_one(round, id, "minecraft:area_effect_cloud");
         }
     }
 

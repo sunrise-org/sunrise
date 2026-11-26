@@ -2416,29 +2416,65 @@ impl Game<'_> {
     /// `ThrowableProjectile.tick` on a server's client: it falls and moves
     /// by itself between the server's updates and stops at a block; only
     /// the server breaks it.
+    #[cfg(test)]
     pub(super) fn step_remote_thrown(&mut self) {
-        let mut thrown = std::mem::take(&mut self.potions.thrown);
-        for t in &mut thrown {
-            t.previous = t.position;
-            t.age += 1;
-            self.thrown_potion_motion(t);
-            let next = Vec3::new(
-                t.position.x + t.velocity.x,
-                t.position.y + t.velocity.y,
-                t.position.z + t.velocity.z,
-            );
-            let state = self.world.block(
-                next.x.floor() as i32,
-                next.y.floor() as i32,
-                next.z.floor() as i32,
-            );
-            if self.res.facts().get(state).full_collision {
-                t.velocity = Vec3::ZERO;
-            } else {
-                t.position = next;
+        let mut round = self.native_tick_round();
+        let mut visited = sunrise_client::fast_hash::FxHashSet::default();
+        self.step_remote_thrown_with(&mut round, &mut visited);
+    }
+
+    pub(super) fn step_remote_thrown_with(
+        &mut self,
+        round: &mut crate::game::native_ticks::TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
+        if !round.told_listening() {
+            let mut thrown = std::mem::take(&mut self.potions.thrown);
+            for t in &mut thrown {
+                self.step_one_remote_thrown(t);
             }
+            self.potions.thrown = thrown;
+            return;
         }
-        self.potions.thrown = thrown;
+        let ids: Vec<(u32, &'static str)> = self
+            .potions
+            .thrown
+            .iter()
+            .map(|t| (t.id, thrown_kind(&t.stack)))
+            .collect();
+        for (id, kind) in ids {
+            visited.insert(id);
+            if !self.client_tick_pre_one(round, id, kind) {
+                continue;
+            }
+            if let Some(i) = self.potions.thrown.iter().position(|t| t.id == id) {
+                let mut thrown = std::mem::take(&mut self.potions.thrown);
+                self.step_one_remote_thrown(&mut thrown[i]);
+                self.potions.thrown = thrown;
+            }
+            self.native_tick_post_one(round, id, kind);
+        }
+    }
+
+    fn step_one_remote_thrown(&mut self, t: &mut ThrownPotion) {
+        t.previous = t.position;
+        t.age += 1;
+        self.thrown_potion_motion(t);
+        let next = Vec3::new(
+            t.position.x + t.velocity.x,
+            t.position.y + t.velocity.y,
+            t.position.z + t.velocity.z,
+        );
+        let state = self.world.block(
+            next.x.floor() as i32,
+            next.y.floor() as i32,
+            next.z.floor() as i32,
+        );
+        if self.res.facts().get(state).full_collision {
+            t.velocity = Vec3::ZERO;
+        } else {
+            t.position = next;
+        }
     }
     /// `ThrownItemRenderer` for thrown splash and lingering potions and
     /// experience bottles: the item (GROUND) facing the camera at scale 1,

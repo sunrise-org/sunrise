@@ -638,12 +638,48 @@ impl Game<'_> {
     }
     /// `LightningBolt.tick` for every bolt.
     pub(super) fn tick_bolts(&mut self) {
+        self.tick_bolts_inner(None);
+    }
+
+    /// `LightningBolt.tick` on a client, bracketing each bolt with `entity_tick_pre` / `.post`
+    /// when subscribed.
+    pub(super) fn tick_remote_bolts(
+        &mut self,
+        round: &mut crate::game::native_ticks::TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
+    ) {
+        self.tick_bolts_inner(Some((round, visited)));
+    }
+
+    fn tick_bolts_inner(
+        &mut self,
+        mut client_tick: Option<(
+            &mut crate::game::native_ticks::TickRound,
+            &mut sunrise_client::fast_hash::FxHashSet<u32>,
+        )>,
+    ) {
         let _save_lease = sunrise_client::join_seq::visibility::PassLease::enter();
         let server = self.remote.is_none();
+        let told = !server
+            && client_tick
+                .as_ref()
+                .is_some_and(|(round, _)| round.told_listening());
         let ticking = self.entity_ticking_area();
         let ids: Vec<u32> = self.bolts.iter().map(|b| b.id).collect();
         for id in ids {
+            if !self.bolts.iter().any(|b| b.id == id) {
+                continue;
+            }
+            if told && let Some((round, visited)) = &mut client_tick {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, "minecraft:lightning_bolt") {
+                    continue;
+                }
+            }
             let Some(i) = self.bolts.iter().position(|b| b.id == id) else {
+                if told && let Some((round, _)) = &client_tick {
+                    self.native_tick_post_one(round, id, "minecraft:lightning_bolt");
+                }
                 continue;
             };
             let mut at = self.bolts[i].at;
@@ -741,6 +777,9 @@ impl Game<'_> {
                 }
             }
             let Some(i) = self.bolts.iter().position(|b| b.id == id) else {
+                if told && let Some((round, _)) = &client_tick {
+                    self.native_tick_post_one(round, id, "minecraft:lightning_bolt");
+                }
                 continue;
             };
             enum Step {
@@ -778,6 +817,9 @@ impl Game<'_> {
                         self.lightning_strike_triggers(at, fires, &hit, &hit_items);
                     }
                     self.remove_bolt(id);
+                    if told && let Some((round, _)) = &client_tick {
+                        self.native_tick_post_one(round, id, "minecraft:lightning_bolt");
+                    }
                     continue;
                 }
                 Step::Reflash => {
@@ -824,6 +866,9 @@ impl Game<'_> {
             {
                 at = seat;
                 self.bolts.update(i, |b| b.at = at);
+            }
+            if told && let Some((round, _)) = &client_tick {
+                self.native_tick_post_one(round, id, "minecraft:lightning_bolt");
             }
         }
     }

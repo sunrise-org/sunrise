@@ -8,12 +8,20 @@ pub trait Hooks {
     /// item frames, paintings, armor stands, thrown tridents, general entity
     /// rows and projectiles that tick in an entity-ticking chunk, and the entities the server
     /// keeps without simulating them (displays, markers, interactions), whose tick is only told
-    /// (not a player's own boat or cart, which ticks with the player); and on a client for the
-    /// mobs, other players, projectiles, tridents and displays it ticks; `host` says which side.
+    /// (not a player's own boat or cart, which ticks with the player); and on a client for every
+    /// entity it ticks (`ClientLevel.tickNonPassenger` and `tickPassenger`, with NeoForge's
+    /// `Entity.rideTick` patch): the local player (besides `player_tick_pre` and
+    /// `player_tick_post`), other players and mobs, items, experience orbs, primed TNT, falling
+    /// blocks, projectiles, tridents, rockets, boats, minecarts, a vehicle this client drives,
+    /// armor stands, displays, general entity rows and the other tracked entities; on a frozen
+    /// client level, only the players and what carries them (`TickRateManager.isEntityFrozen`).
+    /// `host` says which side.
     /// Every observed entity is bracketed individually (`Pre(A)`, tick `A`, `Post(A)`, `Pre(B)`,
     /// ...), matching NeoForge's `EntityTickEvent.Pre` / `.Post` timing. On the server, player
     /// Pre runs before the observed parts of `ServerPlayer.tick`, not the connection body's
-    /// `player_tick_pre`. The local client player is not yet observed here.
+    /// `player_tick_pre`. On a client, a vehicle this client drives ticks before the local
+    /// player. A passenger's `Entity.commonTick` counts before its Pre, inside `Entity.rideTick`,
+    /// and its vehicle still positions it when that Pre cancels; a root counts after its Pre.
     /// Return [`Flow::Cancel`] to skip this entity's observed tick work and suppress its Post.
     /// Removing a general entity during its own Pre skips its tick and Post and dismounts its
     /// passengers unless dismount is vetoed. An eligible former passenger can still tick as a
@@ -28,7 +36,7 @@ pub trait Hooks {
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_entity_tick_pre",
         dispatch = "flat",
         side = "both",
-        version = 5,
+        version = 6,
         contract = "cancel",
         out = "canceled",
         neoforge = "EntityTickEvent.Pre",

@@ -421,13 +421,37 @@ impl Game<'_> {
     /// instead.
     pub(super) fn tick_remote_objects(
         &mut self,
+        step: impl FnMut(u32, Vec3) -> Vec3,
+        turn: impl FnMut(u32, f32) -> f32,
+        lerp_cart: impl FnMut(&mut super::minecarts::Minecart) -> bool,
+    ) {
+        let mut round = self.native_tick_round();
+        let mut visited = sunrise_client::fast_hash::FxHashSet::default();
+        let driven_boat = self.riding.filter(|&id| self.controls_boat(id));
+        self.tick_remote_objects_with(step, turn, lerp_cart, driven_boat, &mut round, &mut visited);
+    }
+
+    pub(super) fn tick_remote_objects_with(
+        &mut self,
         mut step: impl FnMut(u32, Vec3) -> Vec3,
         mut turn: impl FnMut(u32, f32) -> f32,
         mut lerp_cart: impl FnMut(&mut super::minecarts::Minecart) -> bool,
+        driven_boat: Option<u32>,
+        round: &mut crate::game::native_ticks::TickRound,
+        visited: &mut sunrise_client::fast_hash::FxHashSet<u32>,
     ) {
+        let told = round.told_listening();
         let improved = self.minecart_improvements();
         let mut cart = 0;
         while cart < self.carts.len() {
+            let (id, cart_kind_id) = (self.carts[cart].id, self.carts[cart].kind.id());
+            if told {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, cart_kind_id) {
+                    cart += 1;
+                    continue;
+                }
+            }
             let (id, from, to, kind, fuse, fuel) = self.carts.update(cart, |c| {
                 let from = c.position;
                 c.previous = c.position;
@@ -474,16 +498,31 @@ impl Game<'_> {
             if from != to {
                 self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
             }
+            if told {
+                self.native_tick_post_one(round, id, cart_kind_id);
+            }
             cart += 1;
         }
         // The boat the player drives moves here, not where the server says.
-        let driven = self.riding.filter(|&id| self.controls_boat(id));
         let mut boat = 0;
         while boat < self.boats.len() {
-            let (id, from, to) = self.boats.update(boat, |b| {
-                if Some(b.id) == driven {
-                    return (b.id, b.position, b.position);
+            let id = self.boats[boat].id;
+            if Some(id) == driven_boat {
+                if told {
+                    visited.insert(id);
                 }
+                boat += 1;
+                continue;
+            }
+            let kind = told.then(|| self.boats[boat].shared_type_name());
+            if let Some(kind) = &kind {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, kind) {
+                    boat += 1;
+                    continue;
+                }
+            }
+            let (id, from, to) = self.boats.update(boat, |b| {
                 let from = b.position;
                 b.previous = b.position;
                 b.previous_yaw = b.yaw;
@@ -496,30 +535,40 @@ impl Game<'_> {
             if from != to {
                 self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
             }
-            boat += 1;
-        }
-        let mut stand = 0;
-        while stand < self.armor_stands.len() {
-            let (id, from, to) = {
-                let a = &mut self.armor_stands[stand];
-                let from = a.position;
-                a.position = step(a.id, a.position);
-                (a.id, from, a.position)
-            };
-            if from != to {
-                self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
+            if let Some(kind) = &kind {
+                self.native_tick_post_one(round, id, kind);
             }
-            stand += 1;
+            boat += 1;
         }
         // `Entity.tickCount` on the client: a painting's and an item frame's lived ticks, which
         // their renderers read as the age.
-        for painting in &mut self.paintings {
-            painting.ticks = painting.ticks.saturating_add(1);
+        for i in 0..self.paintings.len() {
+            let id = self.paintings[i].id;
+            if told {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, "minecraft:painting") {
+                    continue;
+                }
+            }
+            self.paintings[i].ticks = self.paintings[i].ticks.saturating_add(1);
+            if told {
+                self.native_tick_post_one(round, id, "minecraft:painting");
+            }
         }
-        for frame in &mut self.item_frames {
-            frame.ticks = frame.ticks.saturating_add(1);
+        for i in 0..self.item_frames.len() {
+            let (id, kind) = (self.item_frames[i].id, self.item_frames[i].kind());
+            if told {
+                visited.insert(id);
+                if !self.client_tick_pre_one(round, id, kind) {
+                    continue;
+                }
+            }
+            self.item_frames[i].ticks = self.item_frames[i].ticks.saturating_add(1);
+            if told {
+                self.native_tick_post_one(round, id, kind);
+            }
         }
-        self.tick_remote_boat_bubbles();
+        self.tick_remote_boat_bubbles_with(round);
     }
 
     /// The boats, minecarts, armor stands, item frames and paintings in the
