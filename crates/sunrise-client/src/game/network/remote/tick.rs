@@ -202,7 +202,10 @@ impl Game<'_> {
             .then(|| self.driven_mount().map(|m| m.id))
             .flatten();
         let driven_boat = own_drives
-            .then(|| self.riding.filter(|&id| self.controls_boat(id)))
+            .then(|| {
+                self.riding
+                    .filter(|&id| self.boats.iter().any(|b| b.id == id) && self.controls_boat(id))
+            })
             .flatten();
         // EntityFluidInteraction.update for the entities this window only displays: the
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
