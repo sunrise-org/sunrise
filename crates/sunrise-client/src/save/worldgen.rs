@@ -56,10 +56,16 @@ fn dimension_is_vanilla_like(key: &str, dimension: &Tag) -> bool {
 /// opens and its load builds its own view (`WorldOpenFlows.openWorldCheckWorldStemCompatibility`).
 pub fn world_data_packs(world: &Path) -> crate::datapack::DataPacks {
     let packs = crate::datapack::discover(world);
-    let enabled_features = Level::read(world)
-        .map(|l| l.enabled_features)
+    let level = Level::read(world);
+    let enabled_features = level
+        .as_ref()
+        .map(|l| l.enabled_features.clone())
         .unwrap_or_default();
-    let enabled = crate::datapack::enabled_ids(world, &packs, &enabled_features);
+    let enabled = crate::datapack::enabled_ids(
+        level.as_ref().and_then(|l| l.data_packs.as_ref()),
+        &packs,
+        &enabled_features,
+    );
     let enabled: Vec<&crate::datapack::DataPack> = enabled
         .iter()
         .filter_map(|id| packs.iter().find(|p| &p.id == id))

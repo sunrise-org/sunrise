@@ -25,6 +25,9 @@ pub(super) struct WorldRequest {
     /// A fixture's effective registry traversal, before shape projection.
     #[cfg(test)]
     pub(super) stem_order: Option<&'static [&'static str]>,
+    /// A fixture's `DataPacks` selection, as `WorldDataConfiguration` travels in memory.
+    #[cfg(test)]
+    pub(super) data_packs: Option<(Vec<String>, Vec<String>)>,
 }
 
 pub(super) struct PreparedWorld {
@@ -142,6 +145,8 @@ impl WorldRequest {
             owner: None,
             #[cfg(test)]
             stem_order: None,
+            #[cfg(test)]
+            data_packs: None,
         })
     }
 
@@ -173,6 +178,8 @@ impl WorldRequest {
             owner,
             #[cfg(test)]
             stem_order,
+            #[cfg(test)]
+            data_packs,
         } = self;
         let name = name.as_deref();
         sunrise_client::biome::Biomes::forget_missing_warnings();
@@ -215,6 +222,10 @@ impl WorldRequest {
             ..Level::default()
         });
         let mut level = level;
+        #[cfg(test)]
+        if let Some(selection) = data_packs {
+            level.data_packs = Some(selection);
+        }
         // `IntegratedServer.setSingleplayerProfile`: a world older Sunrise builds made
         // under the offline profile moves its owner to the account at open — the player
         // file, its `UUID` and level.dat's `singleplayer_uuid`. Its entities follow as
@@ -270,6 +281,9 @@ impl WorldRequest {
                         .map(|p| p.id)
                         .filter(|id| !o.data_packs.contains(id)),
                     );
+                }
+                if !o.data_packs.iter().any(|id| id == "vanilla") {
+                    disabled.push("vanilla".into());
                 }
                 (o.data_packs.clone(), disabled)
             });
@@ -599,7 +613,7 @@ pub(super) fn preload_launch_world(
                 &resources,
                 &builtin_source,
                 &data_source,
-                false,
+                level.as_ref().and_then(|l| l.data_packs.as_ref()),
                 enabled_features,
                 &additional,
             );
@@ -837,6 +851,7 @@ fn worldgen_overrides_in_world(
     world_root: &std::path::Path,
     resources: &std::path::Path,
     enabled_features: &[String],
+    selection: Option<&(Vec<String>, Vec<String>)>,
     additional: &[Arc<sunrise_client::datapack::DataPack>],
 ) -> (
     sunrise_world::worldgen::overrides::WorldgenOverrides,
@@ -848,7 +863,7 @@ fn worldgen_overrides_in_world(
         resources,
         &empty,
         &empty,
-        false,
+        selection,
         enabled_features,
         additional,
     );
@@ -1614,11 +1629,6 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            world.join("datapacks.json"),
-            r#"{"enabled":["vanilla","file/recovery"],"disabled":[]}"#,
-        )
-        .unwrap();
-        fs::write(
             dimensions.join("overworld.json"),
             r#"{"type":"minecraft:overworld","generator":{"type":"minecraft:flat","settings":{
                 "biome":"minecraft:plains","features":false,"lakes":false,"structure_overrides":[],
@@ -1640,6 +1650,10 @@ mod tests {
                 )
                 .unwrap();
                 request.save_root = world.to_owned();
+                request.data_packs = Some((
+                    vec!["vanilla".to_owned(), "file/recovery".to_owned()],
+                    vec![],
+                ));
                 game.load_world(request).unwrap();
                 assert_eq!(
                     fs::read(&settings_path).unwrap(),
@@ -1706,11 +1720,6 @@ mod tests {
             "pack.mcmeta",
             r#"{"pack":{"description":"Flat stem fixture","min_format":[121,0],"max_format":[121,0]}}"#,
         );
-        fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["vanilla","file/flat"],"disabled":[]}"#,
-        )
-        .unwrap();
         // FlatLevelGeneratorSettings.validateHeight rejects one above the limit.
         let height = if invalid { 4065 } else { 1 };
         write(
@@ -1736,6 +1745,8 @@ mod tests {
 
         with_game(|game| {
             let shape = LevelShape::NETHER;
+            game.level.data_packs =
+                Some((vec!["vanilla".to_owned(), "file/flat".to_owned()], vec![]));
             let empty =
                 sunrise_assets::resource_source::ResourceSource::indexed(Default::default());
             let stack = super::functions::pack_stack(
@@ -1743,7 +1754,7 @@ mod tests {
                 &game.options.resources,
                 &empty,
                 &empty,
-                false,
+                game.level.data_packs.as_ref(),
                 &game.level.enabled_features,
                 &game.pack.additional_data,
             );
@@ -1847,11 +1858,6 @@ mod tests {
             "pack.mcmeta",
             r#"{"pack":{"description":"New biome fixture","min_format":[121,0],"max_format":[121,0]}}"#,
         );
-        fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["vanilla","file/biome"],"disabled":[]}"#,
-        )
-        .unwrap();
         write(
             "data/minecraft/dimension/overworld.json",
             r#"{"type":"minecraft:overworld","generator":{"type":"minecraft:noise","settings":"minecraft:overworld",
@@ -1868,6 +1874,8 @@ mod tests {
             file["effects"]["water_color"] = serde_json::json!("#123456");
             write("data/test/worldgen/biome/new_biome.json", &file.to_string());
 
+            game.level.data_packs =
+                Some((vec!["vanilla".to_owned(), "file/biome".to_owned()], vec![]));
             let builtin = game.res.biomes();
             assert!(!builtin.contains("test:new_biome"));
             let empty =
@@ -1877,7 +1885,7 @@ mod tests {
                 &game.options.resources,
                 &empty,
                 &empty,
-                false,
+                game.level.data_packs.as_ref(),
                 &game.level.enabled_features,
                 &game.pack.additional_data,
             );
@@ -1955,16 +1963,13 @@ mod tests {
             "pack.mcmeta",
             r#"{"pack":{"description":"Preset fixture","min_format":[121,0],"max_format":[121,0]}}"#,
         );
-        fs::write(
-            root.join("datapacks.json"),
-            r#"{"enabled":["vanilla","file/preset"],"disabled":[]}"#,
-        )
-        .unwrap();
         for (path, text) in files {
             write(path, text);
         }
         let mut names = Vec::new();
         with_game(|game| {
+            game.level.data_packs =
+                Some((vec!["vanilla".to_owned(), "file/preset".to_owned()], vec![]));
             let empty =
                 sunrise_assets::resource_source::ResourceSource::indexed(Default::default());
             let stack = super::functions::pack_stack(
@@ -1972,7 +1977,7 @@ mod tests {
                 &game.options.resources,
                 &empty,
                 &empty,
-                false,
+                game.level.data_packs.as_ref(),
                 &game.level.enabled_features,
                 &game.pack.additional_data,
             );
@@ -2187,6 +2192,7 @@ mod tests {
                 owner: None,
                 chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
                 stem_order: None,
+                data_packs: None,
                 save_root: dir.clone(),
                 folder: "test".into(),
                 name: Some("test".into()),
@@ -2749,11 +2755,10 @@ mod tests {
             pack.join("pack.mcmeta"),
             r#"{"pack":{"description":"Checkerboard test","min_format":[121,0],"max_format":[121,0]}}"#,
         ).unwrap();
-        fs::write(
-            world.join("datapacks.json"),
-            r#"{"enabled":["vanilla","file/checkerboard"],"disabled":[]}"#,
-        )
-        .unwrap();
+        let selection = (
+            vec!["vanilla".to_owned(), "file/checkerboard".to_owned()],
+            Vec::new(),
+        );
         fs::write(
             dimensions.join("pocket.json"),
             r##"{
@@ -2779,7 +2784,7 @@ mod tests {
             biomes: &biomes,
             item_data: &item_data,
         };
-        let (overrides, _) = worldgen_overrides_in_world(world, &root, &[], &[]);
+        let (overrides, _) = worldgen_overrides_in_world(world, &root, &[], Some(&selection), &[]);
         let open = |dim| {
             mod_terrain(
                 &overrides,
@@ -2881,11 +2886,10 @@ mod tests {
             r#"{"pack":{"description":"Checkerboard test","min_format":[121,0],"max_format":[121,0]}}"#,
         )
         .unwrap();
-        fs::write(
-            world.join("datapacks.json"),
-            r#"{"enabled":["vanilla","file/checkerboard"],"disabled":[]}"#,
-        )
-        .unwrap();
+        let selection = (
+            vec!["vanilla".to_owned(), "file/checkerboard".to_owned()],
+            Vec::new(),
+        );
         fs::write(
             dimensions.join("pocket.json"),
             r##"{
@@ -2909,7 +2913,8 @@ mod tests {
             item_data: &item_data,
         };
         let pocket = Dim::Extra(mod_api::__private::dimension_key("test:pocket"));
-        let (overrides, _) = worldgen_overrides_in_world(&world, &resources_root, &[], &[]);
+        let (overrides, _) =
+            worldgen_overrides_in_world(&world, &resources_root, &[], Some(&selection), &[]);
         let Some(Ok(ModLevel::Terrain(terrain))) = mod_terrain(
             &overrides,
             resources,
@@ -2980,6 +2985,7 @@ mod tests {
                             owner: None,
                             chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
                             stem_order: None,
+                            data_packs: None,
                             save_root: world.clone(),
                             folder: "world".into(),
                             name: Some("Region fixture".into()),
@@ -3082,6 +3088,7 @@ mod unused_feature_startup_tests {
                 &root,
                 &options.resources,
                 &level.enabled_features,
+                level.data_packs.as_ref(),
                 &loaded.pack.additional_data,
             );
             assert_eq!(
@@ -3108,6 +3115,7 @@ mod unused_feature_startup_tests {
                 owner: None,
                 chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
                 stem_order: None,
+                data_packs: None,
                 rule_registry: Level::default().rule_registry,
             };
             let mut prepared = request
@@ -3127,7 +3135,7 @@ mod unused_feature_startup_tests {
                 &options.resources,
                 &empty,
                 &empty,
-                false,
+                None,
                 &prepared.level.enabled_features,
                 &loaded.pack.additional_data,
             );
@@ -3219,6 +3227,7 @@ mod unused_feature_preservation_tests {
             &root,
             &options.resources,
             &level.enabled_features,
+            level.data_packs.as_ref(),
             &loaded.pack.additional_data,
         );
         assert_eq!(
@@ -3256,6 +3265,7 @@ mod unused_feature_preservation_tests {
             owner: None,
             chunk_reports: sunrise_client::chunk_io::PROCESS_REPORTS.clone(),
             stem_order: None,
+            data_packs: None,
             rule_registry: Level::default().rule_registry,
         };
         assert!(

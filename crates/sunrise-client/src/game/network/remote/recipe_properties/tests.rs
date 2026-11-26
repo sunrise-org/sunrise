@@ -23,11 +23,6 @@ fn cut_pack(root: &std::path::Path) -> impl Fn(&str, &str) {
         "pack.mcmeta",
         r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
-    std::fs::write(
-        root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/cuts"],"disabled":[]}"#,
-    )
-    .unwrap();
     write
 }
 
@@ -86,6 +81,8 @@ fn guest_stonecutter_uses_packet_tags_components_and_authoritative_buttons() {
     with_guests(|server| {
         let _serving = crate::game::integrated::tests::install_serving(server, false);
         server.world_root = root.to_owned();
+        server.level.data_packs =
+            Some((vec!["vanilla".to_owned(), "file/cuts".to_owned()], vec![]));
         let (tx, rx) = std::sync::mpsc::channel();
         let host = server.lan.as_mut().unwrap();
         host.play.entry(12).or_default();
@@ -323,6 +320,8 @@ fn guest_stonecutter_waits_for_deferred_recipe_publication() {
     with_guests(|server| {
         let _serving = crate::game::integrated::tests::install_serving(server, false);
         server.world_root = root.to_owned();
+        server.level.data_packs =
+            Some((vec!["vanilla".to_owned(), "file/cuts".to_owned()], vec![]));
         let (tx, rx) = std::sync::mpsc::channel();
         let host = server.lan.as_mut().unwrap();
         host.play.entry(12).or_default();
@@ -375,7 +374,7 @@ fn guest_stonecutter_waits_for_deferred_recipe_publication() {
             &resources,
             &server.pack.data_source,
             &server.pack.data_changes,
-            false,
+            server.level.data_packs.as_ref(),
             &[],
             &[],
         );

@@ -2144,11 +2144,7 @@ pub(super) mod interact_vibration_tests {
                 r#"{"values":["minecraft:fishing_rod"]}"#,
             )
             .unwrap();
-            std::fs::write(
-                dir.join("datapacks.json"),
-                r#"{"enabled":["file/rods"],"disabled":[]}"#,
-            )
-            .unwrap();
+            game.level.data_packs = Some((vec!["file/rods".to_owned()], vec![]));
             game.world_root = dir.clone();
             let stack = game.reload_datapacks(false, &[]).unwrap();
             let root = game.options.resources.clone();

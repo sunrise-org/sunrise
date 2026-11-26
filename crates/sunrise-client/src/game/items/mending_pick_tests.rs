@@ -39,11 +39,7 @@ fn repair_orb(id: &str, chest: bool, table: &Enchantments, orb: i32) -> (u32, i3
                 r#"{"pack":{"description":"Mending fixture"}}"#,
             )
             .unwrap();
-            std::fs::write(
-                root.path().join("datapacks.json"),
-                r#"{"enabled":["file/mending"],"disabled":[]}"#,
-            )
-            .unwrap();
+            game.level.data_packs = Some((vec!["file/mending".to_owned()], vec![]));
             game.world_root = root.path().to_path_buf();
             let packs = game.reload_datapacks(false, &[]).unwrap();
             let resources = game.options.resources.clone();

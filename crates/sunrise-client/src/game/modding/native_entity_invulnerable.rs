@@ -634,7 +634,7 @@ mod tests {
                 &root,
                 resources.data(),
                 resources.data_changes(),
-                false,
+                None,
                 &[],
                 &[],
             );

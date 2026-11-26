@@ -139,11 +139,7 @@ fn a_world_pack_provider_sets_the_brew_time() {
         r#"{"pack":{"description":"fixture"}}"#,
     )
     .unwrap();
-    std::fs::write(
-        dir.join("datapacks.json"),
-        r#"{"enabled":["file/bp"],"disabled":[]}"#,
-    )
-    .unwrap();
+    game.level.data_packs = Some((vec!["file/bp".to_owned()], Vec::new()));
     game.world_root = dir.clone();
     let root = game.options.resources.clone();
     let stack = crate::game::functions::pack_stack(
@@ -151,7 +147,7 @@ fn a_world_pack_provider_sets_the_brew_time() {
         &root,
         &sunrise_assets::resource_source::ResourceSource::directory(root.clone()),
         &Default::default(),
-        false,
+        game.level.data_packs.as_ref(),
         &[],
         &[],
     );

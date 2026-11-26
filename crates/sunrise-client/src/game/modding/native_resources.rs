@@ -28,8 +28,10 @@ impl Game<'_> {
                     .then(|| self.fns.enabled_packs_highest_first())
                     .into_iter()
                     .flatten();
-                let lower = std::iter::once(&self.pack.data_changes)
-                    .chain((!self.cmds.vanilla_disabled).then_some(&self.pack.data_source));
+                let lower = std::iter::once(&self.pack.data_changes).chain(
+                    (!sunrise_client::datapack::vanilla_disabled(self.level.data_packs.as_ref()))
+                        .then_some(&self.pack.data_source),
+                );
                 sunrise_client::datapack::open_resource(world, lower, identifier)
             }
             _ => return Ok(None),
@@ -55,7 +57,7 @@ impl Game<'_> {
             ("assets", vec![&self.pack.source])
         } else {
             let mut sources = Vec::new();
-            if !self.cmds.vanilla_disabled {
+            if !sunrise_client::datapack::vanilla_disabled(self.level.data_packs.as_ref()) {
                 sources.push(&self.pack.data_source);
             }
             sources.push(&self.pack.data_changes);

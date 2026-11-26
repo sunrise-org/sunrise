@@ -210,7 +210,7 @@ mod tests {
             &root,
             &sunrise_assets::resource_source::ResourceSource::directory(root.clone()),
             &Default::default(),
-            false,
+            None,
             &[],
             &[],
         );

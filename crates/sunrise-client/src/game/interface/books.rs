@@ -1776,11 +1776,7 @@ mod lectern_books_tag_tests {
             r#"{"values":["minecraft:written_book","minecraft:writable_book","minecraft:book"]}"#,
         )
         .unwrap();
-        std::fs::write(
-            dir.join("datapacks.json"),
-            r#"{"enabled":["file/books"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/books".to_owned()], vec![]));
         game.world_root = dir;
         let stack = game.reload_datapacks(false, &[]).unwrap();
         let root = game.options.resources.clone();

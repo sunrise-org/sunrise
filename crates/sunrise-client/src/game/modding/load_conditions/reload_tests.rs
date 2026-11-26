@@ -74,10 +74,6 @@ fn reload_conditions_read_candidate_registries_and_bound_tags() {
         &pack.join("pack.mcmeta"),
         br#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
-    write(
-        &root.join("datapacks.json"),
-        br#"{"enabled":["vanilla","file/base"],"disabled":[]}"#,
-    );
     let flag_tag = pack.join("data/reload_conditions/tags/item/flag.json");
     let nonempty_flag = br#"{"values":["minecraft:stick","minecraft:flint"]}"#;
     write(&flag_tag, nonempty_flag);
@@ -142,6 +138,8 @@ fn reload_conditions_read_candidate_registries_and_bound_tags() {
                 )
                 .unwrap();
                 request.save_root = root.to_owned();
+                request.data_packs =
+                    Some((vec!["vanilla".to_owned(), "file/base".to_owned()], vec![]));
                 game.load_world(request).unwrap();
                 let item_tags = |game: &crate::game::Game<'_>, tag: mod_api::TagKey| {
                     mod_api::Tags::items(game, tag.typed())

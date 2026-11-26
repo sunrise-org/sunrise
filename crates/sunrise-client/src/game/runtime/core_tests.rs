@@ -62,7 +62,7 @@ fn reload_resolves_parts_against_reloaded_tags() {
             &game.options.resources,
             &game.pack.data_source,
             &game.pack.data_changes,
-            game.cmds.vanilla_disabled,
+            game.level.data_packs.as_ref(),
             &game.level.enabled_features,
             &game.pack.additional_data,
         );

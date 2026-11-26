@@ -63,10 +63,6 @@ fn recipe_priority_layer_is_named_and_applied_through_reload() {
         &pack.join("pack.mcmeta"),
         r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/priority_fixture"],"disabled":[]}"#,
-    );
     for id in ["a", "b"] {
         write(
             &pack.join(format!("data/priority_fixture/recipe/{id}.json")),
@@ -83,7 +79,12 @@ fn recipe_priority_layer_is_named_and_applied_through_reload() {
                 .map(|row| row.id.clone())
                 .collect::<Vec<_>>()
         };
-        game.load_world(request(root)).unwrap();
+        game.load_world(request_selecting(
+            root,
+            &["vanilla", "file/priority_fixture"],
+            &[],
+        ))
+        .unwrap();
         assert_eq!(order(game), ["priority_fixture:b", "priority_fixture:a"]);
         write(
             &path,
@@ -123,10 +124,6 @@ fn goat_horn_use_plays_the_data_pack_instrument() {
         r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
     write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/horns"],"disabled":[]}"#,
-    );
-    write(
         &pack.join("data/minecraft/instrument/ponder_goat_horn.json"),
         r#"{"sound_event":"minecraft:item.goat_horn.sound.1","use_duration":3,"range":32,"description":"override"}"#,
     );
@@ -138,7 +135,12 @@ fn goat_horn_use_plays_the_data_pack_instrument() {
         let mut played = Vec::new();
         let mut cooldown = Vec::new();
         with_game(|game| {
-            game.load_world(request(root)).unwrap();
+            let mut req = request(root);
+            req.data_packs = Some((
+                vec!["vanilla".to_owned(), "file/horns".to_owned()],
+                Vec::new(),
+            ));
+            game.load_world(req).unwrap();
             // `finish_open_world` clears `self.player`; `play_player_bound_sound` looks up the
             // player entity's state before emitting the bound sound on the server path.
             game.player = Some(
@@ -218,10 +220,6 @@ fn datapack_game_open_reload_and_exhaustion_are_atomic() {
             &format!(r#"{{"power":{value}}}"#),
         );
     }
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/base","file/override"],"disabled":[]}"#,
-    );
     let winning = root.join("datapacks/override/data/registry_test/registry_test/spell/fire.json");
     let tag = root.join("datapacks/base/data/registry_test/tags/block/publication.json");
     write(&tag, r#"{"values":["minecraft:stone"]}"#);
@@ -248,7 +246,12 @@ fn datapack_game_open_reload_and_exhaustion_are_atomic() {
                 let source = sunrise_assets::resource_source::ResourceSource::directory(builtin);
                 game.pack.data_source = source.clone();
                 game.pack.data_changes = source;
-                game.load_world(request(root)).unwrap();
+                game.load_world(request_selecting(
+                    root,
+                    &["vanilla", "file/base", "file/override"],
+                    &[],
+                ))
+                .unwrap();
                 assert_eq!(
                     game.fns.store.predicates["registry_test:native"]["chance"],
                     1
@@ -412,10 +415,6 @@ fn world_open_and_wire_use_the_pack_biome_instead_of_the_bundled_file() {
         &pack.join("pack.mcmeta"),
         r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
-    write(
-        &world.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/override"],"disabled":[]}"#,
-    );
     winner["temperature"] = serde_json::json!(0.125);
     write(
         &pack.join("data/registry_test/worldgen/biome/replacement.json"),
@@ -428,7 +427,12 @@ fn world_open_and_wire_use_the_pack_biome_instead_of_the_bundled_file() {
     );
     let _publication = sunrise_client::datapack_net::isolate_server_publication();
     with_game_at(resources, |game| {
-        game.load_world(request(&world)).unwrap();
+        game.load_world(request_selecting(
+            &world,
+            &["vanilla", "file/override"],
+            &[],
+        ))
+        .unwrap();
         let sync = crate::game::lan::sync::cached_reload_sync().unwrap();
         let biome = sync
             .registry_packets(true, &game.level_shapes)
@@ -463,10 +467,6 @@ fn remote_reload_never_decodes_local_registry_files() {
         &root.join("datapacks/local/data/registry_test/registry_test/spell/fire.json"),
         "{malformed",
     );
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["file/local"],"disabled":[]}"#,
-    );
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_test", Box::new(RegistryMod))].into(),
         || {
@@ -474,6 +474,7 @@ fn remote_reload_never_decodes_local_registry_files() {
                 let (pipe, _server) = sunrise_protocol::connection::Pipe::pair();
                 game.connect_local(pipe, "DatapackRemote").unwrap();
                 game.world_root = root.to_owned();
+                game.level.data_packs = Some((vec!["file/local".to_owned()], vec![]));
                 game.reload_datapacks(true, &[]).unwrap();
                 assert!(game.mods.datapack_registries.is_none());
             });
@@ -495,15 +496,12 @@ fn refused_reload_names_the_pack_and_keeps_the_old_generation() {
     );
     let winning = pack.join("data/registry_test/registry_test/spell/fire.json");
     write(&winning, r#"{"power":7}"#);
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/override"],"disabled":[]}"#,
-    );
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_test", Box::new(RegistryMod))].into(),
         || {
             with_game(|game| {
-                game.load_world(request(root)).unwrap();
+                game.load_world(request_selecting(root, &["vanilla", "file/override"], &[]))
+                    .unwrap();
                 let features = game.level.enabled_features.clone();
                 let initial = game.mods.datapack_registries.as_ref().unwrap().clone();
                 assert_eq!(power(game), DatapackValue::Int(7));
@@ -576,15 +574,16 @@ fn with_membership_fixture(run: impl FnOnce(&mut crate::game::Game<'_>, &Path)) 
         &root.join("datapacks/base/data/registry_test/data_maps/registry_test/spell/weights.json"),
         r#"{"values":{"registry_test:fire":11,"registry_test:ice":17,"registry_test:ghost":99}}"#,
     );
-    write(
-        &root.join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/base"],"disabled":["file/later"]}"#,
-    );
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_test", Box::new(RegistryMod))].into(),
         || {
             with_game(|game| {
-                game.load_world(request(root)).unwrap();
+                game.load_world(request_selecting(
+                    root,
+                    &["vanilla", "file/base"],
+                    &["file/later"],
+                ))
+                .unwrap();
                 run(game, root);
             })
         },

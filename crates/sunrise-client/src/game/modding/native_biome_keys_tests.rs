@@ -55,11 +55,7 @@ fn biome_key_world_install_reload_and_unavailable_sides() {
             std::fs::create_dir_all(definition.parent().unwrap()).unwrap();
             let plains_file = game.res.biomes().builtin_file("minecraft:plains").unwrap();
             std::fs::write(definition, plains_file.to_string()).unwrap();
-            std::fs::write(
-                root.path().join("datapacks.json"),
-                r#"{"enabled":["file/biomes"],"disabled":[]}"#,
-            )
-            .unwrap();
+            game.level.data_packs = Some((vec!["file/biomes".to_owned()], vec![]));
 
             let foreign_keys = mod_api::__private::BiomeKeys::new(u64::MAX, [plains.clone()]);
             let foreign_view = foreign_keys.view("minecraft:plains").unwrap();

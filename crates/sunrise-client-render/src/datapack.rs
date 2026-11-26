@@ -692,13 +692,11 @@ pub fn folder_stamp(dir: &Path) -> Vec<(String, Option<std::time::SystemTime>)> 
 }
 /// Create World's packs into the new world before it opens
 /// (`copyTempDataPackDirToNewWorld`): every pack of `dir` goes to
-/// `<world>/datapacks`, and `datapacks.json` enables those `selected`
-/// (lowest priority first) and disables the rest.
-pub fn install(dir: &Path, world: &Path, selected: &[String]) -> Result<(), String> {
+/// `<world>/datapacks`; the selection travels in the world's `Level`.
+pub fn install(dir: &Path, world: &Path) -> Result<(), String> {
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let target = world.join("datapacks");
     std::fs::create_dir_all(&target).map_err(|e| err(&target, e))?;
-    let mut disabled = Vec::new();
     for pack in crate::packs::folder(dir, sunrise_core::version::DATA_PACK_FORMAT) {
         let from = match &pack.source {
             crate::packs::Source::Dir(from) | crate::packs::Source::Zip(from) => from,
@@ -710,30 +708,25 @@ pub fn install(dir: &Path, world: &Path, selected: &[String]) -> Result<(), Stri
             }
         };
         copy(from, &target.join(pack.id.trim_start_matches("file/")))?;
-        if !selected.contains(&pack.id) {
-            disabled.push(pack.id);
-        }
     }
-    if !selected.iter().any(|id| id == "vanilla") {
-        disabled.push("vanilla".into());
-    }
-    let json = serde_json::json!({ "enabled": selected, "disabled": disabled });
-    let file = world.join("datapacks.json");
-    std::fs::write(&file, json.to_string()).map_err(|e| err(&file, e))
+    Ok(())
 }
 /// Re-Create World's packs from a saved world: a new folder holding a copy of
 /// its `datapacks` (`CreateWorldScreen.createTempDataPackDirFromExistingWorld`; `None` when the
-/// world has none), and the selection its `datapacks.json` makes, lowest
+/// world has none), and the selection `selection` (its level.dat `DataPacks`) makes, lowest
 /// priority first (`WorldOpenFlows.recreateWorldData` keeps the world's `DataConfiguration`).
 /// The built-in pack is selected unless the world turned it off.
-pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
+pub fn for_recreate(
+    world: &Path,
+    selection: Option<&(Vec<String>, Vec<String>)>,
+) -> (Option<PathBuf>, Vec<String>) {
     let packs = discover(world);
     // No flags here: the recreated world keeps the original's
     // `enabled_features`, and the flag-aware load re-adds the feature packs
     // it asks for (`for_recreate`'s selection only seeds the new world's
-    // `datapacks.json`).
-    let mut selected = enabled_ids(world, &packs, &[]);
-    if !vanilla_disabled(world) {
+    // `DataPacks`).
+    let mut selected = enabled_ids(selection, &packs, &[]);
+    if !vanilla_disabled(selection) {
         selected.insert(0, "vanilla".into());
     }
     if packs.is_empty() {
@@ -748,15 +741,6 @@ pub fn for_recreate(world: &Path) -> (Option<PathBuf>, Vec<String>) {
         }
     });
     (dir, selected)
-}
-/// Whether the world's `datapacks.json` lists the built-in `vanilla` pack as
-/// disabled (`DataPackConfig` keeps it in `Disabled`).
-pub fn vanilla_disabled(world: &Path) -> bool {
-    std::fs::read(world.join("datapacks.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["disabled"].as_array().cloned())
-        .is_some_and(|a| a.iter().any(|id| id.as_str() == Some("vanilla")))
 }
 /// A file, or a folder and everything in it.
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
@@ -1524,8 +1508,9 @@ fn features_enabled(pack: &DataPack, enabled_features: &[String]) -> bool {
 }
 
 /// The ids of `packs` (a world's, from `discover`) that are enabled, lowest
-/// priority first: those `<world>/datapacks.json` lists as enabled, in its
-/// order, then every pack it lists neither way, in name order.
+/// priority first: those `selection` (the world's `DataPacks`, `None` for a
+/// world with none) lists as enabled, in its order, then every pack it lists
+/// neither way, in name order.
 ///
 /// `enabled_features` are the world's feature flags
 /// (`WorldDataConfiguration.enabledFeatures`): a pack a pack file selected
@@ -1533,31 +1518,25 @@ fn features_enabled(pack: &DataPack, enabled_features: &[String]) -> bool {
 /// (`MinecraftServer.configurePackRepository`), and a feature pack whose
 /// features the world enables is forced on however the world's selection
 /// feels about it (`MinecraftServer.enableForcedFeaturePacks`).
-pub fn enabled_ids(world: &Path, packs: &[DataPack], enabled_features: &[String]) -> Vec<String> {
-    let saved: Option<serde_json::Value> = std::fs::read(world.join("datapacks.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
-    let list = |key: &str| -> Vec<String> {
-        saved
-            .as_ref()
-            .and_then(|v| v[key].as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|s| s.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
+pub fn enabled_ids(
+    selection: Option<&(Vec<String>, Vec<String>)>,
+    packs: &[DataPack],
+    enabled_features: &[String],
+) -> Vec<String> {
+    let (listed, disabled) = match selection {
+        Some((enabled, disabled)) => (enabled.as_slice(), disabled.as_slice()),
+        None => (&[][..], &[][..]),
     };
-    let disabled = list("disabled");
-    let mut enabled: Vec<String> = list("enabled")
-        .into_iter()
-        .filter(|id| packs.iter().any(|p| &p.id == id))
+    let mut enabled: Vec<String> = listed
+        .iter()
+        .filter(|id| packs.iter().any(|p| p.id == **id))
         .filter(|id| {
             packs
                 .iter()
-                .find(|p| &p.id == id)
+                .find(|p| p.id == **id)
                 .is_none_or(|p| features_enabled(p, enabled_features))
         })
+        .cloned()
         .collect();
     for p in packs {
         // A pack nobody mentions comes on (`PackRepository.reload` selects
@@ -1581,6 +1560,11 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack], enabled_features: &[String]
         }
     }
     selected_ids(packs.iter(), &enabled)
+}
+
+/// Whether `selection` (the world's `DataPacks`) turned the built-in pack off.
+pub fn vanilla_disabled(selection: Option<&(Vec<String>, Vec<String>)>) -> bool {
+    selection.is_some_and(|(_, disabled)| disabled.iter().any(|id| id == "vanilla"))
 }
 
 /// Rebuild a data-pack selection, preserving its order and inserting required packs.
@@ -2439,13 +2423,12 @@ mod tests {
             "{\"min_y\":-64,\"height\":2096}",
         );
         // `b` is enabled first, so `a` (enabled after it) wins.
-        std::fs::write(
-            dir.join("datapacks.json"),
-            "{\"enabled\":[\"file/b\",\"file/a\"],\"disabled\":[\"file/off\"]}",
-        )
-        .unwrap();
+        let selection = (
+            vec!["file/b".to_owned(), "file/a".to_owned()],
+            vec!["file/off".to_owned()],
+        );
         let packs = discover(&dir);
-        let enabled = enabled_ids(&dir, &packs, &[]);
+        let enabled = enabled_ids(Some(&selection), &packs, &[]);
         assert_eq!(enabled, ["file/b", "file/a"]);
         let enabled: Vec<&DataPack> = enabled
             .iter()
@@ -2848,13 +2831,9 @@ mod tests {
             )
             .unwrap();
         }
-        std::fs::write(
-            world.join("datapacks.json"),
-            r#"{"enabled":["file/z-saved"]}"#,
-        )
-        .unwrap();
+        let selection = (vec!["file/z-saved".to_owned()], Vec::new());
         let packs = discover(&world);
-        let selected = enabled_ids(&world, &packs, &[]);
+        let selected = enabled_ids(Some(&selection), &packs, &[]);
         std::fs::remove_dir_all(world).unwrap();
         // Temurin 25.0.5 natural String order for the three newly added IDs.
         assert_eq!(
@@ -2949,17 +2928,11 @@ mod tests {
                 Compat::Compatible
             ]
         );
-        let selected = ["vanilla", "file/old.zip", "file/fns"].map(String::from);
-        install(&dir, &world, &selected).unwrap();
+        install(&dir, &world).unwrap();
         let packs = discover(&world);
         let ids: Vec<&str> = packs.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["file/fns", "file/off", "file/old.zip"]);
-        let saved: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(world.join("datapacks.json")).unwrap()).unwrap();
-        assert_eq!(
-            saved,
-            serde_json::json!({"enabled": selected, "disabled": ["file/off"]})
-        );
+        assert!(!world.join("datapacks.json").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

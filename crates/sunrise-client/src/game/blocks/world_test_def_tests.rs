@@ -199,6 +199,8 @@ fn a_world_keeps_the_test_instances_it_opened_with() {
     assert_eq!(ids(&game), ["h275:broken", "minecraft:always_pass"]);
     // World B.
     game.world_root = b.clone();
+    // Opening world B installs B's own level.dat selection, not the one A's `/datapack disable` left.
+    game.level.data_packs = Some((vec!["file/fixture".to_owned()], vec![]));
     game.reload_datapacks(false, &game.level.enabled_features.clone())
         .unwrap();
     game.load_world_state().unwrap();

@@ -38,7 +38,7 @@ starts and writes them when the player changes a setting.
 | Native mod | `<id>.smod` with `[native]` in `sunrise-mod.toml` | `sunrise-native-mods/` | compiled for the instance's exact build: `mod.<id>:true` turns it on, `mod.<id>:false` turns it off |
 | Shader pack | a `shaders/`-format `.zip` or folder | `shaderpacks/` | `sunrise-graphics.txt`: `pickedShaderPack:<file or folder name>`, empty for none. A pack's options are in `shaderpacks/<name>.txt` |
 | Resource pack | a `.zip` or a folder with `pack.mcmeta` | `resourcepacks/` | `options.txt`: `resourcePacks:["vanilla","file/<name>"]`, lowest priority first, as vanilla's |
-| Data pack | a `.zip` or a folder with `pack.mcmeta` and `data/` | `saves/<world>/datapacks/` | `saves/<world>/datapacks.json`: `{"enabled": [...], "disabled": [...]}`, each `file/<name>` (or `vanilla`). A pack in neither list is on |
+| Data pack | a `.zip` or a folder with `pack.mcmeta` and `data/` | `saves/<world>/datapacks/` | `level.dat` `Data.DataPacks` (`Enabled`, `Disabled`), each `file/<name>` (or `vanilla`). A pack in neither list is on |
 
 - **When a change applies.** Every change above applies at the next start. While the game plays, its own
   screens switch packs, shader packs and assets-only content mods live; a content mod that adds blocks, items,

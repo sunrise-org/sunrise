@@ -1,0 +1,1 @@
+sunrise-client game::functions::tests::datapack_selection_survives_a_reopen_through_level_dat lib daily resources

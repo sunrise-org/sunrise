@@ -450,11 +450,7 @@ fn a_data_packs_placeable_painting_variant_is_placed() {
             r#"{"replace":true,"values":["test:big_square"]}"#,
         )
         .unwrap();
-        std::fs::write(
-            dir.join("datapacks.json"),
-            r#"{"enabled":["file/paintings"],"disabled":[]}"#,
-        )
-        .unwrap();
+        game.level.data_packs = Some((vec!["file/paintings".to_owned()], Vec::new()));
         game.world_root = dir.clone();
         let stack = game.reload_datapacks(false, &[]).unwrap();
         let root = game.options.resources.clone();

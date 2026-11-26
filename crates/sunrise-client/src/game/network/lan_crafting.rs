@@ -3135,11 +3135,7 @@ mod empty_ingredient_placement_tests {
                         r#"{"values":[]}"#,
                     )
                     .unwrap();
-                    std::fs::write(
-                        dir.join("datapacks.json"),
-                        r#"{"enabled":["file/empty"],"disabled":[]}"#,
-                    )
-                    .unwrap();
+                    game.level.data_packs = Some((vec!["file/empty".to_owned()], vec![]));
                     for (id, ingredient) in [
                         ("direct", serde_json::json!([])),
                         ("missing", serde_json::json!("#empty_fixture:missing")),
@@ -3181,7 +3177,7 @@ mod empty_ingredient_placement_tests {
                             resources.clone(),
                         ),
                         &Default::default(),
-                        false,
+                        game.level.data_packs.as_ref(),
                         &[],
                         &[],
                     );

@@ -1488,11 +1488,8 @@ mod loot_mine_location_tests {
                 "scoreboard players set pack h079 42\n",
             )
             .unwrap();
-            std::fs::write(
-                game.world_root.join("datapacks.json"),
-                r#"{"enabled":["vanilla","file/h079"],"disabled":[]}"#,
-            )
-            .unwrap();
+            game.level.data_packs =
+                Some((vec!["vanilla".to_owned(), "file/h079".to_owned()], vec![]));
             let stack = game.reload_datapacks(false, &[]).unwrap();
             game.world_tables = game
                 .stage_world_tables(&stack, false, &game.options.resources.clone())

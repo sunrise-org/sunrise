@@ -368,11 +368,6 @@ mod tests {
         let tags = pack.join("data/item_tag_listing/tags/item");
         std::fs::create_dir_all(&tags).unwrap();
         std::fs::write(
-            save.path().join("datapacks.json"),
-            br#"{"enabled":["vanilla","file/test"],"disabled":[]}"#,
-        )
-        .unwrap();
-        std::fs::write(
             pack.join("pack.mcmeta"),
             br#"{"pack":{"description":"Item tag listing fixture","min_format":94,"max_format":94}}"#,
         )
@@ -407,6 +402,8 @@ mod tests {
                 )
                 .unwrap();
                 request.save_root = save.path().to_owned();
+                request.data_packs =
+                    Some((vec!["vanilla".to_owned(), "file/test".to_owned()], vec![]));
                 game.load_world(request).unwrap();
                 let packet = |game: &super::Game<'_>| {
                     sync::sync_data(
@@ -672,10 +669,6 @@ mod tests {
             std::fs::write(path, bytes).unwrap();
         };
         write(
-            &save.path().join("datapacks.json"),
-            br#"{"enabled":["vanilla","file/test"],"disabled":[]}"#,
-        );
-        write(
             &pack.join("pack.mcmeta"),
             br#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
         );
@@ -759,6 +752,7 @@ mod tests {
             )
             .unwrap();
             request.save_root = save.path().to_owned();
+            request.data_packs = Some((vec!["vanilla".to_owned(), "file/test".to_owned()], vec![]));
             game.load_world(request).unwrap();
             let rejected = br#"{"replace":true,"values":["tag_reload:missing_member"]}"#;
             for (registry, tags) in game.items().ordered_tags() {

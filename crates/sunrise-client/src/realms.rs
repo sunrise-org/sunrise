@@ -979,7 +979,7 @@ fn create_temporary_world(world: &CreatedWorld) -> std::result::Result<PathBuf, 
         if let Some(pack_dir) = &world.pack_dir {
             // `Files.move(tempDataPackDir, worldFolder.resolve("datapacks"))`; the
             // Create World screen's temporary folder is gone afterwards.
-            crate::datapack::install(pack_dir, &dir, &world.data_packs.0)?;
+            crate::datapack::install(pack_dir, &dir)?;
             let _ = std::fs::remove_dir_all(pack_dir);
         }
         Ok(())

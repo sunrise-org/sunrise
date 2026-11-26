@@ -126,33 +126,10 @@ impl Game<'_> {
         // Create World's data packs, in the world before it opens.
         if let Some(dir) = create.and_then(|o| o.pack_dir.as_deref()) {
             let world = std::env::current_dir()?.join("saves").join(folder);
-            let packs = create.map_or(&[][..], |o| &o.data_packs[..]);
-            if let Err(e) = sunrise_client::datapack::install(dir, &world, packs) {
+            if let Err(e) = sunrise_client::datapack::install(dir, &world) {
                 log::warn!("Sunrise: data packs for {folder}: {e}");
             }
             let _ = std::fs::remove_dir_all(dir);
-        }
-        // The world's pack selection (`DataPackConfig`), for the pack stack
-        // to read: the picked packs on, the feature packs left out off.
-        // Only when `install` did not run (no Data Packs screen opened): it
-        // writes the file itself, and its `disabled` must not be lost.
-        if let Some(o) = create.filter(|o| o.pack_dir.is_none()) {
-            let world = std::env::current_dir()?.join("saves").join(folder);
-            if let Err(e) = std::fs::create_dir_all(&world) {
-                log::warn!("Sunrise: data packs for {folder}: {}: {e}", world.display());
-            } else {
-                let disabled: Vec<String> =
-                    sunrise_client::datapack::feature_packs(&self.vanilla_root())
-                        .into_iter()
-                        .map(|p| p.id)
-                        .filter(|id| !o.data_packs.contains(id))
-                        .collect();
-                let json = serde_json::json!({"enabled": o.data_packs, "disabled": disabled});
-                let file = world.join("datapacks.json");
-                if let Err(e) = std::fs::write(&file, json.to_string()) {
-                    log::warn!("Sunrise: data packs for {folder}: {}: {e}", file.display());
-                }
-            }
         }
         // A new world opened without the Create screen still gets the game folder's packs.
         if create.is_none() {

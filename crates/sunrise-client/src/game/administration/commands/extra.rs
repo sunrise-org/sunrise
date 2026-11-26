@@ -121,8 +121,6 @@ pub(in crate::game) struct CommandExtras {
     pub jfr: Option<(Instant, u64, String)>,
     /// Waypoint icons changed by `/waypoint modify`.
     pub waypoint_icons: HashMap<Target, Icon>,
-    /// `/datapack disable vanilla` took the built-in pack out of the selection.
-    pub vanilla_disabled: bool,
     /// The waypoint manager's tracked transmitters (None until first used).
     pub waypoints: Option<Vec<Target>>,
     /// Entities whose waypoint transmit range changed since they last ticked.

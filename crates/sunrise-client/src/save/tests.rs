@@ -4392,9 +4392,13 @@ fn world_stem_compatibility_reads_data_pack_dimensions() {
     );
     assert!(unstable(&dir));
     // Disabled, it counts for nothing.
-    fs::write(dir.join("datapacks.json"), r#"{"disabled":["file/p"]}"#).unwrap();
+    let mut level = Level {
+        data_packs: Some((Vec::new(), vec!["file/p".into()])),
+        ..Level::default()
+    };
+    level.write_without_player(&dir).unwrap();
     assert!(!unstable(&dir));
-    fs::remove_file(dir.join("datapacks.json")).unwrap();
+    fs::remove_file(dir.join("level.dat")).unwrap();
     fs::remove_file(dir.join("datapacks/p/data/mypack/dimension/moon.json")).unwrap();
     assert!(!unstable(&dir));
     // A pack's Nether with another biome source replaces the saved vanilla one.
@@ -5218,4 +5222,63 @@ fn a_chunk_from_before_1_17_loads_the_entities_it_keeps() {
 /// `world_gen_unstable` over the view of the packs the world selects.
 fn unstable(world: &Path) -> bool {
     world_gen_unstable(world, &world_data_packs(world))
+}
+
+/// A world with two packs on disk: `file/a` and `file/b`.
+fn selection_world(name: &str) -> PathBuf {
+    let dir = gen_world(name);
+    for pack in ["a", "b"] {
+        let folder = dir.join("datapacks").join(pack);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("pack.mcmeta"),
+            r#"{"pack":{"description":"fixture"}}"#,
+        )
+        .unwrap();
+    }
+    dir
+}
+
+/// `PrimaryLevelData`'s `DataPacks` in level.dat is the pack selection.
+#[test]
+fn level_dat_data_packs_choose_the_enabled_packs() {
+    let dir = selection_world("selection-level-dat");
+    let mut level = Level {
+        data_packs: Some((vec!["vanilla".into()], vec!["file/a".into()])),
+        ..Level::default()
+    };
+    level.write_without_player(&dir).unwrap();
+    let level = Level::read(&dir).unwrap();
+    let packs = crate::datapack::discover(&dir);
+    assert_eq!(
+        crate::datapack::enabled_ids(level.data_packs.as_ref(), &packs, &[]),
+        ["file/b"]
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// A `datapacks.json` an older game or launcher left is read once, the next level save
+/// writes it to level.dat, and the file goes.
+#[test]
+fn a_datapacks_json_moves_into_level_dat_at_the_next_save() {
+    let dir = selection_world("selection-migration");
+    Level::default().write_without_player(&dir).unwrap();
+    fs::write(
+        dir.join("datapacks.json"),
+        r#"{"enabled":["file/a"],"disabled":["file/b"]}"#,
+    )
+    .unwrap();
+    let mut level = Level::read(&dir).unwrap();
+    let packs = crate::datapack::discover(&dir);
+    assert_eq!(
+        crate::datapack::enabled_ids(level.data_packs.as_ref(), &packs, &[]),
+        ["file/a"]
+    );
+    level.write_without_player(&dir).unwrap();
+    assert!(!dir.join("datapacks.json").exists());
+    assert_eq!(
+        Level::read(&dir).unwrap().data_packs,
+        Some((vec!["file/a".into()], vec!["file/b".into()]))
+    );
+    let _ = fs::remove_dir_all(dir);
 }

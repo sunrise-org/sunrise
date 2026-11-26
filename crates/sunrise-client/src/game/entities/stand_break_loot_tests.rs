@@ -73,11 +73,7 @@ fn with_stick_table(game: &mut Game<'_>, name: &str) {
         r#"{"type":"minecraft:entity","pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:stick"}]}]}"#,
     )
     .unwrap();
-    std::fs::write(
-        dir.join("datapacks.json"),
-        r#"{"enabled":["file/stand"],"disabled":[]}"#,
-    )
-    .unwrap();
+    game.level.data_packs = Some((vec!["file/stand".to_owned()], vec![]));
     game.world_root = dir;
     let root = game.options.resources.clone();
     let stack = crate::game::functions::pack_stack(
@@ -85,7 +81,7 @@ fn with_stick_table(game: &mut Game<'_>, name: &str) {
         &root,
         &sunrise_assets::resource_source::ResourceSource::directory(root.clone()),
         &Default::default(),
-        false,
+        game.level.data_packs.as_ref(),
         &[],
         &[],
     );

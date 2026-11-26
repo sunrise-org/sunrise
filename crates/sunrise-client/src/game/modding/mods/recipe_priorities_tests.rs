@@ -151,7 +151,7 @@ fn check_layers(kind: &str, replace_allowed: bool, malformed_jar: bool) {
         overlay.root.prepared(),
         &sunrise_assets::resource_source::ResourceSource::directory(base),
         overlay.root.data_changes(),
-        false,
+        None,
         &[],
         &[],
     );

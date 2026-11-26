@@ -31,6 +31,15 @@ fn write(path: &Path, bytes: impl AsRef<[u8]>) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, bytes).unwrap();
 }
+fn request_selecting(root: &Path) -> super::world_loading::WorldRequest {
+    let mut request = request(root);
+    request.data_packs = Some((
+        vec!["vanilla".to_owned(), "file/entries".to_owned()],
+        vec![],
+    ));
+    request
+}
+
 fn request(root: &Path) -> super::world_loading::WorldRequest {
     let mut request = super::world_loading::WorldRequest::new(
         "generic registries",
@@ -99,10 +108,6 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
         &pack.join("pack.mcmeta"),
         r#"{"pack":{"description":"fixture","min_format":94,"max_format":94}}"#,
     );
-    write(
-        &scratch.path().join("datapacks.json"),
-        r#"{"enabled":["vanilla","file/entries"],"disabled":[]}"#,
-    );
     let fire = pack.join("data/registry_entry_test/registry_entry_test/spell/fire.json");
     let tag = pack.join("data/registry_entry_test/tags/registry_entry_test/spell/hot.json");
     write(&fire, r#"{"power":7}"#);
@@ -162,7 +167,7 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
         || {
             let mut wire = None;
             with_game(|game| {
-                game.load_world(request(scratch.path())).unwrap();
+                game.load_world(request_selecting(scratch.path())).unwrap();
                 check_rejected_sync_tags(game);
                 wire = game.registry_sync();
                 let step = host(game)

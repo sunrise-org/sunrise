@@ -59,7 +59,6 @@ fn dedicated_language_uses_the_opening_selection_once() {
     let _server_data = sunrise_client::datapack_net::isolate_server_publication();
     let scratch = tempfile::tempdir().unwrap();
     let world = scratch.path();
-    let selection = world.join("datapacks.json");
     let (major, minor) = sunrise_core::version::DATA_PACK_FORMAT;
     let meta = format!(
         r#"{{"pack":{{"description":"Language test","min_format":[{major},{minor}],"max_format":[{major},{minor}]}}}}"#
@@ -100,10 +99,6 @@ fn dedicated_language_uses_the_opening_selection_once() {
         };
         write(&pack.join("assets/tooltip_ns/lang/en_us.json"), hover);
     }
-    write(
-        &selection,
-        r#"{"enabled":["vanilla","file/low","file/high","file/later"],"disabled":["file/off"]}"#,
-    );
     let seen = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
         vec![ModEntry::new(
@@ -124,16 +119,24 @@ fn dedicated_language_uses_the_opening_selection_once() {
                 )
                 .unwrap();
                 request.save_root = world.to_owned();
+                request.data_packs = Some((
+                    ["vanilla", "file/low", "file/high", "file/later"]
+                        .map(str::to_owned)
+                        .into(),
+                    vec!["file/off".to_owned()],
+                ));
                 let prepared = game.prepare_world_and_rules(request).unwrap();
                 game.native_server_about_to_start(true);
                 let opening_packs = game.finish_open_world(prepared).unwrap();
                 assert!(game.fns.enabled().iter().any(|id| id == "file/high"));
                 assert!(!game.fns.enabled().iter().any(|id| id == "file/off"));
                 // Publication must use what the world adopted, not a second discovery.
-                write(
-                    &selection,
-                    r#"{"enabled":["vanilla","file/off"],"disabled":["file/low","file/high","file/later"]}"#,
-                );
+                game.level.data_packs = Some((
+                    vec!["vanilla".to_owned(), "file/off".to_owned()],
+                    ["file/low", "file/high", "file/later"]
+                        .map(str::to_owned)
+                        .into(),
+                ));
                 game.start_loaded_dedicated_world(&opening_packs);
                 game.reload_datapacks(true, &game.level.enabled_features.clone())
                     .unwrap();

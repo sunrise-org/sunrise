@@ -64,14 +64,10 @@ fn datapack_damage_initial_snapshot_uses_the_prepared_worlds_features() {
         r#"{"message_id":"heat","scaling":"never","exhaustion":0.1}"#,
     )
     .unwrap();
-    fs::write(
-        world.join("datapacks.json"),
-        r#"{"enabled":["file/feature_damage"],"disabled":[]}"#,
-    )
-    .unwrap();
+    let selection = (vec!["file/feature_damage".to_owned()], Vec::new());
     let packs = crate::datapack::discover_with_features(&world, &root);
     let snapshot = |features: &[String]| {
-        let enabled = crate::datapack::enabled_ids(&world, &packs, features);
+        let enabled = crate::datapack::enabled_ids(Some(&selection), &packs, features);
         let selected: Vec<_> = enabled
             .iter()
             .filter_map(|id| packs.iter().find(|p| &p.id == id))
