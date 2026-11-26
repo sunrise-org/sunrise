@@ -71,6 +71,7 @@ impl sunrise_client::gfx::world_primitives::FrameHooks for GameWorldStageDriver<
         self.draw.begin_custom_geometry();
         self.game.native_submit_custom_geometry(&view, self.draw);
         self.game.submit_debug_geometry(&view, self.draw);
+        self.game.submit_item_pipeline_quads(self.draw);
     }
 
     fn on_frame_graph_setup(&mut self, sections: &[mod_api::RenderableSection], oit_on: bool) {
@@ -223,6 +224,7 @@ impl ClientGame<'_> {
     /// Whether any mod subscribes to world rendering hooks or active debug renderers.
     pub(in crate::game) fn has_world_render_hooks(&self) -> bool {
         !self.client.debug_renderers.0.is_empty()
+            || !self.client.item_pipeline_quads.borrow().is_empty()
             || mod_api::__private::listened(mod_api::HookId::SubmitCustomGeometry)
             || mod_api::__private::listened(mod_api::HookId::PrepareRenderBuffers)
             || mod_api::__private::listened(mod_api::HookId::RenderLevelStage)

@@ -8,9 +8,9 @@
 //! load; an optional one is logged and left out. A frame reads none of this by name.
 use mod_api::{
     BUILTIN_RENDER_TYPE_IDS, BlendFactor, ColorTargetState, DepthCompare, Identifier,
-    LayeringTransform, PackGlslInput, PackPassSlot, PackUniformType, PackUniformValue,
-    PipelineBlend, PipelineModifier, PipelineModifierRef, PipelineState, PipelineTexture,
-    PipelineTextureError, PrimitiveTopology, RenderPipeline, RenderPipelineError,
+    LayeringTransform, OutlineProperty, PackGlslInput, PackPassSlot, PackUniformType,
+    PackUniformValue, PipelineBlend, PipelineModifier, PipelineModifierRef, PipelineState,
+    PipelineTexture, PipelineTextureError, PrimitiveTopology, RenderPipeline, RenderPipelineError,
     RenderPipelineRef, RenderSetup, RenderTypeError, RenderTypeRef, TextureTransform,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -702,6 +702,47 @@ impl ResolvedRenderType<'_> {
         match self {
             Self::Builtin(_) => TextureTransform::Default,
             Self::Custom { setup, .. } => setup.texture_transform,
+        }
+    }
+
+    /// Whether this render type lights its geometry by the lightmap (`RenderSetup.useLightmap`,
+    /// which `RenderType.draw` binds to `Sampler2`). Of the built-ins, `RenderTypes.eyes` and
+    /// `lightning` have none.
+    pub fn uses_lightmap(&self) -> bool {
+        match self {
+            Self::Builtin(builtin) => !matches!(
+                builtin,
+                BuiltinRenderType::Eyes | BuiltinRenderType::Lightning
+            ),
+            Self::Custom { setup, .. } => setup.use_lightmap,
+        }
+    }
+
+    /// Whether geometry drawn with this render type reaches a glowing entity's outline
+    /// (`OutlineBufferSource.getBuffer`): an `IS_OUTLINE` type draws into it as itself
+    /// (`RenderType.isOutline`), an `AFFECTS_OUTLINE` one through `RenderType.outline()`, and a
+    /// `NONE` one not at all. Of the built-ins, `eyes`, `energySwirl` and `lightning` are `NONE`.
+    pub fn affects_outline(&self) -> bool {
+        match self {
+            Self::Builtin(builtin) => !matches!(
+                builtin,
+                BuiltinRenderType::Eyes
+                    | BuiltinRenderType::EnergySwirl
+                    | BuiltinRenderType::Lightning
+            ),
+            Self::Custom { setup, .. } => !matches!(setup.outline, OutlineProperty::None),
+        }
+    }
+
+    /// The registered mod pipeline a custom render type's `RenderSetup.pipeline` names, which
+    /// draws its geometry (`RenderType.draw` sets that `RenderPipeline` on the pass); `None` for
+    /// a built-in or a custom type over a vanilla pipeline.
+    pub fn mod_pipeline_slot(&self) -> Option<u32> {
+        match self {
+            Self::Builtin(_) => None,
+            Self::Custom {
+                mod_pipeline_slot, ..
+            } => *mod_pipeline_slot,
         }
     }
 }
@@ -3189,6 +3230,13 @@ void main() {
         let cutout = gen1.render_type_slot_in(&custom, item_cutout).unwrap();
         assert!(!cutout.is_translucent());
         assert_eq!(cutout.layering(), LayeringTransform::None);
+        // The lightmap, the outline and the mod pipeline of the setup reach the resolved type.
+        assert!(resolved.uses_lightmap());
+        assert!(!resolved.affects_outline());
+        assert_eq!(resolved.mod_pipeline_slot(), Some(0));
+        assert!(cutout.uses_lightmap());
+        assert!(cutout.affects_outline());
+        assert_eq!(cutout.mod_pipeline_slot(), None);
         assert_eq!(
             gen2.render_type_slot_in(&custom, glow_rt).unwrap_err(),
             RenderTypeError::Stale
@@ -3197,6 +3245,50 @@ void main() {
             gen1.resolve_render_type_in(&custom, &id("example:nope")),
             Err(RenderTypeError::Unknown)
         );
+    }
+
+    /// `RenderSetup.useLightmap` and `OutlineProperty` as the item draws read them: a setup
+    /// without `use_lightmap` is unlit, `NONE` stays out of the outline, `IS_OUTLINE` and
+    /// `AFFECTS_OUTLINE` reach it; the built-ins follow `RenderTypes`.
+    #[test]
+    fn a_render_types_lightmap_and_outline_follow_its_setup() {
+        let setup = || RenderSetup::new(id("example:rt"), id("example:glow"));
+        for (setup, lightmap, outline) in [
+            (setup(), false, false),
+            (
+                setup()
+                    .use_lightmap(true)
+                    .outline(OutlineProperty::IsOutline),
+                true,
+                true,
+            ),
+            (
+                setup().outline(OutlineProperty::AffectsOutline { texture: None }),
+                false,
+                true,
+            ),
+        ] {
+            let resolved = ResolvedRenderType::Custom {
+                slot: 0,
+                setup: &setup,
+                mod_pipeline_slot: Some(2),
+            };
+            assert_eq!(resolved.uses_lightmap(), lightmap, "{setup:?}");
+            assert_eq!(resolved.affects_outline(), outline, "{setup:?}");
+            assert_eq!(resolved.mod_pipeline_slot(), Some(2));
+        }
+        for (builtin, lightmap, outline) in [
+            (BuiltinRenderType::EntityCutout, true, true),
+            (BuiltinRenderType::ItemTranslucent, true, true),
+            (BuiltinRenderType::Eyes, false, false),
+            (BuiltinRenderType::EnergySwirl, true, false),
+            (BuiltinRenderType::Lightning, false, false),
+        ] {
+            let resolved = ResolvedRenderType::Builtin(builtin);
+            assert_eq!(resolved.uses_lightmap(), lightmap, "{builtin:?}");
+            assert_eq!(resolved.affects_outline(), outline, "{builtin:?}");
+            assert_eq!(resolved.mod_pipeline_slot(), None);
+        }
     }
 
     #[test]

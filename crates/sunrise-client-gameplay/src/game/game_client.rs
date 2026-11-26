@@ -3939,6 +3939,10 @@ impl crate::game::ClientGame<'_> {
                 .reseed(self.visual_ticks() as i64);
         }
         self.client.glint_frame = self.capture_glint_frame();
+        self.client
+            .client_pack
+            .item_renderer
+            .set_glint_frame(self.client.glint_frame);
         if self
             .client
             .renderer
@@ -4572,6 +4576,7 @@ impl crate::game::ClientGame<'_> {
         let mut static_block_entity_stats = StaticCacheFrameStats::default();
         self.client.see_through_vertices.clear();
         self.client.glowing_vertices.get_mut().clear();
+        self.client.item_pipeline_quads.get_mut().clear();
         self.client.shadow_only_vertices.get_mut().clear();
         pr.lap("pr_entity_setup");
         // The pack is chosen before entity geometry, so a pack that starts this frame

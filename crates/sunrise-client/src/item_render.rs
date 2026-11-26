@@ -103,6 +103,10 @@ pub struct ItemQuad {
     /// Explicit item render type override (`ItemCutout` / `ItemTranslucent`), using vanilla's
     /// `0.1` alpha cutoff in GUI draws and sorting cutout quads before translucent ones.
     pub explicit_alpha_cutoff: bool,
+    /// The registered mod pipeline the quad's custom render type names (`RenderSetup.pipeline`,
+    /// which `RenderType.draw` draws with): a world draw that can hand it on draws the quad with
+    /// that `RenderPipeline`; every other sink draws it with the item shaders.
+    pub mod_pipeline: Option<u32>,
 }
 /// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
@@ -194,6 +198,32 @@ impl GlintFrame {
     pub fn scroll_ticks(&self) -> f32 {
         Glint::scroll_ticks(self.millis, self.speed)
     }
+}
+/// A custom render type's `TextureTransform` applied to a quad's atlas UVs
+/// (`TextureTransform.createMatrix`, which the item shaders multiply UV0 by): `Offset` moves
+/// them, the three glint transforms scroll and scale them as `setupGlintTexturing` does for the
+/// frame's clock (`Glint::uv`, the transform the glint passes are checked against), `Default`
+/// leaves them.
+fn transform_uv(
+    transform: mod_api::TextureTransform,
+    frame: GlintFrame,
+    uv: [[f32; 2]; 4],
+) -> [[f32; 2]; 4] {
+    use mod_api::TextureTransform as T;
+    let scale = match transform {
+        T::Offset([u, v]) => return uv.map(|[x, y]| [x + u, y + v]),
+        T::Glint => Glint::ITEM_SCALE,
+        T::EntityGlint => Glint::ENTITY_SCALE,
+        T::ArmorEntityGlint => Glint::ARMOR_SCALE,
+        _ => return uv,
+    };
+    let glint = Glint {
+        speed: frame.speed,
+        alpha: frame.alpha,
+        millis: frame.millis,
+        scale,
+    };
+    uv.map(|point| glint.uv(point))
 }
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,6 +397,28 @@ impl ItemRenderState {
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
+    /// The layers a glowing entity's outline is drawn from, when they are not all of the
+    /// drawn ones: `OutlineBufferSource.getBuffer` gives a render type with
+    /// `RenderSetup.OutlineProperty.NONE` no outline buffer, and a layer drawn by a mod
+    /// pipeline is not among the item vertices. `None` when the drawn vertices are the
+    /// silhouette as they are.
+    pub fn outline_layers(&self) -> Option<Self> {
+        let drawn_as_outlined = |layer: &LayerRender| {
+            layer.render_type.is_none_or(|resolved| {
+                resolved.affects_outline() && resolved.mod_pipeline_slot().is_none()
+            })
+        };
+        if self.layers.iter().all(drawn_as_outlined) {
+            return None;
+        }
+        let mut outlined = self.clone();
+        outlined.layers.retain(|layer| {
+            layer
+                .render_type
+                .is_none_or(|resolved| resolved.affects_outline())
+        });
+        Some(outlined)
+    }
     /// `usesBlockLight` of the first layer (GUI lighting choice).
     pub fn uses_block_light(&self) -> bool {
         self.layers.first().is_some_and(|l| l.uses_block_light)
@@ -512,7 +564,12 @@ impl ItemRenderState {
             let LayerGeometry::Quads(baked) = &layer.geometry else {
                 return false;
             };
-            if layer.foil != FoilType::None || matches!(&layer.tints, LayerTints::Special(_)) {
+            // A custom render type's settings (texture transform, lightmap, pipeline) are
+            // applied per quad on the CPU path (`submit_quads_with`); the stored skin has none.
+            if layer.foil != FoilType::None
+                || matches!(&layer.tints, LayerTints::Special(_))
+                || layer.render_type.is_some()
+            {
                 return false;
             }
             let Some(stored) = skin.models.item(baked, skin.frame) else {
@@ -981,6 +1038,9 @@ fn submit_quads_joml(
     );
 }
 
+/// `LightCoordsUtil.FULL_BRIGHT` in [`ItemQuad::packed_light`]'s layout: block and sky 15.
+const FULL_BRIGHT: u32 = 0x00F0_00F0;
+
 fn submit_quads_with(
     renderer: &ItemRenderer,
     baked: &BakedItemModel,
@@ -1022,6 +1082,36 @@ fn submit_quads_with(
         })
         .flatten();
     let mut normals = FaceNormals::new(m);
+    // A custom render type's texture transform, once per layer; the glint clock is read only
+    // when it is one of the glint transforms.
+    let texture_transform = layer
+        .render_type
+        .map(|resolved| resolved.texture_transform())
+        .filter(|transform| *transform != mod_api::TextureTransform::Default);
+    let glint_frame = match texture_transform {
+        Some(
+            mod_api::TextureTransform::Glint
+            | mod_api::TextureTransform::EntityGlint
+            | mod_api::TextureTransform::ArmorEntityGlint,
+        ) => *renderer
+            .glint_frame
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        _ => GlintFrame::default(),
+    };
+    // A render type without `RenderSetup.useLightmap` has no lightmap bound, so its quads are
+    // not darkened by it: drawn at `LightCoordsUtil.FULL_BRIGHT`.
+    let packed_light = if layer
+        .render_type
+        .is_none_or(|resolved| resolved.uses_lightmap())
+    {
+        layer.submit_options.packed_light
+    } else {
+        Some(FULL_BRIGHT)
+    };
+    let mod_pipeline = layer
+        .render_type
+        .and_then(|resolved| resolved.mod_pipeline_slot());
     // Quads of one layer mostly share a sprite: look its rect and its
     // translucency up once.
     let mut last: Option<(&str, bool)> = None;
@@ -1076,12 +1166,9 @@ fn submit_quads_with(
             ),
             _ => (translucent || q.material.force_translucent, false),
         };
-        let uv = match layer
-            .render_type
-            .map(|resolved| resolved.texture_transform())
-        {
-            Some(mod_api::TextureTransform::Offset([u, v])) => uv.map(|[x, y]| [x + u, y + v]),
-            _ => uv,
+        let uv = match texture_transform {
+            Some(transform) => transform_uv(transform, glint_frame, uv),
+            None => uv,
         };
         let lightmap_only = matches!(
             layer.submit_options.lighting,
@@ -1125,9 +1212,10 @@ fn submit_quads_with(
             translucent,
             oit: false,
             banner_pattern: false,
-            packed_light: layer.submit_options.packed_light,
+            packed_light,
             lightmap_only,
             explicit_alpha_cutoff,
+            mod_pipeline,
         });
     }
 }
@@ -1282,6 +1370,9 @@ pub struct ItemRenderer {
     glint_atlas: Mutex<glint_atlas::GlintAtlas>,
     block_glint_atlas: Mutex<glint_atlas::GlintAtlas>,
     shield_glint_atlas: Mutex<glint_atlas::GlintAtlas>,
+    /// The frame's glint clock and options, which a custom render type's glint
+    /// `TextureTransform` scrolls by (set once per frame by [`Self::set_glint_frame`]).
+    glint_frame: Mutex<GlintFrame>,
 }
 
 /// Every winning `items/**/*.json` client item definition, by identifier. An error or panic
@@ -1372,7 +1463,17 @@ impl ItemRenderer {
             glint_atlas: Mutex::default(),
             block_glint_atlas: Mutex::default(),
             shield_glint_atlas: Mutex::default(),
+            glint_frame: Mutex::default(),
         })
+    }
+
+    /// Publish this frame's glint clock and options for the glint `TextureTransform`s of custom
+    /// render types. Call once per frame, as `Game` captures its `GlintFrame`.
+    pub fn set_glint_frame(&self, frame: GlintFrame) {
+        *self
+            .glint_frame
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = frame;
     }
 
     /// Prepare item/block/shield glint atlases after the device exists, defaulting `mipmapLevels`
@@ -1545,6 +1646,7 @@ impl ItemRenderer {
             glint_atlas: Mutex::default(),
             block_glint_atlas: Mutex::default(),
             shield_glint_atlas: Mutex::default(),
+            glint_frame: Mutex::default(),
             item_ids,
             models: Arc::new(ItemModels {
                 definitions: BTreeMap::new(),
@@ -1975,6 +2077,39 @@ impl ItemSink for WorldSink<'_> {
                 light,
                 glint_uv,
             });
+        }
+    }
+}
+
+/// A quad a world draw hands to the mod pipeline its custom render type names
+/// ([`ItemQuad::mod_pipeline`]): the pipeline's slot, the corners in the sink's camera-relative
+/// space, the atlas UVs and the ARGB colour (the `PositionTexColor` attributes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PipelineItemQuad {
+    pub slot: u32,
+    pub pos: [Vec3; 4],
+    pub uv: [[f32; 2]; 4],
+    pub color: u32,
+}
+
+/// An item sink that hands each quad whose render type names a mod pipeline `routes` accepts to
+/// `routed`, to be drawn by that `RenderPipeline` as `RenderType.draw` would, and gives the rest
+/// to `world`.
+pub struct PipelineRouting<'a, S> {
+    pub world: S,
+    pub routes: &'a dyn Fn(u32) -> bool,
+    pub routed: &'a mut Vec<PipelineItemQuad>,
+}
+impl<S: ItemSink> ItemSink for PipelineRouting<'_, S> {
+    fn quad(&mut self, quad: ItemQuad) {
+        match quad.mod_pipeline.filter(|&slot| (self.routes)(slot)) {
+            Some(slot) => self.routed.push(PipelineItemQuad {
+                slot,
+                pos: quad.pos,
+                uv: quad.uv,
+                color: quad.color,
+            }),
+            None => self.world.quad(quad),
         }
     }
 }

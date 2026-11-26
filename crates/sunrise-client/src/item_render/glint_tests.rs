@@ -1774,6 +1774,180 @@ fn eid_83245_pose() -> Mat4 {
     p.to_glam()
 }
 
+/// A custom render type's `TextureTransform` moves a quad's UVs as vanilla's matrix does
+/// (`RenderSetup` follow-up of #5682): `Offset` adds, the glint transforms scroll with the
+/// frame's clock and scale by 8, 0.5 and 0.16, `Default` leaves them.
+#[test]
+fn a_render_types_texture_transform_moves_the_quads_uvs() {
+    use mod_api::TextureTransform as T;
+    let quad = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    let frame = |millis| GlintFrame {
+        millis,
+        speed: 0.5,
+        alpha: 0.75,
+        sprite: true,
+    };
+    assert_eq!(transform_uv(T::Default, frame(7), quad), quad);
+    assert_eq!(
+        transform_uv(T::Offset([0.25, -0.5]), frame(7), quad)[2],
+        [1.25, 0.5]
+    );
+    // At clock zero the glint transform is rotate by 10 degrees and scale: the unit x
+    // axis lands at (cos 10, sin 10) times the scale, the origin stays.
+    let (sin, cos) = 10.0_f32.to_radians().sin_cos();
+    for (transform, scale) in [
+        (T::Glint, 8.0),
+        (T::EntityGlint, 0.5),
+        (T::ArmorEntityGlint, 0.16),
+    ] {
+        let uv = transform_uv(transform, frame(0), quad);
+        assert_eq!(uv[0], [0.0, 0.0], "{transform:?}");
+        assert!((uv[1][0] - cos * scale).abs() < 1e-4, "{transform:?}");
+        assert!((uv[1][1] - sin * scale).abs() < 1e-4, "{transform:?}");
+    }
+    // `Util.getMillis() * glintSpeed * 8` is 4000 ticks at 1000 ms and speed 0.5: the origin
+    // moves to (-4000 / 110000, 4000 / 30000).
+    let origin = transform_uv(T::Glint, frame(1000), quad)[0];
+    assert!((origin[0] + 4000.0 / 110_000.0).abs() < 1e-6, "{origin:?}");
+    assert!((origin[1] - 4000.0 / 30_000.0).abs() < 1e-6, "{origin:?}");
+}
+
+/// A custom render type's `RenderSetup` reaches the quads an item draws (#5786): a layer
+/// without `useLightmap` draws at `LightCoordsUtil.FULL_BRIGHT`, a layer whose render type names
+/// a mod pipeline is handed to that pipeline by a world sink that can draw it (and drawn with
+/// the item shaders by one that can't), and the outline is drawn from the layers whose
+/// `OutlineProperty` is not `NONE`.
+#[test]
+fn a_custom_render_types_lightmap_pipeline_and_outline_reach_the_item_draw() {
+    use mod_api::{Identifier, OutlineProperty, RenderSetup};
+    use sunrise_client_render::mod_pipelines::ResolvedRenderType;
+
+    let root = fixture("render-setup");
+    let data = crate::test_resources::item_data(
+        &root,
+        sunrise_world::native_load_context::DataLoadOrigin::ClientPreload,
+    )
+    .unwrap();
+    let renderer = ItemRenderer::load(
+        &sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
+        &data,
+    )
+    .unwrap();
+    fs::remove_dir_all(root).unwrap();
+    let sprite = "item/book";
+    let sprites = HashMap::from([(
+        sprite.into(),
+        Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 8,
+            h: 16,
+        },
+    )]);
+    let id = |text: &str| Identifier::parse(text).unwrap();
+    let setup = || RenderSetup::new(id("test:render_type"), id("test:pipeline"));
+    let custom = |setup: RenderSetup, mod_pipeline_slot| {
+        let setup: &'static RenderSetup = Box::leak(Box::new(setup));
+        Some(ResolvedRenderType::Custom {
+            slot: 0,
+            setup,
+            mod_pipeline_slot,
+        })
+    };
+    let mut state = state(sprite, FoilType::None, DisplayContext::Ground);
+    let plain = state.layers[0].clone();
+    // An unlit layer outside the outline, a lit outlined one on mod pipeline 3, a plain one.
+    state.layers = vec![
+        LayerRender {
+            render_type: custom(setup(), None),
+            ..plain.clone()
+        },
+        LayerRender {
+            render_type: custom(
+                setup()
+                    .use_lightmap(true)
+                    .outline(OutlineProperty::AffectsOutline { texture: None }),
+                Some(3),
+            ),
+            ..plain.clone()
+        },
+        plain,
+    ];
+
+    let mut quads: Vec<ItemQuad> = Vec::new();
+    state.submit(&renderer, &sprites, &NoHost, Mat4::IDENTITY, &mut quads);
+    assert_eq!(
+        quads.iter().map(|q| q.packed_light).collect::<Vec<_>>(),
+        [Some(0x00F0_00F0), None, None]
+    );
+    assert_eq!(
+        quads.iter().map(|q| q.mod_pipeline).collect::<Vec<_>>(),
+        [None, Some(3), None]
+    );
+
+    let draw_light = 0x20 | 0x30 << 8;
+    for (takes_pipeline, drawn) in [(true, 8), (false, 12)] {
+        let mut vertices = Vec::new();
+        let mut routed = Vec::new();
+        let routes = move |slot: u32| takes_pipeline && slot == 3;
+        let mut sink = PipelineRouting {
+            world: WorldSink {
+                out: &mut vertices,
+                light: draw_light,
+                lights: None,
+                glint: None,
+                tier: 0,
+            },
+            routes: &routes,
+            routed: &mut routed,
+        };
+        state.submit(&renderer, &sprites, &NoHost, Mat4::IDENTITY, &mut sink);
+        assert_eq!(
+            vertices.len(),
+            drawn,
+            "takes the pipeline: {takes_pipeline}"
+        );
+        // The unlit layer: full bright, both coordinates as given (`light.z = 1`).
+        assert_eq!(vertices[0].light, 0xF0 | 0xF0 << 8 | 1 << 16);
+        assert_eq!(vertices[drawn - 4].light, draw_light);
+        if takes_pipeline {
+            assert_eq!(
+                routed,
+                [PipelineItemQuad {
+                    slot: 3,
+                    pos: quads[1].pos,
+                    uv: quads[1].uv,
+                    color: quads[1].color,
+                }]
+            );
+        } else {
+            assert!(routed.is_empty());
+            assert_eq!(vertices[4].light, draw_light);
+        }
+    }
+
+    // The unlit layer is `NONE` and the pipeline layer is not among the item vertices: the
+    // outline is drawn again from the two layers that affect it.
+    let outlined = state
+        .outline_layers()
+        .expect("not every layer is outlined as drawn");
+    assert_eq!(outlined.layers.len(), 2);
+    assert_eq!(
+        outlined.layers[0]
+            .render_type
+            .and_then(|resolved| resolved.mod_pipeline_slot()),
+        Some(3)
+    );
+    assert!(outlined.layers[1].render_type.is_none());
+    state.layers.retain(|layer| layer.render_type.is_none());
+    assert!(
+        state.outline_layers().is_none(),
+        "plain layers are their own outline"
+    );
+}
+
 /// 26.3 parity: `Glint::uv` matches `TextureTransform.setupGlintTexturing` bit-for-bit.
 #[test]
 #[ignore = "daily"]
