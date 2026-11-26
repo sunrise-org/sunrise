@@ -274,18 +274,8 @@ impl Hub {
                 }
                 // PlayerChunkSender.onChunkBatchReceivedByClient.
                 S::ChunkBatchReceived(p) => {
-                    self.guests.update(i, |g| {
-                        g.unacknowledged = g.unacknowledged.saturating_sub(1);
-                        g.chunks_per_tick = if p.chunks_per_tick.is_nan() {
-                            0.01
-                        } else {
-                            p.chunks_per_tick.clamp(0.01, 64.0)
-                        };
-                        if g.unacknowledged == 0 {
-                            g.batch_quota = 1.0;
-                        }
-                        g.max_unacknowledged = 10;
-                    });
+                    self.guests
+                        .update(i, |g| g.chunk_batch_received(p.chunks_per_tick));
                 }
                 // ServerCommonPacketListenerImpl.handlePong has no vanilla side effects.
                 S::Pong(p) => {
@@ -599,6 +589,8 @@ impl Hub {
         }
         let to = pos.unwrap_or(self.guests[i].position);
         self.position_change(i, to, rot, flags, Hearing::Heard, ctx, events);
+        // handleMovePlayer's `ServerChunkCache.move`: the view follows the accepted move at once.
+        self.follow_view(i, &*ctx.world, ctx.streaming, ctx.ticking.as_ref());
     }
 
     /// `ServerGamePacketListenerImpl.updateAwaitingTeleport`: while waiting for an ack,

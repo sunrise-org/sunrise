@@ -73,6 +73,7 @@ fn a_guest_hovering_in_cave_air_is_kicked_for_flying() {
         collision: Some(&collision),
         border: &border,
         streaming: None,
+        ticking: None,
     };
     hub.position_change(
         0,

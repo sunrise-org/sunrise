@@ -47,13 +47,13 @@ ChunkMap.markPosition	skip:java		chunk type cache for isExistingChunkFull
 ChunkMap.applyStep	inline	crates/sunrise-client-render/src/streaming.rs::Streaming::new	the worker loop runs the Generate, Decorate and Finish jobs
 ChunkMap.scheduleGenerationTask	port	crates/sunrise-client-render/src/streaming.rs::Streaming::schedule_generation
 ChunkMap.runGenerationTask	port	crates/sunrise-client-render/src/streaming.rs::Streaming::submit	queues the job by distance
-ChunkMap.onChunkReadyToSend	inline	crates/sunrise-client/src/lan/hub/tracking.rs::Hub::next_batch	queued columns are sent once lit
+ChunkMap.onChunkReadyToSend	port	crates/sunrise-client/src/lan/hub/tracking.rs::Hub::poll_ready	each column that becomes ready to send joins the pending chunks of every player whose view holds it then, in the order it did (ChunkMap::take_send_ready), before the views move
 ChunkMap.prepareAccessibleChunk	inline	crates/sunrise-client-render/src/streaming.rs::Streaming::update	a column finishes once its 3x3 is decorated
 ChunkMap.allChunksWithAtLeastStatus	inline	crates/sunrise-client/src/game/world/integrated.rs::Game::publish_load_view	only the loading screen asks: lit chunks around the spawn
 ChunkMap.saveChunkIfNeeded	inline	crates/sunrise-client/src/game.rs::Game::save_chunks_eagerly	resident full chunks only; ordered selection delegates to World.modified
 ChunkMap.isExistingChunkFull	inline	crates/sunrise-client-render/src/streaming.rs::Streaming::save_checked_out	protos exist only for columns not final, so one cannot overwrite a final chunk
-ChunkMap.markChunkPendingToSend	port	crates/sunrise-client/src/lan/hub.rs::requeue	chunks entering the view join the guest's queue, closest first
-ChunkMap.getChunkToSend	inline	crates/sunrise-client/src/lan/hub/tracking.rs::Hub::next_batch	only lit columns are taken
+ChunkMap.markChunkPendingToSend	port	crates/sunrise-client/src/lan/hub/tracking.rs::update_view	a chunk entering the view joins the guest's pending chunks when it is ready to send; one that isn't joins them when it becomes so (poll_ready)
+ChunkMap.getChunkToSend	port	crates/sunrise-client/src/lan/hub.rs::send_ready	lit, its 3×3 resident as full columns, its ticket level ticking; asked on entry and of each pick (a pick not ready stays pending)
 ChunkMap.dumpChunks	skip:debug		CSV chunk dump
 ChunkMap.printFuture	skip:debug
 ChunkMap.readChunk	port	crates/sunrise-client/src/save/dir.rs::SaveDir::read_record	reads the raw record (pending writes first); the upgrade is done when the world opens
@@ -101,7 +101,7 @@ ChunkTrackingView.difference	inline	crates/sunrise-client/src/lan/hub/tracking.r
 ChunkTrackingView.isWithinDistance	port	crates/sunrise-client/src/lan/hub.rs::tracked	buffer 2 form; the buffer 1 form is streaming.rs in_view_distance
 ChunkTrackingView.Positioned.squareIntersects	skip:java		optimisation that picks a box scan over a full enumeration
 ChunkTrackingView.Positioned.contains	port	crates/sunrise-client/src/lan/hub.rs::tracked
-ChunkTrackingView.Positioned.forEach	inline	crates/sunrise-client/src/lan/hub.rs::requeue	loops the view's square around the centre
+ChunkTrackingView.Positioned.forEach	inline	crates/sunrise-client/src/lan/hub.rs::view_difference	loops the view's square around the centre, by x then z
 ColumnPos.asLong	skip:java		key packing
 DemoMode	missing		minor: no demo mode: no demo timer, intro hints or five day limit (the dedicated server's --demo argument is accepted and ignored)
 DistanceManager.runAllUpdates	port	crates/sunrise-client/src/ticket_levels.rs::ChunkTickets::update	levels rebuilt when sources change

@@ -206,9 +206,12 @@ pub struct TickCtx<'a> {
     /// The level's world border (PlayerList.sendLevelInfo sends it).
     pub border: &'a crate::worldborder::WorldBorder,
     /// The level's columns still being generated: a column is sent once
-    /// each neighbour is loaded or a decorated proto chunk (#4294). None:
-    /// every column there is is loaded.
+    /// its 3×3 is at FULL (`streaming::full_around`). None: every column
+    /// there is is loaded.
     pub streaming: Option<&'a crate::streaming::Streaming>,
+    /// The level's ticket levels, for the third part of a chunk's readiness to send (ticking). None:
+    /// every column counts as ticking.
+    pub ticking: Option<crate::ticket_levels::Levels>,
 }
 
 /// Destination placement and viewed-level handoff after the command-tree send.
@@ -391,6 +394,10 @@ pub struct Hub {
     /// The chunks players started and stopped watching, for the mods
     /// (`chunk_watch`): recorded only while a mod listens.
     pub chunk_watches: ChunkWatchLog,
+    /// Each level's columns lit but not ready to send yet (a neighbour not at FULL, or the ticket
+    /// level not ticking), with where they stood when last asked: asked again at each of that
+    /// level's polls (`poll_ready`), never against another level's columns.
+    pub(super) held: crate::fast_hash::FxHashMap<String, Waiters>,
     /// Kicks waiting for the game thread to notify native mods.
     pending_kicks: Vec<HostEvent>,
     /// The player who left whose logout the mods are hearing (`player_logged_out`), by
@@ -736,29 +743,254 @@ pub(super) fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
     dx * dx + dz * dz < i64::from(r) * i64::from(r)
 }
 
-/// The view's queue around a new centre: the queued chunks still tracked, then
-/// the tracked ones neither sent nor queued, closest first (a stable sort, so
-/// equally close chunks keep their order).
-fn requeue(
-    queue: &mut Vec<(i32, i32)>,
-    sent: &crate::fast_hash::FxHashSet<(i32, i32)>,
-    (cx, cz): (i32, i32),
-    r: i32,
+/// `PlayerChunkSender.dropChunk` for a chunk leaving `g`'s view: dropped silently while still
+/// pending; otherwise forgotten, sent or not (a dead player is told nothing).
+fn drop_chunk(log: &mut ChunkWatchLog, g: &mut super::guest::Guest, key: (i32, i32)) {
+    if g.pending_chunks.remove(&pack(key)) {
+        return;
+    }
+    g.sent_chunks.remove(&key);
+    super::chunk_watch::unwatch(log, g, key);
+    if !g.dead {
+        g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk {
+            pos: [key.0, key.1],
+        }));
+    }
+}
+
+/// `ChunkPos.pack`: x in the low and z in the high 32 bits, the pending set's key.
+pub(super) fn pack((x, z): (i32, i32)) -> i64 {
+    (u64::from(x as u32) | (u64::from(z as u32) << 32)) as i64
+}
+
+/// The chunk `pack` packed.
+fn unpack(p: i64) -> (i32, i32) {
+    (p as i32, (p >> 32) as i32)
+}
+
+/// `ChunkTrackingView.difference` from `last` (none: `EMPTY`) to `next`, as (chunk, whether
+/// `next` sees it): one walk, by x then z, over the square both views' squares fit in when the
+/// squares meet; else every chunk of `last` leaving, then every chunk of `next` entering.
+fn view_difference(
+    last: Option<((i32, i32), i32)>,
+    next: ((i32, i32), i32),
+) -> Vec<((i32, i32), bool)> {
+    // `Positioned.minX()`..`maxX()`: the radius and a column of the neighbours' buffer.
+    let square =
+        |((cx, cz), r): ((i32, i32), i32)| (cx - r - 1, cz - r - 1, cx + r + 1, cz + r + 1);
+    let sees = |((cx, cz), r): ((i32, i32), i32), x, z| tracked(cx, cz, r, x, z);
+    let each = |view: ((i32, i32), i32), out: &mut Vec<((i32, i32), bool)>, entering: bool| {
+        let (x0, z0, x1, z1) = square(view);
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                if sees(view, x, z) {
+                    out.push(((x, z), entering));
+                }
+            }
+        }
+    };
+    let mut out = Vec::new();
+    match last {
+        Some(last) if last == next => {}
+        Some(last) => {
+            let ((ax0, az0, ax1, az1), (bx0, bz0, bx1, bz1)) = (square(last), square(next));
+            if ax0 <= bx1 && ax1 >= bx0 && az0 <= bz1 && az1 >= bz0 {
+                for x in ax0.min(bx0)..=ax1.max(bx1) {
+                    for z in az0.min(bz0)..=az1.max(bz1) {
+                        let (saw, sees_now) = (sees(last, x, z), sees(next, x, z));
+                        if saw != sees_now {
+                            out.push(((x, z), sees_now));
+                        }
+                    }
+                }
+            } else {
+                each(last, &mut out, false);
+                each(next, &mut out, true);
+            }
+        }
+        None => each(next, &mut out, true),
+    }
+    out
+}
+
+/// `ChunkHolder.getChunkToSend` being set: the column is loaded and lit, and while the level
+/// streams, its light's neighbours are there too (ChunkStatus.LIGHT needs them at
+/// INITIALIZE_LIGHT).
+fn ticks(ticking: Option<&crate::ticket_levels::Levels>, (x, z): (i32, i32)) -> bool {
+    ticking.is_none_or(|levels| levels.loaded_ticking(x, z))
+}
+
+/// `ChunkMap.getChunkToSend` at `key`: the column is lit (`ChunkHolder`'s send dependency waits for
+/// the light), its 3×3 is at FULL (`ChunkMap.prepareTickingChunk`: `streaming::full_around`), and
+/// its ticket level is ticking (the holder's ticking future).
+fn send_ready(
+    world: &World,
+    streaming: Option<&crate::streaming::Streaming>,
+    ticking: Option<&crate::ticket_levels::Levels>,
+    key: (i32, i32),
+) -> bool {
+    readiness(world, streaming, ticking, key) == Readiness::Ready
+}
+
+/// The level in place as its chunk pass sees it: the world, its streaming and its ticket levels,
+/// which readiness is asked against (`readiness`).
+#[derive(Clone, Copy)]
+pub struct LevelNow<'a> {
+    pub world: &'a World,
+    pub streaming: Option<&'a crate::streaming::Streaming>,
+    pub ticking: Option<&'a crate::ticket_levels::Levels>,
+}
+
+/// One level's columns lit but not ready to send yet, with where each stood when last asked.
+pub(super) type Waiters = crate::fast_hash::FxHashMap<(i32, i32), Readiness>;
+
+/// Level `level`'s waiters in `held` (`Hub::held`), made empty the first time.
+pub(super) fn waiters<'a>(
+    held: &'a mut crate::fast_hash::FxHashMap<String, Waiters>,
+    level: &str,
+) -> &'a mut Waiters {
+    if !held.contains_key(level) {
+        held.insert(level.to_owned(), Waiters::default());
+    }
+    held.get_mut(level).unwrap()
+}
+
+/// Whether chunk `key`, standing at `r`, goes to `g` now (`markChunkPendingToSend`): in its view a
+/// ready one, or for a held arrival a full one (it holds no ticket yet: `rebuild_chunk_tickets`
+/// takes the placed players, so its columns don't tick until it is placed, and its client waits for
+/// them); past its view one an area keeps (`viewed_levels::own`), full or ready. One it was sent
+/// already doesn't go again.
+fn goes_to(g: &super::guest::Guest, in_view: bool, key: (i32, i32), r: Readiness) -> bool {
+    let wanted = match r {
+        Readiness::Ready => in_view || g.viewed.own.sends(key),
+        Readiness::Loaded if in_view => g.held && !g.placed,
+        Readiness::Loaded => g.viewed.own.sends(key),
+        Readiness::Held | Readiness::NotYet => false,
+    };
+    wanted && !g.sent_chunks.contains(&key)
+}
+
+/// The 3×3 around (x, z), x-outer, z-inner.
+fn square(x: i32, z: i32) -> impl Iterator<Item = (i32, i32)> {
+    (-1..=1).flat_map(move |dx| (-1..=1).map(move |dz| (x + dx, z + dz)))
+}
+
+/// Chunk `key` asked where it stands now (`now`): ready, it leaves the waiters and joins `became`;
+/// full past the view, it joins `became` the first time and keeps waiting; else it waits while
+/// lit.
+fn ask(
+    waiting: &mut Waiters,
+    became: &mut Vec<((i32, i32), Readiness)>,
+    key: (i32, i32),
+    now: Readiness,
 ) {
-    let tracked = |x, z| tracked(cx, cz, r, x, z);
-    queue.retain(|&(x, z)| tracked(x, z));
-    // A walking player changes chunk every few ticks with hundreds of chunks
-    // queued: a set, not a scan of the queue for each of the view's chunks.
-    let mut queued: crate::fast_hash::FxHashSet<(i32, i32)> = queue.iter().copied().collect();
-    for dz in -r - 2..=r + 2 {
-        for dx in -r - 2..=r + 2 {
-            let key = (cx + dx, cz + dz);
-            if tracked(key.0, key.1) && !sent.contains(&key) && queued.insert(key) {
-                queue.push(key);
+    match now {
+        Readiness::Ready => {
+            waiting.remove(&key);
+            became.push((key, now));
+        }
+        Readiness::Loaded => {
+            if waiting.insert(key, now) != Some(now) {
+                became.push((key, now));
+            }
+        }
+        Readiness::Held => {
+            waiting.insert(key, now);
+        }
+        Readiness::NotYet => {
+            waiting.remove(&key);
+        }
+    }
+}
+
+/// One poll's columns in the order `ChunkMap.onChunkReadyToSend` gives them (`Hub::poll_ready`):
+/// first the waiters no column of the poll can complete (their ticket level, a proto chunk the
+/// level stopped finishing), in key order; then each column in the order it came in lit
+/// (`events`), and the waiters it was the last FULL neighbour of (x-outer, z-inner), as vanilla's
+/// range future completes with its last neighbour. `stands` says where a chunk stood with the
+/// columns its second argument names (those after the one asked for) not in yet.
+fn arrivals(
+    waiting: &mut Waiters,
+    became: &mut Vec<((i32, i32), Readiness)>,
+    events: &[(i32, i32)],
+    stands: impl Fn((i32, i32), &dyn Fn((i32, i32)) -> bool) -> Readiness,
+) {
+    let at: crate::fast_hash::FxHashMap<(i32, i32), usize> = events
+        .iter()
+        .enumerate()
+        .map(|(i, &key)| (key, i))
+        .collect();
+    let mut held: Vec<_> = waiting
+        .keys()
+        .copied()
+        .filter(|&(x, z)| !square(x, z).any(|n| at.contains_key(&n)))
+        .collect();
+    held.sort_unstable();
+    for key in held {
+        ask(waiting, became, key, stands(key, &|_| false));
+    }
+    for (i, &column) in events.iter().enumerate() {
+        let later = |n: (i32, i32)| at.get(&n).is_some_and(|&j| j > i);
+        let (x, z) = column;
+        for key in std::iter::once(column).chain(square(x, z).filter(|&n| n != column)) {
+            if key == column || waiting.contains_key(&key) {
+                ask(waiting, became, key, stands(key, &later));
             }
         }
     }
-    queue.sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+}
+
+/// Where a chunk stands for sending (`send_ready`'s parts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Readiness {
+    Ready,
+    /// Lit with its 3×3, but its ticket level isn't ticking: an area may send it past the view
+    /// (`viewed_levels::own`, a Sunrise client's), the view may not yet. Asked again at each poll
+    /// (`Hub::held`).
+    Loaded,
+    /// Lit, but a neighbour isn't at FULL yet: asked again at each poll (`Hub::held`).
+    Held,
+    NotYet,
+}
+fn readiness(
+    world: &World,
+    streaming: Option<&crate::streaming::Streaming>,
+    ticking: Option<&crate::ticket_levels::Levels>,
+    key: (i32, i32),
+) -> Readiness {
+    readiness_before(world, streaming, ticking, key, &|_| false)
+}
+
+/// [`readiness`] as it stood before the columns `later` names came in lit (a poll's later
+/// events, `Hub::poll_ready`): none of them counts yet, the column itself or a neighbour.
+fn readiness_before(
+    world: &World,
+    streaming: Option<&crate::streaming::Streaming>,
+    ticking: Option<&crate::ticket_levels::Levels>,
+    (x, z): (i32, i32),
+    later: &dyn Fn((i32, i32)) -> bool,
+) -> Readiness {
+    if !world.chunks.get(&(x, z)).is_some_and(|c| c.lit) || later((x, z)) {
+        return Readiness::NotYet;
+    }
+    // A decorated proto chunk stands for a neighbour vanilla itself keeps below FULL: one whose
+    // ticket level is past FULL's (with the level's ticket levels, which follow a move at once),
+    // else one past every area streaming keeps.
+    let below_full = |x: i32, z: i32| match (streaming, ticking) {
+        (Some(streaming), Some(levels)) => {
+            !levels.loaded_full(x, z) && streaming.proto_sections(x, z).is_some()
+        }
+        (Some(streaming), None) => streaming.is_border_proto(x, z),
+        (None, _) => false,
+    };
+    let around = streaming.is_none() || {
+        crate::streaming::full_around(world, below_full, (x, z)) && square(x, z).all(|n| !later(n))
+    };
+    match (around, ticks(ticking, (x, z))) {
+        (true, true) => Readiness::Ready,
+        (true, false) => Readiness::Loaded,
+        (false, _) => Readiness::Held,
+    }
 }
 
 /// The level's columns a tick's batches send, each once, with the number of batches taking it.
@@ -870,6 +1102,7 @@ impl Hub {
             selector_tokens: Vec::new(),
             native_menu_events: Vec::new(),
             chunk_watches: ChunkWatchLog::default(),
+            held: Default::default(),
             packet_drain: None,
             pending_kicks: Vec::new(),
             departing: None,
@@ -1582,7 +1815,7 @@ impl Hub {
     /// the view is moved at once (the chunk centre is sent and the chunks out of reach are
     /// forgotten, as the next tick would do), and this returns true: the chunks around the new
     /// place are still to come, one batch at a time, and whoever reads them must wait for them.
-    pub fn send_arrival_state(&mut self, i: usize) -> bool {
+    pub fn send_arrival_state(&mut self, i: usize, level: Option<LevelNow<'_>>) -> bool {
         let (mode, conn, uuid) = {
             let g = &self.guests[i];
             (g.game_mode, g.conn, g.uuid)
@@ -1613,7 +1846,18 @@ impl Hub {
             .center
             .is_some_and(|c| c != self.guests[i].chunk());
         if recentered {
-            self.update_view(i);
+            match level.filter(|_| self.watches(&self.guests[i])) {
+                // `ChunkMap.move` after the level's readiness: what became ready lands against the
+                // view the player had (`poll_ready`), then the view follows the player.
+                Some(l) => {
+                    self.poll_ready(l.world, l.streaming, l.ticking);
+                    let ready = |key| readiness(l.world, l.streaming, l.ticking, key);
+                    self.update_view(i, Some(&ready));
+                }
+                // The player's level isn't the one in place: its next poll asks about the chunks
+                // that entered.
+                None => self.update_view(i, None),
+            }
         }
         let g = &self.guests[i];
         g.send(&g.abilities_packet());
@@ -3503,7 +3747,6 @@ mod tests {
     mod pending_move_tests;
     mod sound_tests;
     use super::*;
-    use crate::fast_hash::FxHashSet;
 
     /// Queued one-shot fields wait out a change nobody sees, go in one built tag to
     /// every viewer, and are not sent again; a column sent whole doesn't lose them.
@@ -3690,7 +3933,9 @@ mod tests {
         // 1. Chunk streaming: bad chunk is skipped, valid sibling streams with matching batch size.
         hub.guests.update(0, |g| {
             g.center = Some((0, 0));
-            g.chunk_queue = vec![(0, 0), (1, 0)];
+            g.tracked_view = Some(((0, 0), g.view_distance));
+            g.pending_chunks.insert(&pack((0, 0)));
+            g.pending_chunks.insert(&pack((1, 0)));
             g.batch_quota = 4.0;
         });
         send_chunks(&mut hub, &mut world);
@@ -3710,7 +3955,7 @@ mod tests {
         }
         assert_eq!(sent_chunks, [(1, 0)]);
         assert_eq!(batch_sizes, [1]);
-        assert!(hub.guests[0].chunk_queue.is_empty());
+        assert!(hub.guests[0].pending_chunks.is_empty());
         assert!(!hub.guests[0].sent_chunks.contains(&(0, 0)));
         assert!(hub.guests[0].sent_chunks.contains(&(1, 0)));
 
@@ -3759,6 +4004,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         hub.force_send_player_support_blocks(0, &ctx);
         let mut saw_block_update = false;
@@ -3816,6 +4062,7 @@ mod tests {
         );
         hub.guests.update(0, |g| {
             g.center = Some((0, 0));
+            g.tracked_view = Some(((0, 0), g.view_distance));
             g.sent_chunks.extend([(0, 0), (5, 0), (6, 0)]);
         });
         let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
@@ -3841,7 +4088,9 @@ mod tests {
 
         // Shrinking the radius updates the tracking view immediately without waiting for
         // `update_view` to prune `sent_chunks`.
+        let old_radius = hub.guests[0].view_distance;
         hub.set_view_distance(2);
+        let new_radius = hub.guests[0].view_distance;
         while rx.try_recv().is_ok() {}
         assert_eq!(hub.guests[0].center, Some((0, 0)));
         assert!(hub.guests[0].sent_chunks.contains(&(5, 0)));
@@ -3865,7 +4114,7 @@ mod tests {
         );
 
         // `update_view` still prunes the columns that left the view even with the same centre.
-        hub.update_view(0);
+        hub.update_view(0, Some(&|_| Readiness::NotYet));
         let mut forgotten = Vec::new();
         let mut saw_center = false;
         while let Ok(crate::lan::Out::Packet(body)) = rx.try_recv() {
@@ -3877,8 +4126,18 @@ mod tests {
                 _ => {}
             }
         }
-        forgotten.sort_unstable();
-        assert_eq!(forgotten, vec![(5, 0), (6, 0)]);
+        // `dropChunk` in `difference`'s walk, by x then z over the old view's square: every chunk
+        // that left the view and was not pending, the two sent ones and the never-sent alike.
+        let mut expected = Vec::new();
+        for x in -old_radius - 1..=old_radius + 1 {
+            for z in -old_radius - 1..=old_radius + 1 {
+                if vanilla_tracks(old_radius, x, z) && !vanilla_tracks(new_radius, x, z) {
+                    expected.push((x, z));
+                }
+            }
+        }
+        assert!(expected.contains(&(5, 0)) && expected.contains(&(6, 0)));
+        assert_eq!(forgotten, expected);
         assert!(!saw_center, "radius change at the same centre keeps centre");
         assert!(hub.guests[0].sent_chunks.contains(&(0, 0)));
         assert!(!hub.guests[0].sent_chunks.contains(&(5, 0)));
@@ -4002,6 +4261,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         let change = hub.begin_level_change(0, [100.5, 49.0, 0.5], 0.0, None, 0, &ctx);
         hub.send_commands(0, hub.commands_packet(hub.guests[0].permission));
@@ -4590,6 +4850,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         hub.track_entities(&mut ctx, None);
         assert!(hub.guests[0].tracker.is_tracking(37));
@@ -4674,6 +4935,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         let _ = hub.drain_packets(&mut ctx);
     }
@@ -4745,6 +5007,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         let change = hub.begin_level_change(0, [100.5, 49.0, 0.5], 0.0, None, 0, &ctx);
         hub.send_commands(0, hub.commands_packet(hub.guests[0].permission));
@@ -4798,6 +5061,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         let open = |hub: &mut Hub| {
             hub.guests.update(0, |g| {
@@ -4876,6 +5140,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         hub.guests.update(0, |g| g.selected = 4);
         hub.remove_player_for_respawn(0);
@@ -5069,6 +5334,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         hub.track_entities(&mut ctx, None);
         assert!(!hub.guests[0].tracker.is_tracking(2));
@@ -5233,6 +5499,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         hub.track_entities(&mut ctx, None);
         assert!(hub.guests[0].tracker.is_tracking(2));
@@ -5364,6 +5631,7 @@ mod tests {
                     collision: None,
                     border: &border,
                     streaming: None,
+                    ticking: None,
                 },
                 None,
             );
@@ -5627,6 +5895,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         for action in [3, 4] {
             hub.guests.inbox_mut(0).unwrap().push_back(
@@ -5856,6 +6125,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         let events = hub.drain_packets(&mut ctx);
         let handled: Vec<&S> = events
@@ -5933,6 +6203,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         let handled = hub
             .drain_packets(&mut ctx)
@@ -6128,48 +6399,6 @@ mod tests {
         assert!(listed_properties(&[], true, Some(&failed)).is_empty());
     }
 
-    /// `requeue` as it was, scanning the queue for each chunk of the view.
-    fn requeue_scan(
-        queue: &mut Vec<(i32, i32)>,
-        sent: &FxHashSet<(i32, i32)>,
-        (cx, cz): (i32, i32),
-        r: i32,
-    ) {
-        queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
-        for dz in -r - 2..=r + 2 {
-            for dx in -r - 2..=r + 2 {
-                let key = (cx + dx, cz + dz);
-                if tracked(cx, cz, r, key.0, key.1) && !sent.contains(&key) && !queue.contains(&key)
-                {
-                    queue.push(key);
-                }
-            }
-        }
-        queue.sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
-    }
-
-    /// A player walking a loop, sending a few chunks a tick: the queue
-    /// after every move is the one the scan built.
-    #[test]
-    #[ignore = "daily"]
-    fn requeue_matches_the_scan() {
-        for r in [2, 5, 10, 12, 32] {
-            let (mut a, mut b) = (Vec::new(), Vec::new());
-            let mut sent = FxHashSet::default();
-            for step in 0..60i32 {
-                let center = ((step % 17) - 8, (step * 3 % 11) - 5);
-                requeue(&mut a, &sent, center, r);
-                requeue_scan(&mut b, &sent, center, r);
-                assert_eq!(a, b, "radius {r}, step {step}");
-                for key in a.drain(..a.len().min(7)) {
-                    sent.insert(key);
-                }
-                b.drain(..b.len().min(7));
-                sent.retain(|&(x, z)| tracked(center.0, center.1, r, x, z));
-            }
-        }
-    }
-
     /// `MinecraftServer.onGameRuleChanged`: setting `limited_crafting` updates the hub's state
     /// and broadcasts `ClientboundGameEventPacket` (event 12) with 1.0 (on) or 0.0 (off) to guests.
     #[test]
@@ -6222,32 +6451,6 @@ mod tests {
         }
     }
 
-    /// cargo test --release -p sunrise-client --lib lan::hub::tests::requeue_cost -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn requeue_cost() {
-        for r in [10, 16, 32] {
-            for (name, f) in [
-                ("scan", requeue_scan as fn(&mut _, &_, _, _)),
-                ("set", requeue as fn(&mut _, &_, _, _)),
-            ] {
-                let sent = FxHashSet::default();
-                let mut queue = Vec::new();
-                let start = std::time::Instant::now();
-                let moves = 200;
-                for step in 0..moves {
-                    // Nothing sent yet (an explorer waiting on generation).
-                    f(&mut queue, &sent, (step, 0), r);
-                }
-                let per = start.elapsed().as_secs_f64() * 1e6 / f64::from(moves);
-                println!(
-                    "view {r}: {name} {per:.1} us per chunk crossed, {} queued",
-                    queue.len()
-                );
-            }
-        }
-    }
-
     /// Listens to `chunk_watch`, so the hub records the watch trio.
     struct Watcher;
     #[mod_api::__subscriptions]
@@ -6259,7 +6462,7 @@ mod tests {
     fn send_chunks(hub: &mut Hub, world: &mut World) {
         let mut next_entity = 100;
         let border = crate::worldborder::WorldBorder::default();
-        let ctx = TickCtx {
+        let mut ctx = TickCtx {
             sea_level: 63,
             world,
             entities: &[],
@@ -6276,6 +6479,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         for _ in 0..3 {
             hub.ticks += 10;
@@ -6283,8 +6487,304 @@ mod tests {
                 let value = 0;
                 hub.guests.update(0, |g| g.unacknowledged = value);
             }
-            hub.update_chunks(&ctx);
+            hub.update_chunks(&mut ctx);
         }
+    }
+
+    /// The kit cases (`lan/hub/chunk_send_cases.json`): scripts with a controlled readiness schedule,
+    /// each with the packets 26.3's own PlayerChunkSender and ChunkMap send for it, as
+    /// tools/test_chunk_send_kit_parity.py checks against the jar's classes. The hub sends the same,
+    /// line for line.
+    #[test]
+    fn the_kit_cases_send_what_26_3_sends() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("hub/chunk_send_cases.json")).unwrap();
+        assert!(!cases.is_empty());
+        for case in &cases {
+            let name = case["name"].as_str().unwrap();
+            let want: Vec<&str> = case["vanilla"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: no vanilla lines (tools/test_chunk_send_kit_parity.py --write-cases)"))
+                .iter()
+                .map(|line| line.as_str().unwrap())
+                .collect();
+            assert_eq!(kit_case(&case["script"]), want, "{name}");
+        }
+    }
+
+    /// One kit script through the hub, its lines as the oracle prints them: per tick, "tick N", then
+    /// each centre, batch start, chunk, batch size and forget sent. A tick: the chunks that stop being
+    /// ready (they unload) and those that become ready (they come in lit), the packets in order (an
+    /// acknowledgement, a move, a chunk ready mid-tick), then the chunk pass.
+    fn kit_case(script: &serde_json::Value) -> Vec<String> {
+        let key =
+            |v: &serde_json::Value| (v[0].as_i64().unwrap() as i32, v[1].as_i64().unwrap() as i32);
+        let list = |v: &serde_json::Value| v.as_array().cloned().unwrap_or_default();
+        let lit = |world: &mut World, (x, z): (i32, i32)| {
+            let mut chunk = crate::chunk::Chunk::empty(x, z);
+            chunk.lit = true;
+            world.chunks.insert((x, z), std::sync::Arc::new(chunk));
+        };
+        let (mut hub, rx) = hub_with_a_guest();
+        let r = script["view_distance"].as_i64().unwrap() as i32;
+        let memory = script["memory"].as_bool().unwrap();
+        hub.guests.update(0, |g| {
+            g.view_distance = r;
+            g.center = None;
+            g.tracked_view = None;
+            if memory {
+                g.set_address(crate::lan::conn::MEMORY_ADDRESS);
+            }
+        });
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        for k in list(&script["ready"]) {
+            lit(&mut world, key(&k));
+        }
+        world.chunks.track_send_ready(true);
+        let at = |hub: &mut Hub, (x, z): (i32, i32)| {
+            hub.guests.update(0, |g| {
+                g.position = [
+                    f64::from(x) * 16.0 + 8.0,
+                    g.position[1],
+                    f64::from(z) * 16.0 + 8.0,
+                ];
+            });
+        };
+        while rx.try_recv().is_ok() {}
+        hub.ticks = hub.guests[0].placed_at + 2;
+        let mut out = Vec::new();
+        for (t, tick) in list(&script["ticks"]).iter().enumerate() {
+            out.push(format!("tick {t}"));
+            if t == 0 {
+                at(&mut hub, key(&script["join"]));
+                hub.follow_view(0, &world, None, None);
+            }
+            for k in list(&tick["unready"]) {
+                world.chunks.remove(&key(&k));
+            }
+            for k in list(&tick["ready"]) {
+                lit(&mut world, key(&k));
+            }
+            for packet in list(&tick["packets"]) {
+                if let Some(rate) = packet.get("ack") {
+                    let rate = rate.as_f64().unwrap() as f32;
+                    hub.guests.update(0, |g| g.chunk_batch_received(rate));
+                } else if let Some(k) = packet.get("ready") {
+                    lit(&mut world, key(k));
+                } else {
+                    at(&mut hub, key(&packet["move"]));
+                    hub.follow_view(0, &world, None, None);
+                }
+            }
+            kit_chunk_pass(&mut hub, &mut world);
+            hub.ticks += 1;
+            while let Ok(crate::lan::Out::Packet(body)) = rx.try_recv() {
+                let mut reader = sunrise_protocol::buf::Reader::new(&body);
+                let id = reader.varint().unwrap();
+                match C::decode(id, reader.rest()) {
+                    Ok(C::SetChunkCacheCenter(p)) => out.push(format!("center {} {}", p.x, p.z)),
+                    Ok(C::ChunkBatchStart(_)) => out.push("start".into()),
+                    Ok(C::LevelChunkWithLight(p)) => out.push(format!("chunk {} {}", p.x, p.z)),
+                    Ok(C::ChunkBatchFinished(p)) => out.push(format!("batch {}", p.size)),
+                    Ok(C::ForgetLevelChunk(p)) => {
+                        out.push(format!("forget {} {}", p.pos[0], p.pos[1]))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// One chunk pass of the hub (`update_chunks`) on `world`, no generation running.
+    fn kit_chunk_pass(hub: &mut Hub, world: &mut World) {
+        chunk_pass_with(hub, world, None);
+    }
+
+    /// [`kit_chunk_pass`] with the level's ticket levels `ticking` (None ticks everywhere).
+    fn chunk_pass_with(
+        hub: &mut Hub,
+        world: &mut World,
+        ticking: Option<crate::ticket_levels::Levels>,
+    ) {
+        let mut next_entity = 100;
+        let border = crate::worldborder::WorldBorder::default();
+        let mut ctx = TickCtx {
+            sea_level: 63,
+            world,
+            entities: &[],
+            next_entity: &mut next_entity,
+            spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
+            difficulty: 2,
+            difficulty_locked: false,
+            clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
+            tick_steps: Default::default(),
+            collision: None,
+            border: &border,
+            streaming: None,
+            ticking,
+        };
+        hub.update_chunks(&mut ctx);
+    }
+
+    /// The ticket levels `rebuild_chunk_tickets` gives a level whose players stand at `players`
+    /// (none: only held arrivals, which it doesn't count), at a server's view and simulation
+    /// distance of 10, which a guest's radius-2 view lies well inside.
+    fn ticket_levels(players: &[(i32, i32)]) -> crate::ticket_levels::Levels {
+        let mut tickets = crate::ticket_levels::ChunkTickets::default();
+        tickets.update(Some(crate::ticket_levels::Sources {
+            players: players.to_vec(),
+            view_distance: 10,
+            simulation_distance: 10,
+            ..Default::default()
+        }));
+        tickets.levels()
+    }
+
+    /// The chunks a guest was sent, from its channel.
+    fn sent_chunks(rx: &std::sync::mpsc::Receiver<crate::lan::Out>) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        while let Ok(o) = rx.try_recv() {
+            let bodies = match o {
+                crate::lan::Out::Packet(b) => vec![b],
+                crate::lan::Out::Packets(bs) => bs,
+                _ => Vec::new(),
+            };
+            for body in bodies {
+                let mut reader = sunrise_protocol::buf::Reader::new(&body);
+                let id = reader.varint().unwrap();
+                if let Ok(C::LevelChunkWithLight(p)) = C::decode(id, reader.rest()) {
+                    out.push((p.x, p.z));
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// A held arrival holds no ticket yet (`rebuild_chunk_tickets` takes the placed players), so
+    /// its view's lit columns are full but don't tick: they go to it all the same, as they did
+    /// while it waited before. A placed guest in the same place is sent none of them until they
+    /// tick.
+    #[test]
+    fn a_held_arrival_is_sent_its_views_full_columns() {
+        let view: Vec<(i32, i32)> = (-3..=3)
+            .flat_map(|x| (-3..=3).map(move |z| (x, z)))
+            .filter(|&(x, z)| tracked(0, 0, 2, x, z))
+            .collect();
+        for held in [true, false] {
+            let (mut hub, rx) = hub_with_a_guest();
+            hub.ticks = hub.guests[0].placed_at + 2;
+            hub.guests.update(0, |g| {
+                (g.held, g.placed) = (held, !held);
+                g.view_distance = 2;
+                g.center = None;
+                g.tracked_view = None;
+                g.position = [8.0, g.position[1], 8.0];
+                g.chunks_per_tick = 64.0;
+                g.max_unacknowledged = 10;
+            });
+            let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+            lit_columns(&mut world, view.iter().copied());
+            while rx.try_recv().is_ok() {}
+            chunk_pass_with(&mut hub, &mut world, Some(ticket_levels(&[])));
+            let sent = sent_chunks(&rx);
+            if held {
+                let mut want = view.clone();
+                want.sort_unstable();
+                assert_eq!(sent, want, "the held arrival's whole view");
+            } else {
+                assert_eq!(
+                    sent,
+                    Vec::<(i32, i32)>::new(),
+                    "a placed guest's view waits to tick"
+                );
+            }
+        }
+    }
+
+    /// A held column joins with the column that was its last FULL neighbour, in the order the
+    /// columns came in lit (`ChunkMap.prepareTickingChunk`'s range future completes with its last
+    /// neighbour), not in key order. (0, 0) waits for (1, 0), (3, 0) for (2, 0), and (2, 0), lit
+    /// in this poll, for (1, 0), lit after it.
+    #[test]
+    fn held_columns_join_when_their_last_neighbour_comes_in() {
+        let lit: crate::fast_hash::FxHashSet<(i32, i32)> = (-1..=4)
+            .flat_map(|x| (-1..=1).map(move |z| (x, z)))
+            .collect();
+        let stands = |key: (i32, i32), later: &dyn Fn((i32, i32)) -> bool| {
+            if !lit.contains(&key) || later(key) {
+                Readiness::NotYet
+            } else if square(key.0, key.1).all(|n| lit.contains(&n) && !later(n)) {
+                Readiness::Ready
+            } else {
+                Readiness::Held
+            }
+        };
+        let mut waiting = Waiters::default();
+        waiting.insert((0, 0), Readiness::Held);
+        waiting.insert((3, 0), Readiness::Held);
+        let mut became = Vec::new();
+        arrivals(
+            &mut waiting,
+            &mut became,
+            &[(-1, 0), (2, 0), (1, 0)],
+            stands,
+        );
+        let ready: Vec<_> = became
+            .iter()
+            .filter(|&&(_, r)| r == Readiness::Ready)
+            .map(|&(key, _)| key)
+            .collect();
+        assert_eq!(ready, [(3, 0), (1, 0), (0, 0), (2, 0)]);
+        // (-1, 0) is missing (-2, 0): it waits.
+        assert_eq!(
+            waiting.into_iter().collect::<Vec<_>>(),
+            [((-1, 0), Readiness::Held)]
+        );
+    }
+
+    /// Each level keeps its own readiness waiters (`Hub::held`): a poll of another level, where
+    /// nothing stands at those coordinates, doesn't drop them, and once their ticket ticks they
+    /// go to the guest that waits for them, without a new column event.
+    #[test]
+    fn a_waiter_survives_another_levels_poll() {
+        let view: Vec<(i32, i32)> = (-3..=3)
+            .flat_map(|x| (-3..=3).map(move |z| (x, z)))
+            .filter(|&(x, z)| tracked(0, 0, 2, x, z))
+            .collect();
+        let (mut hub, rx) = hub_with_a_guest();
+        hub.ticks = hub.guests[0].placed_at + 2;
+        hub.guests.update(0, |g| {
+            g.view_distance = 2;
+            g.center = None;
+            g.tracked_view = None;
+            g.position = [8.0, g.position[1], 8.0];
+            g.chunks_per_tick = 64.0;
+            g.max_unacknowledged = 10;
+        });
+        let mut overworld = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        lit_columns(&mut overworld, view.iter().copied());
+        while rx.try_recv().is_ok() {}
+        // Lit, but no ticket ticks there yet: they wait.
+        chunk_pass_with(&mut hub, &mut overworld, Some(ticket_levels(&[])));
+        assert_eq!(sent_chunks(&rx), Vec::<(i32, i32)>::new());
+        // The Nether's pass, with nothing at those coordinates.
+        let dimension = std::mem::replace(&mut hub.config.dimension, "minecraft:the_nether".into());
+        let mut nether = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        nether.chunks.track_send_ready(true);
+        chunk_pass_with(&mut hub, &mut nether, None);
+        hub.config.dimension = dimension;
+        // Back in the overworld, the player's ticket now ticks there.
+        hub.ticks += 1;
+        chunk_pass_with(&mut hub, &mut overworld, Some(ticket_levels(&[(0, 0)])));
+        let mut want = view.clone();
+        want.sort_unstable();
+        assert_eq!(sent_chunks(&rx), want, "every waiter goes once it ticks");
     }
 
     /// The recorded `(kind, dimension, chunk)`s since the last call, sorted
@@ -6405,6 +6905,7 @@ mod tests {
                 collision: None,
                 border: &border,
                 streaming: None,
+                ticking: None,
             };
             let change = hub.begin_level_change(0, [0.5, 64.0, 0.5], 0.0, None, 0, &ctx);
             hub.send_commands(0, hub.commands_packet(hub.guests[0].permission));
@@ -6433,130 +6934,210 @@ mod tests {
         });
     }
 
-    /// A single-player memory connection sends every ready view column before
-    /// `PlayerLoaded`. After that, on a respawn, and for a socket guest, the
-    /// batch is `chunks_per_tick` again (64). An unlit column stays out, and
-    /// the gates that send nothing still do.
-    #[test]
-    fn memory_connection_first_view_sends_every_ready_column() {
-        let (mut hub, _rx) = hub_with_a_guest();
-        hub.ticks = 3;
-        {
-            hub.guests.update(0, |g| {
-                g.chunks_per_tick = 64.0;
-                g.batch_quota = 0.0;
-                g.set_address(crate::lan::conn::MEMORY_ADDRESS);
-                g.loaded = false;
-            });
+    /// `ChunkTrackingView.isWithinDistance(0, 0, r, x, z, true)` as 26.3 writes it (`bufferRange`
+    /// 2, the neighbours' buffer): the chunks a view of radius `r` around the origin tracks.
+    fn vanilla_tracks(r: i32, x: i32, z: i32) -> bool {
+        let dx = i64::from((x.abs() - 2).max(0));
+        let dz = i64::from((z.abs() - 2).max(0));
+        dx * dx + dz * dz < i64::from(r) * i64::from(r)
+    }
+
+    /// The ForgetLevelChunk packets a guest was sent, in order.
+    fn forgotten(rx: &std::sync::mpsc::Receiver<crate::lan::Out>) -> Vec<(i32, i32)> {
+        let mut out = Vec::new();
+        while let Ok(crate::lan::Out::Packet(body)) = rx.try_recv() {
+            let mut reader = sunrise_protocol::buf::Reader::new(&body);
+            let id = reader.varint().unwrap();
+            if let Ok(C::ForgetLevelChunk(packet)) = C::decode(id, reader.rest()) {
+                out.push((packet.pos[0], packet.pos[1]));
+            }
         }
-        // The unlit column first, then 80 lit ones (`floor_at`'s empty column, lit).
-        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
-        let mut dark = crate::chunk::Chunk::empty(100, 100);
-        dark.lit = false;
-        world.chunks.insert((100, 100), std::sync::Arc::new(dark));
-        hub.guests.update(0, |g| {
-            g.chunk_queue.push((100, 100));
-        });
-        for i in 0..80 {
-            let (x, z) = (i % 16, i / 16);
+        out
+    }
+
+    /// Lit columns at `keys`, inserted in that order into a world that keeps its send readiness.
+    fn lit_columns(world: &mut World, keys: impl IntoIterator<Item = (i32, i32)>) {
+        world.chunks.track_send_ready(true);
+        for (x, z) in keys {
             let mut chunk = crate::chunk::Chunk::empty(x, z);
             chunk.lit = true;
             world.chunks.insert((x, z), std::sync::Arc::new(chunk));
-            hub.guests.update(0, |g| {
-                g.chunk_queue.push((x, z));
-            });
         }
+    }
 
-        let batch = hub
-            .next_batch(0, &world, None)
-            .expect("the first view sends");
-        assert_eq!(batch.len(), 80, "every ready column leaves in one batch");
-        assert!(
-            batch.iter().all(|(_, c)| c.lit),
-            "an unlit column is not ready"
-        );
-        assert!(hub.guests[0].batch_quota >= 80.0);
-
+    /// `PlayerChunkSender.dropChunk`: a chunk that leaves the view while still pending leaves
+    /// silently; one never sent because it was never ready is forgotten all the same, as is one
+    /// that was sent.
+    #[test]
+    fn leaving_chunks_are_forgotten_unless_still_pending() {
+        let (mut hub, rx) = hub_with_a_guest();
+        let r = hub.guests[0].view_distance;
+        let (sent, pending, never) = ((r, 0), (0, r), (-r, 0));
         hub.guests.update(0, |g| {
-            g.loaded = true;
+            g.position = [8.0, g.position[1], 8.0];
+            g.center = Some((0, 0));
+            g.tracked_view = Some(((0, 0), r));
+            g.sent_chunks.insert(sent);
+            g.pending_chunks.insert(&pack(pending));
+            // Far enough that none of the three is in the new view.
+            g.position = [16.0 * (4 * r) as f64 + 8.0, g.position[1], 8.0];
         });
-        let loaded = hub
-            .next_batch(0, &world, None)
-            .expect("a loaded client still receives chunks");
-        assert_eq!(loaded.len(), 64, "PlayerLoaded puts the cap back");
+        while rx.try_recv().is_ok() {}
+        hub.update_view(0, Some(&|_| Readiness::NotYet));
+        // The views' squares don't meet: every chunk of the old view leaves, by x then z, each
+        // forgotten but the pending one.
+        let mut expected = Vec::new();
+        for x in -r - 1..=r + 1 {
+            for z in -r - 1..=r + 1 {
+                if vanilla_tracks(r, x, z) && (x, z) != pending {
+                    expected.push((x, z));
+                }
+            }
+        }
+        assert!(expected.contains(&sent) && expected.contains(&never));
+        assert_eq!(forgotten(&rx), expected);
+        let g = &hub.guests[0];
+        assert!(g.pending_chunks.is_empty() && g.sent_chunks.is_empty());
+    }
+
+    /// A chunk in the view that becomes ready in the tick it leaves it: vanilla makes it pending
+    /// between ticks, against the view the player had, before the tick's move, so the move drops
+    /// it silently (`PlayerChunkSender.dropChunk`) and it is never sent.
+    #[test]
+    fn a_chunk_ready_in_the_tick_it_leaves_the_view_drops_silently() {
+        let (mut hub, rx) = hub_with_a_guest();
+        let r = hub.guests[0].view_distance;
+        let became_ready = (-r, 0);
+        hub.guests.update(0, |g| {
+            g.position = [8.0, g.position[1], 8.0];
+            g.center = Some((0, 0));
+            g.tracked_view = Some(((0, 0), r));
+            // Far enough that nothing of the old view is in the new one.
+            g.position = [16.0 * (4 * r) as f64 + 8.0, g.position[1], 8.0];
+        });
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        lit_columns(&mut world, [became_ready]);
+        while rx.try_recv().is_ok() {}
+        hub.poll_ready(&world, None, None);
+        assert!(hub.guests[0].pending_chunks.contains(&pack(became_ready)));
+        hub.update_view(0, Some(&|key| readiness(&world, None, None, key)));
+        // Every chunk of the old view leaves, by x then z, forgotten (never sent included), but
+        // the one that became ready: it was pending.
+        let mut expected = Vec::new();
+        for x in -r - 1..=r + 1 {
+            for z in -r - 1..=r + 1 {
+                if vanilla_tracks(r, x, z) && (x, z) != became_ready {
+                    expected.push((x, z));
+                }
+            }
+        }
+        assert_eq!(forgotten(&rx), expected);
+        let g = &hub.guests[0];
+        assert!(g.pending_chunks.is_empty() && g.sent_chunks.is_empty());
+    }
+
+    /// `ChunkMap.onChunkReadyToSend` adds each chunk to the pending set when it becomes ready, so
+    /// the set's order (the order equally near chunks go out in) follows readiness, not the
+    /// order the chunks entered the view: (-1, -1) and (1, 1) take the same slot of an empty
+    /// 32-slot table, so the one ready first comes first.
+    #[test]
+    fn pending_chunks_follow_the_order_they_became_ready() {
+        for (first, second) in [((1, 1), (-1, -1)), ((-1, -1), (1, 1))] {
+            let (mut hub, _rx) = hub_with_a_guest();
+            let r = hub.guests[0].view_distance;
+            hub.guests.update(0, |g| {
+                g.position = [8.0, g.position[1], 8.0];
+                g.center = None;
+            });
+            // Both enter the view while nothing is ready.
+            hub.update_view(0, Some(&|_| Readiness::NotYet));
+            assert_eq!(hub.guests[0].tracked_view, Some(((0, 0), r)));
+            let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+            lit_columns(&mut world, [first]);
+            lit_columns(&mut world, [second]);
+            hub.poll_ready(&world, None, None);
+            let order: Vec<_> = hub.guests[0].pending_chunks.stream().map(unpack).collect();
+            assert_eq!(order, vec![first, second]);
+        }
+    }
+
+    /// `PlayerChunkSender.collectChunksToSend` on a memory connection (single player's own
+    /// window): every pending chunk goes in each batch, before `PlayerLoaded`, after it and on a
+    /// respawn, where a socket guest's batch is capped at `chunks_per_tick` (64). A pending chunk
+    /// not ready to send now (`getChunkToSend` null: here a column back unlit) is not sent and
+    /// stays pending, and the gates that send nothing still do.
+    #[test]
+    fn memory_connection_takes_every_pending_chunk() {
+        let (mut hub, _rx) = hub_with_a_guest();
+        hub.ticks = 3;
+        hub.guests.update(0, |g| {
+            g.chunks_per_tick = 64.0;
+            g.batch_quota = 0.0;
+            g.set_address(crate::lan::conn::MEMORY_ADDRESS);
+            g.loaded = false;
+        });
+        // 80 pending lit columns (no generation running: lit is ready), and a pending one back unlit.
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        lit_columns(
+            &mut world,
+            (-1..=5).flat_map(|z| (-1..=16).map(move |x| (x, z))),
+        );
+        let mut dark = crate::chunk::Chunk::empty(100, 100);
+        dark.lit = false;
+        world.chunks.insert((100, 100), std::sync::Arc::new(dark));
+        assert!(!send_ready(&world, None, None, (100, 100)));
+        hub.guests.update(0, |g| {
+            g.pending_chunks.insert(&pack((100, 100)));
+            for i in 0..80 {
+                g.pending_chunks.insert(&pack((i % 16, i / 16)));
+            }
+        });
+        let sizes = |hub: &mut Hub| {
+            hub.next_batch(0, &world, None, None)
+                .map(|batch| batch.len())
+        };
+
+        assert_eq!(sizes(&mut hub), Some(80), "the first view in one batch");
+        assert!(
+            hub.guests[0].pending_chunks.contains(&pack((100, 100))),
+            "the unlit one waits"
+        );
+        hub.guests.update(0, |g| g.loaded = true);
+        assert_eq!(sizes(&mut hub), Some(80), "PlayerLoaded changes nothing");
+        hub.guests.update(0, |g| g.loading = true);
+        assert_eq!(sizes(&mut hub), Some(80), "nor does a respawn");
 
         hub.guests.update(0, |g| {
             g.set_address("127.0.0.1:25565".parse().unwrap());
-        });
-        hub.guests.update(0, |g| {
-            g.loaded = false;
-        });
-        hub.guests.update(0, |g| {
             g.batch_quota = 0.0;
         });
-        let socket = hub
-            .next_batch(0, &world, None)
-            .expect("a socket guest still receives chunks");
-        assert_eq!(socket.len(), 64, "a socket guest keeps the quota");
+        assert_eq!(sizes(&mut hub), Some(64), "a socket guest keeps the quota");
 
         hub.guests.update(0, |g| {
             g.set_address(crate::lan::conn::MEMORY_ADDRESS);
+            for i in 70..80 {
+                g.pending_chunks.remove(&pack((i % 16, i / 16)));
+            }
         });
-        hub.guests.update(0, |g| {
-            g.loaded = true;
-        });
-        hub.guests.update(0, |g| {
-            g.loading = true;
-        });
-        hub.guests.update(0, |g| {
-            g.batch_quota = 0.0;
-        });
-        let respawn = hub
-            .next_batch(0, &world, None)
-            .expect("a respawned player still receives chunks");
-        assert_eq!(respawn.len(), 64, "a respawn stays on the vanilla pace");
+        assert_eq!(sizes(&mut hub), Some(70));
 
-        // Seventy lit columns, the unlit one still queued: all seventy, in one batch.
-        hub.guests.update(0, |g| {
-            g.loaded = false;
-        });
-        hub.guests.update(0, |g| {
-            g.batch_quota = 0.0;
-        });
-        hub.guests.update(0, |g| {
-            g.chunk_queue.truncate(71);
-        });
-        let seventy = hub
-            .next_batch(0, &world, None)
-            .expect("seventy ready columns send");
-        assert_eq!(seventy.len(), 70);
-        assert!(seventy.iter().all(|(_, c)| c.lit));
-
-        hub.guests.update(0, |g| {
-            g.unacknowledged = g.max_unacknowledged;
-        });
-        assert!(
-            hub.next_batch(0, &world, None).is_none(),
+        hub.guests
+            .update(0, |g| g.unacknowledged = g.max_unacknowledged);
+        assert_eq!(
+            sizes(&mut hub),
+            None,
             "too many batches still waiting sends nothing"
         );
-
-        hub.guests.update(0, |g| {
-            g.unacknowledged = 0;
-        });
+        hub.guests.update(0, |g| g.unacknowledged = 0);
         hub.ticks = hub.guests[0].placed_at + 1;
-        assert!(
-            hub.next_batch(0, &world, None).is_none(),
+        assert_eq!(
+            sizes(&mut hub),
+            None,
             "the tick after placement still waits"
         );
-
         hub.ticks = 3;
-        hub.guests.update(0, |g| {
-            g.chunk_queue.clear();
-        });
-        assert!(
-            hub.next_batch(0, &world, None).is_none(),
-            "an empty queue sends nothing"
-        );
+        hub.guests.update(0, |g| g.pending_chunks.remove_all());
+        assert_eq!(sizes(&mut hub), None, "nothing pending sends nothing");
     }
     /// `ServerGamePacketListenerImpl.handleAcceptTeleportPacket`: an accept whose id is
     /// the last teleport's (`awaitingTeleport`) while none is awaited any more
@@ -6860,6 +7441,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         hub.track_entities(&mut ctx, None);
         assert!(hub.guests[1].tracker.is_tracking(1));
@@ -7007,6 +7589,7 @@ mod tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         assert_eq!(hub.spawn_info(0, 0, 63).previous_game_type, Some(2));
         hub.set_dimension("minecraft:the_nether");

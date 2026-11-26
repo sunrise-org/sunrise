@@ -112,7 +112,7 @@ ChunkPos.getRegionZ	port	crates/sunrise-core/src/position.rs::ChunkPos::region
 ChunkPos.getBlockAt	skip:other		no caller in 26.3 code
 ChunkPos.contains	port	crates/sunrise-core/src/position.rs::BlockPos::chunk	a block is in a chunk when its chunk() is that chunk
 ChunkPos.getChessboardDistance	inline	crates/sunrise-client/src/ticket_levels.rs::compute	Chebyshev distance folded into the ticket level loop
-ChunkPos.distanceSquared	inline	crates/sunrise-client/src/lan/hub.rs::requeue	the pending chunk queue is sorted by the squared chunk distance, the only use vanilla makes of it (PlayerChunkSender.collectChunksToSend)
+ChunkPos.distanceSquared	inline	crates/sunrise-client/src/lan/hub/tracking.rs::next_batch	the pending chunks are chosen by the squared chunk distance, the only use vanilla makes of it (PlayerChunkSender.collectChunksToSend)
 CollisionGetter.isUnobstructed	port	crates/sunrise-client/src/game/blocks/level_access.rs::GameLevel::is_unobstructed	the state-based overload
 CollisionGetter.noBorderCollision	port	crates/sunrise-client-render/src/collisions.rs::EntityCollisions::movement_border	border shape when inside close to the border
 CollisionGetter.getPreMoveCollisions	inline	crates/sunrise-client-render/src/collisions.rs::SceneCollisions::resolve_with_context	gap: minor: entity and block shapes are not returned as a list; the resolver takes them together

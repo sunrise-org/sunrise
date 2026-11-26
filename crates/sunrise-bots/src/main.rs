@@ -73,6 +73,8 @@ sunrise-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          below), flood-recipe (recipe book placements)
   --ack-mode MODE        chunk batch feedback: vanilla (default) or 64 (fixed chunks per tick);
                          one ACK per completed batch; use explore for a controlled pacing test
+  --hold-acks PATH       while PATH exists, the batch ACKs wait (the server's quota then keeps chunks
+                         pending); once it is gone, the next packet sends them
   --flood N              packets a tick for the flood behaviours; default 100
   --attack NAME          attack the player NAME twice a second, from wherever the bot is (a reach test),
                          swinging after each attack as vanilla's client does. NAME,NAME...: each of them
@@ -180,6 +182,8 @@ struct Options {
     flood: usize,
     /// None uses vanilla estimation; --ack-mode 64 requests a fixed rate.
     ack_rate: Option<f32>,
+    /// --hold-acks: the file whose presence holds the batch ACKs back.
+    hold_acks: Option<std::path::PathBuf>,
     no_read: bool,
     no_loaded: bool,
     height: f64,
@@ -218,6 +222,7 @@ fn options() -> Result<Options, String> {
         crits: false,
         flood: 100,
         ack_rate: None,
+        hold_acks: None,
         no_read: false,
         no_loaded: false,
         height: 24.0,
@@ -287,6 +292,7 @@ fn options() -> Result<Options, String> {
                     _ => return Err(format!("--ack-mode {value}: use vanilla or 64")),
                 };
             }
+            "--hold-acks" => o.hold_acks = Some(value.into()),
             "--flood" => o.flood = value.parse().map_err(|_| number("packets a tick"))?,
             "--attack" => o.attack = Some(value),
             "--attack-after" => o.attack_after = value.parse().map_err(|_| number("seconds"))?,
@@ -1016,6 +1022,7 @@ fn read(
     bot: Arc<Bot>,
     track: bool,
     ack_rate: Option<f32>,
+    hold: Option<std::path::PathBuf>,
     mut capture: Option<Capture>,
 ) {
     use ids::play::clientbound as cb;
@@ -1024,6 +1031,8 @@ fn read(
     let mut seen = HashSet::new();
     let mut batch = sunrise_protocol::chunk_batch::ChunkBatchSize::default();
     let mut teleports = 0u64;
+    // Batch ACKs held back while `hold` exists, each with the rate it would have asked for.
+    let mut held: Vec<f32> = Vec::new();
     loop {
         if bot.deaf.load(Ordering::Relaxed) {
             while bot.online.load(Ordering::SeqCst) {
@@ -1042,6 +1051,16 @@ fn read(
         };
         if let Some(c) = &mut capture {
             c.record(id, &body);
+        }
+        if !held.is_empty() && hold.as_deref().is_none_or(|p| !p.exists()) {
+            for chunks_per_tick in held.drain(..) {
+                let _ = send(
+                    play::Serverbound::ChunkBatchReceived(play::ChunkBatchReceived {
+                        chunks_per_tick,
+                    })
+                    .encode(),
+                );
+            }
         }
         let mut r = Reader::new(&body);
         let sent = match id {
@@ -1103,13 +1122,18 @@ fn read(
             }
             cb::CHUNK_BATCH_FINISHED => {
                 batch.on_batch_finished(r.varint().unwrap_or(0));
-                send(
-                    play::Serverbound::ChunkBatchReceived(play::ChunkBatchReceived {
-                        chunks_per_tick: ack_rate
-                            .unwrap_or_else(|| batch.desired_chunks_per_tick()),
-                    })
-                    .encode(),
-                )
+                let chunks_per_tick = ack_rate.unwrap_or_else(|| batch.desired_chunks_per_tick());
+                if hold.as_deref().is_some_and(|p| p.exists()) {
+                    held.push(chunks_per_tick);
+                    Ok(())
+                } else {
+                    send(
+                        play::Serverbound::ChunkBatchReceived(play::ChunkBatchReceived {
+                            chunks_per_tick,
+                        })
+                        .encode(),
+                    )
+                }
             }
             cb::PLAYER_POSITION => match play::Clientbound::decode(id, &body) {
                 Ok(play::Clientbound::PlayerPosition(p)) => {
@@ -1210,8 +1234,8 @@ fn run_bot(
         let capture = (index == 0)
             .then(|| o.capture.as_deref().and_then(Capture::create))
             .flatten();
-        let ack_rate = o.ack_rate;
-        thread::spawn(move || read(reader, writer, bot, track, ack_rate, capture));
+        let (ack_rate, hold) = (o.ack_rate, o.hold_acks.clone());
+        thread::spawn(move || read(reader, writer, bot, track, ack_rate, hold, capture));
     }
     use ids::play::serverbound as sb;
     // Wait for the spawn position.
@@ -1876,6 +1900,7 @@ mod tests {
                 bot,
                 false,
                 ack_rate,
+                None,
                 None,
             )
         });

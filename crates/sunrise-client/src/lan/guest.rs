@@ -344,7 +344,16 @@ pub struct Guest {
     /// The near chunks the mods were told this player watches
     /// (`lan::chunk_watch`); empty while no mod listens.
     pub watched: crate::fast_hash::FxHashSet<(i32, i32)>,
-    pub chunk_queue: Vec<(i32, i32)>,
+    /// `PlayerChunkSender.pendingChunks`: the tracked chunks that are ready and not sent yet, packed
+    /// (`ChunkPos.pack`), in a `LongOpenHashSet`'s order (the order equally near ones are sent in).
+    pub pending_chunks: crate::fastutil_order::LongOpenOrder,
+    /// Chunks that entered the view where the level could not be asked whether they were ready (an
+    /// arrival's view, moved before its level ticks), in the order they entered: the next poll asks
+    /// (`Hub::poll_ready`). Every other chunk joins `pending_chunks` when it enters the view ready,
+    /// or when it becomes ready while in view (`ChunkMap.onChunkReadyToSend`).
+    pub recheck_chunks: Vec<(i32, i32)>,
+    /// `ServerPlayer.getChunkTrackingView`: the centre and radius the player tracks chunks around.
+    pub tracked_view: Option<((i32, i32), i32)>,
     /// PlayerChunkSender: batches sent but not yet acknowledged, how many
     /// may be (1 until the client's first acknowledgement, then 10), the
     /// rate the client asks for and the chunks the next batch may hold.
@@ -600,6 +609,21 @@ impl Guest {
     /// The client's IP address as text, without the port.
     pub fn ip_address(&self) -> &str {
         &self.ip_address
+    }
+
+    /// `PlayerChunkSender.onChunkBatchReceivedByClient`: a batch acknowledged, with the chunks a
+    /// tick the client asks for from now on.
+    pub fn chunk_batch_received(&mut self, chunks_per_tick: f32) {
+        self.unacknowledged = self.unacknowledged.saturating_sub(1);
+        self.chunks_per_tick = if chunks_per_tick.is_nan() {
+            0.01
+        } else {
+            chunks_per_tick.clamp(0.01, 64.0)
+        };
+        if self.unacknowledged == 0 {
+            self.batch_quota = 1.0;
+        }
+        self.max_unacknowledged = 10;
     }
 
     /// Replaces the address and keeps its cached IP text in sync.
@@ -895,7 +919,9 @@ impl Guest {
             view_dirty: false,
             sent_chunks: Default::default(),
             watched: Default::default(),
-            chunk_queue: Vec::new(),
+            pending_chunks: Default::default(),
+            recheck_chunks: Vec::new(),
+            tracked_view: None,
             unacknowledged: 0,
             max_unacknowledged: 1,
             chunks_per_tick: 9.0,

@@ -248,6 +248,7 @@ impl Hub {
                 let _ = ctx.world.block_log.take();
                 ctx.world.connection_group_log = None;
                 let _ = ctx.world.light_log.take();
+                ctx.world.chunks.track_send_ready(false);
                 ctx.world.bulk_log.clear();
                 ctx.world.chunk_resends.clear();
             }
@@ -256,6 +257,8 @@ impl Hub {
         if ctx.world.block_log.is_none() {
             ctx.world.block_log = Some(Vec::new());
         }
+        // What becomes ready to send from here on is an event for `poll_ready`.
+        ctx.world.chunks.track_send_ready(true);
         if ctx.world.connection_group_log.is_none() {
             ctx.world.connection_group_log = Some(Default::default());
         }
@@ -558,21 +561,56 @@ impl Hub {
 
     // ---- chunks --------------------------------------------------------
 
-    /// Every player's chunks here: their views, then the next batch of each
-    /// (PlayerChunkSender.sendNextChunks). The batches are chosen first, the
-    /// columns in them encoded once each, their new sections and their light
-    /// on the warm-up threads too (`ChunkEncoder::warm`, `bodies_with`), then
-    /// sent: nothing changes the level in between, and each player's packets
-    /// keep their order.
-    pub(super) fn update_chunks(&mut self, ctx: &TickCtx) {
+    /// ChunkMap.move's `updateChunkTracking` for guest `i` after its move packet: the readiness that
+    /// landed since the last poll first (against the view it had), then its view follows it.
+    pub(super) fn follow_view(
+        &mut self,
+        i: usize,
+        world: &World,
+        streaming: Option<&crate::streaming::Streaming>,
+        ticking: Option<&crate::ticket_levels::Levels>,
+    ) {
+        if !self.watches(&self.guests[i]) {
+            return;
+        }
+        self.poll_ready(world, streaming, ticking);
+        self.update_view(i, Some(&|key| readiness(world, streaming, ticking, key)));
+    }
+
+    /// `ChunkMap.tick`'s `updateChunkTracking` for every player here, where `ServerChunkCache.tick`
+    /// runs it, after the changed chunks' broadcast: the readiness since the last poll first, then each
+    /// view follows its player (a teleport, a changed view distance).
+    pub fn update_views(
+        &mut self,
+        world: &World,
+        streaming: Option<&crate::streaming::Streaming>,
+        ticking: Option<&crate::ticket_levels::Levels>,
+    ) {
+        self.poll_ready(world, streaming, ticking);
+        for i in 0..self.guests.len() {
+            if self.watches(&self.guests[i]) {
+                self.update_view(i, Some(&|key| readiness(world, streaming, ticking, key)));
+            }
+        }
+    }
+
+    /// Every player's chunks here: the columns that became ready (`poll_ready`), then each
+    /// player's view (`update_view`) and its next batch (PlayerChunkSender.sendNextChunks). The
+    /// batches are chosen first, the columns in them encoded once each, their new sections and
+    /// their light on the warm-up threads too (`ChunkEncoder::warm`, `bodies_with`), then sent:
+    /// nothing changes the level in between, and each player's packets keep their order.
+    pub(super) fn update_chunks(&mut self, ctx: &mut TickCtx) {
+        let (streaming, ticking) = (ctx.streaming, ctx.ticking.as_ref());
+        self.poll_ready(ctx.world, streaming, ticking);
         let world = &*ctx.world;
         let watching = self.chunk_watches.recording();
         let mut batches = Vec::new();
         for i in 0..self.guests.len() {
             if self.watches(&self.guests[i]) {
-                self.update_far(i);
-                self.update_view(i);
-                if let Some(batch) = self.next_batch(i, world, ctx.streaming) {
+                let ready = |key| readiness(world, streaming, ticking, key);
+                self.update_far(i, Some(&ready));
+                self.update_view(i, Some(&ready));
+                if let Some(batch) = self.next_batch(i, world, streaming, ticking) {
                     batches.push((i, batch));
                 }
             }
@@ -588,7 +626,7 @@ impl Hub {
             .map(|(i, batch)| {
                 let (taken, bodies): (Vec<_>, Vec<_>) = batch
                     .into_iter()
-                    .map(|(idx, chunk)| (idx, columns.add(chunk)))
+                    .map(|(key, chunk)| (key, columns.add(chunk)))
                     .unzip();
                 (i, taken, bodies)
             })
@@ -619,12 +657,12 @@ impl Hub {
             let mut sent_taken = Vec::with_capacity(taken.len());
             let mut sent_batch = Vec::with_capacity(batch.len());
             let mut failed_taken = Vec::new();
-            for (idx, j) in taken.into_iter().zip(batch) {
+            for (key, j) in taken.into_iter().zip(batch) {
                 if encoded[j].is_some() {
-                    sent_taken.push(idx);
+                    sent_taken.push(key);
                     sent_batch.push(j);
                 } else {
-                    failed_taken.push(idx);
+                    failed_taken.push(key);
                 }
             }
             self.guests.update(i, |g| {
@@ -670,30 +708,21 @@ impl Hub {
                 if watching {
                     // ChunkMap.markChunkPendingToSend, then PlayerChunkSender.sendChunk's end:
                     // Sunrise picks a chunk only as it sends it.
-                    for &idx in &sent_taken {
-                        let key = g.chunk_queue[idx];
+                    for &key in &sent_taken {
                         if g.watched.insert(key) {
                             self.chunk_watches.push(g, ChunkWatchKind::Watch, key);
                         }
                     }
-                    for &idx in &sent_taken {
-                        let key = g.chunk_queue[idx];
+                    for &key in &sent_taken {
                         self.chunk_watches.push(g, ChunkWatchKind::Sent, key);
                     }
                 }
-                let mut remove: Vec<(usize, bool)> = sent_taken
-                    .into_iter()
-                    .map(|idx| (idx, true))
-                    .chain(failed_taken.into_iter().map(|idx| (idx, false)))
-                    .collect();
-                remove.sort_unstable_by_key(|&(idx, _)| idx);
-                let mut seen = Vec::with_capacity(remove.len());
-                for (idx, sent) in remove.into_iter().rev() {
-                    let key = g.chunk_queue.remove(idx);
-                    if sent {
-                        seen.push(key);
-                    }
+                // `collectChunksToSend`: the chosen chunks leave the pending ones; the ones the
+                // encoder could not write are not sent.
+                for key in sent_taken.iter().chain(&failed_taken) {
+                    g.pending_chunks.remove(&pack(*key));
                 }
+                let seen = sent_taken;
                 if self.sync_attachments && !seen.is_empty() {
                     queue_snapshots(
                         &mut self.attachment_snapshots,
@@ -708,13 +737,21 @@ impl Hub {
         }
     }
 
-    /// ChunkMap.move's view change: the new centre, the chunks that left
-    /// the view forgotten and the ones that entered it queued, closest first.
-    pub(super) fn update_view(&mut self, i: usize) {
+    /// ChunkMap.move's view change (`applyChunkTrackingView`): the new centre, then the chunks that
+    /// entered and left the view in `ChunkTrackingView.difference`'s walk. An entering chunk joins
+    /// the pending ones when `ready` says it is ready to send (`markChunkPendingToSend`); one that
+    /// isn't joins them when it becomes so (`poll_ready`), and with no level to ask (`None`) the
+    /// next poll asks. A leaving one that was still pending is dropped silently, any other is
+    /// forgotten (`PlayerChunkSender.dropChunk`).
+    pub(super) fn update_view(
+        &mut self,
+        i: usize,
+        ready: Option<&dyn Fn((i32, i32)) -> Readiness>,
+    ) {
         let (cx, cz) = self.guests[i].chunk();
         let r = self.guests[i].view_distance;
         self.guests.update(i, |g| {
-            if g.center == Some((cx, cz)) && !g.view_dirty {
+            if g.center == Some((cx, cz)) && !g.view_dirty && g.tracked_view.is_some() {
                 return;
             }
             let moved = g.center != Some((cx, cz));
@@ -726,82 +763,192 @@ impl Hub {
                     z: cz,
                 }));
             }
-            // Chunks that left the view, but for those an area keeps past it.
-            let kept = &g.viewed.own.kept;
-            let forget: Vec<_> = g
-                .sent_chunks
-                .iter()
-                .copied()
-                .filter(|&(x, z)| !tracked(cx, cz, r, x, z) && !kept.contains(&(x, z)))
-                .collect();
-            for (x, z) in forget {
-                g.sent_chunks.remove(&(x, z));
-                super::super::chunk_watch::unwatch(&mut self.chunk_watches, g, (x, z));
-                g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
+            let next = ((cx, cz), r);
+            let last = g.tracked_view.replace(next);
+            let fresh = last.is_none();
+            for (key, sees) in view_difference(last, next) {
+                if sees {
+                    // A level's views swapped in keep the chunks they were sent.
+                    if g.sent_chunks.contains(&key) {
+                        continue;
+                    }
+                    match ready.map(|ready| ready(key)) {
+                        Some(r) if goes_to(g, true, key, r) => {
+                            g.pending_chunks.insert(&pack(key));
+                        }
+                        // Lit but not ready: asked again at each poll.
+                        Some(Readiness::Held | Readiness::Loaded) => {
+                            waiters(&mut self.held, &self.config.dimension)
+                                .entry(key)
+                                .or_insert(Readiness::Held);
+                        }
+                        Some(_) => {}
+                        None => g.recheck_chunks.push(key),
+                    }
+                } else if !g.viewed.own.kept.contains(&key) {
+                    // One an area keeps past the view stays (`viewed_levels::own`).
+                    drop_chunk(&mut self.chunk_watches, g, key);
+                }
             }
-            requeue(&mut g.chunk_queue, &g.sent_chunks, (cx, cz), r);
-            let own = &g.viewed.own;
-            super::super::viewed_levels::own::queue_far(&mut g.chunk_queue, &g.sent_chunks, own);
+            // A view that starts afresh while its client still holds chunks: a viewed level's,
+            // swapped in as the player's own (`viewed_levels::switch`). Those this view doesn't
+            // track, nor an area keeps, leave as a vanilla view's do, by x then z.
+            if fresh {
+                let kept = &g.viewed.own.kept;
+                let mut past: Vec<_> = g
+                    .sent_chunks
+                    .iter()
+                    .copied()
+                    .filter(|&(x, z)| !tracked(cx, cz, r, x, z) && !kept.contains(&(x, z)))
+                    .collect();
+                past.sort_unstable();
+                for key in past {
+                    drop_chunk(&mut self.chunk_watches, g, key);
+                }
+            }
         });
     }
 
-    /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
-    /// as many as the batch quota the client's acknowledgements pace allows,
-    /// with their places in the queue. A memory connection
-    /// that has not loaded yet sends every ready view column in that one
-    /// batch; the quota recorded for it covers them, so the tick after
-    /// `PlayerLoaded` is capped again.
+    /// `ChunkMap.onChunkReadyToSend`, polled before every view change, as vanilla's readiness lands
+    /// before the move that follows it: each column that came in lit since the last poll (in the
+    /// order it did: `ChunkMap::take_send_ready`) and is ready to send joins the pending chunks of
+    /// every player here whose view holds it now. One lit but not ready yet (a neighbour not at
+    /// FULL, the ticket level not ticking) waits in `held` and is asked again at each poll: with
+    /// the column of this poll that was its last FULL neighbour, in that column's place (vanilla's
+    /// range future completes when its last neighbour does), else in key order before them; the
+    /// chunks a view change couldn't ask about (`recheck_chunks`) are asked here, in the order
+    /// they entered. Chunks in no view are never probed. Past the view, a column an area keeps
+    /// (`viewed_levels::own`) joins once it is full and lit, its ticket level ticking or not.
+    pub(super) fn poll_ready(
+        &mut self,
+        world: &World,
+        streaming: Option<&crate::streaming::Streaming>,
+        ticking: Option<&crate::ticket_levels::Levels>,
+    ) {
+        // What became ready to send (`Ready`), or full past the view (`Loaded`), this poll.
+        let mut became = Vec::new();
+        let mut waiting = self.held.remove(&self.config.dimension).unwrap_or_default();
+        let events = world.chunks.take_send_ready();
+        arrivals(&mut waiting, &mut became, &events, |key, later| {
+            readiness_before(world, streaming, ticking, key, later)
+        });
+        for i in 0..self.guests.len() {
+            if !self.watches(&self.guests[i]) {
+                continue;
+            }
+            let held = &mut waiting;
+            self.guests.update(i, |g| {
+                let Some(((cx, cz), r)) = g.tracked_view else {
+                    g.recheck_chunks.clear();
+                    return;
+                };
+                for &(key, now) in &became {
+                    if goes_to(g, tracked(cx, cz, r, key.0, key.1), key, now) {
+                        g.pending_chunks.insert(&pack(key));
+                    }
+                }
+                for key in std::mem::take(&mut g.recheck_chunks) {
+                    let packed = pack(key);
+                    let in_view = tracked(cx, cz, r, key.0, key.1);
+                    if !(in_view || g.viewed.own.sends(key))
+                        || g.pending_chunks.contains(&packed)
+                        || g.sent_chunks.contains(&key)
+                    {
+                        continue;
+                    }
+                    match readiness(world, streaming, ticking, key) {
+                        r if goes_to(g, in_view, key, r) => {
+                            g.pending_chunks.insert(&packed);
+                        }
+                        Readiness::Loaded | Readiness::Held => {
+                            held.entry(key).or_insert(Readiness::Held);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+        if !waiting.is_empty() {
+            self.held.insert(self.config.dimension.clone(), waiting);
+        }
+    }
+
+    /// PlayerChunkSender.sendNextChunks' choice (`collectChunksToSend`): as many as the batch
+    /// quota the client's acknowledgements pace allows, from the pending chunks in their set's
+    /// order, the nearest to the player's chunk first: `Comparators.least` when there are more
+    /// than that, else all of them sorted, equally near ones in the set's order. A memory
+    /// connection (single player's own window) always takes every pending chunk, and its quota
+    /// goes below zero by the batch, as vanilla's does. The chunks chosen leave the pending ones
+    /// as `update_chunks` sends them.
     pub(super) fn next_batch<'w>(
         &mut self,
         i: usize,
         world: &'w World,
         streaming: Option<&crate::streaming::Streaming>,
-    ) -> Option<Vec<(usize, &'w Chunk)>> {
+        ticking: Option<&crate::ticket_levels::Levels>,
+    ) -> Option<Vec<((i32, i32), &'w Chunk)>> {
         let budget = self.guests.update(i, |g| {
             if self.ticks <= g.placed_at + 1 || g.unacknowledged >= g.max_unacknowledged {
                 return None;
             }
             g.batch_quota = (g.batch_quota + g.chunks_per_tick).min(g.chunks_per_tick.max(1.0));
-            if g.batch_quota < 1.0 || g.chunk_queue.is_empty() {
+            if g.batch_quota < 1.0 || g.pending_chunks.is_empty() {
                 return None;
             }
             Some(g.batch_quota.floor() as usize)
         })?;
         let g = &self.guests[i];
-        // The integrated server's own player, still on the loading screen.
-        // LAN guests and a client that has loaded keep the quota above.
-        let burst = g.address() == super::super::conn::MEMORY_ADDRESS && !g.loaded;
-        let near_take = if burst { g.chunk_queue.len() } else { budget };
-        // ChunkStatus.LIGHT needs its neighbours at INITIALIZE_LIGHT: a
-        // column whose light layers would leave one out waits for it.
-        let ready = |c: &Chunk| {
-            c.lit
-                && streaming.is_none_or(|streaming| {
-                    (-1..=1).all(|dz| {
-                        (-1..=1).all(|dx| {
-                            let (x, z) = (c.x + dx, c.z + dz);
-                            world.chunks.contains_key(&(x, z))
-                                || streaming.proto_sections(x, z).is_some()
-                        })
-                    })
-                })
+        let memory = g.address() == super::super::conn::MEMORY_ADDRESS;
+        let (px, pz) = g.chunk();
+        // `ChunkPos.distanceSquared`, in int arithmetic.
+        let near = |p: i64| {
+            let (x, z) = unpack(p);
+            let (dx, dz) = (x.wrapping_sub(px), z.wrapping_sub(pz));
+            dx.wrapping_mul(dx).wrapping_add(dz.wrapping_mul(dz))
         };
-        let near: Vec<_> = g
-            .chunk_queue
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, key)| Some((idx, &**world.chunks.get(key)?)))
-            .filter(|(_, c)| ready(c))
-            .take(near_take)
+        // A column an area keeps past the view (`viewed_levels::own`, a Sunrise client's) goes
+        // after the view's, nearest to an area's centre first; with none, the order is vanilla's.
+        let own = &g.viewed.own;
+        let past = |(x, z): (i32, i32)| {
+            own.sends((x, z))
+                && !g
+                    .tracked_view
+                    .is_some_and(|((cx, cz), r)| tracked(cx, cz, r, x, z))
+        };
+        let order = |p: i64| {
+            let (x, z) = unpack(p);
+            if past((x, z)) {
+                (
+                    1,
+                    super::super::viewed_levels::view::distance(&own.sources, x, z),
+                )
+            } else {
+                (0, near(p))
+            }
+        };
+        let chosen: Vec<i64> = if !memory && g.pending_chunks.len() > budget {
+            crate::top_k::least(g.pending_chunks.stream(), budget, order)
+        } else {
+            let mut all: Vec<i64> = g.pending_chunks.stream().collect();
+            all.sort_by_key(|&p| order(p));
+            all
+        };
+        // `getChunkToSend` on each pick: one not ready to send now (unloaded, or back unlit) stays
+        // pending. Past the view, one an area keeps goes once it is full and lit, and so does one
+        // in a held arrival's view (`goes_to`).
+        let far = |key: (i32, i32)| {
+            readiness(world, streaming, ticking, key) == Readiness::Loaded
+                && (past(key) || (g.held && !g.placed))
+        };
+        let batch: Vec<_> = chosen
+            .into_iter()
+            .filter_map(|p| {
+                let key = unpack(p);
+                (send_ready(world, streaming, ticking, key) || far(key)).then_some(())?;
+                Some((key, &**world.chunks.get(&key)?))
+            })
             .collect();
-        // `update_chunks` subtracts the batch. Covering the near columns keeps that from going
-        // negative, so the next tick's `.min(chunks_per_tick)` cap holds again.
-        if burst {
-            self.guests.update(i, |g| {
-                g.batch_quota = g.batch_quota.max(near.len() as f32);
-            });
-        }
-        (!near.is_empty()).then_some(near)
+        (!batch.is_empty()).then_some(batch)
     }
 
     /// `ChunkMap.resendBiomesForChunks`: each player in the level is sent,

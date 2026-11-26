@@ -1009,6 +1009,7 @@ mod hub_tests {
             collision: None,
             border: &border,
             streaming: None,
+            ticking: None,
         };
         if let Some(i) = hub.begin_player_join(conn, &ctx) {
             hub.send_commands(i, hub.commands_packet(hub.guests[i].permission));
@@ -1038,6 +1039,7 @@ mod hub_tests {
             collision: None,
             border,
             streaming: None,
+            ticking: None,
         }
     }
 
@@ -2348,7 +2350,7 @@ mod hub_tests {
         uuid: u128,
         request: &serde_json::Value,
     ) -> Result<crate::lan::import::Imported, String> {
-        import_player_with(hub, 1024.0, uuid, request)
+        import_player_with(hub, 1024.0, uuid, request, None)
     }
 
     /// [`import_player`] with `max_health` bounded at `max_health`, as a mod
@@ -2358,6 +2360,7 @@ mod hub_tests {
         max_health: f64,
         uuid: u128,
         request: &serde_json::Value,
+        level: Option<crate::lan::hub::LevelNow<'_>>,
     ) -> Result<crate::lan::import::Imported, String> {
         let bits = |v: f64| format!("{:016x}", v.to_bits());
         let attributes = sunrise_world::attributes::entity::Catalog::from_json(&serde_json::json!({
@@ -2369,7 +2372,7 @@ mod hub_tests {
             "entities": {},
         }))
         .unwrap();
-        let done = crate::lan::import::import_player(hub, &attributes, uuid, request)?;
+        let done = crate::lan::import::import_player(hub, &attributes, uuid, request, level)?;
         if done.place {
             hub.confirm_arrival(uuid, done.handover)?;
         }
@@ -3137,7 +3140,7 @@ mod hub_tests {
         let (_, mut hub, _seen, _mine) = held_in_a_second_hub();
         assert!(import_player(&mut hub, UUID_N, &request).is_err());
         let (_, mut hub, _seen, _mine) = held_in_a_second_hub();
-        import_player_with(&mut hub, 1e6, UUID_N, &request).unwrap();
+        import_player_with(&mut hub, 1e6, UUID_N, &request, None).unwrap();
         assert_eq!(hub.guests[1].health, 5000.0);
     }
 
@@ -3316,6 +3319,73 @@ mod hub_tests {
         // The centre is the vanilla pair of VarInts: chunk x then chunk z (6, then -1 as an unsigned VarInt).
         let mut r = sunrise_protocol::buf::Reader::new(&sent[centre].1);
         assert_eq!((r.varint().unwrap(), r.varint().unwrap()), (6, -1));
+    }
+
+    /// An import that recentres moves the view as vanilla's `ChunkMap.move` does, after the level's
+    /// readiness (`poll_ready`): the centre, then each chunk leaving the view forgotten once (one
+    /// that became ready just before the import is pending, and drops silently; one never sent is
+    /// forgotten all the same), by x then z. The packets are the ones 26.3 sends for the same move
+    /// in the JVM kit's case `ready_before_a_view_exit` (`hub/chunk_send_cases.json`): (0, 0) ready
+    /// and sent, (2, 0) becoming ready between ticks, the rest of the radius-2 view never ready,
+    /// then a move to (7, 0).
+    #[test]
+    fn an_import_that_recentres_forgets_as_a_vanilla_move_does() {
+        use sunrise_protocol::packets::play::Clientbound as C;
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("hub/chunk_send_cases.json")).unwrap();
+        let case = (cases.as_array().unwrap().iter())
+            .find(|c| c["name"] == "ready_before_a_view_exit")
+            .unwrap();
+        assert_eq!(
+            case["script"]["ticks"][2]["ready"],
+            serde_json::json!([[2, 0]])
+        );
+        let vanilla: Vec<&str> = (case["vanilla"].as_array().unwrap().iter())
+            .map(|l| l.as_str().unwrap())
+            .skip_while(|l| *l != "tick 2")
+            .skip(1)
+            .take_while(|l| !l.starts_with("tick "))
+            .filter(|l| l.starts_with("center ") || l.starts_with("forget "))
+            .collect();
+        assert_eq!(vanilla.first(), Some(&"center 7 0"));
+        let lit = |world: &mut crate::world::World, (x, z): (i32, i32)| {
+            let mut chunk = crate::chunk::Chunk::empty(x, z);
+            chunk.lit = true;
+            world.chunks.insert((x, z), std::sync::Arc::new(chunk));
+        };
+        let mut world = crate::world::World::new(sunrise_world::registry::BlockStateId(0), 0);
+        lit(&mut world, (0, 0));
+        world.chunks.track_send_ready(true);
+        let _ = world.chunks.take_send_ready();
+        // Chunk (7, 0) after: x 120.5 is block 120, chunk 7.
+        let (record, mut hub, mine) = held_with_a_record_at([120.5, 64.0, 8.5], Some((0, 0)));
+        hub.guests.update(0, |g| {
+            g.view_distance = 2;
+            g.tracked_view = Some(((0, 0), 2));
+            g.sent_chunks = [(0, 0)].into_iter().collect();
+        });
+        let _ = packets(&mine);
+        // Between ticks, just before the import: (2, 0) becomes ready against the view at (0, 0).
+        lit(&mut world, (2, 0));
+        let level = crate::lan::hub::LevelNow {
+            world: &world,
+            streaming: None,
+            ticking: None,
+        };
+        let request = serde_json::json!({ "record": record, "place": false });
+        let done = import_player_with(&mut hub, 1024.0, UUID_N, &request, Some(level)).unwrap();
+        assert!(done.recentered);
+        let sent: Vec<String> = (packets(&mine).into_iter())
+            .filter_map(|(packet, body)| match C::decode(packet, &body) {
+                Ok(C::SetChunkCacheCenter(p)) => Some(format!("center {} {}", p.x, p.z)),
+                Ok(C::ForgetLevelChunk(p)) => Some(format!("forget {} {}", p.pos[0], p.pos[1])),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sent, vanilla,
+            "the import's centre and forgets are vanilla's move's"
+        );
     }
 
     #[test]

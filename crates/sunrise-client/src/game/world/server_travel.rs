@@ -189,6 +189,7 @@ macro_rules! server_ctx {
             collision: Some($s.collision),
             border: &$s.border,
             streaming: Some(&$s.streaming),
+            ticking: Some($s.tickets.levels()),
         }
     }};
 }
@@ -1732,6 +1733,7 @@ impl Game<'_> {
             collision: Some(self.collision),
             border: &self.border,
             streaming: Some(&self.streaming),
+            ticking: Some(self.tickets.levels()),
         }
     }
 }

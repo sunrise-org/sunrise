@@ -25,6 +25,7 @@ pub mod snbt;
 pub mod sound_source;
 pub mod suggestion;
 pub mod text;
+pub mod top_k;
 pub mod uuid;
 pub mod who;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

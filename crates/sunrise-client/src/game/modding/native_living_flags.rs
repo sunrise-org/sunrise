@@ -810,6 +810,7 @@ pub(in crate::game) mod tests {
             collision: Some(game.collision),
             border: &game.border,
             streaming: None,
+            ticking: None,
         };
         game.lan.as_mut().unwrap().hub.tick_level(&mut ctx, None);
     }

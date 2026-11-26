@@ -39,6 +39,8 @@ impl Streaming {
                 world.modified.insert((x, z));
             }
             chunk.lit = true;
+            // Lit in place: it may count for sending now (`ChunkMap::take_send_ready`).
+            world.chunks.note_lit((x, z));
             if first {
                 world.publish_light_border((x, z), before);
                 for dz in -1..=1 {

@@ -63,7 +63,6 @@ sunrise-client-lib lan::hub::tests::collision_exclusion_tests::the_server_checks
 sunrise-client-lib lan::hub::tests::entity_move_check_tests::a_happy_ghast_is_solid_to_a_reported_move_only_while_held_still lib daily resources
 sunrise-client-lib lan::hub::tests::entity_move_check_tests::a_report_ending_inside_a_new_solid_entity_is_refused_however_small_or_creative lib daily resources
 sunrise-client-lib lan::hub::tests::entity_move_check_tests::a_reported_move_through_a_shulker_is_moved_wrongly_and_one_that_stops_at_its_side_is_not lib daily resources
-sunrise-client-lib lan::hub::tests::requeue_matches_the_scan lib daily slow
 sunrise-client-lib lan::io_pool::memory_progress_tests::tcp_server_resumes_only_from_writable_readiness lib daily network
 sunrise-client-lib lan::io_pool::tests::a_close_ends_a_disconnect_the_client_does_not_take lib daily network
 sunrise-client-lib lan::io_pool::tests::a_socket_carries_packets_both_ways_in_order_then_disconnects lib daily network

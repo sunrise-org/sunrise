@@ -144,6 +144,19 @@ pub struct ChunkMap {
     /// included) are resident; absent when none is. `surrounded` asks one
     /// map instead of nine every tick, for every ticking chunk.
     near: FxHashMap<Key, u8>,
+    /// While a server sends this level to players (`track_send_ready`): the columns ready to send
+    /// as far as this map can tell, and those that became so, in the order they did.
+    send_ready: Option<SendReady>,
+}
+
+/// `ChunkMap.onChunkReadyToSend`'s events, as far as this map goes: a column counts once it is
+/// resident and lit (`ChunkHolder.getChunkToSend` waits for the light). Its neighbours and its ticket
+/// level, the other parts, are the sender's to check.
+struct SendReady {
+    ready: FxHashSet<Key>,
+    /// Taken through a shared map (`take_send_ready`): a server polls them where vanilla polls the
+    /// chunk source's executor, a move packet's handling included, which holds the level shared.
+    became: std::sync::Mutex<Vec<Key>>,
 }
 impl Default for ChunkMap {
     fn default() -> Self {
@@ -162,6 +175,7 @@ impl Default for ChunkMap {
             attachment_observer: None,
             group_residency: None,
             near: FxHashMap::default(),
+            send_ready: None,
         }
     }
 }
@@ -503,6 +517,7 @@ impl ChunkMap {
         if previous.is_none() {
             self.add_visible(key);
         }
+        self.recheck_send_ready(key);
         previous
     }
     fn add_visible(&mut self, key: Key) {
@@ -536,6 +551,7 @@ impl ChunkMap {
         self.fresh.remove(key);
         let previous = if let Some(chunk) = self.columns.remove(key) {
             self.remove_visible(*key);
+            self.recheck_send_ready(*key);
             Some(chunk)
         } else if let Some(range) = self.cache_range {
             let slot = range.slot(*key);
@@ -572,6 +588,9 @@ impl ChunkMap {
             self.ordered.clear();
             self.fresh.clear();
             self.near.clear();
+            if let Some(send) = &mut self.send_ready {
+                send.ready.clear();
+            }
             self.revision = next_revision();
             self.recent_deltas.clear();
             self.recent_deltas
@@ -597,6 +616,50 @@ impl ChunkMap {
         self.columns.get(&key).is_some_and(|chunk| chunk.lit) && self.surrounded(key)
     }
 
+    /// Keep (`on`) or stop keeping which columns are lit and resident and which became so. Turned on,
+    /// the columns lit now count already: none of them is an event.
+    pub fn track_send_ready(&mut self, on: bool) {
+        if on == self.send_ready.is_some() {
+            return;
+        }
+        self.send_ready = on.then(|| SendReady {
+            ready: self
+                .columns
+                .iter()
+                .filter(|(_, chunk)| chunk.lit)
+                .map(|(&key, _)| key)
+                .collect(),
+            became: Default::default(),
+        });
+    }
+    /// The columns that came in lit (or were lit in place of an unlit one) since the last call, in the
+    /// order they did (empty while not kept).
+    pub fn take_send_ready(&self) -> Vec<Key> {
+        self.send_ready.as_ref().map_or_else(Vec::new, |send| {
+            std::mem::take(&mut *send.became.lock().unwrap_or_else(|e| e.into_inner()))
+        })
+    }
+    /// A resident column lit in place (its light came in, `Streaming::apply_lit`): it counts for
+    /// sending as one inserted lit does.
+    pub fn note_lit(&mut self, key: Key) {
+        self.recheck_send_ready(key);
+    }
+    fn recheck_send_ready(&mut self, key: Key) {
+        let now = self.columns.get(&key).is_some_and(|chunk| chunk.lit);
+        let Some(send) = &mut self.send_ready else {
+            return;
+        };
+        if now {
+            if send.ready.insert(key) {
+                send.became
+                    .get_mut()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(key);
+            }
+        } else {
+            send.ready.remove(&key);
+        }
+    }
     pub fn has_fresh(&self) -> bool {
         !self.fresh.is_empty()
     }
@@ -670,6 +733,45 @@ mod tests {
         AttachmentCodec, AttachmentType, index::AttachmentIndex,
         observer::IndexedAttachmentObserver,
     };
+
+    /// `ChunkMap.onChunkReadyToSend`'s events as far as the map goes: a column counts when it comes in
+    /// lit, or lit in place of an unlit one, in that order; one lit when the tracking starts is no
+    /// event, one that leaves and comes back is one again, an unlit one or a lit one replaced is none.
+    #[test]
+    fn columns_count_for_sending_in_the_order_they_come_in_lit() {
+        let column = |x, z, lit| {
+            let mut chunk = Chunk::empty(x, z);
+            chunk.lit = lit;
+            Arc::new(chunk)
+        };
+        let mut map = ChunkMap::default();
+        map.insert((0, 0), column(0, 0, true));
+        map.track_send_ready(true);
+        assert!(map.take_send_ready().is_empty(), "(0, 0) was lit before");
+        map.insert((2, 0), column(2, 0, true));
+        map.insert((1, 0), column(1, 0, false));
+        map.insert((3, 0), column(3, 0, true));
+        assert_eq!(map.take_send_ready(), vec![(2, 0), (3, 0)]);
+        // Lit in place of its unlit self, and a lit one replaced by a lit one.
+        map.insert((1, 0), column(1, 0, true));
+        map.insert((2, 0), column(2, 0, true));
+        assert_eq!(map.take_send_ready(), vec![(1, 0)]);
+        // Lit where it stands, as its light comes in.
+        map.insert((4, 0), column(4, 0, false));
+        Arc::make_mut(map.get_mut(&(4, 0)).unwrap()).lit = true;
+        map.note_lit((4, 0));
+        map.note_lit((4, 0));
+        assert_eq!(map.take_send_ready(), vec![(4, 0)]);
+        // It leaves and comes back.
+        map.remove(&(0, 0));
+        assert!(map.take_send_ready().is_empty());
+        map.insert((0, 0), column(0, 0, true));
+        assert_eq!(map.take_send_ready(), vec![(0, 0)]);
+        map.track_send_ready(false);
+        map.remove(&(3, 0));
+        map.insert((3, 0), column(3, 0, true));
+        assert!(map.take_send_ready().is_empty(), "not kept");
+    }
 
     #[test]
     fn active_and_viewed_residence_share_credit_until_replaced_or_unloaded() {

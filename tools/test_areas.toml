@@ -178,7 +178,7 @@ harnesses = [
   "lan*", "server_*", "remote_*", "dedicated_*", "online_mode", "secure_chat", "wire_stream", "item_wire",
   "stop_sound_wire", "protocol_*", "friends_integration", "management_protocol", "user_cache", "player_sync",
   "*_guest", "guest_*", "connected_guest_advancement_save", "disconnect_crafting", "entity_sound_packet",
-  "synced_*", "test_pos_guest", "gamemode_split", "network",
+  "synced_*", "test_pos_guest", "gamemode_split", "network", "chunk_send", "chunk_send_kit",
 ]
 # Every LAN check runs through a guest: all of them belong here as well.
 lan = ["*"]

@@ -1,14 +1,15 @@
 //! The player's own level past its view (revision 5 of `sunrise:levels`): a mod's area there
 //! reaches a client that answered that revision even far from the player, so that a portal can
-//! show a place of the same level thousands of blocks away. Its columns go in the player's
-//! ordinary chunk queue, after the view's, in plain packets: `far` tells the client first to keep
-//! them wherever its chunk cache centre goes. They are tracked as the view's are
+//! show a place of the same level thousands of blocks away. Its columns join the player's ordinary
+//! pending chunks once they are full and lit (their ticket level need not tick, as the view's must)
+//! and go nearest to the player first, so after the view's, in plain packets: `far` tells the
+//! client first to keep them wherever its chunk cache centre goes. They are tracked as the view's are
 //! (`Guest::tracks_chunk`), so their block changes, passages and entities reach the client too.
 //! A column no area covers any more lingers [`LINGER`] ticks, then is forgotten unless the view
 //! holds it, and released. A vanilla client, or an older Sunrise one, gets the area's ticket and
 //! nothing past its view.
 use super::{
-    super::{chunk_watch, hub::Hub, hub::tracked},
+    super::{chunk_watch, hub::Hub, hub::Readiness, hub::pack, hub::tracked},
     areas::ChunkArea,
     view::{LINGER, covers, distance},
 };
@@ -40,6 +41,11 @@ impl Own {
             dirty: true,
             ..Self::default()
         };
+    }
+
+    /// Whether `key` is kept to be sent: an area covers it (it doesn't only linger).
+    pub fn sends(&self, key: (i32, i32)) -> bool {
+        self.kept.contains(&key) && !self.linger.contains_key(&key)
     }
 
     /// `kept` made again for `areas` as of hub tick `now`, at most `cap` columns: the ones it
@@ -91,32 +97,29 @@ impl Own {
     }
 }
 
-/// The columns an area keeps that are neither sent nor queued, put after `queue`, nearest to an
-/// area's centre first. A column that only lingers is not sent.
-pub(in crate::lan) fn queue_far(
-    queue: &mut Vec<(i32, i32)>,
-    sent: &FxHashSet<(i32, i32)>,
-    own: &Own,
-) {
-    if own.kept.is_empty() {
-        return;
-    }
-    let queued: FxHashSet<(i32, i32)> = queue.iter().copied().collect();
+/// The columns an area keeps that aren't sent, nearest to an area's centre first. A column that
+/// only lingers is not sent.
+fn unsent(sent: &FxHashSet<(i32, i32)>, own: &Own) -> Vec<(i32, i32)> {
     let mut far: Vec<_> = (own.kept.iter().copied())
-        .filter(|key| !own.linger.contains_key(key) && !sent.contains(key))
-        .filter(|key| !queued.contains(key))
+        .filter(|&key| own.sends(key) && !sent.contains(&key))
         .collect();
     far.sort_unstable_by_key(|&(x, z)| (distance(&own.sources, x, z), x, z));
-    queue.extend(far);
+    far
 }
 
 impl Hub {
     /// Guest `i`'s own level past its view, before its view moves (`update_chunks`): with its
     /// areas changed, or a lingering column's time up, the columns kept made again (a column
     /// left out at the cap gets the room a released one leaves), those released forgotten
-    /// unless its view holds them, then `far` and the new columns queued. Nothing for a client
-    /// that answered no revision 5, and one compare while it keeps nothing.
-    pub(in crate::lan) fn update_far(&mut self, i: usize) {
+    /// unless its view holds them (one still pending leaves silently), then `far`, and the columns
+    /// kept and not sent past the view join the pending chunks as `ready` says they can: full and
+    /// lit, or else asked again at each poll (`Hub::poll_ready`). Nothing for a client that
+    /// answered no revision 5, and one compare while it keeps nothing.
+    pub(in crate::lan) fn update_far(
+        &mut self,
+        i: usize,
+        ready: Option<&dyn Fn((i32, i32)) -> Readiness>,
+    ) {
         let g = &self.guests[i];
         let answer = g.sender.viewed_levels;
         if !self.viewed.active() || !answer.far_columns() {
@@ -128,6 +131,7 @@ impl Hub {
         let now = self.ticks;
         let cap = self.viewed.caps.for_client(answer).loaded_per_player as usize;
         let watches = &mut self.chunk_watches;
+        let held = super::super::hub::waiters(&mut self.held, &self.config.dimension);
         let active = self.viewed.active.clone();
         self.guests.update(i, |g| {
             let released = g.viewed.own.due(now);
@@ -144,7 +148,10 @@ impl Hub {
             let in_view =
                 |(x, z): (i32, i32)| center.is_some_and(|(cx, cz)| tracked(cx, cz, r, x, z));
             let gone: FxHashSet<_> = released.iter().copied().filter(|&k| !in_view(k)).collect();
-            g.chunk_queue.retain(|key| !gone.contains(key));
+            for key in &gone {
+                g.pending_chunks.remove(&pack(*key));
+            }
+            g.recheck_chunks.retain(|key| !gone.contains(key));
             for &key in &released {
                 if gone.contains(&key) && g.sent_chunks.remove(&key) {
                     chunk_watch::unwatch(watches, g, key);
@@ -155,7 +162,25 @@ impl Hub {
             if !kept.is_empty() || !released.is_empty() {
                 g.sender.send(viewed_levels::far(&kept, &released));
             }
-            queue_far(&mut g.chunk_queue, &g.sent_chunks, &g.viewed.own);
+            let view = g.tracked_view;
+            let in_view =
+                |(x, z): (i32, i32)| view.is_some_and(|((cx, cz), r)| tracked(cx, cz, r, x, z));
+            for key in unsent(&g.sent_chunks, &g.viewed.own) {
+                // One the view holds goes as the view's do.
+                if in_view(key) {
+                    continue;
+                }
+                match ready.map(|ready| ready(key)) {
+                    Some(Readiness::Ready | Readiness::Loaded) => {
+                        g.pending_chunks.insert(&pack(key));
+                    }
+                    Some(Readiness::Held) => {
+                        held.entry(key).or_insert(Readiness::Held);
+                    }
+                    Some(Readiness::NotYet) => {}
+                    None => g.recheck_chunks.push(key),
+                }
+            }
             g.viewed.recount(&active);
         });
     }
@@ -176,7 +201,7 @@ mod tests {
     }
 
     /// The square is kept centre first, as far as the cap; a withdrawn area's columns linger
-    /// [`LINGER`] ticks, and those covered again stay. Only covered columns are queued.
+    /// [`LINGER`] ticks, and those covered again stay. Only covered columns are sent.
     #[test]
     fn an_areas_columns_are_kept_centre_first_up_to_the_cap_then_linger() {
         let mut own = Own::default();
@@ -184,13 +209,17 @@ mod tests {
         let kept = own.rekeep(&[&a], 0, 5);
         assert_eq!(kept.len(), 5, "cut at the cap");
         assert_eq!(kept[0], (300, -40), "the centre first");
-        let mut queue = vec![(0, 0)];
-        queue_far(&mut queue, &[(300, -40)].into_iter().collect(), &own);
-        assert_eq!(queue.len(), 5, "after the view's, less the one sent");
-        assert_eq!(queue[0], (0, 0));
+        let far = unsent(&[(300, -40)].into_iter().collect(), &own);
+        assert_eq!(far.len(), 4, "less the one sent");
+        assert!(!far.contains(&(300, -40)));
 
         let b = area((299, -41), 0);
         own.rekeep(&[&b], 10, 9);
+        assert_eq!(
+            unsent(&FxHashSet::default(), &own),
+            [(299, -41)],
+            "a lingering one is not sent"
+        );
         assert!(own.due(10 + LINGER - 1).is_empty());
         let gone = own.due(10 + LINGER);
         assert_eq!(gone.len(), 4, "all but the column covered again");

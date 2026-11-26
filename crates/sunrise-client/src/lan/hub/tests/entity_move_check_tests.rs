@@ -59,6 +59,7 @@ fn a_reported_move_through_a_shulker_is_moved_wrongly_and_one_that_stops_at_its_
         collision: Some(&fixture.collision),
         border: &border,
         streaming: None,
+        ticking: None,
     };
     hub.guests.update(0, |g| {
         g.position = [20.5, 5.0, 20.5];
@@ -120,6 +121,7 @@ fn with_rig(test: impl FnOnce(&mut Hub, &mut TickCtx)) {
         collision: Some(&fixture.collision),
         border: &border,
         streaming: None,
+        ticking: None,
     };
     hub.guests.update(0, |g| {
         g.position = [20.5, 5.0, 20.5];

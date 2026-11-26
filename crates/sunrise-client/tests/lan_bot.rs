@@ -190,6 +190,7 @@ impl Server {
             collision: None,
             border: &sunrise_client::worldborder::WorldBorder::default(),
             streaming: None,
+            ticking: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -1727,6 +1728,7 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         collision: None,
         border: &border,
         streaming: None,
+        ticking: None,
     };
     s.hub.begin_respawn(0, at, None, false, &ctx);
     s.hub

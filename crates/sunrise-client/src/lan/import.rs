@@ -513,12 +513,14 @@ impl Kept {
 /// guest is touched only once everything is known to be well. It refuses everything once
 /// the server has begun to stop.
 /// `attributes`: the game's attribute catalog, whose bounds the record's values are checked
-/// against.
+/// against. `in_place`: the level in place, which a recentring import asks readiness against
+/// before it moves the view (`Hub::send_arrival_state`); None when the player's level isn't it.
 pub fn import_player(
     hub: &mut Hub,
     attributes: &Catalog,
     uuid: u128,
     request: &Value,
+    in_place: Option<super::hub::LevelNow<'_>>,
 ) -> Result<Imported, String> {
     if hub.transfers.as_ref().is_some_and(|t| t.stopping) {
         return Err(super::arrivals::STOPPING.into());
@@ -607,7 +609,7 @@ pub fn import_player(
     });
     // Everything the import changed reaches the client now, so that a proxy sees the
     // player as it will be; the player stays held until it is placed or dropped.
-    let recentered = hub.send_arrival_state(i);
+    let recentered = hub.send_arrival_state(i, in_place);
     let recentered = hub.guests.update(i, |g| {
         // A retry of this hand-over's import finds the view already moved: it still answers that
         // the chunks around the new place are on their way, as the first reply did.

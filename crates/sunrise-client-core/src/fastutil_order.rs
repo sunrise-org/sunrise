@@ -1,23 +1,62 @@
-//! Iteration order of the Java hash collections vanilla's scoreboard keeps
-//! its names in: fastutil's `Object2ObjectOpenHashMap<String, _>` (open
-//! addressing with linear probing, backward-shift deletion and rehashing at
-//! the load factor) and `java.util.HashSet<String>` (chained buckets split on
-//! resize). `/team list` walks team names in fastutil iterator order;
-//! `scoreboard.dat` saves them in fastutil's forward stream order and saves
-//! team members in Java HashSet order. `/team list <team>` sorts the members.
+//! Iteration order of the Java hash collections vanilla keeps things in: fastutil's open hash sets and maps
+//! (open addressing with linear probing, backward-shift deletion and rehashing at the load factor; the null key, 0
+//! for longs, kept apart from the table) and `java.util.HashSet<String>` (chained buckets split on resize).
+//! The scoreboard's names: `/team list` walks team names in fastutil iterator order; `scoreboard.dat` saves them
+//! in fastutil's forward stream order and saves team members in Java HashSet order; `/team list <team>` sorts the
+//! members. A server's chunks waiting to be sent a player (`PlayerChunkSender.pendingChunks`, a
+//! `LongOpenHashSet` of packed chunk positions) are streamed in that order too.
 
+use std::borrow::Borrow;
 use sunrise_core::{java_hash_set::JavaHashSet, random::java_string_hash};
 
-/// The keys of a fastutil open hash map in their table slots.
+/// A key of a fastutil open hash collection: its hash as the table uses it, and whether it is the null key.
+pub trait OpenKey {
+    /// `HashCommon.mix` of the key's hash code.
+    fn mixed(&self) -> usize;
+    /// The null key (`containsNull`, slot `n`): 0 for a primitive long; no string is.
+    fn is_null(&self) -> bool {
+        false
+    }
+}
+impl OpenKey for str {
+    fn mixed(&self) -> usize {
+        mix(java_string_hash(self.encode_utf16()))
+    }
+}
+impl OpenKey for String {
+    fn mixed(&self) -> usize {
+        self.as_str().mixed()
+    }
+}
+impl OpenKey for i64 {
+    /// `HashCommon.mix(long)`.
+    fn mixed(&self) -> usize {
+        let h = self.wrapping_mul(0x9E37_79B9_7F4A_7C15_u64 as i64);
+        let h = h ^ ((h as u64) >> 32) as i64;
+        (h ^ ((h as u64) >> 16) as i64) as i32 as u32 as usize
+    }
+    fn is_null(&self) -> bool {
+        *self == 0
+    }
+}
+
+/// The keys of a fastutil open hash set (or map) in their table slots.
 #[derive(Clone, Debug, PartialEq)]
-pub struct OpenOrder {
-    keys: Vec<Option<String>>,
+pub struct Open<K> {
+    keys: Vec<Option<K>>,
+    /// The null key, when the set holds it (`key[n]`).
+    null: Option<K>,
     size: usize,
     min_n: usize,
     load: f32,
 }
-impl Default for OpenOrder {
-    /// `new Object2ObjectOpenHashMap<>()`: 16 expected entries, load 0.75.
+/// `Object2ObjectOpenHashMap<String, _>`'s keys.
+pub type OpenOrder = Open<String>;
+/// `LongOpenHashSet`.
+pub type LongOpenOrder = Open<i64>;
+
+impl<K> Default for Open<K> {
+    /// `new ...OpenHash...()`: 16 expected entries, load 0.75.
     fn default() -> Self {
         Self::new(16, 0.75)
     }
@@ -36,11 +75,12 @@ fn array_size(expected: usize, f: f32) -> usize {
 fn max_fill(n: usize, f: f32) -> usize {
     ((n as f64 * f64::from(f)).ceil() as usize).min(n - 1)
 }
-impl OpenOrder {
+impl<K> Open<K> {
     pub fn new(expected: usize, load: f32) -> Self {
         let n = array_size(expected, load);
         Self {
-            keys: vec![None; n],
+            keys: (0..n).map(|_| None).collect(),
+            null: None,
             size: 0,
             min_n: n,
             load,
@@ -52,31 +92,71 @@ impl OpenOrder {
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
-    fn slot(&self, key: &str) -> usize {
-        mix(java_string_hash(key.encode_utf16())) & (self.keys.len() - 1)
+    /// The bytes its table holds.
+    pub fn heap_bytes(&self) -> usize {
+        self.keys.capacity() * size_of::<Option<K>>()
     }
-    pub fn contains(&self, key: &str) -> bool {
+    /// Every key removed one by one, as a set emptied by `remove` is: its table shrinks as fastutil's does, so
+    /// keys added later land where they would in vanilla's (`clear` would keep the table at its size).
+    pub fn remove_all(&mut self)
+    where
+        K: OpenKey + Eq + Clone,
+    {
+        let keys: Vec<K> = self.slots_up().cloned().collect();
+        for key in &keys {
+            self.remove(key);
+        }
+    }
+    /// `iterator()` and `forEach`: the null key, then from the last slot down.
+    fn slots_down(&self) -> impl Iterator<Item = &K> {
+        self.null.iter().chain(self.keys.iter().rev().flatten())
+    }
+    /// `spliterator()` (what `stream()` uses): the null key, then from the first slot up.
+    fn slots_up(&self) -> impl Iterator<Item = &K> {
+        self.null.iter().chain(self.keys.iter().flatten())
+    }
+}
+impl<K: OpenKey + Eq> Open<K> {
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: OpenKey + Eq + ?Sized,
+    {
+        if key.is_null() {
+            return self.null.is_some();
+        }
         let mask = self.keys.len() - 1;
-        let mut pos = self.slot(key);
+        let mut pos = key.mixed() & mask;
         while let Some(k) = &self.keys[pos] {
-            if k == key {
+            if Borrow::<Q>::borrow(k) == key {
                 return true;
             }
             pos = (pos + 1) & mask;
         }
         false
     }
-    /// `put`: false when the key was already there.
-    pub fn insert(&mut self, key: &str) -> bool {
-        let mask = self.keys.len() - 1;
-        let mut pos = self.slot(key);
-        while let Some(k) = &self.keys[pos] {
-            if k == key {
+    /// `add`/`put`: false when the key was already there.
+    pub fn insert<Q>(&mut self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: OpenKey + Eq + ToOwned<Owned = K> + ?Sized,
+    {
+        if key.is_null() {
+            if self.null.is_some() {
                 return false;
             }
-            pos = (pos + 1) & mask;
+            self.null = Some(key.to_owned());
+        } else {
+            let mask = self.keys.len() - 1;
+            let mut pos = key.mixed() & mask;
+            while let Some(k) = &self.keys[pos] {
+                if Borrow::<Q>::borrow(k) == key {
+                    return false;
+                }
+                pos = (pos + 1) & mask;
+            }
+            self.keys[pos] = Some(key.to_owned());
         }
-        self.keys[pos] = Some(key.to_owned());
         // `if (size++ >= maxFill) rehash(arraySize(size + 1, f))`.
         let old = self.size;
         self.size += 1;
@@ -86,18 +166,30 @@ impl OpenOrder {
         true
     }
     /// `remove`: false when the key was not there.
-    pub fn remove(&mut self, key: &str) -> bool {
-        let mask = self.keys.len() - 1;
-        let mut pos = self.slot(key);
-        loop {
-            match &self.keys[pos] {
-                None => return false,
-                Some(k) if k == key => break,
-                Some(_) => pos = (pos + 1) & mask,
+    pub fn remove<Q>(&mut self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: OpenKey + Eq + ?Sized,
+    {
+        if key.is_null() {
+            // `removeNullEntry`.
+            if self.null.take().is_none() {
+                return false;
             }
+        } else {
+            let mask = self.keys.len() - 1;
+            let mut pos = key.mixed() & mask;
+            loop {
+                match &self.keys[pos] {
+                    None => return false,
+                    Some(k) if Borrow::<Q>::borrow(k) == key => break,
+                    Some(_) => pos = (pos + 1) & mask,
+                }
+            }
+            // `removeEntry`.
+            self.shift_keys(pos);
         }
         self.size -= 1;
-        self.shift_keys(pos);
         let n = self.keys.len();
         if n > self.min_n && self.size < max_fill(n, self.load) / 4 && n > 16 {
             self.rehash(n / 2);
@@ -110,18 +202,17 @@ impl OpenOrder {
             let last = pos;
             pos = (last + 1) & mask;
             loop {
-                let Some(curr) = self.keys[pos].clone() else {
+                let Some(slot) = self.keys[pos].as_ref().map(|k| k.mixed() & mask) else {
                     self.keys[last] = None;
                     return;
                 };
-                let slot = self.slot(&curr);
                 let stop = if last <= pos {
                     last >= slot || slot > pos
                 } else {
                     last >= slot && slot > pos
                 };
                 if stop {
-                    self.keys[last] = Some(curr);
+                    self.keys[last] = self.keys[pos].take();
                     break;
                 }
                 pos = (pos + 1) & mask;
@@ -129,24 +220,36 @@ impl OpenOrder {
         }
     }
     fn rehash(&mut self, new_n: usize) {
-        let old = std::mem::replace(&mut self.keys, vec![None; new_n]);
+        let old = std::mem::replace(&mut self.keys, (0..new_n).map(|_| None).collect());
         let mask = new_n - 1;
         // `for (int j = realSize(); j-- != 0;) { while (key[--i] == null); ... }`
         for key in old.into_iter().rev().flatten() {
-            let mut pos = mix(java_string_hash(key.encode_utf16())) & mask;
+            let mut pos = key.mixed() & mask;
             while self.keys[pos].is_some() {
                 pos = (pos + 1) & mask;
             }
             self.keys[pos] = Some(key);
         }
     }
+}
+impl Open<String> {
     /// `iterator()` and `forEach`: from the last slot down.
     pub fn iter(&self) -> impl Iterator<Item = &str> {
-        self.keys.iter().rev().flatten().map(String::as_str)
+        self.slots_down().map(String::as_str)
     }
     /// `spliterator()` (what `stream()` uses): from the first slot up.
     pub fn stream(&self) -> impl Iterator<Item = &str> {
-        self.keys.iter().flatten().map(String::as_str)
+        self.slots_up().map(String::as_str)
+    }
+}
+impl Open<i64> {
+    /// `iterator()` and `forEach`: the null key (0), then from the last slot down.
+    pub fn iter(&self) -> impl Iterator<Item = i64> + '_ {
+        self.slots_down().copied()
+    }
+    /// `spliterator()` (what `stream()` and `longStream()` use): the null key (0), then from the first slot up.
+    pub fn stream(&self) -> impl Iterator<Item = i64> + '_ {
+        self.slots_up().copied()
     }
 }
 
@@ -178,6 +281,25 @@ impl HashSetOrder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_sets_zero_key_comes_first_in_both_orders() {
+        // fastutil keeps 0, the null key, apart from the table: first in `iterator()` and in `spliterator()`.
+        let mut set = LongOpenOrder::default();
+        for key in [5_i64, 0, -3, 1 << 32] {
+            assert!(set.insert(&key));
+        }
+        assert!(!set.insert(&0));
+        assert_eq!(set.iter().next(), Some(0));
+        assert_eq!(set.stream().next(), Some(0));
+        let down: Vec<i64> = set.iter().skip(1).collect();
+        let mut up: Vec<i64> = set.stream().skip(1).collect();
+        up.reverse();
+        assert_eq!(down, up, "the table, from either end");
+        assert!(set.remove(&0) && !set.contains(&0) && set.len() == 3);
+        set.remove_all();
+        assert!(set.is_empty() && set.stream().next().is_none());
+    }
 
     #[test]
     fn team_names_follow_java_hashset_tree_order() {
