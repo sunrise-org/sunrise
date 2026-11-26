@@ -380,6 +380,145 @@ fn compact_records_feed_a_pack_the_vertices_they_hold() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A shader pack's flat terrain inputs read a far tile's compact record (`lod::packed`, drawn
+/// past `FAR_BASE`) as the four vertices it holds, as terrain.wgsl's `section_corner` does: a
+/// face of each axis and winding, and one no record holds, kept as its vertices
+/// (`packed::FULL`). Read as a chunk section's record instead, far land lost its place (#5016).
+/// Each face has its own sprite cell in a 4 by 4 atlas, its own size and its own alpha byte
+/// (`separateAo`), and a UV scale small enough that no UV clamps shows the record's UV steps.
+#[test]
+#[ignore = "daily"]
+fn far_records_feed_a_pack_the_vertices_they_hold() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    use crate::lod::packed;
+    let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    // 16 layers of 16 pixels: a 64 by 64 atlas, layer `l` at cell (l % 4, l / 4).
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 16,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut atlas = PackAtlas::new(&device, &mut encoder, &[texture], 16, 16, 16).unwrap();
+    queue.submit([encoder.finish()]);
+    assert_eq!(atlas.size(), [64, 64]);
+    atlas.separate_ao = true;
+    let mut solid = packed::sample_faces();
+    let faces = solid.len() / 4;
+    // Half a block off the grid: no record holds it.
+    let mut spilled: Vec<_> = solid[..4].to_vec();
+    for v in &mut spilled {
+        v.pos[1] += 0.5;
+    }
+    solid.extend(spilled);
+    let records = packed::layout(&solid);
+    assert_eq!(
+        crate::mesher::packed::packed_quads(&records, faces + 1),
+        faces,
+        "the faces pack, the one off the grid doesn't"
+    );
+    let page = Page::vertices(bytemuck::cast_slice(&records));
+    let far = packed::FAR_BASE..packed::FAR_BASE + solid.len() as u32;
+    // Far tiles' own UV scale (`lod::instance`), where every UV past a block clamps to the
+    // sprite's edge, and 1/4096, where none of the fixture's (at most 21 blocks) does.
+    let production = crate::gfx::lod::instance([0.0; 3], 0)[3];
+    let small = 1.0 / 4096.0;
+    let mut failures = Vec::new();
+    let mut read = |expression: &str, scale: f32, shadow: bool| {
+        let flags = [true, shadow];
+        let wide = sample_probe(&device, &queue, &atlas, &solid, scale, flags, expression);
+        let compact = sample_page(
+            &device,
+            &queue,
+            &atlas,
+            page,
+            far.clone(),
+            scale,
+            flags,
+            expression,
+        );
+        let bits = |v: &[[f32; 4]]| v.iter().flatten().map(|f| f.to_bits()).collect::<Vec<_>>();
+        if bits(&wide) != bits(&compact) {
+            failures.push(format!(
+                "{expression} scale={scale} shadow={shadow}: {wide:?} != {compact:?}"
+            ));
+        }
+        compact
+    };
+    for scale in [production, small] {
+        for expression in [
+            "gl_Vertex",
+            "gl_Color",
+            "vec4(gl_MultiTexCoord0.xy, gl_MultiTexCoord1.xy)",
+            "vec4(gl_Normal, 0.0)",
+            "at_tangent",
+            "vec4(mc_midTexCoord, mc_Entity.xy)",
+        ] {
+            for shadow in [false, true] {
+                read(expression, scale, shadow);
+            }
+        }
+    }
+    let uv = read("gl_MultiTexCoord0", small, false);
+    let color = read("gl_Color", production, false);
+    for (face, quad) in solid.chunks(4).take(faces).enumerate() {
+        let corners = &uv[face * 4..face * 4 + 4];
+        // The face's sprite cell, its corner at UV 0: a quarter of the atlas a cell.
+        let layer = u32::from(quad[0].layer);
+        let cell = [(layer % 4) as f32 * 0.25, (layer / 4) as f32 * 0.25];
+        let least = [0, 1].map(|i| corners.iter().map(|c| c[i]).fold(f32::INFINITY, f32::min));
+        let most = [0, 1].map(|i| {
+            corners
+                .iter()
+                .map(|c| c[i])
+                .fold(f32::NEG_INFINITY, f32::max)
+        });
+        // Its rectangle's width and height in blocks, from the corners' positions: the axis
+        // they share is the plane's, u and v are `lod::mesh::emit_quad`'s (Y: x, z; Z: x, y;
+        // X: z, y).
+        let extent = |a: usize| {
+            let p = quad.iter().map(|v| v.pos[a]);
+            p.clone().fold(f32::NEG_INFINITY, f32::max) - p.fold(f32::INFINITY, f32::min)
+        };
+        let plane = (0..3).find(|&a| extent(a) == 0.0).expect("a flat face");
+        let (u, v) = match plane {
+            1 => (0, 2),
+            2 => (0, 1),
+            _ => (2, 1),
+        };
+        // 32 UV steps a block (`mesher::TILED_UV_STEPS`), times the scale, times the cell's
+        // quarter of the atlas: 1/512 of the atlas a block.
+        let span = [extent(u) / 512.0, extent(v) / 512.0];
+        let got = [most[0] - least[0], most[1] - least[1]];
+        if least != cell || got != span {
+            failures.push(format!(
+                "face {face} (layer {layer}): UVs from {least:?} spanning {got:?}, \
+                 expected from {cell:?} spanning {span:?}"
+            ));
+        }
+        // `separateAo`: the colour's alpha byte, as the vertex fetch converts a Unorm8.
+        let alpha = (quad[0].color >> 24) as f32 * (1.0 / 255.0);
+        for (k, c) in color[face * 4..face * 4 + 4].iter().enumerate() {
+            if c[3].to_bits() != alpha.to_bits() {
+                failures.push(format!("face {face} corner {k}: alpha {} != {alpha}", c[3]));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 fn sample(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

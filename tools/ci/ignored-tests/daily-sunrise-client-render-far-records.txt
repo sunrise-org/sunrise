@@ -1,0 +1,3 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+# A pack's terrain inputs read far tiles' compact records as their vertices (#5016).
+sunrise-client-render gfx::pack_atlas_tests::midpoint_test::far_records_feed_a_pack_the_vertices_they_hold lib daily gpu

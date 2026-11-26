@@ -8,7 +8,8 @@
 //! axis-aligned plane, with one colour, one light and one sprite layer across
 //! all four corners, and UVs that `lod::mesh::emit_quad` derives from the
 //! positions. So a record holds what that function was given, and
-//! terrain.wgsl's `far_corner` does what it did:
+//! terrain.wgsl's `far_corner` (and, for `shaders/` packs' terrain programs,
+//! `pack_atlas`'s `hz_far_corner`) does what it did:
 //!
 //! - word 0: the colour (RGBA8), the same for all four corners;
 //! - word 1: the sprite layer, and the light in the high half;
@@ -249,6 +250,37 @@ pub fn pack(quad: &[TerrainVertex; 4]) -> Option<[u32; 6]> {
 #[cfg(test)]
 pub fn corners(words: [u32; 6]) -> Option<[TerrainVertex; 4]> {
     Face::from_words(words).map(Face::vertices)
+}
+
+/// Far quads as `lod::mesh::emit_quad` writes them, one for each axis and winding, every one with
+/// its own place, size, layer (3 to 8), light and colour, alpha included, and each packing to a
+/// record: for the tests that feed records to other readers of the layout.
+#[cfg(test)]
+pub(crate) fn sample_faces() -> Vec<TerrainVertex> {
+    let mut quads = Vec::new();
+    for (i, axis) in Axis::ALL.into_iter().enumerate() {
+        for reversed in [false, true] {
+            let n = 2 * i as u32 + u32::from(reversed);
+            quads.extend(
+                Face {
+                    axis,
+                    reversed,
+                    plane: 63 + n as i32,
+                    u0: -48 + 5 * n as i32,
+                    v0: 112 - 3 * n as i32,
+                    du: 16 + n,
+                    dv: 7 + 2 * n,
+                    layer: 3 + n as u16,
+                    light: 0x10F0 + (n as u16) * 0x1010,
+                    // Each its own alpha byte too, 0x40 to 0xE0: what a far quad's corners carry
+                    // there reaches a pack's `gl_Color.a` with `separateAo`.
+                    color: (0x40 + 0x20 * n) << 24 | (0x80_40_20 + n * 0x0101),
+                }
+                .vertices(),
+            );
+        }
+    }
+    quads
 }
 
 /// Lays a far tile's solid quads out compactly in `mesh.packed`, where the
