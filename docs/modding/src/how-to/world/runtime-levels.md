@@ -30,8 +30,8 @@ event.commands.push(Command::op("openarena", 2).executes(|host, _, _| {
   name is `UnknownDimensionType`; a data pack's own dimension types are not offered yet.
 - **`generator`** is `RuntimeGenerator::Flat` (bedrock, two dirt, a grass block, over plains),
   `Void` (air), or `Mod(name)`, a chunk generator a native mod registered
-  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). An unregistered generator
-  returns `UnknownGenerator`.
+  ([`register_chunk_generator`](dimension-shape.md#chunk-generators)). Use the generator's full
+  `namespace:path` id. A malformed, unqualified or unregistered name returns `UnknownGenerator`.
 - **`biome_source`** (`RuntimeLevel::with_biome_source`) pairs a [`RuntimeBiomeSource`] with
   `generator`, matching how vanilla's `LevelStem` pairs a `ChunkGenerator` and `BiomeSource`:
   `Fixed`, `Checkerboard`, `MultiNoise`, `End`, `Points`, or `Registered(id)` (a biome source

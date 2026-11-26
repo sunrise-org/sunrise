@@ -225,7 +225,7 @@ fn part_state_is_per_block_entity_through_ticks_transactions_and_replacement() {
                 Ok(Some(7))
             );
         });
-        let chunk = game.world.chunks.remove(&(0, 0)).unwrap();
+        let mut chunk = game.world.chunks.remove(&(0, 0)).unwrap();
         game.with_level(|_, level, _| {
             assert_eq!(
                 press_part.state_in(level, a, Clone::clone),
@@ -236,10 +236,23 @@ fn part_state_is_per_block_entity_through_ticks_transactions_and_replacement() {
                 Err(PartStateError::Stale)
             );
         });
+        game.install_live_features();
+        let rain_pos = [4, 64, 4];
+        let plains = world_biomes!(game).id("minecraft:plains");
+        let column = Arc::make_mut(&mut chunk);
+        let bottom = column.min_y() >> 2;
+        // This column is open air with full skylight. Seed every quart cell that
+        // BiomeManager.getBiome can select at rain_pos, independent of the zoom seed.
+        for x in 0..=1 {
+            for y in 15..=16 {
+                for z in 0..=1 {
+                    column.set_biome_cell(x, y - bottom, z, plains);
+                }
+            }
+        }
         game.world.chunks.insert((0, 0), chunk);
         let level = game.level(game.dim.id()).unwrap();
         game.world.weather.rain_level = (1.0, 1.0);
-        let rain_pos = [1, 64, 1];
         let server_rain = game
             .level_is_raining_at(level, rain_pos)
             .expect("server weather read");

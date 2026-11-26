@@ -33,8 +33,6 @@ pub struct RenderPipeline {
     /// Each `name` must be a valid non-`GL_` ASCII GLSL identifier, and each `value` (when
     /// present) a non-empty single-line token without comments, backslashes, or `#`.
     pub defines: Vec<(String, Option<String>)>,
-    /// What the pipeline's draws are made of.
-    pub vertex_format: PipelineVertexFormat,
     /// Custom per-binding vertex formats (`withVertexBinding(bindingIndex, format)`). Empty by
     /// default, meaning binding 0 uses [`VertexFormat::position_tex_color`] (stride 24:
     /// `Position: Float32x3`, `UV0: Float32x2`, `Color: Unorm8x4`).
@@ -85,7 +83,7 @@ pub struct RenderPipeline {
     pub push_constant_size: u32,
 }
 impl RenderPipeline {
-    /// Describe a required pipeline that draws [`PipelineVertexFormat::PositionTexColor`]
+    /// Describe a required pipeline that draws [`VertexFormat::position_tex_color`]
     /// geometry with the GLSL core program `shader` (`ns:core/path` ->
     /// `assets/<ns>/shaders/core/<path>.vsh` and `.fsh`).
     pub fn new(
@@ -100,7 +98,6 @@ impl RenderPipeline {
             fragment: shader,
             vertex_shader: None,
             defines: Vec::new(),
-            vertex_format: PipelineVertexFormat::PositionTexColor,
             vertex_bindings: Vec::new(),
             state: PipelineState::new(blend, depth),
             color_targets: Vec::new(),
@@ -238,8 +235,9 @@ impl RenderPipeline {
         }
     }
 
-    /// Whether this pipeline uses the default single `PositionTexColor` vertex binding
-    /// (compatible with the [`crate::WorldDrawContext::pipeline_quads`] shorthand).
+    /// Whether this pipeline uses the default single vertex binding,
+    /// [`VertexFormat::position_tex_color`] (compatible with the
+    /// [`crate::WorldDrawContext::pipeline_quads`] shorthand).
     pub fn uses_default_vertex_format(&self) -> bool {
         self.vertex_bindings.is_empty()
             || (self.vertex_bindings.len() == 1
@@ -1259,15 +1257,6 @@ impl std::fmt::Display for PipelineTextureError {
 
 impl std::error::Error for PipelineTextureError {}
 
-/// The vertex data a pipeline's draws carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-// no wire: local client render-pipeline vertex format.
-pub enum PipelineVertexFormat {
-    /// A position, a texture coordinate and a colour: what [`PipelineQuad`] gives.
-    PositionTexColor,
-}
-
 /// Required byte alignment for vertex strides (`VertexFormat.VERTEX_ALIGNMENT = 4`).
 pub const VERTEX_ALIGNMENT: u32 = 4;
 
@@ -1617,7 +1606,8 @@ impl VertexFormat {
         }
     }
 
-    /// Default binding 0 matching [`PipelineVertexFormat::PositionTexColor`] (`Position: Float32x3`
+    /// The default binding 0 of a pipeline, and what [`PipelineQuad`] gives: a position, a texture
+    /// coordinate and a colour (`Position: Float32x3`
     /// at 0, `UV0: Float32x2` at 12, `Color: Unorm8x4` at 20, stride 24).
     pub fn position_tex_color() -> Self {
         Self {

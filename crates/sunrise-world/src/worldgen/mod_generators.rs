@@ -144,7 +144,7 @@ pub trait ModChunkGenerator: Send + Sync {
 
 /// The installed generators, `modid:void` → generator. Set once, before any
 /// world opens (the executable hands the mods' registrations over).
-pub type ModChunkGenerators = BTreeMap<String, Arc<dyn ModChunkGenerator>>;
+pub type ModChunkGenerators = BTreeMap<Identifier, Arc<dyn ModChunkGenerator>>;
 
 static MOD_GENERATORS: OnceLock<ModChunkGenerators> = OnceLock::new();
 static EMPTY: ModChunkGenerators = BTreeMap::new();

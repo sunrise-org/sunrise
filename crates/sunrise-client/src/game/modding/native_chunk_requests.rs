@@ -866,7 +866,7 @@ mod tests {
             }
         }
         install_mod_chunk_generators(ModChunkGenerators::from([(
-            "asyncfail:terrain".to_owned(),
+            mod_api::Identifier::parse("asyncfail:terrain").unwrap(),
             Arc::new(PanicsAtOrigin) as Arc<dyn ModChunkGenerator>,
         )]))
         .map_err(|_| "installed twice")

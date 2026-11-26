@@ -10,7 +10,7 @@
 //! keeps no mutable state because two workers can fill neighbouring chunks at
 //! once. The level gets the generator's terrain, then the
 //! [`VanillaStages`] it asks for.
-use crate::{BiomeKey, BlockKey, BlockMetadata, BlockState, ChunkPos, Compound};
+use crate::{BiomeKey, BlockKey, BlockMetadata, BlockState, ChunkPos, Compound, Identifier};
 use std::sync::Arc;
 
 /// The chunk a generator fills: vanilla's `ChunkAccess`, as far as terrain needs it. Positions
@@ -133,7 +133,7 @@ pub trait ChunkGenerator: Send + Sync + 'static {
 
 /// A registered API generator, before the game builds its worker adapter.
 pub(crate) struct ChunkGeneratorInfo {
-    pub(crate) id: Box<str>,
+    pub(crate) id: Identifier,
     /// Its [`ChunkGenerator::vanilla_stages`], asked once at registration.
     pub(crate) stages: VanillaStages,
     pub(crate) generator: Arc<dyn ChunkGenerator>,
@@ -143,9 +143,9 @@ pub(crate) struct ChunkGeneratorInfo {
 /// vanilla stages and the generator.
 // hidden: the game's startup adapter reads the registered generators; mods declare them through the registrar.
 #[doc(hidden)]
-pub fn chunk_generator_declarations() -> Vec<(String, VanillaStages, Arc<dyn ChunkGenerator>)> {
+pub fn chunk_generator_declarations() -> Vec<(Identifier, VanillaStages, Arc<dyn ChunkGenerator>)> {
     crate::parts::installed_chunk_generator_list()
         .iter()
-        .map(|info| (info.id.to_string(), info.stages, info.generator.clone()))
+        .map(|info| (info.id.clone(), info.stages, info.generator.clone()))
         .collect()
 }

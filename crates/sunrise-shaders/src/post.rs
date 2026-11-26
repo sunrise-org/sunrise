@@ -1519,7 +1519,7 @@ impl Loader<'_> {
     }
 
     /// The program `name` translated by `translate`, or `None` when it is missing, disabled or
-    /// fails (with a note).
+    /// fails (with a note naming the authored position and stage when known).
     fn load(
         &mut self,
         name: String,
@@ -1609,21 +1609,12 @@ impl Loader<'_> {
         let program = match translate(&vertex, &fragment) {
             Ok(p) => p,
             Err(errors) => {
-                notes.extend(
-                    errors
-                        .iter()
-                        .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                );
+                notes.extend(errors.iter().map(ToString::to_string));
                 notes.push(format!("{name}: skipped"));
                 return None;
             }
         };
-        notes.extend(
-            program
-                .notes
-                .iter()
-                .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-        );
+        notes.extend(program.notes.iter().map(ToString::to_string));
         self.post.config.read_vertex(&vertex);
         self.post.config.read(&fragment);
         let mut buffers =
@@ -1745,7 +1736,8 @@ impl Loader<'_> {
         pp.with_code(lines.join("\n"))
     }
 
-    /// A program with a geometry stage, folded into its vertex stage.
+    /// A program with a geometry stage, folded into its vertex stage. A refusal notes the
+    /// authored position and stage when known.
     fn load_geometry(
         &mut self,
         name: String,
@@ -1770,21 +1762,12 @@ impl Loader<'_> {
             match crate::translate_geometry(vertex, geometry, fragment, inputs, self.limits) {
                 Ok(p) => p,
                 Err(errors) => {
-                    notes.extend(
-                        errors
-                            .iter()
-                            .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                    );
+                    notes.extend(errors.iter().map(ToString::to_string));
                     notes.push(format!("{name}: skipped"));
                     return None;
                 }
             };
-        notes.extend(
-            program
-                .notes
-                .iter()
-                .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-        );
+        notes.extend(program.notes.iter().map(ToString::to_string));
         self.post.config.read_vertex(vertex);
         self.post.config.read(fragment);
         let mut buffers =
@@ -1822,6 +1805,7 @@ impl Loader<'_> {
     }
 
     /// The compute programs of composite-style program `name` that are on and translate.
+    /// Translation refusals are noted with their authored position and stage when known.
     fn compute(&mut self, name: &str) -> Vec<(String, ComputeProgram)> {
         let mut out = Vec::new();
         let names =
@@ -1854,20 +1838,11 @@ impl Loader<'_> {
             notes.extend(warnings(&pp));
             match translate_compute(&pp) {
                 Ok(program) => {
-                    notes.extend(
-                        program
-                            .notes
-                            .iter()
-                            .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                    );
+                    notes.extend(program.notes.iter().map(ToString::to_string));
                     out.push((name, program));
                 }
                 Err(errors) => {
-                    notes.extend(
-                        errors
-                            .iter()
-                            .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                    );
+                    notes.extend(errors.iter().map(ToString::to_string));
                     notes.push(format!("{name}: skipped"));
                 }
             }
@@ -2766,7 +2741,10 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
             notes.contains("composite6: uses a tessellation stage (unsupported); skipped"),
             "{notes}"
         );
-        assert!(notes.contains("composite5.fsh:2:"), "{notes}");
+        assert!(
+            notes.contains("composite5.fsh:2: fragment shader: "),
+            "{notes}"
+        );
         assert!(notes.contains("composite5: skipped"), "{notes}");
 
         let mut macros = Macros::standard();

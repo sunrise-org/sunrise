@@ -199,6 +199,12 @@ fn sampler_parameters_are_replaced_at_once_and_not_as_members() {
     );
 }
 
+fn replace_ident(text: &str, from: &str, to: &str) -> String {
+    let mut lines = Lines::from_text(text);
+    super::replace_ident(&mut lines, from, to);
+    lines.text().to_owned()
+}
+
 #[test]
 fn a_parameter_matched_twice_in_one_identifier_stays_whole() {
     assert_eq!(replace_ident("c.ss + ss * s", "s", "t"), "c.ss + ss * t");
@@ -237,6 +243,24 @@ fn a_helper_taking_its_sampler_translates() {
         .collect();
     assert!(names.contains(&"tap_hz_Sampler0"), "{names:?}");
     assert!(!names.contains(&"tap"), "{names:?}");
+}
+
+/// A bad type in a retained parameter points to the type, not the specialized header's start.
+#[test]
+fn an_error_in_a_specialized_signature_names_the_retained_type() {
+    let fsh = "#version 330\nuniform sampler2D Sampler0;\nin vec2 texCoord0;\nout vec4 fragColor;\n\
+        vec4 tap(sampler2D s, UnknownType uv) { return texture(s, uv); }\n\
+        void main() { fragColor = tap(Sampler0, texCoord0); }\n";
+    let errors = translate(fsh).unwrap_err();
+    let error = &errors[0];
+    assert!(
+        error.message.ends_with("found Identifier(\"UnknownType\")"),
+        "{errors:?}"
+    );
+    assert_eq!(
+        (error.file.as_str(), error.line, error.column),
+        (crate::tests::FSH_FILE, 5, 23)
+    );
 }
 
 /// A sampler parameter with no name used to hand `replace_ident` an empty name to replace,

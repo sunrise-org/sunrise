@@ -36,6 +36,34 @@ impl Game<'_> {
         self.remote_menu_ops(&ops)
     }
 
+    /// `MenuRef::destroy_carried`: the creative screen's destroy slot
+    /// (`ItemPickerMenu.setCarried(EMPTY)`), which clears the client's own cursor and sends
+    /// nothing. Every refusal comes before the empty-cursor answer.
+    pub(super) fn menu_destroy_carried(
+        &mut self,
+        menu: MenuRef,
+    ) -> Result<bool, mod_api::CarriedDestroyError> {
+        use mod_api::CarriedDestroyError;
+        if self.is_logical_server()
+            || self.player.is_none()
+            || self.res.rest.get().is_none()
+            || !self.remote.as_ref().is_some_and(|r| r.logged_in)
+        {
+            return Err(CarriedDestroyError::Unavailable);
+        }
+        if self.native_client_menu_name(menu).is_none() {
+            return Err(CarriedDestroyError::Stale);
+        }
+        if !self.creative {
+            return Err(CarriedDestroyError::NotCreative);
+        }
+        // The visible screen can outlive a change to the active menu.
+        if self.screen != super::Screen::Creative || self.remote_menu_type().is_some() {
+            return Err(CarriedDestroyError::ServerOwnedMenu);
+        }
+        Ok(self.carried.take().is_some())
+    }
+
     /// Close the local player's open container screen as Escape does
     /// (`AbstractContainerScreen.onClose`, `LocalPlayer.closeContainer`): the
     /// server is told (`ContainerClose`) and the screen goes. Refuses stale
@@ -133,6 +161,29 @@ impl Game<'_> {
         let framebuffer = self.renderer_framebuffer()?;
         let batch = super::HudBatch::new(framebuffer, self.settings.gui_scale_inputs());
         self.inventory_menu_slot_boxes(menu.fields().window, name, &batch)
+    }
+
+    pub(super) fn menu_creative_catalog(
+        &self,
+        menu: MenuRef,
+    ) -> Option<Vec<([f32; 4], Option<ItemStack>)>> {
+        use sunrise_client::creative::Creative;
+        if self.screen != super::Screen::Creative || !self.screen_hooks_open() {
+            return None;
+        }
+        self.native_client_menu_name(menu)?;
+        let framebuffer = self.renderer_framebuffer()?;
+        if !self.creative_tab_open() {
+            return Some(Vec::new());
+        }
+        let batch = super::HudBatch::new(framebuffer, self.settings.gui_scale_inputs());
+        let (ox, oy) = Self::creative_origin(&batch);
+        let shown = self.creative_screen.display_window(&self.pack.names);
+        Some(
+            Creative::display_slots()
+                .map(|(slot, (x, y))| ([ox + x, oy + y, 16.0, 16.0], shown.stack(slot).cloned()))
+                .collect(),
+        )
     }
 
     fn inventory_menu_slot_boxes(
@@ -1449,6 +1500,141 @@ mod tests {
                     .unwrap();
                     is_stone(hover(game, Creative::DISPLAY));
                     is_sword(hover(game, 0));
+                });
+            },
+        );
+    }
+
+    /// `MenuRef::creative_catalog` gives the item and search tabs' 45 catalog cells where
+    /// `ItemPickerMenu` puts them, each with the stack the scrolled list shows there (the one
+    /// its centre hovers); nothing on the inventory tab, and no answer off the creative screen,
+    /// for a stale handle or without a window.
+    #[test]
+    #[ignore = "daily"]
+    fn creative_catalog_shows_the_scrolled_list() {
+        crate::game::in_own_process(
+            "game::native_menu_refs::tests::creative_catalog_shows_the_scrolled_list",
+            || {
+                use mod_api::{Tag, prelude::ScreensClientHost};
+                use sunrise_client::creative::Creative;
+                use sunrise_core::nbt::JavaString;
+
+                let key = |id| mod_api::__private::item_key(id).unwrap();
+                let named = |stack: &mod_api::ItemStack| {
+                    stack
+                        .components()
+                        .and_then(|c| c.as_nbt().get(&JavaString::from("minecraft:custom_name")))
+                        .cloned()
+                };
+                with_panel(0, |game, _| {
+                    game.creative = true;
+                    game.screen = super::super::Screen::Creative;
+                    game.refresh_creative_tabs();
+                    creative_tab(game, |t| !t.inventory && !t.search && !t.items.is_empty());
+                    let menu = game
+                        .player_container_menu(game.local_player().unwrap())
+                        .unwrap();
+                    let host: &dyn mod_api::ClientHost = &*game;
+                    assert_eq!(menu.creative_catalog(host), None, "no window");
+
+                    let _window = offscreen_window(game);
+                    let batch = window_batch(game);
+                    // A 320x240 window at GUI scale 1: leftPos (320 - 195) / 2, topPos (240 - 136) / 2.
+                    assert_eq!((batch.width, batch.height), (320.0, 240.0));
+                    let cell_box = |cell: usize| {
+                        let (column, row) = ((cell % 9) as f32, (cell / 9) as f32);
+                        [
+                            62.0 + 9.0 + column * 18.0,
+                            52.0 + 18.0 + row * 18.0,
+                            16.0,
+                            16.0,
+                        ]
+                    };
+                    use crate::game::api_values::TryIntoEngine;
+                    let sword = game
+                        .item_from_snbt(r#"{id:"minecraft:diamond_sword",count:1,components:{"minecraft:custom_name":"Blade"}}"#)
+                        .unwrap()
+                        .try_into_engine(game.items())
+                        .unwrap();
+                    // Seven rows, the last one partial: scrolled to the bottom, the first shown
+                    // row is the third and the last three cells are past the list's end.
+                    let tab = game.creative_screen.selected_index();
+                    let mut items = vec![ItemStack::new("minecraft:stone", 17); 60];
+                    items[0] = sword;
+                    items[1].count = 0;
+                    items[18] = ItemStack::new("minecraft:dirt", 3);
+                    game.creative_screen.tabs[tab].items = items;
+                    game.creative_screen.forget_items();
+
+                    // (item, count, custom name) of each cell, from the fixture above.
+                    type Want = Option<(&'static str, u32, Option<Tag>)>;
+                    let check = |game: &mut Game<'_>, want: &dyn Fn(usize) -> Want| {
+                        let host: &dyn mod_api::ClientHost = &*game;
+                        let menu = host.local_player().unwrap().container_menu(host).unwrap();
+                        let cells = menu.creative_catalog(host).unwrap();
+                        assert_eq!(cells.len(), 45);
+                        for (cell, (rect, stack)) in cells.into_iter().enumerate() {
+                            assert_eq!(rect, cell_box(cell), "cell {cell}");
+                            let found = stack.as_ref().map(|s| (s.item(), s.count(), named(s)));
+                            let want = want(cell).map(|(id, count, name)| (key(id), count, name));
+                            assert_eq!(found, want, "cell {cell}");
+                            game.cursor = (rect[0] + 8.0, rect[1] + 8.0);
+                            assert_eq!(
+                                ScreensClientHost::screen_hovered_stack(&*game),
+                                stack,
+                                "cell {cell}"
+                            );
+                        }
+                    };
+                    check(game, &|cell| match cell {
+                        0 => Some((
+                            "minecraft:diamond_sword",
+                            1,
+                            Some(Tag::String("Blade".into())),
+                        )),
+                        1 => None,
+                        18 => Some(("minecraft:dirt", 3, None)),
+                        _ => Some(("minecraft:stone", 17, None)),
+                    });
+                    game.creative_screen.scroll = 1.0;
+                    check(game, &|cell| match cell {
+                        0 => Some(("minecraft:dirt", 3, None)),
+                        42.. => None,
+                        _ => Some(("minecraft:stone", 17, None)),
+                    });
+
+                    let generation = game.remote.as_ref().unwrap().menu.generation;
+                    let stale =
+                        mod_api::__private::game::menu_ref(menu.fields().player, 0, generation + 1);
+                    let host: &dyn mod_api::ClientHost = &*game;
+                    assert_eq!(stale.creative_catalog(host), None, "stale handle");
+
+                    creative_tab(game, |t| t.inventory);
+                    let host: &dyn mod_api::ClientHost = &*game;
+                    assert_eq!(
+                        menu.creative_catalog(host),
+                        Some(Vec::new()),
+                        "inventory tab"
+                    );
+
+                    game.screen = super::super::Screen::Inventory;
+                    let host: &dyn mod_api::ClientHost = &*game;
+                    assert_eq!(menu.creative_catalog(host), None, "inventory screen");
+
+                    game.screen = super::super::Screen::Creative;
+                    game.creative_screen = Creative::from_json(&serde_json::json!({
+                        "schema": 4, "item_features": {}, "potion_features": {}, "tabs": [{
+                            "id": "minecraft:search", "type": "SEARCH", "title": "Search Items",
+                            "build": [], "search_metadata": [{
+                                "stack": r#"{id:"minecraft:stone",count:17}"#,
+                                "ungrouped": true
+                            }]
+                        }]
+                    }))
+                    .unwrap();
+                    check(game, &|cell| {
+                        (cell == 0).then_some(("minecraft:stone", 17, None))
+                    });
                 });
             },
         );

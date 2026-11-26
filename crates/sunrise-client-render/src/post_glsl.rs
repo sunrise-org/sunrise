@@ -100,8 +100,8 @@ pub enum Refused {
         declared: usize,
         limit: usize,
     },
-    /// The translator's errors in the stage `stage` (`ns:post/name`), at the files and lines
-    /// the author wrote.
+    /// The translator's errors for `stage` (`ns:post/name`), with the shader stage and
+    /// positions the author wrote.
     Translator { stage: String, errors: Vec<Error> },
 }
 
@@ -292,16 +292,18 @@ fn wrap_main(src: &mut Expanded) -> Result<(), String> {
 
 /// Runs the directives of one stage, with the backend's defines every program has
 /// (`core_shader::run_directives`: a post pass has none of its own), then parses and validates
-/// it; errors at the files and lines the author wrote. With the code that was parsed.
+/// it. Refusals name the stage and the authored position, without quoting the rewritten line;
+/// success includes the parsed code.
 fn parse(
     stage: ShaderStage,
     code: &Expanded,
     limits: naga::front::glsl::InterfaceLimits,
 ) -> Result<(naga::Module, naga::valid::ModuleInfo, Expanded), Vec<Error>> {
-    let code = crate::core_shader::run_directives(code, &[]).map_err(|e| vec![e])?;
+    let code =
+        crate::core_shader::run_directives(code, &[]).map_err(|e| vec![e.with_stage(stage)])?;
     let module = Frontend::default()
         .parse(&sunrise_glsl::glsl_options(stage, limits), code.text())
-        .map_err(|e| code.errors_in(e.errors.iter().map(|e| (e.meta, e.kind.to_string()))))?;
+        .map_err(|e| code.errors_in(stage, &e, |kind, _line| kind.to_string()))?;
     let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
         .validate(&module)
         .map_err(|e| {
@@ -310,13 +312,17 @@ fn parse(
                 .filter(|s| s.to_range().is_some())
                 .last();
             let span = span.unwrap_or_default();
-            vec![code.error_in(span, format!("{:?}", e.into_inner()))]
+            vec![
+                code.error_in(span, format!("{:?}", e.into_inner()))
+                    .with_stage(stage),
+            ]
         })?;
     Ok((module, info, code))
 }
 
 /// Translates the vertex and fragment shader a pass names (`minecraft:post/invert`), refused
-/// before any analysis when they declare more blocks or samplers than `declarable`.
+/// before any analysis when they declare more blocks or samplers than `declarable`. A parse,
+/// directive or validation refusal names the stage as well as its authored position.
 pub fn translate(
     root: &ResourceSource,
     vertex: &str,
@@ -364,7 +370,12 @@ pub fn translate(
         errors,
     };
     rewrite(&mut vs, &blocks, &samplers);
-    wrap_main(&mut vs).map_err(|message| refused(vertex, vec![vs.error_at(None, message)]))?;
+    wrap_main(&mut vs).map_err(|message| {
+        refused(
+            vertex,
+            vec![vs.error_at(None, message).with_stage(ShaderStage::Vertex)],
+        )
+    })?;
     rewrite(&mut fs, &blocks, &samplers);
     vs.wrap("#version 450\n", "");
     fs.wrap("#version 450\n", "");
@@ -531,11 +542,15 @@ mod tests {
             ("assets/custom/shaders/post/big.vsh".into(), Resource::bytes(b"#version 330\nvoid main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }".to_vec())),
             ("assets/custom/shaders/post/big.fsh".into(), Resource::bytes(b"#version 330\nfloat big[0x7fffffff];\nfloat after[2];\nlayout(location=0) out vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }".to_vec())),
         ]));
-        let refused = translate(&source, "custom:post/big", "custom:post/big", ANY).err();
+        let Err(refused) = translate(&source, "custom:post/big", "custom:post/big", ANY) else {
+            panic!("the fragment shader's oversized array is refused");
+        };
+        let displayed = refused.to_string();
         assert!(
-            matches!(&refused, Some(Refused::Translator { stage, .. }) if stage == "custom:post/big"),
-            "{refused:?}"
+            displayed.starts_with("custom:post/big: custom:shaders/post/big.fsh:2:"),
+            "{displayed}"
         );
+        assert!(displayed.contains(": fragment shader: "), "{displayed}");
     }
 
     /// `#moj_import`, as Polytone's wiki writes it, and its `polytone_globals.glsl` built in:
@@ -945,7 +960,17 @@ mod tests {
             panic!("not the translator's refusal");
         };
         assert_eq!(stage, "p:post/a");
-        let located: Vec<(&str, u32)> = errors.iter().map(|e| (e.file.as_str(), e.line)).collect();
-        assert_eq!(located, [("p:shaders/include/lib/pick.glsl", 4)]);
+        let located: Vec<_> = errors
+            .iter()
+            .map(|e| (e.file.as_str(), e.line, e.stage))
+            .collect();
+        assert_eq!(
+            located,
+            [(
+                "p:shaders/include/lib/pick.glsl",
+                4,
+                Some(ShaderStage::Fragment)
+            )]
+        );
     }
 }

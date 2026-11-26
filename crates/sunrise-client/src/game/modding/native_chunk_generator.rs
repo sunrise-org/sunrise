@@ -174,7 +174,7 @@ mod tests {
         let generators = installed_chunk_generators();
         for _ in 0..2 {
             assert_eq!(
-                generators["test:chaos"].vanilla_stages(),
+                generators[&Identifier::parse("test:chaos").unwrap()].vanilla_stages(),
                 VanillaStages {
                     surface: true,
                     carvers: false,

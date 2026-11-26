@@ -926,7 +926,7 @@ impl Game<'_> {
                 super::world_loading::worldgen_overrides_of(&self.fns.data, &conditions)?.0
             }
         };
-        let (streaming, save, locator) = super::world_loading::make_streaming(
+        let (streaming, save, locator, generator_type) = super::world_loading::make_streaming(
             &self.res,
             &self.pack,
             &self.options,
@@ -960,6 +960,7 @@ impl Game<'_> {
                 world.weather.thunder_level.1 = 1.0;
             }
         }
+        world.generator_type = Some(generator_type);
         world.fast_lava = self.dimension_type_of(dim).fast_lava;
         world.infiniburn = Some(self.resolve_level_infiniburn(self.dimension_type_of(dim)));
         world.golem_heads = Some(self.resolve_golem_heads());

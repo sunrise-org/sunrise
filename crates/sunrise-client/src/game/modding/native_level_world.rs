@@ -248,6 +248,11 @@ impl Game<'_> {
         self.native_level_world(level)?;
         Some(self.level.seed)
     }
+    /// `level.getChunkSource().getGenerator()`'s codec id: the generator `make_streaming`
+    /// built the level with, recorded when it did.
+    pub(super) fn level_generator_type(&self, level: LevelRef) -> Option<mod_api::Identifier> {
+        self.native_level_world(level)?.generator_type.clone()
+    }
     /// The difficulty (`Level.getDifficulty`): `peaceful`, `easy`, `normal`
     /// or `hard`, as `/difficulty` names it.
     pub(super) fn level_difficulty(&self, level: LevelRef) -> Option<&'static str> {
@@ -478,6 +483,30 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
+
+    /// `LevelRef::generator_type` (#6032): the generator the level was built with, as its
+    /// world recorded it, nothing before one is recorded, and nothing for a stale level.
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_names_the_chunk_generator_it_was_built_with() {
+        with_game(|game| {
+            let overworld = game.level("minecraft:overworld").unwrap();
+            // The harness stops short of building terrain, so it sets what `make_streaming`
+            // records (a_level_reports_the_generator_it_was_built_with covers the recording).
+            let debug = mod_api::Identifier::parse("minecraft:debug").unwrap();
+            game.world.generator_type = Some(debug.clone());
+            assert_eq!(overworld.generator_type(game), Some(debug));
+            game.world.generator_type = None;
+            assert_eq!(overworld.generator_type(game), None);
+            let stale = mod_api::LevelRef::new(
+                mod_api::WorldEpoch::new(overworld.epoch().get() + 1),
+                overworld.dimension(),
+            );
+            game.world.generator_type =
+                Some(mod_api::Identifier::parse("minecraft:noise").unwrap());
+            assert_eq!(stale.generator_type(game), None);
+        });
+    }
     use core::ops::ControlFlow;
     use mod_api::{GameRuleChangedEvent, GameRuleValue, Hooks, LevelHost, ModEntry, ServerHost};
     use mod_platform::testing::with_mods;

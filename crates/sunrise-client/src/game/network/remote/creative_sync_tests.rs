@@ -436,3 +436,147 @@ mod give_stack {
         );
     }
 }
+
+mod destroy_carried {
+    use super::*;
+    use crate::game::Screen;
+    use crate::game::native_entity_refs::tests::with_client_game;
+    use crate::game::native_hotbar_slot::hotbar_slot_tests::{logged_in, sent};
+    use mod_api::CarriedDestroyError;
+    use sunrise_client::command::args::GameMode;
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
+
+    fn stack(item: &str, count: u32) -> Option<sunrise_client::items::ItemStack> {
+        Some(sunrise_client::items::ItemStack::new(item, count))
+    }
+
+    /// The packets among `packets` that write a slot or the cursor, as the server decodes them.
+    fn slot_writes(packets: Vec<S>) -> Vec<S> {
+        packets
+            .into_iter()
+            .filter(|p| matches!(p, S::SetCreativeModeSlot(_) | S::ContainerClick(_)))
+            .collect()
+    }
+
+    fn menu(game: &mut Game<'_>) -> mod_api::MenuRef {
+        let local = game.local_player().unwrap();
+        local.container_menu(game).unwrap()
+    }
+
+    /// `menu` refuses with `error` both carrying a stack and carrying nothing, leaving the
+    /// cursor and the inventory as they were.
+    fn refuses(game: &mut Game<'_>, menu: mod_api::MenuRef, error: CarriedDestroyError) {
+        let inventory = game.inventory.clone();
+        for carried in [stack("minecraft:stone", 5), None] {
+            game.carried = carried.clone();
+            assert_eq!(menu.destroy_carried(game), Err(error), "{carried:?}");
+            assert_eq!(game.carried, carried);
+            assert_eq!(game.inventory, inventory);
+        }
+    }
+
+    /// Every refusal, with a stack carried and with none, changes nothing and sends nothing.
+    /// A live server menu is refused even when the creative inventory screen is still visible.
+    #[test]
+    #[ignore = "daily"]
+    fn a_refused_destroy_changes_and_sends_nothing() {
+        crate::game::in_own_process(
+            "game::remote::tests::creative_sync_tests::destroy_carried::a_refused_destroy_changes_and_sends_nothing",
+            || {
+                with_client_game(|game| {
+                    let before_login = mod_api::__private::game::menu_ref(
+                        mod_api::__private::game::player_ref(
+                            mod_api::EntityRef::new(mod_api::WorldEpoch::new(1), 1),
+                            1,
+                        ),
+                        0,
+                        0,
+                    );
+                    refuses(game, before_login, CarriedDestroyError::Unavailable);
+                    let mut reader = logged_in(game);
+                    game.inventory[0] = stack("minecraft:dirt", 1);
+                    game.remote_send_state(0);
+                    sent(&mut reader);
+                    let inventory_menu = menu(game);
+                    game.screen = Screen::Creative;
+                    refuses(game, inventory_menu, CarriedDestroyError::NotCreative);
+                    game.set_local_mode(GameMode::Creative);
+                    game.screen = Screen::Inventory;
+                    refuses(game, inventory_menu, CarriedDestroyError::ServerOwnedMenu);
+                    let packets = sent(&mut reader);
+                    assert!(packets.is_empty(), "{packets:?}");
+
+                    game.screen = Screen::Creative;
+                    let previous_screen = game.screen;
+                    let chest = game
+                        .remote
+                        .as_ref()
+                        .unwrap()
+                        .builtin
+                        .get("minecraft:menu")
+                        .unwrap()
+                        .id("minecraft:generic_9x3")
+                        .unwrap();
+                    game.handle_packet(C::OpenScreen(play::OpenScreen {
+                        container: 12,
+                        menu: chest,
+                        title: Tag::String("Chest".into()),
+                    }))
+                    .unwrap();
+                    assert_eq!(game.screen, Screen::Inventory);
+                    assert_eq!(game.remote_menu().0, 12);
+                    sent(&mut reader);
+                    refuses(game, inventory_menu, CarriedDestroyError::Stale);
+                    let chest_menu = menu(game);
+                    refuses(game, chest_menu, CarriedDestroyError::ServerOwnedMenu);
+
+                    // Keep the previous screen visible without changing the live server menu.
+                    // Model that state without depending on how ScreenOpening handles a veto.
+                    game.screen = previous_screen;
+                    refuses(game, chest_menu, CarriedDestroyError::ServerOwnedMenu);
+                    game.options.execution_role =
+                        crate::game::execution_role::ExecutionRole::IntegratedServer;
+                    refuses(game, chest_menu, CarriedDestroyError::Unavailable);
+                    game.options.execution_role =
+                        crate::game::execution_role::ExecutionRole::Client;
+                    let packets = sent(&mut reader);
+                    assert!(packets.is_empty(), "{packets:?}");
+                });
+            },
+        );
+    }
+
+    /// On the creative screen the cursor is the client's alone: the destroy slot clears it
+    /// and sends nothing, and an empty cursor is no destroy.
+    #[test]
+    #[ignore = "daily"]
+    fn the_creative_screen_destroys_without_a_packet() {
+        crate::game::in_own_process(
+            "game::remote::tests::creative_sync_tests::destroy_carried::the_creative_screen_destroys_without_a_packet",
+            || {
+                with_client_game(|game| {
+                    let mut reader = logged_in(game);
+                    game.set_local_mode(GameMode::Creative);
+                    game.screen = Screen::Creative;
+                    game.inventory[0] = stack("minecraft:dirt", 1);
+                    game.remote_send_state(0);
+                    sent(&mut reader);
+                    let inventory = game.inventory.clone();
+                    let menu = menu(game);
+                    game.carried = stack("minecraft:diamond_sword", 1);
+                    assert_eq!(menu.destroy_carried(game), Ok(true));
+                    assert_eq!(game.carried, None);
+                    assert_eq!(menu.destroy_carried(game), Ok(false));
+                    assert_eq!(game.inventory, inventory);
+                    let writes = slot_writes(sent(&mut reader));
+                    assert!(writes.is_empty(), "{writes:?}");
+                    // The tick's sync after it sends nothing either.
+                    game.remote_send_state(0);
+                    let writes = slot_writes(sent(&mut reader));
+                    assert!(writes.is_empty(), "{writes:?}");
+                });
+            },
+        );
+    }
+}

@@ -532,12 +532,6 @@
       "canonical_path": "crate::client::render_pipeline::PipelineBlend"
     },
     {
-      "name": "PipelineVertexFormat",
-      "path": "crate::client::render_pipeline::PipelineVertexFormat",
-      "hash": "9fd68d6fbfedbcfb",
-      "canonical_path": "crate::client::render_pipeline::PipelineVertexFormat"
-    },
-    {
       "name": "Pose",
       "path": "crate::entity::mobs::Pose",
       "hash": "a59146be4f337358",

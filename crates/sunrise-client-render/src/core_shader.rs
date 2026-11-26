@@ -82,7 +82,8 @@ pub(crate) fn translate_core_with(
     provided: &dyn Fn(&str) -> bool,
 ) -> Result<Translated, Vec<Error>> {
     let sources = Stages {
-        dir: "minecraft:shaders/core/",
+        vertex_dir: "minecraft:shaders/core/",
+        fragment_dir: "minecraft:shaders/core/",
         vertex,
         fragment,
         vertex_file: "minecraft:shaders/core/core.vsh",

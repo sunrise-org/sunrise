@@ -270,6 +270,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
+    use sunrise_core::identifier::Identifier;
     use sunrise_world::worldgen::{
         biome_source::BiomeSourceCatalog,
         mod_biome_sources::{LevelBiomeSource, ModBiomeSource, ModBiomeSources},
@@ -312,7 +313,7 @@ mod tests {
 
     fn generators() -> ModChunkGenerators {
         ModChunkGenerators::from([(
-            "test:slab".to_owned(),
+            Identifier::parse("test:slab").unwrap(),
             Arc::new(Slab) as Arc<dyn ModChunkGenerator>,
         )])
     }
@@ -380,7 +381,8 @@ mod tests {
         shape: LevelShape,
         seed: i64,
     ) -> Option<Result<ModTerrain, String>> {
-        let generator = generators.get(stem["generator"]["type"].as_str()?)?;
+        let requested = Identifier::parse_namespaced(stem["generator"]["type"].as_str()?)?;
+        let generator = generators.get(&requested)?;
         if generator.vanilla_stages().any() {
             return None;
         }
@@ -525,7 +527,7 @@ mod tests {
             }
         }
         let generators = ModChunkGenerators::from([(
-            "test:by_level".to_owned(),
+            Identifier::parse("test:by_level").unwrap(),
             Arc::new(ByLevel) as Arc<dyn ModChunkGenerator>,
         )]);
         let open = |level: &str| {
@@ -704,7 +706,7 @@ mod tests {
         }
         let for_stem = |stages| {
             let generators = ModChunkGenerators::from([(
-                "test:slab".to_owned(),
+                Identifier::parse("test:slab").unwrap(),
                 Arc::new(Staged(stages)) as Arc<dyn ModChunkGenerator>,
             )]);
             let stem = stem("test:slab");
@@ -928,7 +930,8 @@ mod tests {
     }
 
     fn dungeon(generator: Arc<dyn ModChunkGenerator>) -> ModTerrain {
-        let generators = ModChunkGenerators::from([("test:dungeon".to_owned(), generator)]);
+        let generators =
+            ModChunkGenerators::from([(Identifier::parse("test:dungeon").unwrap(), generator)]);
         for_stem(
             "test:pocket",
             &stem("test:dungeon"),

@@ -427,6 +427,9 @@ screen shows. `menu.click_button(host, button)` presses one of the open menu's b
 (`ContainerButtonClick`, as a loom's pattern list does), for input the screen's own
 buttons don't take; the server's menu decides what it does, and the inventory menu has none.
 
+`menu.destroy_carried(host)` clears a creative player's cursor on the creative inventory screen, as its
+destroy slot does; any other menu's cursor is the server's and is refused. See its rustdoc for the refusals.
+
 ## Writing slot storage
 
 `ItemPlace::MenuSlot { menu, slot }` is slot `slot` of a player's open menu, a `MenuRef` (`player.container_menu(host)`). NeoForge 26.3's `ItemAccess` reaches a player's inventory slot (`forPlayerSlot`) and cursor
@@ -726,3 +729,5 @@ On the Creative screen, `menu.slot_boxes(host)` keeps the player's inventory men
 Creative's visible order: crafting `0..=4`, armor `5..=8`, main inventory `9..=35`, hotbar `36..=44`,
 and offhand `45`. A hidden index is `None`. The inventory tab hides crafting; item and Search
 tabs show only the hotbar. Creative catalog slots and the trash slot have no entries.
+
+Use `MenuRef::creative_catalog` to read the catalog cells shown on an item or Search tab.

@@ -650,9 +650,10 @@ pub trait WorldDrawContext {
         unimplemented!("WorldDrawContext::world_draw_quads")
     }
     /// Submit world quads drawn by the mod pipeline `pipeline`: shorthand over
-    /// [`Self::draw_vertices`] for pipelines using the default `PositionTexColor` vertex format
-    /// and [`PrimitiveTopology::Quads`]. Checks `RenderPipelineRef` validity and staleness
-    /// ([`PipelineDrawError::Pipeline`]), refuses non-`Quads` pipelines
+    /// [`Self::draw_vertices`] for pipelines using the default vertex format
+    /// (`VertexFormat::position_tex_color`) and [`PrimitiveTopology::Quads`]. Checks
+    /// `RenderPipelineRef` validity and staleness ([`PipelineDrawError::Pipeline`]), refuses
+    /// non-`Quads` pipelines
     /// ([`PipelineDrawError::TopologyMismatch`]) and custom vertex-format pipelines
     /// ([`PipelineDrawError::VertexFormatMismatch`]), skips any quad with non-finite coordinates
     /// or UVs individually without rejecting valid quads in the same slice, and lets quad storage
@@ -958,8 +959,8 @@ pub trait OffscreenDrawContext {
         Err(PipelineDrawError::Pipeline(RenderPipelineError::Invalid))
     }
 
-    /// Shorthand for drawing [`PipelineQuad`]s with a `PositionTexColor` quad pipeline into this
-    /// offscreen pass.
+    /// Shorthand for drawing [`PipelineQuad`]s into this offscreen pass with a quad pipeline of the
+    /// default vertex format (`VertexFormat::position_tex_color`).
     fn pipeline_quads(
         &mut self,
         pipeline: RenderPipelineRef,

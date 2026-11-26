@@ -121,6 +121,9 @@ jobs:
             git fetch -q --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch"
             git merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch" \
               || { echo "::error::$sha is not on $branch: a writing daily run takes only its branch's commits"; exit 1; }
+            # The live branch can advance, but this run's workflow and jobs come from the dispatch SHA.
+            git merge-base --is-ancestor "$sha" "$GITHUB_SHA" \
+              || { echo "::error::$sha is not in the dispatched workflow's history ($GITHUB_SHA)"; exit 1; }
           fi
           skip=false
           if [ "$SCHEDULED" = true ] && [ "$DRY_RUN" = false ]; then

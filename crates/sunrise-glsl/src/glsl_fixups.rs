@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use super::located::{Lines, Origin};
+use super::located::Lines;
 
 /// The longest shader rewritten (vanilla's, includes expanded, are a few KiB).
 const MAX_LEN: usize = 64 * 1024;
@@ -18,7 +18,7 @@ const MAX_LEN: usize = 64 * 1024;
 const SCAN_BUDGET: usize = 64 << 20;
 
 /// `text` with the rewrites, where they apply; anything they can't follow is left as it was.
-/// Each line keeps where it came from: a copy of a function, the lines of its body.
+/// Copies keep their source positions, including retained parameters and specialized bodies.
 pub(super) fn fixups(text: Lines) -> Lines {
     if text.text().len() > MAX_LEN {
         return text;
@@ -206,19 +206,24 @@ fn split_top(list: &str) -> Vec<&str> {
 /// A function at the file's top level whose parameters include a `sampler2D`.
 struct SamplerFn {
     name: String,
-    /// The header from its return type to its `{` (or `;` for a prototype), and the body after.
+    /// The whole function, from the start of its return type to just after its `}` or `;`.
     start: usize,
     end: usize,
-    params: Vec<String>,
+    return_type_end: usize,
+    name_at: usize,
+    open_paren: usize,
+    /// The trimmed parameter ranges in the input, in declaration order.
+    params: Vec<Range<usize>>,
+    close_paren: usize,
     /// The indices of the `sampler2D` parameters and their names.
     samplers: Vec<(usize, String)>,
     /// `None` for a prototype.
     body: Option<String>,
-    /// Where the body starts (its `{`).
+    /// Where the body starts (its `{`, or the `;` of a prototype).
     body_at: usize,
-    return_type: String,
 }
 
+/// Find sampler helpers and record the byte ranges of the signature pieces they can keep.
 fn sampler_functions(text: &str) -> Vec<SamplerFn> {
     let closing = closings(text);
     let mut out = Vec::new();
@@ -233,12 +238,18 @@ fn sampler_functions(text: &str) -> Vec<SamplerFn> {
                 if let (Some((name_at, name)), Some(close)) = (ident_before(text, i), closing[i])
                     && let Some((type_at, return_type)) = ident_before(text, name_at)
                 {
-                    let params: Vec<String> = split_top(&text[i + 1..close])
+                    let params: Vec<Range<usize>> = split_top(&text[i + 1..close])
                         .into_iter()
-                        .map(|p| p.trim().to_owned())
+                        .map(|p| {
+                            let trimmed = p.trim_start();
+                            let at = p.as_ptr() as usize - text.as_ptr() as usize;
+                            let start = at + p.len() - trimmed.len();
+                            start..start + trimmed.trim_end().len()
+                        })
                         .collect();
                     let samplers: Vec<(usize, String)> = params
                         .iter()
+                        .map(|range| &text[range.clone()])
                         .enumerate()
                         .filter(|(_, p)| p.split_whitespace().any(|w| w == "sampler2D"))
                         .map(|(n, p)| (n, p.split_whitespace().last().unwrap_or("").to_owned()))
@@ -264,11 +275,14 @@ fn sampler_functions(text: &str) -> Vec<SamplerFn> {
                             name: name.to_owned(),
                             start: type_at,
                             end,
+                            return_type_end: type_at + return_type.len(),
+                            name_at,
+                            open_paren: i,
                             params,
+                            close_paren: close,
                             samplers,
                             body,
                             body_at,
-                            return_type: return_type.to_owned(),
                         });
                         i = end;
                         continue;
@@ -320,44 +334,39 @@ fn calls<'a>(
     out
 }
 
-/// Every `from` standing as an identifier on its own, but not a member after a `.` (a
-/// parameter `s` leaves the swizzle `c.s` alone).
-fn replace_ident(text: &str, from: &str, to: &str) -> String {
+/// Replace each whole identifier `from` with `to`, but not a member after a `.` (a
+/// parameter `s` leaves the swizzle `c.s` alone). Unchanged bytes keep their positions.
+fn replace_ident(lines: &mut Lines, from: &str, to: &str) {
     if from.is_empty() {
-        return text.to_owned();
+        return;
     }
-    let mut out = String::with_capacity(text.len());
-    let mut done = 0;
-    while let Some(found) = text[done..].find(from) {
-        let at = done + found;
-        // Read in the whole text: a match right after another (`ss`) is part of it.
-        let before = text[..at].trim_end().chars().next_back();
-        let joined = text[..at].chars().next_back().is_some_and(is_ident);
-        let after = text[at + from.len()..].chars().next();
-        out.push_str(&text[done..at]);
-        if joined || before == Some('.') || after.is_some_and(is_ident) {
-            out.push_str(from);
-        } else {
-            out.push_str(to);
-        }
-        done = at + from.len();
-    }
-    out.push_str(&text[done..]);
-    out
+    let text = lines.text();
+    let edits = text
+        .match_indices(from)
+        .filter_map(|(at, _)| {
+            let end = at + from.len();
+            let before = text[..at].trim_end().chars().next_back();
+            let joined = text[..at].chars().next_back().is_some_and(is_ident);
+            let after = text[end..].chars().next();
+            if joined || before == Some('.') || after.is_some_and(is_ident) {
+                return None;
+            }
+            Some((at..end, to.to_owned()))
+        })
+        .collect();
+    lines.edit(edits);
 }
 
 /// A body with its sampler parameters reading `chosen`, all at once: a parameter named like
 /// another's sampler (`mix2(sampler2D Sampler0, sampler2D Sampler1)` called with them swapped)
 /// still reads its own.
-fn read_samplers(body: &str, params: &[(usize, String)], chosen: &[String]) -> String {
-    let mut body = body.to_owned();
+fn read_samplers(body: &mut Lines, params: &[(usize, String)], chosen: &[String]) {
     for (n, (_, param)) in params.iter().enumerate() {
-        body = replace_ident(&body, param, &format!("hz_sampler_param_{n}"));
+        replace_ident(body, param, &format!("hz_sampler_param_{n}"));
     }
     for (n, sampler) in chosen.iter().enumerate().take(params.len()) {
-        body = replace_ident(&body, &format!("hz_sampler_param_{n}"), sampler);
+        replace_ident(body, &format!("hz_sampler_param_{n}"), sampler);
     }
-    body
 }
 
 /// The byte after `uniform sampler2D <name>;`, where the shader declares that sampler.
@@ -397,8 +406,44 @@ fn chosen_samplers(f: &SamplerFn, args: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// A call of the specialized name without its sampler arguments. The name points to the
+/// original call, and the remaining arguments keep their own source positions.
+fn specialized_call(
+    source: &Lines,
+    at: usize,
+    f: &SamplerFn,
+    chosen: &[String],
+    args: &[&str],
+) -> Lines {
+    let origin = source.origin_at(at);
+    let mut out = Lines::default();
+    out.push_replacement(
+        &format!("{}_hz_{}(", f.name, chosen.join("_")),
+        origin,
+        source,
+        at,
+    );
+    let retained = args
+        .iter()
+        .enumerate()
+        .filter(|(n, _)| !f.samplers.iter().any(|(s, _)| s == n));
+    for (i, (_, arg)) in retained.enumerate() {
+        if i != 0 {
+            out.push(", ", origin);
+        }
+        let arg = arg.trim();
+        if !arg.is_empty() {
+            let start = arg.as_ptr() as usize - source.text().as_ptr() as usize;
+            out.push_lines(&source.slice(start..start + arg.len()));
+        }
+    }
+    out.push(")", origin);
+    out
+}
+
 /// One pass per function with `sampler2D` parameters, until none is left or one can't be
-/// followed (a caller passes something that is no sampler's name).
+/// followed (a caller passes something that is no sampler's name). A specialized signature
+/// keeps the source positions of the return type, parentheses and retained parameters.
 fn specialize_sampler_params(original: Lines) -> Lines {
     let mut text = original.text().to_owned();
     // The text with where each line came from, edited with it.
@@ -469,10 +514,9 @@ fn specialize_sampler_params(original: Lines) -> Lines {
         // A body may call another overload of itself with its own sampler (vanilla's
         // `sampleNearest` calls the six-argument one): once its sampler parameters read a
         // sampler, those calls name that copy too, and their sets join the variants.
-        let rewrite_own_calls = |body: &str| -> Option<(String, Vec<Vec<String>>)> {
-            let mut body = body.to_owned();
+        let rewrite_own_calls = |mut body: Lines| -> Option<(Lines, Vec<Vec<String>>)> {
             let mut found = Vec::new();
-            let mut starts: Vec<usize> = calls(&scanned, &body, &f.name, &[])
+            let mut starts: Vec<usize> = calls(&scanned, body.text(), &f.name, &[])
                 .iter()
                 .map(|c| c.0)
                 .collect();
@@ -482,30 +526,25 @@ fn specialize_sampler_params(original: Lines) -> Lines {
                     return None;
                 }
                 let (end, chosen, with) = {
-                    let (_, end, args) = calls(&scanned, &body, &f.name, &[])
+                    let (_, end, args) = calls(&scanned, body.text(), &f.name, &[])
                         .into_iter()
                         .find(|c| c.0 == start)?;
                     let chosen = chosen_samplers(f, &args);
-                    let rest: Vec<&str> = args
-                        .iter()
-                        .enumerate()
-                        .filter(|(n, _)| !f.samplers.iter().any(|(s, _)| s == n))
-                        .map(|(_, a)| a.trim())
-                        .collect();
-                    let with = format!("{}_hz_{}({})", f.name, chosen.join("_"), rest.join(", "));
+                    let with = specialized_call(&body, start, f, &chosen, &args);
                     (end, chosen, with)
                 };
                 if chosen.len() != f.samplers.len() || !chosen.iter().all(|a| is_name(a)) {
                     return None;
                 }
                 found.push(chosen);
-                body.replace_range(start..end, &with);
+                body.replace_lines(start..end, with);
             }
             Some((body, found))
         };
         let specialize = |g: &SamplerFn, chosen: &[String]| {
-            let body = read_samplers(g.body.as_deref().unwrap_or_default(), &g.samplers, chosen);
-            rewrite_own_calls(&body)
+            let mut body = lines.slice(g.body_at..g.end);
+            read_samplers(&mut body, &g.samplers, chosen);
+            rewrite_own_calls(body)
         };
         let same: Vec<&SamplerFn> = functions.iter().filter(|g| g.name == f.name).collect();
         let mut next = 0;
@@ -529,45 +568,60 @@ fn specialize_sampler_params(original: Lines) -> Lines {
         if !followable {
             break;
         }
-        // One copy of an overload per set of samplers its callers pass, keeping its other
-        // parameters; a prototype becomes the copies' prototypes.
-        let signature = |g: &SamplerFn, chosen: &[String]| {
-            let params: Vec<&str> = g
-                .params
-                .iter()
-                .enumerate()
-                .filter(|(n, _)| !g.samplers.iter().any(|(s, _)| s == n))
-                .map(|(_, p)| p.as_str())
-                .collect();
-            format!(
-                "{} {}_hz_{}({})",
-                g.return_type,
-                g.name,
-                chosen.join("_"),
-                params.join(", ")
-            )
-        };
-        // A copy's lines come from the function's: its header's line, then its body's line for
-        // line while the copy keeps their count (else the line it starts on).
+        // One copy per set of samplers, including for prototypes. The signature keeps the
+        // spans it copies; the body's fallback line origins stay line for line when possible.
         let copies_of = |g: &SamplerFn| -> Lines {
             let header = lines.origin_at(g.start);
+            let copy = |out: &mut Lines, range: Range<usize>| {
+                out.push_spanned(&lines.text()[range.clone()], header, &lines, range);
+            };
+            let write = |out: &mut Lines, code: &str| {
+                out.push_replacement(code, header, &lines, g.start);
+            };
             let mut copies = Lines::default();
             for chosen in &variants {
+                copy(&mut copies, g.start..g.return_type_end);
+                write(&mut copies, " ");
+                copies.push_replacement(
+                    &format!("{}_hz_{}", g.name, chosen.join("_")),
+                    header,
+                    &lines,
+                    g.name_at,
+                );
+                copy(&mut copies, g.open_paren..g.open_paren + 1);
+                let retained = g
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter(|(n, _)| !g.samplers.iter().any(|(s, _)| s == n));
+                for (i, (_, range)) in retained.enumerate() {
+                    if i != 0 {
+                        write(&mut copies, ", ");
+                    }
+                    copy(&mut copies, range.clone());
+                }
+                copy(&mut copies, g.close_paren..g.close_paren + 1);
                 match &g.body {
                     Some(written) => {
                         let body = specialize(g, chosen).map(|(b, _)| b).unwrap_or_default();
-                        copies.push(&format!("{} ", signature(g, chosen)), header);
-                        let from: &[Option<Origin>] = lines.origins_from(g.body_at);
-                        if body.matches('\n').count() == written.matches('\n').count() {
-                            for (n, piece) in body.split_inclusive('\n').enumerate() {
-                                copies.push(piece, from[n]);
+                        write(&mut copies, " ");
+                        let from = lines.origins_from(g.body_at);
+                        let text = body.text();
+                        if text.matches('\n').count() == written.matches('\n').count() {
+                            let mut at = 0;
+                            for (n, piece) in text.split_inclusive('\n').enumerate() {
+                                copies.push_spanned(piece, from[n], &body, at..at + piece.len());
+                                at += piece.len();
                             }
                         } else {
-                            copies.push(&body, from[0]);
+                            copies.push_spanned(text, from[0], &body, 0..text.len());
                         }
                         copies.push("\n", header);
                     }
-                    None => copies.push(&format!("{};\n", signature(g, chosen)), header),
+                    None => {
+                        copy(&mut copies, g.body_at..g.end);
+                        write(&mut copies, "\n");
+                    }
                 }
             }
             copies
@@ -617,34 +671,25 @@ fn specialize_sampler_params(original: Lines) -> Lines {
         edits.sort_by_key(|(start, _)| std::cmp::Reverse(*start));
         let mut sound = true;
         for (start, edit) in edits {
-            let (end, with, with_lines) = match edit {
-                Some((end, with)) => (end, with.text().to_owned(), Some(with)),
+            let (end, with) = match edit {
+                Some(edit) => edit,
                 None => {
-                    let found = calls(&scanned, &text, &f.name, &[])
+                    let found = calls(&scanned, lines.text(), &f.name, &[])
                         .into_iter()
                         .find(|c| c.0 == start);
                     let Some((_, end, args)) = found else {
                         continue;
                     };
-                    let rest: Vec<&str> = args
-                        .iter()
-                        .enumerate()
-                        .filter(|(n, _)| !f.samplers.iter().any(|(s, _)| s == n))
-                        .map(|(_, a)| a.trim())
-                        .collect();
-                    let copy = format!("{}_hz_{}", f.name, chosen_samplers(f, &args).join("_"));
-                    (end, format!("{copy}({})", rest.join(", ")), None)
+                    let chosen = chosen_samplers(f, &args);
+                    (end, specialized_call(&lines, start, f, &chosen, &args))
                 }
             };
             if start > end || text.get(start..end).is_none() || spent() {
                 sound = false;
                 break;
             }
-            text.replace_range(start..end, &with);
-            match with_lines {
-                Some(with) => lines.replace_lines(start..end, with),
-                None => lines.replace(start..end, &with),
-            }
+            text.replace_range(start..end, with.text());
+            lines.replace_lines(start..end, with);
         }
         if !sound {
             break;

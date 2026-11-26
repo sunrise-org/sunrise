@@ -47,13 +47,14 @@ pub(crate) enum Refusal {
     /// An include the selected packs don't have (`ns:path`, as the shader asks for it).
     IncludeMissing { id: String },
     /// An include refused (`refusal`: missing, unreadable, over the budget, not text) at the
-    /// directive asking for it, in the file (`ns:path`) and on the line that has it.
+    /// directive asking for it, with the authored file and line and the stage that asked.
     Include {
         file: String,
         line: u32,
+        stage: Option<naga::ShaderStage>,
         refusal: Box<Refusal>,
     },
-    /// The translator refused the GLSL, at the files and lines the author wrote.
+    /// The translator refused the GLSL, with the authored positions and responsible stages.
     Translation(Vec<sunrise_glsl::Error>),
     /// The translator panicked on it.
     Panicked(String),
@@ -74,8 +75,12 @@ impl std::fmt::Display for Refusal {
             Self::Include {
                 file,
                 line,
+                stage,
                 refusal,
-            } => write!(f, "{file}:{line}: {refusal}"),
+            } => {
+                let message = sunrise_glsl::shader_message(*stage, refusal);
+                write!(f, "{file}:{line}: {message}")
+            }
             Self::Translation(errors) => f.write_str(&sunrise_glsl::describe(errors)),
             Self::Panicked(e) => write!(f, "the shader translator failed: {e}"),
         }
@@ -146,7 +151,8 @@ fn selected_stages(
 
 /// The program `stages` (as [`selected_stages`] gives them) make with `defines` and `glue`, the
 /// pipeline giving the blocks and samplers `provided` says yes to; or why it is refused, a file
-/// the translation couldn't read named by its path, a panic in the translator a refusal too
+/// the translation couldn't read named by its path and the stage that needed it, a panic in
+/// the translator a refusal too
 /// ([`contained`]).
 fn translate_selected(
     root: &ResourceSource,
@@ -165,7 +171,8 @@ fn translate_selected(
     let (vertex_file, fragment_file) =
         (stage_id(vertex_name, "vsh"), stage_id(fragment_name, "fsh"));
     let stages = sunrise_glsl::Stages {
-        dir: "minecraft:shaders/core/",
+        vertex_dir: "minecraft:shaders/core/",
+        fragment_dir: "minecraft:shaders/core/",
         vertex,
         fragment,
         vertex_file: &vertex_file,
@@ -175,12 +182,13 @@ fn translate_selected(
         crate::core_shader::translate_core_at(&stages, defines, &include, glue, provided)
     });
     // An include that couldn't be given stops the translation at its directive, the error's
-    // file and line.
+    // file, line and stage.
     translated.map_err(|e| match (e, unavailable.into_inner()) {
         (Refusal::Translation(errors), Some(refusal)) => match errors.first() {
             Some(at) => Refusal::Include {
                 file: at.file.clone(),
                 line: at.line,
+                stage: at.stage,
                 refusal: Box::new(refusal),
             },
             None => refusal,
@@ -948,6 +956,7 @@ mod tests {
         Refusal::Include {
             file: "minecraft:shaders/core/lightmap.fsh".into(),
             line,
+            stage: Some(naga::ShaderStage::Fragment),
             refusal: Box::new(refusal),
         }
     }
@@ -1157,13 +1166,9 @@ mod tests {
             missing.unwrap_err(),
             RequiredShaderRefused {
                 pipeline: "minecraft:pipeline/lightmap",
-                why: in_lightmap(
-                    2,
-                    Refusal::IncludeMissing {
-                        id: "minecraft:shaders/include/other.glsl".into()
-                    }
-                )
-                .to_string()
+                why: "minecraft:shaders/core/lightmap.fsh:2: fragment shader: \
+                      minecraft:shaders/include/other.glsl is not in the selected packs"
+                    .to_owned(),
             },
             "another missing import"
         );

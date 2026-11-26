@@ -11,10 +11,8 @@ impl Game<'_> {
     }
     /// The stack at a resolved display slot on the active item tab, accounting for scroll.
     pub(super) fn creative_display_stack(&self, slot: usize) -> Option<ItemStack> {
-        let names = &self.pack.names;
-        let cell = slot - Creative::DISPLAY;
-        let first_row = self.creative_screen.first_row(names);
-        self.creative_screen.shown(names, first_row * 9 + cell)
+        let shown = self.creative_screen.display_window(&self.pack.names);
+        shown.stack(slot).cloned()
     }
     pub(super) fn creative_origin(batch: &HudBatch) -> (f32, f32) {
         batch.centered_origin(Creative::WIDTH, Creative::HEIGHT)
@@ -206,23 +204,20 @@ impl Game<'_> {
             }
             self.draw_hovered_slot_highlight(batch, true, ox, oy);
         } else {
-            let items = self.creative_screen.items(&self.pack.names);
-            let first = self.creative_screen.first_row(&self.pack.names);
-            for r in 0..5 {
-                for c in 0..9 {
-                    let Some(stack) = items.get((first + r) * 9 + c).filter(|s| s.count > 0) else {
-                        continue;
-                    };
-                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                    let over = hovered_slot == Some(Creative::DISPLAY + r * 9 + c);
-                    if over {
-                        self.draw_slot_highlight(batch, false, x, y);
-                    }
-                    self.draw_item(batch, stack, x, y);
-                    if over {
-                        self.draw_slot_highlight(batch, true, x, y);
-                        hovered = Some((stack.clone(), true));
-                    }
+            let shown = self.creative_screen.display_window(&self.pack.names);
+            for (slot, (x, y)) in Creative::display_slots() {
+                let Some(stack) = shown.stack(slot) else {
+                    continue;
+                };
+                let (x, y) = (ox + x, oy + y);
+                let over = hovered_slot == Some(slot);
+                if over {
+                    self.draw_slot_highlight(batch, false, x, y);
+                }
+                self.draw_item(batch, stack, x, y);
+                if over {
+                    self.draw_slot_highlight(batch, true, x, y);
+                    hovered = Some((stack.clone(), true));
                 }
             }
             let drag = self.drag_view();
@@ -238,8 +233,7 @@ impl Game<'_> {
                     hovered = self.inventory[c].clone().map(|s| (s, false));
                 }
             }
-            let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
-            let scroller = if scrollable {
+            let scroller = if shown.can_scroll() {
                 "container/creative_inventory/scroller"
             } else {
                 "container/creative_inventory/scroller_disabled"

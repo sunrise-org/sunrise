@@ -73,9 +73,9 @@ fn parse_errors_name_where_the_caller_says_their_line_came_from() {
     assert_eq!(
         errors
             .iter()
-            .map(|e| (e.file.as_str(), e.line))
+            .map(|e| (e.file.as_str(), e.line, e.stage))
             .collect::<Vec<_>>(),
-        [("pack.csh", 104)]
+        [("pack.csh", 104, Some(ShaderStage::Compute))]
     );
 }
 

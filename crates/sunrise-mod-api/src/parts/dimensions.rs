@@ -10,7 +10,10 @@ impl PartRegistrar {
         for dimension in &self.dimensions {
             let generator = &dimension.settings.generator;
             if generator != mod_vocab::__private::NOISE_GENERATOR
-                && !self.chunk_generators.iter().any(|g| *g.id == **generator)
+                && !self
+                    .chunk_generators
+                    .iter()
+                    .any(|g| g.id.as_str() == generator.as_str())
             {
                 self.refused.push(format!(
                     "{} registered dimension {} with the unknown generator {generator:?}",
@@ -120,21 +123,30 @@ impl DimensionsRegistrar for PartRegistrar {
         });
     }
     fn add_chunk_generator(&mut self, name: &str, generator: Arc<dyn crate::ChunkGenerator>) {
-        let id = match self.declaration_id(name) {
-            Ok(id) => id,
-            Err(reason) => {
-                self.refused.push(reason);
-                return;
-            }
+        let name = qualified(self.mod_id, name);
+        let Some(id) = crate::Identifier::parse_namespaced(&name) else {
+            self.refused.push(format!(
+                "mod {} declares {}",
+                self.mod_id,
+                DeclarationError::InvalidId { id: name }
+            ));
+            return;
         };
-        let refusal = if !valid_level_id(&id) {
+        // Identifier already checked the resource location; also require safe folder components.
+        let refusal = if id.namespace() == "."
+            || id
+                .path()
+                .split('/')
+                .any(|part| matches!(part, "" | "." | ".."))
+        {
             Some(format!(
-                "{} registered chunk generator {id:?}, whose name must be lowercase letters, \
+                "{} registered chunk generator {:?}, whose name must be lowercase letters, \
                  digits and _ . - with / between segments, none empty, `.` or `..`",
-                self.mod_id
+                self.mod_id,
+                id.as_str()
             ))
         } else if VANILLA_CHUNK_GENERATORS.contains(&id.as_str())
-            || self.has_builtin_entry("minecraft:worldgen/chunk_generator", &id)
+            || self.has_builtin_entry("minecraft:worldgen/chunk_generator", id.as_str())
         {
             Some(format!(
                 "{} registered chunk generator {id}, which is the game's own",
@@ -143,7 +155,7 @@ impl DimensionsRegistrar for PartRegistrar {
         } else {
             self.chunk_generators
                 .iter()
-                .any(|g| *g.id == *id)
+                .any(|g| g.id == id)
                 .then(|| format!("{} registered chunk generator {id} twice", self.mod_id))
         };
         if let Some(refusal) = refusal {
@@ -151,7 +163,7 @@ impl DimensionsRegistrar for PartRegistrar {
             return;
         }
         self.chunk_generators.push(ChunkGeneratorInfo {
-            id: id.into(),
+            id,
             // ChunkGenerator.vanilla_stages, asked once.
             stages: generator.vanilla_stages(),
             generator,
@@ -321,7 +333,7 @@ mod tests {
             assert_eq!(
                 r.chunk_generators
                     .iter()
-                    .map(|g| &*g.id)
+                    .map(|g| g.id.as_str())
                     .collect::<Vec<_>>(),
                 ["maker:void", "other:void", "minecraft:custom_gen"]
             );
@@ -331,6 +343,21 @@ mod tests {
             );
             assert_eq!(r.refused.len(), 13, "{:?}", r.refused);
             assert!(r.refused.iter().all(|msg| msg.contains("maker")));
+
+            for invalid in ["", ":void", "other:Bad"] {
+                r.add_chunk_generator(invalid, Arc::new(Void));
+                assert!(r.refused.last().unwrap().contains("invalid identifier"));
+            }
+            for unsafe_folder in [".:void", "other:a//b", "other:a/./b", "other:a/../b"] {
+                r.add_chunk_generator(unsafe_folder, Arc::new(Void));
+                assert!(
+                    r.refused
+                        .last()
+                        .unwrap()
+                        .contains("with / between segments")
+                );
+            }
+            assert_eq!(r.chunk_generators.len(), 3);
         });
     }
 }

@@ -1004,6 +1004,15 @@ fn menu_slot_boxes_take_a_client_host(
     menu.slot_boxes(host)
 }
 
+/// Compile-only: a client mod reads the creative catalog's cells through its menu handle.
+#[allow(dead_code)]
+fn menu_creative_catalog_takes_a_client_host(
+    host: &dyn ClientHost,
+    menu: MenuRef,
+) -> Option<Vec<([f32; 4], Option<ItemStack>)>> {
+    menu.creative_catalog(host)
+}
+
 /// Compile-only: the world data, tick, sky and sight queries as a mod calls them, the reads on any
 /// host and the writes (which move the level's random or its saved data) on a server host.
 #[allow(dead_code)]

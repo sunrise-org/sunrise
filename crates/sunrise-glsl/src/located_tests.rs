@@ -1,5 +1,4 @@
-//! Errors at the file and line the author wrote, through includes nested in includes and the
-//! rewrites that add, drop and move lines.
+//! Errors at the file, line and column the author wrote, through nested includes and rewrites.
 use super::tests::{FSH_FILE, LIMITS, VSH_FILE, translate_core_at};
 use super::*;
 
@@ -36,7 +35,7 @@ const FILES: [(&str, &str); 6] = [
     // A helper taking the sampler it reads, above the sampler's declaration: copied below it.
     (
         "minecraft:shaders/include/tap.glsl",
-        "vec4 tap(sampler2D s, vec2 uv) {\n    vec4 c = texture(s, uv);\n    return c * missing_scale;\n}\n",
+        "vec4 tap(sampler2D s, vec2 uv) {\n    vec4 c = texture(s, uv);\n    return texture(s, uv) * missing_scale;\n}\n",
     ),
     // An include of a file nobody has, on line 2.
     (
@@ -59,7 +58,8 @@ fn read(id: &str) -> Result<Option<String>, String> {
 
 fn translate(vertex: &str, fragment: &str) -> Result<Translated, Vec<Error>> {
     let stages = Stages {
-        dir: "minecraft:shaders/core/",
+        vertex_dir: "minecraft:shaders/core/",
+        fragment_dir: "minecraft:shaders/core/",
         vertex,
         fragment,
         vertex_file: VSH_FILE,
@@ -73,8 +73,8 @@ fn located(errors: &[Error]) -> Vec<(&str, u32)> {
     errors.iter().map(|e| (e.file.as_str(), e.line)).collect()
 }
 
-/// An error in a file an included file includes names that file and the line it is written
-/// on, past the lines an inactive branch drops, a comment, a continued line and a `#line`.
+/// An error in a nested include names its file, physical line and column, past the lines an
+/// inactive branch drops, a comment, a continued line and a `#line`.
 #[test]
 fn an_error_in_a_nested_include_names_that_file_and_line() {
     let fsh = "#version 330\n// the stage\n#include <minecraft:outer.glsl>\n\
@@ -82,31 +82,32 @@ fn an_error_in_a_nested_include_names_that_file_and_line() {
         void main() { fragColor = vertexColor * broken; }\n";
     let errors = translate(VSH, fsh).unwrap_err();
     assert_eq!(
-        located(&errors),
-        [("minecraft:shaders/include/inner/deep.glsl", 6)]
+        (errors[0].file.as_str(), errors[0].line, errors[0].column),
+        ("minecraft:shaders/include/inner/deep.glsl", 6, 16)
     );
-    assert!(
-        errors[0].message.starts_with("fragment shader: "),
-        "{errors:?}"
-    );
+    assert_eq!(errors[0].stage, Some(ShaderStage::Fragment));
 }
 
-/// The stage's own lines keep their numbers past the rewrites that add lines: the glue before
-/// the vertex stage's code, a sampler split into three lines, two declarations on one line.
+/// The stage keeps its line and column past glue, rewritten declarations and macro expansion.
 #[test]
 fn an_error_in_the_stage_keeps_its_line_past_the_rewrites() {
     let vsh = "#version 330\nuniform sampler2D Sampler0;\nin vec3 Position;\n\
-        out vec4 vertexColor;out vec2 uv;\nvoid main() {\n\
+        out vec4 vertexColor;out vec2 uv;\n#define S 100.0\nvoid main() {\n\
             vertexColor = texture(Sampler0, vec2(0.0));\n\
-            uv = vec2(1.0); gl_Position = vec4(Position, nope);\n}\n";
+            uv = vec2(S); gl_Position = vec4(Position, nope);\n}\n";
     let fsh = "#version 330\nin vec4 vertexColor;\nin vec2 uv;\nout vec4 fragColor;\n\
         void main() { fragColor = vertexColor * uv.x; }\n";
     let errors = translate(vsh, fsh).unwrap_err();
-    assert_eq!(located(&errors), [(VSH_FILE, 7)]);
+    assert_eq!(
+        (errors[0].file.as_str(), errors[0].line, errors[0].column),
+        (VSH_FILE, 8, 44)
+    );
+    assert_eq!(errors[0].stage, Some(ShaderStage::Vertex));
+    assert!(errors[0].message.starts_with('('), "{errors:?}");
 }
 
 /// A helper taking a sampler is copied per sampler passed, below the sampler's declaration:
-/// an error in it names the line of the helper's body it is on.
+/// an error names its original line and column, even after a parameter changes on that line.
 #[test]
 fn an_error_in_a_copied_helper_names_its_bodys_line() {
     let fsh = "#version 330\n#moj_import <minecraft:tap.glsl>\nuniform sampler2D Sampler0;\n\
@@ -114,8 +115,8 @@ fn an_error_in_a_copied_helper_names_its_bodys_line() {
         void main() { fragColor = tap(Sampler0, vec2(0.5)) * vertexColor; }\n";
     let errors = translate(VSH, fsh).unwrap_err();
     assert_eq!(
-        located(&errors),
-        [("minecraft:shaders/include/tap.glsl", 3)]
+        (errors[0].file.as_str(), errors[0].line, errors[0].column),
+        ("minecraft:shaders/include/tap.glsl", 3, 29)
     );
 }
 
@@ -131,6 +132,8 @@ fn a_refused_include_names_the_directive_in_the_file_that_asks() {
         [Error {
             file: "minecraft:shaders/include/asks.glsl".into(),
             line: 2,
+            column: 0,
+            stage: Some(ShaderStage::Fragment),
             unprovided: None,
             message: "minecraft:shaders/include/absent.glsl not found".into(),
         }]
@@ -149,6 +152,8 @@ fn a_location_no_stage_writes_names_the_input() {
         [Error {
             file: FSH_FILE.into(),
             line: 3,
+            column: 1,
+            stage: Some(ShaderStage::Fragment),
             unprovided: None,
             message: "the fragment shader reads location 5, which the vertex shader doesn't write"
                 .into(),
@@ -203,10 +208,7 @@ fn a_validation_error_in_an_include_names_its_file_and_line() {
         [("minecraft:shaders/include/pick.glsl", 4)]
     );
     // Not the parser's: its errors quote the line they read.
-    assert!(
-        !errors[0].message.starts_with("fragment shader: ("),
-        "{errors:?}"
-    );
+    assert!(!errors[0].message.starts_with('('), "{errors:?}");
 }
 
 /// A validation error whose span is in no line the author wrote (an entry point using what its

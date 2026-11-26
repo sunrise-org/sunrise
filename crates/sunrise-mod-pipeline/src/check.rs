@@ -1,47 +1,42 @@
 //! Backend translation checks and located diagnostics for mod render pipeline GLSL programs.
+use naga::ShaderStage;
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::fmt;
 
 /// What is wrong, and where: a file by its asset path (`assets/<namespace>/<path>`, an `#include`d
-/// file's too), with the 1-based line and column when known (0 when not).
+/// file's too), with the 1-based line and column when known (0 when not). Its display names the
+/// shader stage when the problem is specific to one stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Problem {
     pub file: String,
     pub line: usize,
     pub column: usize,
+    /// The shader stage responsible, or `None` for a program-wide or unattributed problem.
+    pub stage: Option<ShaderStage>,
+    /// The refusal without a stage prefix.
     pub message: String,
 }
 
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = sunrise_glsl::shader_message(self.stage, &self.message);
         if self.line == 0 {
-            write!(f, "{}: {}", self.file, self.message)
+            write!(f, "{}: {message}", self.file)
         } else {
-            write!(
-                f,
-                "{}:{}:{}: {}",
-                self.file, self.line, self.column, self.message
-            )
+            write!(f, "{}:{}:{}: {message}", self.file, self.line, self.column)
         }
     }
 }
 
-pub fn problem(file: &str, message: impl Into<String>) -> Problem {
+/// A refusal at the file as a whole, attributed to `stage` when known.
+pub fn problem(file: &str, stage: Option<ShaderStage>, message: impl Into<String>) -> Problem {
     Problem {
         file: file.to_owned(),
         line: 0,
         column: 0,
+        stage,
         message: message.into(),
     }
-}
-
-/// 1-based `(line, column)` of byte offset `offset` inside `text`.
-pub fn line_column(text: &str, offset: usize) -> (usize, usize) {
-    let clamped = offset.min(text.len());
-    let before = &text[..clamped];
-    let line = before.matches('\n').count() + 1;
-    let column = before.len() - before.rfind('\n').map_or(0, |i| i + 1) + 1;
-    (line, column)
 }
 
 /// Validates `module` and translates every entry point for Vulkan (SPIR-V), Metal (MSL) and

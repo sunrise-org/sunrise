@@ -281,7 +281,7 @@ fn a_runtime_checkerboard_resolves_tags_before_admission_and_uses_their_biomes()
         fn build_terrain(&self, _: &mut dyn ChunkAccess) {}
     }
     let generators = ModChunkGenerators::from([(
-        "checker:test".into(),
+        mod_api::Identifier::parse("checker:test").unwrap(),
         Arc::new(Terrain) as Arc<dyn ModChunkGenerator>,
     )]);
     with_opener("checker", "checker:level", flat(), |game, _| {
@@ -1013,7 +1013,7 @@ fn load_chunk_fails_where_a_mods_generator_panics() {
     }
     let breaks: Arc<dyn ModChunkGenerator> = Arc::new(Breaks);
     install_mod_chunk_generators(ModChunkGenerators::from([(
-        "broken:terrain".to_owned(),
+        mod_api::Identifier::parse("broken:terrain").unwrap(),
         breaks,
     )]))
     .map_err(|_| "installed twice")

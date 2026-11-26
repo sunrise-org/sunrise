@@ -501,7 +501,8 @@ impl Assets<'_> {
 }
 
 /// Reads, translates and validates one program, as [`pipeline_shaders`] documents: every refusal
-/// as `<file>[:<line>:<column>]: <message>`.
+/// as `<file>[:<line>:<column>]: [<stage> shader: ]<message>` when its position and stage
+/// are known.
 ///
 /// The check has no `RenderPipeline`, so it cannot know which vertex format the mod registers:
 /// the game's registration decides that. It takes the vertex `in`s the program declares, each on
@@ -765,6 +766,45 @@ mod tests {
             );
             let (count, refused) = pipeline_shaders(&blur_program(&fsh), None);
             assert_eq!((count, refused), (1, Vec::<String>::new()), "{what}");
+        }
+    }
+
+    /// The same authored include position can fail in either stage; the CLI names which one.
+    #[test]
+    fn a_shared_include_error_names_the_stage_that_failed() {
+        let include = "#include <m:shared.glsl>\n";
+        let shared = "#ifdef BROKEN\nvec4 sharedColor() {\n    return missing_color;\n}\n\
+                      #else\nvec4 sharedColor() { return vec4(1.0); }\n#endif\n";
+        for (vertex_define, fragment_define, failing_stage) in [
+            ("#define BROKEN\n", "", "vertex"),
+            ("", "#define BROKEN\n", "fragment"),
+        ] {
+            let vertex = format!(
+                "#version 330\n{vertex_define}{include}void main() {{ gl_Position = sharedColor(); }}\n"
+            );
+            let fragment = format!(
+                "#version 330\n{fragment_define}{include}out vec4 fragColor;\n\
+                 void main() {{ fragColor = sharedColor(); }}\n"
+            );
+            let files = BTreeMap::from([
+                (
+                    "assets/m/shaders/core/shared.vsh".to_owned(),
+                    vertex.into_bytes(),
+                ),
+                (
+                    "assets/m/shaders/core/shared.fsh".to_owned(),
+                    fragment.into_bytes(),
+                ),
+                (
+                    "assets/m/shaders/include/shared.glsl".to_owned(),
+                    shared.as_bytes().to_vec(),
+                ),
+            ]);
+            let (count, refused) = pipeline_shaders(&files, None);
+            assert_eq!((count, refused.len()), (1, 1), "{refused:?}");
+            let prefix =
+                format!("assets/m/shaders/include/shared.glsl:3:12: {failing_stage} shader: ");
+            assert!(refused[0].starts_with(&prefix), "{refused:?}");
         }
     }
 

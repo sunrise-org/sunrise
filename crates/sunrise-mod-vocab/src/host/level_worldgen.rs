@@ -92,6 +92,15 @@ pub trait LevelWorldgenBackend {
     /// Side: server.
     /// The world's seed (`WorldOptions.seed`), as `/seed` shows it.
     fn level_seed(&self, level: LevelRef) -> Option<i64>;
+    /// Side: server.
+    /// The id of the chunk generator this level was made with, as `BuiltInRegistries.CHUNK_GENERATOR`
+    /// names its codec (`level.getChunkSource().getGenerator()`): `minecraft:noise`,
+    /// `minecraft:flat` (a superflat world, and a level a mod opened with layers or air),
+    /// `minecraft:debug`, or the name a mod registered its generator under
+    /// (`register_chunk_generator`). Reports the generator the server actually built, not
+    /// necessarily the one named in a pack or saved stem: a flat stem takes precedence over
+    /// the saved Debug preset. None for a stale level and on a client.
+    fn level_generator_type(&self, level: LevelRef) -> Option<Identifier>;
 }
 /// The handles' writes of the `level_worldgen` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

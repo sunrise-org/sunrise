@@ -13,7 +13,7 @@
 //!   [`BindingMap`];
 //! - the module is validated with every capability and subgroup operation naga has.
 //!
-//! Errors name where [`Source::locate`] says each line came from.
+//! Errors name the stage and where [`Source::locate`] says each line came from.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -51,7 +51,7 @@ pub struct Source<'a> {
 const MAX_PARSES: u32 = 256;
 
 /// `source` parsed under `limits` and validated, the resources its code declares bound through
-/// `bindings`.
+/// `bindings`. Diagnostics carry `source`'s stage and the caller's line mapping.
 pub fn compile_stage(
     source: &Source,
     bindings: &BindingMap,
@@ -64,7 +64,9 @@ pub fn compile_stage(
     let at = |text: &str, span: naga::Span, message: String| {
         let start = span.to_range().map_or(0, |r| r.start);
         let line = text[..start.min(text.len())].matches('\n').count();
-        (source.locate)(line).error(message)
+        (source.locate)(line)
+            .error(message)
+            .with_stage(source.stage)
     };
     let mut text = String::with_capacity(source.header.len() + source.code.len());
     text.push_str(source.header);

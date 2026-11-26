@@ -86,7 +86,6 @@
   "crate::game::PhantomSpawnResult",
   "crate::entity::types::PierceLevelError",
   "crate::client::render_pipeline::PipelineBlend",
-  "crate::client::render_pipeline::PipelineVertexFormat",
   "crate::entity::mobs::Pose",
   "crate::world::types::ProgressType",
   "crate::content::content_declarations::PushReaction",

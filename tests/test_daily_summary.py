@@ -13,6 +13,7 @@ from unittest import mock
 
 from tests.os_support import needs_runner_shell
 from tests.test_ci_concurrency import ROOT
+from tests.test_release_branches import MAIN, NIGHTLY, RELEASE, git_in, repository, run_gate
 from tools import sunrise_mod_binstall
 from tools.ci import daily_summary as summary, parity_verdict
 from tools.ci import vendored_yaml
@@ -1129,30 +1130,63 @@ class DailyWorkflowTests(unittest.TestCase):
         self.assertEqual(jobs["resolve"]["outputs"]["parity_required"], "${{ steps.commit.outputs.parity_required }}")
         self.assertIn("needs.resolve.outputs.parity_required == 'true'", jobs["parity"]["if"])
 
+    def resolve_commit(self, folder, ref, source, commit, *, dry_input="false", scheduled="false", break_glass="false"):
+        steps = self.workflow["jobs"]["resolve"]["steps"]
+        auth = run_gate(steps[-2]["run"], DRY_INPUT=dry_input, GITHUB_REF=ref)
+        out = Path(folder, "out")
+        out.write_text("")
+        env = {**os.environ, "COMMIT": commit, "DRY_RUN": auth["dry_run"], "SCHEDULED": scheduled,
+               "BREAK_GLASS": break_glass, "GITHUB_SHA": source, "GITHUB_REF": ref, "GITHUB_OUTPUT": str(out),
+               "GITHUB_STEP_SUMMARY": str(Path(folder, "summary")), "GIT_ALLOW_PROTOCOL": "file"}
+        result = subprocess.run(["bash", "-e", "-c", steps[-1]["run"]], cwd=Path(folder, "clone"), env=env,
+                                capture_output=True, text=True)
+        return result, out.read_text()
+
     @needs_runner_shell
     def test_every_writing_run_requires_parity_and_only_a_dry_run_leaves_it_out(self):
-        resolve = self.workflow["jobs"]["resolve"]
         with tempfile.TemporaryDirectory() as folder:
-            folder = Path(folder)
-            # A checked-in resolve job body exercised with a substitute git: an older commit of main writes too, so
-            # it runs parity as main's head does.
-            stub = folder / "git"
-            stub.write_text('#!/bin/sh\n[ "$1" != rev-parse ] || printf "%s\\n" "${4%%^*}"\n')
-            stub.chmod(0o755)
-            out = folder / "out"
-            for ref, dry, commit, required in (("main", "false", "head", "true"),
-                                               ("main", "false", "older", "true"),
-                                               ("main", "true", "head", "false"),
-                                               ("release/26.3", "false", "head", "true"),
-                                               ("nightly/26.3", "false", "head", "false"),
-                                               ("topic", "false", "head", "false")):
-                with self.subTest(ref=ref, dry=dry, commit=commit):
-                    out.unlink(missing_ok=True)
-                    env = {**os.environ, "PATH": f"{folder}{os.pathsep}{os.environ['PATH']}", "COMMIT": commit,
-                           "DRY_RUN": dry, "SCHEDULED": "false", "GITHUB_SHA": "head", "GITHUB_REF": f"refs/heads/{ref}",
-                           "GITHUB_OUTPUT": str(out)}
-                    subprocess.run(["bash", "-e", "-c", resolve["steps"][-1]["run"]], env=env, check=True)
-                    self.assertIn(f"parity_required={required}", out.read_text().splitlines())
+            git, (older, source, later) = repository(folder)
+            git("push", "-q", "origin", f"{later}:{RELEASE}")
+            for ref, dispatch, tested, dry_input, writes in (
+                    (MAIN, later, later, "false", True), (MAIN, later, older, "false", True),
+                    (RELEASE, later, later, "false", True), (RELEASE, later, older, "false", True),
+                    (MAIN, source, later, "true", False), (NIGHTLY, later, later, "false", False),
+                    ("refs/heads/topic", later, later, "false", False)):
+                with self.subTest(ref=ref, dispatch=dispatch, tested=tested, dry_input=dry_input):
+                    result, out = self.resolve_commit(folder, ref, dispatch, tested[:12], dry_input=dry_input)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(dict(line.split("=", 1) for line in out.splitlines()),
+                                     {"commit": tested, "skip": "false", "dry_run": str(not writes).lower(),
+                                      "parity_required": str(writes).lower(),
+                                      "branch": ref.removeprefix("refs/heads/") if writes else ""})
+
+    @needs_runner_shell
+    def test_writing_resolution_refuses_commits_outside_the_dispatch_graph(self):
+        with tempfile.TemporaryDirectory() as folder:
+            git, (_, source, later) = repository(folder)
+            git("push", "-q", "origin", f"{later}:{RELEASE}")
+            # The checkout and both live branches contain the later commit; the immutable dispatch SHA does not.
+            # Neither --seen nor break-glass-legs can run here: these helpers aren't in the scratch checkout.
+            for ref, scheduled, break_glass in ((MAIN, "true", "false"), (RELEASE, "false", "true")):
+                with self.subTest(ref=ref):
+                    result, out = self.resolve_commit(folder, ref, source, later, scheduled=scheduled,
+                                                      break_glass=break_glass)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"::error::{later} is not in the dispatched workflow's history ({source})", result.stdout)
+                    self.assertEqual(result.stderr, "")
+                    self.assertEqual(out, "")
+
+    @needs_runner_shell
+    def test_writing_resolution_still_requires_the_live_branch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            git, (older, tested, source) = repository(folder)
+            git("push", "-q", "origin", f"{source}:{RELEASE}")
+            # The clone and the dispatch still contain tested, but the refreshed branch does not.
+            git_in(Path(folder, "origin"))("update-ref", RELEASE, older)
+            result, out = self.resolve_commit(folder, RELEASE, source, tested)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"::error::{tested} is not on release/26.3", result.stdout)
+            self.assertEqual(out, "")
 
     def test_every_leg_is_a_called_workflow_with_the_commit(self):
         # The summary's needs are the legs it judges (daily_summary.daily_legs): each a called workflow given

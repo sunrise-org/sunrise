@@ -1462,7 +1462,8 @@ fn gpu_program(
     };
     let (vertex_file, fragment_file) = (file("vsh"), file("fsh"));
     let stages = sunrise_glsl::Stages {
-        dir: &dir,
+        vertex_dir: &dir,
+        fragment_dir: &dir,
         vertex,
         fragment,
         vertex_file: &vertex_file,

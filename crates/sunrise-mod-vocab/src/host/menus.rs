@@ -112,6 +112,18 @@ pub trait MenusClientBackend {
     /// scale and the recipe book's horizontal offset.
     fn menu_slot_boxes(&self, menu: MenuRef) -> Option<Vec<Option<[f32; 4]>>>;
     /// Side: client.
+    /// The creative item or search tab's catalog cells (`ItemPickerMenu`'s 45
+    /// `CustomCreativeSlot`s, 9 by 5, left to right then top to bottom), which
+    /// [`MenuRef::slot_boxes`] leaves out because they are not `InventoryMenu`'s slots.
+    /// Each cell is its box (`[x, y, width, height]` in GUI pixels, as `slot_boxes` gives:
+    /// `leftPos`/`topPos` plus `9 + column * 18`, `18 + row * 18`, 16x16) and the stack it
+    /// shows from the tab's list scrolled to its first visible row (`scrollTo`: list index
+    /// `first_row * 9 + cell`), components included; `None` for a cell past the list's end.
+    /// `Some` of an empty list on the creative inventory tab, which shows no catalog.
+    /// Returns `None` for a stale menu, another screen, or no window.
+    /// Built per call; read it in the frame that draws over it.
+    fn menu_creative_catalog(&self, menu: MenuRef) -> Option<Vec<([f32; 4], Option<ItemStack>)>>;
+    /// Side: client.
     /// Slot roles from the client layout and content menu declaration, in menu order.
     /// The length equals `slot_count`. Machine inputs (including fuel and brewing
     /// bottle slots) are `Input`; unknown roles are `Other`. Roles describe neither
@@ -151,6 +163,18 @@ pub trait MenusClientBackendMut {
     /// the creative inventory screen and empty batches without changing items.
     /// True means submitted, not accepted by the server: its corrections win.
     fn menu_click(&mut self, menu: MenuRef, clicks: &[MenuClick]) -> bool;
+    /// Side: client.
+    /// Creative mode only: destroys the local player's carried (cursor) stack on the creative
+    /// inventory screen, as its destroy slot does (`CreativeModeInventoryScreen.slotClicked`,
+    /// `ItemPickerMenu.setCarried(EMPTY)`). With no active server container, that cursor is
+    /// the client's alone, so it is cleared locally and nothing is sent.
+    ///
+    /// `Ok(true)` means destroyed, `Ok(false)` that nothing was carried. Refuses outside a ready
+    /// client world (`Unavailable`), for a stale menu (`Stale`), outside creative mode
+    /// (`NotCreative`), or if the creative inventory screen is not visible or a server
+    /// container is active (`ServerOwnedMenu`). Refusals are checked before the cursor is read,
+    /// change nothing and send nothing.
+    fn menu_destroy_carried(&mut self, menu: MenuRef) -> Result<bool, CarriedDestroyError>;
     /// Side: client.
     /// Close the local player's open container screen as Escape does
     /// (`AbstractContainerScreen.onClose`, `LocalPlayer.closeContainer`): the

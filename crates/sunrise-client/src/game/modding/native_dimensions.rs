@@ -361,7 +361,7 @@ mod tests {
         let stem: serde_json::Value = serde_json::from_str(&dimensions[0].stem).unwrap();
         assert_eq!(stem["generator"]["type"], "later:void");
         let generators = crate::game::native_chunk_generator::installed_chunk_generators();
-        assert!(generators.contains_key("later:void"));
+        assert!(generators.contains_key(&mod_api::Identifier::parse("later:void").unwrap()));
     }
 
     /// What the engine calls is the mod's own code, under its namespaced id: its terrain, the
@@ -476,7 +476,7 @@ mod tests {
             sunrise_world::registry::BlockRegistry::from_facts_json(facts.as_bytes()).unwrap(),
         ));
         crate::game::api_values::resolve_block_definitions(registry).unwrap();
-        let generator = generators["test:marker"].clone();
+        let generator = generators[&mod_api::Identifier::parse("test:marker").unwrap()].clone();
         let (writes, data, biomes) = std::thread::spawn(move || {
             let mut chunk = Written(Vec::new(), registry, Vec::new());
             generator.build_terrain(&mut chunk);
