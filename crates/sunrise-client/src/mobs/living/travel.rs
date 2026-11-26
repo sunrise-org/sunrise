@@ -54,13 +54,14 @@ impl Mob {
             return ControlFlow::Continue(());
         };
         let mut velocity = self.velocity;
-        if !crate::travel_gate::decide(
+        if !crate::travel_gate::decide_controlled(
             w.loop_context,
             self.id,
             &self.kind.id,
             || route.mode(),
             &mut input,
             &mut velocity,
+            super::super::equine::controlled(self),
         ) {
             return ControlFlow::Continue(());
         }

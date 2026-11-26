@@ -131,7 +131,10 @@ pub fn main_with(
                 .order
                 .into_iter()
                 .filter(|&i| code_ids.contains(manifests[i].id.as_str()))
-                .map(|i| entries.remove(manifests[i].id.as_str()).unwrap())
+                .map(|i| {
+                    let entry = entries.remove(manifests[i].id.as_str()).unwrap();
+                    mod_api::__private::with_mod_side(entry, manifests[i].side)
+                })
                 .collect();
             mod_api::__private::install_dependencies(order.effective);
             mod_api::__private::install(mods.into());

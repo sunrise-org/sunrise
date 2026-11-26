@@ -546,7 +546,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `FireBlock.getIgniteOdds` and `getBurnOdds` of `state` at `pos`, asked
     /// from its side `face`: the level's answer, else the world's
     /// `neoforge:flammable` value, else `FireBlock.bootStrap`'s table.
-    fn fire_odds(&self, state: BlockStateId, pos: BlockPos, face: Direction) -> (i32, i32) {
+    pub(crate) fn fire_odds(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        face: Direction,
+    ) -> (i32, i32) {
         if self.b.is_waterlogged(state) {
             return (0, 0);
         }

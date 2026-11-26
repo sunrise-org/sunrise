@@ -1039,6 +1039,48 @@ impl Game<'_> {
         changed.then_some(drops)
     }
 
+    /// `Block.dropResources` of the block at `pos`, the block left in place: the loot with
+    /// `tool` and `breaker`, the block entity's contribution, the `block_drops` hook and the
+    /// experience, under `doTileDrops`, as `level_destroy_block` drops them, without the break
+    /// particles, the removal or the `block_destroy` game event. With `collect`, the stacks
+    /// come back instead of spawning. None for air and where `level_destroy_block` refuses.
+    pub(super) fn level_drop_resources(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        tool: Option<&ItemStack>,
+        breaker: Option<EntityRef>,
+        collect: bool,
+    ) -> Option<Vec<ItemStack>> {
+        if !self.native_level_write_position(level, pos).ok()? {
+            return None;
+        }
+        if let Some(entity) = breaker
+            && (self.native_entity_target(entity).is_none() || !self.native_entity_here(entity))
+        {
+            return None;
+        }
+        let [x, y, z] = pos;
+        let state = self.world.block(x, y, z);
+        if self.res.behaviours().is_air(state) {
+            return None;
+        }
+        if let Some(mut write) = super::journal_level_write::JournalLevelWrite::new(self, level) {
+            return Some(write.drop_resources(pos, state, tool, breaker, collect));
+        }
+        let at = sunrise_core::position::BlockPos::new(x, y, z);
+        let drops = self.with_level(|b, level, ticks| {
+            level.drop_tool = Some(((x, y, z), tool.cloned()));
+            level.drop_entity = breaker;
+            level.drop_breaker_at = breaker.map(|_| at);
+            level.drop_into = collect.then(Vec::new);
+            b.drop_resources(level, ticks, at, state);
+            level.drop_into.take().unwrap_or_default()
+        });
+        let _ = self.process_level_events();
+        Some(drops)
+    }
+
     pub(in crate::game) fn post_destroy_block_game_event(
         &mut self,
         pos: [i32; 3],
@@ -5655,6 +5697,171 @@ pub(super) mod tests {
             0x0102_0304_ffff_ffff_0000_0000_7fff_ffff
         );
     }
+    /// `LevelRef::drop_resources` (#5526) drops what `destroy_block` drops, without breaking
+    /// the block: a stone gives its cobblestone and stays, a chest gives itself and keeps its
+    /// contents, nothing drops under `doTileDrops` false, and air drops nothing. In a transaction the spawns wait for commit.
+    #[test]
+    #[ignore = "daily"]
+    fn drop_resources_drops_without_breaking() {
+        use super::super::{Audio, Game, Options, Progress, Settings, load_resources};
+        use mod_api::{Authority, BlockUpdateFlags, HostTransaction};
+        use std::{sync::Arc, time::Instant};
+        use sunrise_client::{chunk::Chunk, items::ItemStack};
+
+        let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            Instant::now(),
+            false,
+            super::super::execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = super::super::execution_role::ExecutionRole::IntegratedServer;
+        options.dedicated = Some(Vec::new());
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
+                root.to_path_buf(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.native_lifecycle
+            .begin_open(Some(Authority::IntegratedServer));
+
+        let level = game.level("minecraft:overworld").unwrap();
+        let stone = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone")
+            .unwrap();
+        let chest = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:chest")
+            .unwrap();
+        let air = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:air")
+            .unwrap();
+        let flags = BlockUpdateFlags::NEIGHBORS;
+        let count = |game: &Game<'_>, item: &str| {
+            game.dropped
+                .iter()
+                .filter(|dropped| dropped.stack.item.as_ref() == item)
+                .map(|dropped| dropped.stack.count)
+                .sum::<u32>()
+        };
+        assert_eq!(
+            game.level_set_block(level, [0, 64, 0], stone, flags),
+            Ok(true)
+        );
+        let collected = game
+            .level_drop_resources(level, [0, 64, 0], None, None, true)
+            .unwrap();
+        assert!(
+            collected
+                .iter()
+                .any(|stack| stack.item.as_ref() == "minecraft:cobblestone")
+        );
+        assert!(game.dropped.is_empty(), "collected, not spawned");
+        assert_eq!(game.world.block(0, 64, 0), stone, "the block stays");
+        assert_eq!(
+            game.level_drop_resources(level, [0, 64, 0], None, None, false),
+            Some(Vec::new())
+        );
+        assert_eq!(count(&game, "minecraft:cobblestone"), 1);
+        assert_eq!(game.world.block(0, 64, 0), stone);
+        game.dropped.clear();
+
+        assert_eq!(
+            game.level_set_block(level, [0, 64, 0], chest, flags),
+            Ok(true)
+        );
+        let Some(super::super::BlockEntity::Chest(items)) =
+            game.world.block_entities.get_mut(&(0, 64, 0))
+        else {
+            panic!("chest block entity missing")
+        };
+        items[0] = Some(ItemStack {
+            item: "minecraft:diamond".into(),
+            count: 3,
+            damage: 0,
+            extra: None,
+        });
+        assert!(
+            game.level_drop_resources(level, [0, 64, 0], None, None, false)
+                .is_some()
+        );
+        // The chest's own loot only: its contents spill when the block is removed
+        // (`Containers.dropContents`), which this doesn't do.
+        assert_eq!(count(&game, "minecraft:chest"), 1);
+        assert_eq!(count(&game, "minecraft:diamond"), 0);
+        assert_eq!(game.world.block(0, 64, 0), chest);
+        let Some(super::super::BlockEntity::Chest(items)) =
+            game.world.block_entities.get(&(0, 64, 0))
+        else {
+            panic!("chest block entity missing")
+        };
+        assert_eq!(items[0].as_ref().map(|stack| stack.count), Some(3));
+        game.dropped.clear();
+
+        // Inside a transaction: rolled now, spawned at commit.
+        let host: &mut dyn mod_api::ServerHost = &mut game;
+        host.transaction(|host, _| {
+            assert!(
+                level
+                    .drop_resources(host, [0, 64, 0], None, None, false)
+                    .unwrap()
+                    .is_some()
+            );
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(count(&game, "minecraft:chest"), 1);
+        assert_eq!(game.world.block(0, 64, 0), chest);
+        game.dropped.clear();
+
+        assert!(game.ui.rules.set(
+            "block_drops",
+            sunrise_client_core::gamerules::Value::Bool(false)
+        ));
+        assert_eq!(
+            game.level_drop_resources(level, [0, 64, 0], None, None, true),
+            Some(Vec::new())
+        );
+        assert!(game.dropped.is_empty());
+
+        assert_eq!(
+            game.level_set_block(level, [0, 64, 0], air, flags),
+            Ok(true)
+        );
+        assert_eq!(
+            game.level_drop_resources(level, [0, 64, 0], None, None, true),
+            None
+        );
+    }
+
     #[test]
     #[ignore = "daily"]
     fn level_block_writes_validate_and_change_world() {

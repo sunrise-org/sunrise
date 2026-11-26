@@ -137,7 +137,6 @@ pub use surface::{
     FrictionLevel, SideLevel, block_friction, native_block_jump_factor, native_block_speed_factor,
     native_is_ladder, read_friction,
 };
-pub use travel::ServerTravel;
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
@@ -1528,10 +1527,9 @@ impl MotionWorld<'_, '_, '_> {
     }
     /// ServerPlayer's own travel: the server simulates a player too
     /// (`MoveSimulationType.AUTHORITATIVE_SIDE_AND_SERVER`), with no input
-    /// (it never sets xxa/zza). Normally only the delta movement stays, for
-    /// knockback and later move validation. When `living_travel` changes the
-    /// travel, the connection's move validator owns the position correction.
-    pub fn server_travel(&mut self) -> Result<ServerTravel> {
+    /// (it never sets xxa/zza). Only the delta movement stays, for knockback
+    /// and later move validation.
+    pub fn server_travel(&mut self) -> Result<()> {
         let p = &mut *self.player;
         let (position, ground, collision) = (p.position, p.ground, p.collision);
         let (history, fall_distance, steps) = (p.history.clone(), p.fall_distance, p.steps);
@@ -1553,15 +1551,11 @@ impl MotionWorld<'_, '_, '_> {
         p.events.truncate(events);
         p.events.extend(kept);
         // A travel the world cannot solve (a swept box past the collision scan's domain) publishes
-        // none of its partial work: the velocity it was handed stands as it was and the client is
-        // corrected to the server's own position and velocity.
-        travelled.or_else(|_| {
+        // none of its partial work: the velocity it was handed stands as it was.
+        if travelled.is_err() {
             p.set_velocity(velocity);
-            Ok(ServerTravel::Replace {
-                position,
-                on_ground: ground.on_ground,
-            })
-        })
+        }
+        Ok(())
     }
     /// `LivingEntity.checkAutoSpinAttack`: the first living entity in the
     /// box swept this tick takes the hit and ends the spin, bouncing the

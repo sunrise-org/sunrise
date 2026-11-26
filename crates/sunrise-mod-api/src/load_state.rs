@@ -647,4 +647,42 @@ mod tests {
             assert!(absent.iter().all(|entry| entry == "None"));
         });
     }
+
+    /// `ConfigHost::mods` reads the inventory visible at startup: a package installed but off
+    /// when the game started (no content files bound for it) is not in it (#5494).
+    #[test]
+    fn host_mods_leave_out_a_package_off_at_startup() {
+        crate::__private::initialize().unwrap();
+        struct NoFiles;
+        impl crate::PackageFileSource for NoFiles {
+            fn names(&self) -> Result<Arc<[String]>, String> {
+                Ok(Arc::from([]))
+            }
+            fn read(&self, name: &str) -> Result<Vec<u8>, crate::PackageReadError> {
+                unreachable!("{name} was never listed")
+            }
+        }
+        with_test_packages(&["on", "off"], || {
+            let files: Arc<dyn crate::PackageFileSource> = Arc::new(NoFiles);
+            let data = RegistrationData::new(
+                BTreeMap::new(),
+                BTreeMap::new(),
+                crate::InstanceDirectory::from_path(std::path::Path::new("unused")).unwrap(),
+                crate::RuntimeEnvironment::new(
+                    crate::Dist::Client,
+                    "26.3".into(),
+                    "test".into(),
+                    false,
+                ),
+            )
+            .with_package_files(BTreeMap::from([("on".to_owned(), files)]));
+            with_test_registration_data(data, || {
+                let mods = crate::prelude::ConfigHost::mods(&crate::testing::FakeHost::default());
+                assert_eq!(mods.ids().collect::<Vec<_>>(), ["on"]);
+                assert!(mods.get("off").is_none());
+                assert_eq!(mods.display_name("off"), None);
+                assert_eq!(mods.display_name("on"), Some("on"));
+            });
+        });
+    }
 }

@@ -1,4 +1,4 @@
-//! The native travel decision affects real player reports and sends vanilla corrections.
+//! The native travel decision affects the server copy without sending extra corrections.
 use super::*;
 use crate::game::execution_role::ExecutionRole;
 use crate::game::native_entity_refs::tests::{fixture_root, run_fresh_cases, with_game_role};
@@ -194,58 +194,36 @@ fn packets(rx: &mpsc::Receiver<Out>) -> Vec<(i32, Vec<u8>)> {
         .collect()
 }
 
-fn correction(rx: &mpsc::Receiver<Out>) -> play::PlayerPosition {
-    let positions = packets(rx)
-        .into_iter()
-        .filter_map(|(id, body)| match C::decode(id, &body).unwrap() {
-            C::PlayerPosition(packet) => Some(packet),
-            C::SetEntityMotion(_) => panic!("travel correction must carry velocity itself"),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let [packet]: [_; 1] = positions.try_into().expect("one position correction");
-    assert_eq!(packet.relatives, 0);
-    packet
-}
-
-fn acknowledge(game: &mut Game<'_>, packet: &play::PlayerPosition) {
-    let [x, y, z] = packet.position;
-    send(
-        game,
-        S::AcceptTeleportation(play::AcceptTeleportation {
-            id: packet.teleport,
-            x,
-            y,
-            z,
-            yaw: packet.yaw,
-            pitch: packet.pitch,
-        }),
-    );
-}
-
 #[test]
 #[ignore = "daily"]
-fn a_player_travel_veto_holds_new_reports_not_previously_accepted_ones() {
+fn a_player_travel_veto_skips_server_travel_without_clamping_reports() {
     for integrated in [true, false] {
         with_reply(Some(Reply::Veto), || {
             with_player(integrated, |game, rx| {
                 report(game, ACCEPTED);
                 assert_eq!(guest(game).position, ACCEPTED);
+                game.lan.as_mut().unwrap().hub.update_guest(1, |g| {
+                    g.motion.as_mut().unwrap().velocity = Vec3::new(0.4, 0.0, 0.0);
+                });
                 game.guest_server_tick(1, true);
                 assert_eq!(guest(game).position, ACCEPTED);
+                assert_eq!(
+                    guest(game).motion.as_ref().unwrap().velocity,
+                    Vec3::new(0.4, 0.0, 0.0)
+                );
                 assert!(guest(game).awaiting_teleport.is_none());
-                packets(&rx);
+                assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
+                    C::decode(id, &body).unwrap(),
+                    C::PlayerPosition(_) | C::SetEntityMotion(_)
+                )));
 
                 report(game, NEXT);
-                let packet = correction(&rx);
-                assert_eq!(packet.position, ACCEPTED);
-                assert_eq!(guest(game).position, ACCEPTED);
-
-                acknowledge(game, &packet);
+                assert_eq!(guest(game).position, NEXT);
                 assert!(guest(game).awaiting_teleport.is_none());
-                report(game, NEXT);
-                assert_eq!(correction(&rx).position, ACCEPTED);
-                assert_eq!(guest(game).position, ACCEPTED);
+                assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
+                    C::decode(id, &body).unwrap(),
+                    C::PlayerPosition(_) | C::SetEntityMotion(_)
+                )));
             })
         });
     }
@@ -253,154 +231,32 @@ fn a_player_travel_veto_holds_new_reports_not_previously_accepted_ones() {
 
 #[test]
 #[ignore = "daily"]
-fn a_player_travel_replacement_commits_displacement_and_corrects_velocity() {
+fn a_player_travel_edit_updates_server_velocity_without_correction() {
     for integrated in [true, false] {
         for reply in [Reply::Velocity, Reply::Input] {
             with_reply(Some(reply), || {
                 with_player(integrated, |game, rx| {
                     game.guest_server_tick(1, true);
-                    let position = [
-                        3.0 + match reply {
-                            Reply::Velocity => 0.5,
-                            // The default off-ground movement speed is the widened vanilla 0.02f.
-                            _ => f64::from(0.02_f32),
-                        },
-                        64.0,
-                        5.0,
-                    ];
-                    let packet = correction(&rx);
-                    assert_eq!(packet.position, position);
-                    assert_eq!(guest(game).position, position);
+                    let displacement_x = match reply {
+                        Reply::Velocity => 0.5,
+                        // The default off-ground movement speed is the widened vanilla 0.02f.
+                        _ => f64::from(0.02_f32),
+                    };
                     let expected = Vec3::new(
-                        (position[0] - START[0]) * f64::from(0.91_f32),
+                        displacement_x * f64::from(0.91_f32),
                         -0.08 * f64::from(0.98_f32),
                         0.0,
                     );
-                    assert_eq!(
-                        sunrise_client::player_sync::teleport_velocity(
-                            Vec3::new(1.0, 1.0, 1.0),
-                            (0.0, 0.0),
-                            (0.0, 0.0),
-                            &packet
-                        ),
-                        expected,
-                    );
+                    assert_eq!(guest(game).position, START);
+                    assert!(guest(game).awaiting_teleport.is_none());
                     assert_eq!(guest(game).motion.as_ref().unwrap().velocity, expected);
+                    assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
+                        C::decode(id, &body).unwrap(),
+                        C::PlayerPosition(_) | C::SetEntityMotion(_)
+                    )));
                 })
             });
         }
-    }
-}
-
-#[test]
-#[ignore = "daily"]
-fn another_travel_replacement_waits_for_the_first_correction_acknowledgement() {
-    with_reply(Some(Reply::Velocity), || {
-        with_player(false, |game, rx| {
-            game.guest_server_tick(1, true);
-            let first = correction(&rx);
-            assert_eq!(first.position, NEXT);
-
-            for _ in 0..2 {
-                game.lan.as_mut().unwrap().hub.ticks += 1;
-                game.guest_server_tick(1, true);
-            }
-            report(game, [4.0, 64.0, 5.0]);
-            assert_eq!(guest(game).position, NEXT);
-            assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
-                C::decode(id, &body).unwrap(),
-                C::PlayerPosition(_) | C::SetEntityMotion(_)
-            )));
-
-            acknowledge(game, &first);
-            assert!(guest(game).awaiting_teleport.is_none());
-            report(game, [4.0, 64.0, 5.0]);
-            assert_eq!(guest(game).position, [4.0, 64.0, 5.0]);
-            game.guest_server_tick(1, true);
-            let next = correction(&rx);
-            assert_ne!(next.teleport, first.teleport);
-            assert_eq!(next.position, [4.5, 64.0, 5.0]);
-        });
-    });
-}
-
-#[test]
-#[ignore = "daily"]
-fn an_edit_absorbed_by_collision_still_sends_one_correction() {
-    if run_fresh_cases(
-        "game::lan_actions::guest_body::tests::travel::an_edit_absorbed_by_collision_still_sends_one_correction",
-        "SUNRISE_PLAYER_TRAVEL_CHILD",
-        &["travel"],
-    ) {
-        return;
-    }
-    struct IntoWall {
-        calls: Arc<AtomicUsize>,
-        edit_input: bool,
-    }
-
-    #[mod_api::__subscriptions]
-    impl Hooks for IntoWall {
-        fn living_travel(&self, _: &dyn LoopContext, event: &mut LivingTravelEvent<'_>) -> Flow {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            if self.edit_input {
-                *event.input = [-1.0, 0.0, 0.0];
-            } else {
-                *event.velocity = [-0.5, 0.0, 0.0];
-            }
-            Flow::Continue
-        }
-    }
-
-    for edit_input in [false, true] {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let mods = vec![mod_api::ModEntry::new(
-            "wall-travel-test",
-            Box::new(IntoWall {
-                calls: calls.clone(),
-                edit_input,
-            }),
-        )];
-        mod_platform::testing::with_mods(mods.into(), || {
-            with_player(false, |game, rx| {
-                let stone = game
-                    .pack
-                    .assets
-                    .registry
-                    .default_state("minecraft:stone")
-                    .unwrap();
-                game.world.set(2, 64, 5, stone).unwrap();
-                let mut at = START;
-                let half_width =
-                    f64::from(guest(game).motion.as_ref().unwrap().dimensions.width) / 2.0;
-                at[0] += half_width; // The player's west face is flush with the block at x=2.
-                game.lan.as_mut().unwrap().hub.update_guest(1, |g| {
-                    g.position = at;
-                    g.first_good = at;
-                    g.last_reported.0 = at;
-                    g.motion.as_mut().unwrap().position = Vec3::new(at[0], at[1], at[2]);
-                });
-
-                game.guest_server_tick(1, true);
-                let guest = guest(game);
-                let packet = correction(&rx);
-                let expected_velocity = [0.0, -0.08 * f64::from(0.98_f32), 0.0].map(f64::to_bits);
-                assert_eq!(packet.position.map(f64::to_bits), at.map(f64::to_bits));
-                assert_eq!(packet.delta.map(f64::to_bits), expected_velocity);
-                assert_eq!(guest.position.map(f64::to_bits), at.map(f64::to_bits));
-                assert_eq!(
-                    guest
-                        .motion
-                        .as_ref()
-                        .unwrap()
-                        .velocity
-                        .components()
-                        .map(f64::to_bits),
-                    expected_velocity
-                );
-                assert_eq!(calls.load(Ordering::Relaxed), 1);
-            });
-        });
     }
 }
 
@@ -532,31 +388,33 @@ fn vanilla_travel_operations_apply_large_and_non_finite_edits_independently() {
                         .insert_remote(&mut game.world, Chunk::empty(cx, 0));
                 }
                 game.guest_server_tick(1, true);
-                let position = [START[0] + displacement_x, START[1], START[2]];
-                let packet = correction(&rx);
-                assert_eq!(packet.position, position);
-                assert_eq!(guest(game).position, position);
                 let expected = Vec3::new(
                     displacement_x * f64::from(0.91_f32),
                     -0.08 * f64::from(0.98_f32),
                     0.0,
                 );
+                assert_eq!(guest(game).position, START);
                 assert_eq!(guest(game).motion.as_ref().unwrap().velocity, expected);
+                assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
+                    C::decode(id, &body).unwrap(),
+                    C::PlayerPosition(_) | C::SetEntityMotion(_)
+                )));
             });
         });
     }
 
     // A finite velocity whose swept box the collision scan cannot cover fails the travel. None of
-    // its work is published: the velocity stands as it was and the player is corrected to the
-    // server's position and velocity.
+    // its work is published: the velocity stands as it was and no correction packet is sent.
     with_reply(Some(Reply::HugeVelocity), || {
         with_player(false, |game, rx| {
             let before = guest(game).motion.as_ref().unwrap().velocity;
             game.guest_server_tick(1, true);
-            let packet = correction(&rx);
-            assert_eq!(packet.position, START);
             assert_eq!(guest(game).position, START);
             assert_eq!(guest(game).motion.as_ref().unwrap().velocity, before);
+            assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
+                C::decode(id, &body).unwrap(),
+                C::PlayerPosition(_) | C::SetEntityMotion(_)
+            )));
         });
     });
 
@@ -581,9 +439,12 @@ fn vanilla_travel_operations_apply_large_and_non_finite_edits_independently() {
             report(game, ACCEPTED);
             game.guest_server_tick(1, true);
             report(game, NEXT);
-            let packet = correction(&rx);
-            assert_eq!(packet.position, ACCEPTED);
-            assert_eq!(guest(game).position, ACCEPTED);
+            assert_eq!(guest(game).position, NEXT);
+            assert!(guest(game).awaiting_teleport.is_none());
+            assert!(!packets(&rx).into_iter().any(|(id, body)| matches!(
+                C::decode(id, &body).unwrap(),
+                C::PlayerPosition(_) | C::SetEntityMotion(_)
+            )));
         });
     });
 }

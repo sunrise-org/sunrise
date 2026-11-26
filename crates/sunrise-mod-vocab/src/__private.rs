@@ -107,6 +107,12 @@ pub fn install(mods: Mods) {
     crate::install(mods);
 }
 
+/// Bind a native mod entry's declared package side before installation.
+pub fn with_mod_side(mut entry: ModEntry, side: Side) -> ModEntry {
+    entry.side = side;
+    entry
+}
+
 // no wire: process-local diagnostic report, never crosses the wire.
 // exhaustive: internal two-field report for the game client's toast queue.
 /// One mod callback panic queued for the game client's error toast.
@@ -319,6 +325,11 @@ pub fn entity_selector_type(
 /// The startup package inventory at an owning engine load boundary.
 pub fn loaded_mods() -> LoadedMods {
     LoadedMods::new()
+}
+
+/// The packages enabled and admitted at startup, as registration reads them: `ConfigHost::mods`.
+pub fn startup_mods() -> LoadedMods {
+    LoadedMods::enabled_at_startup()
 }
 
 /// The data-pack and resource reloads the game runs.

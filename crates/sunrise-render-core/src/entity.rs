@@ -51,6 +51,14 @@ pub const DYNAMIC_TEXTURE_CUTOUT_OVERLAY: u32 = 53;
 pub const DYNAMIC_TEXTURE_TRANSLUCENT_OVERLAY: u32 = 54;
 /// Armor foil without its color material: additive, with no depth or outline writes.
 pub const ARMOR_GLINT_ONLY_OVERLAY: u32 = 55;
+/// The overlays of a name tag's `Font.DisplayMode.NORMAL` copy when a pack's `core/text` draws
+/// it (`RenderTypes.text`, `RenderPipelines.TEXT`): opaque on no background, which
+/// `SubmitNodeCollection.canRenderAsSolid` puts in the solid phase, and translucent (a discrete
+/// tag on its background; `OIT_TEXT` under Improved Transparency). Their own materials, stored
+/// last, which a world view draws after the native entity layer. A `shaders/` pack's shadow pass
+/// takes them with the rest of their entity's run (`pack_entities` spans), whatever the layer.
+pub const NAME_TAG_SOLID_OVERLAY: u32 = 57;
+pub const NAME_TAG_OVERLAY: u32 = 56;
 pub const WATER_MASK_OVERLAY: u32 = 13;
 pub const TRANSLUCENT_PARTICLE_OVERLAY: u32 = 15;
 pub const OIT_ENTITY: u32 = 1 << 24;

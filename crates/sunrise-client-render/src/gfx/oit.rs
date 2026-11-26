@@ -34,8 +34,9 @@ impl Stage {
 }
 
 /// What the clouds' transmittance and accumulate passes sample (`CloudRenderer.renderOit`'s
-/// `params`): the culled depth bounds and the two transmittance targets, in that order; and
-/// which targets these are, a number made new each time they are.
+/// `params`), and a pack's translucent world text in the same stages: the culled depth bounds and
+/// the two transmittance targets, in that order; and which targets these are, a number made new
+/// each time they are.
 pub(super) struct CloudSamples<'a> {
     pub generation: u64,
     pub views: [&'a wgpu::TextureView; 3],

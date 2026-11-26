@@ -1244,6 +1244,23 @@ fn patch_components(
     Ok(())
 }
 
+/// Names a block's item by its own key, `item.<namespace>.<path>` (an `Item.Properties` without
+/// `useBlockDescriptionPrefix`), unless the patch already sets or removes its name.
+fn own_item_name(id: &str, components: &mut Vec<(String, J)>) {
+    const NAME: &str = "minecraft:item_name";
+    if components
+        .iter()
+        .any(|(key, _)| key.strip_prefix('!').unwrap_or(key) == NAME)
+    {
+        return;
+    }
+    let key = format!("item.{}", id.replacen(':', ".", 1).replace('/', "."));
+    components.push((
+        NAME.to_owned(),
+        J::Obj(vec![("translate".into(), J::Str(key))]),
+    ));
+}
+
 /// A declared component patch, as the overlay's JSON.
 fn component_patch(components: &BTreeMap<String, serde_json::Value>) -> Result<Vec<(String, J)>> {
     components
@@ -1980,12 +1997,16 @@ impl<'a> Plan<'a> {
                 let item = b.item.as_deref().ok_or_else(|| {
                     format!("{}: template {} has no item", b.decl.id, b.decl.template)
                 })?;
+                let mut components = component_patch(&b.decl.components)
+                    .map_err(|error| format!("{}: {error}", b.decl.id))?;
+                if b.decl.own_item_name {
+                    own_item_name(&b.decl.id, &mut components);
+                }
                 items.push(NewItem {
                     rename: Rename::new(item, &b.decl.id),
                     max_stack_size: None,
                     rarity: None,
-                    components: component_patch(&b.decl.components)
-                        .map_err(|error| format!("{}: {error}", b.decl.id))?,
+                    components,
                     crafting_remainder: None,
                     block: None,
                     arm_pose: None,

@@ -183,6 +183,22 @@ pub fn native_is_ladder(
     crate::native_client_hooks::is_ladder(context, entity, pos, state, ladder);
 }
 
+/// Whether a block stops a sneaking player's slide down a climbable as scaffolding does
+/// (`IBlockExtension.isScaffolding`, which `LivingEntity.handleOnClimbable` asks of the block the
+/// player stands in) is being decided. `scaffolding` starts with the `minecraft:scaffolding`
+/// answer and the block's parts may change it. Fires on replayed ticks too, so a listener must be
+/// a pure function of its inputs.
+#[inline(never)]
+pub fn native_is_scaffolding(
+    context: &LoopContext,
+    entity: u32,
+    pos: BlockPos,
+    state: BlockStateId,
+    scaffolding: &mut bool,
+) {
+    crate::native_client_hooks::is_scaffolding(context, entity, pos, state, scaffolding);
+}
+
 /// The factors the `block_jump_factor` and `block_speed_factor` parts give the blocks an entity
 /// reads, for the loop of the side that ticks it.
 pub(crate) struct ModBlockFactors<'a>(pub &'a LoopContext);

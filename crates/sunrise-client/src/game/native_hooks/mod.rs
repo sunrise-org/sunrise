@@ -342,6 +342,8 @@ mod is_pathfindable;
 mod is_piglin_currency;
 mod is_possible_to_respawn_in;
 mod is_primary_item_for;
+mod is_scaffolding;
+pub(crate) use is_scaffolding::is_scaffolding;
 mod is_shearable;
 mod is_valid_book_shelf;
 mod item_after_vertical_collision;
@@ -593,6 +595,9 @@ mod tags_updated;
 mod teleport_command;
 mod texture_atlas_stitched;
 mod tick_target_millis;
+mod tick_weather_effects;
+#[cfg(test)]
+mod tick_weather_effects_tests;
 mod toast_add;
 mod tool_modified_state;
 mod translate;

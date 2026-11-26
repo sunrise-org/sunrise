@@ -927,13 +927,14 @@ impl Mob {
         gate: &mut MoveGate,
         pause: bool,
     ) -> Option<MovePause> {
-        crate::move_gate::arm(
+        crate::move_gate::arm_controlled(
             gate,
             w.loop_context,
             self.id,
             &self.kind.id,
             MoverType::SelfMovement,
             self.velocity,
+            super::equine::controlled(self),
         );
         if gate.skipped() {
             return None;

@@ -219,3 +219,31 @@ pub trait EntityPositionBackendMut {
     /// the frame take its new signal. False for another kind or a stale handle.
     fn entity_set_item_frame_rotation(&mut self, entity: EntityRef, rotation: u8) -> bool;
 }
+
+/// The handles' client writes of the `entity_position` area, implemented by the game and reached through [`ClientBackendMut`].
+// hidden: a handle's backend, reached through `ClientBackendMut`; mods call the handle, never this trait
+#[doc(hidden)]
+#[sunrise_mod_api_macros::host_area]
+pub trait EntityPositionClientBackendMut {
+    /// Side: client.
+    /// Moves or interpolates an observed remote entity to `position` (and
+    /// optional `[yaw, pitch]` rotation in degrees), as vanilla's
+    /// `Entity.moveOrInterpolateTo` does: routes to the entity family's own
+    /// interpolation handler (its own step count), and falls back to setting
+    /// the position and rotation directly for families without a handler (as
+    /// vanilla's `InterpolationHandler.NO_OP` does).
+    ///
+    /// This updates client display state for bodies the server owns; the next
+    /// server update wins. Returns `false` and changes nothing for a body the
+    /// client simulates (the local player, a vehicle the local player is
+    /// driving, or a `SERVER_AND_CLIENT` body such as an item, primed TNT,
+    /// falling block, projectile, experience orb or dying dragon), for any
+    /// non-finite coordinate or angle, for a stale or untracked handle, or
+    /// outside a client world.
+    fn entity_interpolate_to(
+        &mut self,
+        entity: EntityRef,
+        position: [f64; 3],
+        rotation: Option<[f32; 2]>,
+    ) -> bool;
+}

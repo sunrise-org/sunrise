@@ -1220,15 +1220,6 @@ impl Renderer {
                 core_lines::uniforms(pack.globals, view, pose, jitter, 1.0, fog_color, pack.fog)
             })
         };
-        // The pack's world text: vanilla's blocks, HDR tier windows, then its expression uniforms.
-        if let Some(core) = &self.core_text {
-            core.prepare(
-                &mut self.uploads,
-                &mut encoder,
-                &vanilla_blocks(),
-                globals.hdr_windows,
-            );
-        }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             // The same per-line colour and pixel width layout as the gizmo lines. A high
@@ -1646,6 +1637,16 @@ impl Renderer {
         // GameRenderer.useImprovedTransparency. A shader pack keeps its own
         // path.
         let oit_on = !frame.title && self.oit_active_for(self.improved_transparency);
+        // The pack's world text: vanilla's blocks, HDR tier windows, then its expression uniforms;
+        // its Improved Transparency stages' only on a frame that draws them.
+        if let Some(core) = &self.core_text {
+            core.prepare(
+                &mut self.uploads,
+                &mut encoder,
+                &vanilla_blocks(),
+                (globals.hdr_windows, oit_on),
+            );
+        }
         // The posed models' vertices come first: the ordinary entities' draw takes them in.
         let posed = if pack_skin {
             0
@@ -1698,6 +1699,8 @@ impl Renderer {
             dynamic_solid_quads,
             dynamic_cutout_quads,
             dynamic_translucent_quads,
+            name_tag_solid_quads,
+            name_tag_quads,
         ] = batch_counts.materials;
         let dynamic_quads = dynamic_solid_quads + dynamic_cutout_quads + dynamic_translucent_quads;
         let entities = &entities[..batch_counts.admitted_entity_vertices];
@@ -1730,7 +1733,13 @@ impl Renderer {
             + dynamic_quads
             + banner_pattern_quads
             + glint_only_quads
-            + text_solid_quads;
+            + text_solid_quads
+            + name_tag_solid_quads
+            + name_tag_quads;
+        // Where the solid text ends and a pack-drawn name tag's copies (the last materials, solid
+        // then translucent) begin.
+        let text_end = world_quads - name_tag_solid_quads - name_tag_quads;
+        let name_tags = (text_end, name_tag_solid_quads + name_tag_quads);
         laps.lap("r_draw_lists");
         // Where the tail of materials the classic and the improved passes
         // both draw ends: the shadows, particles and items count back from it.
@@ -1746,16 +1755,15 @@ impl Renderer {
             - dynamic_quads
             - banner_pattern_quads
             - glint_only_quads
-            - text_solid_quads;
+            - text_solid_quads
+            - name_tag_solid_quads
+            - name_tag_quads;
         // Dynamic-texture quads sit after the terrain models and before banner patterns: their
         // first quad in the entity buffer, and their runs with one bind group each.
-        let dynamic_first = world_quads
-            - text_solid_quads
-            - glint_only_quads
-            - banner_pattern_quads
-            - dynamic_quads;
+        let section_first = super::entity_batch::dynamic_texture_start(&batch_counts.materials);
+        let dynamic_first = posed / 4 + section_first;
         if dynamic_quads > 0 {
-            let section_start = (dynamic_first - posed / 4) as usize * 4;
+            let section_start = section_first as usize * 4;
             self.dynamic_entity.prepare(
                 &self.device,
                 &mut self.uploads,
@@ -2487,6 +2495,13 @@ impl Renderer {
             ) {
                 core.bind_oit(&self.device, &samples);
             }
+            // So does a pack's translucent world text (`OIT_TEXT`).
+            if let (Some(core), Some(samples)) = (
+                self.core_text.as_mut(),
+                self.oit.as_ref().and_then(|o| o.cloud_samples()),
+            ) {
+                core.bind_oit(&self.device, &samples);
+            }
         }
         laps.lap("r_world_pass");
         laps.lap("r_pack_inputs");
@@ -3021,7 +3036,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..banner_pattern_quads * 6,
-                    ((world_quads - text_solid_quads - glint_only_quads - banner_pattern_quads) * 4)
+                    ((text_end - text_solid_quads - glint_only_quads - banner_pattern_quads) * 4)
                         as i32,
                     0..1,
                 );
@@ -3034,12 +3049,12 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..glint_only_quads * 6,
-                    ((world_quads - text_solid_quads - glint_only_quads) * 4) as i32,
+                    ((text_end - text_solid_quads - glint_only_quads) * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if text_solid_quads > 0 {
+            if text_solid_quads + name_tag_solid_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "entity text solid");
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 // Draw glowing outline copies with NORMAL depth before coplanar
@@ -3050,15 +3065,15 @@ impl Renderer {
                         core_text::WorldTextMode::Normal,
                         &self.world_text_pipeline,
                         &self.text_mark_pipelines[0],
-                        text_normal_solid_quads,
-                        world_quads - text_normal_solid_quads,
+                        text_normal_solid_quads + name_tag_solid_quads,
+                        text_end - text_normal_solid_quads,
                     ),
                     (
                         core_text::WorldTextMode::PolygonOffset,
                         &self.text_polygon_offset_pipeline,
                         &self.text_mark_pipelines[1],
                         text_offset_solid_quads,
-                        world_quads - text_solid_quads,
+                        text_end - text_solid_quads,
                     ),
                 ] {
                     if count == 0 {
@@ -3095,7 +3110,7 @@ impl Renderer {
             // Native terrain models use the block sprite arrays with their own
             // alpha/mipmap policies and ordinary opaque depth. Storage follows
             // the existing materials without moving their indices or frame tails.
-            let mut first = world_quads
+            let mut first = text_end
                 - text_solid_quads
                 - glint_only_quads
                 - banner_pattern_quads
@@ -3207,12 +3222,33 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if text_quads > 0 && !oit_on {
+            // The translucent world text, as `FeatureRenderDispatcher.PreparedFrame
+            // .executeTranslucent` runs its phases: `nameTags` (`TEXT`, discrete name tags) before
+            // `texts` (`TEXT_POLYGON_OFFSET`, text displays). Under Improved Transparency their
+            // `OIT_*` stages draw it.
+            if text_quads + name_tag_quads > 0 && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "entity text");
-                pass.set_pipeline(&self.text_polygon_offset_pipeline);
-                self.bind_world_text(&mut pass, core_text::WorldTextMode::PolygonOffset);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-                pass.draw_indexed(0..text_quads * 6, (entity_quads * 4) as i32, 0..1);
+                for (mode, pipeline, count, first) in [
+                    (
+                        core_text::WorldTextMode::Normal,
+                        &self.world_text_pipeline,
+                        name_tag_quads,
+                        text_end + name_tag_solid_quads,
+                    ),
+                    (
+                        core_text::WorldTextMode::PolygonOffset,
+                        &self.text_polygon_offset_pipeline,
+                        text_quads,
+                        entity_quads,
+                    ),
+                ] {
+                    if count > 0 {
+                        pass.set_pipeline(pipeline);
+                        self.bind_world_text(&mut pass, mode);
+                        pass.draw_indexed(0..count * 6, (first * 4) as i32, 0..1);
+                    }
+                }
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if translucent_item_quads > 0 && !oit_on {
@@ -3245,7 +3281,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..native_translucent_quads * 6,
-                    ((world_quads
+                    ((text_end
                         - text_solid_quads
                         - glint_only_quads
                         - banner_pattern_quads
@@ -3468,6 +3504,7 @@ impl Renderer {
                     };
                     // "Features, World Border, Weather": what follows the opaque
                     // world in the classic pass, one stage at a time.
+                    let core_text = self.core_text.as_ref();
                     let mut wp = self.world_primitives.take().expect("world primitives");
                     wp.prepare_oit_mod_pipelines(&self.device, oit.cloud_samples());
                     let mut features = |pass: &mut wgpu::RenderPass<'_>, stage: oit::Stage| {
@@ -3486,7 +3523,22 @@ impl Renderer {
                                 pass.draw_indexed(0..count * 6, (first * 4) as i32, 0..1);
                             }
                         };
-                        quads(pass, &f.text[s], text_quads, entity_quads);
+                        // `OIT_TEXT_POLYGON_OFFSET` (text displays) and `OIT_TEXT` (discrete
+                        // name tags): one program, the pack's when it has one.
+                        for (count, first) in [
+                            (text_quads, entity_quads),
+                            (name_tag_quads, text_end + name_tag_solid_quads),
+                        ] {
+                            if count == 0 {
+                                continue;
+                            }
+                            if core_text.is_some_and(|c| c.bind_oit_stage(pass, stage)) {
+                                pass.draw_indexed(0..count * 6, (first * 4) as i32, 0..1);
+                                pass.set_bind_group(0, &self.entity_group, &[]);
+                            } else {
+                                quads(pass, &f.text[s], count, first);
+                            }
+                        }
                         if !hdr_gain {
                             quads(
                                 pass,
@@ -4153,6 +4205,7 @@ impl Renderer {
                 debug_top,
                 globals,
                 entity_quads,
+                name_tags,
                 hand_in_world,
                 world_quads,
                 additive_quads,

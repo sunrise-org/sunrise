@@ -285,8 +285,6 @@ pub struct Guest {
     /// `landing` was set by a `tp` hold waiting for chunks (`Game::hold_for_chunks`), not by a portal.
     pub tp_held: bool,
     pub teleport_counter: i32,
-    /// The last server travel veto holds new position reports from this body.
-    pub(super) travel_vetoed: bool,
     /// The velocity in a travel correction still awaiting confirmation.
     pub(super) pending_travel_velocity: Option<[f64; 3]>,
     /// `ServerPlayer.getCamera() != this`.
@@ -873,7 +871,6 @@ impl Guest {
             landing: false,
             tp_held: false,
             teleport_counter: 0,
-            travel_vetoed: false,
             pending_travel_velocity: None,
             watching: false,
             teleport_tick: 0,
@@ -1246,7 +1243,6 @@ impl Guest {
     /// same player in another level (`restore_all`), only their base values
     /// after a death. The old body, for what else it hands over.
     pub fn new_body(&mut self, restore_all: bool) -> Option<Box<PlayerMotion>> {
-        self.travel_vetoed = false;
         if !restore_all {
             self.carried_tick_count = None;
             self.carried_body_yaw = Some(0.0);

@@ -85,6 +85,7 @@ Content {
             state_properties: {},
             default_state: {},
             item: true,
+            own_item_name: false,
             open_sound: Some(
                 All(
                     "keys_block_forms:gate_open",
@@ -223,6 +224,7 @@ Content {
             },
             default_state: {},
             item: true,
+            own_item_name: false,
             open_sound: None,
             close_sound: None,
             block_item: None,

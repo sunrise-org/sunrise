@@ -1649,8 +1649,9 @@ impl Game<'_> {
         );
         canceled
     }
-    /// The files dropped in this event-loop pass, fired as one list for the open screen
-    /// (`Screen.onFilesDrop`). Nothing is built with no listener or no screen.
+    /// The files of the last drop, fired as one list for the open screen (`Screen.onFilesDrop`):
+    /// before the next window event, or when the event-loop pass ends. Nothing is built with no
+    /// listener or no screen.
     pub(in crate::game) fn fire_dropped_files(&mut self) {
         if self.dropped_files.is_empty() {
             return;

@@ -354,6 +354,20 @@ Bookshelf slot-occupancy flags and the last-interacted slot are transactional st
 not notification effects. Aborting restores them with the items. Changed observers, comparator
 ticks and data-send requests already issued still survive that abort.
 
+## Climbing and scaffolding
+
+`BlockPart::is_ladder` is asked for the block a living entity stands in, and `BlockPart::is_scaffolding` for the block a
+player on a climbable stands in. Both fire on both sides, are `listen`, and must be pure functions of the event: set the
+field to decide, and a block with no part keeps vanilla's answer.
+
+| Part | Starts as | Effect of the answer |
+|---|---|---|
+| `is_ladder` | The block is in `#minecraft:climbable` | `true` climbs like a ladder, `false` refuses a tagged block |
+| `is_scaffolding` | The state is `minecraft:scaffolding` | While sneaking, `true` lets the player keep sliding down the climbable, `false` stops the slide |
+
+`is_scaffolding` is asked for players only; mobs never ask it. The player's id, the block its position is in and that
+block's state are passed.
+
 ## Fluid faces beside a block
 
 Client `BlockPart` methods change how a fluid draws its faces against your block. They are `collect`: set the field to

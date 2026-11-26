@@ -1,11 +1,15 @@
 //! A resource pack's `core/text` on world text, as vanilla 26.3's `TEXT`, `TEXT_POLYGON_OFFSET`
-//! and `TEXT_SEE_THROUGH` draw signs, text displays, name tags and their backgrounds. Only these
-//! paths and the GUI's text take the pack's shader; the other world text paths, Improved
-//! Transparency's depth-tested text among them, draw with the native shaders. Every pipeline
-//! vanilla requires of the shader is checked when the packs load (`hud::pack_text::TEXT`).
+//! and `TEXT_SEE_THROUGH` draw signs, text displays, name tags and their backgrounds, and as
+//! Improved Transparency's `OIT_TEXT` and `OIT_TEXT_POLYGON_OFFSET` draw the translucent ones
+//! ([`OitPart`]). These paths and the GUI's text take the pack's shader; Sunrise's own world
+//! canvas (`WORLD_TEXT_OVERLAY`, a native mod's) draws natively. Every pipeline vanilla requires
+//! of the shader is checked when the packs load (`hud::pack_text::TEXT`).
 
+use oit::OitPart;
 use std::sync::Arc;
 use sunrise_glsl::{Glue, Translated};
+
+mod oit;
 
 /// The entity vertices' light bytes are sky then block; vanilla's `UV2` is block then sky.
 pub(crate) const WORLD_GLUE: Glue = Glue {
@@ -43,6 +47,9 @@ pub struct TextShaders {
     pub gui: Option<Arc<Translated>>,
     pub world: Option<Arc<Translated>>,
     pub see_through: Option<Arc<Translated>>,
+    /// `OIT_TEXT`'s programs, which `OIT_TEXT_POLYGON_OFFSET` shares: none unless all three
+    /// stages' load. Boxed, as the game holds the atlas inline.
+    pub oit: Option<Box<OitPrograms>>,
     /// Each program's Polytone expression uniforms (`shader_modifiers`), resolved when it
     /// loaded: the blocks its stages read, with their programs, bound after the pipeline's own
     /// (`expression_blocks`).
@@ -57,6 +64,13 @@ pub struct TextExpressions {
     pub see_through: Vec<crate::polytone_post::ExpressionUniform>,
 }
 
+/// `OIT_TEXT`'s program in each Improved Transparency stage (`OitStage`'s order), with its
+/// Polytone expression uniforms.
+pub struct OitPrograms {
+    pub programs: [Arc<Translated>; 3],
+    pub expressions: [Vec<crate::polytone_post::ExpressionUniform>; 3],
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct PackBlocks {
     pub(super) globals: [u8; 48],
@@ -69,7 +83,7 @@ impl super::Renderer {
     /// reload.
     pub fn set_world_text_shaders(&mut self, shaders: &TextShaders) -> Result<(), String> {
         let expressions = &shaders.expressions;
-        self.core_text = CoreText::new(
+        let mut core = CoreText::new(
             &self.device,
             self.output.frame.format,
             (shaders.world.as_deref()).map(|p| (p, &expressions.world[..])),
@@ -77,7 +91,29 @@ impl super::Renderer {
             &self.entity_atlas,
             (&self.lightmap_view, &self.lightmap_sampler),
         )?;
+        // Improved Transparency's stages, where the device has it. They share the world text's
+        // fallback: with no pack pipeline of the world's or the see-through text's, the
+        // translucent world text draws natively in every mode.
+        if let (Some(core), Some(programs)) = (core.as_mut(), shaders.oit.as_ref())
+            && super::oit::supported(&self.device)
+        {
+            let programs =
+                std::array::from_fn(|i| (&*programs.programs[i], &programs.expressions[i][..]));
+            core.oit = OitPart::new(
+                &self.device,
+                programs,
+                &self.entity_atlas,
+                (&self.lightmap_view, &self.lightmap_sampler),
+            )?;
+        }
+        self.core_text = core;
         Ok(())
+    }
+
+    /// Whether a pack's `core/text` draws the world's text (`TEXT`, `TEXT_POLYGON_OFFSET`): its
+    /// pipelines were made for this renderer.
+    pub fn draws_pack_world_text(&self) -> bool {
+        self.core_text.as_ref().is_some_and(|c| c.world.is_some())
     }
 
     /// The vanilla `Globals` block a pack's core shaders read this frame.
@@ -196,6 +232,9 @@ pub(super) struct Part {
 pub(crate) struct CoreText {
     pub(super) world: Option<WorldPart>,
     pub(super) see_through: Option<Part>,
+    /// `OIT_TEXT`'s stages, where the device has Improved Transparency; boxed, as the clouds'
+    /// stages are, to keep the renderer the game holds inline small.
+    pub(super) oit: Option<Box<OitPart>>,
     uniform: wgpu::Buffer,
     hdr_mark_group: wgpu::BindGroup,
 }
@@ -337,6 +376,7 @@ impl CoreText {
         Ok(Some(Self {
             world: world_part,
             see_through: see_through_part,
+            oit: None,
             uniform,
             hdr_mark_group,
         }))
@@ -584,13 +624,14 @@ impl CoreText {
     }
 
     /// Vanilla's blocks (`data`, as `core_lines::uniforms` lays them out) once into the shared
-    /// buffer, then HDR tier windows, then each pipeline's Polytone blocks.
+    /// buffer, then HDR tier windows, then each pipeline's Polytone blocks; the Improved
+    /// Transparency stages' only when the frame draws them (`improved_transparency`).
     pub(super) fn prepare(
         &self,
         uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         data: &[u8; 1024],
-        hdr_windows: [[f32; 4]; 2],
+        (hdr_windows, improved_transparency): ([[f32; 4]; 2], bool),
     ) {
         uploads.buffer(encoder, &self.uniform, 0, data);
         uploads.buffer(
@@ -605,18 +646,54 @@ impl CoreText {
         if let Some(see_through) = &self.see_through {
             see_through.extra.upload(uploads, encoder, &self.uniform);
         }
+        if let Some(oit) = self.oit.as_ref().filter(|_| improved_transparency) {
+            oit.prepare(uploads, encoder, data);
+        }
     }
 
-    /// The world's and the see-through text's Polytone blocks.
+    /// The pack's `OIT_TEXT` (or `OIT_TEXT_POLYGON_OFFSET`, the same program) for `stage` with its
+    /// group, when the pack's text draws under Improved Transparency and [`CoreText::bind_oit`]
+    /// made the groups; else nothing is set and the native pipeline draws.
+    pub(super) fn bind_oit_stage(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        stage: super::oit::Stage,
+    ) -> bool {
+        let Some(oit) = self.oit.as_ref() else {
+            return false;
+        };
+        let Some((_, groups)) = oit.groups.as_ref() else {
+            return false;
+        };
+        pass.set_pipeline(&oit.stages[stage as usize].pipeline);
+        pass.set_bind_group(0, &groups[stage as usize], &[]);
+        true
+    }
+
+    /// The Improved Transparency stages' groups for `samples`' targets, made again only when
+    /// those targets were.
+    pub(super) fn bind_oit(
+        &mut self,
+        device: &wgpu::Device,
+        samples: &super::oit::CloudSamples<'_>,
+    ) {
+        if let Some(oit) = self.oit.as_mut() {
+            oit.bind(device, samples);
+        }
+    }
+
+    /// The world's, the see-through text's and the Improved Transparency stages' Polytone blocks.
     pub(super) fn expression_blocks(
         &mut self,
     ) -> impl Iterator<Item = &mut super::expression_blocks::ExpressionBlocks> {
+        let oit = (self.oit.iter_mut()).flat_map(|o| o.stages.iter_mut().map(|s| &mut s.extra));
         [
             self.world.as_mut().map(|w| &mut w.extra),
             self.see_through.as_mut().map(|p| &mut p.extra),
         ]
         .into_iter()
         .flatten()
+        .chain(oit)
     }
 }
 

@@ -381,3 +381,92 @@ fn a_panic_elsewhere_does_not_poison_the_move_listener() {
         );
     });
 }
+
+/// `entity_move` fires on the client's loop context with `context.side() == Client`.
+#[test]
+fn client_context_fires_entity_move_with_client_side() {
+    let sides = Arc::new(Mutex::new(Vec::new()));
+    struct SideProbe(Arc<Mutex<Vec<mod_api::LoopSide>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for SideProbe {
+        fn entity_move(&self, context: &dyn LoopContext, event: &mut EntityMoveEvent<'_>) -> Flow {
+            self.0.lock().unwrap().push(context.side());
+            *event.delta = [0.5, 0.0, 0.0];
+            Flow::Continue
+        }
+    }
+    let client_context = LoadContext::new(
+        DataLoadOrigin::ServerDataLoad,
+        Arc::new(LoadInputs::new(Default::default(), Default::default())),
+        [],
+    )
+    .loop_context(LoopSide::Client, []);
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "client-probe",
+        Box::new(SideProbe(Arc::clone(&sides))),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        let mut gate = MoveGate::new();
+        sunrise_client::move_gate::arm(
+            &mut gate,
+            &client_context,
+            7,
+            "minecraft:player",
+            MoverType::SelfMovement,
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        assert_eq!(gate.delta(), Vec3::new(0.5, 0.0, 0.0));
+    });
+    assert_eq!(*sides.lock().unwrap(), vec![mod_api::LoopSide::Client]);
+}
+
+/// A `side = "server"` mod's `entity_move` listener fires for a zombie and not
+/// for a player or a player-driven vehicle.
+#[test]
+fn server_only_mod_hears_zombie_and_skips_player_and_driven_vehicle() {
+    let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+    struct KindProbe(Arc<Mutex<Vec<String>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for KindProbe {
+        fn entity_move(&self, _: &dyn LoopContext, event: &mut EntityMoveEvent<'_>) -> Flow {
+            self.0.lock().unwrap().push(event.kind.to_owned());
+            Flow::Continue
+        }
+    }
+    let mods: mod_api::Mods = vec![mod_api::__private::with_mod_side(
+        mod_api::ModEntry::new("server-only", Box::new(KindProbe(Arc::clone(&heard)))),
+        mod_api::Side::Server,
+    )]
+    .into();
+    let context = server_context();
+    mod_platform::testing::with_mods(mods, || {
+        let mut gate = MoveGate::new();
+        sunrise_client::move_gate::arm(
+            &mut gate,
+            &context,
+            1,
+            "minecraft:zombie",
+            MoverType::SelfMovement,
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        sunrise_client::move_gate::arm(
+            &mut gate,
+            &context,
+            2,
+            "minecraft:player",
+            MoverType::SelfMovement,
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        sunrise_client::move_gate::arm_controlled(
+            &mut gate,
+            &context,
+            3,
+            "minecraft:oak_boat",
+            MoverType::SelfMovement,
+            Vec3::new(1.0, 0.0, 0.0),
+            true,
+        );
+    });
+    assert_eq!(*heard.lock().unwrap(), vec!["minecraft:zombie"]);
+}

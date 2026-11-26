@@ -720,7 +720,7 @@ impl OrientedCollider {
             };
             push = push.add_vector(axis.scale(-sep + clearance));
         }
-        Some(push)
+        push.is_finite().then_some(push)
     }
 
     /// Fraction of a straight collider's travel remaining after its first contact with `mover`.
@@ -1462,6 +1462,8 @@ mod tests {
             .sweep_push_displacement(&end, mover, 0.01)
             .expect("push displacement");
         assert!(!end.intersects(mover.move_by(push)));
+        // A non-finite clearance never yields a non-finite push.
+        assert_eq!(start.sweep_push_displacement(&end, mover, f64::NAN), None);
     }
 
     /// The grid's cell is picked from the boxes alone, inside its bounds, and whatever its size a

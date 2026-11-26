@@ -206,6 +206,13 @@ pub trait ScreensClientHost {
     /// make it visible with F3 off. F1 hides the overlay unless a screen is open.
     fn debug_overlay_visible(&self) -> bool;
     /// Side: client.
+    /// Whether the resource reload overlay (vanilla's `LoadingOverlay`) is up: from a resource
+    /// pack reload's start, whether the player's own selection or a server's packs, until the
+    /// overlay has faded out after the reload (`Gui.overlay()`). While it
+    /// covers the whole window, between its fade-in and its fade-out, the game draws the
+    /// overlay alone and renders no world or screen behind it.
+    fn reload_overlay_visible(&self) -> bool;
+    /// Side: client.
     /// Adds the calling mod's `text` to the end of F3's frame rate line (vanilla's
     /// `DebugEntryFps`, the line that reads `60 fps T: 120 ...`), after a space, where a mod
     /// shows a state of its own (Dynamic FPS's reduced frame rate) without an entry of its own

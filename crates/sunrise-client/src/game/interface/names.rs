@@ -692,6 +692,7 @@ impl Game<'_> {
         layouts.begin_frame(&self.gui.atlas);
         let background = self.settings.text_background(0.25);
         let faded = self.settings.faded_text_alpha(0.25);
+        let pack_text = (self.renderer.as_ref()).is_some_and(|r| r.draws_pack_world_text());
         let hooks = !mod_api::__private::mods().is_empty();
         // Asked once a frame: with no listener, no line is posed or copied.
         let do_render =
@@ -715,7 +716,7 @@ impl Game<'_> {
                     &tag.lines,
                     faded,
                     background,
-                    0,
+                    name_tag_layer(pack_text, faded, background),
                     light,
                     NAME_TAG_UNIT,
                     out,
@@ -732,7 +733,7 @@ impl Game<'_> {
                 &tag.lines,
                 0xFF,
                 0,
-                0,
+                name_tag_layer(pack_text, 0xFF, 0),
                 light,
                 NAME_TAG_UNIT,
                 out,
@@ -910,6 +911,22 @@ impl Game<'_> {
         }
         // Glyphs rasterized on first use (Unifont's) upload with the frame.
         batch.patches
+    }
+}
+
+/// The layer of a name tag's `Font.DisplayMode.NORMAL` copy when a pack's `core/text` draws the
+/// world's text (`pack_text`; `RenderTypes.text`): `SubmitNodeCollection.submitNameTagPart` puts
+/// it in the solid phase when `canRenderAsSolid` (its text's alpha 255 and its background's 0, in
+/// a level), else with the translucent text (`OIT_TEXT` under Improved Transparency). Without
+/// one, the native entity layer (0), which world views also draw. `text_alpha` is 0 to 255,
+/// `background` ARGB.
+pub(super) fn name_tag_layer(pack_text: bool, text_alpha: u32, background: u32) -> u32 {
+    if !pack_text {
+        0
+    } else if text_alpha == 0xFF && background >> 24 == 0 {
+        sunrise_client::gfx::NAME_TAG_SOLID_OVERLAY
+    } else {
+        sunrise_client::gfx::NAME_TAG_OVERLAY
     }
 }
 

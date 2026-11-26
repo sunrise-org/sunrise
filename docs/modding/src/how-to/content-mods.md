@@ -292,6 +292,11 @@ that other item instead, an item of the mod or a vanilla one, such as `"minecraf
 `Block.asItem` both read it, and the load fails naming the block when no such item exists. `"none"` is not an item id;
 write `"item": false`. A sign's wall form takes its sign's item through `wall_block`, not `block_item`.
 
+A block's item is named by the block's key, `block.<namespace>.<path>`, as vanilla's own block items are
+(`Item.Properties.useBlockDescriptionPrefix`). `"use_block_description_prefix": false` names it by its own key,
+`item.<namespace>.<path>`, as a plain `new BlockItem(block, new Item.Properties())` is: write it when your language
+file keys the item under `item.`. A `minecraft:item_name` in the block's `components` wins either way.
+
 Pick-block takes the block's item by default. `"pick_item": "<item id>"` names a different one, with any `item` and
 `block_item`: vanilla's `getCloneItemStack`, which lets a mature crop pick its seed while `Block.asItem` stays what it
 is (air for `"item": false`). It is an item of the mod or a vanilla one, and the load fails naming the block when no

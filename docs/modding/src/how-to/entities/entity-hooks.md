@@ -91,12 +91,20 @@ notice.
 
 ## Physical movement decisions
 
-`entity_move` runs on the server before one physical `Entity.move` invocation,
-including its no-physics and stuck-multiplier handling. This hook receives the
-loop context, not a `Host`: it decides only the movement delta. `MoveCause`
-distinguishes self movement, player packets, pistons, shulker boxes, shulkers and a
-moving collider carrying a body (`Carried`, version 2 of the hook);
-boats and minecarts use self movement.
+`entity_move` runs on both sides (movement phase 3, `Entity.move`) before one
+physical `Entity.move` invocation, including its no-physics and stuck-multiplier
+handling. It fires on every side that simulates the body (vanilla
+`Entity.canSimulateMovement`), and also for piston, shulker and other
+non-`SelfMovement` pushes (`MoverType.isServerAndClientSimulated`) on bodies the
+client only observes. This hook receives the loop context, not a `Host`: it
+decides only the movement delta, as a pure function of its inputs and what both
+sides know that tick (`context.side()` tells the sides apart; the server keeps
+vanilla's movement checks and its position wins). A `side = "server"` mod's
+listener is not called for a body a client controls (a player, or a vehicle a
+player is driving) and runs normally for every other body. `MoveCause`
+distinguishes self movement, player packets, pistons, shulker boxes, shulkers
+and a moving collider carrying or shoving a body (`Carried`); boats and
+minecarts use self movement.
 
 A replacement must have finite components; the hook imposes no per-axis magnitude
 limit. Each invalid proposal is reported with its mod and discarded whole, including
@@ -126,15 +134,18 @@ armor stands and nonliving bodies that keep ground support, including items, boa
 It does not rerun collision detection. If there is no retained support, it reads the block at
 vanilla's feet offset.
 
-`living_travel` runs on both peers, after the player's swim steering or at a
-mob's travel entry: the client's own movement fires it too, so a mod installed
-on both sides predicts the edit or veto the server applies, and the server's
-position still wins. It receives the loop context, not a `Host`, and lets a
-listener change the input and velocity or cancel. `TravelMode` names the branch
-about to run, including species overrides: an allay or vex reports `Flying`, and
-a squid reports `VelocityOnly` in or out of water. A replacement does not change
-the branch. A body that does not travel, such as a shulker, fires no hook; neither
-does a replayed player tick.
+`living_travel` runs on both peers (movement phase 2, `LivingEntity.travel`
+branch pick), after the player's swim steering or at a mob's travel entry: the
+client's own movement fires it too, so a mod installed on both sides predicts
+the edit or veto the server applies, and the server keeps vanilla's movement
+checks and its position wins. A `side = "server"` mod's listener is not called
+for a body a client controls (a player, or a vehicle a player is driving) and
+runs normally for every other body. It receives the loop context, not a `Host`,
+and lets a listener change the input and velocity or cancel. `TravelMode` names
+the branch about to run, including species overrides: an allay or vex reports
+`Flying`, and a squid reports `VelocityOnly` in or out of water. A replacement
+does not change the branch. A body that does not travel, such as a shulker,
+fires no hook. Simulated (replayed) player ticks fire the hook as real ticks do.
 
 Edits to `input`, edits to `velocity` and cancellation are independent: there is
 no per-listener output validator or synthetic magnitude cap. Velocity writes
@@ -153,17 +164,15 @@ vetoed. A listener panic or phase refusal leaves earlier edits standing and
 later eligible listeners running. Only a panic disables the failed callback for
 this hook for the session.
 
-For a player, a veto holds the position accepted at the server's travel boundary;
-it does not rewind reports already accepted before that tick. While the veto
-stands, the server corrects new reports that would move the player away. An
-edit that changes the stored velocity or the acceleration the chosen branch
-applies sends one correction, even if collision absorbs it, if the player
-remains eligible and no correction awaits acknowledgement. The server compares
-inputs using that branch's `moveRelative` operation, at the same speed and yaw
-as the move. Inputs that have the same effect or are unused by the branch do
-not trigger a correction. A separate teleport in the same tick takes priority.
-The correction carries the live server position and velocity. The client never
-calls this hook.
+The server does not send a separate position correction for a listener's edit or
+clamp later movement reports on a veto: vanilla's ordinary movement checks
+decide.
+
+On an observing client, `EntityRef::interpolate_to(host, position, rotation)`
+updates client display state for a body the server owns (`Entity.moveOrInterpolateTo`),
+routing to the family's own interpolation handler or setting the pose directly
+for `NO_OP` families; the next server update wins, and bodies the client
+simulates are refused (`false`).
 
 ## Turning hanging entities
 

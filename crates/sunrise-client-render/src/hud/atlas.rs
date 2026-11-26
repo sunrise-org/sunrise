@@ -235,16 +235,7 @@ pub fn dump_atlas(
             pixels.len()
         )));
     }
-    fs::create_dir_all(dir)?;
-    let png_path = dir.join(format!("{name}.png"));
-    let mut encoder = png::Encoder::new(fs::File::create(&png_path)?, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(std::io::Error::other)?;
-    writer
-        .write_image_data(pixels)
-        .map_err(std::io::Error::other)?;
-    drop(writer);
+    let png_path = write_dump_png(dir, name, width, height, pixels)?;
     let mut names = sprites.iter().collect::<Vec<_>>();
     names.sort_by(|a, b| a.0.cmp(b.0));
     let mut list = String::new();
@@ -255,6 +246,27 @@ pub fn dump_atlas(
         list.push_str(&format!("{sprite}\tx={x}\ty={y}\tw={w}\th={h}\n"));
     }
     fs::write(dir.join(format!("{name}.txt")), list)?;
+    Ok(png_path)
+}
+
+/// `NativeImage.writeToFile` for a dump: `pixels` (RGBA, `width * height * 4` bytes) written to
+/// `dir/name.png`, `dir` made first.
+pub(crate) fn write_dump_png(
+    dir: &Path,
+    name: &str,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let png_path = dir.join(format!("{name}.png"));
+    let mut encoder = png::Encoder::new(fs::File::create(&png_path)?, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(std::io::Error::other)?;
+    writer
+        .write_image_data(pixels)
+        .map_err(std::io::Error::other)?;
     Ok(png_path)
 }
 

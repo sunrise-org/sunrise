@@ -52,8 +52,9 @@ pub(crate) struct OitStageSource {
     pub samplers: &'static [&'static str],
 }
 
-/// The stage samplers, in the order [`super::oit::CloudSamples::views`] gives their textures.
-const STAGE_SAMPLERS: [&str; 3] = ["DepthBoundsSampler", "Coeff0", "Coeff1"];
+/// The stage samplers, in the order [`super::oit::CloudSamples::views`] gives their textures (the
+/// pack text's Improved Transparency stages bind them by the same names).
+pub(crate) const STAGE_SAMPLERS: [&str; 3] = ["DepthBoundsSampler", "Coeff0", "Coeff1"];
 
 /// The defines of `CLOUDS` and `FLAT_CLOUDS`: none of their own. The backend's, which every
 /// program has, the translator adds (`core_shader::DEPTH_ZERO_TO_ONE`).

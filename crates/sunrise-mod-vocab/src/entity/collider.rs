@@ -69,10 +69,19 @@ impl ColliderPose {
 /// A collider that moves or turns carries the bodies standing on it: once a tick, after the
 /// level's entities ticked, each moves by the displacement of its contact point as a collided
 /// move with `MoveCause::Carried`. After carrying, a collider that moved or turned shoves
-/// bodies in the simultaneous swept path of its boxes, with the same move cause. The shove does
-/// not cancel velocity into the collider; ordinary collision handles velocity. A body caught
-/// between the collider and a wall stays where the move leaves it, and a living one takes
-/// `in_wall` damage while a box covers its eyes. Passengers follow their vehicle.
+/// bodies in the simultaneous swept path of its boxes, with the same move cause: a turn is swept
+/// along with any translation, not resolved at its final pose alone. Riders already carried are
+/// not shoved again, and a body caught between the collider and a wall stays where the move
+/// leaves it.
+///
+/// A shove that actually moves a body removes only the component of its velocity that points
+/// into the shove; tangential velocity stays. An upward shove never lowers vertical velocity
+/// below the collider's own vertical speed: a body already rising faster keeps its speed.
+/// Vanilla pistons and shulkers keep their velocity behaviour.
+///
+/// The server shoves non-player entities and never a player; each Sunrise client predicts the
+/// shove of its own player through the ordinary movement checks. A living body still takes `in_wall`
+/// damage while a box covers its eyes. Passengers follow their vehicle.
 ///
 /// A vanilla client has none of this: the server sends a collider only to a Sunrise client that
 /// tracks the entity, and a vanilla client sees the entity and walks through it.

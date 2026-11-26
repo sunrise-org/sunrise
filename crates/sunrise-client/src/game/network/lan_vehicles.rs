@@ -547,12 +547,13 @@ impl Game<'_> {
             // Unreachable: the vehicle was a boat or a mount, or it returned.
             (None, None) => std::borrow::Cow::Borrowed(""),
         };
-        let mut gate = sunrise_client::move_gate::armed_with(
+        let mut gate = sunrise_client::move_gate::armed_with_controlled(
             &self.loop_context,
             id,
             kind,
             MoverType::Player,
             wanted,
+            true,
         );
         let wanted = gate.delta();
         // A listener's decision that is not the request (#2414, ruling 5):

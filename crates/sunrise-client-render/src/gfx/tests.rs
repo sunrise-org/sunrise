@@ -623,7 +623,7 @@ fn special_material_batches_preserve_quad_order_and_offsets() {
     assert_eq!(
         counts,
         [
-            4, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            4, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
         ]
     );
     assert_eq!(

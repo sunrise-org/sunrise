@@ -1075,6 +1075,7 @@ pub(super) fn tnt_general_seat(tnt: Vec3) -> Vec3 {
 #[cfg(test)]
 pub(in crate::game) mod tests {
     use super::*;
+    use crate::game::game_tests::tests::on_big_stack;
 
     #[test]
     fn saved_block_state_follows_the_model_instead_of_raw_input() {
@@ -2478,19 +2479,6 @@ pub(in crate::game) mod tests {
             }
             write_silence_output("bottles", &rows);
         });
-    }
-
-    /// Runs `test` on a thread with an 8 MiB stack. A Game's explosion and potion-impact paths
-    /// need more than the 2 MiB test thread in a Windows debug build, where those tests
-    /// overflowed it (4 MiB is enough).
-    fn on_big_stack(test: impl FnOnce() + Send + 'static) {
-        let thread = std::thread::Builder::new()
-            .stack_size(8 << 20)
-            .spawn(test)
-            .unwrap();
-        if let Err(panic) = thread.join() {
-            std::panic::resume_unwind(panic);
-        }
     }
 
     fn source_silence_game(

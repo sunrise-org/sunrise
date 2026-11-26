@@ -181,6 +181,9 @@ pub(crate) fn install() {
             },
             // Keeps the game's reach: the menu tests read vanilla's `stillValid` distance.
             block_interaction_range: |_, _, _, _, _| {},
+            is_scaffolding: |context, _, _, _, scaffolding| {
+                *scaffolding |= context.setting("rules_mod", "stack").is_some();
+            },
             makes_open_trapdoor_above_climbable: |context, _, _, _, climbable| {
                 *climbable |= context.setting("rules_mod", "stack").is_some();
             },

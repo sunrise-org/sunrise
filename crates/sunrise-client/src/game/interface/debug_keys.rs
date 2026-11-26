@@ -905,11 +905,23 @@ impl Game<'_> {
                 let dir = sunrise_client::logging::player_dir()
                     .join("screenshots")
                     .join("debug");
-                match self
+                let atlas = self
                     .gui
                     .atlas
-                    .dump_contents(&dir, "minecraft_textures_atlas_gui")
+                    .dump_contents(&dir, "minecraft_textures_atlas_gui");
+                // Each client mod's dynamic texture is a GPU texture of its own
+                // (`DynamicTexture.dumpContents`), read back beside the atlas.
+                if let Some(renderer) = &self.renderer
+                    && let Err(e) = renderer.hud.dynamic().dump_contents(
+                        &renderer.device,
+                        &renderer.queue,
+                        self.dynamic_textures.live(),
+                        &dir,
+                    )
                 {
+                    log::error!("Failed to dump mod dynamic textures: {e}");
+                }
+                match atlas {
                     Ok(_) => {
                         log::info!("Dumped dynamic textures to {}", dir.display());
                         let link = Text::styled(

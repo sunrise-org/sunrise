@@ -1,6 +1,8 @@
 //! `LivingEntity.onClimbable` for the player: the block it stands in, and the mods' say on whether
 //! that block is a ladder (`native_is_ladder`, in `motion`) and on whether the block under an open
-//! trapdoor makes it one (`native_makes_open_trapdoor_above_climbable`).
+//! trapdoor makes it one (`native_makes_open_trapdoor_above_climbable`). A sneaking player's slide
+//! down it is stopped unless the block is scaffolding, which the mods may also say
+//! (`native_is_scaffolding`, in `motion::surface`).
 use super::*;
 
 /// Whether an open trapdoor above a block climbs like a ladder
@@ -141,9 +143,17 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
         Ok(())
     }
     fn in_scaffolding(&mut self) -> Result<bool> {
-        Ok(self
-            .collision_binding
-            .is_scaffolding(self.block(BlockPos::containing(self.player.position))))
+        let position = BlockPos::containing(self.player.position);
+        let state = self.block(position);
+        let mut scaffolding = self.collision_binding.is_scaffolding(state);
+        super::surface::native_is_scaffolding(
+            self.loop_context,
+            self.player.entity_id as u32,
+            position,
+            state,
+            &mut scaffolding,
+        );
+        Ok(scaffolding)
     }
     fn suppressing_ladder_slide(&mut self) -> Result<bool> {
         Ok(self.player.shift_key_down && !(self.player.client_side && self.player.flying))

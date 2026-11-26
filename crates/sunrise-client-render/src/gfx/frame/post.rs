@@ -36,6 +36,9 @@ pub(in crate::gfx) struct PostPassArgs<'a> {
     pub(in crate::gfx) debug_top: u32,
     pub(in crate::gfx) globals: Globals,
     pub(in crate::gfx) entity_quads: u32,
+    /// A pack-drawn name tag's copies (`EntityBatch`'s last materials): their first quad and
+    /// count, which the views draw as the native entity layer.
+    pub(in crate::gfx) name_tags: (u32, u32),
     pub(in crate::gfx) hand_in_world: bool,
     pub(in crate::gfx) world_quads: u32,
     pub(in crate::gfx) additive_quads: u32,
@@ -98,6 +101,7 @@ impl Renderer {
             debug_top,
             globals,
             entity_quads,
+            name_tags,
             hand_in_world,
             world_quads,
             additive_quads,
@@ -435,7 +439,13 @@ impl Renderer {
             );
         }
         if !frame.title {
-            self.draw_world_views(&mut encoder, frame, globals, flat_frame, entity_quads);
+            self.draw_world_views(
+                &mut encoder,
+                frame,
+                globals,
+                flat_frame,
+                (entity_quads, name_tags),
+            );
             let (depth, depth_size) = match &scaled {
                 Some((_, depth)) => (depth, self.world_post.size().unwrap_or(size)),
                 None => (&self.depth, size),

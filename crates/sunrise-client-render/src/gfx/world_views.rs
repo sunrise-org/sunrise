@@ -154,6 +154,9 @@ impl Kept {
 /// additive, depth-read-only pipeline; other energy swirls are not part of these views.
 pub(super) struct EntityDraws {
     pub ordinary: u32,
+    /// A pack-drawn name tag's copies, drawn as the native entity layer with the ordinary
+    /// pipeline (the pack's text blocks hold the frame camera's matrices, not the view's).
+    pub name_tags: std::ops::Range<u32>,
     pub foil: std::ops::Range<u32>,
 }
 
@@ -165,15 +168,17 @@ impl EntityDraws {
         group: &wgpu::BindGroup,
         buffer: &wgpu::Buffer,
     ) {
-        if self.ordinary == 0 && self.foil.is_empty() {
+        if self.ordinary == 0 && self.name_tags.is_empty() && self.foil.is_empty() {
             return;
         }
         pass.set_bind_group(0, group, &[]);
         pass.set_vertex_buffer(0, buffer.slice(..));
-        for (pipeline, quads) in pipelines
-            .into_iter()
-            .zip([0..self.ordinary, self.foil.clone()])
-        {
+        let [entities, foil] = pipelines;
+        for (pipeline, quads) in [
+            (entities, 0..self.ordinary),
+            (entities, self.name_tags.clone()),
+            (foil, self.foil.clone()),
+        ] {
             if !quads.is_empty() {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..quads.len() as u32 * 6, (quads.start * 4) as i32, 0..1);
@@ -196,14 +201,15 @@ impl Renderer {
     /// Draws each of this frame's views (`view_sections::Sections`) and hands it to
     /// `native_world_view_drawn`. The views' globals go in the frame's own buffer, its bind
     /// groups with it, and the frame's are put back after them, all in `encoder`'s order.
-    /// `globals` are the frame's, `flat` whether it drew flat, `entity_quads` its entity quads.
+    /// `globals` are the frame's, `flat` whether it drew flat, `entity_quads` its entity quads and
+    /// `name_tags` the range of a pack-drawn name tag's copies.
     pub(super) fn draw_world_views(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
         globals: Globals,
         flat: bool,
-        entity_quads: u32,
+        (entity_quads, name_tags): (u32, (u32, u32)),
     ) {
         let views = self.world_views.sections.take_views();
         let [r, g, b, _] = globals.fog_color.map(f64::from);
@@ -220,6 +226,7 @@ impl Renderer {
             hdr: self.hdr.is_some(),
             entities: EntityDraws {
                 ordinary: entity_quads,
+                name_tags: name_tags.0..name_tags.0 + name_tags.1,
                 foil: self.entity_batch.armor_foil.clone(),
             },
         };

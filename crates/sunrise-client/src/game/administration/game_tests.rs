@@ -1705,6 +1705,20 @@ fn retry_line(info: &Info, retry: Retry, attempts: i32, successes: i32, passed: 
 pub(in crate::game) mod tests {
     use super::*;
 
+    /// Runs `test` on a thread with an 8 MiB stack. A Game's explosion and potion-impact paths
+    /// need more than the 2 MiB test thread in a Windows debug build, where those tests
+    /// overflowed it (4 MiB is enough); building a server game and resolving a `/ride` comes
+    /// within a few kilobytes of it in a Linux debug build.
+    pub(in crate::game) fn on_big_stack(test: impl FnOnce() + Send + 'static) {
+        let thread = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(test)
+            .unwrap();
+        if let Err(panic) = thread.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+
     pub(in crate::game) fn server_game<'a>(
         resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
     ) -> Game<'a> {
