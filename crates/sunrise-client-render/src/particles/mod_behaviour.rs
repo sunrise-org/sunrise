@@ -18,7 +18,7 @@ enum ModAnimation {
 }
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub(super) struct ModBehaviour {
+pub struct ModBehaviour {
     velocity: Option<[f64; 3]>,
     /// Random extra velocity, each axis uniform in `-jitter..=jitter`.
     velocity_jitter: Option<[f64; 3]>,

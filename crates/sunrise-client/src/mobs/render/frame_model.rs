@@ -11,7 +11,7 @@ use std::{borrow::Cow, sync::Arc};
 
 /// The exact body selected for one draw, with an owned pack snapshot rather than a read lock.
 /// The same selection supplies the Pre bind pose and all the vanilla draws that follow it.
-pub(super) struct FrameBody<'a> {
+pub struct FrameBody<'a> {
     pub(super) visuals: &'a ClientMobVisuals,
     model_key: Cow<'static, str>,
     vanilla: &'a Arc<Part>,

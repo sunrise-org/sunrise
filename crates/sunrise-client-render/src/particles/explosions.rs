@@ -35,7 +35,7 @@ impl ExplosionParticle {
 
 /// `ClientExplosionTracker.ExplosionInfo`.
 #[derive(Clone, Debug)]
-pub(super) struct TrackedExplosion {
+pub struct TrackedExplosion {
     pub(super) center: [f64; 3],
     pub(super) radius: f32,
     pub(super) block_count: usize,

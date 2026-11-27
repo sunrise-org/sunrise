@@ -258,7 +258,7 @@ fn as_number(value: &Value) -> f64 {
 
 /// A Polytone colormap used as an attribute value (wiki "Colormaps"): an image read at the
 /// column and row its two expressions pick, each 0 to 1 with 1 the top-left corner.
-pub(crate) struct Colormap {
+pub struct Colormap {
     x: Axis,
     y: Axis,
     /// Only the lower-left triangle: the row value is scaled by the column value, as vanilla's
