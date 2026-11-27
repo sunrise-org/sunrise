@@ -1064,8 +1064,20 @@ fn work_shared_out_is_all_done_in_order_when_no_helper_can_start() {
 /// to write lz4, gzip or uncompressed regions does
 /// (`RegionFileVersion.configure`).
 #[test]
+#[ignore = "daily"]
 fn a_chunk_is_written_with_the_selected_region_version() {
     use super::{Record, compress_records};
+
+    const CHILD: &str = "SUNRISE_SAVE_REGION_VERSION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        crate::fresh_process::run_in_fresh_process(
+            "save::tests::a_chunk_is_written_with_the_selected_region_version",
+            CHILD,
+            "1",
+        );
+        return;
+    }
+
     let tag = Arc::new(NamedTag {
         name: "".into(),
         tag: Tag::compound([("xPos", Tag::Int(3))]),

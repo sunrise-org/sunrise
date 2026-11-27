@@ -24,17 +24,21 @@ pub const REGION_FILE_NAMES: [&str; 4] = ["gzip", "deflate", "none", "lz4"];
 static SELECTED: AtomicU8 = AtomicU8::new(Compression::Zlib as u8);
 
 impl Compression {
+    /// Look up a `region-file-compression` name from [`REGION_FILE_NAMES`].
+    pub fn from_name(name: &str) -> Option<Self> {
+        REGION_FILE_NAMES
+            .iter()
+            .position(|known| *known == name)
+            .map(|i| [Self::Gzip, Self::Zlib, Self::None, Self::Lz4][i])
+    }
+
     /// `RegionFileVersion.configure`: what `region-file-compression` names
     /// becomes the version every region file written from here on uses,
     /// whichever world it belongs to. An unknown name leaves the selection as
     /// it was, as vanilla logs the value and keeps going. False for a name
     /// that is not one of [`REGION_FILE_NAMES`].
     pub fn configure(name: &str) -> bool {
-        let Some(compression) = REGION_FILE_NAMES
-            .iter()
-            .position(|known| *known == name)
-            .map(|i| [Self::Gzip, Self::Zlib, Self::None, Self::Lz4][i])
-        else {
+        let Some(compression) = Self::from_name(name) else {
             return false;
         };
         SELECTED.store(compression as u8, Ordering::Relaxed);
@@ -763,11 +767,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn region_file_names_resolve_exact_codecs() {
+        for (name, want) in [
+            ("gzip", Some(Compression::Gzip)),
+            ("deflate", Some(Compression::Zlib)),
+            ("none", Some(Compression::None)),
+            ("lz4", Some(Compression::Lz4)),
+            ("zstd", None),
+            ("LZ4", None),
+        ] {
+            assert_eq!(Compression::from_name(name), want, "{name}");
+        }
+        assert_eq!(Compression::selected(), Compression::Zlib);
+    }
+
     /// `RegionFileVersion.configure` and `getSelected`: the names
     /// server.properties' `region-file-compression` takes, the default before
     /// any is set, and an unknown name leaving the selection alone.
     #[test]
+    #[ignore = "daily"]
     fn the_selected_region_version_follows_the_property() {
+        const CHILD: &str = "SUNRISE_COMPRESSION_CONFIGURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "compression::tests::the_selected_region_version_follows_the_property",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let report = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                out.status.success()
+                    && report
+                        .lines()
+                        .any(|line| line.starts_with("test result: ok. 1 passed;")),
+                "region compression configuration failed in its own process:\n{report}"
+            );
+            return;
+        }
+
         assert_eq!(
             Compression::selected(),
             Compression::Zlib,
