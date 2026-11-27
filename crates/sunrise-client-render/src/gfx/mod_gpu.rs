@@ -67,6 +67,7 @@ pub struct ModGpuResources {
     /// Distinct [`FrameGraphWarning`]s already logged once since last reload.
     pub(super) warned_frame_graph: Arc<Mutex<HashSet<FrameGraphWarning>>>,
     render_capabilities: RenderCapabilities,
+    read_only_depth_stencil: bool,
     max_buffer_size: u64,
     /// Retained GPU vertex/index buffers backing [`mod_api::MeshRef`].
     pub(crate) meshes: Arc<Mutex<ModMeshes>>,
@@ -103,6 +104,10 @@ impl ModGpuResources {
             .alloc_view_id();
         Self {
             render_capabilities: probe_render_capabilities(&adapter, &device),
+            read_only_depth_stencil: adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::READ_ONLY_DEPTH_STENCIL),
             max_buffer_size: device.limits().max_buffer_size,
             adapter,
             device,
@@ -221,6 +226,12 @@ impl ModGpuResources {
     /// `RenderCapabilities::multi_draw_indirect_count`, without copying the rest.
     pub fn multi_draw_indirect_count(&self) -> bool {
         self.render_capabilities.multi_draw_indirect_count
+    }
+
+    /// Whether the adapter supports attaching a depth-stencil texture read-only (`depth_ops: None`)
+    /// while simultaneously sampling it in a render pass (`DownlevelFlags::READ_ONLY_DEPTH_STENCIL`).
+    pub fn read_only_depth_stencil(&self) -> bool {
+        self.read_only_depth_stencil
     }
 
     /// The largest inline uniform and texel-buffer payloads a mod's set-1 draw may bind: the

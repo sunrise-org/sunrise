@@ -299,6 +299,8 @@ pub struct ResolvedDrawBindings {
     pub entries: Vec<ResolvedSet1Entry>,
     /// Optional push-constant byte range in `Batch::inline_uniforms` / `Batch::oit_inline_uniforms`.
     pub push_constants: Option<std::ops::Range<usize>>,
+    /// Whether any binding samples [`mod_api::TextureSource::WorldDepth`].
+    pub reads_world_depth: bool,
 }
 
 /// One unified mod-pipeline draw command (`draw_mesh`, `draw_vertices`, or `pipeline_quads`).
@@ -390,6 +392,9 @@ struct PreparedDraw {
     /// An empty layout draws with the base pipeline; otherwise use its nearest-sampler variant.
     sampler_layout: SamplerLayout,
     set1_bind_group: Option<(wgpu::BindGroup, Vec<u32>)>,
+    /// Whether this draw samples `TextureSource::WorldDepth` and therefore runs in a read-only
+    /// depth world render pass (`depth_ops: None`).
+    reads_world_depth: bool,
 }
 
 /// Where textured pipelines' textures come from when the renderer builds them
@@ -2717,10 +2722,18 @@ impl ModPipelines {
             else {
                 continue;
             };
-            let (variant, topology) = match batch.modifiers {
-                _ if cmd.modifier_stack == ModifierStacks::EMPTY => {
-                    (ModifierStacks::EMPTY, compiled.source.recipe.state.topology)
-                }
+            let reads_world_depth = cmd.bindings.as_ref().is_some_and(|b| b.reads_world_depth);
+            let (variant, topology, writes_depth) = match batch.modifiers {
+                _ if cmd.modifier_stack == ModifierStacks::EMPTY => (
+                    ModifierStacks::EMPTY,
+                    compiled.source.recipe.state.topology,
+                    compiled
+                        .source
+                        .recipe
+                        .state
+                        .depth_stencil
+                        .is_some_and(|ds| ds.write),
+                ),
                 Some(stacks) => {
                     let slots = stacks.get(cmd.modifier_stack);
                     let variant = Self::variant_id(&mut self.variant_ids, slots);
@@ -2737,11 +2750,19 @@ impl ModPipelines {
                         compiled.source.recipe.state,
                         modifier_defs,
                     );
-                    (variant, state.topology)
+                    (
+                        variant,
+                        state.topology,
+                        state.depth_stencil.is_some_and(|ds| ds.write),
+                    )
                 }
                 // A stack with no table to resolve it draws nothing.
-                None => (u32::MAX, compiled.source.recipe.state.topology),
+                None => (u32::MAX, compiled.source.recipe.state.topology, false),
             };
+            // A modifier stack that turns depth writes on cannot run in a read-only depth pass.
+            if reads_world_depth && writes_depth {
+                continue;
+            }
             if let DrawRange::Vertices(ref range) = cmd.draw.range {
                 let count = range.end.saturating_sub(range.start);
                 match topology {
@@ -2764,6 +2785,7 @@ impl ModPipelines {
                 source: cmd.source.clone(),
                 sampler_layout: key.1,
                 set1_bind_group: None,
+                reads_world_depth,
             });
         }
         for (submitted_index, cmd) in batch.oit_draws.iter().enumerate() {
@@ -2830,6 +2852,7 @@ impl ModPipelines {
                 source: cmd.source.clone(),
                 sampler_layout: key.1,
                 set1_bind_group: None,
+                reads_world_depth: cmd.bindings.as_ref().is_some_and(|b| b.reads_world_depth),
             });
         }
         if self.runs.is_empty()
@@ -3294,6 +3317,7 @@ impl ModPipelines {
                     },
                     sampler_layout: key.1,
                     set1_bind_group,
+                    reads_world_depth: false,
                 },
             ));
         }
@@ -4151,6 +4175,99 @@ impl ModPipelines {
             .retain(|texture| !released.contains(texture));
     }
 
+    /// Whether any prepared standard-pass draw samples `TextureSource::WorldDepth` and therefore
+    /// needs world depth stored before opening a read-only depth pass.
+    pub fn reads_world_depth(&self) -> bool {
+        self.draws.iter().any(|cmd| cmd.reads_world_depth)
+    }
+
+    /// Whether any prepared standard-pass draw in stages `first..=last` (excluding `skip_slots`)
+    /// samples `TextureSource::WorldDepth`.
+    pub fn stage_reads_world_depth(&self, first: usize, last: usize, skip_slots: &[usize]) -> bool {
+        self.draws.iter().any(|cmd| {
+            cmd.reads_world_depth
+                && first <= cmd.stage
+                && cmd.stage <= last
+                && !skip_slots.contains(&cmd.slot)
+        })
+    }
+
+    /// Whether any prepared standard-pass draw in `ranges` samples `TextureSource::WorldDepth`.
+    pub fn prepared_draws_read_world_depth(&self, ranges: &[std::ops::Range<u32>]) -> bool {
+        ranges.iter().any(|r| {
+            let start = self
+                .draws
+                .partition_point(|cmd| cmd.submitted_index < r.start as usize);
+            let end = self
+                .draws
+                .partition_point(|cmd| cmd.submitted_index < r.end as usize);
+            self.draws[start..end]
+                .iter()
+                .any(|cmd| cmd.reads_world_depth)
+        })
+    }
+
+    /// Draws the prepared runs and leading non-`WorldDepth` draws of stages `first..=last`
+    /// (excluding `skip_slots`) into the already-open writable `pass`, returning how many
+    /// matching draws were issued before the first `WorldDepth`-sampling draw.
+    pub fn draw_excluding_prefix(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indices: &wgpu::Buffer,
+        first: usize,
+        last: usize,
+        skip_slots: &[usize],
+    ) -> usize {
+        self.draw_runs(
+            pass,
+            indices,
+            false,
+            self.runs
+                .iter()
+                .filter(|run| {
+                    first <= run.stage && run.stage <= last && !skip_slots.contains(&run.slot)
+                })
+                .map(|run| (run, run.quads.clone())),
+        );
+        self.draw_writable_prefix(
+            pass,
+            indices,
+            self.draws.iter().filter(|cmd| {
+                first <= cmd.stage && cmd.stage <= last && !skip_slots.contains(&cmd.slot)
+            }),
+        )
+    }
+
+    /// Draws the remaining draws of stages `first..=last` (skipping `skip` already issued by
+    /// [`Self::draw_excluding_prefix`]) in exact submission order, switching between read-only
+    /// (`depth_ops: None`) and writable depth passes on `(view, depth)` as contiguous runs
+    /// alternate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_excluding_split(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        indices: &wgpu::Buffer,
+        first: usize,
+        last: usize,
+        skip_slots: &[usize],
+        skip: usize,
+    ) {
+        self.draw_split_rest(
+            encoder,
+            view,
+            depth,
+            indices,
+            self.draws
+                .iter()
+                .filter(|cmd| {
+                    first <= cmd.stage && cmd.stage <= last && !skip_slots.contains(&cmd.slot)
+                })
+                .skip(skip),
+        );
+    }
+
     /// Draws the prepared runs and unified draws of stages `first..=last` in the order queued,
     /// with `indices` (6 a quad, `u32`), skipping slots in `skip_slots` (e.g. slots bound to a
     /// shader pack's translated mod pass). Leaves the pass with its own pipeline, bind group 0
@@ -4273,6 +4390,61 @@ impl ModPipelines {
                 .flat_map(|range| self.prepared_runs(range))
                 .filter(|run| !skip_slots.contains(&run.slot))
                 .map(|run| (run, run.quads.clone())),
+        );
+    }
+
+    /// Draw the leading non-`WorldDepth` draws in `ranges` into the already-open writable `pass`,
+    /// returning how many were issued before the first `WorldDepth`-sampling draw.
+    pub fn draw_prepared_draws_prefix(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indices: &wgpu::Buffer,
+        ranges: &[std::ops::Range<u32>],
+    ) -> usize {
+        self.draw_writable_prefix(
+            pass,
+            indices,
+            ranges.iter().flat_map(|r| {
+                let start = self
+                    .draws
+                    .partition_point(|cmd| cmd.submitted_index < r.start as usize);
+                let end = self
+                    .draws
+                    .partition_point(|cmd| cmd.submitted_index < r.end as usize);
+                self.draws[start..end].iter()
+            }),
+        )
+    }
+
+    /// Draw the remaining draws in `ranges` (skipping `skip` already issued by
+    /// [`Self::draw_prepared_draws_prefix`]) in exact submission order across read-only and
+    /// writable depth passes on `(view, depth)`.
+    pub fn draw_prepared_draws_split(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        indices: &wgpu::Buffer,
+        ranges: &[std::ops::Range<u32>],
+        skip: usize,
+    ) {
+        self.draw_split_rest(
+            encoder,
+            view,
+            depth,
+            indices,
+            ranges
+                .iter()
+                .flat_map(|r| {
+                    let start = self
+                        .draws
+                        .partition_point(|cmd| cmd.submitted_index < r.start as usize);
+                    let end = self
+                        .draws
+                        .partition_point(|cmd| cmd.submitted_index < r.end as usize);
+                    self.draws[start..end].iter()
+                })
+                .skip(skip),
         );
     }
 
@@ -4549,6 +4721,96 @@ impl ModPipelines {
                 pass.draw(range, instances);
             }
         }
+    }
+
+    fn draw_writable_prefix<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indices: &wgpu::Buffer,
+        cmds: impl Iterator<Item = &'a PreparedDraw>,
+    ) -> usize {
+        let mut issued = 0;
+        self.draw_prepared_cmds(
+            pass,
+            indices,
+            false,
+            cmds.take_while(|cmd| {
+                if cmd.reads_world_depth {
+                    false
+                } else {
+                    issued += 1;
+                    true
+                }
+            }),
+        );
+        issued
+    }
+
+    fn draw_split_rest<'a>(
+        &'a self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        indices: &wgpu::Buffer,
+        mut cmds: impl Iterator<Item = &'a PreparedDraw>,
+    ) {
+        let Some(mut first) = cmds.next() else {
+            return;
+        };
+        loop {
+            let read_only = first.reads_world_depth;
+            let mut pass = Self::open_world_depth_pass(encoder, view, depth, read_only);
+            self.draw_prepared_cmds(&mut pass, indices, false, std::iter::once(first));
+            let mut next_group = None;
+            for cmd in cmds.by_ref() {
+                if cmd.reads_world_depth != read_only {
+                    next_group = Some(cmd);
+                    break;
+                }
+                self.draw_prepared_cmds(&mut pass, indices, false, std::iter::once(cmd));
+            }
+            drop(pass);
+            match next_group {
+                Some(cmd) => first = cmd,
+                None => break,
+            }
+        }
+    }
+
+    /// Open a world render pass over `(view, depth)` whose depth attachment is read-only
+    /// (`depth_ops: None`, vanilla `OitRenderPassProvider`) when `read_only` is true, or writable
+    /// (`LoadOp::Load`, `StoreOp::Store`) when resuming ordinary draws.
+    fn open_world_depth_pass<'e>(
+        encoder: &'e mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        read_only: bool,
+    ) -> wgpu::RenderPass<'e> {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(if read_only {
+                "Sunrise world, read-only depth"
+            } else {
+                "Sunrise world, after read-only depth"
+            }),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: (!read_only).then_some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        })
     }
 
     fn draw_prepared_cmds<'a>(
@@ -7014,6 +7276,7 @@ void main() {
                         },
                     ],
                     push_constants: Some(16..32),
+                    reads_world_depth: false,
                 }),
             },
             PipelineDraw {
@@ -7039,6 +7302,7 @@ void main() {
                         },
                     ],
                     push_constants: Some(48..64),
+                    reads_world_depth: false,
                 }),
             },
         ];
@@ -7092,6 +7356,7 @@ void main() {
                         },
                     ],
                     push_constants: Some(pc_start..pool.len()),
+                    reads_world_depth: false,
                 }),
             }];
             let batch = Batch {
@@ -7232,6 +7497,7 @@ void main() {
                         size: r.length,
                     }],
                     push_constants: None,
+                    reads_world_depth: false,
                 }),
             }
         };
@@ -7710,6 +7976,7 @@ void main() {
                     mips: None,
                 }],
                 push_constants: None,
+                reads_world_depth: false,
             }),
         };
 
@@ -7872,6 +8139,7 @@ void main() {
                 sampler_layout,
                 entries,
                 push_constants: None,
+                reads_world_depth: false,
             }),
         }
     }
@@ -8897,6 +9165,7 @@ void main() {
                     mips: None,
                 }],
                 push_constants: None,
+                reads_world_depth: false,
             }),
         };
 
@@ -9149,6 +9418,7 @@ void main() {
                     mips: None,
                 }],
                 push_constants: None,
+                reads_world_depth: false,
             }),
         };
 
@@ -9279,6 +9549,7 @@ void main() {
                     mips,
                 }],
                 push_constants: None,
+                reads_world_depth: false,
             }),
         };
         let frame_format = wgpu::TextureFormat::Rgba8Unorm;

@@ -1651,6 +1651,7 @@ mod tests {
                     attachment: 0,
                 }],
                 push_constants: None,
+                reads_world_depth: false,
             }),
         });
         let _id_b = recorded.push_pass(pass_b);

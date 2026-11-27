@@ -156,6 +156,23 @@ impl sunrise_client::gfx::world_primitives::FrameHooks for GameWorldStageDriver<
     }
 }
 
+/// Validate binding [`mod_api::TextureSource::WorldDepth`]: a depth-writing pipeline cannot sample
+/// the depth target it writes (`InvalidBinding`), and an in-world raster pass needs adapter
+/// read-only depth-stencil support (`TargetReadWriteHazard`).
+fn check_world_depth_binding(
+    writes_depth: bool,
+    in_world_raster: bool,
+    read_only_depth_stencil: bool,
+) -> Result<(), PipelineDrawError> {
+    if writes_depth {
+        return Err(PipelineDrawError::InvalidBinding);
+    }
+    if in_world_raster && !read_only_depth_stencil {
+        return Err(PipelineDrawError::TargetReadWriteHazard);
+    }
+    Ok(())
+}
+
 impl ClientGame<'_> {
     /// A camera-space quad in solid `argb`, of the atlas's white texel.
     pub(in crate::game) fn native_camera_quad(
@@ -701,15 +718,17 @@ impl ClientGame<'_> {
             "",
             &[],
             pack_linked,
+            true,
             &mut |bytes| draw.borrow_mut().push_inline_uniform(bytes),
             &mut |bytes| draw.borrow_mut().push_texel_data(bytes),
         )
     }
 
     /// Validate and resolve per-draw set-1 [`mod_api::DrawBindings`] for either the main world
-    /// pass (`active_target = None`) or an offscreen pass (`active_target = Some((target, mip_level))`:
-    /// a mod render target's mip level or a transient frame-graph target at level 0), refusing
-    /// self-sampling with [`PipelineDrawError::TargetReadWriteHazard`].
+    /// pass (`active_target = None`, `in_world_raster = true`) or an offscreen pass
+    /// (`active_target = Some((target, mip_level))`, `in_world_raster = false`: a mod render
+    /// target's mip level or a transient frame-graph target at level 0), refusing self-sampling
+    /// with [`PipelineDrawError::TargetReadWriteHazard`].
     #[allow(clippy::too_many_arguments)]
     fn resolve_draw_bindings_into(
         &self,
@@ -720,6 +739,7 @@ impl ClientGame<'_> {
         pass_label: &str,
         reads: &[mod_api::FrameTarget],
         pack_linked: bool,
+        in_world_raster: bool,
         push_inline: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
         push_texel: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
     ) -> Result<Option<sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings>, PipelineDrawError>
@@ -749,6 +769,7 @@ impl ClientGame<'_> {
             pass_label,
             reads,
             pack_linked,
+            in_world_raster,
             push_inline,
             push_texel,
         )
@@ -770,6 +791,7 @@ impl ClientGame<'_> {
         pass_label: &str,
         reads: &[mod_api::FrameTarget],
         pack_linked: bool,
+        in_world_raster: bool,
         push_inline: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
         push_texel: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
     ) -> Result<Option<sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings>, PipelineDrawError>
@@ -860,6 +882,8 @@ impl ClientGame<'_> {
             },
         }
         let float32_filterable = gpu.float32_filterable();
+        let read_only_depth_stencil = gpu.read_only_depth_stencil();
+        let mut reads_world_depth = false;
         let mut sampler_layout = SamplerLayout::default();
         let mut sampled = 0;
         let mut staged = Vec::with_capacity(layout.entries.len());
@@ -961,9 +985,12 @@ impl ClientGame<'_> {
                                     })?
                                 }
                                 mod_api::TextureSource::WorldDepth => {
-                                    if writes_depth {
-                                        return Err(PipelineDrawError::InvalidBinding);
-                                    }
+                                    check_world_depth_binding(
+                                        writes_depth,
+                                        in_world_raster,
+                                        read_only_depth_stencil,
+                                    )?;
+                                    reads_world_depth = true;
                                     gpu.mod_world_depth_texture_view()
                                 }
                                 mod_api::TextureSource::Lightmap => gpu.mod_lightmap_texture_view(),
@@ -1191,6 +1218,7 @@ impl ClientGame<'_> {
                 sampler_layout,
                 entries: resolved_entries,
                 push_constants,
+                reads_world_depth,
             },
         ))
     }
@@ -1584,6 +1612,7 @@ impl ClientGame<'_> {
                 &pass.label,
                 &pass.reads,
                 false,
+                false,
                 &mut |bytes| {
                     let start = inline.len();
                     inline.extend_from_slice(bytes);
@@ -1684,6 +1713,7 @@ impl ClientGame<'_> {
             &pass.label,
             &pass.reads,
             false,
+            false,
             &mut |bytes| {
                 let start = pass.inline_uniforms.len();
                 pass.inline_uniforms.extend_from_slice(bytes);
@@ -1747,6 +1777,7 @@ impl ClientGame<'_> {
             transients,
             &pass.label,
             &pass.reads,
+            false,
             false,
             &mut |bytes| {
                 let start = pass.inline_uniforms.len();
@@ -1878,6 +1909,7 @@ impl ClientGame<'_> {
             transients,
             &pass.label,
             &pass.reads,
+            false,
             false,
             &mut |bytes| {
                 let start = pass.inline_uniforms.len();
@@ -6532,6 +6564,355 @@ void main() {
                 wall_right, wall_left,
                 "opaque wall must occlude the behind-wall quad after a mid-world split"
             );
+
+            drop(game.client.mod_gpu.take());
+            drop(renderer);
+        });
+    }
+
+    #[test]
+    fn world_depth_binding_refuses_depth_writes_and_missing_read_only_depth_stencil() {
+        assert_eq!(
+            check_world_depth_binding(true, true, true),
+            Err(PipelineDrawError::InvalidBinding)
+        );
+        assert_eq!(
+            check_world_depth_binding(true, false, false),
+            Err(PipelineDrawError::InvalidBinding)
+        );
+        assert_eq!(
+            check_world_depth_binding(false, true, false),
+            Err(PipelineDrawError::TargetReadWriteHazard)
+        );
+        assert_eq!(check_world_depth_binding(false, true, true), Ok(()));
+        assert_eq!(check_world_depth_binding(false, false, false), Ok(()));
+    }
+
+    struct InWorldDepthSampleProbe {
+        draws: Mutex<Vec<mod_api::PreparedWorldDraw>>,
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for InWorldDepthSampleProbe {
+        fn register_render_pipelines(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+        ) {
+            let sample_fmt = mod_api::VertexFormat::builder(mod_api::VertexStepMode::Vertex)
+                .attribute("Pos", mod_api::VertexAttributeFormat::Float32x3)
+                .attribute("Tint", mod_api::VertexAttributeFormat::Float32x4)
+                .build()
+                .unwrap();
+            event.register(
+                mod_api::RenderPipeline::new(
+                    Identifier::parse("world_depth_in_world:sample").unwrap(),
+                    Identifier::parse("world_depth_in_world:core/sample").unwrap(),
+                    mod_api::PipelineBlend::Opaque,
+                    mod_api::WorldDepth::Tested,
+                )
+                .vertex_binding(0, sample_fmt)
+                .sampler(
+                    "DepthTex",
+                    mod_api::Sampler::new(
+                        mod_api::SamplerFilter::Nearest,
+                        mod_api::SamplerAddress::ClampToEdge,
+                    ),
+                ),
+            );
+            let corner_fmt = mod_api::VertexFormat::builder(mod_api::VertexStepMode::Vertex)
+                .attribute("Pos", mod_api::VertexAttributeFormat::Float32x3)
+                .build()
+                .unwrap();
+            event.register(
+                mod_api::RenderPipeline::new(
+                    Identifier::parse("world_depth_in_world:corner").unwrap(),
+                    Identifier::parse("world_depth_in_world:core/corner").unwrap(),
+                    mod_api::PipelineBlend::Opaque,
+                    mod_api::WorldDepth::Tested,
+                )
+                .depth_write(true)
+                .vertex_binding(0, corner_fmt),
+            );
+        }
+
+        fn prepare_render_buffers(
+            &self,
+            host: &dyn ClientHost,
+            event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+        ) {
+            #[repr(C)]
+            #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+            struct PosTint([f32; 3], [f32; 4]);
+
+            let sample = host
+                .render_assets()
+                .render_pipeline(&Identifier::parse("world_depth_in_world:sample").unwrap())
+                .unwrap();
+            let corner = host
+                .render_assets()
+                .render_pipeline(&Identifier::parse("world_depth_in_world:corner").unwrap())
+                .unwrap();
+            let depth_bindings = mod_api::DrawBindings::default()
+                .texture("DepthTex", mod_api::TextureSource::WorldDepth);
+
+            // In front of the opaque wall (reversed-Z 0.5 >= ~0.02495): passes read-only depth test.
+            let front = [
+                PosTint([-1.0, -1.0, 0.5], [0.0, 0.4, 0.0, 1.0]),
+                PosTint([1.0, -1.0, 0.5], [0.0, 0.4, 0.0, 1.0]),
+                PosTint([1.0, 1.0, 0.5], [0.0, 0.4, 0.0, 1.0]),
+                PosTint([-1.0, 1.0, 0.5], [0.0, 0.4, 0.0, 1.0]),
+            ];
+            // Behind the opaque wall (reversed-Z 0.01 < ~0.02495): rejected by read-only depth test.
+            let behind = [
+                PosTint([-1.0, -1.0, 0.01], [0.0, 1.0, 0.0, 1.0]),
+                PosTint([1.0, -1.0, 0.01], [0.0, 1.0, 0.0, 1.0]),
+                PosTint([1.0, 1.0, 0.01], [0.0, 1.0, 0.0, 1.0]),
+                PosTint([-1.0, 1.0, 0.01], [0.0, 1.0, 0.0, 1.0]),
+            ];
+            // Top-left NDC quad drawn with depth writes on after the read-only pass.
+            let top_left: [[f32; 3]; 4] = [
+                [-1.0, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
+                [-0.5, 1.0, 0.5],
+                [-1.0, 1.0, 0.5],
+            ];
+            let draw_front = event
+                .context
+                .draw_vertices(
+                    RenderLevelStage::AfterOpaqueBlocks,
+                    sample,
+                    &[bytemuck::cast_slice(&front)],
+                    None,
+                    mod_api::MeshDraw::vertices(0..4),
+                    &depth_bindings,
+                )
+                .unwrap();
+            let draw_behind = event
+                .context
+                .draw_vertices(
+                    RenderLevelStage::AfterOpaqueBlocks,
+                    sample,
+                    &[bytemuck::cast_slice(&behind)],
+                    None,
+                    mod_api::MeshDraw::vertices(0..4),
+                    &depth_bindings,
+                )
+                .unwrap();
+            let draw_corner = event
+                .context
+                .draw_vertices(
+                    RenderLevelStage::AfterOpaqueBlocks,
+                    corner,
+                    &[bytemuck::cast_slice(&top_left)],
+                    None,
+                    mod_api::MeshDraw::vertices(0..4),
+                    &mod_api::DrawBindings::default(),
+                )
+                .unwrap();
+            *self.draws.lock().unwrap() = vec![draw_front, draw_behind, draw_corner];
+        }
+
+        fn render_level_stage(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut mod_api::RenderLevelStageEvent<'_>,
+        ) {
+            if event.stage != RenderLevelStage::AfterOpaqueBlocks {
+                return;
+            }
+            let draws: Vec<_> = self.draws.lock().unwrap().drain(..).collect();
+            for draw in draws {
+                event.context.world_pass().unwrap().draw(draw).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn in_world_pipeline_samples_world_depth_in_read_only_depth_pass() {
+        use super::super::native_entity_refs::tests::{test_window, with_client_game};
+        use crate::game::loading_window::{loading_frame, loading_renderer};
+        use mod_api::__private::{game::RegistrationContextNew, take_hook_panics};
+        use std::sync::Arc;
+        use sunrise_client::mesher::{SectionMesh, TerrainVertex};
+        use sunrise_client_render::{assets::RenderAssets, graphics::GraphicsApi};
+        use sunrise_gameplay_common::game::{Screen, test_fixtures::run_fresh_cases_with_env};
+
+        if run_fresh_cases_with_env(
+            "game::client_side::native_custom_geometry::tests::in_world_pipeline_samples_world_depth_in_read_only_depth_pass",
+            "SUNRISE_IN_WORLD_DEPTH_SAMPLE_CHILD",
+            &["run"],
+            1,
+            &[("SUNRISE_GPU_CULL", "0"), ("SUNRISE_VISBUFFER", "0")],
+        ) {
+            return;
+        }
+        with_client_game(|game| {
+            let (_event_loop, window) = test_window([64, 64]);
+            let mut renderer =
+                loading_renderer(window, true, None, None, None, GraphicsApi::Vulkan).unwrap();
+            renderer.set_section_cull(false).unwrap();
+            assert!(
+                renderer.mod_gpu().read_only_depth_stencil(),
+                "Vulkan adapter must support READ_ONLY_DEPTH_STENCIL"
+            );
+            game.set_renderer(Box::new(renderer));
+            game.client.title.0 = None;
+            game.client.screen = Screen::Playing;
+            assert!(!sunrise_client_render::render_slots::needs().world_depth);
+
+            mod_platform::__private::install(
+                vec![ModEntry::new(
+                    "world_depth_in_world",
+                    Box::new(InWorldDepthSampleProbe {
+                        draws: Mutex::new(Vec::new()),
+                    }),
+                )]
+                .into(),
+            );
+            let _ = take_hook_panics();
+            let mut pipelines = Vec::new();
+            sunrise_gameplay_common::game::native_hooks::native_register_render_pipelines(
+                &mod_api::RegistrationContext::new(),
+                &mut pipelines,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            );
+            let vanilla = tempfile::tempdir().unwrap();
+            std::fs::write(
+                vanilla.path().join("render-pipelines.json"),
+                r#"{"required":["minecraft:pipeline/solid_block"],"optional":["minecraft:pipeline/wireframe"]}"#,
+            )
+            .unwrap();
+            sunrise_client_render::mod_pipelines::register(pipelines, vanilla.path()).unwrap();
+            let shaders = tempfile::tempdir().unwrap();
+            let core = shaders
+                .path()
+                .join("assets/world_depth_in_world/shaders/core");
+            std::fs::create_dir_all(&core).unwrap();
+            std::fs::write(
+                core.join("sample.vsh"),
+                "#version 330\n\
+                 in vec3 Pos;\n\
+                 in vec4 Tint;\n\
+                 out vec4 vTint;\n\
+                 void main() {\n\
+                     gl_Position = vec4(Pos, 1.0);\n\
+                     vTint = Tint;\n\
+                 }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                core.join("sample.fsh"),
+                "#version 330\n\
+                 uniform sampler2D DepthTex;\n\
+                 in vec4 vTint;\n\
+                 out vec4 fragColor;\n\
+                 void main() {\n\
+                     float d = textureLod(DepthTex, vec2(0.5), 0.0).r;\n\
+                     fragColor = vec4(d, vTint.g, 1.0 - d, 1.0);\n\
+                 }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                core.join("corner.vsh"),
+                "#version 330\n\
+                 in vec3 Pos;\n\
+                 void main() {\n\
+                     gl_Position = vec4(Pos, 1.0);\n\
+                 }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                core.join("corner.fsh"),
+                "#version 330\n\
+                 out vec4 fragColor;\n\
+                 void main() {\n\
+                     fragColor = vec4(0.0, 1.0, 0.0, 1.0);\n\
+                 }\n",
+            )
+            .unwrap();
+            let mut assets = RenderAssets::unpublished();
+            assets.mod_pipelines = sunrise_client_render::mod_pipelines::Pipelines::load(
+                &sunrise_assets::resource_source::ResourceSource::directory(
+                    shaders.path().to_owned(),
+                ),
+                7,
+            )
+            .unwrap();
+            let mut renderer = game.client.renderer.0.take().unwrap();
+            renderer
+                .build_mod_pipelines(&assets.mod_pipelines, &|_| None)
+                .unwrap();
+            game.client.client_pack.render = Arc::new(assets);
+
+            // White opaque wall 2 blocks ahead of the camera (reversed-Z ~0.02495 -> red 6).
+            let mut wall = SectionMesh::default();
+            for (pos, uv) in [[0., 0., 4.], [0., 16., 4.], [16., 16., 4.], [16., 0., 4.]]
+                .into_iter()
+                .zip([[0., 1.], [0., 0.], [1., 0.], [1., 1.]])
+            {
+                wall.solid
+                    .push(TerrainVertex::new(pos, uv, 0, u32::MAX, 0xf0f0));
+            }
+            wall.sort_solid();
+            renderer.load_column(0, 0);
+            renderer.upload((0, 10, 0), &wall);
+            renderer.screenshot = Some(sunrise_client::gfx::ScreenshotRequest {
+                path: "unused.png".into(),
+                size: None,
+                scaled: false,
+                background: false,
+            });
+            let hud = sunrise_client::hud::HudBatch::scratch([
+                renderer.config.width,
+                renderer.config.height,
+            ]);
+            let mut frame = loading_frame(&hud);
+            frame.title = false;
+            frame.distance = 64.0;
+            frame.detail_distance = 64.0;
+            frame.camera = DVec3::new(8.0, 104.0, 2.0);
+            frame.eye = frame.camera;
+            frame.pitch = 0.0;
+            frame.eye_rotation = [0.0, 0.0];
+            let camera = test_camera(
+                frame.camera.to_array(),
+                sunrise_client::camera::view_rotation_matrix(0.0, 0.0).0,
+            );
+            let mut draw = WorldGeometry::default();
+            draw.reset(
+                camera.position,
+                Mat4::from_cols_array(&camera.view),
+                [0.0; 2],
+            );
+            let mut hooks = GameWorldStageDriver::new(game, &camera, 0.0, &mut draw);
+            assert!(renderer.render(&frame, Some(&mut hooks)).unwrap());
+            assert_eq!(
+                renderer.drawn_sections, 1,
+                "the opaque wall section must draw"
+            );
+            assert!(
+                renderer.section_draws > 0,
+                "the opaque wall must issue a draw"
+            );
+            drop(hooks);
+            renderer.wait_submissions();
+            let panics = take_hook_panics();
+            assert!(panics.is_empty(), "{panics:?}");
+
+            let mut pending = renderer.screenshot_result.take().unwrap().unwrap();
+            let image = pending.image_mut();
+            let pixel = |x: usize, y: usize| -> [u8; 4] {
+                let at = (y * image.width as usize + x) * 4;
+                image.rgba[at..at + 4].try_into().unwrap()
+            };
+            // Center: sampled opaque wall depth (~0.02495 -> 6), front tint (0.4 -> 102),
+            // 1 - depth (~0.975 -> 249); behind-wall draw (tint 1.0 -> 255) rejected by depth test.
+            assert_eq!(pixel(32, 32), [6, 102, 249, 255]);
+            // Top-left corner: writable depth pass resumed after the read-only pass.
+            assert_eq!(pixel(4, 4), [0, 255, 0, 255]);
 
             drop(game.client.mod_gpu.take());
             drop(renderer);
