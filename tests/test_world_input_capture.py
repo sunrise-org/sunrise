@@ -122,8 +122,8 @@ mod window {
 }
 struct Settings;
 impl Settings {
-    fn gui_frame_for(&self, target: [u32; 2]) -> window::GuiFrame {
-        window::GuiFrame::new(target, 2, false)
+    fn gui_frame_with_insets(&self, target: [u32; 2], insets: Option<[u32; 4]>) -> window::GuiFrame {
+        window::GuiFrame::from_insets(target, 2, false, insets)
     }
 }
 #[derive(Clone, Copy)]
@@ -183,7 +183,7 @@ struct ClientState {
     window: (Option<Box<Window>>,), title: (Option<()>,),
     screen_state: (ScreenState,), renderer: (Option<Renderer>,),
     server_packs: (ServerPacks,), command_prompt: (Option<()>,),
-    settings: Settings, gui_safe_area: Option<window::GuiFrame>, lan_acting: Option<u32>,
+    settings: Settings, gui_safe_area: Option<([u32; 2], [u32; 4])>, lan_acting: Option<u32>,
     focused: bool, agent_pointer: bool, mouse: Mouse,
     captured: bool, capture_mode: Option<CursorGrabMode>, regrab_on_refocus: bool, screen: Screen,
     studio: Studio, cursor: (f32, f32),
@@ -386,6 +386,17 @@ fn main() {
         assert_eq!(game.client.window.0.as_ref().unwrap().at.get(), (500.0, 300.0));
         assert_eq!(game.client.cursor, (250.0, 150.0));
     }
+    // A capture warp remains at the window centre with a translated GUI.
+    {
+        let mut game = ClientGame::default();
+        game.client.window.0.as_mut().unwrap().size = Some([1000, 600]);
+        game.client.renderer.0 = Some(Renderer { config: Config { width: 1000, height: 600 } });
+        game.client.gui_safe_area = Some(([1000, 600], [32, 16, 12, 20]));
+        game.capture(true);
+        assert!(game.client.captured);
+        assert_eq!(game.client.window.0.as_ref().unwrap().at.get(), (500.0, 300.0));
+        assert_eq!(game.client.cursor, (234.0, 142.0));
+    }
     // `--offscreen` shows no window: the grab is the game's own, and the system
     // pointer is never grabbed, warped or hidden.
     {
@@ -567,15 +578,7 @@ fn main() {
                                   method(source, "internal_grab") + "\n" +
                                   method(source, "claim_window") + "\n" +
                                   method(source, "settle_after_run"))
-        with tempfile.TemporaryDirectory(prefix="sunrise-input-") as folder:
-            folder = Path(folder)
-            rust = folder / "capture.rs"
-            binary = folder / ("capture.exe" if os.name == "nt" else "capture")
-            rust.write_text(fixture, encoding="utf-8")
-            subprocess.run(["rustc", "--edition=2024", str(rust), "-o", str(binary)],
-                           check=True, capture_output=True, text=True, timeout=60)
-            subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=10)
-
+        self.run_fixture(fixture, "capture")
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_native_mouse_turns_only_during_active_gameplay(self):
