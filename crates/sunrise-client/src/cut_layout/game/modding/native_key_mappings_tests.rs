@@ -409,34 +409,36 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
             assert!(zoom.consume_click(game).unwrap());
             game.open_options_at(false, sunrise_client::options_ui::Page::NativeMod(0));
 
-            // A Host rebind and reset while Config stays open must update the cached Reset state.
-            // Build the layout before the first Host write to capture Reset disabled (zoom is at
-            // its registered default after the Reset click above).
-            let no_change = options_click(game, config_size, 282.5, 99.0);
-            assert!(!no_change.contains(&sunrise_client::options_ui::Event::Changed));
-            // Host rebind: the layout revision bumps; the next read must show Reset enabled.
+            // A Host rebind and reset while Config stays open update the cached Reset state. A
+            // click that answers no event keeps the built layout, so each Host write below lands
+            // on a layout built before it, at the same page and size.
+            // zoom is at its default: the inactive Reset answers nothing and stays cached.
+            let inactive_reset = options_click(game, config_size, 282.5, 99.0);
+            assert!(inactive_reset.is_empty());
             assert_eq!(
                 zoom.set_binding(game, "key.keyboard.x", ClientModifiers::default()),
                 Ok(())
             );
             assert_eq!(saved("zoom"), ("key.keyboard.x".to_owned(), 0));
-            // Build layout and confirm Reset is now enabled (fires Changed and resets the binding).
-            let rebind_reset_events = options_click(game, config_size, 282.5, 99.0);
-            assert!(rebind_reset_events.contains(&sunrise_client::options_ui::Event::Changed));
+            // The rebind enabled Reset on the cached layout: the click resets.
+            let enabled_reset = options_click(game, config_size, 282.5, 99.0);
+            assert!(enabled_reset.contains(&sunrise_client::options_ui::Event::Changed));
             assert_eq!(
                 zoom.binding(game),
                 Ok(("key.keyboard.z", ClientModifiers::default()))
             );
             assert_eq!(saved("zoom"), ("default".to_owned(), 99));
-            // Host rebind again, then Host reset: revision bumps twice; the layout must reflect the
-            // double update and show Reset disabled.
+            // Rebind again and build the layout with Reset enabled through an empty spot.
             assert_eq!(
                 zoom.set_binding(game, "key.keyboard.x", ClientModifiers::default()),
                 Ok(())
             );
+            let empty_spot = options_click(game, config_size, 2.0, 200.0);
+            assert!(empty_spot.is_empty());
+            // The Host reset disabled Reset on that cached layout: the click answers nothing.
             assert_eq!(zoom.reset_binding(game), Ok(()));
             let after_host_reset = options_click(game, config_size, 282.5, 99.0);
-            assert!(!after_host_reset.contains(&sunrise_client::options_ui::Event::Changed));
+            assert!(after_host_reset.is_empty());
             assert_eq!(
                 zoom.binding(game),
                 Ok(("key.keyboard.z", ClientModifiers::default()))
