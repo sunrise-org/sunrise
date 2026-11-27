@@ -1086,6 +1086,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn frame_and_legacy_hud_match_at_odd_targets() {
+        use sunrise_client::window::{GuiFrame, PointerSpace};
+
+        for (target, requested, unicode) in [
+            ([641, 481], 0, false),
+            ([853, 479], 1, true),
+            ([1279, 719], 2, false),
+            ([1921, 1081], 3, false),
+        ] {
+            let frame = GuiFrame::new(target, requested, unicode)
+                .with_pointer_space(PointerSpace::new([1927, 1083], 1.25));
+            let batch = HudBatch::for_frame(&frame);
+            let legacy = HudBatch::new(target, GuiScale { requested, unicode });
+            assert_eq!(frame.size(), (legacy.width, legacy.height));
+            assert_eq!(frame.scale(), legacy.scale);
+            assert_eq!(batch.viewport, legacy.viewport);
+            assert_eq!(
+                (batch.width, batch.height, batch.scale),
+                (legacy.width, legacy.height, legacy.scale)
+            );
+
+            for point in [[0.0, -0.0], [1.25, -3.75], [legacy.width, legacy.height]] {
+                assert_eq!(
+                    frame.gui_to_target(point).map(f32::to_bits),
+                    point.map(|v| (v * legacy.scale).to_bits())
+                );
+            }
+        }
+    }
+
     /// The pause menu's layout is made when it opens and when it resizes, not
     /// per frame: the build keeps it, and the readers get the same buttons and
     /// icons the frame drew.

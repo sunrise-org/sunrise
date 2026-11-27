@@ -1,5 +1,6 @@
 use super::*;
 use std::ops::Range;
+use sunrise_client_input::window::{GuiFrame, GuiSize};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -249,8 +250,17 @@ impl HudBatch {
     /// Window.calculateScale: the largest scale keeping >= 320x240 GUI pixels,
     /// capped by the GUI Scale option (0 = auto).
     pub fn new(window: [u32; 2], inputs: GuiScale) -> Self {
-        let gui =
-            sunrise_client_input::window::GuiSize::new(window, inputs.requested, inputs.unicode);
+        Self::with_gui_size(
+            window,
+            GuiSize::new(window, inputs.requested, inputs.unicode),
+        )
+    }
+
+    pub fn for_frame(frame: &GuiFrame) -> Self {
+        Self::with_gui_size(frame.target, frame.gui)
+    }
+
+    fn with_gui_size(window: [u32; 2], gui: GuiSize) -> Self {
         Self {
             pictures: Vec::new(),
             vertices: Vec::new(),

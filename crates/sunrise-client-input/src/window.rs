@@ -179,6 +179,52 @@ impl Default for PointerSample {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GuiFrame {
+    pub target: [u32; 2],
+    pub gui: GuiSize,
+    origin: [u32; 2],
+    window: Option<PointerSpace>,
+}
+
+impl GuiFrame {
+    pub fn new(target: [u32; 2], max_scale: u32, enforce_unicode: bool) -> Self {
+        Self {
+            target,
+            gui: GuiSize::new(target, max_scale, enforce_unicode),
+            origin: [0; 2],
+            window: None,
+        }
+    }
+
+    pub fn with_pointer_space(self, window: PointerSpace) -> Self {
+        Self {
+            window: Some(window),
+            ..self
+        }
+    }
+
+    pub fn origin(self) -> [u32; 2] {
+        self.origin
+    }
+
+    pub fn size(self) -> (f32, f32) {
+        (self.gui.size[0] as f32, self.gui.size[1] as f32)
+    }
+
+    pub fn scale(self) -> f32 {
+        self.gui.scale as f32
+    }
+
+    pub fn gui_to_target(self, position: [f32; 2]) -> [f32; 2] {
+        position.map(|axis| axis * self.scale())
+    }
+
+    pub fn pointer_to_gui(self, sample: PointerSample) -> GuiPointer {
+        PointerProjection::new(self).project_pointer(sample)
+    }
+}
+
 /// The GUI uses framebuffer-derived dimensions, but the pointer denominator
 /// is the window's screen-coordinate extent, not the rounded drawable size.
 #[derive(Clone, Copy, Debug)]
@@ -188,6 +234,15 @@ pub struct PointerProjection {
 }
 
 impl PointerProjection {
+    pub fn new(frame: GuiFrame) -> Self {
+        Self {
+            gui: frame.gui,
+            window: frame
+                .window
+                .unwrap_or_else(|| PointerSpace::new(frame.target, 1.0)),
+        }
+    }
+
     fn project_axis(self, screen: f64, axis: usize) -> f64 {
         scaled_pos(screen, self.gui.size[axis] as i32, self.window.screen[axis])
     }
@@ -1029,6 +1084,43 @@ mod tests {
             scaled.window.center(),
             PhysicalPosition::new(320.625, 240.625)
         );
+    }
+
+    #[test]
+    fn frame_preserves_projection_at_odd_sizes_and_fractional_dpi() {
+        for (target, live_size, requested, unicode) in [
+            ([641, 481], [641, 481], 2, false),
+            ([853, 479], [857, 483], 1, true),
+            ([1921, 1081], [1927, 1083], 0, false),
+            ([1921, 1081], [1921, 1081], 3, false),
+        ] {
+            for backing_scale in [1.0, 1.25, 1.5] {
+                let window = PointerSpace::new(live_size, backing_scale);
+                let gui = GuiSize::new(target, requested, unicode);
+                let legacy = PointerProjection { gui, window };
+                let frame = GuiFrame::new(target, requested, unicode).with_pointer_space(window);
+                let projection = PointerProjection::new(frame);
+                assert_eq!(frame.target, target);
+                assert_eq!(frame.gui, gui);
+                assert_eq!(frame.origin(), [0, 0]);
+
+                for point in [(67.0, 17.0), (-35.0, 37.125), (161.0f32.next_down(), 7.0)] {
+                    let position = [point.0, point.1];
+                    assert_eq!(
+                        frame.gui_to_target(position).map(f32::to_bits),
+                        position.map(|axis| (axis * gui.scale as f32).to_bits())
+                    );
+
+                    let physical = projection.window_pointer(point);
+                    assert_eq!(physical, legacy.window_pointer(point));
+                    let sample = window.physical_sample(physical);
+                    let projected = frame.pointer_to_gui(sample);
+                    let expected = legacy.project_pointer(sample);
+                    assert_eq!(projected.subpixel(), expected.subpixel());
+                    assert_eq!(projected.pixel(), expected.pixel());
+                }
+            }
+        }
     }
 
     #[test]
