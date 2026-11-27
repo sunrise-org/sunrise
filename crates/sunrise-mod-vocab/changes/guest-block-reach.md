@@ -1,0 +1,1 @@
+The vanilla answer supplied to `block_interaction_range` for a remote player's open menu or sign editor now uses that player's live block interaction range attribute and body eye height, just as block use and break requests do. The hook contract is unchanged.

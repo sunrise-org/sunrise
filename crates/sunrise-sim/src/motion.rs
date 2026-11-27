@@ -782,7 +782,7 @@ impl PlayerMotion {
     pub fn bounds(&self) -> Aabb {
         self.dimensions.bounds(self.position)
     }
-    pub fn attribute(&mut self, name: &str) -> Result<f64> {
+    pub fn attribute(&self, name: &str) -> Result<f64> {
         let key = self
             .attributes
             .key(name)
