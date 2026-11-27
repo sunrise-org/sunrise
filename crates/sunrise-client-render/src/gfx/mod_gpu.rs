@@ -35,6 +35,17 @@ pub(crate) struct ModFrameState {
     pub(crate) pack_iris: bool,
 }
 
+/// High-water marks of the mod GPU handle ID sequences, captured without retaining GPU handles so
+/// a replacement renderer continues them across device-loss recovery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModGpuIds {
+    meshes: u64,
+    uniforms: u64,
+    storage: u64,
+    readbacks: u64,
+    render_targets: u64,
+}
+
 /// A frame-graph problem logged once per reload, keyed by its kind so a cycle can never
 /// suppress an undeclared-read warning that shares its labels.
 #[derive(PartialEq, Eq, Hash)]
@@ -119,16 +130,47 @@ impl ModGpuResources {
         }
     }
 
+    /// Snapshot the current handle ID high-water marks without retaining GPU handles.
+    pub fn id_state(&self) -> ModGpuIds {
+        ModGpuIds {
+            meshes: self
+                .meshes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+            uniforms: self
+                .uniforms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+            storage: self
+                .storage
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+            readbacks: self
+                .readbacks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_id,
+            render_targets: self
+                .render_targets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+        }
+    }
+
     /// Before publishing a replacement renderer, continue the old handle ID sequences in
     /// any fresh stores. The retired allocations and pending work stay on the old device.
-    pub fn continue_ids_from(&self, previous: &Self) {
-        carry_counter(&self.meshes, &previous.meshes, |s| &mut s.next_generation);
-        carry_counter(&self.uniforms, &previous.uniforms, |s| {
+    pub fn continue_ids_from(&self, previous: ModGpuIds) {
+        raise_counter(&self.meshes, previous.meshes, |s| &mut s.next_generation);
+        raise_counter(&self.uniforms, previous.uniforms, |s| {
             &mut s.next_generation
         });
-        carry_counter(&self.storage, &previous.storage, |s| &mut s.next_generation);
-        carry_counter(&self.readbacks, &previous.readbacks, |s| &mut s.next_id);
-        carry_counter(&self.render_targets, &previous.render_targets, |s| {
+        raise_counter(&self.storage, previous.storage, |s| &mut s.next_generation);
+        raise_counter(&self.readbacks, previous.readbacks, |s| &mut s.next_id);
+        raise_counter(&self.render_targets, previous.render_targets, |s| {
             &mut s.next_generation
         });
     }
@@ -229,17 +271,10 @@ impl ModGpuResources {
     }
 }
 
-fn carry_counter<T>(
-    new: &Arc<Mutex<T>>,
-    old: &Arc<Mutex<T>>,
-    counter: impl Fn(&mut T) -> &mut u64,
-) {
-    if !Arc::ptr_eq(new, old) {
-        // The old facade was still callable until publication. Read its final high-water mark
-        // now, and release its lock before taking the new table's lock.
-        let last = *counter(&mut old.lock().unwrap_or_else(|e| e.into_inner()));
-        *counter(&mut new.lock().unwrap_or_else(|e| e.into_inner())) = last;
-    }
+fn raise_counter<T>(store: &Arc<Mutex<T>>, last: u64, counter: impl Fn(&mut T) -> &mut u64) {
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = counter(&mut guard);
+    *slot = (*slot).max(last);
 }
 
 /// Renderer methods that forward to its [`ModGpuResources`].
