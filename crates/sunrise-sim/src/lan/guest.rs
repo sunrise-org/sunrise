@@ -1293,14 +1293,24 @@ impl Guest {
     pub fn eye_height(&self) -> f64 {
         f64::from(self.dimensions().eye_height)
     }
-    /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest:
-    /// its block interaction range is 4.5, 5 in creative.
+    /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest, using
+    /// its body's eye height and current `block_interaction_range` attribute.
     pub fn within_block_range(&self, pos: [i32; 3], buffer: f64) -> bool {
-        let range = if self.creative() { 5.0 } else { 4.5 };
-        within_block_range(self.eye(), range + buffer, pos)
+        let motion = self.motion.as_deref();
+        let eye = motion.map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
+        let fallback = if self.creative() { 5.0 } else { 4.5 };
+        let range = motion
+            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
+            .unwrap_or(fallback);
+        within_block_range(
+            [self.position[0], self.position[1] + eye, self.position[2]],
+            range + buffer,
+            pos,
+        )
     }
-    /// [`Self::within_block_range`], then a mod's `block_interaction_range`: what a menu's
-    /// `stillValid` asks (`buffer` 4).
+    /// [`Self::within_block_range`], then a mod's `block_interaction_range` answer.
+    /// Menu validity and sign editing use a `buffer` of 4.0; block use and break
+    /// requests use 1.0.
     pub fn within_interaction_range(
         &self,
         context: &LoopContext,
@@ -1311,13 +1321,6 @@ impl Guest {
         native_block_interaction_range(context, self.uuid, block_pos(pos), buffer, &mut within);
         within
     }
-    /// [`Self::may_reach_block`], then a mod's `block_interaction_range`: what a use or a
-    /// break request asks (`buffer` 1).
-    pub fn reaches_block(&mut self, context: &LoopContext, pos: [i32; 3]) -> bool {
-        let mut within = self.may_reach_block(pos);
-        native_block_interaction_range(context, self.uuid, block_pos(pos), 1.0, &mut within);
-        within
-    }
     /// Where the guest's eyes are: its feet raised by its pose's eye height.
     pub fn eye(&self) -> [f64; 3] {
         [
@@ -1325,28 +1328,6 @@ impl Guest {
             self.position[1] + self.eye_height(),
             self.position[2],
         ]
-    }
-    /// `Player.isWithinBlockInteractionRange(pos, 1.0)`, which the server
-    /// checks a block action against (ServerPlayerGameMode.handleBlockBreakAction,
-    /// ServerGamePacketListenerImpl.handleUseItemOn): from the eyes of the
-    /// guest's body in its pose (crouching, swimming, gliding), with its
-    /// `block_interaction_range` (4.5, 5 in creative, more with `/attribute`).
-    pub fn may_reach_block(&mut self, pos: [i32; 3]) -> bool {
-        let eye = self
-            .motion
-            .as_ref()
-            .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let otherwise = if self.creative() { 5.0 } else { 4.5 };
-        let range = self
-            .motion
-            .as_mut()
-            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
-            .unwrap_or(otherwise);
-        within_block_range(
-            [self.position[0], self.position[1] + eye, self.position[2]],
-            range + 1.0,
-            pos,
-        )
     }
     /// The inventory menu's 46 slots (ServerPlayer.inventoryMenu): 0 crafting
     /// result, 1..=4 crafting grid, 5..=8 armor, 9..=35 main, 36..=44 hotbar,
@@ -1553,20 +1534,27 @@ mod tests {
     #[test]
     fn a_block_action_must_be_within_reach() {
         let mut g = guest_at([0.5, 64.0, 0.5]);
+        assert!(g.motion.is_none());
+        assert!(g.within_block_range([4, 65, 0], 0.0));
+        assert!(!g.within_block_range([5, 65, 0], 0.0)); // Exactly 4.5 blocks.
         // Survival (4.5 + 1 from the eyes): five blocks off horizontally,
         // not one further.
-        assert!(g.may_reach_block([5, 64, 0]));
-        assert!(!g.may_reach_block([6, 64, 0]));
+        assert!(g.within_block_range([5, 64, 0], 1.0));
+        assert!(!g.within_block_range([6, 64, 0], 1.0));
         // Creative's 5.0 reaches one block further.
         g.game_mode = CREATIVE;
-        assert!(g.may_reach_block([6, 64, 0]));
-        assert!(!g.may_reach_block([7, 64, 0]));
+        assert!(g.within_block_range([5, 65, 0], 0.0));
+        g.position[0] = 0.0;
+        assert!(!g.within_block_range([5, 65, 0], 0.0)); // Exactly 5 blocks.
+        g.position[0] = 0.5;
+        assert!(g.within_block_range([6, 64, 0], 1.0));
+        assert!(!g.within_block_range([7, 64, 0], 1.0));
         // With no body yet the sneak flag gives the eye height: a block at
         // the edge above is gone once crouched.
         g.game_mode = SURVIVAL;
-        assert!(g.may_reach_block([0, 71, 0]));
+        assert!(g.within_block_range([0, 71, 0], 1.0));
         g.sneaking = true;
-        assert!(!g.may_reach_block([0, 71, 0]));
+        assert!(!g.within_block_range([0, 71, 0], 1.0));
     }
 
     /// A shulker box's `minecraft:container` crosses to a guest, so its
@@ -1631,6 +1619,56 @@ mod tests {
             })
             .unwrap();
         m.refresh_attributes().unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn buffered_block_reach_reads_the_live_body() {
+        use sunrise_world::attributes::{Modifier, Operation};
+
+        let root = crate::prepared_test_root::prepared_root(&[&[
+            "attributes.json",
+            "block-behaviours.json",
+            "block-tags.json",
+            "damage-catalog.json",
+            "facts.json",
+            "gameplay-facts.json",
+            "landing-definitions.json",
+            "movement-properties.nbt",
+            "player-float-ids.json",
+            "sunrise-resources.json",
+        ]]);
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let motion_tables = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut g = guest_at([0.0, 64.0, 0.5]);
+        let mut body = PlayerMotion::new(&motion_tables, Vec3::new(0.0, 64.0, 0.5)).unwrap();
+        let attribute = "minecraft:block_interaction_range";
+        assert!(g.within_block_range([6, 65, 0], 4.0));
+        assert!(!g.within_block_range([12, 65, 0], 4.0));
+
+        set_base(&mut body, attribute, 1.0);
+        g.motion = Some(Box::new(body));
+        assert!(!g.within_block_range([6, 65, 0], 4.0));
+
+        let body = g.motion.as_deref_mut().unwrap();
+        let key = body.attributes.key(attribute).unwrap();
+        let handle = body.attributes.get_instance(Some(key)).unwrap().unwrap();
+        let bonus = Modifier::new("test:bonus", 11.0, Operation::AddValue).unwrap();
+        body.attributes
+            .edit(&handle, |a, observer| a.add_permanent(bonus, observer))
+            .unwrap();
+        // The dirty modifier counts on the next reach check, before a tick.
+        assert!(g.within_block_range([12, 65, 0], 4.0));
+
+        // An announced glide does not change reach until the body changes pose.
+        g.fall_flying = true;
+        assert!(g.within_block_range([0, 81, 0], 4.0));
+        g.motion
+            .as_deref_mut()
+            .unwrap()
+            .set_pose(Pose::FallFlying)
+            .unwrap();
+        assert!(!g.within_block_range([0, 81, 0], 4.0));
     }
 
     fn assert_dims(got: Dimensions, want: (f32, f32, f32), what: &str) {
