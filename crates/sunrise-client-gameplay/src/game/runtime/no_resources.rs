@@ -5,7 +5,7 @@
 use super::*;
 use sunrise_client::{
     no_resources::{Action, NoResources},
-    window::{GuiSize, PointerProjection, PointerSample, PointerSpace},
+    window::{GuiFrame, PointerSample, PointerSpace},
 };
 use winit::event::MouseButton;
 
@@ -58,9 +58,12 @@ impl Missing {
             .map_or([1280, 720], |r| [r.config.width, r.config.height])
     }
 
-    fn projected_pointer(&self) -> sunrise_client::window::GuiPointer {
+    fn gui_frame(&self) -> GuiFrame {
+        self.gui_frame_for(self.size())
+    }
+
+    fn gui_frame_for(&self, size: [u32; 2]) -> GuiFrame {
         let inputs = self.settings.gui_scale_inputs();
-        let size = self.size();
         let window = self.window.as_deref().map_or_else(
             || PointerSpace::new(size, 1.0),
             |window| {
@@ -69,11 +72,7 @@ impl Missing {
                     .get_or_init(|| PointerSpace::from_window(window))
             },
         );
-        PointerProjection {
-            gui: GuiSize::new(size, inputs.requested, inputs.unicode),
-            window,
-        }
-        .project_pointer(self.pointer)
+        GuiFrame::new(size, inputs.requested, inputs.unicode).with_pointer_space(window)
     }
 
     /// `f` over a Ui of the window's size, the cursor where the pointer is.
@@ -90,10 +89,13 @@ impl Missing {
     }
 
     fn draw(&mut self) {
-        let mut batch = HudBatch::new(self.size(), self.settings.gui_scale_inputs());
-        self.with_ui(&mut batch, self.projected_pointer().pixel(), |ui| {
-            self.screen.draw(ui)
-        });
+        let frame = self.gui_frame();
+        let mut batch = HudBatch::for_frame(&frame);
+        self.with_ui(
+            &mut batch,
+            frame.pointer_to_gui(self.pointer).pixel(),
+            |ui| self.screen.draw(ui),
+        );
         let Some(renderer) = &mut self.renderer else {
             return;
         };
@@ -111,10 +113,9 @@ impl Missing {
     }
 
     fn click(&mut self, event_loop: &ActiveEventLoop) {
-        let mut batch = HudBatch::new(self.size(), self.settings.gui_scale_inputs());
-        match self.with_ui(&mut batch, self.projected_pointer().subpixel(), |ui| {
-            self.screen.click(ui)
-        }) {
+        let frame = self.gui_frame();
+        let cursor = frame.pointer_to_gui(self.pointer).subpixel();
+        match self.screen.click(&self.gui.atlas, frame, cursor) {
             Some(Action::Open(address)) => packs::open_uri(address),
             Some(Action::Quit) => event_loop.exit(),
             None => {}

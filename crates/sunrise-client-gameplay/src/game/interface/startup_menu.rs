@@ -11,7 +11,7 @@ use sunrise_client::{
     clipboard::{self, AppendSelection, SystemClipboard},
     options_ui::{Event, OptionsUi, Page},
     widgets::{Kind, Target},
-    window::{GuiSize, PointerProjection, PointerSample, PointerSpace},
+    window::{GuiFrame, PointerProjection, PointerSample, PointerSpace},
 };
 use sunrise_gameplay_common::game::{api_values::game_rule_registry, pack_discovery::discover};
 use winit::{event::KeyEvent, keyboard::ModifiersState};
@@ -561,8 +561,15 @@ impl Loading {
     }
 
     pub fn menu_pointer_projection(&self) -> PointerProjection {
+        PointerProjection::new(self.gui_frame())
+    }
+
+    pub fn gui_frame(&self) -> GuiFrame {
+        self.gui_frame_for(self.menu_size())
+    }
+
+    pub fn gui_frame_for(&self, size: [u32; 2]) -> GuiFrame {
         let inputs = self.settings.gui_scale_inputs();
-        let size = self.menu_size();
         let window = self.window.as_deref().map_or_else(
             || PointerSpace::new(size, 1.0),
             |window| {
@@ -572,10 +579,7 @@ impl Loading {
                     .get_or_init(|| PointerSpace::from_window(window))
             },
         );
-        PointerProjection {
-            gui: GuiSize::new(size, inputs.requested, inputs.unicode),
-            window,
-        }
+        GuiFrame::new(size, inputs.requested, inputs.unicode).with_pointer_space(window)
     }
 
     fn projected_menu_pointer(&self) -> sunrise_client::window::GuiPointer {
@@ -856,9 +860,7 @@ impl Loading {
             .status_changed(was_disabled, sunrise_narrator::screen::Trigger::Keyboard);
     }
 
-    fn menu_options_click(&mut self, drag: bool, right: bool) {
-        let size = self.menu_size();
-        let batch = HudBatch::new(size, self.settings.gui_scale_inputs());
+    fn menu_options_click(&mut self, frame: GuiFrame, drag: bool, right: bool) {
         let Some(gui) = &self.gui else { return };
         self.menu.options.shift = self.menu.modifiers.shift_key();
         let events = self.menu.options.click(
@@ -866,8 +868,8 @@ impl Loading {
             &gui.atlas,
             self.menu.cursor.0,
             self.menu.cursor.1,
-            (batch.width, batch.height),
-            [size[0] as i32, size[1] as i32],
+            frame.size(),
+            frame.target.map(|axis| axis as i32),
             drag,
             right,
         );
@@ -969,9 +971,9 @@ impl Loading {
 
     /// What the keyboard can focus on the screen last drawn.
     fn menu_key_targets(&self) -> Vec<Target> {
-        let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
+        let frame = self.gui_frame();
         key_focus::keyboard_targets(
-            key_focus::on_screen(key_focus::drawn_targets(), (batch.width, batch.height)),
+            key_focus::on_screen(key_focus::drawn_targets(), frame.size()),
             false,
         )
     }
@@ -1031,12 +1033,12 @@ impl Loading {
         } else {
             (false, false)
         };
-        let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
+        let frame = self.gui_frame();
         let ctx = key_focus::Context {
             slider_edit,
             typing,
             rows_take_enter,
-            gui: (batch.width, batch.height),
+            gui: frame.size(),
         };
         let act = key_focus::act(nav, focus, &targets, ctx);
         if act == Act::Pass {
@@ -1117,9 +1119,9 @@ impl Loading {
         match target.kind {
             Kind::Field => self.menu_key_click(event_loop, key_focus::field_click(target.rect)),
             Kind::Row if !self.menu.options_open => {
-                let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
+                let frame = self.gui_frame();
                 if let Some(title) = &mut self.menu.title {
-                    title.focus_world_row(target.center(), (batch.width, batch.height));
+                    title.focus_world_row(target.center(), frame.size());
                 }
             }
             _ => {}
@@ -1211,14 +1213,12 @@ impl Loading {
             // `PackSelectionScreen.onFilesDrop`: a pack dropped on the window
             // joins the Create New World screen's data packs.
             WindowEvent::DroppedFile(path) => {
-                let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
+                let frame = self.gui_frame();
                 let handled = self.menu.options_open
                     && self.gui.as_ref().is_some_and(|gui| {
-                        self.menu.options.drop_resource_pack(
-                            path.clone(),
-                            &gui.atlas,
-                            (batch.width, batch.height),
-                        )
+                        self.menu
+                            .options
+                            .drop_resource_pack(path.clone(), &gui.atlas, frame.size())
                     });
                 if !handled && let Some(title) = &mut self.menu.title {
                     title.drop_file(path);
@@ -1258,18 +1258,14 @@ impl Loading {
             WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
                 if self.menu.win.is_some() => {}
             WindowEvent::CursorMoved { position, .. } => {
-                let projection = self.menu_pointer_projection();
+                let frame = self.gui_frame();
+                let projection = PointerProjection::new(frame);
                 self.menu.pointer = projection.window.os_sample(position);
                 self.menu.cursor = projection.project_pointer(self.menu.pointer).subpixel();
                 if self.menu.options_open && self.menu.dragging {
-                    self.menu_options_click(true, false);
+                    self.menu_options_click(frame, true, false);
                 } else if let Some(title) = &mut self.menu.title {
-                    let size = self
-                        .renderer
-                        .as_ref()
-                        .map_or([1280, 720], |r| [r.config.width, r.config.height]);
-                    let b = HudBatch::new(size, self.settings.gui_scale_inputs());
-                    title.drag(self.menu.cursor, (b.width, b.height));
+                    title.drag(self.menu.cursor, frame.size());
                     title.drag_field(&self.gui.as_ref().unwrap().atlas, self.menu.cursor.0);
                 }
             }
@@ -1281,7 +1277,11 @@ impl Loading {
                 } else if matches!(button, MouseButton::Left | MouseButton::Right) {
                     if state == ElementState::Pressed {
                         self.menu.dragging = button == MouseButton::Left;
-                        self.menu_options_click(false, button == MouseButton::Right);
+                        self.menu_options_click(
+                            self.gui_frame(),
+                            false,
+                            button == MouseButton::Right,
+                        );
                     } else if button == MouseButton::Left {
                         self.menu.dragging = false;
                         let events = self.menu.options.release();
@@ -1294,28 +1294,21 @@ impl Loading {
                 button: MouseButton::Left,
                 ..
             } => {
-                let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
+                let frame = self.gui_frame();
                 if let (Some(title), Some(gui)) = (&mut self.menu.title, &self.gui) {
                     if state == ElementState::Released {
                         title.release();
                         title.release_field();
                     } else {
-                        let (action, _) = title.click(
-                            self.menu.cursor.0,
-                            self.menu.cursor.1,
-                            (batch.width, batch.height),
-                        );
+                        let (action, _) =
+                            title.click(self.menu.cursor.0, self.menu.cursor.1, frame.size());
                         title.press_field(
                             &gui.atlas,
                             self.menu.cursor,
-                            (batch.width, batch.height),
+                            frame.size(),
                             self.menu.modifiers.shift_key(),
                         );
-                        title.press_rules(
-                            &gui.atlas,
-                            self.menu.cursor,
-                            (batch.width, batch.height),
-                        );
+                        title.press_rules(&gui.atlas, self.menu.cursor, frame.size());
                         self.menu_action(event_loop, action);
                     }
                 }
@@ -1327,13 +1320,9 @@ impl Loading {
                 button: MouseButton::Middle,
                 ..
             } => {
-                let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
+                let frame = self.gui_frame();
                 if let Some(title) = &mut self.menu.title {
-                    title.select_world_at(
-                        self.menu.cursor.0,
-                        self.menu.cursor.1,
-                        (batch.width, batch.height),
-                    );
+                    title.select_world_at(self.menu.cursor.0, self.menu.cursor.1, frame.size());
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1346,19 +1335,18 @@ impl Loading {
                 } else {
                     raw
                 } * self.settings.mouse_wheel_sensitivity as f32;
-                let size = self.menu_size();
-                let batch = HudBatch::new(size, self.settings.gui_scale_inputs());
+                let frame = self.gui_frame();
                 if self.menu.options_open {
                     let events = self.menu.options.wheel(
                         &mut self.settings,
-                        (batch.width, batch.height),
+                        frame.size(),
                         self.menu.cursor,
-                        [size[0] as i32, size[1] as i32],
+                        frame.target.map(|axis| axis as i32),
                         amount,
                     );
                     self.menu_option_events(events);
                 } else if let Some(title) = &mut self.menu.title {
-                    title.scroll_worlds(amount, self.menu.cursor, (batch.width, batch.height));
+                    title.scroll_worlds(amount, self.menu.cursor, frame.size());
                 }
             }
             WindowEvent::KeyboardInput { event, .. }
@@ -1394,8 +1382,8 @@ impl Loading {
                         self.menu_option_events(events);
                     }
                 } else {
-                    let batch = HudBatch::new(self.menu_size(), self.settings.gui_scale_inputs());
-                    let action = self.menu.title_key(&event, (batch.width, batch.height));
+                    let frame = self.gui_frame();
+                    let action = self.menu.title_key(&event, frame.size());
                     self.menu_action(event_loop, action);
                 }
             }
@@ -1404,7 +1392,7 @@ impl Loading {
         Ok(())
     }
 
-    pub fn draw_menu(&mut self, batch: &mut HudBatch) {
+    pub fn draw_menu(&mut self, frame: GuiFrame, batch: &mut HudBatch) {
         // The buttons crates add to the title screen show by what is installed now
         // (`sunrise_hooks::title`), as on the game's own title screen.
         self.sync_title_mods();
@@ -1418,7 +1406,7 @@ impl Loading {
         let cursor = if self.menu.key_focus.is_some() {
             self.menu.cursor
         } else {
-            self.projected_menu_pointer().pixel()
+            frame.pointer_to_gui(self.menu.pointer).pixel()
         };
         // `Gui.setScreen` clears the focus of the screen it leaves
         // (`Screen.clearFocus`): the title behind the options, and the one

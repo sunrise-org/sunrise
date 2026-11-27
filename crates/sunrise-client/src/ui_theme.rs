@@ -377,7 +377,7 @@ impl<'a> Ui<'a> {
     pub fn new(atlas: &'a HudAtlas, batch: &'a mut HudBatch, cursor: (f32, f32)) -> Self {
         let scale = batch.scale;
         let (pw, ph) = (batch.width * scale, batch.height * scale);
-        let density = (pw / 1040.0).min(ph / 700.0).clamp(1.0, 4.0);
+        let density = Self::density_of([pw, ph]);
         Self {
             atlas,
             w: pw / density,
@@ -388,12 +388,18 @@ impl<'a> Ui<'a> {
             batch,
         }
     }
+    pub(crate) fn density_of([width, height]: [f32; 2]) -> f32 {
+        (width / 1040.0).min(height / 700.0).clamp(1.0, 4.0)
+    }
+
+    pub(crate) fn take_patches(atlas: &HudAtlas) -> impl Iterator<Item = crate::font::Patch> {
+        let pending = with_cache(atlas, |c| std::mem::take(&mut c.pending));
+        pending.into_iter().chain(atlas.font.take_patches())
+    }
+
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
     pub fn finish(self) {
-        let pending = with_cache(self.atlas, |c| std::mem::take(&mut c.pending));
-        self.batch.patches.extend(pending);
-        // Pack glyphs `layout` borrowed from the resource pack's font.
-        self.batch.patches.extend(self.atlas.font.take_patches());
+        self.batch.patches.extend(Self::take_patches(self.atlas));
     }
 
     // ---- geometry, snapped to physical pixels ----
@@ -597,17 +603,28 @@ impl<'a> Ui<'a> {
     }
     /// The advance of `text` in dp.
     pub(crate) fn measure(&self, face: Face, size: f32, text: &str) -> f32 {
-        let px = (size * self.density * 4.0).round() / 4.0;
+        Self::measure_at(self.atlas, self.scale, self.density, face, size, text)
+    }
+
+    pub(crate) fn measure_at(
+        atlas: &HudAtlas,
+        scale: f32,
+        density: f32,
+        face: Face,
+        size: f32,
+        text: &str,
+    ) -> f32 {
+        let px = (size * density * 4.0).round() / 4.0;
         Self::layout(
-            self.atlas,
-            self.scale,
-            self.density,
+            atlas,
+            scale,
+            density,
             None,
             face,
             px,
             text,
             |_, _, _, _, _| {},
-        ) / self.density
+        ) / density
     }
     /// Draw a line of text in a `line`-tall box whose top is `y` (the
     /// launcher's line heights: about 1.45 × size for the interface);

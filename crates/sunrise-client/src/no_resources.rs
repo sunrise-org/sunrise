@@ -6,8 +6,8 @@
 //! The page it sends the player to comes from a hook (`sunrise_hooks::Hooks::get_the_game`,
 //! Sunrise's launcher in the official executable). With none, it says how to prepare the files
 //! and has only Quit.
-use crate::lang;
 use crate::ui_theme::{self, Face, Ui, color};
+use crate::{hud::HudAtlas, lang, window::GuiFrame};
 use sunrise_hooks::GetTheGame;
 
 const COLUMN: f32 = 560.0;
@@ -67,23 +67,23 @@ impl NoResources {
 
     /// The buttons' labels, actions and rectangles in dp, and the paragraphs' wrapped
     /// lines: one layout for drawing and clicks.
-    fn layout(&self, ui: &Ui) -> Layout {
-        let width = COLUMN.min(ui.w - 64.0).max(160.0);
-        let x = ((ui.w - width) / 2.0).round();
+    fn layout(&self, (w, h): (f32, f32), measure: impl Fn(Face, f32, &str) -> f32) -> Layout {
+        let width = COLUMN.min(w - 64.0).max(160.0);
+        let x = ((w - width) / 2.0).round();
         let lines: Vec<Vec<String>> = self
             .paragraphs
             .iter()
-            .map(|p| wrap(ui, Face::Regular, body(), p, width))
+            .map(|p| wrap(&measure, Face::Regular, body(), p, width))
             .collect();
         let text_h = lines.iter().map(|l| l.len() as f32 * LINE).sum::<f32>()
             + (lines.len() - 1) as f32 * PARAGRAPH_GAP;
         let height = TITLE_LINE + 16.0 + text_h + 28.0 + control() + 20.0 + SMALL_LINE;
-        let y = ((ui.h - height) / 2.0).max(24.0).round();
+        let y = ((h - height) / 2.0).max(24.0).round();
         let buttons_y = y + TITLE_LINE + 16.0 + text_h + 28.0;
         let mut buttons = Vec::new();
         let mut bx = x;
         for (label, action) in &self.buttons {
-            let w = (ui.measure(Face::Medium, button_text(), label) + 40.0).round();
+            let w = (measure(Face::Medium, button_text(), label) + 40.0).round();
             buttons.push(Button {
                 label: label.clone(),
                 action: *action,
@@ -103,7 +103,9 @@ impl NoResources {
     }
 
     pub fn draw(&self, ui: &mut Ui) {
-        let layout = self.layout(ui);
+        let layout = self.layout((ui.w, ui.h), |face, size, text| {
+            ui.measure(face, size, text)
+        });
         ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, color::bg());
         let mut y = layout.y;
         ui.text_line(
@@ -157,7 +159,7 @@ impl NoResources {
         }
         let small_y = layout.buttons[0].y + control() + 20.0;
         for (i, line) in wrap(
-            ui,
+            |face, size, text| ui.measure(face, size, text),
             Face::Regular,
             ui_theme::small(),
             &self.looked_in,
@@ -179,13 +181,24 @@ impl NoResources {
         }
     }
 
-    /// The button under the cursor (`ui.cursor`, in dp), if any.
-    pub fn click(&self, ui: &Ui) -> Option<Action> {
-        self.layout(ui)
+    pub fn click(&self, atlas: &HudAtlas, frame: GuiFrame, cursor: (f32, f32)) -> Option<Action> {
+        let (w, h) = frame.size();
+        let pixels = frame.gui_to_target([w, h]);
+        let density = Ui::density_of(pixels);
+        let [w, h] = pixels.map(|axis| axis / density);
+        let [x, y] = frame
+            .gui_to_target([cursor.0, cursor.1])
+            .map(|axis| axis / density);
+        let action = self
+            .layout((w, h), |face, size, text| {
+                Ui::measure_at(atlas, frame.scale(), density, face, size, text)
+            })
             .buttons
             .iter()
-            .find(|b| b.contains(ui.cursor))
-            .map(|b| b.action)
+            .find(|b| b.contains((x, y)))
+            .map(|b| b.action);
+        drop(Ui::take_patches(atlas));
+        action
     }
 }
 
@@ -230,7 +243,13 @@ impl Button {
 
 /// `text` broken at spaces into lines no wider than `width` dp (a longer word,
 /// such as a path, gets a line of its own).
-fn wrap(ui: &Ui, face: Face, size: f32, text: &str, width: f32) -> Vec<String> {
+fn wrap(
+    measure: impl Fn(Face, f32, &str) -> f32,
+    face: Face,
+    size: f32,
+    text: &str,
+    width: f32,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split(' ') {
@@ -239,7 +258,7 @@ fn wrap(ui: &Ui, face: Face, size: f32, text: &str, width: f32) -> Vec<String> {
         } else {
             format!("{line} {word}")
         };
-        if !line.is_empty() && ui.measure(face, size, &candidate) > width {
+        if !line.is_empty() && measure(face, size, &candidate) > width {
             lines.push(std::mem::replace(&mut line, word.to_owned()));
         } else {
             line = candidate;
@@ -254,7 +273,7 @@ fn wrap(ui: &Ui, face: Face, size: f32, text: &str, width: f32) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hud::{HudAtlas, HudBatch};
+    use crate::hud::HudBatch;
 
     /// A Ui over a `size` window at GUI scale 1, the cursor at `cursor` pixels.
     fn with_ui<R>(size: [u32; 2], cursor: (f32, f32), f: impl FnOnce(&mut Ui) -> R) -> R {
@@ -341,7 +360,9 @@ mod tests {
         let screen = screen(Some(GET));
         for size in [[1280, 720], [800, 600], [2560, 1440]] {
             let (open, quit, density) = with_ui(size, (0.0, 0.0), |ui| {
-                let layout = screen.layout(ui);
+                let layout = screen.layout((ui.w, ui.h), |face, size, text| {
+                    ui.measure(face, size, text)
+                });
                 let center = |b: &Button| (b.x + b.w / 2.0, b.y + control() / 2.0);
                 (
                     center(&layout.buttons[0]),
@@ -349,20 +370,21 @@ mod tests {
                     ui.density,
                 )
             });
+            let frame = GuiFrame::new(size, 0, false);
+            let click = |(x, y)| {
+                with_ui(size, (0.0, 0.0), |ui| {
+                    screen.click(ui.atlas, frame, (x / frame.scale(), y / frame.scale()))
+                })
+            };
             let at = |p: (f32, f32)| (p.0 * density, p.1 * density);
-            assert_eq!(
-                with_ui(size, at(open), |ui| screen.click(ui)),
-                Some(Action::Open(GET.address)),
-                "{size:?}"
-            );
-            assert_eq!(
-                with_ui(size, at(quit), |ui| screen.click(ui)),
-                Some(Action::Quit)
-            );
-            assert_eq!(with_ui(size, (1.0, 1.0), |ui| screen.click(ui)), None);
+            assert_eq!(click(at(open)), Some(Action::Open(GET.address)), "{size:?}");
+            assert_eq!(click(at(quit)), Some(Action::Quit));
+            assert_eq!(click((1.0, 1.0)), None);
             // Everything fits in the window.
             with_ui(size, (0.0, 0.0), |ui| {
-                let layout = screen.layout(ui);
+                let layout = screen.layout((ui.w, ui.h), |face, size, text| {
+                    ui.measure(face, size, text)
+                });
                 let last = layout.buttons.last().unwrap();
                 assert!(
                     last.x + last.w <= ui.w && last.y + control() <= ui.h,
@@ -387,17 +409,21 @@ mod tests {
             let mut draw = HudBatch::new([960, 720], settings);
             assert_eq!(draw.scale, if unicode { 4.0 } else { 3.0 });
             let mut ui = Ui::new(&atlas, &mut draw, (0.0, 0.0));
-            let layout = screen.layout(&ui);
+            let layout = screen.layout((ui.w, ui.h), |face, size, text| {
+                ui.measure(face, size, text)
+            });
             let button = &layout.buttons[0];
             let physical = (
                 (button.x + button.w / 2.0) * ui.density,
                 (button.y + control() / 2.0) * ui.density,
             );
             screen.draw(&mut ui);
-            let mut hit = HudBatch::new([960, 720], settings);
-            let cursor = (physical.0 / hit.scale, physical.1 / hit.scale);
-            let ui = Ui::new(&atlas, &mut hit, cursor);
-            assert_eq!(screen.click(&ui), Some(Action::Open(GET.address)));
+            let frame = GuiFrame::new([960, 720], settings.requested, unicode);
+            let cursor = (physical.0 / frame.scale(), physical.1 / frame.scale());
+            assert_eq!(
+                screen.click(&atlas, frame, cursor),
+                Some(Action::Open(GET.address))
+            );
         }
     }
 
@@ -406,7 +432,13 @@ mod tests {
         let screen = screen(Some(GET));
         with_ui([1280, 720], (0.0, 0.0), |ui| {
             for paragraph in &screen.paragraphs {
-                let lines = wrap(ui, Face::Regular, body(), paragraph, 300.0);
+                let lines = wrap(
+                    |face, size, text| ui.measure(face, size, text),
+                    Face::Regular,
+                    body(),
+                    paragraph,
+                    300.0,
+                );
                 assert!(lines.len() > 1, "{paragraph}");
                 for line in &lines {
                     assert!(ui.measure(Face::Regular, body(), line) <= 300.0, "{line}");
