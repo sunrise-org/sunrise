@@ -26,6 +26,9 @@ repeat on the same terrain. Build the bots first: cargo build --release -p sunri
 --seed, so every server gets the same ones): once all bots are in, the console teleports each one high above its
 spot and then down onto the ground there, and the bots (run with --rehome) take that as home; the bots stay until
 the window ends, however long the teleports took. With
+`--bots-arg=--leash --bots-arg=96` they stay within 96 blocks of home, so a world saved with `--save-world` and given
+back with `--pre-generated` is never generated further and every run ticks the same terrain. Every run reports how
+many entities, players and items were loaded when its window ended. With
 `--behaviour random` each bot then keeps switching between wandering, flying off, standing, hotbar switching,
 attacking mobs and placing and breaking blocks. A spread run loads view distance around every bot, so give it a
 longer --warmup: the window should start after the terrain around the bots is generated.
@@ -114,6 +117,7 @@ DONE = re.compile(r'Done|listening|Server started', re.IGNORECASE)
 TICK_AVERAGE = re.compile(r'Average time per tick: ([0-9.]+) ?ms')
 TICK_PERCENTILES = re.compile(r'P50: ([0-9.]+) ?ms P95: ([0-9.]+) ?ms P99: ([0-9.]+) ?ms')
 GAMETIME = re.compile(r'The game time is (-?\d+) tick\(s\)')
+COUNTED = re.compile(r'Test passed[.,] count: (\d+)|Test failed', re.IGNORECASE)
 TELEPORTED = re.compile(r'Teleported (\w+) to')
 # Above every terrain height, so the drop onto the ground is always a long one.
 SPREAD_HEIGHT = 320
@@ -145,6 +149,14 @@ def parse_gametime(lines):
     for line in lines:
         if m := GAMETIME.search(line):
             return int(m.group(1))
+    return None
+
+
+def parse_count(lines):
+    """What `execute if entity SELECTOR` printed: the count, 0 when nothing matched, None until it answered."""
+    for line in lines:
+        if m := COUNTED.search(line):
+            return int(m.group(1) or 0)
     return None
 
 
@@ -292,7 +304,7 @@ def bots_command(args, port, total):
     return [str(args.bots_bin), '--server', f'127.0.0.1:{port}', '--bots', str(args.bots),
             '--behaviour', args.behaviour, '--join-every', str(args.join_every), '--seconds', str(int(total)),
             '--seed', str(args.seed), '--view-distance', str(args.view_distance), '--report', '-',
-            *(['--rehome'] if args.spread else [])]
+            *(['--rehome'] if args.spread else []), *args.bots_arg]
 
 
 def spread_spots(bots, side, seed):
@@ -433,6 +445,9 @@ def run_once(kind, args, out):
                 next_query = now + 5
         window = time.time() - began
         last = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
+        # What the server was ticking, so two runs can be told to have done the same work.
+        loaded = {name: server.ask(f'execute if entity {selector}', parse_count, timeout=30)
+                  for name, selector in (('entities', '@e'), ('players', '@a'), ('items', '@e[type=minecraft:item]'))}
         if args.spread:
             bot_process.stdin.write('stop\n')
             bot_process.stdin.flush()
@@ -442,11 +457,14 @@ def run_once(kind, args, out):
         _, summary = split_bot_output(list(bot_lines))
         result.update(summarize(kind, args, ticks, rss, cpu, (first_time, last) if supports['gametime'] else None, window, summary, start_seconds,
                                 total))
+        result['loaded'] = loaded
     except Exception as e:  # a failed run is reported, and the next one still runs
         result['error'] = str(e)
     finally:
         if server:
             server.stop()
+        if args.save_world and (scratch / 'world').is_dir():
+            shutil.copytree(scratch / 'world', args.save_world, dirs_exist_ok=True)
         shutil.rmtree(scratch, ignore_errors=True)
     return result
 
@@ -462,6 +480,7 @@ def table(runs):
         return '-' if value is None else str(value)
     rows = [
         ('Players', ('bots',)),
+        ('Entities loaded', ('loaded', 'entities')),
         ('TPS', ('tps',)),
         ('MSPT average', ('mspt', 'average')),
         ('MSPT p99 (mean of 5 s queries)', ('mspt', 'p99')),
@@ -510,6 +529,9 @@ def main(argv=None):
     parser.add_argument('--view-distance', type=int, default=10)
     parser.add_argument('--heap', default='4g', help='the Java heap for vanilla')
     parser.add_argument('--pre-generated', help='a finished world folder, copied into every run as `world`')
+    parser.add_argument('--save-world', type=Path, help='copy the run\'s world here afterwards, to use as --pre-generated')
+    parser.add_argument('--bots-arg', action='append', default=[], metavar='ARG',
+                        help='an extra argument for sunrise-bots, such as --bots-arg=--leash --bots-arg=96 (repeatable)')
     parser.add_argument('--pumpkin-config', help='extra TOML appended to Pumpkin\'s configuration.toml')
     parser.add_argument('--start-timeout', type=int, default=600)
     parser.add_argument('--out', type=Path, default=ROOT / '.local/bench', help='the folder for report.json and logs')

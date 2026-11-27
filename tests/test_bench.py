@@ -10,7 +10,8 @@ from tools import bench
 
 def args(**kw):
     base = dict(seed=777, view_distance=8, pre_generated=None, pumpkin_config=None, exe='pumpkin', jar='server.jar',
-                heap='2g', bots=5, behaviour='mixed', warmup=1, join_every=0.5, spread=0, bots_bin='sunrise-bots')
+                heap='2g', bots=5, behaviour='mixed', warmup=1, join_every=0.5, spread=0, bots_bin='sunrise-bots',
+                bots_arg=[], save_world=None)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -110,6 +111,13 @@ class ParserTests(unittest.TestCase):
                                 'execute at Bot0 positioned over motion_blocking run tp Bot0 ~ ~ ~',
                                 'execute at Bot1 positioned over motion_blocking run tp Bot1 ~ ~ ~'])
         self.assertEqual(parsed, [(True, None)] * 4)
+
+    def test_counts_and_extra_bot_arguments(self):
+        self.assertEqual(bench.parse_count(['[Server thread/INFO]: Test passed, count: 1712']), 1712)
+        self.assertEqual(bench.parse_count(['Test passed. Count: 48']), 48)
+        self.assertEqual(bench.parse_count(['Test failed']), 0)
+        self.assertIsNone(bench.parse_count(['Teleported Bot0 to 1, 2, 3']))
+        self.assertEqual(bench.bots_command(args(bots_arg=['--leash', '96']), 25565, 60)[-2:], ['--leash', '96'])
 
     def test_spread_bots_take_the_teleport_as_home(self):
         self.assertNotIn('--rehome', bench.bots_command(args(), 25565, 60))

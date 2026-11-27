@@ -104,6 +104,8 @@ sunrise-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --brand B              the client brand sent in configuration (minecraft:brand); default none; with
                          sunrise, the bot also echoes a Sunrise server's mod list and content digest
   --height H             blocks above spawn the bots fly at (walk, explore, idle); default 24
+  --leash B              a random bot flying off turns back once it is B blocks from home, so the
+                         bots stay on terrain that exists already; default unlimited
   --rehome               a server teleport of more than 32 blocks moves the bot's home there (where it walks,
                          how high it flies), so a server can spread the bots (tools/bench.py --spread)
   --ground               claim the ground in every move (with --height 0 on a flat world: walking
@@ -193,6 +195,8 @@ struct Options {
     ground: bool,
     /// --rehome: a server teleport of more than `REHOME_BLOCKS` moves the bot's home there.
     rehome: bool,
+    /// --leash: how far from home a random bot flies before it turns back.
+    leash: f64,
     /// --raw: (tick after joining, packet id, body).
     raw: Vec<(u64, i32, Vec<u8>)>,
     /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
@@ -232,6 +236,7 @@ fn options() -> Result<Options, String> {
         height: 24.0,
         ground: false,
         rehome: false,
+        leash: f64::INFINITY,
         raw: Vec::new(),
         give: Vec::new(),
         click: None,
@@ -286,6 +291,12 @@ fn options() -> Result<Options, String> {
             "--seed" => o.seed = value.parse().map_err(|_| number("a number"))?,
             "--explore-speed" => {
                 o.explore_speed = value.parse().map_err(|_| number("blocks a second"))?;
+            }
+            "--leash" => {
+                o.leash = value.parse().map_err(|_| number("positive blocks"))?;
+                if !o.leash.is_finite() || o.leash <= 0.0 {
+                    return Err(number("positive blocks"));
+                }
             }
             "--explore-distance" => {
                 o.explore_distance = value.parse().map_err(|_| number("positive blocks"))?;
@@ -668,6 +679,12 @@ const REHOME_BLOCKS: f64 = 32.0;
 /// Whether a teleport from `from` to `to` moved the bot far enough to count as a new home.
 fn rehomed(from: [f64; 3], to: [f64; 3]) -> bool {
     distance(from, to) > REHOME_BLOCKS
+}
+
+/// The heading back home for a bot that is past its leash, if it is.
+fn heading_home(pos: [f64; 3], home: [f64; 3], leash: f64) -> Option<f64> {
+    let (dx, dz) = (home[0] - pos[0], home[2] - pos[2]);
+    (dx.hypot(dz) > leash).then(|| dz.atan2(dx))
 }
 
 /// What a `random` bot is doing right now.
@@ -1432,6 +1449,9 @@ fn run_bot(
                         Activity::Travel => {
                             pos[0] += heading.cos() * o.explore_speed / 20.0;
                             pos[2] += heading.sin() * o.explore_speed / 20.0;
+                            if let Some(back) = heading_home(pos, spawn, o.leash) {
+                                heading = back;
+                            }
                         }
                         Activity::Hotbar => {
                             if tick.is_multiple_of(10) {
@@ -2318,6 +2338,19 @@ mod tests {
         assert!(rehomed([4000.0, 320.0, -2500.0], [4000.0, 71.0, -2500.0]));
         // "Moved too quickly": back to a spot a few blocks away.
         assert!(!rehomed(at, [14.0, 80.0, 7.0]));
+    }
+
+    #[test]
+    fn a_bot_past_its_leash_heads_home() {
+        let home = [100.0, 70.0, -40.0];
+        assert_eq!(heading_home([150.0, 94.0, -40.0], home, 96.0), None);
+        assert_eq!(
+            heading_home([150.0, 94.0, -40.0], home, f64::INFINITY),
+            None
+        );
+        let back = heading_home([300.0, 94.0, -40.0], home, 96.0).unwrap();
+        // Due west: home is at a smaller x and the same z.
+        assert!((back.cos() + 1.0).abs() < 1e-9 && back.sin().abs() < 1e-9);
     }
 
     #[test]
