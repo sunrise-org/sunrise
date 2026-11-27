@@ -270,6 +270,10 @@ impl BetterGrass {
             }
             Surface::DirtPath => return None,
         };
+        // A block a rule turns off keeps its own faces, snow or not.
+        if !on {
+            return None;
+        }
         let nylium = matches!(cube, Cube::CrimsonNylium | Cube::WarpedNylium);
         if !nylium && probe(Probe::SnowAbove) {
             // With snow on top the side shows snow, and the block's own kind stays out of it.

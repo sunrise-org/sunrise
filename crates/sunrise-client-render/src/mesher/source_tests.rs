@@ -1,6 +1,7 @@
 //! Original synthetic block/model/world controls; no prepared game resources.
 use super::*;
 use crate::assets::{Properties, SpritePixels};
+use crate::graphics::BetterGrassMode;
 use serde_json::json;
 use std::{collections::BTreeMap, path::PathBuf};
 use sunrise_world::registry::BlockRegistry;
