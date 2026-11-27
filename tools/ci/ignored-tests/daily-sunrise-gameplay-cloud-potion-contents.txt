@@ -1,0 +1,2 @@
+# PACKAGE TEST TARGET daily REASON
+sunrise-gameplay game::client_side::potions::tests::cloud_potion_contents_match_command_and_chunk_save lib daily resources

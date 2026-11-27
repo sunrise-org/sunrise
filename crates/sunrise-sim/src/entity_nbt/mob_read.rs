@@ -284,30 +284,21 @@ fn mob_from_nbt_at(
     // entry of an effect winning.
     if let Some(Tag::List(effects)) = tag.get("active_effects") {
         for e in effects {
-            let Some(def) = text(e.get("id")).and_then(|id| crate::brewing::effect(&id)) else {
+            let Some(instance) = crate::effects::EffectInstance::from_nbt(e) else {
                 continue;
             };
-            let effect = crate::brewing::namespaced(def.id);
-            let duration = number(e.get("duration")).unwrap_or(0) as i32;
-            let amplifier = effect_amplifier(e);
-            // Details.CODEC: `show_particles` defaults to true, `show_icon` to `show_particles`.
-            let particles = number(e.get("show_particles")) != Some(0);
-            let mut stored = crate::mobs::StoredEffect::new(effect, duration, amplifier);
-            stored.show_icon = number(e.get("show_icon")).map_or(particles, |v| v != 0);
-            m.load_effect(stored);
+            let effect = instance.id;
+            m.load_effect(crate::mobs::StoredEffect::from_instance(effect, &instance));
             m.extra.effect_chains.retain(|e| e.id != effect);
-            if let Some(hidden) = e.get("hidden_effect") {
-                m.extra
-                    .effect_chains
-                    .push(hidden_effect_from_nbt(effect, hidden));
+            if let Some(hidden) = instance.hidden {
+                m.extra.effect_chains.push(*hidden);
             }
             m.extra.hidden_effects.retain(|h| *h != effect);
-            if !particles {
+            if !instance.visible {
                 m.extra.hidden_effects.push(effect);
             }
-            // Details.CODEC: `ambient` defaults to false.
             m.extra.ambient_effects.retain(|h| *h != effect);
-            if number(e.get("ambient")).is_some_and(|a| a != 0) {
+            if instance.ambient {
                 m.extra.ambient_effects.push(effect);
             }
         }

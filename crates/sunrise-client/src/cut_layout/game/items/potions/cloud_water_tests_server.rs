@@ -19,6 +19,8 @@ use sunrise_gameplay_common::game::GameGameExt1;
 #[cfg(feature = "client")]
 use sunrise_gameplay_common::game::dragon_common::Breath;
 #[cfg(feature = "client")]
+use sunrise_gameplay_common::game::potions_common::area_effect_cloud_to_nbt;
+#[cfg(feature = "client")]
 use sunrise_sim::motion::PlayerMotion;
 #[cfg(feature = "client")]
 use {
@@ -103,14 +105,10 @@ pub(crate) fn run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_
                 let expected_fall = Some(parse_double_bits(obs["fall_bits"].as_str().unwrap()));
                 let expected_motion = Some(parse_motion_bits(obs));
 
-                // Saved chunk view (`potion_cloud_to_nbt`).
+                // Saved chunk view (`area_effect_cloud_to_nbt`).
                 let saved = {
                     let cloud = game.breath_clouds.iter().find(|c| c.id == *id).unwrap();
-                    sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt(
-                        cloud,
-                        *uuid,
-                        game.persist_raw(*id),
-                    )
+                    area_effect_cloud_to_nbt(cloud, *uuid, game.persist_raw(*id))
                 };
                 assert_eq!(
                     saved.get("fall_distance").cloned(),
