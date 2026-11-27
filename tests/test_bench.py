@@ -1,10 +1,14 @@
 """tools/bench.py: the parsers, the report table and the per-server setup (no server is started)."""
 
+import contextlib
+import io
+import json
 from pathlib import Path
 import subprocess
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 from tools import bench
 
@@ -350,6 +354,27 @@ class ProfileTests(unittest.TestCase):
 
         spawn_fail_table = bench.table([dict(base, profile=spawn_failed)])
         self.assertIn('| Profile | failed: missing binary |', spawn_fail_table)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            bots = tmp / 'sunrise-bots'
+            bots.write_text('')
+            out = tmp / 'out'
+            argv = ['--server', 'sunrise', '--exe', 'sunrise-server', '--bots-bin', str(bots), '--out', str(out)]
+            with mock.patch.object(bench, 'run_once', return_value=dict(base, profile=failed)):
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = bench.main(argv)
+            self.assertEqual(code, 1)
+            report = json.loads((out / 'report.json').read_text())
+            self.assertEqual(report['runs'][0]['tps'], 20.0)
+            self.assertIn('error', report['runs'][0]['profile'])
+            self.assertIn('| Profile | failed:', buf.getvalue())
+
+            with mock.patch.object(bench, 'run_once', return_value=dict(
+                    base, profile={'recording': True, 'path': str(out / 'sunrise-50.hzperf'), 'seconds': 40.0, 'ticks': 800})):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(bench.main(argv), 0)
 
 
 if __name__ == '__main__':

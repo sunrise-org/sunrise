@@ -707,6 +707,10 @@ def check(args):
     return profile_seconds, profile_note
 
 
+def run_failed(run):
+    return 'error' in run or (isinstance(run.get('profile'), dict) and 'error' in run['profile'])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--server', type=lambda s: s.split(','), default=['sunrise'],
@@ -759,7 +763,7 @@ def main(argv=None):
     path = args.out / 'report.json'
     path.write_text(json.dumps(report, indent=2) + '\n')
     print('\n' + table(runs) + f'\nWrote {path}')
-    return 1 if any('error' in r for r in runs) else 0
+    return 1 if any(run_failed(r) for r in runs) else 0
 
 
 if __name__ == '__main__':
