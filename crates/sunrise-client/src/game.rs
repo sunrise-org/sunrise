@@ -14422,21 +14422,15 @@ impl<'a> Game<'a> {
         if role.is_logical_server() {
             // Config loading and server startup hooks can read settings before the world
             // publishes its loop context. An integrated server takes its own capture.
-            let settings = if item_data.origin() == role.data_load_origin() {
-                item_data.captured_loop_context(loop_side)
-            } else {
-                let inventory =
-                    sunrise_mod_package::enabled::EnabledMods::read(&options.resources)?;
-                let ids: std::collections::BTreeSet<_> = inventory.server_ids().collect();
+            let captured = (item_data.origin() == role.data_load_origin())
+                .then(|| item_data.captured_loop_context(loop_side));
+            let inventory = sunrise_mod_package::enabled::EnabledMods::read(&options.resources)?;
+            let server_owners: std::collections::BTreeSet<_> = inventory.server_ids().collect();
+            let settings = captured.unwrap_or_else(|| {
                 let registered = native_hooks::mod_settings::registered_setting_keys()
-                    .filter(|(owner, _)| ids.contains(owner));
+                    .filter(|(owner, _)| server_owners.contains(owner));
                 item_data.loop_context_with_registered(loop_side, [], registered)
-            };
-            let server_owners: std::collections::BTreeSet<_> =
-                sunrise_mod_package::enabled::EnabledMods::read(&options.resources)?
-                    .server_ids()
-                    .map(str::to_owned)
-                    .collect();
+            });
             let _ = native_settings
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
