@@ -193,6 +193,9 @@ impl Preprocessed {
 
 /// Runs the preprocessor on the stage file `path` of `pack` with `macros` defined.
 pub fn preprocess(pack: &Pack, path: &str, macros: &Macros) -> Preprocessed {
+    if pack.cancelled() {
+        return Preprocessed::default();
+    }
     let mut run = Run {
         pack,
         macros: macros.for_file(),
@@ -202,6 +205,9 @@ pub fn preprocess(pack: &Pack, path: &str, macros: &Macros) -> Preprocessed {
         texts: HashMap::new(),
     };
     run.file(path, 0, Origin::default());
+    if pack.cancelled() {
+        return Preprocessed::default();
+    }
     // Iris 1.11.7 draws a program whose `#if` stays open to its end: a warning, as there.
     if run.conditionals.open() {
         run.out.warnings.push(Diagnostic {
@@ -225,6 +231,9 @@ struct Run<'p> {
 
 impl Run<'_> {
     fn file(&mut self, path: &str, depth: usize, from: Origin) {
+        if self.pack.cancelled() {
+            return;
+        }
         let cached = self
             .texts
             .entry(path.to_owned())
@@ -243,7 +252,7 @@ impl Run<'_> {
         let lines: Vec<&str> = text.split('\n').map(|l| l.trim_end_matches('\r')).collect();
         let mut comments = comments.into_iter().peekable();
         let mut n = 0;
-        while n < lines.len() {
+        while n < lines.len() && !self.pack.cancelled() {
             let first = n;
             let mut line = lines[n].to_owned();
             while line.ends_with('\\') && n + 1 < lines.len() {

@@ -1002,6 +1002,24 @@ impl Renderer {
             self.sections.set_sections(layout.sections() as i32);
         }
     }
+    pub fn follow_shader_pack_layout(&mut self) -> bool {
+        let previous = self.shader_pack_section_layout();
+        self.follow_arena_layout();
+        self.follow_translucent_layout();
+        self.follow_packed_layout();
+        let dropped = self.take_dropped_sections();
+        previous != self.shader_pack_section_layout() || dropped
+    }
+
+    pub fn shader_pack_section_layout(&self) -> (bool, bool, bool, bool) {
+        (
+            self.arena_storage,
+            self.arena.has_normals(),
+            self.translucent_arena.is_some(),
+            self.packed_quads,
+        )
+    }
+
     /// Lays the sections out as `translucent_split` says for the shader pack that
     /// runs, before a world frame draws them. A change drops every section and far
     /// tile, as a new renderer has none, and changes the sorted indices' arena with
@@ -1065,7 +1083,7 @@ impl Renderer {
     /// (`poll_shader_pack`) will draw from the game's sections (`PackLoading::draws_of`); `None`
     /// with none. The layouts the sections are in (`follow_arena_layout`,
     /// `follow_translucent_layout`, `follow_packed_layout`) take such a pack as present, drawing
-    /// that, with its terrain drawn as `pack_terrain_inputs` decided for it: the frames drawn
+    /// that, with its terrain drawn as `prepare_shader_pack` decided for it: the frames drawn
     /// meanwhile keep the layout it will draw in rather than drop the sections for the frames
     /// without it and again once it runs.
     pub(super) fn pack_pending(&self) -> Option<PackDraws> {

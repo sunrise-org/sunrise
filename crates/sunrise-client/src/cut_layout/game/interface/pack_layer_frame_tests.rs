@@ -206,7 +206,16 @@ fn layer_rules_move_states_between_the_packs_terrain_programs() {
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
 
         drawn_frame(game);
-        assert!(game.client.pack_ids.is_some(), "the pack loads");
+        assert!(
+            game.client.pack_ids.is_none(),
+            "translation publishes on a later frame"
+        );
+        game.test_wait_shader_pack_translation();
+        drawn_frame(game);
+        assert!(
+            game.client.pack_ids.is_some(),
+            "the translated pack publishes its metadata"
+        );
         settle(game);
         assert!(
             game.client

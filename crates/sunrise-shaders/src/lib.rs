@@ -56,14 +56,14 @@ pub use post::{
 };
 pub use post::{
     Post, PostProgram, STARS_BLEND, ShadowCulling, SkySwitches, TRANSLUCENT_BLEND,
-    dimension_folder, dimension_folder_named, load_post,
+    dimension_folder, dimension_folder_named, load_post, load_post_cancellable,
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties, Tonemap};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{
     CustomTexture, Dim as TextureDim, EVERY_STAGE, PngError, Texels, Texture, TextureSource,
-    decode_png, load_textures, resolve_resources,
+    decode_png, load_textures, resolve_resources, resolve_resources_cancellable,
 };
 pub use translate::{
     AlphaTest, ComputeProgram, DRAW_UNIFORMS, Error, GbuffersInputs, GeometryInputs, Image,

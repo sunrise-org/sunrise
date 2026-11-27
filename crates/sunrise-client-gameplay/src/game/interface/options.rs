@@ -595,10 +595,15 @@ impl crate::game::ClientGame<'_> {
                     self.client.native_shaders.pick_hdr.get_mut().forget();
                 }
                 // Saved; the next frame's `shader_pack_inputs` loads the pick.
-                Event::ShaderPack => self
-                    .client
-                    .settings
-                    .save(&sunrise_gameplay_common::game::options_path()),
+                Event::ShaderPack => {
+                    self.client
+                        .native_shaders
+                        .translation
+                        .pick_changed(self.client.renderer.0.as_deref_mut());
+                    self.client
+                        .settings
+                        .save(&sunrise_gameplay_common::game::options_path());
+                }
                 Event::OpenShaderOptions => self.open_shader_options(),
                 Event::ShaderOptions => self.save_shader_options(),
                 Event::OpenShaderPackFolder => {
@@ -870,12 +875,20 @@ impl crate::game::ClientGame<'_> {
             TogglePlan::Off(name) => {
                 self.client.settings.set_shader_pick("");
                 self.client
+                    .native_shaders
+                    .translation
+                    .pick_changed(self.client.renderer.0.as_deref_mut());
+                self.client
                     .settings
                     .save(&sunrise_gameplay_common::game::options_path());
                 self.client_system_message(Text::tr("sunrise.shaders.suspended", &[&name]));
             }
             TogglePlan::On(name) => {
                 self.client.settings.set_shader_pick(&name);
+                self.client
+                    .native_shaders
+                    .translation
+                    .pick_changed(self.client.renderer.0.as_deref_mut());
                 self.client
                     .settings
                     .save(&sunrise_gameplay_common::game::options_path());

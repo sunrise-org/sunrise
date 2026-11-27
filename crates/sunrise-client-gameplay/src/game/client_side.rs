@@ -1671,7 +1671,7 @@ pub struct ClientState {
     /// The item panel beside container screens (`game/modding/native_panel.rs`).
     pub panel: native_panel::Panel,
     /// Sunrise's own shader pack, while one is picked (`game/modding/native_shaders.rs`).
-    pub(in crate::game::client_side) native_shaders: native_shaders::NativeShaders,
+    pub(in crate::game) native_shaders: native_shaders::NativeShaders,
     /// Native client mods' key mappings (game/modding/native_key_mappings.rs).
     pub mod_keys: sunrise_client::keymapping::ModKeys,
     /// The mod whose own screen is open (`Screen::Mod`).

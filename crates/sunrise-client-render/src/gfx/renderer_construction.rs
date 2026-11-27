@@ -2561,6 +2561,8 @@ impl Renderer {
             hdr_driver,
             pack_post: None,
             pack_loading: None,
+            #[cfg(feature = "test-support")]
+            shader_pack_build_test_mode: None,
             pack_generation: 0,
             pass_timing: false,
             pass_detail: false,

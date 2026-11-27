@@ -310,7 +310,7 @@ pub fn resolve_parts<'g>(game: &impl super::SideGame<'g>) -> Result<(), String> 
 pub fn fixture_facts_mut(
     resources: &mut std::sync::Arc<super::Resources>,
 ) -> &mut sunrise_items::blocks::BlockFacts {
-    &mut std::sync::Arc::get_mut(resources).unwrap().core.facts
+    std::sync::Arc::get_mut(&mut std::sync::Arc::get_mut(resources).unwrap().core.facts).unwrap()
 }
 
 pub fn prepare_game_boot(

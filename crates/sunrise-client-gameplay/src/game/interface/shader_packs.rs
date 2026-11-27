@@ -11,14 +11,22 @@ use sunrise_client::shader_options::ShaderOptions;
 use sunrise_game_data::text::Text;
 use sunrise_mod_package::mod_list::ModList;
 use sunrise_shaders::{
-    BlockIds, BlockLayers, Macros, Pack, Properties, Tonemap, dimension_folder_named, load_post,
+    BlockIds, BlockLayers, Macros, Pack, Properties, Tonemap, dimension_folder_named,
+    load_post_cancellable,
 };
 
 use super::native_shaders::{fingerprint, outcome, refused, remember};
 use super::{Dim, Screen};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 use sunrise_client_render::render_geometry::EntitySpan;
 
 /// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
@@ -339,7 +347,13 @@ impl PickHdr {
         if let Some(hdr) = self.hdr {
             return hdr;
         }
+        let _span = sunrise_level::spans::guard("shader_pack_hdr");
+        let started = Instant::now();
         let (hdr, notes) = read_pick_hdr(picked, path);
+        log::debug!(
+            "shader pack {picked}: HDR preflight in {} ms",
+            started.elapsed().as_millis()
+        );
         for note in self.unreported(notes) {
             log::warn!("shader pack {picked}: {note}");
         }
@@ -492,7 +506,1038 @@ impl PackIds {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct PackSelection {
+    path: PathBuf,
+    dimension: &'static str,
+    options_revision: u64,
+    pick_revision: u64,
+    renderer_epoch: u64,
+    renderer_layout: (bool, u32, Option<Tonemap>),
+    resource_generation: u64,
+    world_generation: u64,
+    registry: usize,
+    biomes: usize,
+    fluids_revision: u64,
+    mods_revision: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct TranslationKey {
+    generation: u64,
+    selection: PackSelection,
+    fingerprint: Option<u64>,
+}
+
+struct TranslationRequest {
+    key: TranslationKey,
+    pack: Pack,
+    folder: String,
+    properties: Properties,
+    macros: Macros,
+    inputs: sunrise_shaders::GameInputs,
+    biomes: Vec<String>,
+    registry: &'static sunrise_world::registry::BlockRegistry,
+    facts: Arc<sunrise_items::blocks::BlockFacts>,
+    resources: sunrise_assets::resource_source::ResourceSource,
+    fluids: Vec<(
+        sunrise_world::fluid::ModFluid,
+        &'static sunrise_world::fluid::ModFluidType,
+    )>,
+}
+
+struct TranslatedPack {
+    post: sunrise_shaders::Post,
+    folder: String,
+    blocks: BlockIds,
+    layers: BlockLayers,
+    terrain_states: Vec<i32>,
+    block_items: HashMap<String, i32>,
+    items: HashMap<String, i32>,
+    entities: HashMap<String, i32>,
+    item_file: bool,
+    old_hand_light: bool,
+    vignette: bool,
+    old_lighting: bool,
+    separate_ao: bool,
+    resource_notes: Vec<String>,
+    #[cfg(test)]
+    game_inputs: String,
+}
+
+struct TranslationReply {
+    key: TranslationKey,
+    outcome: Result<Option<Box<TranslatedPack>>, String>,
+}
+
+const _: fn() = || {
+    fn assert_owned<T: Send + 'static>() {}
+    assert_owned::<TranslationRequest>();
+    assert_owned::<TranslationReply>();
+};
+
+struct TranslationWorker {
+    key: TranslationKey,
+    cancel: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<TranslationReply>>,
+    #[cfg(any(test, feature = "test-support"))]
+    ready: Option<std::thread::Result<TranslationReply>>,
+}
+
+#[cfg(test)]
+pub(super) enum TranslationTestAction {
+    Complete,
+    Fail,
+    Panic,
+}
+
+impl Drop for TranslationWorker {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl TranslationWorker {
+    fn spawn(
+        request: TranslationRequest,
+        #[cfg(test)] gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
+        #[cfg(test)] fail_spawn: bool,
+    ) -> std::io::Result<Self> {
+        #[cfg(test)]
+        if fail_spawn {
+            return Err(std::io::Error::other("forced translation spawn failure"));
+        }
+        let key = request.key.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancelled = cancel.clone();
+        let thread = std::thread::Builder::new()
+            .name("Shader translation".into())
+            .spawn(move || {
+                let key = request.key.clone();
+                #[cfg(test)]
+                let mut force_panic = false;
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    match gate.recv() {
+                        Ok(TranslationTestAction::Panic) => force_panic = true,
+                        Ok(TranslationTestAction::Complete) => {}
+                        Ok(TranslationTestAction::Fail) => {
+                            return TranslationReply {
+                                key,
+                                outcome: Err("forced translation failure".into()),
+                            };
+                        }
+                        Err(_) => {
+                            return TranslationReply {
+                                key,
+                                outcome: Ok(None),
+                            };
+                        }
+                    }
+                }
+                let outcome = sunrise_level::crash::contain(|| {
+                    #[cfg(test)]
+                    assert!(!force_panic, "forced translation panic");
+                    translate_pack(request, &cancelled)
+                })
+                .map_err(|panic| format!("translating it panicked: {panic}"));
+                TranslationReply { key, outcome }
+            })?;
+        Ok(Self {
+            key,
+            cancel,
+            thread: Some(thread),
+            #[cfg(any(test, feature = "test-support"))]
+            ready: None,
+        })
+    }
+
+    fn is_finished(&self) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.ready.is_some() {
+            return true;
+        }
+        self.thread
+            .as_ref()
+            .is_some_and(|thread| thread.is_finished())
+    }
+
+    fn finish(mut self) -> Option<TranslationReply> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(ready) = self.ready.take() {
+            return ready.ok();
+        }
+        self.thread.take()?.join().ok()
+    }
+}
+
+enum LoadStage {
+    Translating {
+        request: Option<Box<TranslationRequest>>,
+        gpu: Box<sunrise_client_render::gfx::PreparedShaderPack>,
+    },
+    Building,
+    Installed {
+        first_frame: bool,
+    },
+    Finished,
+}
+
+struct PackJob {
+    key: TranslationKey,
+    name: String,
+    dimension: i32,
+    started: Instant,
+    stage: LoadStage,
+}
+
+#[derive(Default)]
+pub(in crate::game) struct ShaderTranslation {
+    active: Option<PackJob>,
+    worker: Option<TranslationWorker>,
+    retiring_build: Option<sunrise_client_render::gfx::PackBuildDrain>,
+    generation: u64,
+    options_revision: u64,
+    pick_revision: u64,
+    resource_generation: u64,
+    renderer_epoch: u64,
+    world_generation: u64,
+    pub(in crate::game) remesh: bool,
+    pick_time: Option<(String, Instant)>,
+    #[cfg(test)]
+    gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
+    #[cfg(test)]
+    pub(super) test_immediate: bool,
+    #[cfg(test)]
+    pub(super) test_spawn_failure: bool,
+    #[cfg(test)]
+    pub(super) test_lava_layers: Option<Vec<u16>>,
+}
+
+impl ShaderTranslation {
+    fn cancel(&mut self, renderer: Option<&mut sunrise_client_render::gfx::Renderer>) -> bool {
+        let was_building = self
+            .active
+            .take()
+            .is_some_and(|job| matches!(job.stage, LoadStage::Building));
+        self.cancel_work(renderer);
+        was_building
+    }
+
+    pub(in crate::game) fn renderer_replaced(
+        &mut self,
+        old: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) -> bool {
+        self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
+        self.pick_time = None;
+        self.cancel(old)
+    }
+
+    pub(in crate::game) fn resources_changed(
+        &mut self,
+        renderer: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) {
+        self.resource_generation = self.resource_generation.wrapping_add(1);
+        self.pick_time = None;
+        self.cancel_work(renderer);
+    }
+
+    pub(in crate::game) fn world_changed(
+        &mut self,
+        renderer: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) {
+        self.world_generation = self.world_generation.wrapping_add(1);
+        self.pick_time = None;
+        self.cancel_work(renderer);
+    }
+
+    pub(super) fn pick_changed(
+        &mut self,
+        renderer: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) {
+        self.pick_revision = self.pick_revision.wrapping_add(1);
+        self.pick_time = None;
+        self.cancel_work(renderer);
+    }
+
+    pub(super) fn hold_running_frame(&self, picked: &str, dimension: &str) -> bool {
+        if picked.is_empty() {
+            return false;
+        }
+        self.active.as_ref().is_none_or(|job| {
+            let key = &job.key.selection;
+            !matches!(job.stage, LoadStage::Finished)
+                && (!matches!(job.stage, LoadStage::Installed { .. })
+                    || job.name != picked
+                    || key.dimension != dimension
+                    || key.options_revision != self.options_revision
+                    || key.pick_revision != self.pick_revision
+                    || key.resource_generation != self.resource_generation
+                    || key.world_generation != self.world_generation)
+        })
+    }
+
+    pub(super) fn is_building(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|job| matches!(job.stage, LoadStage::Building))
+    }
+
+    fn cancel_work(&mut self, renderer: Option<&mut sunrise_client_render::gfx::Renderer>) {
+        if let Some(worker) = &self.worker {
+            worker.cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(build) = renderer.and_then(|r| r.cancel_shader_pack_build()) {
+            self.retiring_build = Some(build);
+        }
+    }
+
+    pub(super) fn record_presented_pack(&mut self) {
+        let Some(job) = &mut self.active else {
+            return;
+        };
+        let LoadStage::Installed { first_frame } = &mut job.stage else {
+            return;
+        };
+        if !std::mem::take(first_frame) {
+            return;
+        }
+        let _span = sunrise_level::spans::guard("shader_pack_first_frame");
+        let picked = self.pick_time.as_ref().map_or(job.started, |(_, at)| *at);
+        log::info!(
+            "shader pack {}: first frame in {} ms from pick, {} ms from load",
+            job.name,
+            picked.elapsed().as_millis(),
+            job.started.elapsed().as_millis()
+        );
+    }
+
+    fn discard_obsolete_work(&mut self) {
+        if self
+            .retiring_build
+            .as_ref()
+            .is_some_and(|build| build.is_finished())
+        {
+            self.retiring_build = None;
+        }
+        if self.worker.as_ref().is_some_and(|worker| {
+            worker.is_finished()
+                && self.active.as_ref().is_none_or(|job| {
+                    job.key != worker.key || !matches!(job.stage, LoadStage::Translating { .. })
+                })
+        }) {
+            self.worker = None;
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ShaderTranslation {
+    #[cfg(test)]
+    pub(super) fn is_translating(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|job| matches!(job.stage, LoadStage::Translating { .. }))
+    }
+
+    #[cfg(test)]
+    pub(super) fn block_next(&mut self) -> std::sync::mpsc::Sender<TranslationTestAction> {
+        let (release, wait) = std::sync::mpsc::channel();
+        self.gate = Some(wait);
+        release
+    }
+
+    pub(super) fn wait_for_translation(&mut self) {
+        let worker = self.worker.as_mut().expect("a translation worker");
+        if let Some(thread) = worker.thread.take() {
+            worker.ready = Some(thread.join());
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn disconnect_worker(&mut self) {
+        self.wait_for_translation();
+        self.worker.as_mut().unwrap().ready = Some(Err(Box::new("disconnected")));
+    }
+}
+
+fn translate_pack(
+    request: TranslationRequest,
+    cancel: &Arc<AtomicBool>,
+) -> Option<Box<TranslatedPack>> {
+    let _span = sunrise_level::spans::guard("shader_pack_translate");
+    let started = Instant::now();
+    let TranslationRequest {
+        key,
+        mut pack,
+        folder,
+        properties,
+        macros,
+        inputs,
+        biomes,
+        registry,
+        facts,
+        resources,
+        fluids,
+    } = request;
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let mut post = load_post_cancellable(
+        &mut pack,
+        &folder,
+        &properties,
+        &macros,
+        &inputs,
+        cancel.clone(),
+    )?;
+    let resource_notes = {
+        let _span = sunrise_level::spans::guard("shader_pack_resources");
+        let read = |namespace: &str, path: &str| {
+            resources.read(&format!("assets/{namespace}/{path}")).ok()
+        };
+        sunrise_shaders::resolve_resources_cancellable(&mut post.textures, &read, cancel)
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let names: Vec<&str> = biomes.iter().map(String::as_str).collect();
+    post.custom.set_biomes(&names);
+    let _ids = sunrise_level::spans::guard("shader_pack_ids");
+    let text = pack.read_text("block.properties").unwrap_or_default();
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let block_properties = Properties::parse(&text, &macros);
+    let blocks = BlockIds::parse(&block_properties);
+    let layers = BlockLayers::parse(&block_properties);
+    let text = pack.read_text("entity.properties");
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let entities = BlockIds::parse_kind(
+        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
+        "entity",
+    );
+    let text = pack.read_text("item.properties");
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let items = BlockIds::parse_kind(
+        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
+        "item",
+    );
+    let block_items = block_item_ids(&facts, registry, &blocks, cancel)?;
+    let lookup = |name: &str| {
+        fluids
+            .iter()
+            .find(|(_, fluid)| fluid.block_id == name)
+            .map(|(id, _)| *id)
+    };
+    let started_ids = Instant::now();
+    let terrain_states = terrain_state_ids_with(registry, &blocks, lookup, cancel)?;
+    let matched = terrain_states
+        .chunks(2)
+        .filter(|pair| pair[0] != -1)
+        .count();
+    log::debug!(
+        "shader pack {}: translated folder `{folder}` in {} ms, mc_Entity for {matched} of {} states in {} ms",
+        key.selection.path.display(),
+        started.elapsed().as_millis(),
+        terrain_states.len() / 2,
+        started_ids.elapsed().as_millis(),
+    );
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(Box::new(TranslatedPack {
+        post,
+        folder,
+        blocks,
+        layers,
+        terrain_states,
+        block_items,
+        resource_notes,
+        #[cfg(test)]
+        game_inputs: format!("{inputs:?}"),
+        item_file: text.is_some(),
+        items: items.plain(),
+        entities: entities.plain(),
+        old_hand_light: properties
+            .get("oldHandLight")
+            .is_none_or(|v| v.trim() != "false"),
+        vignette: properties
+            .get("vignette")
+            .is_none_or(|v| v.trim() != "false"),
+        old_lighting: properties
+            .get("oldLighting")
+            .is_some_and(|v| v.trim() == "true"),
+        separate_ao: properties.separate_ao(),
+    }))
+}
+
 impl crate::game::ClientGame<'_> {
+    #[inline(always)]
+    fn advance_shader_pack(&mut self) -> bool {
+        let selected = picked_pack(&self.client.settings).to_owned();
+        let dir = Self::shader_packs_dir();
+        let path = dir.join(&selected);
+        let unsupported = sunrise_client::shader_pack_list::unsupported(&dir, &selected);
+        if unsupported {
+            self.shader_pack_unsupported(&selected);
+        }
+        let file = path.file_name().unwrap_or_default().to_string_lossy();
+        let enabled = !selected.is_empty()
+            && !unsupported
+            && !active_pack(&file, &self.client.settings.mods).is_empty();
+        let native = &mut self.client.native_shaders;
+        if enabled {
+            path.to_string_lossy()
+                .as_ref()
+                .clone_into(&mut native.picked);
+        } else {
+            native.picked.clear();
+        }
+        let translation = &mut native.translation;
+        let renderer = self.client.renderer.0.as_mut();
+        let selection = renderer.as_deref().filter(|_| enabled).map(|renderer| {
+            use std::hash::{Hash, Hasher};
+            let mut mods = std::hash::DefaultHasher::new();
+            self.client.settings.mods.enabled.hash(&mut mods);
+            self.client.settings.mods.disabled.hash(&mut mods);
+            PackSelection {
+                path,
+                dimension: self.common.dim.id(),
+                options_revision: translation.options_revision,
+                pick_revision: translation.pick_revision,
+                renderer_epoch: translation.renderer_epoch,
+                renderer_layout: renderer.shader_pack_input_layout(),
+                resource_generation: translation.resource_generation,
+                world_generation: translation.world_generation,
+                registry: std::ptr::from_ref(self.common.pack.assets.registry) as usize,
+                biomes: Arc::as_ptr(world_biomes!(self.common)) as usize,
+                fluids_revision: sunrise_world::fluid::mod_fluid_revision(),
+                mods_revision: mods.finish(),
+            }
+        });
+        let still_selected = translation
+            .active
+            .as_ref()
+            .is_some_and(|job| selection.as_ref() == Some(&job.key.selection));
+        if !still_selected && translation.active.is_some() {
+            translation.pick_time = None;
+        }
+        let cancelled_build = !still_selected && translation.cancel(renderer.map(Box::as_mut));
+        translation.discard_obsolete_work();
+        if !enabled {
+            translation.pick_time = None;
+            self.drop_published_shader_pack();
+            return false;
+        }
+        if translation
+            .pick_time
+            .as_ref()
+            .is_none_or(|(pick, _)| *pick != selected)
+        {
+            translation.pick_time = Some((selected.clone(), Instant::now()));
+        }
+        if cancelled_build {
+            self.drop_published_shader_pack();
+            if let Some(renderer) = &mut self.client.renderer.0 {
+                self.client.native_shaders.translation.remesh |=
+                    renderer.follow_shader_pack_layout();
+            }
+        }
+        if !sunrise_client::sprites::labpbr_maps() {
+            sunrise_client::sprites::set_labpbr_maps(true);
+            self.reload_packs();
+            return false;
+        }
+        if self.client.pack_reload.0.is_some() {
+            return true;
+        }
+        let Some(selection) = selection else {
+            return true;
+        };
+        if still_selected {
+            self.poll_shader_jobs();
+        } else {
+            self.prepare_shader_job(selected, selection);
+        }
+        self.start_shader_translation();
+        true
+    }
+
+    #[inline(always)]
+    fn prepare_shader_job(&mut self, name: String, selection: PackSelection) {
+        let _span = sunrise_level::spans::guard("shader_pack_preflight");
+        let started = Instant::now();
+        let stamp = fingerprint(&selection.path);
+        let translation = &mut self.client.native_shaders.translation;
+        translation.generation = translation.generation.wrapping_add(1);
+        let key = TranslationKey {
+            generation: translation.generation,
+            selection,
+            fingerprint: stamp,
+        };
+        let dimension = match self.common.dim {
+            Dim::Overworld | Dim::Extra(_) => 0,
+            Dim::Nether => -1,
+            Dim::End => 1,
+        };
+        let stage = if super::native_shaders::linear_frame_switch()
+            && refused(&key.selection.path, stamp)
+        {
+            self.shader_pack_without_pack(dimension);
+            LoadStage::Finished
+        } else {
+            let prepared = sunrise_level::crash::contain(|| {
+                self.preflight_shader_pack(&name, &key, dimension)
+            });
+            if fingerprint(&key.selection.path) != stamp {
+                self.shader_pack_without_pack(dimension);
+                LoadStage::Finished
+            } else {
+                match prepared {
+                    Ok(Ok((request, gpu))) => LoadStage::Translating {
+                        request: Some(Box::new(request)),
+                        gpu: Box::new(gpu),
+                    },
+                    Ok(Err(error)) => {
+                        log::warn!("shader pack {name}: {error}");
+                        remember(&key.selection.path, stamp, false);
+                        self.shader_pack_without_pack(dimension);
+                        LoadStage::Finished
+                    }
+                    Err(error) => {
+                        remember(&key.selection.path, stamp, false);
+                        self.shader_pack_failed(&name, dimension, &error);
+                        LoadStage::Finished
+                    }
+                }
+            }
+        };
+        self.client.native_shaders.translation.active = Some(PackJob {
+            key,
+            name,
+            dimension,
+            started,
+            stage,
+        });
+    }
+
+    #[inline(always)]
+    fn preflight_shader_pack(
+        &mut self,
+        name: &str,
+        key: &TranslationKey,
+        dimension: i32,
+    ) -> Result<
+        (
+            TranslationRequest,
+            sunrise_client_render::gfx::PreparedShaderPack,
+        ),
+        sunrise_shaders::PackError,
+    > {
+        let started = Instant::now();
+        let frame_hdr = self.picked_pack_shape().hdr;
+        let renderer = self
+            .client
+            .renderer
+            .0
+            .as_ref()
+            .expect("shader pack preflight needs a renderer");
+        let pack = Pack::open(&key.selection.path)?.with_chosen(chosen_shader_options(name));
+        let mut macros = Macros::standard();
+        renderer.define_pack_macros(&mut macros);
+        // Its conditionals test the pack's options too.
+        let (properties, log) = loaded_properties(
+            &pack,
+            &mut macros,
+            super::native_shaders::linear_frame_switch(),
+            frame_hdr,
+            name,
+            &mut self.client.native_shaders.pick_hdr.borrow_mut(),
+        );
+        for line in log {
+            log::warn!("shader pack {name}: {line}");
+        }
+        log::debug!(
+            "shader pack {name}: preflight in {} ms",
+            started.elapsed().as_millis()
+        );
+        let started = Instant::now();
+        let _span = sunrise_level::spans::guard("shader_pack_prepare");
+        let separate_ao = properties.separate_ao();
+        let lava_layers = ["lava_still", "lava_flow"]
+            .iter()
+            .filter_map(|f| {
+                let name = format!("minecraft:block/{f}");
+                self.client
+                    .client_pack
+                    .render
+                    .sprite_layers
+                    .get(&name)
+                    .map(|&l| l as u16)
+            })
+            .collect();
+        #[cfg(test)]
+        let lava_layers = self
+            .client
+            .native_shaders
+            .translation
+            .test_lava_layers
+            .clone()
+            .unwrap_or(lava_layers);
+        let folder = dimension_folder_named(&pack, key.selection.dimension, dimension);
+        // Its terrain programs read the section arena's pages, or else the
+        // normal stream, where they still fit the vertex stage with them.
+        let bindings = sunrise_client::gfx::pack_atlas::TerrainBindings::of(&properties);
+        let (gpu, inputs) = renderer.prepare_shader_pack(separate_ao, lava_layers, bindings);
+        log::debug!(
+            "shader pack {name}: GPU preparation in {} ms",
+            started.elapsed().as_millis()
+        );
+        Ok((
+            TranslationRequest {
+                key: key.clone(),
+                pack,
+                folder,
+                properties,
+                macros,
+                inputs,
+                biomes: world_biomes!(self.common)
+                    .list
+                    .iter()
+                    .map(|b| b.name.clone())
+                    .collect(),
+                registry: self.common.pack.assets.registry,
+                facts: self.common.res.shared_facts(),
+                resources: self.common.pack.source.clone(),
+                fluids: sunrise_world::fluid::mod_fluids(),
+            },
+            gpu,
+        ))
+    }
+
+    #[inline(always)]
+    fn start_shader_translation(&mut self) {
+        let translation = &mut self.client.native_shaders.translation;
+        if translation.worker.is_some() {
+            return;
+        }
+        let Some(job) = &mut translation.active else {
+            return;
+        };
+        let LoadStage::Translating { request, .. } = &mut job.stage else {
+            return;
+        };
+        let Some(request) = request.take() else {
+            return;
+        };
+        match TranslationWorker::spawn(
+            *request,
+            #[cfg(test)]
+            translation.gate.take(),
+            #[cfg(test)]
+            std::mem::take(&mut translation.test_spawn_failure),
+        ) {
+            Ok(worker) => {
+                translation.worker = Some(worker);
+                #[cfg(test)]
+                if std::mem::take(&mut translation.test_immediate) {
+                    translation.wait_for_translation();
+                }
+            }
+            Err(error) => {
+                log::error!(
+                    "shader pack {}: no thread to translate it on: {error}",
+                    job.name
+                );
+                let dimension = job.dimension;
+                job.stage = LoadStage::Finished;
+                self.shader_pack_without_pack(dimension);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn poll_shader_jobs(&mut self) {
+        let translation = &mut self.client.native_shaders.translation;
+        let Some(job) = &translation.active else {
+            return;
+        };
+        let renderer = self
+            .client
+            .renderer
+            .0
+            .as_mut()
+            .expect("shader pack job needs a renderer");
+        let worker_ready = matches!(job.stage, LoadStage::Translating { .. })
+            && translation
+                .worker
+                .as_ref()
+                .is_some_and(|worker| worker.key == job.key && worker.is_finished());
+        let build_ready =
+            matches!(job.stage, LoadStage::Building) && renderer.shader_pack_build_ready();
+        if translation.retiring_build.is_some() || !(worker_ready || build_ready) {
+            return;
+        }
+        let current_fingerprint = sunrise_level::spans::time("shader_pack_validate", || {
+            fingerprint(&job.key.selection.path)
+        });
+        if current_fingerprint != job.key.fingerprint {
+            let mut job = translation.active.take().expect("stale shader pack job");
+            translation.cancel_work(Some(renderer));
+            job.stage = LoadStage::Finished;
+            self.shader_pack_without_pack(job.dimension);
+            self.client.native_shaders.translation.active = Some(job);
+        } else if build_ready {
+            let mut job = translation.active.take().expect("building job");
+            job.stage = LoadStage::Finished;
+            if let Some((_, _, _, report)) = renderer.poll_shader_pack() {
+                match report {
+                    Ok(Some((programs, notes))) => {
+                        remember(&job.key.selection.path, job.key.fingerprint, true);
+                        self.client.native_shaders.running =
+                            job.key.selection.path.to_string_lossy().into_owned();
+                        job.stage = LoadStage::Installed { first_frame: true };
+                        for note in notes {
+                            log::warn!("shader pack {}: {note}", job.name);
+                        }
+                        log::info!(
+                            "shader pack {}: {} programs ({}) in {} ms",
+                            job.name,
+                            programs.len(),
+                            programs.join(" "),
+                            job.started.elapsed().as_millis()
+                        );
+                    }
+                    Ok(None) => {
+                        remember(&job.key.selection.path, job.key.fingerprint, false);
+                        self.shader_pack_without_pack(job.dimension);
+                    }
+                    Err(refusal) if refusal.is_cancelled() => {
+                        self.shader_pack_without_pack(job.dimension)
+                    }
+                    Err(refusal) => {
+                        for note in refusal.notes {
+                            log::warn!("shader pack {}: {note}", job.name);
+                        }
+                        remember(&job.key.selection.path, job.key.fingerprint, false);
+                        self.shader_pack_failed(&job.name, job.dimension, &refusal.reason);
+                    }
+                }
+            }
+            self.client.native_shaders.translation.active = Some(job);
+        } else {
+            let worker = translation.worker.take().expect("finished translation");
+            let mut job = translation.active.take().expect("translation job");
+            let stage = std::mem::replace(&mut job.stage, LoadStage::Finished);
+            let LoadStage::Translating { gpu, .. } = stage else {
+                unreachable!("a ready worker belongs to a translating pack");
+            };
+            let reply = worker.finish();
+            if reply.as_ref().is_some_and(|reply| reply.key != job.key) {
+                self.client.native_shaders.translation.active = Some(job);
+                return;
+            }
+            match reply.map(|reply| reply.outcome) {
+                Some(Ok(Some(pack))) => {
+                    self.reconcile_shader_pack_frame();
+                    if self.client.native_shaders.translation.renderer_epoch
+                        != job.key.selection.renderer_epoch
+                    {
+                        return;
+                    }
+                    self.accept_translated_pack(&mut job, *pack, *gpu);
+                }
+                Some(Err(error)) => {
+                    remember(&job.key.selection.path, job.key.fingerprint, false);
+                    self.shader_pack_failed(&job.name, job.dimension, &error);
+                }
+                Some(Ok(None)) | None => self.shader_pack_without_pack(job.dimension),
+            }
+            self.client.native_shaders.translation.active = Some(job);
+        }
+    }
+
+    #[inline(always)]
+    fn accept_translated_pack(
+        &mut self,
+        job: &mut PackJob,
+        pack: TranslatedPack,
+        gpu: sunrise_client_render::gfx::PreparedShaderPack,
+    ) {
+        let _span = sunrise_level::spans::guard("shader_pack_handoff");
+        let name = &job.name;
+        for note in &pack.resource_notes {
+            log::warn!("shader pack {name}: {note}");
+        }
+        for note in pack.blocks.notes.iter().chain(&pack.layers.notes) {
+            log::warn!("shader pack {name}: block.properties: {note}");
+        }
+        log::info!(
+            "shader pack {name}: folder `{}`, building its pipelines",
+            pack.folder
+        );
+        let renderer = self
+            .client
+            .renderer
+            .0
+            .as_mut()
+            .expect("translated pack needs a renderer");
+        job.key.selection.renderer_layout = renderer.shader_pack_input_layout();
+        renderer.refresh_prepared_shader_pack_atlases(&gpu);
+        renderer.apply_prepared_shader_pack(gpu);
+        self.client.native_shaders.running.clear();
+        renderer.load_shader_pack(
+            job.dimension,
+            pack.post,
+            pack.terrain_states.clone(),
+            name.clone(),
+            job.started,
+        );
+        self.client.native_shaders.translation.remesh = true;
+        if !renderer.shader_pack_build_pending() {
+            self.client.pack_ids = None;
+            self.set_translucent_layers(Vec::new());
+            job.stage = LoadStage::Finished;
+            return;
+        }
+        self.client.pack_ids = Some(PackIds {
+            block_items: pack.block_items,
+            item_file: pack.item_file,
+            items: pack.items,
+            missing_item: if pack.item_file { -1 } else { 0 },
+            old_hand_light: pack.old_hand_light,
+            vignette: pack.vignette,
+            old_lighting: pack.old_lighting,
+            separate_ao: pack.separate_ao,
+            entities: pack.entities,
+            missing_entity: if pack.item_file { 65535 } else { 0 },
+            missing_block: if pack.blocks.is_empty() { 0 } else { 65535 },
+            blocks: pack.blocks,
+            layers: super::pack_layers::PackLayers::new(name, pack.layers),
+            terrain_states: pack.terrain_states,
+            block_states: RefCell::default(),
+        });
+        self.set_translucent_layers(Vec::new());
+        job.stage = LoadStage::Building;
+    }
+
+    #[cfg(test)]
+    #[inline(always)]
+    pub(super) fn assert_shader_translation_matches_preflight(&mut self, folder: &str) {
+        let translation = &self.client.native_shaders.translation;
+        let job = translation.active.as_ref().expect("a job");
+        let (name, key, dimension) = (job.name.clone(), job.key.clone(), job.dimension);
+        let (request, _) = self.preflight_shader_pack(&name, &key, dimension).unwrap();
+        let reference = sunrise_shaders::load_post(
+            &request.pack,
+            &request.folder,
+            &request.properties,
+            &request.macros,
+            &request.inputs,
+        );
+        let worker = self
+            .client
+            .native_shaders
+            .translation
+            .worker
+            .as_ref()
+            .unwrap();
+        let report = worker.ready.as_ref().unwrap().as_ref().unwrap();
+        let actual = report.outcome.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(actual.folder, folder);
+        assert_eq!(actual.folder, request.folder);
+        assert_eq!(actual.post.folder, reference.folder);
+        assert_eq!(actual.game_inputs, format!("{:?}", request.inputs));
+        assert_eq!(actual.post.notes, reference.notes);
+        let programs = |post: &sunrise_shaders::Post| {
+            post.every_program()
+                .map(|p| {
+                    let stages = p
+                        .program
+                        .as_ref()
+                        .map(|program| format!("{:?}{:?}", program.vertex, program.fragment));
+                    (p.name.clone(), p.buffers.clone(), stages)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(programs(&actual.post), programs(&reference));
+        assert_eq!(actual.separate_ao, request.properties.separate_ao());
+        assert_eq!(
+            actual.old_lighting,
+            request
+                .properties
+                .get("oldLighting")
+                .is_some_and(|v| v.trim() == "true")
+        );
+        let states = request
+            .pack
+            .read_text("block.properties")
+            .unwrap_or_default();
+        let states = Properties::parse(&states, &request.macros);
+        assert_eq!(
+            actual.terrain_states,
+            terrain_state_ids(request.registry, &BlockIds::parse(&states))
+        );
+        assert_eq!(
+            actual.layers.subjects().collect::<Vec<_>>(),
+            BlockLayers::parse(&states).subjects().collect::<Vec<_>>()
+        );
+    }
+
+    #[inline(always)]
+    fn shader_pack_without_pack(&mut self, dimension: i32) {
+        self.clear_published_shader_metadata();
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.set_separate_ao(false);
+            let _ = renderer.set_shader_pack(dimension, None, &[]);
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn drop_published_shader_pack(&mut self) {
+        let had_metadata = self.client.pack_ids.is_some();
+        self.clear_published_shader_metadata();
+        if let Some(renderer) = &mut self.client.renderer.0
+            && (had_metadata || renderer.shader_pack_dimension().is_some())
+        {
+            renderer.drop_shader_packs();
+        }
+    }
+
+    #[inline(always)]
+    fn clear_published_shader_metadata(&mut self) {
+        self.client.native_shaders.running.clear();
+        let had_metadata = self.client.pack_ids.take().is_some();
+        let streaming = &mut self.client.streaming;
+        self.client.native_shaders.translation.remesh |= had_metadata
+            || streaming.shader_pack
+            || streaming.shader_pack_lighting
+            || streaming.separate_ao
+            || !streaming.layer_overrides.is_empty();
+        streaming.shader_pack = false;
+        streaming.shader_pack_lighting = false;
+        streaming.separate_ao = false;
+        streaming.layer_overrides = Arc::from([]);
+        self.set_translucent_layers(Vec::new());
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn settle_shader_layout_for_resource_reload(&mut self) {
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.keep_pack_sources(false);
+            let layout_changed = renderer.follow_shader_pack_layout();
+            if self.client.native_shaders.translation.remesh || layout_changed {
+                renderer.clear_sections(self.common.world.layout());
+            }
+        }
+        self.client.native_shaders.translation.remesh = false;
+    }
+
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
     pub(in crate::game::client_side) fn shader_pack_inputs(
@@ -502,250 +1547,44 @@ impl crate::game::ClientGame<'_> {
         partial: f32,
         sky: &sunrise_level::environment::Sky,
     ) -> PackInputs {
-        // A `shaders/` pack lights the faces itself unless `oldLighting=true`: sections mesh
-        // without the game's face shading (the pack loaded or dropped below shows next frame).
+        let enabled = self.advance_shader_pack();
+        let _span = sunrise_level::spans::guard("shader_pack_mesh_state");
+        let shader_pack = self.client.pack_ids.is_some();
         let pack_lighting = self
             .client
             .pack_ids
             .as_ref()
             .is_some_and(|ids| !ids.old_lighting);
-        if self.client.streaming.shader_pack_lighting != pack_lighting {
-            self.client.streaming.shader_pack_lighting = pack_lighting;
-            self.all_sections_changed();
-        }
-        // Any `shaders/` pack (its `oldLighting` too) draws fluid tops split as Iris does.
-        let shader_pack = self.client.pack_ids.is_some();
-        if self.client.streaming.shader_pack != shader_pack {
-            self.client.streaming.shader_pack = shader_pack;
-            self.all_sections_changed();
-        }
-        // The renderer keeps the meshes' sources while they carry them, and frees them after.
-        if let Some(renderer) = &mut self.client.renderer.0 {
-            renderer.keep_pack_sources(shader_pack);
-        }
         let separate_ao = self
             .client
             .pack_ids
             .as_ref()
             .is_some_and(|ids| ids.separate_ao);
-        if self.client.streaming.separate_ao != separate_ao {
-            self.client.streaming.separate_ao = separate_ao;
-            self.all_sections_changed();
-        }
-        // Its `layer.*` rules (4.2), none without a pack: in the frame after it loads or drops, as
-        // the flags above, so one meshing of every section takes them all.
+        let streaming = &mut self.client.streaming;
+        let mut remesh = streaming.shader_pack != shader_pack
+            || streaming.shader_pack_lighting != pack_lighting
+            || streaming.separate_ao != separate_ao;
+        streaming.shader_pack = shader_pack;
+        streaming.shader_pack_lighting = pack_lighting;
+        streaming.separate_ao = separate_ao;
         self.sync_pack_layers();
-        let selected = picked_pack(&self.client.settings).to_owned();
-        let dir = Self::shader_packs_dir();
-        let path = dir.join(&selected);
-        let unsupported = sunrise_client::shader_pack_list::unsupported(&dir, &selected);
-        if unsupported {
-            self.shader_pack_unsupported(&selected);
+        remesh |= std::mem::take(&mut self.client.native_shaders.translation.remesh);
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.keep_pack_sources(shader_pack);
+            remesh |= renderer.follow_shader_pack_layout();
         }
-        let file = path.file_name().unwrap_or_default().to_string_lossy();
-        let picked = if selected.is_empty()
-            || unsupported
-            || active_pack(&file, &self.client.settings.mods).is_empty()
-        {
-            String::new()
-        } else {
-            path.to_string_lossy().into_owned()
-        };
-        if self.client.native_shaders.picked != picked {
-            self.client.native_shaders.picked = picked.clone();
-            self.set_translucent_layers(Vec::new());
-            self.client.pack_ids = None;
-            if let Some(renderer) = &mut self.client.renderer.0 {
-                renderer.drop_shader_packs();
-            }
+        if remesh {
+            let _span = sunrise_level::spans::guard("shader_pack_remesh");
+            let started = Instant::now();
+            self.all_sections_changed();
+            log::debug!(
+                "shader pack terrain invalidation in {} ms",
+                started.elapsed().as_millis()
+            );
         }
-        // A pack whose pipelines were building runs once they are built, or is turned off.
-        if let Some((dimension, name, started, report)) = self
-            .client
-            .renderer
-            .0
-            .as_mut()
-            .and_then(|r| r.poll_shader_pack())
-        {
-            match report {
-                Ok(Some((programs, notes))) => {
-                    remember(&path, fingerprint(&path), true);
-                    for note in notes {
-                        log::warn!("shader pack {name}: {note}");
-                    }
-                    log::info!(
-                        "shader pack {name}: {} programs ({}) in {} ms",
-                        programs.len(),
-                        programs.join(" "),
-                        started.elapsed().as_millis()
-                    );
-                }
-                Ok(None) => remember(&path, fingerprint(&path), false),
-                // Stopped because it isn't wanted any more: not the pack's failure.
-                Err(refused) if refused.is_cancelled() => {}
-                Err(refused) => {
-                    for note in refused.notes {
-                        log::warn!("shader pack {name}: {note}");
-                    }
-                    self.shader_pack_failed(&name, dimension, &refused.reason);
-                }
-            }
-        }
-        if picked.is_empty() {
+        drop(_span);
+        if !enabled {
             return PackInputs::default();
-        }
-        if !sunrise_client::sprites::labpbr_maps() {
-            sunrise_client::sprites::set_labpbr_maps(true);
-            self.reload_packs();
-            return PackInputs::default();
-        }
-        let name = selected.clone();
-        let dimension = match self.common.dim {
-            Dim::Overworld | Dim::Extra(_) => 0,
-            Dim::Nether => -1,
-            Dim::End => 1,
-        };
-        if let Some(renderer) = &mut self.client.renderer.0
-            && renderer.shader_pack_dimension() != Some(dimension)
-            && !(super::native_shaders::linear_frame_switch() && refused(&path, fingerprint(&path)))
-        {
-            let name = name.as_str();
-            let started = std::time::Instant::now();
-            // A pack is not the game's own code: one that makes the shader compiler (or our
-            // translation of it) panic is turned off instead of crashing every world load (#3525).
-            let loaded = sunrise_level::crash::contain(|| {
-                match Pack::open(&path).map(|p| p.with_chosen(chosen_shader_options(name))) {
-                    Ok(pack) => {
-                        let mut macros = Macros::standard();
-                        renderer.define_pack_macros(&mut macros);
-                        // Its conditionals test the pack's options too.
-                        let (properties, log) = loaded_properties(
-                            &pack,
-                            &mut macros,
-                            super::native_shaders::linear_frame_switch(),
-                            renderer.pack_hdr,
-                            name,
-                            &mut self.client.native_shaders.pick_hdr.borrow_mut(),
-                        );
-                        for line in log {
-                            log::warn!("shader pack {name}: {line}");
-                        }
-                        let separate_ao = properties.separate_ao();
-                        renderer.set_separate_ao(separate_ao);
-                        // Lava's faces draw with the solid terrain's program.
-                        renderer.set_pack_lava_layers(
-                            ["lava_still", "lava_flow"]
-                                .iter()
-                                .filter_map(|f| {
-                                    let name = format!("minecraft:block/{f}");
-                                    self.client
-                                        .client_pack
-                                        .render
-                                        .sprite_layers
-                                        .get(&name)
-                                        .map(|&l| l as u16)
-                                })
-                                .collect(),
-                        );
-                        let folder = dimension_folder_named(&pack, self.common.dim.id(), dimension);
-                        // Its terrain programs read the section arena's pages, or else the
-                        // normal stream, where they still fit the vertex stage with them.
-                        renderer.set_pack_terrain_bindings(
-                            sunrise_client::gfx::pack_atlas::TerrainBindings::of(&properties),
-                        );
-                        let inputs = renderer.pack_inputs();
-                        let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
-                        // Textures that name one of the game's: from the resource packs over
-                        // the game's own resources.
-                        let resources = self.common.pack.source.clone();
-                        let read = |namespace: &str, path: &str| {
-                            resources.read(&format!("assets/{namespace}/{path}")).ok()
-                        };
-                        for note in sunrise_shaders::resolve_resources(&mut post.textures, &read) {
-                            log::warn!("shader pack {name}: {note}");
-                        }
-                        let biomes = world_biomes!(self.common);
-                        let names: Vec<&str> =
-                            biomes.list.iter().map(|b| b.name.as_str()).collect();
-                        post.custom.set_biomes(&names);
-                        let text = pack.read_text("block.properties").unwrap_or_default();
-                        let block_properties = Properties::parse(&text, &macros);
-                        let ids = BlockIds::parse(&block_properties);
-                        let layers = BlockLayers::parse(&block_properties);
-                        for note in ids.notes.iter().chain(&layers.notes) {
-                            log::warn!("shader pack {name}: block.properties: {note}");
-                        }
-                        let text = pack.read_text("entity.properties");
-                        let entities = BlockIds::parse_kind(
-                            &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                            "entity",
-                        );
-                        let text = pack.read_text("item.properties");
-                        let items = BlockIds::parse_kind(
-                            &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                            "item",
-                        );
-                        let block_items = block_item_ids(
-                            self.common.res.facts(),
-                            self.common.pack.assets.registry,
-                            &ids,
-                        );
-                        self.client.pack_ids = Some(PackIds {
-                            block_items,
-                            item_file: text.is_some(),
-                            items: items.plain(),
-                            missing_item: if text.is_some() { -1 } else { 0 },
-                            // OQ-21: on unless the pack turns it off.
-                            old_hand_light: properties
-                                .get("oldHandLight")
-                                .is_none_or(|v| v.trim() != "false"),
-                            // On unless the pack turns it off (`vignette=false`).
-                            vignette: properties
-                                .get("vignette")
-                                .is_none_or(|v| v.trim() != "false"),
-                            // Off unless the pack turns it on (Iris shades no faces by default).
-                            old_lighting: properties
-                                .get("oldLighting")
-                                .is_some_and(|v| v.trim() == "true"),
-                            separate_ao,
-                            entities: entities.plain(),
-                            missing_entity: if text.is_some() { 65535 } else { 0 },
-                            missing_block: if ids.is_empty() { 0 } else { 65535 },
-                            blocks: ids.clone(),
-                            layers: super::pack_layers::PackLayers::new(name, layers),
-                            terrain_states: Vec::new(),
-                            block_states: RefCell::default(),
-                        });
-                        let started_ids = std::time::Instant::now();
-                        let table = terrain_state_ids(self.common.pack.assets.registry, &ids);
-                        if let Some(pack_ids) = &mut self.client.pack_ids {
-                            pack_ids.terrain_states.clone_from(&table);
-                        }
-                        log::info!(
-                            "shader pack {name}: mc_Entity for {} of {} block states in {} ms",
-                            table.chunks(2).filter(|p| p[0] != -1).count(),
-                            table.len() / 2,
-                            started_ids.elapsed().as_millis()
-                        );
-                        log::info!("shader pack {name}: folder `{folder}`, building its pipelines");
-                        // The driver compiles the programs on a thread of their own; the game
-                        // draws without a pack meanwhile, and the next frames pick it up.
-                        renderer.load_shader_pack(dimension, post, table, name.to_owned(), started);
-                    }
-                    Err(e) => {
-                        remember(&path, fingerprint(&path), false);
-                        self.client.pack_ids = None;
-                        log::warn!("shader pack {name}: {e}");
-                        // Without a pack this can't fail.
-                        let _ = renderer.set_shader_pack(dimension, None, &[]);
-                    }
-                }
-                Ok(())
-            });
-            // A pack that can't run is turned off like one that panics.
-            if let Err(error) = loaded.flatten() {
-                self.shader_pack_failed(name, dimension, &error);
-            }
         }
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
         let at = camera.floor().as_ivec3();
@@ -964,10 +1803,19 @@ impl crate::game::ClientGame<'_> {
         if write_shader_options(&options) {
             self.client.native_shaders.pick_hdr.get_mut().forget();
         }
-        self.client.pack_ids = None;
-        if let Some(renderer) = &mut self.client.renderer.0 {
-            renderer.drop_shader_packs();
-        }
+        let translation = &mut self.client.native_shaders.translation;
+        translation.options_revision = translation.options_revision.wrapping_add(1);
+        translation.pick_time = None;
+        translation.cancel_work(self.client.renderer.0.as_deref_mut());
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline(always)]
+    pub fn test_wait_shader_pack_translation(&mut self) {
+        self.client
+            .native_shaders
+            .translation
+            .wait_for_translation();
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -989,17 +1837,16 @@ impl crate::game::ClientGame<'_> {
         dimension: i32,
         error: &str,
     ) {
-        let path = Self::shader_packs_dir().join(name);
-        remember(&path, fingerprint(&path), false);
+        self.shader_pack_without_pack(dimension);
+        self.report_shader_pack_failure(name, error);
+    }
+
+    #[inline(always)]
+    fn report_shader_pack_failure(&mut self, name: &str, error: &str) {
         log::error!("shader pack {name}: turned off: {error}");
-        self.client.pack_ids = None;
-        if let Some(renderer) = &mut self.client.renderer.0 {
-            // Marks this dimension as loaded, without a pack, so it is not tried again (without
-            // a pack this can't fail).
-            let _ = renderer.set_shader_pack(dimension, None, &[]);
-        }
         if self.client.settings.sunrise.shader_pack == name {
             self.client.settings.sunrise.shader_pack.clear();
+            self.client.native_shaders.picked.clear();
             self.client
                 .settings
                 .save(&sunrise_gameplay_common::game::options_path());
@@ -1247,13 +2094,17 @@ pub(in crate::game::client_side) fn rendered_item_id(
 /// The block items' `currentRenderedItemId`: for each block's default state, the item it gives
 /// (`StateFacts::item`) takes the state's id in `ids`, or 0. A block named as its item wins over
 /// another block giving that item.
-pub(in crate::game::client_side) fn block_item_ids(
+fn block_item_ids(
     facts: &sunrise_items::blocks::BlockFacts,
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
-) -> HashMap<String, i32> {
+    cancel: &AtomicBool,
+) -> Option<HashMap<String, i32>> {
     let mut out = HashMap::new();
     for (i, state) in facts.states.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         let id = sunrise_world::registry::BlockStateId(i as u32);
         if &*state.item == "minecraft:air" || registry.default_state(&state.name) != Some(id) {
             continue;
@@ -1268,7 +2119,7 @@ pub(in crate::game::client_side) fn block_item_ids(
             out.entry(state.item.to_string()).or_insert(value);
         }
     }
-    out
+    Some(out)
 }
 
 /// Spans for a native mod (`native_render::RenderNeeds::entity_spans`), without a pack.
@@ -1290,10 +2141,26 @@ pub(in crate::game::client_side) fn name_id(name: &str) -> i32 {
 /// Model/fluid material ids by the original state, independent of sprite sharing and
 /// multipart model selection. Waterlogged model faces retain their model id; emitted
 /// fluid faces use the fluid's state (the source state itself for liquid blocks).
-pub(in crate::game::client_side) fn terrain_state_ids(
+#[cfg(test)]
+fn terrain_state_ids(
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
 ) -> Vec<i32> {
+    terrain_state_ids_with(
+        registry,
+        ids,
+        sunrise_world::fluid::mod_fluid_of_block_name,
+        &AtomicBool::new(false),
+    )
+    .expect("uncancelled test translation")
+}
+
+fn terrain_state_ids_with(
+    registry: &sunrise_world::registry::BlockRegistry,
+    ids: &BlockIds,
+    mod_fluid_of_block: impl Fn(&str) -> Option<sunrise_world::fluid::ModFluid>,
+    cancel: &AtomicBool,
+) -> Option<Vec<i32>> {
     use sunrise_world::{
         fluid::{FluidKind, FluidState},
         registry::BlockStateId,
@@ -1302,30 +2169,37 @@ pub(in crate::game::client_side) fn terrain_state_ids(
         ids.id(&state.name, |k| state.properties.get(k).map(String::as_str))
             .unwrap_or(-1)
     };
-    (0..registry.len())
-        .flat_map(|i| {
-            let Some(state) = registry.state(BlockStateId(i as u32)) else {
-                return [-1, -1];
-            };
-            let fluid = FluidState::from_block(state).unwrap_or(FluidState::EMPTY);
-            let name = match fluid.kind() {
-                FluidKind::Water | FluidKind::FlowingWater => "minecraft:water",
-                FluidKind::Lava | FluidKind::FlowingLava => "minecraft:lava",
-                FluidKind::Empty => return [material(state), -1],
-                FluidKind::Mod(_) | FluidKind::ModFlowing(_) => {
-                    return [material(state), material(state)];
-                }
-            };
-            let fluid = if state.name == name {
-                Some(state)
-            } else {
-                registry
-                    .default_state(name)
-                    .and_then(|id| registry.state(id))
-            };
-            [material(state), fluid.map_or(-1, material)]
-        })
-        .collect()
+    let pair = |i| {
+        let Some(state) = registry.state(BlockStateId(i as u32)) else {
+            return [-1, -1];
+        };
+        let fluid =
+            FluidState::from_block_with(state, &mod_fluid_of_block).unwrap_or(FluidState::EMPTY);
+        let name = match fluid.kind() {
+            FluidKind::Water | FluidKind::FlowingWater => "minecraft:water",
+            FluidKind::Lava | FluidKind::FlowingLava => "minecraft:lava",
+            FluidKind::Empty => return [material(state), -1],
+            FluidKind::Mod(_) | FluidKind::ModFlowing(_) => {
+                return [material(state), material(state)];
+            }
+        };
+        let fluid = if state.name == name {
+            Some(state)
+        } else {
+            registry
+                .default_state(name)
+                .and_then(|id| registry.state(id))
+        };
+        [material(state), fluid.map_or(-1, material)]
+    };
+    let mut table = Vec::with_capacity(registry.len() * 2);
+    for i in 0..registry.len() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        table.extend(pair(i));
+    }
+    Some(table)
 }
 
 #[cfg(test)]

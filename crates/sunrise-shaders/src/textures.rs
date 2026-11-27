@@ -75,6 +75,9 @@ fn components(channels: u8) -> usize {
 pub fn load_textures(pack: &Pack, properties: &Properties) -> (Vec<CustomTexture>, Vec<String>) {
     let (mut textures, mut notes) = (Vec::new(), Vec::new());
     for e in &properties.entries {
+        if pack.cancelled() {
+            break;
+        }
         let (stage, name) = if let Some(name) = e.key.strip_prefix("customTexture.") {
             (EVERY_STAGE, name)
         } else if let Some(rest) = e.key.strip_prefix("texture.") {
@@ -114,8 +117,30 @@ pub fn resolve_resources(
     textures: &mut Vec<CustomTexture>,
     read: &dyn Fn(&str, &str) -> Option<Vec<u8>>,
 ) -> Vec<String> {
+    resolve_resources_inner(textures, read, || false)
+}
+
+/// Resolves resource textures until the translation is cancelled.
+pub fn resolve_resources_cancellable(
+    textures: &mut Vec<CustomTexture>,
+    read: &dyn Fn(&str, &str) -> Option<Vec<u8>>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Vec<String> {
+    resolve_resources_inner(textures, read, || {
+        cancel.load(std::sync::atomic::Ordering::Relaxed)
+    })
+}
+
+fn resolve_resources_inner(
+    textures: &mut Vec<CustomTexture>,
+    read: &dyn Fn(&str, &str) -> Option<Vec<u8>>,
+    cancelled: impl Fn() -> bool,
+) -> Vec<String> {
     let mut notes = Vec::new();
     textures.retain_mut(|t| {
+        if cancelled() {
+            return true;
+        }
         let TextureSource::Resource(location) = &t.source else {
             return true;
         };
@@ -147,6 +172,9 @@ pub fn resolve_resources(
             notes.push(format!("`{key}`: the game has no `{location}`"));
             return false;
         };
+        if cancelled() {
+            return true;
+        }
         let mut texture = match decode_png(&bytes) {
             Ok(texture) => texture,
             Err(e) => {
@@ -154,6 +182,9 @@ pub fn resolve_resources(
                 return false;
             }
         };
+        if cancelled() {
+            return true;
+        }
         let meta = read(namespace, &format!("{path}.mcmeta"));
         let text = meta.as_deref().map(String::from_utf8_lossy);
         let (blur, clamp) = mcmeta(text.as_deref());
@@ -182,6 +213,9 @@ fn source(pack: &Pack, value: &str) -> Result<TextureSource, String> {
         .read(path)
         .ok_or_else(|| format!("can't find `{path}`"))?;
     let (blur, clamp) = mcmeta(pack.read_text(&format!("{path}.mcmeta")).as_deref());
+    if pack.cancelled() {
+        return Err("cancelled".into());
+    }
     let rest: Vec<&str> = words.collect();
     let mut texture = if rest.is_empty() {
         decode_png(&bytes).map_err(|e| format!("`{path}` {e}"))?
@@ -190,6 +224,9 @@ fn source(pack: &Pack, value: &str) -> Result<TextureSource, String> {
     };
     // A PNG is nearest and repeating, a raw texture linear and clamped (Iris 1.11.7 with a probe
     // pack of ours, #9064); each key the `.mcmeta` has overrides its own default only.
+    if pack.cancelled() {
+        return Err("cancelled".into());
+    }
     texture.blur = blur.unwrap_or(texture.raw);
     texture.clamp = clamp.unwrap_or(texture.raw);
     Ok(TextureSource::Image(texture))

@@ -828,7 +828,7 @@ pub fn finish_core(
     let resources = Resources {
         core: WorldCore {
             item_data,
-            facts,
+            facts: Arc::new(facts),
             biomes,
             environment,
             collision,
