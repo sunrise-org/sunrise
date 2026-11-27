@@ -3781,13 +3781,37 @@ impl crate::game::ClientGame<'_> {
             return Err("the graphics device was lost again after recovery".into());
         }
         self.client.last_device_recovery = Some(now);
+        if self.client.window.0.is_none() {
+            return Err("no window for graphics recovery".into());
+        }
+        log::warn!("Sunrise: rebuilding the renderer after graphics device loss");
+        // A GPU-culled frame may be what lost it: the renderers after this one don't
+        // offer GPU culling, until Sunrise restarts (`graphics::lose_gpu_culling`).
+        if self
+            .client
+            .renderer
+            .0
+            .as_deref()
+            .is_some_and(Renderer::gpu_frame)
+        {
+            log::warn!(
+                "Sunrise: GPU culling off until the next start: the graphics device was lost in one of its frames"
+            );
+            sunrise_client::graphics::lose_gpu_culling();
+        }
+        self.replace_renderer_on_new_device()?;
+        log::info!("Sunrise: graphics device recovered; rebuilding world meshes");
+        Ok(())
+    }
+    /// Drop the installed renderer and its device, open a fresh graphics device on the current
+    /// window, build a replacement carrying the old renderer's continuity, and adopt it.
+    pub(in crate::game::client_side) fn replace_renderer_on_new_device(&mut self) -> Result<()> {
         let window = self
             .client
             .window
             .0
             .clone()
             .ok_or("no window for graphics recovery")?;
-        log::warn!("Sunrise: rebuilding the renderer after graphics device loss");
         // Drop the old surface and device before opening another on this window.
         let mut old = self
             .client
@@ -3795,14 +3819,6 @@ impl crate::game::ClientGame<'_> {
             .0
             .take()
             .ok_or("no renderer for graphics recovery")?;
-        // A GPU-culled frame may be what lost it: the renderers after this one don't
-        // offer GPU culling, until Sunrise restarts (`graphics::lose_gpu_culling`).
-        if old.gpu_frame() {
-            log::warn!(
-                "Sunrise: GPU culling off until the next start: the graphics device was lost in one of its frames"
-            );
-            sunrise_client::graphics::lose_gpu_culling();
-        }
         let (screenshot, screenshot_result) = (old.screenshot.take(), old.screenshot_result.take());
         let display = old.display_reading();
         let carried = old.continuity();
@@ -3853,7 +3869,6 @@ impl crate::game::ClientGame<'_> {
         (renderer.screenshot, renderer.screenshot_result) = (screenshot, screenshot_result);
         renderer.continue_from(carried);
         self.adopt_renderer(Box::new(renderer));
-        log::info!("Sunrise: graphics device recovered; rebuilding world meshes");
         Ok(())
     }
     pub(in crate::game::client_side) fn refresh_window_cursor(&mut self) {
