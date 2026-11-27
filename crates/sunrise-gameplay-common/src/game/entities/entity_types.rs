@@ -54,7 +54,7 @@ pub struct Blast {
 /// `EntityType.TRIDENT.getDimensions()`: width, height and eye height.
 pub(in crate::game) const THROWN_TRIDENT_DIMENSIONS: [f32; 3] = [0.5, 0.5, 0.13];
 
-pub trait Entity: EntityRules + EntityProjection {
+pub trait Entity: EntityRules {
     /// `Entity.getId`.
     fn id(&self) -> u32;
     fn position(&self) -> Vec3;
@@ -646,7 +646,8 @@ pub use list_borrows::entity_lists_of;
 pub use list_borrows::{borrow_level_list, borrow_lists};
 #[allow(unused_imports)]
 pub use projection::{
-    DragonPartRef, EntityProjection, extents_aabb, knot_bounds, with_common_entity_projection,
+    DragonPartRef, EntityProjection, common_saved_uuid, extents_aabb, knot_bounds,
+    with_common_entity_projection,
 };
 #[doc(hidden)]
 #[macro_export]

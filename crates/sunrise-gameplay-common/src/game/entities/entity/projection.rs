@@ -1,5 +1,4 @@
-//! Read-only projection of shared entity state across the typed entity lists
-//! and every body owner outside them.
+//! Read-only row-local projection of entity body fields across all entity families.
 use super::Entity;
 use crate::game::{
     CommonGame, FallingBlock,
@@ -30,34 +29,49 @@ use sunrise_sim::{
     thrown_trident::ThrownTrident,
 };
 
-/// Read-only view of the values entities share. Absent fields return `None`
-/// rather than inventing defaults.
+/// Row-local body fields shared across entity kinds; `None` means not stored on the body.
 pub trait EntityProjection {
     fn projected_id(&self) -> u32;
     fn projected_kind(&self) -> Cow<'_, str>;
     fn projected_position(&self) -> Vec3;
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         None
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         None
     }
+    #[inline(always)]
+    fn projected_yaw(&self) -> Option<f32> {
+        self.projected_rotation().map(|[yaw, _]| yaw)
+    }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         None
     }
+    #[inline(always)]
+    fn projected_raw_bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        None
+    }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         None
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         None
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         None
     }
-    fn projected_is_removed(&self) -> Option<bool> {
+    #[inline(always)]
+    fn projected_body_removed(&self) -> Option<bool> {
         None
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         None
     }
 }
@@ -71,11 +85,13 @@ pub struct DragonPartRef<'a> {
 }
 
 impl<'a> DragonPartRef<'a> {
+    #[inline(always)]
     pub const fn new(id: u32, dragon: &'a Dragon, part: usize) -> Self {
         Self { id, dragon, part }
     }
 }
 
+#[inline(always)]
 pub fn extents_aabb((lo, hi): ([f64; 3], [f64; 3])) -> Aabb {
     Aabb::new(
         Vec3::new(lo[0], lo[1], lo[2]),
@@ -83,6 +99,7 @@ pub fn extents_aabb((lo, hi): ([f64; 3], [f64; 3])) -> Aabb {
     )
 }
 
+#[inline(always)]
 fn bounds_center((lo, hi): ([f64; 3], [f64; 3])) -> Vec3 {
     Vec3::new(
         (lo[0] + hi[0]) / 2.0,
@@ -91,6 +108,7 @@ fn bounds_center((lo, hi): ([f64; 3], [f64; 3])) -> Vec3 {
     )
 }
 
+#[inline(always)]
 pub fn knot_bounds(fence: [i32; 3]) -> Aabb {
     let knot = sunrise_sim::mobs::leash::knot_state(fence);
     let (p, half) = (knot.position, knot.width / 2.0);
@@ -100,487 +118,665 @@ pub fn knot_bounds(fence: [i32; 3]) -> Aabb {
     )
 }
 
-macro_rules! impl_entity_projection_from_entity {
+macro_rules! impl_vanilla_typed_projection {
     ($ty:ty { $($extra:item)* }) => {
         impl EntityProjection for $ty {
+            #[inline(always)]
             fn projected_id(&self) -> u32 {
-                Entity::id(self)
+                self.id
             }
+            #[inline(always)]
             fn projected_kind(&self) -> Cow<'_, str> {
                 Entity::native_type(self)
             }
+            #[inline(always)]
             fn projected_position(&self) -> Vec3 {
-                Entity::position(self)
+                self.position
             }
+            #[inline(always)]
             fn projected_velocity(&self) -> Option<Vec3> {
-                Some(Entity::velocity(self))
+                Some(self.velocity)
             }
+            #[inline(always)]
             fn projected_rotation(&self) -> Option<[f32; 2]> {
                 Some(Entity::rotation(self))
             }
+            #[inline(always)]
             fn projected_bounds(&self) -> Option<Aabb> {
                 Some(Entity::bounds(self))
             }
+            #[inline(always)]
             fn projected_on_ground(&self) -> Option<bool> {
-                Some(Entity::on_ground(self))
+                Some(self.ground.on_ground)
             }
             $($extra)*
         }
     };
 }
 
-impl_entity_projection_from_entity!(Mob {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(Mob {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         Some(self.air)
     }
-    fn projected_is_removed(&self) -> Option<bool> {
+    #[inline(always)]
+    fn projected_body_removed(&self) -> Option<bool> {
         Some(self.removed)
     }
 });
 
-impl_entity_projection_from_entity!(ItemEntity {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(ItemEntity {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
 });
 
-impl_entity_projection_from_entity!(ExperienceOrb {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(ExperienceOrb {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         Some(self.air)
     }
 });
 
-impl_entity_projection_from_entity!(Boat {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(Boat {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
 });
 
-impl_entity_projection_from_entity!(Minecart {});
+impl_vanilla_typed_projection!(Minecart {});
 
-impl_entity_projection_from_entity!(ArmorStand {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(ArmorStand {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         Some(self.air)
     }
 });
 
-impl_entity_projection_from_entity!(PrimedTnt {});
+impl_vanilla_typed_projection!(PrimedTnt {});
 
-impl_entity_projection_from_entity!(FallingBlock {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(FallingBlock {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         self.saved.as_deref().map(|(uuid, _)| *uuid)
     }
 });
 
-impl_entity_projection_from_entity!(Projectile {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(Projectile {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.arrow.as_ref().map_or(self.fire_ticks, |a| a.fire_ticks))
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         Some(self.air_supply)
     }
-    fn projected_is_removed(&self) -> Option<bool> {
+    #[inline(always)]
+    fn projected_body_removed(&self) -> Option<bool> {
         Some(self.destroyed || self.arrow.as_ref().is_some_and(|a| a.removed))
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         self.uuid
     }
 });
 
-impl_entity_projection_from_entity!(Rocket {});
+impl_vanilla_typed_projection!(Rocket {});
 
-impl_entity_projection_from_entity!(ThrownTrident {
-    fn projected_fire_ticks(&self) -> Option<i32> {
+impl_vanilla_typed_projection!(ThrownTrident {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
 });
 
-impl_entity_projection_from_entity!(GeneralRow {
-    fn projected_fire_ticks(&self) -> Option<i32> {
-        Some(self.base.fire_ticks)
-    }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
-        Some(self.uuid)
-    }
-});
-
-impl EntityProjection for Painting {
+impl EntityProjection for GeneralRow {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
+    fn projected_kind(&self) -> Cow<'_, str> {
+        Entity::native_type(self)
+    }
+    #[inline(always)]
+    fn projected_position(&self) -> Vec3 {
+        self.position
+    }
+    #[inline(always)]
+    fn projected_velocity(&self) -> Option<Vec3> {
+        Some(self.velocity)
+    }
+    #[inline(always)]
+    fn projected_rotation(&self) -> Option<[f32; 2]> {
+        Some(self.rotation)
+    }
+    #[inline(always)]
+    fn projected_bounds(&self) -> Option<Aabb> {
+        Some(Entity::bounds(self))
+    }
+    #[inline(always)]
+    fn projected_on_ground(&self) -> Option<bool> {
+        Some(self.on_ground)
+    }
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
+        Some(self.base.fire_ticks)
+    }
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
+        Some(self.uuid)
+    }
+}
+
+impl EntityProjection for Painting {
+    #[inline(always)]
+    fn projected_id(&self) -> u32 {
+        self.id
+    }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:painting")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         bounds_center(self.bounds())
     }
+    #[inline(always)]
+    fn projected_yaw(&self) -> Option<f32> {
+        Some(f32::from(self.facing) * 90.0)
+    }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(extents_aabb(self.bounds()))
+    }
+    #[inline(always)]
+    fn projected_raw_bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        Some(self.bounds())
     }
 }
 
 impl EntityProjection for ItemFrame {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed(self.kind())
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         bounds_center(self.bounds())
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some(self.entity_rotation())
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(extents_aabb(self.bounds()))
+    }
+    #[inline(always)]
+    fn projected_raw_bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        Some(self.bounds())
     }
 }
 
 impl EntityProjection for Cushion {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:cushion")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
+    fn projected_yaw(&self) -> Option<f32> {
+        Some(self.yaw)
+    }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(extents_aabb(self.bounds()))
+    }
+    #[inline(always)]
+    fn projected_raw_bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        Some(self.bounds())
     }
 }
 
 impl EntityProjection for Bolt {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:lightning_bolt")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         Vec3::new(self.at[0], self.at[1], self.at[2])
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(self.velocity)
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some(self.rotation)
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         let p = self.projected_position();
         Some(Aabb::new(p, p))
     }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         Some(self.on_ground)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         Some(self.air)
     }
 }
 
 impl EntityProjection for Dragon {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:ender_dragon")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(self.velocity)
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some([self.yaw, self.pitch])
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(self.body_bounds())
     }
 }
 
 impl EntityProjection for DragonPartRef<'_> {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:ender_dragon")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.dragon.parts[self.part].0
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
-        Some(self.dragon.part_box(self.part))
-    }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
-        Some(self.dragon.parts[self.part].3)
+        Some(self.dragon.part_geometry(self.part).1)
     }
 }
 
 impl EntityProjection for Crystal {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:end_crystal")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some(self.rotation)
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(self.bounds())
     }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         Some(self.fall.0)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire)
     }
 }
 
 impl EntityProjection for Breath {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:area_effect_cloud")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         Vec3::new(self.at[0], self.at[1], self.at[2])
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(Vec3::new(self.motion[0], self.motion[1], self.motion[2]))
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
 }
 
 impl EntityProjection for Hook {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:fishing_bobber")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(self.velocity)
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some([self.yaw, self.pitch])
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(self.bounds())
     }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         Some(self.ground.on_ground)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.base.fire_ticks)
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         Some(self.uuid)
     }
 }
 
 impl EntityProjection for OminousItemSpawner {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:ominous_item_spawner")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         Vec3::new(self.position[0], self.position[1], self.position[2])
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         self.raw.as_deref().map(sunrise_sim::entity_nbt::rotation)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         Some(self.uuid)
     }
 }
 
 impl EntityProjection for Fangs {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:evoker_fangs")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         Vec3::new(self.pos[0], self.pos[1], self.pos[2])
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(self.motion)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_yaw(&self) -> Option<f32> {
+        Some(self.yaw)
+    }
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
 }
 
 impl EntityProjection for Knot {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:leash_knot")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         sunrise_sim::mobs::leash::knot_state(self.fence).position
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(knot_bounds(self.fence))
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
 }
 
 impl EntityProjection for EyeOfEnder {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:eye_of_ender")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         Vec3::new(self.position.x, self.position.y, self.position.z)
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(Vec3::new(self.velocity.x, self.velocity.y, self.velocity.z))
     }
 }
 
 impl EntityProjection for ThrownPotion {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed(thrown_kind(&self.stack))
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(self.velocity)
     }
 }
 
 impl EntityProjection for OtherEntity {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.id
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed(self.kind.as_str())
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         self.eye.as_ref().map(|e| e.motion)
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some([self.yaw, self.pitch])
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         self.display_marker_or_interaction_bounds()
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         self.eye.as_ref().map(|e| e.fire_ticks)
     }
 }
 
 impl EntityProjection for PlayerMotion {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.entity_id as u32
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:player")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         self.position
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         Some(self.velocity)
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some([self.yaw, self.pitch])
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(self.bounds())
     }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         Some(self.ground.on_ground)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         Some(self.fire_ticks)
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         Some(self.air)
     }
 }
 
 impl EntityProjection for Guest {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         self.entity_id as u32
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         Cow::Borrowed("minecraft:player")
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         Vec3::new(self.position[0], self.position[1], self.position[2])
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         self.motion.as_ref().map(|m| m.velocity)
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         Some([self.yaw, self.pitch])
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         Some(self.bounds())
     }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         Some(self.on_ground)
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         self.motion.as_ref().map(|m| m.fire_ticks)
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         self.motion.as_ref().map(|m| m.air)
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         Some(sunrise_sim::lan::playerdata::uuid_ints(self.uuid))
     }
 }
 
 impl EntityProjection for OffLevel {
+    #[inline(always)]
     fn projected_id(&self) -> u32 {
         match self {
             Self::Mob(m) => m.projected_id(),
@@ -588,6 +784,7 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_id(),
         }
     }
+    #[inline(always)]
     fn projected_kind(&self) -> Cow<'_, str> {
         match self {
             Self::Mob(m) => m.projected_kind(),
@@ -595,6 +792,7 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_kind(),
         }
     }
+    #[inline(always)]
     fn projected_position(&self) -> Vec3 {
         match self {
             Self::Mob(m) => m.projected_position(),
@@ -602,6 +800,7 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_position(),
         }
     }
+    #[inline(always)]
     fn projected_velocity(&self) -> Option<Vec3> {
         match self {
             Self::Mob(m) => m.projected_velocity(),
@@ -609,6 +808,7 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_velocity(),
         }
     }
+    #[inline(always)]
     fn projected_rotation(&self) -> Option<[f32; 2]> {
         match self {
             Self::Mob(m) => m.projected_rotation(),
@@ -616,6 +816,7 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_rotation(),
         }
     }
+    #[inline(always)]
     fn projected_bounds(&self) -> Option<Aabb> {
         match self {
             Self::Mob(m) => m.projected_bounds(),
@@ -623,6 +824,7 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_bounds(),
         }
     }
+    #[inline(always)]
     fn projected_on_ground(&self) -> Option<bool> {
         match self {
             Self::Mob(m) => m.projected_on_ground(),
@@ -630,13 +832,15 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_on_ground(),
         }
     }
-    fn projected_fire_ticks(&self) -> Option<i32> {
+    #[inline(always)]
+    fn projected_body_fire_ticks(&self) -> Option<i32> {
         match self {
-            Self::Mob(m) => m.projected_fire_ticks(),
-            Self::Boat(b) => b.projected_fire_ticks(),
-            Self::Cart(c) => c.projected_fire_ticks(),
+            Self::Mob(m) => m.projected_body_fire_ticks(),
+            Self::Boat(b) => b.projected_body_fire_ticks(),
+            Self::Cart(c) => c.projected_body_fire_ticks(),
         }
     }
+    #[inline(always)]
     fn projected_air_supply(&self) -> Option<i32> {
         match self {
             Self::Mob(m) => m.projected_air_supply(),
@@ -644,25 +848,26 @@ impl EntityProjection for OffLevel {
             Self::Cart(c) => c.projected_air_supply(),
         }
     }
-    fn projected_is_removed(&self) -> Option<bool> {
+    #[inline(always)]
+    fn projected_body_removed(&self) -> Option<bool> {
         match self {
-            Self::Mob(m) => m.projected_is_removed(),
-            Self::Boat(b) => b.projected_is_removed(),
-            Self::Cart(c) => c.projected_is_removed(),
+            Self::Mob(m) => m.projected_body_removed(),
+            Self::Boat(b) => b.projected_body_removed(),
+            Self::Cart(c) => c.projected_body_removed(),
         }
     }
-    fn projected_saved_uuid(&self) -> Option<[i32; 4]> {
+    #[inline(always)]
+    fn projected_body_uuid(&self) -> Option<[i32; 4]> {
         match self {
-            Self::Mob(m) => m.projected_saved_uuid(),
-            Self::Boat(b) => b.projected_saved_uuid(),
-            Self::Cart(c) => c.projected_saved_uuid(),
+            Self::Mob(m) => m.projected_body_uuid(),
+            Self::Boat(b) => b.projected_body_uuid(),
+            Self::Cart(c) => c.projected_body_uuid(),
         }
     }
 }
 
-/// Read-only lookup of a common entity target through [`EntityProjection`].
-/// Server-only owners (`Guest`, `Other`, guest `Hook`, `DragonPart`, natural `Knot`)
-/// return `None` here and are resolved on the owning side.
+/// Local-body lookup on `CommonGame`; side-specific authority and replica fallbacks stay with callers.
+#[inline(always)]
 pub fn with_common_entity_projection<R>(
     common: &CommonGame<'_>,
     target: Target,
@@ -752,6 +957,22 @@ pub fn with_common_entity_projection<R>(
     }
 }
 
+/// Context-aware read-only saved UUID lookup on `CommonGame` combining `EntityMemory` and body UUIDs.
+#[inline(always)]
+pub fn common_saved_uuid(common: &CommonGame<'_>, target: Target) -> Option<[i32; 4]> {
+    match target {
+        Target::Player => common.level.player_uuid,
+        Target::Guest(_) | Target::Other(_) | Target::DragonPart(_) => None,
+        other => {
+            let id = crate::game::commands_common::target_id(other)?;
+            common.persist.uuid_of(id).or_else(|| {
+                with_common_entity_projection(common, other, |entity| entity.projected_body_uuid())
+                    .flatten()
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,10 +1028,10 @@ mod tests {
         assert_eq!(item.projected_rotation(), Some(item.rotation));
         assert_eq!(item.projected_bounds(), Some(item.bounds()));
         assert_eq!(item.projected_on_ground(), Some(item.ground.on_ground));
-        assert_eq!(item.projected_fire_ticks(), Some(item.fire_ticks));
+        assert_eq!(item.projected_body_fire_ticks(), Some(item.fire_ticks));
         assert_eq!(item.projected_air_supply(), None);
-        assert_eq!(item.projected_is_removed(), None);
-        assert_eq!(item.projected_saved_uuid(), None);
+        assert_eq!(item.projected_body_removed(), None);
+        assert_eq!(item.projected_body_uuid(), None);
     }
 
     #[test]
@@ -832,10 +1053,10 @@ mod tests {
         assert_eq!(orb.projected_rotation(), Some(orb.rotation));
         assert_eq!(orb.projected_bounds(), Some(orb.bounds()));
         assert_eq!(orb.projected_on_ground(), Some(orb.ground.on_ground));
-        assert_eq!(orb.projected_fire_ticks(), Some(orb.fire_ticks));
+        assert_eq!(orb.projected_body_fire_ticks(), Some(orb.fire_ticks));
         assert_eq!(orb.projected_air_supply(), Some(orb.air));
-        assert_eq!(orb.projected_is_removed(), None);
-        assert_eq!(orb.projected_saved_uuid(), None);
+        assert_eq!(orb.projected_body_removed(), None);
+        assert_eq!(orb.projected_body_uuid(), None);
     }
 
     #[test]
@@ -852,10 +1073,10 @@ mod tests {
         assert_eq!(boat.projected_rotation(), Some([boat.yaw, boat.pitch]));
         assert_eq!(boat.projected_bounds(), Some(boat.bounds()));
         assert_eq!(boat.projected_on_ground(), Some(boat.ground.on_ground));
-        assert_eq!(boat.projected_fire_ticks(), Some(boat.fire_ticks));
+        assert_eq!(boat.projected_body_fire_ticks(), Some(boat.fire_ticks));
         assert_eq!(boat.projected_air_supply(), None);
-        assert_eq!(boat.projected_is_removed(), None);
-        assert_eq!(boat.projected_saved_uuid(), None);
+        assert_eq!(boat.projected_body_removed(), None);
+        assert_eq!(boat.projected_body_uuid(), None);
     }
 
     #[test]
@@ -872,10 +1093,10 @@ mod tests {
         assert_eq!(cart.projected_rotation(), Some([cart.yaw, cart.pitch]));
         assert_eq!(cart.projected_bounds(), Some(cart.bounds()));
         assert_eq!(cart.projected_on_ground(), Some(cart.ground.on_ground));
-        assert_eq!(cart.projected_fire_ticks(), None);
+        assert_eq!(cart.projected_body_fire_ticks(), None);
         assert_eq!(cart.projected_air_supply(), None);
-        assert_eq!(cart.projected_is_removed(), None);
-        assert_eq!(cart.projected_saved_uuid(), None);
+        assert_eq!(cart.projected_body_removed(), None);
+        assert_eq!(cart.projected_body_uuid(), None);
     }
 
     #[test]
@@ -893,10 +1114,10 @@ mod tests {
         assert_eq!(stand.projected_rotation(), Some([stand.yaw, stand.pitch]));
         assert_eq!(stand.projected_bounds(), Some(stand.bounds()));
         assert_eq!(stand.projected_on_ground(), Some(stand.ground.on_ground));
-        assert_eq!(stand.projected_fire_ticks(), Some(stand.fire_ticks));
+        assert_eq!(stand.projected_body_fire_ticks(), Some(stand.fire_ticks));
         assert_eq!(stand.projected_air_supply(), Some(stand.air));
-        assert_eq!(stand.projected_is_removed(), None);
-        assert_eq!(stand.projected_saved_uuid(), None);
+        assert_eq!(stand.projected_body_removed(), None);
+        assert_eq!(stand.projected_body_uuid(), None);
     }
 
     #[test]
@@ -934,10 +1155,10 @@ mod tests {
         assert_eq!(tnt.projected_rotation(), Some(tnt.rotation));
         assert_eq!(tnt.projected_bounds(), Some(tnt.bounds()));
         assert_eq!(tnt.projected_on_ground(), Some(tnt.ground.on_ground));
-        assert_eq!(tnt.projected_fire_ticks(), None);
+        assert_eq!(tnt.projected_body_fire_ticks(), None);
         assert_eq!(tnt.projected_air_supply(), None);
-        assert_eq!(tnt.projected_is_removed(), None);
-        assert_eq!(tnt.projected_saved_uuid(), None);
+        assert_eq!(tnt.projected_body_removed(), None);
+        assert_eq!(tnt.projected_body_uuid(), None);
     }
 
     #[test]
@@ -986,10 +1207,13 @@ mod tests {
             falling.projected_on_ground(),
             Some(falling.ground.on_ground)
         );
-        assert_eq!(falling.projected_fire_ticks(), Some(falling.fire_ticks));
+        assert_eq!(
+            falling.projected_body_fire_ticks(),
+            Some(falling.fire_ticks)
+        );
         assert_eq!(falling.projected_air_supply(), None);
-        assert_eq!(falling.projected_is_removed(), None);
-        assert_eq!(falling.projected_saved_uuid(), Some(uuid));
+        assert_eq!(falling.projected_body_removed(), None);
+        assert_eq!(falling.projected_body_uuid(), Some(uuid));
     }
 
     #[test]
@@ -1011,18 +1235,18 @@ mod tests {
         assert_eq!(shot.projected_rotation(), Some([shot.yaw, shot.pitch]));
         assert_eq!(shot.projected_bounds(), Some(shot.bounds()));
         assert_eq!(shot.projected_on_ground(), Some(shot.ground.on_ground));
-        assert_eq!(shot.projected_fire_ticks(), Some(shot.fire_ticks));
+        assert_eq!(shot.projected_body_fire_ticks(), Some(shot.fire_ticks));
         assert_eq!(shot.projected_air_supply(), Some(shot.air_supply));
-        assert_eq!(shot.projected_is_removed(), Some(shot.destroyed));
-        assert_eq!(shot.projected_saved_uuid(), shot.uuid);
+        assert_eq!(shot.projected_body_removed(), Some(shot.destroyed));
+        assert_eq!(shot.projected_body_uuid(), shot.uuid);
 
         let mut arrow_state = ArrowState::new();
         arrow_state.fire_ticks = 99;
         arrow_state.removed = true;
         shot.destroyed = false;
         shot.arrow = Some(Box::new(arrow_state));
-        assert_eq!(shot.projected_fire_ticks(), Some(99));
-        assert_eq!(shot.projected_is_removed(), Some(true));
+        assert_eq!(shot.projected_body_fire_ticks(), Some(99));
+        assert_eq!(shot.projected_body_removed(), Some(true));
     }
 
     #[test]
@@ -1037,10 +1261,10 @@ mod tests {
         assert_eq!(rocket.projected_rotation(), Some(rocket.rotation));
         assert_eq!(rocket.projected_bounds(), Some(rocket.bounds()));
         assert_eq!(rocket.projected_on_ground(), Some(rocket.ground.on_ground));
-        assert_eq!(rocket.projected_fire_ticks(), None);
+        assert_eq!(rocket.projected_body_fire_ticks(), None);
         assert_eq!(rocket.projected_air_supply(), None);
-        assert_eq!(rocket.projected_is_removed(), None);
-        assert_eq!(rocket.projected_saved_uuid(), None);
+        assert_eq!(rocket.projected_body_removed(), None);
+        assert_eq!(rocket.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1062,10 +1286,13 @@ mod tests {
             trident.projected_on_ground(),
             Some(trident.ground.on_ground)
         );
-        assert_eq!(trident.projected_fire_ticks(), Some(trident.fire_ticks));
+        assert_eq!(
+            trident.projected_body_fire_ticks(),
+            Some(trident.fire_ticks)
+        );
         assert_eq!(trident.projected_air_supply(), None);
-        assert_eq!(trident.projected_is_removed(), None);
-        assert_eq!(trident.projected_saved_uuid(), None);
+        assert_eq!(trident.projected_body_removed(), None);
+        assert_eq!(trident.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1114,10 +1341,10 @@ mod tests {
             assert_eq!(row.projected_rotation(), Some(row.rotation));
             assert_eq!(row.projected_bounds(), Some(Entity::bounds(&row)));
             assert_eq!(row.projected_on_ground(), Some(row.on_ground));
-            assert_eq!(row.projected_fire_ticks(), Some(row.base.fire_ticks));
+            assert_eq!(row.projected_body_fire_ticks(), Some(row.base.fire_ticks));
             assert_eq!(row.projected_air_supply(), None);
-            assert_eq!(row.projected_is_removed(), None);
-            assert_eq!(row.projected_saved_uuid(), Some(row.uuid));
+            assert_eq!(row.projected_body_removed(), None);
+            assert_eq!(row.projected_body_uuid(), Some(row.uuid));
         });
     }
 
@@ -1149,12 +1376,28 @@ mod tests {
         );
         assert_eq!(painting.projected_velocity(), None);
         assert_eq!(painting.projected_rotation(), None);
+        assert_eq!(
+            painting.projected_yaw(),
+            Some(f32::from(painting.facing) * 90.0)
+        );
         assert_eq!(painting.projected_bounds(), Some(extents_aabb((lo, hi))));
+        assert_eq!(painting.projected_raw_bounds(), Some((lo, hi)));
         assert_eq!(painting.projected_on_ground(), None);
-        assert_eq!(painting.projected_fire_ticks(), None);
+        assert_eq!(painting.projected_body_fire_ticks(), None);
         assert_eq!(painting.projected_air_supply(), None);
-        assert_eq!(painting.projected_is_removed(), None);
-        assert_eq!(painting.projected_saved_uuid(), None);
+        assert_eq!(painting.projected_body_removed(), None);
+        assert_eq!(painting.projected_body_uuid(), None);
+
+        let neg = Painting {
+            width: -2,
+            ..painting
+        };
+        let (neg_lo, neg_hi) = neg.bounds();
+        assert!(neg_lo[0] > neg_hi[0]);
+        assert_eq!(neg.projected_raw_bounds(), Some((neg_lo, neg_hi)));
+        let normalized = neg.projected_bounds().unwrap();
+        assert_eq!(normalized.min.x, neg_hi[0]);
+        assert_eq!(normalized.max.x, neg_lo[0]);
     }
 
     #[test]
@@ -1191,11 +1434,12 @@ mod tests {
             assert_eq!(frame.projected_velocity(), None);
             assert_eq!(frame.projected_rotation(), Some(frame.entity_rotation()));
             assert_eq!(frame.projected_bounds(), Some(extents_aabb((lo, hi))));
+            assert_eq!(frame.projected_raw_bounds(), Some((lo, hi)));
             assert_eq!(frame.projected_on_ground(), None);
-            assert_eq!(frame.projected_fire_ticks(), None);
+            assert_eq!(frame.projected_body_fire_ticks(), None);
             assert_eq!(frame.projected_air_supply(), None);
-            assert_eq!(frame.projected_is_removed(), None);
-            assert_eq!(frame.projected_saved_uuid(), None);
+            assert_eq!(frame.projected_body_removed(), None);
+            assert_eq!(frame.projected_body_uuid(), None);
         }
     }
 
@@ -1217,15 +1461,17 @@ mod tests {
         assert_eq!(cushion.projected_position(), cushion.position);
         assert_eq!(cushion.projected_velocity(), None);
         assert_eq!(cushion.projected_rotation(), None);
+        assert_eq!(cushion.projected_yaw(), Some(cushion.yaw));
         assert_eq!(
             cushion.projected_bounds(),
             Some(extents_aabb(cushion.bounds()))
         );
+        assert_eq!(cushion.projected_raw_bounds(), Some(cushion.bounds()));
         assert_eq!(cushion.projected_on_ground(), None);
-        assert_eq!(cushion.projected_fire_ticks(), None);
+        assert_eq!(cushion.projected_body_fire_ticks(), None);
         assert_eq!(cushion.projected_air_supply(), None);
-        assert_eq!(cushion.projected_is_removed(), None);
-        assert_eq!(cushion.projected_saved_uuid(), None);
+        assert_eq!(cushion.projected_body_removed(), None);
+        assert_eq!(cushion.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1244,10 +1490,10 @@ mod tests {
         assert_eq!(bolt.projected_rotation(), Some(bolt.rotation));
         assert_eq!(bolt.projected_bounds(), Some(Aabb::new(pos, pos)));
         assert_eq!(bolt.projected_on_ground(), Some(bolt.on_ground));
-        assert_eq!(bolt.projected_fire_ticks(), Some(bolt.fire_ticks));
+        assert_eq!(bolt.projected_body_fire_ticks(), Some(bolt.fire_ticks));
         assert_eq!(bolt.projected_air_supply(), Some(bolt.air));
-        assert_eq!(bolt.projected_is_removed(), None);
-        assert_eq!(bolt.projected_saved_uuid(), None);
+        assert_eq!(bolt.projected_body_removed(), None);
+        assert_eq!(bolt.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1266,10 +1512,10 @@ mod tests {
         );
         assert_eq!(dragon.projected_bounds(), Some(dragon.body_bounds()));
         assert_eq!(dragon.projected_on_ground(), None);
-        assert_eq!(dragon.projected_fire_ticks(), None);
+        assert_eq!(dragon.projected_body_fire_ticks(), None);
         assert_eq!(dragon.projected_air_supply(), None);
-        assert_eq!(dragon.projected_is_removed(), None);
-        assert_eq!(dragon.projected_saved_uuid(), None);
+        assert_eq!(dragon.projected_body_removed(), None);
+        assert_eq!(dragon.projected_body_uuid(), None);
 
         let part = DragonPartRef::new(206, &dragon, 2);
         assert_eq!(part.projected_id(), 206);
@@ -1277,12 +1523,12 @@ mod tests {
         assert_eq!(part.projected_position(), dragon.parts[2].0);
         assert_eq!(part.projected_velocity(), None);
         assert_eq!(part.projected_rotation(), None);
-        assert_eq!(part.projected_bounds(), Some(dragon.part_box(2)));
+        assert_eq!(part.projected_bounds(), Some(dragon.part_geometry(2).1));
         assert_eq!(part.projected_on_ground(), None);
-        assert_eq!(part.projected_fire_ticks(), None);
+        assert_eq!(part.projected_body_fire_ticks(), None);
         assert_eq!(part.projected_air_supply(), None);
-        assert_eq!(part.projected_is_removed(), None);
-        assert_eq!(part.projected_saved_uuid(), Some(dragon.parts[2].3));
+        assert_eq!(part.projected_body_removed(), None);
+        assert_eq!(part.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1298,10 +1544,10 @@ mod tests {
         assert_eq!(crystal.projected_rotation(), Some(crystal.rotation));
         assert_eq!(crystal.projected_bounds(), Some(crystal.bounds()));
         assert_eq!(crystal.projected_on_ground(), Some(crystal.fall.0));
-        assert_eq!(crystal.projected_fire_ticks(), Some(crystal.fire));
+        assert_eq!(crystal.projected_body_fire_ticks(), Some(crystal.fire));
         assert_eq!(crystal.projected_air_supply(), None);
-        assert_eq!(crystal.projected_is_removed(), None);
-        assert_eq!(crystal.projected_saved_uuid(), None);
+        assert_eq!(crystal.projected_body_removed(), None);
+        assert_eq!(crystal.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1339,10 +1585,10 @@ mod tests {
         assert_eq!(breath.projected_rotation(), None);
         assert_eq!(breath.projected_bounds(), None);
         assert_eq!(breath.projected_on_ground(), None);
-        assert_eq!(breath.projected_fire_ticks(), Some(breath.fire_ticks));
+        assert_eq!(breath.projected_body_fire_ticks(), Some(breath.fire_ticks));
         assert_eq!(breath.projected_air_supply(), None);
-        assert_eq!(breath.projected_is_removed(), None);
-        assert_eq!(breath.projected_saved_uuid(), None);
+        assert_eq!(breath.projected_body_removed(), None);
+        assert_eq!(breath.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1360,10 +1606,10 @@ mod tests {
         assert_eq!(hook.projected_rotation(), Some([hook.yaw, hook.pitch]));
         assert_eq!(hook.projected_bounds(), Some(hook.bounds()));
         assert_eq!(hook.projected_on_ground(), Some(hook.ground.on_ground));
-        assert_eq!(hook.projected_fire_ticks(), Some(hook.base.fire_ticks));
+        assert_eq!(hook.projected_body_fire_ticks(), Some(hook.base.fire_ticks));
         assert_eq!(hook.projected_air_supply(), None);
-        assert_eq!(hook.projected_is_removed(), None);
-        assert_eq!(hook.projected_saved_uuid(), Some(hook.uuid));
+        assert_eq!(hook.projected_body_removed(), None);
+        assert_eq!(hook.projected_body_uuid(), Some(hook.uuid));
     }
 
     #[test]
@@ -1396,10 +1642,13 @@ mod tests {
         assert_eq!(spawner.projected_rotation(), None);
         assert_eq!(spawner.projected_bounds(), None);
         assert_eq!(spawner.projected_on_ground(), None);
-        assert_eq!(spawner.projected_fire_ticks(), Some(spawner.fire_ticks));
+        assert_eq!(
+            spawner.projected_body_fire_ticks(),
+            Some(spawner.fire_ticks)
+        );
         assert_eq!(spawner.projected_air_supply(), None);
-        assert_eq!(spawner.projected_is_removed(), None);
-        assert_eq!(spawner.projected_saved_uuid(), Some(spawner.uuid));
+        assert_eq!(spawner.projected_body_removed(), None);
+        assert_eq!(spawner.projected_body_uuid(), Some(spawner.uuid));
     }
 
     #[test]
@@ -1428,12 +1677,13 @@ mod tests {
         );
         assert_eq!(fangs.projected_velocity(), Some(fangs.motion));
         assert_eq!(fangs.projected_rotation(), None);
+        assert_eq!(fangs.projected_yaw(), Some(fangs.yaw));
         assert_eq!(fangs.projected_bounds(), None);
         assert_eq!(fangs.projected_on_ground(), None);
-        assert_eq!(fangs.projected_fire_ticks(), Some(fangs.fire_ticks));
+        assert_eq!(fangs.projected_body_fire_ticks(), Some(fangs.fire_ticks));
         assert_eq!(fangs.projected_air_supply(), None);
-        assert_eq!(fangs.projected_is_removed(), None);
-        assert_eq!(fangs.projected_saved_uuid(), None);
+        assert_eq!(fangs.projected_body_removed(), None);
+        assert_eq!(fangs.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1459,10 +1709,10 @@ mod tests {
         assert_eq!(knot.projected_rotation(), None);
         assert_eq!(knot.projected_bounds(), Some(knot_bounds(knot.fence)));
         assert_eq!(knot.projected_on_ground(), None);
-        assert_eq!(knot.projected_fire_ticks(), Some(knot.fire_ticks));
+        assert_eq!(knot.projected_body_fire_ticks(), Some(knot.fire_ticks));
         assert_eq!(knot.projected_air_supply(), None);
-        assert_eq!(knot.projected_is_removed(), None);
-        assert_eq!(knot.projected_saved_uuid(), None);
+        assert_eq!(knot.projected_body_removed(), None);
+        assert_eq!(knot.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1489,10 +1739,10 @@ mod tests {
         assert_eq!(eye.projected_rotation(), None);
         assert_eq!(eye.projected_bounds(), None);
         assert_eq!(eye.projected_on_ground(), None);
-        assert_eq!(eye.projected_fire_ticks(), None);
+        assert_eq!(eye.projected_body_fire_ticks(), None);
         assert_eq!(eye.projected_air_supply(), None);
-        assert_eq!(eye.projected_is_removed(), None);
-        assert_eq!(eye.projected_saved_uuid(), None);
+        assert_eq!(eye.projected_body_removed(), None);
+        assert_eq!(eye.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1519,10 +1769,10 @@ mod tests {
         assert_eq!(potion.projected_rotation(), None);
         assert_eq!(potion.projected_bounds(), None);
         assert_eq!(potion.projected_on_ground(), None);
-        assert_eq!(potion.projected_fire_ticks(), None);
+        assert_eq!(potion.projected_body_fire_ticks(), None);
         assert_eq!(potion.projected_air_supply(), None);
-        assert_eq!(potion.projected_is_removed(), None);
-        assert_eq!(potion.projected_saved_uuid(), None);
+        assert_eq!(potion.projected_body_removed(), None);
+        assert_eq!(potion.projected_body_uuid(), None);
     }
 
     #[test]
@@ -1560,10 +1810,10 @@ mod tests {
             interaction.display_marker_or_interaction_bounds()
         );
         assert_eq!(interaction.projected_on_ground(), None);
-        assert_eq!(interaction.projected_fire_ticks(), None);
+        assert_eq!(interaction.projected_body_fire_ticks(), None);
         assert_eq!(interaction.projected_air_supply(), None);
-        assert_eq!(interaction.projected_is_removed(), None);
-        assert_eq!(interaction.projected_saved_uuid(), None);
+        assert_eq!(interaction.projected_body_removed(), None);
+        assert_eq!(interaction.projected_body_uuid(), None);
 
         let summoned_eye = OtherEntity {
             id: 216,
@@ -1583,7 +1833,7 @@ mod tests {
             Some(Vec3::new(0.1, 0.2, 0.3))
         );
         assert_eq!(summoned_eye.projected_bounds(), None);
-        assert_eq!(summoned_eye.projected_fire_ticks(), Some(27));
+        assert_eq!(summoned_eye.projected_body_fire_ticks(), Some(27));
     }
 
     #[test]
@@ -1607,11 +1857,11 @@ mod tests {
         assert_eq!(guest.projected_rotation(), Some([guest.yaw, guest.pitch]));
         assert_eq!(guest.projected_bounds(), Some(guest.bounds()));
         assert_eq!(guest.projected_on_ground(), Some(guest.on_ground));
-        assert_eq!(guest.projected_fire_ticks(), None);
+        assert_eq!(guest.projected_body_fire_ticks(), None);
         assert_eq!(guest.projected_air_supply(), None);
-        assert_eq!(guest.projected_is_removed(), None);
+        assert_eq!(guest.projected_body_removed(), None);
         assert_eq!(
-            guest.projected_saved_uuid(),
+            guest.projected_body_uuid(),
             Some(sunrise_sim::lan::playerdata::uuid_ints(guest.uuid))
         );
     }
