@@ -326,6 +326,14 @@ pub fn literal_include(item: &Item, shadowed: bool) -> Option<(syn::LitStr, &[sy
 /// Whether `items` define a `macro_rules! include` or import a name `include`. The tools then
 /// read a bare `include!` there, and in the modules inside, as that macro.
 pub fn include_shadowed(items: &[Item]) -> bool {
+    items
+        .iter()
+        .any(|item| imports_include(item) || defines_include(item))
+}
+
+/// Whether `item` is a `use` that imports a name `include`. An import binds in its whole module,
+/// above its own line too.
+fn imports_include(item: &Item) -> bool {
     fn binds(tree: &syn::UseTree) -> bool {
         match tree {
             syn::UseTree::Path(path) => binds(&path.tree),
@@ -335,7 +343,14 @@ pub fn include_shadowed(items: &[Item]) -> bool {
             syn::UseTree::Glob(_) => false,
         }
     }
-    items.iter().any(|item| match item {
+    matches!(item, Item::Use(used) if binds(&used.tree))
+}
+
+/// Whether `item` defines a `macro_rules! include`, or is an inline `#[macro_use]` module that
+/// does. A `macro_rules!` macro is in scope only below its definition: in the items after it and
+/// the modules declared after it, not in the ones before.
+fn defines_include(item: &Item) -> bool {
+    match item {
         Item::Macro(defined) => {
             defined.mac.path.is_ident("macro_rules")
                 && defined
@@ -343,9 +358,19 @@ pub fn include_shadowed(items: &[Item]) -> bool {
                     .as_ref()
                     .is_some_and(|ident| ident == "include")
         }
-        Item::Use(used) => binds(&used.tree),
+        Item::Mod(declared) => {
+            macro_use(&declared.attrs)
+                && declared
+                    .content
+                    .as_ref()
+                    .is_some_and(|(_, inner)| inner.iter().any(defines_include))
+        }
         _ => false,
-    })
+    }
+}
+
+fn macro_use(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| attr.path().is_ident("macro_use"))
 }
 
 /// Whether some build can hold every predicate in `conditions` at once: an assignment of the
@@ -434,6 +459,7 @@ pub fn walk_module_variants(
             dir,
             ancestors: Vec::new(),
             shadowed: false,
+            exports_macros: false,
         }],
         variants: Vec::new(),
     };
@@ -442,6 +468,7 @@ pub fn walk_module_variants(
         dir,
         mut ancestors,
         shadowed,
+        exports_macros,
     }) = walker.pending.pop()
     {
         // A target with only conditional paths need not have a conventional file. A literal
@@ -466,6 +493,21 @@ pub fn walk_module_variants(
         let parsed = parse(&file.path, &source)?;
         if !walker.keep(&parsed.attrs) {
             continue;
+        }
+        // An included fragment's `macro_rules!` macros stay in scope in the file that includes it,
+        // and a `#[macro_use]` module file's in the module that declares it, below that line. The
+        // walk has already read those items, so it refuses the shadowing rather than miss source.
+        if (file.included || exports_macros) && parsed.items.iter().any(defines_include) {
+            return Err(format!(
+                "{}: a `macro_rules! include` here would shadow `include!` in the file that {} it, \
+                 which the module walk does not follow",
+                file.path.display(),
+                if file.included {
+                    "includes"
+                } else {
+                    "declares"
+                },
+            ));
         }
         file.cfg.extend(walker.conditions(&parsed.attrs));
         let here = file.path.parent().expect("a source file has a folder");
@@ -497,12 +539,14 @@ struct Walker {
 }
 
 /// A file to read, the directory Rust uses for its conventional children, its physical
-/// ancestors and whether a bare `include!` reaching it names a shadowing macro.
+/// ancestors, whether a bare `include!` reaching it names a shadowing macro and whether its
+/// `macro_rules!` macros reach the module that declares it (`#[macro_use]`).
 struct Pending {
     file: ModuleFile,
     dir: PathBuf,
     ancestors: Vec<PathBuf>,
     shadowed: bool,
+    exports_macros: bool,
 }
 
 impl Walker {
@@ -529,8 +573,12 @@ impl Walker {
         ancestors: &[PathBuf],
         shadowed: bool,
     ) {
-        let shadowed = shadowed || include_shadowed(items);
+        // An import of `include` binds in the whole module; a `macro_rules! include` only below it.
+        let mut shadowed = shadowed || items.iter().any(imports_include);
         for (index, item) in items.iter().enumerate() {
+            if index > 0 && defines_include(&items[index - 1]) {
+                shadowed = true;
+            }
             if let Some((relative, attrs)) = literal_include(item, shadowed)
                 && self.keep(attrs)
             {
@@ -547,6 +595,7 @@ impl Walker {
                     dir: dir.to_owned(),
                     ancestors: ancestors.to_vec(),
                     shadowed,
+                    exports_macros: false,
                 });
             }
             let Item::Mod(declared) = item else { continue };
@@ -631,6 +680,7 @@ impl Walker {
                         dir: child_dir,
                         ancestors: ancestors.to_vec(),
                         shadowed,
+                        exports_macros: macro_use(&declared.attrs),
                     });
                 }
             }
@@ -691,6 +741,56 @@ mod shadow {
             files.sort();
             assert_eq!(files, ["lib.rs", "qualified.rs", "unix.rs"]);
         }
+    }
+
+    /// `rustc` expands the standard `include!` in `early` and the local macro in `late`: a
+    /// `macro_rules!` macro shadows `include!` only below its definition (this layout compiles,
+    /// with no `never-read.rs`). A shadowing macro that would reach back into a file the walk has
+    /// read, from an included fragment or a `#[macro_use]` module file, is refused.
+    #[test]
+    fn a_local_include_macro_shadows_only_the_modules_below_it() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        put(
+            "lib.rs",
+            r#"
+mod parent {
+    pub mod early { include!("gen.rs"); }
+    macro_rules! include { ($name:literal) => {} }
+    mod late { include!("never-read.rs"); }
+}
+"#,
+        );
+        put("gen.rs", "pub fn generated() {}\n");
+        let mut files = walk(root.path(), false).unwrap();
+        files.sort();
+        assert_eq!(files, ["gen.rs", "lib.rs"]);
+
+        let macro_rules = "macro_rules! include { ($name:literal) => {} }\n";
+        put("lib.rs", "include!(\"defs.rs\");\ninclude!(\"gen.rs\");\n");
+        put("defs.rs", macro_rules);
+        let error = walk(root.path(), false).unwrap_err();
+        assert!(
+            error.contains("defs.rs") && error.contains("includes"),
+            "{error}"
+        );
+
+        put("lib.rs", "#[macro_use]\nmod defs;\ninclude!(\"gen.rs\");\n");
+        let error = walk(root.path(), false).unwrap_err();
+        assert!(
+            error.contains("defs.rs") && error.contains("declares"),
+            "{error}"
+        );
+
+        put(
+            "lib.rs",
+            &format!(
+                "include!(\"gen.rs\");\n#[macro_use]\nmod defs {{ {macro_rules} }}\ninclude!(\"never-read.rs\");\n"
+            ),
+        );
+        let mut files = walk(root.path(), false).unwrap();
+        files.sort();
+        assert_eq!(files, ["gen.rs", "lib.rs"]);
     }
 
     #[test]
