@@ -1215,6 +1215,31 @@ mod tests {
     }
 
     #[test]
+    fn safe_area_leaves_nested_mod_scissors_and_visible_bounds_local() {
+        let atlas = HudAtlas::boot();
+        let frame =
+            sunrise_client::window::GuiFrame::from_insets([853, 481], 2, true, Some([15, 9, 7, 3]));
+        let mut batch = HudBatch::for_frame(&frame);
+        GameGuiCanvas::draw(&mut batch, &atlas, None, None, &mut |root| {
+            root.scope(
+                &[PoseOp::Translate(3.0, 4.0)],
+                Some([-5.0, -8.0, 16.0, 17.0]),
+                &mut |outer| {
+                    outer.scope(&[], Some([2.0, 3.0, 20.0, 20.0]), &mut |inner| {
+                        inner.fill([-32.0, -32.0, 64.0, 64.0], u32::MAX)
+                    })
+                },
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            batch.scissors_in(0..6).next(),
+            Some((0..6, Some([5.0, 7.0, 14.0, 13.0])))
+        );
+        assert_eq!(batch.visible_vertex_bounds(0), Some([5.0, 7.0, 9.0, 6.0]));
+    }
+
+    #[test]
     fn player_face_rejects_non_finite_geometry_and_missing_game() {
         let atlas = HudAtlas::build(&ResourceSource::directory(
             "/nonexistent/sunrise-test-assets".into(),

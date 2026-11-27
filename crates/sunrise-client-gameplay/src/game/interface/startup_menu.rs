@@ -596,6 +596,12 @@ impl Loading {
         frame
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline(always)]
+    pub fn test_set_menu_safe_area(&mut self, target: [u32; 2], insets: sunrise_hooks::Insets) {
+        self.menu.safe_area = Some((target, insets));
+    }
+
     #[inline(always)]
     fn menu_pointer_space(&self, size: [u32; 2]) -> PointerSpace {
         self.window.as_deref().map_or_else(

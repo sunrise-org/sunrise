@@ -1216,6 +1216,97 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
+    #[test]
+    #[ignore = "daily"]
+    fn a_safe_area_keeps_pause_slot_and_chat_mouse_hits_on_their_draws() {
+        use crate::game::native_entity_refs::tests::{test_window, with_client_game};
+        use sunrise_client::{
+            widgets::{self, Kind},
+            window::{GuiFrame, PointerProjection, PointerSpace},
+        };
+        use winit::dpi::PhysicalPosition;
+
+        sunrise_gameplay_common::game::in_own_process(
+            "game::client_side::screen_build::tests::a_safe_area_keeps_pause_slot_and_chat_mouse_hits_on_their_draws",
+            || {
+                with_client_game(|game| {
+                    let target = [853, 481];
+                    let (_event_loop, window) = test_window(target);
+                    game.common.options.offscreen = true;
+                    let mut renderer = game.new_renderer(window.clone()).unwrap();
+                    renderer.resize(target[0], target[1]);
+                    game.client.window.0 = Some(window);
+                    game.set_renderer(renderer);
+                    game.common.player = Some(
+                        sunrise_sim::motion::PlayerMotion::new(
+                            game.common.motion,
+                            sunrise_core::geometry::Vec3::ZERO,
+                        )
+                        .unwrap(),
+                    );
+                    game.client.title.0 = None;
+                    let frame = GuiFrame::from_insets(target, 1, false, Some([35, 11, 7, 17]));
+                    game.client.gui_safe_area = Some(frame);
+                    let space = PointerSpace::new(target, 1.0);
+                    let projection = PointerProjection::new(frame.with_pointer_space(space));
+                    let place = |game: &mut crate::game::ClientGame<'_>, at: [f32; 2]| {
+                        let [x, y] = frame.gui_to_target(at);
+                        game.set_window_cursor(
+                            space
+                                .physical_sample(PhysicalPosition::new(f64::from(x), f64::from(y))),
+                            projection,
+                        );
+                        assert_eq!(game.client.cursor, (at[0], at[1]));
+                    };
+                    let mut batch = HudBatch::for_frame(&frame);
+
+                    game.client.screen = Screen::Paused;
+                    game.client.pause_menu = true;
+                    game.build_screen_at(target);
+                    let (w, h) = frame.size();
+                    let &(x, y, width, _, _, _) = game
+                        .built_pause(w, h)
+                        .unwrap()
+                        .buttons
+                        .iter()
+                        .find(|button| button.4 == 1 && button.5)
+                        .unwrap();
+                    game.draw_pause_menu(&mut batch);
+                    widgets::end_frame(1);
+                    assert!(
+                        widgets::last_targets()
+                            .iter()
+                            .any(|t| t.rect == [x, y, width, 20.0])
+                    );
+                    place(game, [x + width * 0.5, y + 10.0]);
+                    assert!(game.pause_click().unwrap());
+                    assert_eq!(game.client.screen, Screen::Options);
+
+                    game.client.screen = Screen::Inventory;
+                    game.common.craft_size = 2;
+                    game.build_screen_at(target);
+                    let (slot, [x, y, w, h]) = game.built_container(&batch).unwrap().slots[0];
+                    place(game, [x + w * 0.5, y + h * 0.5]);
+                    assert!(game.draw_inventory(&mut batch));
+                    assert_eq!(game.inventory_target().0, Some(slot));
+
+                    assert!(game.begin_chat_screen("hello", false));
+                    widgets::end_frame(2);
+                    game.draw_chat_screen(&mut batch);
+                    widgets::end_frame(3);
+                    let field = widgets::last_targets()
+                        .into_iter()
+                        .find(|t| t.kind == Kind::Field)
+                        .unwrap();
+                    let (x, y) = field.center();
+                    place(game, [x, y]);
+                    assert!(game.chat_click());
+                })
+            },
+        );
+    }
+
     /// The pause menu's layout is made when it opens and when it resizes, not
     /// per frame: the build keeps it, and the readers get the same buttons and
     /// icons the frame drew.

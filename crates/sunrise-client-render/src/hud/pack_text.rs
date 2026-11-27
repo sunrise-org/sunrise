@@ -987,6 +987,27 @@ mod tests {
     }
 
     #[test]
+    fn pack_text_keeps_the_window_origin_in_a_scaled_capture() {
+        let frame = sunrise_client_input::window::GuiFrame::from_insets(
+            [853, 481],
+            2,
+            true,
+            Some([15, 9, 7, 3]),
+        );
+        let batch = HudBatch::for_frame(&frame);
+        for zoom in [1, 2] {
+            let size = frame.target.map(|axis| axis * zoom);
+            let scale = batch.scale * zoom as f32;
+            let data: Vec<f32> = bytemuck::cast_slice(&uniforms(&batch, size, scale)).to_vec();
+            let [x, y] = frame
+                .gui_to_target([0.0, 0.0])
+                .map(|axis| axis * zoom as f32);
+            assert!((data[76] - (x / size[0] as f32 * 2.0 - 1.0)).abs() < 1e-6);
+            assert!((data[77] - (1.0 - y / size[1] as f32 * 2.0)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
     fn filtering_a_required_cloud_stage_fails_the_load() {
         use sunrise_assets::resource_source::Resource;
         let vertex = "assets/minecraft/shaders/core/clouds.vsh";

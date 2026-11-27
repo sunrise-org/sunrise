@@ -234,6 +234,90 @@ pub(crate) mod tests {
         assert_eq!(first.menu.cursor, (100.0, 50.0));
     }
     #[test]
+    fn safe_area_title_button_draw_and_click_agree() {
+        use sunrise_client::title::Title;
+        use winit::{
+            dpi::PhysicalPosition,
+            event::{DeviceId, ElementState, MouseButton},
+        };
+
+        struct Loop;
+        impl EventLoopCtl for Loop {
+            fn exit(&self) {}
+            fn set_control_flow(&self, _: winit::event_loop::ControlFlow) {}
+        }
+        let (_, receiver) = std::sync::mpsc::channel();
+        let mut loading = loading(receiver);
+        let root = std::path::Path::new("/nonexistent/sunrise-title-fixture");
+        loading.gui = Some(gui(root));
+        loading.menu.title = Some(Title::new(root.join("saves"), root, ""));
+        loading.settings.gui_scale = 2;
+        loading.settings.force_unicode = false;
+        let target = loading.menu_size();
+        loading.test_set_menu_safe_area(
+            target,
+            sunrise_hooks::Insets {
+                left: 59,
+                top: 19,
+                right: 11,
+                bottom: 31,
+            },
+        );
+        let frame = loading.gui_frame();
+        let mut batch = HudBatch::for_frame(&frame);
+        loading.draw_menu_in(frame, &mut batch);
+        sunrise_client::widgets::end_frame(u64::MAX - 1);
+        let options = sunrise_client::widgets::last()
+            .into_iter()
+            .find(|widget| {
+                widget.label == sunrise_client::lang::get_or("menu.options", "Options...")
+            })
+            .expect("the title painted the Options button");
+        loading
+            .menu_event(
+                &Loop,
+                WindowEvent::CursorMoved {
+                    device_id: DeviceId::dummy(),
+                    position: PhysicalPosition::new(1.0, 1.0),
+                },
+            )
+            .unwrap();
+        loading
+            .menu_event(
+                &Loop,
+                WindowEvent::MouseInput {
+                    device_id: DeviceId::dummy(),
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                },
+            )
+            .unwrap();
+        assert!(!loading.menu.options_open);
+        let [x, y] =
+            frame.gui_to_target([options.x + options.w / 2.0, options.y + options.h / 2.0]);
+        loading
+            .menu_event(
+                &Loop,
+                WindowEvent::CursorMoved {
+                    device_id: DeviceId::dummy(),
+                    position: PhysicalPosition::new(f64::from(x), f64::from(y)),
+                },
+            )
+            .unwrap();
+        loading
+            .menu_event(
+                &Loop,
+                WindowEvent::MouseInput {
+                    device_id: DeviceId::dummy(),
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                },
+            )
+            .unwrap();
+        assert!(loading.menu.options_open);
+    }
+
+    #[test]
     #[ignore = "daily"]
     fn resource_pack_drops_import_from_startup_and_game_options() {
         if super::super::native_entity_refs::tests::run_fresh_cases(
