@@ -2532,7 +2532,9 @@ sunrise-client cut_layout::game::server_side::view_pass::tests::a_travel_into_th
 sunrise-client cut_layout::game::server_side::view_pass::tests::a_withdrawn_last_area_is_forgotten_and_closed_through_tick_server lib daily resources
 sunrise-client cut_layout::game::server_side::view_pass::tests::an_entity_in_a_loaded_viewed_area_is_added_and_stands_still lib daily resources
 sunrise-client cut_layout::game::server_side::view_pass::tests::an_entity_in_a_ticking_viewed_area_is_added_moved_and_removed_wrapped lib daily resources
+sunrise-client cut_layout::game::server_side::view_pass::tests::cached_tracker_states_match_full_rebuilds_across_ticks_and_levels lib daily resources
 sunrise-client cut_layout::game::server_side::view_pass::tests::clock_changes_reach_the_viewer_of_a_level_nobody_is_in lib daily resources
+sunrise-client cut_layout::game::server_side::view_pass::tests::two_effect_flushes_keep_hurt_death_and_swing_in_order lib daily resources
 sunrise-client cut_layout::game::client_side::viewed_worlds::switch::tests::a_block_replacing_a_viewed_block_entity_takes_its_data lib daily resources
 sunrise-client cut_layout::game::client_side::viewed_worlds::switch::tests::a_chest_placed_in_a_viewed_column_keeps_its_data_through_the_travel lib daily resources
 sunrise-client cut_layout::game::client_side::viewed_worlds::switch::tests::a_death_or_an_end_exit_into_a_viewed_level_reloads lib daily resources
