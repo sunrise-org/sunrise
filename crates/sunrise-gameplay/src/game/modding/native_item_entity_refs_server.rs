@@ -232,7 +232,6 @@ impl crate::game::ServerGame<'_> {
 }
 
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
-use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;
 
@@ -912,7 +911,9 @@ mod tests {
 
     /// `touch_orb` (#6126) is `Ok(true)` once the pickup committed: a `player_xp_change`
     /// listener that removes the orb after its points were given does not turn it into a
-    /// refusal, and the player keeps the 7 points and the delay.
+    /// refusal, and the guest keeps the 7 points and the delay. A guest's: `xp_change` asks the
+    /// mods for the player whose turn it is (`lan_acting_uuid`), which the host's own player
+    /// outside a turn is not.
     #[test]
     #[ignore = "daily"]
     fn an_orb_removed_after_its_points_were_given_still_counts_as_taken() {
@@ -923,17 +924,21 @@ mod tests {
         )]
         .into();
         mod_platform::testing::with_mods(mods, || {
-            with_game(|game| {
+            crate::game::native_guest_turn_tests::with_guests(|game| {
                 fixture_resident_column(&mut game.world, (0, 0));
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0))
-                        .unwrap(),
-                );
-                crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
-                let player = game.player(123).unwrap();
-                game.server.xp_delay = 0;
-                game.experience = Default::default();
-                game.add_orb([8.0, 64.0, 8.0], 7);
+                let guest = game.player(12).unwrap();
+                let xp = |game: &crate::game::ServerGame<'_>| {
+                    game.server
+                        .lan
+                        .as_ref()
+                        .unwrap()
+                        .hub
+                        .guest(12)
+                        .unwrap()
+                        .xp_total
+                };
+                let before = xp(game);
+                game.add_orb([3.0, 64.0, 5.0], 7);
                 let orb = mod_api::prelude::EntitiesServerHost::experience_orb(
                     game,
                     game.entity(game.orbs[0].id).unwrap(),
@@ -941,10 +946,10 @@ mod tests {
                 .unwrap()
                 .unwrap();
                 *kill.0.lock().unwrap() = Some(orb);
-                assert_eq!(player.touch_orb(game, orb), Ok(true));
+                assert_eq!(guest.touch_orb(game, orb), Ok(true));
                 assert!(kill.0.lock().unwrap().is_none(), "the listener ran");
-                assert_eq!(game.experience.total, 7);
-                assert_eq!(player.exp_cooldown(game), Some(2));
+                assert_eq!(xp(game), before + 7);
+                assert_eq!(guest.exp_cooldown(game), Some(2));
             });
         });
     }
