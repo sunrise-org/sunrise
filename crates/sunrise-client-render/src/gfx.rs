@@ -912,6 +912,13 @@ impl Renderer {
     pub fn device_lost(&self) -> bool {
         self.device_lost.load(std::sync::atomic::Ordering::Relaxed)
     }
+    /// Marks the device lost, as its loss callback does, so a test drives the game's recovery.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_mark_device_lost(&self) {
+        self.device_lost
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 /// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.
 pub(crate) fn copy_frame(
