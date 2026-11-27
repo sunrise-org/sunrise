@@ -1610,8 +1610,9 @@ pub struct Painting {
     pub pos: [i32; 3],
     /// Direction.get2DDataValue: south 0, west 1, north 2, east 3.
     pub facing: u8,
-    pub variant: std::sync::Arc<str>,
-    /// Asset path for inline or synced custom variants; `None` looks up `variant`.
+    /// Registry key, absent for a direct (inline) variant.
+    pub variant: Option<std::sync::Arc<str>>,
+    /// Resolved texture asset for a synced holder. Otherwise, look up the asset by registry key.
     pub asset: Option<std::sync::Arc<str>>,
     pub width: i32,
     pub height: i32,

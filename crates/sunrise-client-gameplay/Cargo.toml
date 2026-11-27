@@ -58,6 +58,7 @@ winit = "0.30.13"
 [dev-dependencies]
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["engine-test-platform"] }
 tempfile = "3"
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 sunrise-gameplay-common = { path = "../sunrise-gameplay-common", features = ["test-support"] }
 sunrise-client-lib = { path = "../sunrise-client-lib", default-features = false, features = ["test-dry-side", "test-menu-validity", "test-mob-kind", "test-pack-feedback", "test-payload-probe", "test-publication-scope", "test-residency-observer", "test-resource-cache", "test-still-clock", "test-tooltip-factories"] }
 sunrise-client-render = { path = "../sunrise-client-render", features = ["test-support"] }

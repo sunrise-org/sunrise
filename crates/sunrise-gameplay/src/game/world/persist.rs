@@ -999,7 +999,7 @@ impl crate::game::ServerGame<'_> {
                 id,
                 pos,
                 facing,
-                variant: v.id,
+                variant: Some(v.id),
                 asset: None,
                 width: v.width,
                 height: v.height,
