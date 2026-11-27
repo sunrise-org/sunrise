@@ -67,7 +67,7 @@ impl ClientGame<'_> {
             .iter()
             .all(|v| v.pos.iter().all(|c| c.is_finite()) && v.depth.is_finite())
         {
-            batch.vertices.truncate(start);
+            batch.truncate_vertices(start);
             batch.blends.truncate(blends);
             return Err(Gui3dError::NotFinite);
         }

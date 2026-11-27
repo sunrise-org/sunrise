@@ -173,17 +173,12 @@ impl HudPaintCheckpoint {
     pub fn discard(self, batch: &mut HudBatch) {
         if self.start < batch.vertices.len() {
             let start = self.start as u32;
-            batch.vertices.truncate(self.start);
+            batch.truncate_vertices(self.start);
             let first = batch.blends.partition_point(|(run, _)| run.end <= start);
             for (run, _) in &mut batch.blends[first..] {
                 run.end = run.end.min(start);
             }
             batch.blends.retain(|(run, _)| run.start < run.end);
-            let first = batch.scissors.partition_point(|(run, _)| run.end <= start);
-            for (run, _) in &mut batch.scissors[first..] {
-                run.end = run.end.min(start);
-            }
-            batch.scissors.retain(|(run, _)| run.start < run.end);
         }
         // Glyph atlas uploads are reusable by other painters.
         batch.pictures.truncate(self.pictures);
@@ -1197,6 +1192,27 @@ mod bounds_tests {
         let quad = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
         batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
         batch.full_target_since(0);
+        batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+        assert_eq!(
+            batch
+                .scissored_intervals(0..12, Blend::Alpha, frame.target, 1.0)
+                .collect::<Vec<_>>(),
+            [(0..6, [0, 0, 853, 481]), (6..12, [16, 10, 829, 467])]
+        );
+    }
+
+    #[test]
+    fn discarding_paint_removes_full_target_ranges_before_reusing_vertex_indices() {
+        let frame = GuiFrame::from_insets([853, 481], 2, true, Some([15, 9, 7, 3]));
+        let mut batch = HudBatch::for_frame(&frame);
+        let quad = [[0.0, 0.0], [15.0, 0.0], [15.0, 15.0], [0.0, 15.0]];
+        batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+        batch.full_target_since(0);
+        let checkpoint = batch.paint_checkpoint();
+        batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+        batch.full_target_since(6);
+        batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+        checkpoint.discard(&mut batch);
         batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
         assert_eq!(
             batch
