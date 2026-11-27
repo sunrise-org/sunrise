@@ -89,6 +89,20 @@ impl crate::game::ClientGame<'_> {
             return;
         }
         let picked = shader_packs::picked_pack(&self.client.settings);
+        if self
+            .client
+            .renderer
+            .0
+            .as_ref()
+            .is_some_and(|renderer| renderer.shader_pack_kind().is_some())
+            && self
+                .client
+                .native_shaders
+                .translation
+                .hold_running_frame(picked, self.common.dim.id())
+        {
+            return;
+        }
         let dir = Self::shader_packs_dir();
         let path = dir.join(picked);
         let available = path.exists()

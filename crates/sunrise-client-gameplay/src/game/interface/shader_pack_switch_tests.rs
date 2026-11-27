@@ -207,14 +207,7 @@ fn a_packs_separate_ao_reaches_the_terrain() {
         pick(game, &a);
         let gate = game.client.native_shaders.translation.block_next();
         frame(game);
-        assert!(
-            game.client
-                .renderer
-                .0
-                .as_ref()
-                .unwrap()
-                .is_translating_shader_pack()
-        );
+        assert!(game.client.native_shaders.translation.is_translating());
         assert_boundary(game, None, notices);
         assert_eq!(layout(game), vanilla);
 

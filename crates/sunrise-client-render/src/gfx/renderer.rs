@@ -453,7 +453,6 @@ pub struct Renderer {
     pub(crate) pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// A `shaders/` pack whose pipelines build on a thread of their own (`load_shader_pack`).
     pub(crate) pack_loading: Option<PackLoading>,
-    pub(crate) translating_pack_reads_pages: Option<bool>,
     /// Counts shader packs loaded, switched or turned off (`ShaderPackState::generation`).
     pub(crate) pack_generation: u32,
     /// Time the shader pack's passes on the GPU (F3, or a capture made with `--gpu`).
@@ -478,17 +477,17 @@ pub struct Renderer {
     /// The shared atlas's LabPBR normal and specular paged maps (`set_shared_material_maps`),
     /// which shader packs read for entities, items and the hand.
     pub(crate) shared_material_maps: [Option<wgpu::Texture>; 2],
-    /// The pack's terrain program reads flat draws' vertices (`pack_terrain_inputs`).
+    /// The pack's terrain program reads flat draws' vertices (`prepare_shader_pack`).
     pub(crate) pack_terrain_flat: bool,
     /// Vertex shaders read the section arena's pages (`flat::pages_readable`, and
     /// `pack_post::Gpu::vertex_reads`): a pack's terrain
     /// program can read its quad's corners there in per-section draws too (`pack_terrain_draws`).
     pub(crate) terrain_pages: bool,
     /// The pack's terrain programs read their pages in per-section draws: decided as
-    /// `pack_terrain_inputs` last took them, from `pack_terrain_bindings`.
+    /// `prepare_shader_pack` last took them, from `pack_terrain_bindings`.
     pub(crate) pack_terrain_pages: bool,
     /// The pack's terrain programs read the normal stream in per-section draws that read no
-    /// pages: decided as `pack_terrain_inputs` last took them, from `pack_terrain_bindings`.
+    /// pages: decided as `prepare_shader_pack` last took them, from `pack_terrain_bindings`.
     pub(crate) pack_terrain_normals: bool,
     /// What the pack being loaded binds in its terrain programs' vertex stage
     /// (`set_pack_terrain_bindings`).

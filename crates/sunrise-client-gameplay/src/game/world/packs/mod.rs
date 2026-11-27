@@ -740,6 +740,7 @@ impl crate::game::ClientGame<'_> {
                 .native_shaders
                 .translation
                 .resources_changed(game.client.renderer.0.as_deref_mut());
+            game.drop_published_shader_pack();
             game.pack = pack;
             game.client.client_pack = client_pack;
             // The joined level's environment for the frame has the packs' layers over its type.

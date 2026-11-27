@@ -94,6 +94,7 @@ mod renderer_construction;
 mod section_fade;
 mod section_upload;
 mod shader_pack;
+pub use shader_pack::PreparedShaderPack;
 mod surface_lifecycle;
 use entity_draw::*;
 #[cfg(test)]

@@ -1,5 +1,18 @@
 use super::*;
 
+struct PackAtlases {
+    color: Option<pack_atlas::PackAtlas>,
+    materials: Option<[pack_atlas::PackAtlas; 2]>,
+}
+
+pub struct PreparedShaderPack {
+    separate_ao: bool,
+    lava_layers: Vec<u16>,
+    terrain_bindings: pack_atlas::TerrainBindings,
+    draws: pack_atlas::TerrainDraws,
+    atlases: Option<PackAtlases>,
+}
+
 impl Renderer {
     /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`;
     /// `block_ids` gives each source state its model and fluid material ids (two values
@@ -12,7 +25,6 @@ impl Renderer {
         pack: Option<sunrise_shaders::Post>,
         block_ids: &[i32],
     ) -> std::result::Result<Option<(Vec<String>, Vec<String>)>, pack_post::Refused> {
-        self.end_shader_translation();
         if pack.is_none() {
             self.forget_pack_atlas();
         }
@@ -450,26 +462,8 @@ impl Renderer {
         )
     }
 
-    pub fn begin_shader_translation(&mut self) {
-        if self.translating_pack_reads_pages.is_none() {
-            self.translating_pack_reads_pages = Some(self.pack_reads_pages());
-            if self.pack_post.take().is_some() {
-                self.pack_changed();
-            }
-        }
-    }
-
-    pub fn end_shader_translation(&mut self) {
-        self.translating_pack_reads_pages = None;
-    }
-
-    pub fn is_translating_shader_pack(&self) -> bool {
-        self.translating_pack_reads_pages.is_some()
-    }
-
     /// Drops the running shader pack.
     pub fn drop_shader_packs(&mut self) {
-        self.end_shader_translation();
         self.pack_loading = None;
         self.pack_changed();
         self.pack_post = None;
@@ -478,7 +472,7 @@ impl Renderer {
         self.pack_block_ids = None;
     }
     /// Frees the pack's block atlas and the material atlases made in its layout
-    /// (`pack_terrain_inputs` makes them again, together).
+    /// (`prepare_shader_pack` makes them again, together).
     fn forget_pack_atlas(&mut self) {
         self.pack_atlas = None;
         self.pack_material_atlases = None;
@@ -499,89 +493,85 @@ impl Renderer {
     /// What a shader pack's gbuffers programs read from Sunrise's geometry: the sky's, and
     /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
     pub fn pack_inputs(&mut self) -> sunrise_shaders::GameInputs {
-        let terrain = self.pack_terrain_inputs();
-        sunrise_shaders::GameInputs {
-            interface_limits: crate::core_shader::interface_limits(&self.device.limits()),
-            mod_programs: crate::mod_pipelines::pack_program_requests(),
-            ..pack_atlas::game_inputs(terrain, self.pack_terrain_flat, &self.pack_lava_layers)
-        }
+        let (prepared, inputs) = self.prepare_shader_pack(
+            self.separate_ao,
+            self.pack_lava_layers.clone(),
+            self.pack_terrain_bindings,
+        );
+        self.apply_prepared_shader_pack(prepared);
+        inputs
     }
 
-    pub(super) fn pack_terrain_inputs(&mut self) -> Option<sunrise_shaders::GbuffersInputs> {
-        // Flat draws whenever the device has them (`render` keeps them on with a pack).
+    pub fn prepare_shader_pack(
+        &self,
+        separate_ao: bool,
+        lava_layers: Vec<u16>,
+        terrain_bindings: pack_atlas::TerrainBindings,
+    ) -> (PreparedShaderPack, sunrise_shaders::GameInputs) {
         let flat = self.flat.is_some() && self.flat_on;
-        // Flat draws read each sprite's place from a table: the atlas is stitched as the game's.
-        // Other draws need the grid.
-        if !flat && self.pack_atlas.as_ref().is_some_and(|a| a.is_stitched()) {
-            self.forget_pack_atlas();
-        }
-        if self.pack_atlas.is_none() {
-            let mut encoder = self.device.create_command_encoder(&Default::default());
-            let layers = self
-                .sprite_textures
-                .iter()
-                .map(|t| t.depth_or_array_layers())
-                .sum();
-            let sprite = self.sprite_textures[0].width();
-            // Vanilla's padding counts the anisotropy bit only with anisotropic filtering.
-            let anisotropy_bit = if self.texture_filtering == 2 {
-                u32::from(self.max_anisotropy).trailing_zeros()
-            } else {
-                0
-            };
-            let stitched = flat
-                .then(|| {
-                    pack_atlas::PackAtlas::stitched(
-                        &self.device,
-                        &mut encoder,
-                        &self.sprite_textures,
-                        self.sprite_split,
-                        sprite,
-                        &self.sprite_native,
-                        self.mipmap_option,
-                        anisotropy_bit,
-                    )
-                })
-                .flatten();
-            if flat && stitched.is_none() {
-                log::warn!(
-                    "shader pack block atlas: the sprites don't stitch on this device, a grid instead"
-                );
-            }
-            let mut atlas = stitched.or_else(|| {
-                pack_atlas::PackAtlas::new(
-                    &self.device,
-                    &mut encoder,
-                    &self.sprite_textures,
-                    self.sprite_split,
-                    layers,
-                    sprite,
-                )
-            });
-            if let Some(atlas) = &mut atlas {
-                atlas.separate_ao = self.separate_ao;
-            }
-            self.pack_material_atlases = atlas.as_ref().and_then(|colour| {
-                let maps = self.pbr_maps.as_ref()?;
-                let make = |kind: usize, encoder: &mut wgpu::CommandEncoder| {
-                    let arrays: Vec<_> = maps.iter().map(|pair| pair[kind].clone()).collect();
-                    colour.material_for(&self.device, encoder, &arrays, layers)
-                };
-                Some([make(0, &mut encoder)?, make(1, &mut encoder)?])
-            });
-            self.pack_atlas = atlas;
-            self.queue.submit([encoder.finish()]);
-        }
-        self.pack_terrain_flat = flat;
-        // Per-section draws read the pages where the pack's terrain programs still fit the
-        // vertex stage with them, and the normal stream where they don't but fit with it.
+        let atlases = self
+            .pack_atlas
+            .as_ref()
+            .is_none_or(|atlas| !flat && atlas.is_stitched())
+            .then(|| self.make_pack_atlases(flat));
+        let atlas = match &atlases {
+            Some(atlases) => atlases.color.as_ref(),
+            None => self.pack_atlas.as_ref(),
+        };
         let gpu = pack_post::Gpu::of(&self.adapter, self.device.features());
         let limits = self.device.limits();
-        let fit = (self.pack_terrain_bindings).pages_fit(&limits, gpu);
-        self.pack_terrain_pages = !flat && self.terrain_pages && fit;
-        let stream = (self.pack_terrain_bindings).normals_fit(&limits, gpu);
-        self.pack_terrain_normals = !flat && !self.pack_terrain_pages && stream;
-        if !flat && !self.pack_terrain_pages && !stream {
+        use pack_atlas::TerrainDraws;
+        let draws = if flat {
+            TerrainDraws::Flat
+        } else if self.terrain_pages && terrain_bindings.pages_fit(&limits, gpu) {
+            TerrainDraws::Pages
+        } else if terrain_bindings.normals_fit(&limits, gpu) {
+            TerrainDraws::Normals
+        } else {
+            TerrainDraws::Attributes
+        };
+        let terrain = atlas.map(|atlas| {
+            pack_atlas::PackAtlas::terrain_inputs_sized(
+                atlas.size(),
+                atlas.columns,
+                atlas.sprite,
+                separate_ao,
+                draws,
+            )
+        });
+        let inputs = sunrise_shaders::GameInputs {
+            interface_limits: crate::core_shader::interface_limits(&limits),
+            mod_programs: crate::mod_pipelines::pack_program_requests(),
+            ..pack_atlas::game_inputs(terrain, flat, &lava_layers)
+        };
+        (
+            PreparedShaderPack {
+                separate_ao,
+                lava_layers,
+                terrain_bindings,
+                draws,
+                atlases,
+            },
+            inputs,
+        )
+    }
+
+    pub fn apply_prepared_shader_pack(&mut self, prepared: PreparedShaderPack) {
+        if let Some(atlases) = prepared.atlases {
+            self.pack_atlas = atlases.color;
+            self.pack_material_atlases = atlases.materials;
+        }
+        self.separate_ao = prepared.separate_ao;
+        if let Some(atlas) = &mut self.pack_atlas {
+            atlas.separate_ao = prepared.separate_ao;
+        }
+        self.pack_lava_layers = prepared.lava_layers;
+        self.pack_terrain_bindings = prepared.terrain_bindings;
+        use pack_atlas::TerrainDraws;
+        self.pack_terrain_flat = prepared.draws == TerrainDraws::Flat;
+        self.pack_terrain_pages = prepared.draws == TerrainDraws::Pages;
+        self.pack_terrain_normals = prepared.draws == TerrainDraws::Normals;
+        if prepared.draws == TerrainDraws::Attributes {
             log::warn!(
                 "shader pack terrain: {:?} fit the vertex stage's buffers with neither set 3 \
                  nor the normal stream; per-section draws give the constant normal and tangent, \
@@ -589,11 +579,64 @@ impl Renderer {
                 self.pack_terrain_bindings
             );
         }
-        let draws = self.pack_terrain_draws();
-        Some(self.pack_atlas.as_ref()?.terrain_inputs_for(draws))
+    }
+
+    fn make_pack_atlases(&self, flat: bool) -> PackAtlases {
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let layers = self
+            .sprite_textures
+            .iter()
+            .map(|t| t.depth_or_array_layers())
+            .sum();
+        let sprite = self.sprite_textures[0].width();
+        // Vanilla's padding counts the anisotropy bit only with anisotropic filtering.
+        let anisotropy_bit = if self.texture_filtering == 2 {
+            u32::from(self.max_anisotropy).trailing_zeros()
+        } else {
+            0
+        };
+        let stitched = flat
+            .then(|| {
+                pack_atlas::PackAtlas::stitched(
+                    &self.device,
+                    &mut encoder,
+                    &self.sprite_textures,
+                    self.sprite_split,
+                    sprite,
+                    &self.sprite_native,
+                    self.mipmap_option,
+                    anisotropy_bit,
+                )
+            })
+            .flatten();
+        if flat && stitched.is_none() {
+            log::warn!(
+                "shader pack block atlas: the sprites don't stitch on this device, a grid instead"
+            );
+        }
+        let color = stitched.or_else(|| {
+            pack_atlas::PackAtlas::new(
+                &self.device,
+                &mut encoder,
+                &self.sprite_textures,
+                self.sprite_split,
+                layers,
+                sprite,
+            )
+        });
+        let materials = color.as_ref().and_then(|colour| {
+            let maps = self.pbr_maps.as_ref()?;
+            let make = |kind: usize, encoder: &mut wgpu::CommandEncoder| {
+                let arrays: Vec<_> = maps.iter().map(|pair| pair[kind].clone()).collect();
+                colour.material_for(&self.device, encoder, &arrays, layers)
+            };
+            Some([make(0, &mut encoder)?, make(1, &mut encoder)?])
+        });
+        self.queue.submit([encoder.finish()]);
+        PackAtlases { color, materials }
     }
     /// How the game's terrain draws give the pack's terrain programs their vertices, as
-    /// `pack_terrain_inputs` last took them: flat, or per section, reading their quad's corners
+    /// `prepare_shader_pack` last prepared them: flat, or per section, reading their quad's corners
     /// from the section arena's pages where vertex shaders read storage and the pack's programs
     /// fit with them (`pack_terrain_pages`), else their quad's normal and tangent from the
     /// normal stream where they fit with it (`pack_terrain_normals`), else as attributes alone.
