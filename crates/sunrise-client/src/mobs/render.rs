@@ -39,6 +39,9 @@ macro_rules! replaced {
 /// Ordinary tools and probes use `ClientMobRender` directly, with no callbacks.
 pub trait RenderDataSource {
     fn mob_tables(&self) -> ClientMobRender<'_>;
+    fn synced_flags(&self, _id: u32) -> super::cem_anim::SyncedFlags {
+        super::cem_anim::SyncedFlags::default()
+    }
     fn mob_data(&self) -> &ClientMobData {
         self.mob_tables().data
     }
@@ -2322,7 +2325,7 @@ fn posed_body(
     if let Some(c) = custom
         && let Some(animation) = &c.animation
     {
-        animation.run(m, &s, &mut poses);
+        animation.run(m, &s, &mut poses, data.synced_flags(m.id));
     }
     let anchors = custom.map_or(Vec::new(), |c| c.anchors.clone());
     Some((model, poses, anchors))
@@ -2391,7 +2394,7 @@ pub fn render_extra_layers(
         .as_deref()
         .and_then(|layer| layer.animation.as_ref())
     {
-        animation.run(m, &s, &mut poses);
+        animation.run(m, &s, &mut poses, data.synced_flags(m.id));
     }
     model_posed(
         m,
@@ -2506,7 +2509,7 @@ pub fn render_equipment_layers(
         .as_deref()
         .and_then(|layer| layer.animation.as_ref())
     {
-        animation.run(m, &s, &mut poses);
+        animation.run(m, &s, &mut poses, data.synced_flags(m.id));
     }
     model_posed(
         m,
@@ -2561,7 +2564,7 @@ pub fn render_equipment_layers(
                 layer_poses.reset(part);
                 anim::setup(m, &s, &mut layer_poses, &data.mob_data().animations);
                 if let Some(animation) = custom.and_then(|c| c.animation.as_ref()) {
-                    animation.run(m, &s, &mut layer_poses);
+                    animation.run(m, &s, &mut layer_poses, data.synced_flags(m.id));
                 }
                 model_posed(
                     m,
@@ -2758,7 +2761,7 @@ fn render_selected(
         .as_deref()
         .and_then(|layer| layer.animation.as_ref())
     {
-        animation.run(m, &s, poses);
+        animation.run(m, &s, poses, data.synced_flags(m.id));
     }
     model_posed(
         m,
@@ -2963,7 +2966,7 @@ fn render_selected(
                 layer_poses.reset(part);
                 anim::setup(m, &s, &mut layer_poses, &data.mob_data().animations);
                 if let Some(animation) = custom.and_then(|c| c.animation.as_ref()) {
-                    animation.run(m, &s, &mut layer_poses);
+                    animation.run(m, &s, &mut layer_poses, data.synced_flags(m.id));
                 }
                 model_posed(
                     m,

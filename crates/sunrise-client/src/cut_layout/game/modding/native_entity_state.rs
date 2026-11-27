@@ -474,7 +474,11 @@ pub(crate) mod tests {
                         assert_eq!(zombie.is_on_fire(g), Some(burning));
                         assert_eq!(stand.is_on_fire(g), Some(burning));
                         assert_eq!(
-                            g.mobs.iter().find(|m| m.id == 16).unwrap().is_on_fire(),
+                            g.mobs
+                                .iter()
+                                .find(|m| m.id == 16)
+                                .unwrap()
+                                .is_on_fire_with_synced(g.tracked_entity_on_fire(16)),
                             burning
                         );
                         assert_eq!(
@@ -482,7 +486,7 @@ pub(crate) mod tests {
                                 .iter()
                                 .find(|s| s.id == 15)
                                 .unwrap()
-                                .is_on_fire(),
+                                .is_on_fire_with_synced(g.tracked_entity_on_fire(15)),
                             burning
                         );
                     }

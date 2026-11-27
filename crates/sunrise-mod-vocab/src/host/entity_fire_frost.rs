@@ -9,7 +9,8 @@ pub trait EntityFireFrostBackend {
     /// Side: both.
     /// `Entity.isOnFire`: not fire immune, and positive remaining fire ticks OR the
     /// client's synced shared flag 0. Every kind of entity, and every entity a client
-    /// tracks. Reads this side's own immunity and fire state. None for a stale handle.
+    /// tracks. Reads this side's own immunity and fire state. The synced flag does not
+    /// set the client's remaining fire ticks. `None` for a stale handle.
     fn entity_is_on_fire(&self, entity: EntityRef) -> Option<bool>;
     /// Side: both.
     /// `Entity.fireImmune`: type immunity or the live grant on this side. Separate
