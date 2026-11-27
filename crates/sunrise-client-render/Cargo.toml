@@ -95,6 +95,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 [features]
 # Sound output and input: sunrise-client's `audio` feature.
 audio = ["dep:cpal", "dep:alsa", "dep:libc", "dep:sunrise-audio-input"]
+# Sunrise's own graphics-screen rows; opt-in here so plain builds do not unify it on.
+sunrise-extras = []
 # Helpers sunrise-client's tests build their fixtures with.
 test-support = ["sunrise-level/test-support"]
 

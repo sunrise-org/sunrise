@@ -980,7 +980,8 @@ impl crate::game::ClientGame<'_> {
         );
         self.client.settings.fullbright_held = held;
         if let Some(r) = self.client.renderer.0.as_mut() {
-            r.fullbright = self.client.settings.extras.fullbright && !held;
+            r.fullbright =
+                cfg!(feature = "sunrise-extras") && self.client.settings.extras.fullbright && !held;
         }
     }
 }

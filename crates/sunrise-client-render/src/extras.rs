@@ -766,6 +766,7 @@ impl Item {
     }
 }
 
+#[cfg(feature = "sunrise-extras")]
 mod graphics_rows {
     use crate::{
         graphics_style::Cost,
@@ -891,6 +892,7 @@ mod graphics_rows {
         &[&HIDE_BLOCK_PARTICLES, &DYNAMIC_LIGHTS, &FULLBRIGHT];
 }
 
+#[cfg(feature = "sunrise-extras")]
 pub(crate) use graphics_rows::GRAPHICS_ROWS;
 
 #[cfg(test)]

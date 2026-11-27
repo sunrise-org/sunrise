@@ -958,11 +958,11 @@ fn resolve_rows_with_issues(
 ) -> (Vec<(Page, Vec<ResolvedGroup>)>, Vec<OrderIssue>) {
     let mut pages = base_pages(macos);
     let mut issues = Vec::new();
-    let mut group_loc: HashMap<(Page, GroupId), (usize, usize)> = HashMap::new();
+    let mut valid_groups: HashSet<(Page, GroupId)> = HashSet::new();
     let mut row_groups: HashMap<RowId, (Page, GroupId)> = HashMap::new();
-    for (p_idx, (page, groups)) in pages.iter().enumerate() {
-        for (g_idx, group) in groups.iter().enumerate() {
-            group_loc.insert((*page, group.id), (p_idx, g_idx));
+    for (page, groups) in &pages {
+        for group in groups {
+            valid_groups.insert((*page, group.id));
             for row in &group.rows {
                 row_groups.insert(row.id, (*page, group.id));
             }
@@ -976,7 +976,7 @@ fn resolve_rows_with_issues(
             continue;
         }
         let target = (d.placement.page, d.placement.group);
-        if !group_loc.contains_key(&target) {
+        if !valid_groups.contains(&target) {
             issues.push(OrderIssue::UnknownGroup(
                 d.id,
                 d.placement.page,
@@ -1013,18 +1013,19 @@ fn resolve_rows_with_issues(
                         anchors.push(Some(anchor));
                         parent_desc.push(None);
                     }
-                    Some(anchor) if desc_index.contains_key(&anchor) => {
-                        anchors.push(Some(anchor));
-                        parent_desc.push(Some(desc_index[&anchor]));
-                    }
                     Some(anchor) => {
-                        if row_groups.contains_key(&anchor) {
-                            issues.push(OrderIssue::CrossGroupAnchor(d.id, anchor));
+                        if let Some(&idx) = desc_index.get(&anchor) {
+                            anchors.push(Some(anchor));
+                            parent_desc.push(Some(idx));
                         } else {
-                            issues.push(OrderIssue::MissingAnchor(d.id, anchor));
+                            if row_groups.contains_key(&anchor) {
+                                issues.push(OrderIssue::CrossGroupAnchor(d.id, anchor));
+                            } else {
+                                issues.push(OrderIssue::MissingAnchor(d.id, anchor));
+                            }
+                            anchors.push(None);
+                            parent_desc.push(None);
                         }
-                        anchors.push(None);
-                        parent_desc.push(None);
                     }
                 }
             }
@@ -2501,11 +2502,14 @@ mod tests {
         exclusive.cycle(&mut s, false, FB, &NONE);
         assert_eq!(exclusive.switch(&s, &NONE), Some(true));
         assert!(s.file.bool("exclusiveFullscreen"));
-        // The graphics extras switch their own setting.
-        let lights = Item::Described(RowId("sunrise:dynamic_lights"));
-        lights.cycle(&mut s, false, FB, &NONE);
-        assert!(s.extras.dynamic_lights);
-        assert_eq!(lights.switch(&s, &NONE), Some(true));
+        #[cfg(feature = "sunrise-extras")]
+        {
+            // The graphics extras switch their own setting.
+            let lights = Item::Described(RowId("sunrise:dynamic_lights"));
+            lights.cycle(&mut s, false, FB, &NONE);
+            assert!(s.extras.dynamic_lights);
+            assert_eq!(lights.switch(&s, &NONE), Some(true));
+        }
     }
 
     #[test]
@@ -2624,6 +2628,7 @@ mod tests {
 
     /// On another's server Fullbright's row is gone and the screen draws again; its choice is
     /// kept for the next world that allows it (#3823).
+    #[cfg(feature = "sunrise-extras")]
     #[test]
     fn fullbright_row_is_hidden_while_held_and_keeps_its_choice() {
         let mut s = Settings::default();

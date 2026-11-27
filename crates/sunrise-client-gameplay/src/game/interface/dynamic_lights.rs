@@ -38,11 +38,7 @@ impl ClientGame<'_> {
         &self,
         alpha: f64,
     ) -> impl Iterator<Item = (Source, Option<&str>)> {
-        let lum = self
-            .client
-            .settings
-            .extras
-            .dynamic_lights
+        let lum = (cfg!(feature = "sunrise-extras") && self.client.settings.extras.dynamic_lights)
             .then(|| self.luminance());
         lum.into_iter().flat_map(move |lum| {
             let player = self

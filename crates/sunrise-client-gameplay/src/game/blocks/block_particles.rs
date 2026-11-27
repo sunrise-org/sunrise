@@ -34,7 +34,7 @@ impl crate::game::ClientGame<'_> {
         state: BlockStateId,
     ) {
         let facts = self.common.res.facts().get(state);
-        if self.client.settings.extras.hide_block_particles
+        if (cfg!(feature = "sunrise-extras") && self.client.settings.extras.hide_block_particles)
             || facts.render_shape == RenderShape::Invisible
         {
             return;

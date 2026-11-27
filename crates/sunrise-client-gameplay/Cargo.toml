@@ -78,7 +78,7 @@ sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 [features]
 parity-fixtures = []
 rng-trace = ["sunrise-client-lib/rng-trace"]
-sunrise-extras = ["client", "friends"]
+sunrise-extras = ["client", "friends", "sunrise-client-render/sunrise-extras"]
 friends = ["dep:sunrise-friends"]
 controllers = ["client", "sunrise-client-lib/controllers", "sunrise-client-input/controllers", "dep:gilrs", "dep:sunrise-dualsense"]
 audio = ["client", "sunrise-client-lib/audio", "sunrise-client-render/audio"]

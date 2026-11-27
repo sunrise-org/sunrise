@@ -476,6 +476,7 @@ fn described_row_affects_preset_controls_whether_an_edit_marks_custom() {
     assert_eq!(s.sunrise.preset, Preset::Custom);
 }
 
+#[cfg(feature = "sunrise-extras")]
 const EXPECTED_ROWS_WITH_EXTRAS: &[(Page, GroupId, RowId)] = &[
     (Page::General, GroupId::PRESET, RowId("graphics:preset")),
     (
@@ -903,12 +904,374 @@ fn assert_combined_sunrise_graphics_order(expected: &[(Page, GroupId, RowId)]) {
     assert_eq!(graphics_rows, expected_combined);
 }
 
+const EXPECTED_ROWS_WITHOUT_EXTRAS: &[(Page, GroupId, RowId)] = &[
+    (Page::General, GroupId::PRESET, RowId("graphics:preset")),
+    (
+        Page::General,
+        GroupId::DISTANCE,
+        RowId("vanilla:render_distance"),
+    ),
+    (
+        Page::General,
+        GroupId::DISTANCE,
+        RowId("graphics:lod_distance"),
+    ),
+    (
+        Page::General,
+        GroupId::DISTANCE,
+        RowId("graphics:far_detail"),
+    ),
+    (
+        Page::General,
+        GroupId::DISTANCE,
+        RowId("graphics:blue_map_radius"),
+    ),
+    (
+        Page::General,
+        GroupId::DISTANCE,
+        RowId("vanilla:simulation_distance"),
+    ),
+    (Page::General, GroupId::DISPLAY, RowId("vanilla:gui_scale")),
+    (Page::General, GroupId::DISPLAY, RowId("vanilla:fullscreen")),
+    (
+        Page::General,
+        GroupId::DISPLAY,
+        RowId("vanilla:exclusive_fullscreen"),
+    ),
+    (
+        Page::General,
+        GroupId::DISPLAY,
+        RowId("vanilla:exclusive_mode"),
+    ),
+    (Page::General, GroupId::DISPLAY, RowId("vanilla:vsync")),
+    (Page::General, GroupId::DISPLAY, RowId("vanilla:max_fps")),
+    (
+        Page::General,
+        GroupId::DISPLAY,
+        RowId("vanilla:inactivity_fps"),
+    ),
+    (Page::General, GroupId::DISPLAY, RowId("vanilla:gamma")),
+    (
+        Page::General,
+        GroupId::INTERFACE,
+        RowId("vanilla:menu_blur"),
+    ),
+    (
+        Page::General,
+        GroupId::INTERFACE,
+        RowId("vanilla:attack_indicator"),
+    ),
+    (Page::General, GroupId::INTERFACE, RowId("vanilla:autosave")),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("vanilla:clouds"),
+    ),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("vanilla:cloud_range"),
+    ),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("graphics:sky"),
+    ),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("graphics:fog"),
+    ),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("graphics:weather"),
+    ),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("vanilla:weather_radius"),
+    ),
+    (
+        Page::Quality,
+        GroupId::SKY_AND_WEATHER,
+        RowId("vanilla:particles"),
+    ),
+    (
+        Page::Quality,
+        GroupId::LIGHTING_AND_ENTITIES,
+        RowId("vanilla:smooth_lighting"),
+    ),
+    (
+        Page::Quality,
+        GroupId::LIGHTING_AND_ENTITIES,
+        RowId("vanilla:biome_blend"),
+    ),
+    (
+        Page::Quality,
+        GroupId::LIGHTING_AND_ENTITIES,
+        RowId("vanilla:entity_distance"),
+    ),
+    (
+        Page::Quality,
+        GroupId::LIGHTING_AND_ENTITIES,
+        RowId("vanilla:entity_shadows"),
+    ),
+    (
+        Page::Quality,
+        GroupId::LIGHTING_AND_ENTITIES,
+        RowId("vanilla:vignette"),
+    ),
+    (
+        Page::Quality,
+        GroupId::LIGHTING_AND_ENTITIES,
+        RowId("vanilla:chunk_fade"),
+    ),
+    (Page::Quality, GroupId::TEXTURES, RowId("vanilla:mipmaps")),
+    (
+        Page::Quality,
+        GroupId::TEXTURES,
+        RowId("vanilla:texture_filtering"),
+    ),
+    (
+        Page::Quality,
+        GroupId::TEXTURES,
+        RowId("vanilla:max_anisotropy"),
+    ),
+    (
+        Page::Quality,
+        GroupId::TEXTURES,
+        RowId("vanilla:cutout_leaves"),
+    ),
+    (
+        Page::Quality,
+        GroupId::TEXTURES,
+        RowId("vanilla:improved_transparency"),
+    ),
+    (
+        Page::Quality,
+        GroupId::TEXTURES,
+        RowId("graphics:animated_textures"),
+    ),
+    (
+        Page::Quality,
+        GroupId::TEXTURES,
+        RowId("graphics:dither_cutout_mips"),
+    ),
+    (
+        Page::Quality,
+        GroupId::IMAGE,
+        RowId("graphics:resolution_scale"),
+    ),
+    (
+        Page::Quality,
+        GroupId::IMAGE,
+        RowId("graphics:dynamic_resolution"),
+    ),
+    (Page::Quality, GroupId::IMAGE, RowId("graphics:target_fps")),
+    (
+        Page::Quality,
+        GroupId::IMAGE,
+        RowId("graphics:antialiasing"),
+    ),
+    (Page::Quality, GroupId::IMAGE, RowId("graphics:upscaling")),
+    (
+        Page::Quality,
+        GroupId::IMAGE,
+        RowId("graphics:upscaling_sharpness"),
+    ),
+    (
+        Page::Quality,
+        GroupId::IMAGE,
+        RowId("graphics:screenshot_quality"),
+    ),
+    (
+        Page::Quality,
+        GroupId::IMAGE,
+        RowId("graphics:frame_generation"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CHUNK_LOADING,
+        RowId("vanilla:chunk_builder"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CHUNK_LOADING,
+        RowId("graphics:chunk_updates"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CHUNK_LOADING,
+        RowId("graphics:upload_budget"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CHUNK_LOADING,
+        RowId("graphics:workers"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:cave_culling"),
+    ),
+    #[cfg(not(target_os = "macos"))]
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:gpu_culling"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:entity_culling"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:particle_culling"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:entity_culling_precheck"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:leaf_culling"),
+    ),
+    (
+        Page::Performance,
+        GroupId::CULLING,
+        RowId("graphics:opaque_ice"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_shulker_boxes"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_signs"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_decorated_pots"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_bells"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_chests"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_banners"),
+    ),
+    (
+        Page::Performance,
+        GroupId::BLOCK_ENTITIES,
+        RowId("graphics:cache_copper_golem_statues"),
+    ),
+    (
+        Page::Performance,
+        GroupId::POWER,
+        RowId("graphics:battery_mode"),
+    ),
+    (
+        Page::Shaders,
+        GroupId::BUILT_IN_SHADERS,
+        RowId("graphics:shadow_cache"),
+    ),
+    (
+        Page::Advanced,
+        GroupId::FRAMES,
+        RowId("graphics:present_mode"),
+    ),
+    (Page::Advanced, GroupId::FRAMES, RowId("graphics:pacing")),
+    #[cfg(not(target_os = "macos"))]
+    (
+        Page::Advanced,
+        GroupId::FRAMES,
+        RowId("graphics:graphics_api"),
+    ),
+    #[cfg(not(target_os = "macos"))]
+    (
+        Page::Advanced,
+        GroupId::FRAMES,
+        RowId("graphics:translucent_batching"),
+    ),
+    (Page::Hdr, GroupId::HDR_OUTPUT, RowId("graphics:hdr")),
+    (
+        Page::Hdr,
+        GroupId::HDR_OUTPUT,
+        RowId("graphics:hdr_smooth_gradients"),
+    ),
+    (
+        Page::Hdr,
+        GroupId::HDR_OUTPUT,
+        RowId("graphics:hdr_calibrate"),
+    ),
+    (
+        Page::Hdr,
+        GroupId::HDR_BRIGHTNESS,
+        RowId("graphics:hdr_black_level"),
+    ),
+    (
+        Page::Hdr,
+        GroupId::HDR_BRIGHTNESS,
+        RowId("graphics:hdr_peak"),
+    ),
+    (
+        Page::Hdr,
+        GroupId::HDR_BRIGHTNESS,
+        RowId("graphics:hdr_paper_white"),
+    ),
+    (
+        Page::Hdr,
+        GroupId::HDR_BRIGHTNESS,
+        RowId("graphics:hdr_ui_brightness"),
+    ),
+    (
+        Page::Hdr,
+        GroupId::HDR_BRIGHTNESS,
+        RowId("graphics:hdr_lighting"),
+    ),
+];
+
+#[cfg(feature = "sunrise-extras")]
 #[test]
 fn ordered_rows_snapshot_with_extras_matches_baseline() {
     assert_eq!(flatten_resolved(resolved_rows()), EXPECTED_ROWS_WITH_EXTRAS);
     assert_combined_sunrise_graphics_order(EXPECTED_ROWS_WITH_EXTRAS);
 }
 
+#[cfg(not(feature = "sunrise-extras"))]
+#[test]
+fn ordered_rows_snapshot_without_extras_matches_baseline() {
+    assert_eq!(
+        flatten_resolved(resolved_rows()),
+        EXPECTED_ROWS_WITHOUT_EXTRAS
+    );
+    assert_combined_sunrise_graphics_order(EXPECTED_ROWS_WITHOUT_EXTRAS);
+}
+
+#[test]
+fn ordered_rows_snapshot_without_descriptors_matches_vanilla() {
+    let (pages, issues) = resolve_rows_with_issues(cfg!(target_os = "macos"), &[]);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(flatten_resolved(pages), EXPECTED_ROWS_WITHOUT_EXTRAS);
+}
+
+#[cfg(feature = "sunrise-extras")]
 #[test]
 fn undo_restores_all_three_extras_including_hidden_fullbright() {
     use crate::settings_shell::{Columns, Hosted};
@@ -945,6 +1308,7 @@ fn undo_restores_all_three_extras_including_hidden_fullbright() {
     assert!(!ui.changed());
 }
 
+#[cfg(feature = "sunrise-extras")]
 #[test]
 fn presets_leave_the_three_extras_alone() {
     let extras = [

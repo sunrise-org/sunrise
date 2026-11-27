@@ -213,7 +213,14 @@ pub mod render_slots;
 pub mod render_views;
 
 pub(crate) fn described_graphics_rows() -> &'static [&'static graphics_ui::RowDescriptor] {
-    extras::GRAPHICS_ROWS
+    #[cfg(feature = "sunrise-extras")]
+    {
+        extras::GRAPHICS_ROWS
+    }
+    #[cfg(not(feature = "sunrise-extras"))]
+    {
+        &[]
+    }
 }
 
 #[cfg(test)]
