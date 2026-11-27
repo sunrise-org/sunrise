@@ -593,15 +593,23 @@ impl Hub {
                 (i, taken, bodies)
             })
             .collect();
+        let any_sync_groups = batches
+            .iter()
+            .any(|&(i, _, _)| self.guests[i].negotiated_connection_groups());
         self.encoder.warm(&columns.chunks);
-        let encoded_results = self.encoder.bodies_with(&columns.chunks, world, &|x, z| {
-            ctx.streaming.and_then(|s| s.proto_sections(x, z))
-        });
-        let mut encoded: Vec<Option<Vec<u8>>> = encoded_results
+        let encoded_results = self.encoder.bodies_with_groups(
+            &columns.chunks,
+            world,
+            &|x, z| ctx.streaming.and_then(|s| s.proto_sections(x, z)),
+            any_sync_groups.then_some(
+                block_changes::encode_chunk_connection_groups as fn(&Chunk) -> Vec<Vec<u8>>,
+            ),
+        );
+        let mut encoded: Vec<Option<(Vec<u8>, Vec<Vec<u8>>)>> = encoded_results
             .into_iter()
             .enumerate()
-            .map(|(j, result)| match result {
-                Ok(body) => Some(body),
+            .map(|(j, (result, groups))| match result {
+                Ok(body) => Some((body, groups)),
                 Err(error) => {
                     let chunk = columns.chunks[j];
                     log::warn!(
@@ -644,16 +652,20 @@ impl Hub {
                         if memory {
                             super::super::handoff::offer(chunk);
                         }
-                        let groups = if grouped && !chunk.connection_groups.is_empty() {
-                            block_changes::encode_chunk_connection_groups(chunk)
-                        } else {
-                            Vec::new()
-                        };
                         uses[j] -= 1;
-                        let body = if uses[j] == 0 {
-                            encoded[j].take().expect("valid chunk body")
+                        let (body, groups) = if uses[j] == 0 {
+                            let (body, groups) = encoded[j].take().expect("valid chunk body");
+                            (body, if grouped { groups } else { Vec::new() })
                         } else {
-                            encoded[j].as_ref().expect("valid chunk body").clone()
+                            let (body, groups) = encoded[j].as_ref().expect("valid chunk body");
+                            (
+                                body.clone(),
+                                if grouped && !groups.is_empty() {
+                                    groups.clone()
+                                } else {
+                                    Vec::new()
+                                },
+                            )
                         };
                         block_changes::group_bundle(body, groups)
                     });
@@ -834,6 +846,276 @@ impl Hub {
         if self.guests.iter().any(|g| self.here(g)) || self.viewed_here() {
             self.broadcast_light_changes(world);
             self.broadcast_block_changes(world);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lan::chunks::{BodiesTestMode, with_bodies_test_mode};
+    use sunrise_protocol::{buf::Reader, connection_groups};
+    use sunrise_world::registry::BlockStateId;
+
+    fn transport_with_groups() -> Arc<crate::raw_payloads::Transport> {
+        let transport = crate::raw_payloads::Transport::capture(
+            crate::raw_payloads::Side::Server,
+            crate::lan::PAYLOAD_RECORD_OVERHEAD,
+        )
+        .unwrap();
+        let entries = transport.local.manifest.entries().to_vec();
+        transport.accept(&entries).unwrap();
+        transport.finish_configuration().unwrap();
+        transport
+    }
+
+    fn drain_frames(rx: &std::sync::mpsc::Receiver<crate::lan::Out>) -> Vec<Vec<u8>> {
+        rx.try_iter()
+            .flat_map(|out| match out {
+                crate::lan::Out::Packet(body) => vec![body],
+                crate::lan::Out::Packets(bodies) => bodies,
+                crate::lan::Out::Disconnect(_) => panic!("unexpected disconnect"),
+            })
+            .collect()
+    }
+
+    fn decode_packet(body: &[u8]) -> C {
+        let mut r = Reader::new(body);
+        let id = r.varint().unwrap();
+        C::decode(id, r.rest()).unwrap()
+    }
+
+    fn make_world() -> World {
+        let mut world = World::new(BlockStateId(0), 0);
+        for cz in -2..=2 {
+            for cx in -2..=2 {
+                let mut chunk = Chunk::empty(cx, cz);
+                chunk.lit = true;
+                let n = (cx * 7 + cz * 13).rem_euclid(13);
+                for i in 0..24 {
+                    chunk.set(
+                        (i * 3 + n) % 16,
+                        60 + (i * 5 + n) % 64,
+                        (i * 7 + n) % 16,
+                        1 + (i % 2) as u32,
+                    );
+                }
+                if (cx + cz).rem_euclid(3) == 0 {
+                    chunk.set(4, 64, 4, 2);
+                    chunk.set_connection_group(4, 64, 4, Some((cx * 100 + cz + 500) as u64));
+                }
+                world.chunks.insert((cx, cz), Arc::new(chunk));
+            }
+        }
+        world
+    }
+
+    fn make_hub() -> (Hub, Vec<std::sync::mpsc::Receiver<crate::lan::Out>>) {
+        let sync = Arc::new(SyncData::empty());
+        let lan = Lan::start_with(
+            sync.clone(),
+            crate::lan::NetConfig {
+                announce: false,
+                listen: false,
+                ..crate::lan::NetConfig::loopback(0, "ChunkOrderTest".into(), 4)
+            },
+        )
+        .unwrap();
+        let states = ["minecraft:air", "minecraft:stone", "minecraft:water"]
+            .map(|n| (Arc::<str>::from(n), n.ends_with("water")));
+        let encoder = ChunkEncoder::new(
+            states,
+            &sunrise_protocol::registry::Builtin::default(),
+            &[],
+            &[],
+            Default::default(),
+        );
+        let config = HubConfig {
+            default_game_mode: 0,
+            guest_commands: false,
+            force_game_mode: false,
+            hardcore: false,
+            view_distance: 8,
+            simulation_distance: 8,
+            dimension: "minecraft:overworld".into(),
+            allow_flight: false,
+            seed: 0,
+            max_players: 20,
+            integrated: false,
+            levels: Default::default(),
+            level_seeds: Default::default(),
+        };
+        let mut hub = Hub::new(
+            lan,
+            sync,
+            encoder,
+            config,
+            crate::test_resources::loop_context(
+                sunrise_world::native_load_context::LoopSide::Server,
+            ),
+        );
+        hub.chunk_watches.record_for_passages();
+        hub.ticks = 10;
+
+        let specs = [
+            (1u32, "Sunrise", [0.5, 64.0, 0.5], 16.0f32, true),
+            (2u32, "Vanilla", [16.5, 64.0, 0.5], 12.0f32, false),
+            (3u32, "Edge", [-15.5, 64.0, -15.5], 10.0f32, false),
+        ];
+        let mut receivers = Vec::with_capacity(specs.len());
+        for (id, name, pos, per_tick, with_groups) in specs {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let sender = if with_groups {
+                crate::lan::PlayerSender::new_with_payload_transport(
+                    tx,
+                    Arc::default(),
+                    transport_with_groups(),
+                )
+            } else {
+                crate::lan::PlayerSender::new(tx, Arc::default())
+            };
+            let mut guest = Guest::new(
+                crate::lan::Joined {
+                    conn: id,
+                    uuid: u128::from(id),
+                    name: name.into(),
+                    properties: Vec::new(),
+                    info: ClientInformation::new(4),
+                    brand: if with_groups { "sunrise" } else { "vanilla" }.into(),
+                    sender,
+                    latency: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+                    address: format!("127.0.0.1:{}", 25560 + id).parse().unwrap(),
+                    expected: false,
+                },
+                id,
+                pos,
+                4,
+            );
+            guest.placed = true;
+            guest.dimension = "minecraft:overworld".into();
+            guest.max_unacknowledged = 64;
+            guest.chunks_per_tick = per_tick;
+            hub.guests.push(guest);
+            receivers.push(rx);
+        }
+        (hub, receivers)
+    }
+
+    struct RunResult {
+        frames: Vec<Vec<Vec<u8>>>,
+        guest_state: Vec<(Vec<(i32, i32)>, Vec<(i32, i32)>, f32, u32)>,
+        watches: Vec<(u128, ChunkWatchKind, [i32; 2])>,
+    }
+
+    fn run_once(mode: BodiesTestMode) -> RunResult {
+        let mut world = make_world();
+        let (mut hub, receivers) = make_hub();
+        let border = crate::worldborder::WorldBorder::default();
+        let mut next_entity = 100;
+        let ctx = TickCtx {
+            sea_level: 63,
+            world: &mut world,
+            entities: &[],
+            next_entity: &mut next_entity,
+            spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
+            difficulty: 2,
+            difficulty_locked: false,
+            clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
+            tick_steps: Default::default(),
+            collision: None,
+            border: &border,
+            streaming: None,
+        };
+        with_bodies_test_mode(mode, || hub.update_chunks(&ctx));
+        let frames = receivers.iter().map(drain_frames).collect();
+        let guest_state = hub
+            .guests
+            .iter()
+            .map(|g| {
+                let mut sent: Vec<_> = g.sent_chunks.iter().copied().collect();
+                sent.sort_unstable();
+                (sent, g.chunk_queue.clone(), g.batch_quota, g.unacknowledged)
+            })
+            .collect();
+        let watches = hub
+            .chunk_watches
+            .take()
+            .into_iter()
+            .flat_map(|run| run.watches.into_iter().map(|w| (w.uuid, w.kind, w.chunk)))
+            .collect();
+        RunResult {
+            frames,
+            guest_state,
+            watches,
+        }
+    }
+
+    #[test]
+    fn chunk_batch_order_is_unchanged_when_pool_finishes_columns_out_of_order() {
+        let serial = run_once(BodiesTestMode::Serial);
+        let pool = run_once(BodiesTestMode::Normal);
+        let reverse = run_once(BodiesTestMode::ReverseWorkerOrder);
+
+        assert_eq!(pool.frames, serial.frames);
+        assert_eq!(reverse.frames, serial.frames);
+        assert_eq!(pool.guest_state, serial.guest_state);
+        assert_eq!(reverse.guest_state, serial.guest_state);
+        assert_eq!(pool.watches, serial.watches);
+        assert_eq!(reverse.watches, serial.watches);
+
+        let centers = [(0, 0), (1, 0), (-1, -1)];
+        let expected_counts = [16usize, 12usize, 10usize];
+        for (guest_idx, frames) in reverse.frames.iter().enumerate() {
+            let packets: Vec<C> = frames.iter().map(|b| decode_packet(b)).collect();
+            let start = packets
+                .iter()
+                .position(|p| matches!(p, C::ChunkBatchStart(_)))
+                .expect("ChunkBatchStart");
+            let finish = packets
+                .iter()
+                .position(|p| matches!(p, C::ChunkBatchFinished(_)))
+                .expect("ChunkBatchFinished");
+            assert!(start < finish, "batch start must precede batch finished");
+            assert_eq!(
+                finish,
+                packets.len() - 1,
+                "ChunkBatchFinished must close the batch"
+            );
+            assert!(
+                packets[..start]
+                    .iter()
+                    .all(|p| !matches!(p, C::LevelChunkWithLight(_) | C::BundleDelimiter(_))),
+                "no chunk bodies before ChunkBatchStart"
+            );
+            let mut coords = Vec::new();
+            let mut delimiters = 0usize;
+            for p in &packets[start + 1..finish] {
+                match p {
+                    C::LevelChunkWithLight(c) => coords.push((c.x, c.z)),
+                    C::BundleDelimiter(_) => delimiters += 1,
+                    C::CustomPayload(c) if c.channel == connection_groups::CHANNEL => {}
+                    _ => panic!("unexpected packet inside chunk batch for guest {guest_idx}"),
+                }
+            }
+            assert_eq!(coords.len(), expected_counts[guest_idx]);
+            assert!(
+                matches!(packets[finish], C::ChunkBatchFinished(ref f) if f.size == coords.len() as i32)
+            );
+            if guest_idx == 0 {
+                assert!(delimiters > 0 && delimiters.is_multiple_of(2));
+            } else {
+                assert_eq!(delimiters, 0);
+            }
+            let (cx, cz) = centers[guest_idx];
+            let dist = |(x, z): (i32, i32)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2);
+            assert!(
+                coords.windows(2).all(|w| dist(w[0]) <= dist(w[1])),
+                "columns must arrive in non-decreasing distance order for guest {guest_idx}: {coords:?}"
+            );
         }
     }
 }
