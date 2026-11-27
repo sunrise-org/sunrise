@@ -78,7 +78,7 @@ impl crate::game::ServerGame<'_> {
             return Err(RidePlayerRefusal::Cycle);
         }
         if !force {
-            if !self.seated_passengers(vehicle_id).is_empty() {
+            if self.has_seated_passengers(vehicle_id) {
                 return Err(RidePlayerRefusal::Full);
             }
             if cannot_ride {
@@ -259,12 +259,7 @@ impl crate::game::ServerGame<'_> {
     /// What `id` rides, when `id` may be a player: the next link of a
     /// vehicle walk that can pass through a player carrying a mob.
     pub(in crate::game) fn vehicle_of_any(&self, id: u32) -> Option<u32> {
-        match self.player_vehicle(id) {
-            Some(player) => self.native_player_vehicle_id(player),
-            None => self
-                .native_vehicle_id(Target::Mob(id))
-                .or_else(|| self.native_vehicle_id(Target::General(id))),
-        }
+        crate::game::server_side::boarding::vehicle_of_entity(self, id)
     }
 
     fn native_player_vehicle_id(&self, player: Target) -> Option<u32> {
@@ -279,8 +274,6 @@ impl crate::game::ServerGame<'_> {
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
-
-use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 

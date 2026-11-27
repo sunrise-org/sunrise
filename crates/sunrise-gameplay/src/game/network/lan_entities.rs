@@ -280,10 +280,9 @@ impl ServerGame<'_> {
             }
         }
         for vehicle in mixed {
-            let seats = self.seated_passengers(vehicle);
+            let seats = crate::game::server_side::boarding::ordered_passengers(self, vehicle);
             if let Some(passengers) = riding.passengers.get_mut(&(vehicle as i32)) {
-                passengers
-                    .sort_by_key(|&id| seats.iter().position(|&(_, rider, _)| rider == id as u32));
+                passengers.sort_by_key(|&id| seats.iter().position(|seat| seat.id == id as u32));
             }
         }
         // Players carry passengers only when a mod seated a mob on one.

@@ -51,7 +51,7 @@ impl ServerGame<'_> {
             // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
             let id = self.common.mobs[index].id;
             // `startRiding` without `force` asks `canAddPassenger`: a fifth rider is refused.
-            let aboard = self.seated_passengers(id).len();
+            let aboard = self.seated_passenger_count(id);
             if !sunrise_sim::mobs::riders::can_add_passenger(&self.common.mobs[index], aboard)
                 || !self.native_may_board(id)
             {

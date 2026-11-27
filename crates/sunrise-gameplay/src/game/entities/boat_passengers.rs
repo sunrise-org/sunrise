@@ -222,7 +222,7 @@ impl crate::game::ServerGame<'_> {
         let b = &self.common.boats[i];
         let players = self.boat_players(b.id);
         // The seated list, with the rider counted before its own link exists.
-        let count = self.passenger_order(b.id).len() + usize::from(players == 0);
+        let count = self.seated_passenger_count(b.id) + usize::from(players == 0);
         b.seat(0, count, false, PLAYER_RIDING_OFFSET, false)
     }
     /// `getRootVehicle` of mob `j`: the mob or boat at the bottom of what it

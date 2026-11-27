@@ -611,9 +611,9 @@ impl ServerGame<'_> {
     /// This player's index in `vehicle`'s `getPassengers`, 0 when it is not listed.
     pub(in crate::game::server_side) fn own_passenger_index(&self, vehicle: u32) -> usize {
         let own = self.riding_player().map(|(id, _)| id);
-        self.seated_passengers(vehicle)
+        crate::game::server_side::boarding::ordered_passengers(self, vehicle)
             .iter()
-            .position(|&(_, id, player)| player && Some(id) == own)
+            .position(|seat| seat.player && Some(seat.id) == own)
             .unwrap_or(0)
     }
     pub(in crate::game) fn server_own_passenger_index(&self, vehicle: u32) -> usize {
@@ -847,8 +847,9 @@ impl ServerGame<'_> {
         distance: f64,
         modifier: f32,
     ) {
-        let seats = self.seated_passengers(mob);
-        for (_, id, player) in seats {
+        let seats = crate::game::server_side::boarding::ordered_passengers(self, mob);
+        for seat in seats {
+            let (id, player) = (seat.id, seat.player);
             if player {
                 if self.common.riding == Some(mob)
                     && self

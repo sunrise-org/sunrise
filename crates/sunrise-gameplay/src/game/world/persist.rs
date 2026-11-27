@@ -1205,9 +1205,9 @@ impl crate::game::ServerGame<'_> {
 
     /// Non-player passengers in `getPassengers` order, shared by NBT and transfer state.
     fn non_player_passenger_ids(&self, vehicle: u32) -> Vec<u32> {
-        self.seated_passengers(vehicle)
+        crate::game::server_side::boarding::ordered_passengers(self, vehicle)
             .into_iter()
-            .filter_map(|(_, id, player)| (!player).then_some(id))
+            .filter_map(|seat| (!seat.player).then_some(seat.id))
             .collect()
     }
 
@@ -1405,7 +1405,7 @@ impl crate::game::ServerGame<'_> {
 
     /// `Entity.getVehicle` for the entities whose tree a player can save.
     fn vehicle_of(&self, id: u32) -> Option<u32> {
-        let vehicle = self.vehicle_of_any(id)?;
+        let vehicle = crate::game::server_side::boarding::vehicle_of_entity(self, id)?;
         self.saved_vehicle_position(vehicle).map(|_| vehicle)
     }
     fn riding_root(&self, id: u32) -> Option<u32> {
