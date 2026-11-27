@@ -10899,6 +10899,7 @@ void main() {
                         size: r.length,
                     }],
                     push_constants: None,
+                    reads_world_depth: false,
                 }
             }),
         };

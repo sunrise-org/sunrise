@@ -1432,6 +1432,7 @@ impl Pipelines {
     }
 
     /// Marks `slot` as one the GPU refused as [`Refusal::Invalid`]; false when already refused.
+    #[cfg(test)]
     pub(crate) fn invalidate(&self, slot: usize) -> bool {
         self.refuse(slot, Refusal::Invalid)
     }
