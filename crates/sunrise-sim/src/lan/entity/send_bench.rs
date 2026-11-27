@@ -181,10 +181,20 @@ fn pooled_tracker_send_matches_serial_on_small_spread() {
                 scene.origins[viewers][0] += offset;
             }
         }
+        if tick == 15 {
+            for scene in [&mut serial, &mut pooled] {
+                scene.trackers.truncate(viewers - 1);
+                scene.out.truncate(viewers - 1);
+            }
+        }
         let send_only = (4..8).contains(&tick) || (10..14).contains(&tick);
         serial.step(tick, send_only);
         pooled.step(tick, send_only);
         assert_eq!(serial.out, pooled.out, "tick {tick}");
+        if tick >= 15 {
+            assert_eq!(pooled.level.flags.len(), viewers - 1);
+            assert_eq!(pooled.level.starts.len(), viewers - 1);
+        }
         let events = pooled.events();
         assert_eq!(serial.events(), events, "tick {tick}");
         for event in events.iter().flatten().filter(|e| e.entity == unseen) {

@@ -1055,14 +1055,22 @@ mod tests {
         let (mut serial, mut pooled) = (Waypoints::default(), Waypoints::default());
         let mut moved_packets = 0;
         for tick in 0..5 {
-            for p in &mut players {
-                p.position[0] += f64::from(tick * 16);
-                p.position[2] += f64::from(p.conn.unwrap() % 3 * tick);
+            if tick == 3 {
+                players.pop().unwrap();
+            }
+            if tick != 2 {
+                for p in &mut players {
+                    p.position[0] += f64::from(tick * 16);
+                    p.position[2] += f64::from(p.conn.unwrap() % 3 * tick);
+                }
             }
             let serial = serial.tick_with(&players, &[], &[], true, usize::MAX);
             let pooled = pooled.tick_with(&players, &[], &[], true, 0);
             assert_eq!(by_conn(&serial), by_conn(&pooled), "tick {tick}");
-            if tick > 0 {
+            if tick == 2 {
+                assert!(pooled.is_empty());
+            }
+            if tick == 1 || tick == 4 {
                 moved_packets += pooled.len();
             }
         }
