@@ -6024,19 +6024,9 @@ impl crate::game::ServerGame<'_> {
         // yet (the first tick after a load, a fresh spawn) or has moved since
         // would be pushed out of a ladder or scaffolding. Refreshed here, from
         // where each mob stands now, before the snapshot others push it by.
-        let prep_lanes = if self.common.mobs.len() >= borrowed_tick::MIN_PARALLEL_MOBS {
-            sunrise_sim::parallel::lanes()
-        } else {
-            1
-        };
         let climbing = {
             let w = self.mob_world_base(&[]);
-            let lanes = if prep_lanes > 1 && !mod_api::__private::mods().is_empty() {
-                1
-            } else {
-                prep_lanes
-            };
-            borrowed_tick::climbing_flags(&self.common.mobs, &w, lanes)
+            borrowed_tick::climbing_flags(&self.common.mobs, &w, sunrise_sim::parallel::lanes())
         };
         let inactive_equipment = if self.common.is_logical_server() {
             Some((

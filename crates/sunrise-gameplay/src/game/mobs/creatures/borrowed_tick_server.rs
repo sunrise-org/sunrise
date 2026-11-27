@@ -9,7 +9,7 @@ use sunrise_level::world::World;
 use sunrise_sim::parallel;
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
-pub(super) const MIN_PARALLEL_MOBS: usize = 256;
+const MIN_PARALLEL_MOBS: usize = 256;
 
 enum ClimbInput {
     Fixed(bool),
@@ -85,8 +85,12 @@ impl ClimbingBlocks<'_> {
     }
 }
 
+fn can_share_climbing(mob_count: usize, lanes: usize) -> bool {
+    lanes > 1 && mob_count >= MIN_PARALLEL_MOBS && mod_api::__private::mods().is_empty()
+}
+
 pub(super) fn climbing_flags(mobs: &[Mob], view: &MobWorld<'_>, lanes: usize) -> Vec<bool> {
-    if lanes <= 1 || mobs.len() < MIN_PARALLEL_MOBS {
+    if !can_share_climbing(mobs.len(), lanes) {
         return mobs.iter().map(|mob| mob.on_climbable(view)).collect();
     }
     let blocks = ClimbingBlocks {
@@ -2003,10 +2007,23 @@ fn mob_batch_preparation_matches_serial() {
                 "facing".into(),
                 registry.state(ladder).unwrap().properties["facing"].clone(),
             );
-            world.set(12, 64, 0, ladder).unwrap();
-            world
-                .set(12, 65, 0, registry.id(&trapdoor).unwrap())
-                .unwrap();
+            let open = registry.id(&trapdoor).unwrap();
+            trapdoor.properties.insert("open".into(), "false".into());
+            let closed = registry.id(&trapdoor).unwrap();
+            trapdoor.properties.insert("open".into(), "true".into());
+            let facing = if trapdoor.properties["facing"] == "north" {
+                "south"
+            } else {
+                "north"
+            };
+            trapdoor.properties.insert("facing".into(), facing.into());
+            let mismatched = registry.id(&trapdoor).unwrap();
+            for (x, state) in [(9, closed), (10, mismatched), (11, open), (12, open)] {
+                if x != 11 {
+                    world.set(x, 64, 0, ladder).unwrap();
+                }
+                world.set(x, 65, 0, state).unwrap();
+            }
         },
         |view, types| {
             let border = BorderGeometry::new([0.0, 0.0], 32.0, 30_000_000).unwrap();
@@ -2024,6 +2041,9 @@ fn mob_batch_preparation_matches_serial() {
                 ("minecraft:spider", 2.5, 64.0, true),
                 ("minecraft:horse", 0.5, 64.0, false),
                 ("minecraft:pig", 2.5, 64.0, false),
+                ("minecraft:pig", 9.5, 65.0, false),
+                ("minecraft:pig", 10.5, 65.0, false),
+                ("minecraft:pig", 11.5, 65.0, false),
             ];
             let kinds = rows.map(|(kind, ..)| Arc::new(types.types[kind].clone()));
             let mut mobs: Vec<Mob> = Vec::new();
@@ -2052,6 +2072,7 @@ fn mob_batch_preparation_matches_serial() {
             assert!(mobs[1].is_baby() && !mobs[2].is_baby());
             assert_ne!(mobs[1].dims(), mobs[2].dims());
 
+            assert!(can_share_climbing(mobs.len(), 2));
             let serial = climbing_flags(&mobs, &view, 1);
             let shared = climbing_flags(&mobs, &view, 2);
             assert_eq!(serial, expected_flags);
@@ -2092,4 +2113,21 @@ fn mob_batch_preparation_matches_serial() {
         },
     );
     assert!(ran || std::env::var_os("SUNRISE_TEST_RESOURCES").is_none());
+}
+
+#[cfg(test)]
+#[test]
+fn climbing_uses_serial_when_a_mod_is_loaded() {
+    struct LoadedMod;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for LoadedMod {}
+
+    mod_platform::testing::with_mods(Vec::new().into(), || {
+        assert!(can_share_climbing(MIN_PARALLEL_MOBS, 2));
+    });
+    let mods: mod_api::Mods =
+        vec![mod_api::ModEntry::new("climbing_test", Box::new(LoadedMod))].into();
+    mod_platform::testing::with_mods(mods, || {
+        assert!(!can_share_climbing(MIN_PARALLEL_MOBS, 2));
+    });
 }
