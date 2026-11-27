@@ -1240,7 +1240,6 @@ fn resolve_mod_uniforms<'a>(
                         u.ty,
                         expected.glsl_name()
                     );
-                    log::warn!("shader pack: {msg}");
                     notes.push(msg);
                 }
             }
@@ -1879,7 +1878,7 @@ pub fn build_compute(
     } = resolve_mod_uniforms(
         &interface.uniforms,
         &mut interface.initial_values,
-        &name,
+        &format!("{name}.csh"),
         pack,
         notes,
     );
