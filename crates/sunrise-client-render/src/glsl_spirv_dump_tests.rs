@@ -245,6 +245,7 @@ const ANY_GLUE: Glue = Glue {
     finish: "",
     vertex_id: "int(gl_VertexIndex)",
     fragment_finish: None,
+    fragment_rewrite: sunrise_glsl::FragmentRewrite::NONE,
     interface: sunrise_shaders::DEVICELESS_INTERFACE_LIMITS,
 };
 

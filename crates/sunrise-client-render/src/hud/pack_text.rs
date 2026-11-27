@@ -29,6 +29,7 @@ const GLUE: Glue = Glue {
     finish: "gl_Position.z = 0.5 * gl_Position.w;",
     vertex_id: "hz_vertex_id()",
     fragment_finish: None,
+    fragment_rewrite: sunrise_glsl::FragmentRewrite::NONE,
     interface: sunrise_shaders::DEVICELESS_INTERFACE_LIMITS,
 };
 

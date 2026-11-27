@@ -145,6 +145,7 @@ const GLUE: Glue = Glue {
     finish: "gl_Position.z = 0.5 * gl_Position.w;",
     vertex_id: "hz_vertex_id()",
     fragment_finish: None,
+    fragment_rewrite: FragmentRewrite::NONE,
     interface: LIMITS,
 };
 
@@ -1495,6 +1496,7 @@ fn set1_extra_bindings_and_push_constants_bind_into_group_1() {
         finish: "",
         vertex_id: "int(gl_VertexIndex)",
         fragment_finish: None,
+        fragment_rewrite: FragmentRewrite::NONE,
         interface: LIMITS,
     };
     let translated = translate(&stages, &inputs, &glue, &|_| false)
@@ -1592,6 +1594,7 @@ fn fragment_early_depth_test_and_writable_storage_come_from_ir() {
         finish: "",
         vertex_id: "gl_VertexIndex",
         fragment_finish: None,
+        fragment_rewrite: FragmentRewrite::NONE,
         interface: LIMITS,
     };
     let vsh =
@@ -1635,4 +1638,145 @@ fn fragment_early_depth_test_and_writable_storage_come_from_ir() {
     );
     assert!(early_writable.uses_early_depth_test());
     assert!(early_writable.uses_fragment_writable_storage());
+}
+
+#[test]
+fn fragment_conventions_detect_ir_and_rewrite_frag_coord_dfdy_and_depth() {
+    let includes = Includes {
+        read: &|_| Ok(None),
+        namespace: "t",
+        folder: "",
+        once: &[],
+    };
+    let base_glue = Glue {
+        inputs: &[("Position", "vec3")],
+        prelude: "layout(location = 0) in vec3 hz_pos;",
+        setup: "Position = hz_pos;",
+        finish: "",
+        vertex_id: "int(gl_VertexIndex)",
+        fragment_finish: None,
+        fragment_rewrite: FragmentRewrite::NONE,
+        interface: LIMITS,
+    };
+    let vsh = "#version 330\nin vec3 Position;\nout vec3 worldPos;\n\
+               void main() { worldPos = Position; gl_Position = vec4(Position, 1.0); }\n";
+    let run = |fsh: &str, glue: &Glue<'_>| {
+        let inputs = Inputs {
+            blocks: &[("Globals", 0)],
+            samplers: &[],
+            extra_set: 1,
+            extra_blocks: &[],
+            extra_samplers: &[],
+            extra_texel_buffers: &[],
+            extra_storage_buffers: &[],
+            extra_storage_images: &[],
+            push_constant_binding: None,
+            loose: &[],
+            defines: &[],
+            includes: &includes,
+        };
+        translate(&storage_stages(vsh, fsh), &inputs, glue, &|_| false)
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    };
+
+    // Plain shader (with fwidth and dFdx, neither dFdy nor gl_FragCoord nor gl_FragDepth).
+    let plain = run(
+        "#version 330\nin vec3 worldPos;\nout vec4 fragColor;\n\
+         void main() { fragColor = vec4(dFdx(worldPos) + fwidth(worldPos), 1.0); }\n",
+        &base_glue,
+    );
+    assert_eq!(
+        plain.fragment_conventions(),
+        FragmentConventions {
+            writes_frag_depth: false,
+            reads_frag_coord: false,
+            uses_dfdy: false,
+        }
+    );
+
+    // Helper-function gl_FragCoord + dFdyFine + dFdyCoarse, no gl_FragDepth.
+    let screen_space_fsh = "#version 330\nin vec3 worldPos;\nout vec4 fragColor;\n\
+        vec4 sample_pos() { return gl_FragCoord; }\n\
+        vec3 build_n(vec3 p) { return cross(dFdx(p), dFdy(p)) + dFdyFine(p) + dFdyCoarse(p); }\n\
+        void main() { fragColor = vec4(build_n(worldPos) + sample_pos().xyz, 1.0); }\n";
+    let screen_space = run(screen_space_fsh, &base_glue);
+    assert_eq!(
+        screen_space.fragment_conventions(),
+        FragmentConventions {
+            writes_frag_depth: false,
+            reads_frag_coord: true,
+            uses_dfdy: true,
+        }
+    );
+
+    // Rewriting with gl_FragCoord + negate_dfdy (and NO fragment_finish) keeps writes_frag_depth false.
+    let rw_glue = Glue {
+        fragment_rewrite: FragmentRewrite {
+            prelude: "vec4 hz_FragCoord;",
+            setup: "hz_FragCoord = vec4(gl_FragCoord.x, 16.0 - gl_FragCoord.y, 1.0 - gl_FragCoord.z, gl_FragCoord.w);",
+            frag_coord: Some("hz_FragCoord"),
+            negate_dfdy: true,
+        },
+        ..base_glue
+    };
+    let rewritten = run(screen_space_fsh, &rw_glue);
+    assert_eq!(
+        rewritten.fragment_conventions(),
+        FragmentConventions {
+            writes_frag_depth: false,
+            reads_frag_coord: true,
+            uses_dfdy: true,
+        }
+    );
+    // Verify at least one UnaryOperator::Negate wraps an Axis::Y Derivative in build_n.
+    let has_negated_dfdy = rewritten.fragment.functions.iter().any(|(_, f)| {
+        f.expressions.iter().any(|(_, expr)| {
+            matches!(
+                expr,
+                naga::Expression::Unary {
+                    op: naga::UnaryOperator::Negate,
+                    expr: inner,
+                } if matches!(
+                    f.expressions[*inner],
+                    naga::Expression::Derivative {
+                        axis: naga::DerivativeAxis::Y,
+                        ..
+                    }
+                )
+            )
+        })
+    });
+    assert!(
+        has_negated_dfdy,
+        "negate_dfdy must wrap Axis::Y derivatives in UnaryOperator::Negate"
+    );
+
+    // Depth-writing shader with early return and discard.
+    let depth_fsh = "#version 330\nin vec3 worldPos;\nout vec4 fragColor;\n\
+        void main() {\n\
+            if (worldPos.x < -2.0) discard;\n\
+            if (worldPos.y > 0.0) { fragColor = vec4(1.0); gl_FragDepth = 0.75; return; }\n\
+            fragColor = vec4(0.0, 0.0, 1.0, 1.0);\n\
+            gl_FragDepth = 0.25;\n\
+        }\n";
+    let depth_base = run(depth_fsh, &base_glue);
+    assert_eq!(
+        depth_base.fragment_conventions(),
+        FragmentConventions {
+            writes_frag_depth: true,
+            reads_frag_coord: false,
+            uses_dfdy: false,
+        }
+    );
+    let depth_glue = Glue {
+        fragment_finish: Some("gl_FragDepth = 1.0 - gl_FragDepth;"),
+        ..base_glue
+    };
+    let depth_rewritten = run(depth_fsh, &depth_glue);
+    assert!(depth_rewritten.fragment_conventions().writes_frag_depth);
+    assert!(calls(
+        &depth_rewritten.fragment,
+        glsl_main(&depth_rewritten.fragment),
+        "hz_main"
+    ));
 }

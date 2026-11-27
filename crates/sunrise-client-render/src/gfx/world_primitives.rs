@@ -467,6 +467,12 @@ impl WorldPrimitives {
         self.pipelines.ensure_pack_pipelines(device, format, rgb);
     }
 
+    /// Record the active standard-Z / GL-rows target's pixel dimensions for `Globals.ScreenSize`
+    /// patching when resolution scaling makes `colortex0` differ from the window size.
+    pub(super) fn set_pack_target_size(&mut self, queue: &wgpu::Queue, size: [u32; 2]) {
+        self.pipelines.set_pack_target_size(queue, size);
+    }
+
     fn standard_pipelines(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -1042,35 +1048,40 @@ impl WorldPrimitives {
         {
             return false;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Prepared classic pack world stage"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
+        self.pipelines.patch_pack_screen_size(encoder);
+        let drew = {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Prepared classic pack world stage"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        self.draw_prepared_ranges(
-            &mut pass,
-            PreparedPass::Pack {
-                pipelines,
-                bound_slots,
-            },
-            draws,
-        )
+                ..Default::default()
+            });
+            self.draw_prepared_ranges(
+                &mut pass,
+                PreparedPass::Pack {
+                    pipelines,
+                    bound_slots,
+                },
+                draws,
+            )
+        };
+        self.pipelines.restore_pack_screen_size(encoder);
+        drew
     }
 
     /// Per-frame shader-pack uniform values uploaded from the latest [`Batch`].
@@ -1139,50 +1150,59 @@ impl WorldPrimitives {
         if !has_primitives && !has_pipelines {
             return false;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Classic pack custom geometry"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
+        self.pipelines.patch_pack_screen_size(encoder);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Classic pack custom geometry"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        if has_primitives {
-            pass.set_bind_group(0, group, &[]);
-            for (through, (quad_range, line_range)) in
-                [(quads, lines), (quads_through, lines_through)]
-                    .into_iter()
-                    .enumerate()
-            {
-                Self::draw_pages(
+                ..Default::default()
+            });
+            if has_primitives {
+                pass.set_bind_group(0, group, &[]);
+                for (through, (quad_range, line_range)) in
+                    [(quads, lines), (quads_through, lines_through)]
+                        .into_iter()
+                        .enumerate()
+                {
+                    Self::draw_pages(
+                        &mut pass,
+                        &self.indices,
+                        (
+                            &pipelines.quad_pipelines[through],
+                            &pipelines.line_pipelines[through],
+                        ),
+                        (&self.quads, 0, quad_range),
+                        (&self.lines, 0, line_range),
+                    );
+                }
+            }
+            if has_pipelines {
+                self.pipelines.draw_pack(
                     &mut pass,
                     &self.indices,
-                    (
-                        &pipelines.quad_pipelines[through],
-                        &pipelines.line_pipelines[through],
-                    ),
-                    (&self.quads, 0, quad_range),
-                    (&self.lines, 0, line_range),
+                    first,
+                    last,
+                    &self.bound_mod_slots,
                 );
             }
         }
-        if has_pipelines {
-            self.pipelines
-                .draw_pack(&mut pass, &self.indices, first, last, &self.bound_mod_slots);
-        }
+        self.pipelines.restore_pack_screen_size(encoder);
         true
     }
 
