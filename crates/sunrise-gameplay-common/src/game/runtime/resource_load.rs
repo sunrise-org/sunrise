@@ -796,7 +796,7 @@ pub fn prepare_core(
     Ok((
         PreparedCore {
             pack,
-            facts: Arc::new(facts),
+            facts,
             biomes,
             item_data,
             item_defaults,
@@ -828,7 +828,7 @@ pub fn finish_core(
     let resources = Resources {
         core: WorldCore {
             item_data,
-            facts,
+            facts: Arc::new(facts),
             biomes,
             environment,
             collision,
