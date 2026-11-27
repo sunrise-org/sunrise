@@ -18,6 +18,9 @@ pub use sunrise_sim::item_damage;
 pub use sunrise_sim::mod_packet_builders;
 #[cfg(test)]
 mod fresh_process;
+#[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
 pub use sunrise_sim::parallel;
 pub use sunrise_sim::powder_snow;
 #[cfg(test)]

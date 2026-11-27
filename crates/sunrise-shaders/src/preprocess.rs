@@ -130,22 +130,29 @@ impl Preprocessed {
         out
     }
 
-    /// This stage with `declaration` after its leading directives (`#version`, `#extension`...).
-    /// The inserted lines are Sunrise's own, so they get [`Origin::default`] and every later line
-    /// keeps the pack file and line it came from.
+    /// This stage with `declaration` on its own lines after its leading directives (`#version`,
+    /// `#extension`...). If the last directive has no newline, the declaration follows it on a
+    /// new line without adding a trailing newline. The inserted lines get [`Origin::default`];
+    /// the pack's lines keep their original file and line.
     pub(crate) fn with_declaration(&self, declaration: &str) -> Self {
         let mut at = 0;
+        let mut first = 0;
         for line in self.code.split_inclusive('\n') {
             let t = line.trim_start();
             if !(t.is_empty() || t.starts_with('#')) {
                 break;
             }
             at += line.len();
+            first += 1;
         }
-        let first = self.code[..at].matches('\n').count();
+        let (before, after) = self.code.split_at(at);
         let added = declaration.matches('\n').count() + 1;
         let mut out = self.clone();
-        out.code = format!("{}{declaration}\n{}", &self.code[..at], &self.code[at..]);
+        out.code = if !before.is_empty() && !before.ends_with('\n') {
+            format!("{before}\n{declaration}")
+        } else {
+            format!("{before}{declaration}\n{after}")
+        };
         out.lines
             .splice(first..first, std::iter::repeat_n(Origin::default(), added));
         out
@@ -903,6 +910,21 @@ mod tests {
         );
         let p = run(&[("program/final.fsh", &text)]);
         assert_eq!(p.diagnostics, [refused(1002)]);
+    }
+
+    #[test]
+    fn a_declaration_starts_on_its_own_line_after_an_unterminated_directive() {
+        let stage = Preprocessed::from_source("gbuffers_water.fsh", "#version 330");
+        let out = stage.with_declaration("uniform sampler2D sunriseWaterMask;");
+        assert_eq!(
+            out.code(),
+            "#version 330\nuniform sampler2D sunriseWaterMask;"
+        );
+        assert_eq!(
+            out.lines(),
+            [Origin { file: 0, line: 1 }, Origin { file: 0, line: 0 }]
+        );
+        assert_eq!(out.files(), ["gbuffers_water.fsh"]);
     }
 
     #[test]

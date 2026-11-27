@@ -14,7 +14,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use super::scan::{is_ident, significant};
+use super::Error;
+use super::scan::{error_at_token, is_ident, significant};
 use crate::Preprocessed;
 use crate::macros::lex;
 
@@ -92,10 +93,12 @@ fn std430(ty: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// `pp` with its shared and buffer vectors that atomic functions use by component rewritten.
-pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
+/// `pp` with its shared and buffer vectors that atomic functions use by component rewritten,
+/// or `None` if nothing changes. An unclosed array index or a terminal selector refuses the
+/// stage at the `[` or `.` that starts it.
+pub(super) fn rewrite(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> {
     if !ATOMICS.iter().any(|a| pp.code().contains(a)) {
-        return None;
+        return Ok(None);
     }
     let tokens = lex(pp.code());
     let next = |i: usize| (i + 1..tokens.len()).find(|&j| significant(tokens[j]));
@@ -409,7 +412,7 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
         }
     }
     if splits.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut out: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
     for (start, end, decl) in &decls {
@@ -470,20 +473,23 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
                 continue;
             };
             let mut depth = 0;
-            let mut close = open;
+            let mut close = None;
             for (j, &t) in tokens.iter().enumerate().skip(open) {
                 match t {
                     "[" => depth += 1,
                     "]" => {
                         depth -= 1;
                         if depth == 0 {
-                            close = j;
+                            close = Some(j);
                             break;
                         }
                     }
                     _ => {}
                 }
             }
+            let close = close.ok_or_else(|| {
+                error_at_token(pp, &tokens, open, "unclosed atomic vector array index")
+            })?;
             let index: String = tokens[open + 1..close].concat();
             base = format!("{base}[{index}]");
             // GLSL won't turn a `uint` index into the `int` the getter and setter take.
@@ -491,7 +497,6 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
             last = close;
         }
         let after = next(last);
-        let follows = |t: &str| after.is_some_and(|j| tokens[j] == t);
         let assigned = |at: Option<usize>| {
             at.is_some_and(|j| tokens[j] == "=" && next(j).is_none_or(|k| tokens[k] != "="))
         };
@@ -527,9 +532,13 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
             out[semi] = "));".into();
             i = eq + 1;
             continue;
-        } else if follows(".") || (s.array.is_none() && follows("[")) {
-            let at = after.and_then(next).unwrap();
-            if follows("[") {
+        } else if let Some(selector) =
+            after.filter(|&j| tokens[j] == "." || (s.array.is_none() && tokens[j] == "["))
+        {
+            let at = next(selector).ok_or_else(|| {
+                error_at_token(pp, &tokens, selector, "missing atomic vector selector")
+            })?;
+            if tokens[selector] == "[" {
                 // `name[c]`: an element already.
                 replacement = base.clone();
             } else if let Some(c) = component(tokens[at]) {
@@ -566,7 +575,7 @@ pub(super) fn rewrite(pp: &Preprocessed) -> Option<Preprocessed> {
         }
         i = end + 1;
     }
-    Some(pp.with_code(out.concat()))
+    Ok(Some(pp.with_code(out.concat())))
 }
 
 /// `hz_get_<key>` and `hz_set_<key>`: a whole vector of `split` (of an array: the `k`th),
@@ -601,7 +610,7 @@ mod tests {
 
     fn rewritten(code: &str) -> String {
         let pp = Preprocessed::from_source("", code);
-        let out = rewrite(&pp).expect("rewritten").code().to_owned();
+        let out = rewrite(&pp).unwrap().expect("rewritten").code().to_owned();
         assert_eq!(out.lines().count(), code.lines().count(), "{out}");
         out
     }
@@ -635,10 +644,56 @@ mod tests {
     }
 
     #[test]
+    fn an_unclosed_atomic_vector_array_index_is_refused_at_its_opening_bracket() {
+        let compute = Preprocessed::from_source(
+            "deferred.csh",
+            "layout(local_size_x = 1) in;\nshared uvec2 lights[8];\nvoid main() {\n    \
+             atomicMax(lights[\n        gl_LocalInvocationID[0].x, 2u);\n}\n",
+        );
+        let Err(errors) = crate::translate_compute(&compute) else {
+            panic!("an unclosed index must be refused");
+        };
+        let expected = Error::new("deferred.csh", 4, "unclosed atomic vector array index");
+        assert_eq!(errors, [expected]);
+    }
+
+    #[test]
+    fn a_terminal_atomic_vector_selector_is_refused_at_its_delimiter() {
+        let fragment = Preprocessed::from_source("composite.fsh", "void main() {}\n");
+        for selector in [".", "["] {
+            let vertex = Preprocessed::from_source(
+                "composite.vsh",
+                &format!(
+                    "layout(std430, binding = 2) buffer Counts {{ uvec2 values; }} counts;\n\
+                     void main() {{\n    atomicAdd(counts.values.x, 1u);\n    counts.values{selector}\n"
+                ),
+            );
+            let Err(errors) = crate::translate_composite(
+                &vertex,
+                &fragment,
+                crate::Target::Buffers,
+                crate::DEVICELESS_INTERFACE_LIMITS,
+            ) else {
+                panic!("a terminal `{selector}` must be refused");
+            };
+            let expected = Error::new("composite.vsh", 4, "missing atomic vector selector");
+            assert_eq!(errors, [expected], "{selector}");
+        }
+    }
+
+    #[test]
     fn untouched_without_atomics_on_a_component() {
         let pp = |code: &str| Preprocessed::from_source("", code);
-        assert!(rewrite(&pp("shared ivec4 v;\nvoid f() { v.x = 1; }\n")).is_none());
-        assert!(rewrite(&pp("shared int n;\nvoid f() { atomicAdd(n, 1); }\n")).is_none());
+        assert!(
+            rewrite(&pp("shared ivec4 v;\nvoid f() { v.x = 1; }\n"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            rewrite(&pp("shared int n;\nvoid f() { atomicAdd(n, 1); }\n"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -691,6 +746,7 @@ mod tests {
         };
         // The control: a known offset splits the vector.
         let out = rewrite(&block("float small[4];"))
+            .unwrap()
             .expect("rewritten")
             .code()
             .to_owned();
@@ -701,7 +757,7 @@ mod tests {
             "float a[1000000000]; float c[1000000000];",
             "float a[1073741823];",
         ] {
-            assert!(rewrite(&block(members)).is_none(), "{members}");
+            assert!(rewrite(&block(members)).unwrap().is_none(), "{members}");
         }
     }
 
@@ -711,6 +767,6 @@ mod tests {
             "",
             "shared struct S { ivec3 lo; } sh;\nvoid f(S s) { atomicMin(sh.lo.x, 1); }\n",
         );
-        assert!(rewrite(&pp).is_none());
+        assert!(rewrite(&pp).unwrap().is_none());
     }
 }

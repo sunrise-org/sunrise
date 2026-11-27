@@ -12,7 +12,7 @@ use super::mod_render_targets::{
 };
 use super::mod_storage::{ModStorageBuffers, ResolvedStorageRange};
 use super::mod_uniforms::{
-    ATLAS_VIEW_ID, DYNAMIC_VIEW_ID_BIT, LIGHTMAP_VIEW_ID, ModUniformBuffers, WORLD_DEPTH_VIEW_ID,
+    ATLAS_VIEW_ID, DYNAMIC_VIEW_ID_BIT, LIGHTMAP_VIEW_ID, ModUniformBuffers,
 };
 use mod_api::{
     BufferError, Identifier, MeshDescriptor, MeshDraw, MeshError, MeshRef, PipelineDrawError,
@@ -25,14 +25,24 @@ use std::sync::{Arc, Mutex};
 
 /// The renderer's per-frame values a mod hook can read while the renderer is out of the game:
 /// the texture views a mod pipeline can bind, the entity batch capacity and whether a `shaders/`
-/// pack is loaded. Refreshed when the renderer draws a frame or resizes.
+/// pack is loaded. Refreshed when the renderer draws a frame. The world depth is not here: it is
+/// replaced with a new view ID (`ModGpuResources::replace_world_depth`).
 #[derive(Clone)]
 pub(crate) struct ModFrameState {
     pub(crate) entity_atlas: wgpu::TextureView,
     pub(crate) lightmap: wgpu::TextureView,
-    pub(crate) world_depth: wgpu::TextureView,
     pub(crate) entity_quad_capacity: super::EntityQuadCapacity,
     pub(crate) pack_iris: bool,
+}
+
+/// A frame-graph problem logged once per reload, keyed by its kind so a cycle can never
+/// suppress an undeclared-read warning that shares its labels.
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) enum FrameGraphWarning {
+    /// The pass labels of one detected cycle.
+    Cycle(Vec<String>),
+    /// A pass (by label) that sampled a transient target it did not declare in its reads.
+    UndeclaredTransientRead(String, mod_api::TransientTargetId),
 }
 
 /// Handles on the device and the mod tables of one [`Renderer`](super::Renderer); cloning shares
@@ -54,8 +64,8 @@ pub struct ModGpuResources {
     pub(crate) adapter: wgpu::Adapter,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
-    /// Distinct frame-graph cycle pass-label sets already logged once since last reload.
-    pub(crate) warned_frame_graph_cycles: Arc<Mutex<HashSet<Vec<String>>>>,
+    /// Distinct [`FrameGraphWarning`]s already logged once since last reload.
+    pub(super) warned_frame_graph: Arc<Mutex<HashSet<FrameGraphWarning>>>,
     render_capabilities: RenderCapabilities,
     max_buffer_size: u64,
     /// Retained GPU vertex/index buffers backing [`mod_api::MeshRef`].
@@ -72,6 +82,8 @@ pub struct ModGpuResources {
     /// The mods' dynamic textures, shared with the renderer's HUD.
     dynamic_textures: crate::hud::dynamic_textures::Store,
     frame_views: Arc<Mutex<ModFrameState>>,
+    /// The renderer's world depth view and the view ID a bind group built on it is keyed by.
+    world_depth: Arc<Mutex<(u64, wgpu::TextureView)>>,
 }
 
 impl ModGpuResources {
@@ -81,22 +93,29 @@ impl ModGpuResources {
         queue: wgpu::Queue,
         dynamic_textures: crate::hud::dynamic_textures::Store,
         frame_views: ModFrameState,
+        world_depth: wgpu::TextureView,
         previous: Option<&Self>,
     ) -> Self {
+        let uniforms: Arc<Mutex<ModUniformBuffers>> = Arc::default();
+        let world_depth_id = uniforms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .alloc_view_id();
         Self {
             render_capabilities: probe_render_capabilities(&adapter, &device),
             max_buffer_size: device.limits().max_buffer_size,
             adapter,
             device,
             queue,
-            warned_frame_graph_cycles: Arc::default(),
+            warned_frame_graph: Arc::default(),
             meshes: Arc::default(),
-            uniforms: Arc::default(),
+            uniforms,
             storage: previous.map_or_else(Arc::default, |old| old.storage.clone()),
             readbacks: previous.map_or_else(Arc::default, |old| old.readbacks.clone()),
             render_targets: previous.map_or_else(Arc::default, |old| old.render_targets.clone()),
             dynamic_textures,
             frame_views: Arc::new(Mutex::new(frame_views)),
+            world_depth: Arc::new(Mutex::new((world_depth_id, world_depth))),
         }
     }
 
@@ -130,10 +149,25 @@ impl ModGpuResources {
         (LIGHTMAP_VIEW_ID, views.lightmap.clone())
     }
 
-    /// The active world depth view for `TextureSource::WorldDepth`.
+    /// The active world depth view for `TextureSource::WorldDepth`, with the view ID that keys its
+    /// bind groups: a new one each time the renderer swaps its world depth
+    /// (`Renderer::swap_world_depth`).
     pub fn mod_world_depth_texture_view(&self) -> (u64, wgpu::TextureView) {
-        let views = self.frame_views.lock().unwrap_or_else(|e| e.into_inner());
-        (WORLD_DEPTH_VIEW_ID, views.world_depth.clone())
+        self.world_depth
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Makes `view` the world depth under a view ID no earlier view had, so a bind group a mod
+    /// pipeline kept for the texture it replaces is not reused for it.
+    pub(super) fn replace_world_depth(&self, view: wgpu::TextureView) {
+        let id = self
+            .uniforms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .alloc_view_id();
+        *self.world_depth.lock().unwrap_or_else(|e| e.into_inner()) = (id, view);
     }
 
     /// A mod's dynamic texture by its handle, with the revision that keys its bind group.
@@ -273,12 +307,18 @@ forward! {
 }
 
 impl super::Renderer {
+    /// Points the depth attachment at `depth`, publishes the same view to the mod handles under
+    /// a fresh binding ID, and returns the depth it retired.
+    pub(super) fn swap_world_depth(&mut self, depth: wgpu::TextureView) -> wgpu::TextureView {
+        self.mod_gpu.replace_world_depth(depth.clone());
+        std::mem::replace(&mut self.depth, depth)
+    }
+
     /// Points the mod handles at the views this renderer draws with now.
     pub(super) fn refresh_mod_frame_views(&self) {
         self.mod_gpu.set_frame_views(ModFrameState {
             entity_atlas: self.entity_atlas.clone(),
             lightmap: self.lightmap_view.clone(),
-            world_depth: self.depth.clone(),
             entity_quad_capacity: self.entity_quad_capacity(),
             pack_iris: self.shader_pack_kind() == Some("iris"),
         });

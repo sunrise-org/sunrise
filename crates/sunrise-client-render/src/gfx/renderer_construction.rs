@@ -2284,13 +2284,13 @@ impl Renderer {
             mod_gpu::ModFrameState {
                 entity_atlas: atlas_view.clone(),
                 lightmap: lightmap_view.clone(),
-                world_depth: depth.clone(),
                 entity_quad_capacity: EntityQuadCapacity::from_limits(
                     &device.limits(),
                     entity_skin.is_some(),
                 ),
                 pack_iris: false,
             },
+            depth.clone(),
             previous.map(|renderer| renderer.mod_gpu()),
         );
         Ok(Self {

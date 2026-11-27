@@ -286,6 +286,7 @@ fn mod_pack_program_draws_aux_depth_and_tracks_previous_uniform() {
             depth_target: Some(0),
             depth_write: true,
             depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_bias: Default::default(),
             cull: false,
             program_mode: Default::default(),
         }],
@@ -348,18 +349,20 @@ fn mod_pack_linked_pass_honors_depth_compare_and_write() {
     };
 
     let _gpu_guard = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        return;
-    };
+    let gpu = Gpu::new().expect("an executed adapter is required for the linked depth fixture");
+    let passthrough = "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}";
+    let red =
+        "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(1.0,0.0,0.0,1.0);}";
     let files = [
+        ("mod_depth.vsh", passthrough),
+        ("mod_depth.fsh", red),
         (
-            "mod_depth.vsh",
-            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}",
+            "mod_slope.vsh",
+            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xy,0.5*gl_Vertex.x,1.0);}",
         ),
-        (
-            "mod_depth.fsh",
-            "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(1.0,0.0,0.0,1.0);}",
-        ),
+        ("mod_slope.fsh", red),
+        ("gbuffers_damagedblock.vsh", passthrough),
+        ("gbuffers_damagedblock.fsh", red),
         ("final.vsh", VERTEX),
         (
             "final.fsh",
@@ -379,29 +382,64 @@ fn mod_pack_linked_pass_honors_depth_compare_and_write() {
     .into();
     // All declarations draw in the same slot. A late pass without an explicit target may
     // test against main depth but cannot write it, even if it requests a write.
+    // Each row is the depth compare, depth write, whether it names the main depth, the pack
+    // program it links and the bias it declares (none for most).
     let states = [
-        (DepthCompare::Equal, false, true),
-        (DepthCompare::Never, false, true),
-        (DepthCompare::Less, false, true),
-        (DepthCompare::Greater, false, true),
-        (DepthCompare::Always, true, true),
-        (DepthCompare::Always, true, false),
+        (DepthCompare::Equal, false, true, "mod_depth", None),
+        (DepthCompare::Never, false, true, "mod_depth", None),
+        (DepthCompare::Less, false, true, "mod_depth", None),
+        (DepthCompare::Greater, false, true, "mod_depth", None),
+        (DepthCompare::Always, true, true, "mod_depth", None),
+        (DepthCompare::Always, true, false, "mod_depth", None),
+        (
+            DepthCompare::Greater,
+            false,
+            true,
+            "mod_depth",
+            Some((100, 0.0)),
+        ),
+        (
+            DepthCompare::Greater,
+            false,
+            true,
+            "mod_slope",
+            Some((0, 2.0)),
+        ),
+        (
+            DepthCompare::Greater,
+            false,
+            true,
+            "gbuffers_damagedblock",
+            None,
+        ),
+        (
+            DepthCompare::Greater,
+            false,
+            true,
+            "gbuffers_damagedblock",
+            Some((-100, 0.0)),
+        ),
     ];
     let pipelines: Vec<_> = states
         .iter()
         .enumerate()
-        .map(|(slot, &(compare, write, names_main))| {
+        .map(|(slot, &(compare, write, names_main, program, bias))| {
             let id = Identifier::parse(&format!("example:linked_depth_{slot}")).unwrap();
             let mut binding = PackBinding::new()
-                .program("mod_depth")
+                .program(program)
                 .slot(PackPassSlot::AfterTranslucentGbuffers);
             if names_main {
                 binding = binding.depth_target(PackDepthTarget::Main);
             }
-            RenderPipeline::new(id.clone(), id, PipelineBlend::Opaque, WorldDepth::Tested)
-                .pack_binding(binding)
-                .depth_compare(compare)
-                .depth_write(write)
+            let pipeline =
+                RenderPipeline::new(id.clone(), id, PipelineBlend::Opaque, WorldDepth::Tested)
+                    .pack_binding(binding)
+                    .depth_compare(compare)
+                    .depth_write(write);
+            match bias {
+                Some((constant, slope)) => pipeline.depth_bias(constant, slope),
+                None => pipeline,
+            }
         })
         .collect();
     let (mut post, color, depth) = load_with_mods(
@@ -420,6 +458,18 @@ fn mod_pack_linked_pass_honors_depth_compare_and_write() {
 
     // Seed 0.5 anew each frame. GL clip-space z in [-1, 1] maps to pack depth in [0, 1].
     // Read red for a draw, green for the seed depth and blue for the far draw's depth.
+    // The shader emits 0 or 1 per channel: multiplied by 255 these are exactly 0 or 255.
+    // The constant bias lifts a coplanar quad. SIZE is 16 pixels across 2 clip-space units, and
+    // the slope quad has depth 0.5 + 0.25*x, so one pixel steps the depth by 0.25 * 2 / 16 =
+    // 0.03125. The center sample is at pixel centre 8.5 of 16, x = 0.0625, depth 0.5 +
+    // 0.015625 (half a step), farther than the seed. The declared slope scale 2.0 is -2.0 in
+    // standard-Z and biases by -2 * 0.03125 = -0.0625, so the draw lands at 0.453125, nearer
+    // than the seed. Neither biased draw writes depth.
+    // The two gbuffers_damagedblock slots are coplanar with the seed under Greater, which is Less
+    // in the pack's forward depth and so refuses an unbiased draw. Declaring no bias keeps the
+    // pack's polygon offset (-10 constant units toward the camera), which lets the draw pass;
+    // a declared constant -100 is +100 in standard-Z, farther, and replaces that offset, so it
+    // is refused.
     for (name, slot, clip_z, drew, stored_far) in [
         ("Equal at seed", 0, 0.0, true, false),
         ("Equal nearer", 0, -0.5, false, false),
@@ -429,6 +479,22 @@ fn mod_pack_linked_pass_honors_depth_compare_and_write() {
         ("Greater nearer without write", 3, -0.5, true, false),
         ("Always farther with write", 4, 0.5, true, true),
         ("Always farther in read-only slot", 5, 0.5, true, false),
+        ("Greater coplanar with constant bias", 6, 0.0, true, false),
+        ("Greater farther with slope bias", 7, 0.0, true, false),
+        (
+            "Undeclared bias keeps the pack's polygon offset",
+            8,
+            0.0,
+            true,
+            false,
+        ),
+        (
+            "Declared bias replaces the pack's polygon offset",
+            9,
+            0.0,
+            false,
+            false,
+        ),
     ] {
         gpu.clear(&color, &depth, 0.5);
         let (vertices, indices) = mod_quad_buffers(&gpu.device, clip_z);
@@ -488,6 +554,7 @@ fn mod_pack_falls_back_to_gbuffers_terrain_when_custom_program_absent() {
             depth_target: None,
             depth_write: true,
             depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_bias: Default::default(),
             cull: false,
             program_mode: Default::default(),
         }],
@@ -552,6 +619,7 @@ fn mod_pack_aux_depth_is_lazy_when_pack_never_samples_it() {
             depth_target: Some(0),
             depth_write: true,
             depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_bias: Default::default(),
             cull: false,
             program_mode: Default::default(),
         }],
@@ -630,6 +698,7 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
                 depth_target: None,
                 depth_write: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_bias: Default::default(),
                 cull: false,
                 program_mode: Default::default(),
             },
@@ -639,6 +708,7 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
                 depth_target: None,
                 depth_write: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_bias: Default::default(),
                 cull: false,
                 program_mode: Default::default(),
             },
@@ -716,6 +786,7 @@ fn mod_shadow_pass_geometry_is_drawn_and_invalidates_the_shadow_cache() {
                 depth_target: None,
                 depth_write: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_bias: Default::default(),
                 cull: false,
                 program_mode: Default::default(),
             }],
@@ -860,6 +931,7 @@ fn own_stage_runtime() -> (
             depth_target: None,
             depth_write: true,
             depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_bias: Default::default(),
             cull: false,
             program_mode: ModProgramMode::ModVertexPackFragment,
         }],
@@ -1050,6 +1122,7 @@ fn mod_vertex_pack_fragment_against_a_geometry_stage_program_is_unbound_with_a_n
             depth_target: None,
             depth_write: true,
             depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_bias: Default::default(),
             cull: false,
             program_mode: ModProgramMode::ModVertexPackFragment,
         }],
@@ -1222,6 +1295,7 @@ fn mod_pack_indirect_draw_with_a_count_buffer_draws_only_the_counted_commands() 
             depth_target: None,
             depth_write: true,
             depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_bias: Default::default(),
             cull: false,
             program_mode: Default::default(),
         }],

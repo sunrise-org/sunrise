@@ -33,3 +33,8 @@ pub mod wandering_trader;
 
 extern crate self as sunrise_gameplay;
 pub mod game;
+#[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+#[cfg(test)]
+mod test_game_dir;

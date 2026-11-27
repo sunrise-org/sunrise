@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 use syn::{ImplItem, Item, TraitItem, Type};
 
 #[test]
+#[ignore = "daily"]
 fn native_hooks_live_in_their_catalog_area() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = Routing::load(&root).unwrap().catalog(&root).unwrap();

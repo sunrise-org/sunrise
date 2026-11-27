@@ -33,11 +33,12 @@ cargo sunrise-mod check             # validate the project before release
   ([writing hooks](../start/writing-hooks.md)). Any other `--template` is refused.
 - `build` packs the checked project into `target/sunrise-mod/<id>.smod`: `sunrise-mod.toml`, `assets/`,
   `data/`, optional `icon.png` and, for code, the root Cargo project. It reads content with the game's own package
-  rules and runs the reference checks of `check` below. If `target/` or `target/sunrise-mod/` is a symlink, the build
-  refuses it without touching the previous package. Otherwise, once the build reaches output cleanup, it removes the
-  previous `<id>.smod` before running the reference checks. Earlier failures, such as a manifest or SDK error,
-  can leave the previous package in place. A content build compiles nothing; a native build compiles against the pinned SDK. Native code requires
-  both `Cargo.toml` and `[native]`; inconsistent declarations and a manifest without capability `registries` are refused.
+  rules and runs the reference checks of `check` below. Once it accepts the options, manifest and output path,
+  `build` removes the previous `<id>.smod` before resolving the SDK, compiling or checking references.
+  Earlier refusals leave the previous package untouched, including invalid options, an invalid manifest, or a
+  symlink at `target/` or `target/sunrise-mod/`. A content build compiles nothing; a native build compiles against
+  the pinned SDK. Native code requires both `Cargo.toml` and `[native]`; inconsistent declarations and a manifest
+  without capability `registries` are refused.
 - For content mods, `run` builds, then starts `sunrise-client` (on `PATH`, or `--game PATH`, or `SUNRISE_CLIENT`) with
   `--dev-mod target/sunrise-mod/<id>.smod`, always on. Native projects use the pinned SDK's game. Use `--jars <dir>`
   to choose a folder of [original Java jars](#java-jars-as-external-assets). Arguments after `--` go to the game.

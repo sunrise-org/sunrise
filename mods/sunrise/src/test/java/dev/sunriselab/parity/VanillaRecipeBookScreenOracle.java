@@ -78,8 +78,6 @@ public final class VanillaRecipeBookScreenOracle {
         unsafe.getClass().getMethod(setter, Object.class, long.class, param).invoke(unsafe, target, offset, value);
     }
 
-    static float round(float v) { return Math.round(v * 1e4f) / 1e4f; }
-
     /** A text's styled runs: [text, rgb or -1, italic]. */
     static JsonArray runs(FormattedCharSequence s) {
         var out = new JsonArray();
@@ -117,7 +115,7 @@ public final class VanillaRecipeBookScreenOracle {
             var o = new JsonObject();
             o.addProperty("t", type);
             var m = new JsonArray();
-            for (float v : new float[] {stack.m00(), stack.m01(), stack.m10(), stack.m11(), stack.m20(), stack.m21()}) m.add(round(v));
+            for (float v : new float[] {stack.m00(), stack.m01(), stack.m10(), stack.m11(), stack.m20(), stack.m21()}) m.add(v);
             o.add("m", m);
             draws.add(o);
             return o;

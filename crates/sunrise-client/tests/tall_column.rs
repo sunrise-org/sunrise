@@ -22,10 +22,10 @@ use sunrise_client::{
     },
     world::World,
 };
-use sunrise_core::biome::BiomeZoom;
+use sunrise_core::{biome::BiomeZoom, prepared_test_support::STREAMING_INPUTS};
 use sunrise_world::registry::BlockStateId;
-#[path = "../src/test_resources.rs"]
-mod test_resources;
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+mod prepared_test_root;
 
 /// Saved columns without their light: a stone spire to y 1799 in the middle
 /// of each, so light jobs and meshes reach far above vanilla's top.
@@ -56,7 +56,7 @@ impl ChunkGenerator for Spires {
 #[test]
 #[ignore = "daily"]
 fn a_tall_column_streams_lights_and_meshes_to_its_top() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let shape = LevelShape::new(-64, 2096, 2096, true, false).unwrap();
     let layout = shape.column();
     let assets = Arc::new(Assets::load(&root).unwrap());

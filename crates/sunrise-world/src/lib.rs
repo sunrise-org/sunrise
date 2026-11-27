@@ -152,6 +152,10 @@ pub mod world_movement;
 pub mod world_ray;
 pub mod worldgen;
 
+#[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
+
 pub const DATA_VERSION: i32 = sunrise_core::version::DATA_VERSION;
 
 pub mod item_stack_refs;

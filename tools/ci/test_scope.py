@@ -26,8 +26,9 @@ from tools.ci.rust_changes import changed_paths  # noqa: E402
 # tests/test_ci_test_scope.py scans crates/ and xtask/ and fails on a read missing here. Entries outside every package
 # directory only document the read: a change there selects the whole workspace.
 SUNRISE_CLIENT = [
-    # The build script and the native hook tests read the hook targets' sources.
-    "crates/sunrise-client-render/src", "crates/sunrise-world/src", "crates/sunrise-items/src",
+    # The build script and the native hook tests read the hook targets' sources; prepared-data tests include the shared boundary.
+    "crates/sunrise-client-render/src", "crates/sunrise-core/src/prepared_test_root.rs",
+    "crates/sunrise-world/src", "crates/sunrise-items/src",
     "docs/api/launch-reference.md", "docs/sunrise-ctl-commands.md", "docs/modding/examples/src/worldgen.rs",
     "docs/parity/block-entity-client-ticks.jsonl", "docs/parity/random-chance-seeded.jsonl",
     "research-lock.json", "tests/fixture_support/item_resource_properties.rs", "tests/fixtures",
@@ -70,7 +71,9 @@ READERS = {
         "crates/sunrise-gameplay/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-world/src",
         "docs/api/launch-reference.md", "docs/modding/examples/src/worldgen.rs",
     ],
-    "sunrise-gameplay": ["crates/sunrise-mod-vocab/src/hooks", "tests/fixtures"],
+    "sunrise-gameplay": [
+        "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks", "tests/fixtures",
+    ],
     "sunrise-client-gameplay": ["crates/sunrise-mod-vocab/src/hooks"],
     "sunrise-parity-fixtures": [*SUNRISE_CLIENT, "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs"],
     "sunrise-sim": [
@@ -127,6 +130,8 @@ READERS = {
         "tests/stable_mod_api_integration.py", "tests/test_stable_mod_api.py", "tools/ci/nightly.py",
         "tools/release_train.py",
     ],
+    # Worldgen prepared-data tests include the shared prepared-root boundary.
+    "sunrise-world": ["crates/sunrise-core/src/prepared_test_root.rs"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.
     "xtask": [
         "crates/sunrise-client/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-perf/web",

@@ -10,14 +10,13 @@ use super::super::{
         start::Piece,
     },
 };
-use super::tests::{PieceWorld, prepared_root, prepared_with};
+use super::tests::{PieceWorld, prepared_with, worldgen_root};
 use super::*;
 use serde_json::json;
 
 /// A prepared bundle (`worldgen/<name>.json`): each entry's id and JSON text.
 fn bundle(name: &str) -> BTreeMap<String, String> {
-    let path = prepared_root()
-        .expect("prepared resources")
+    let path = worldgen_root()
         .join("worldgen")
         .join(format!("{name}.json"));
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
@@ -35,7 +34,7 @@ fn with_pack(files: &[(impl AsRef<str>, String)]) -> Arc<GeneratorData> {
         let added = overrides.add_file("file/test", file.as_ref(), || Some(text.clone()));
         assert_eq!(added, PackFile::Read, "{}", file.as_ref());
     }
-    let data = prepared_with(&overrides).expect("prepared resources");
+    let data = prepared_with(&overrides);
     assert!(data.warnings().is_empty(), "{:?}", data.warnings());
     data
 }
@@ -56,7 +55,7 @@ fn surface(data: Arc<GeneratorData>) -> Vec<Option<(i32, BlockStateId)>> {
 }
 
 fn vanilla_surface() -> Vec<Option<(i32, BlockStateId)>> {
-    surface(prepared_with(&WorldgenOverrides::default()).expect("prepared resources"))
+    surface(prepared_with(&WorldgenOverrides::default()))
 }
 
 /// Places `feature` at one position of an empty world, as a structure piece does; whether it
@@ -201,9 +200,7 @@ fn a_packs_carvers_that_never_run_leave_the_noise_chunk_uncarved() {
         changed
     };
     assert!(!carved(with_pack(&files)));
-    assert!(carved(
-        prepared_with(&WorldgenOverrides::default()).unwrap()
-    ));
+    assert!(carved(prepared_with(&WorldgenOverrides::default())));
 }
 
 /// The prepared igloo under the pack's `biomes`, in a pack structure set that gives every
@@ -320,7 +317,7 @@ fn a_packs_processor_list_replaces_a_vanilla_one() {
         json!({"processors": []}).to_string(),
     )]));
     assert!(packed.0.is_empty());
-    let vanilla = decode(prepared_with(&WorldgenOverrides::default()).unwrap());
+    let vanilla = decode(prepared_with(&WorldgenOverrides::default()));
     assert!(!vanilla.0.is_empty());
 }
 
