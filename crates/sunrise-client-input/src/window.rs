@@ -183,6 +183,7 @@ pub fn centered_gui_origin((w, h): (f32, f32), width: f32, height: f32) -> (f32,
     (((w - width) / 2.0).trunc(), ((h - height) / 2.0).trunc())
 }
 
+/// The geometry of one GUI target, with its OS pointer space when needed.
 #[derive(Clone, Copy, Debug)]
 pub struct GuiFrame {
     pub target: [u32; 2],
@@ -220,6 +221,7 @@ impl GuiFrame {
         self.gui.scale as f32
     }
 
+    /// Rasterization uses integer scale even when the rounded GUI extent overhangs the target.
     pub fn gui_to_target(self, position: [f32; 2]) -> [f32; 2] {
         position.map(|axis| axis * self.scale())
     }

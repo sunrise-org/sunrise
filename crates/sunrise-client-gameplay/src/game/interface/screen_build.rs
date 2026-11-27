@@ -1086,6 +1086,13 @@ mod tests {
             let legacy = HudBatch::new(target, GuiScale { requested, unicode });
             assert_eq!(frame.size(), (legacy.width, legacy.height));
             assert_eq!(frame.scale(), legacy.scale);
+
+            let mut state = ScreenBuildState::default();
+            state.sync(Screen::Inventory, true, None, frame.gui, None);
+            let build = state.current.as_ref().unwrap();
+            assert_eq!(build.size, (legacy.width, legacy.height));
+            assert_eq!(build.scale, legacy.scale);
+
             assert_eq!(batch.viewport, legacy.viewport);
             assert_eq!(
                 (batch.width, batch.height, batch.scale),

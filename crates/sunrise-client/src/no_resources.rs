@@ -197,6 +197,7 @@ impl NoResources {
             .iter()
             .find(|b| b.contains((x, y)))
             .map(|b| b.action);
+        // The click's text measurement used to drain uploads into a discarded batch.
         drop(Ui::take_patches(atlas));
         action
     }
