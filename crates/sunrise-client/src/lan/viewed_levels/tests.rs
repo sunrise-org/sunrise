@@ -172,6 +172,7 @@ fn in_ctx<R>(world: &mut World, f: impl FnOnce(&mut TickCtx) -> R) -> R {
         collision: None,
         border: &border,
         streaming: None,
+        ticking: None,
     };
     f(&mut ctx)
 }
@@ -786,6 +787,59 @@ fn a_travel_into_a_viewed_level_swaps_it_with_the_level_left() {
     assert!(g.sent_chunks.is_empty());
     let sent = got(&rx[0]);
     assert!(!sent.iter().any(|g| matches!(g, Got::Close(_))), "{sent:?}");
+}
+
+/// The plain `ForgetLevelChunk`s a client was sent, in order.
+fn plain_forgets(rx: &Receiver<Out>) -> Vec<(i32, i32)> {
+    rx.try_iter()
+        .flat_map(|o| match o {
+            Out::Packet(body) => vec![body],
+            Out::Packets(bodies) => bodies,
+            Out::Disconnect(_) => Vec::new(),
+        })
+        .filter_map(|body| {
+            let mut r = Reader::new(&body);
+            let id = r.varint().unwrap();
+            match C::decode(id, r.rest()) {
+                Ok(C::ForgetLevelChunk(p)) => Some((p.pos[0], p.pos[1])),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// A swap hands the player the Nether view's chunks. Those the player's view doesn't track where
+/// it arrives are forgotten, by x then z, as a vanilla view's leaving chunks are
+/// (`PlayerChunkSender.dropChunk`); those it tracks stay sent.
+#[test]
+#[ignore = "daily"]
+fn a_swap_forgets_the_views_chunks_past_the_players_view() {
+    let (mut hub, rx) = hub_with(&[1], 2);
+    hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
+    hub.set_dimension(NETHER);
+    let mut nether_world = lit_columns(1);
+    run_level(&mut hub, &mut nether_world);
+    // Columns the view holds that the player's view, around (0, 0), doesn't track.
+    let r = hub.guests[0].view_distance;
+    let past = [(r + 3, 0), (0, -(r + 3)), (r + 2, r + 2)];
+    hub.guests.update(0, |g| {
+        g.viewed.views.get_mut(NETHER).unwrap().sent.extend(past);
+    });
+    in_ctx(&mut nether_world, |ctx| {
+        let change = hub.begin_level_change(0, [8.5, 64.0, 8.5], 0.0, None, 0, ctx);
+        hub.send_commands(0, hub.commands_packet(hub.guests[0].permission));
+        hub.finish_level_change(0, change, false, ctx);
+    });
+    while rx[0].try_recv().is_ok() {}
+    hub.ticks += 1;
+    run_level(&mut hub, &mut nether_world);
+    assert_eq!(
+        plain_forgets(&rx[0]),
+        vec![(0, -(r + 3)), (r + 2, r + 2), (r + 3, 0)]
+    );
+    let g = &hub.guests[0];
+    assert!(past.iter().all(|key| !g.sent_chunks.contains(key)));
+    assert!(g.sent_chunks.contains(&(0, 0)), "a tracked one stays sent");
 }
 
 /// A client of revision 1 does not swap worlds on a travel: into the Nether it views, the server
@@ -1465,6 +1519,68 @@ fn got_own(rx: &Receiver<Out>) -> Vec<OwnGot> {
         }
     }
     out
+}
+
+/// A `Loaded` area's ticket loads its columns to full only: their ticket level isn't ticking, as
+/// the view's must be for a chunk to go (`ChunkHolder.getChunkToSend`). Past the view, kept for
+/// the area, they go all the same, in the tick the area is set, the centre first.
+#[test]
+#[ignore = "daily"]
+fn an_own_level_area_sends_its_columns_though_its_ticket_only_loads_them() {
+    use crate::ticket_levels::{ChunkTickets, Sources, ViewedTicket};
+    let answer = Answer {
+        revision: viewed_levels::REVISION_5,
+        max_levels: 2,
+    };
+    let (mut hub, rx) = hub_answered(&[1], answer);
+    hub.guests.update(0, |g| {
+        g.view_distance = 2;
+        g.chunks_per_tick = 400.0;
+        g.max_unacknowledged = 100;
+    });
+    let portal = vec![area(
+        "minecraft:overworld",
+        (300, 0),
+        1,
+        ChunkAreaMode::Loaded,
+    )];
+    hub.set_viewed_areas(1, "test:portal", portal).unwrap();
+    let mut tickets = ChunkTickets::default();
+    tickets.update(Some(Sources {
+        players: vec![(0, 0)],
+        viewed: vec![ViewedTicket {
+            center: (300, 0),
+            radius: 1,
+            ticking: false,
+        }],
+        view_distance: 2,
+        simulation_distance: 2,
+        ..Default::default()
+    }));
+    let levels = tickets.levels();
+    assert!(levels.loaded_full(300, 0) && !levels.loaded_ticking(300, 0));
+    let mut world = lit_columns(4);
+    let square: Vec<(i32, i32)> = (299..=301)
+        .flat_map(|x| (-1..=1).map(move |z| (x, z)))
+        .collect();
+    for &(x, z) in &square {
+        let mut chunk = crate::chunk::Chunk::empty(x, z);
+        chunk.lit = true;
+        world.chunks.insert((x, z), std::sync::Arc::new(chunk));
+    }
+    in_ctx(&mut world, |ctx| {
+        ctx.ticking = Some(levels);
+        let _ = hub.tick_level(ctx, None);
+    });
+    let mut far: Vec<_> = (got_own(&rx[0]).into_iter())
+        .filter_map(|g| match g {
+            OwnGot::Chunk(key) if key.0 >= 299 => Some(key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(far.first(), Some(&(300, 0)), "the centre first");
+    far.sort_unstable();
+    assert_eq!(far, square);
 }
 
 /// From revision 5, an area in the player's own level 300 chunks away: `far` keeps its columns

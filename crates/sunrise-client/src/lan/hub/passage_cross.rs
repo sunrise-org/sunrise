@@ -171,7 +171,9 @@ impl Hub {
             }
             g.tracker.clear();
             g.sent_chunks.clear();
-            g.chunk_queue.clear();
+            g.pending_chunks.remove_all();
+            g.recheck_chunks.clear();
+            g.tracked_view = None;
             g.viewed.forget_views();
             g.viewed.own.reset();
             g.entity_id
@@ -242,7 +244,9 @@ impl Hub {
             g.center = None;
             g.view_dirty = false;
             g.sent_chunks.clear();
-            g.chunk_queue.clear();
+            g.pending_chunks.remove_all();
+            g.recheck_chunks.clear();
+            g.tracked_view = None;
             g.tracker.clear();
             g.viewed.own.reset();
         });

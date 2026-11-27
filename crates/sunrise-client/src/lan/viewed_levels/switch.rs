@@ -60,7 +60,9 @@ impl Hub {
         let watching = self.chunk_watches.recording();
         let (kept, weather) = self.guests.update(i, |g| {
             let own = std::mem::take(&mut g.sent_chunks);
-            g.chunk_queue.clear();
+            g.pending_chunks.remove_all();
+            g.recheck_chunks.clear();
+            g.tracked_view = None;
             // Its client keeps nothing of the level entered past its view yet.
             g.viewed.own.reset();
             // The client drops both levels' entities: the server sends them again.
@@ -78,8 +80,8 @@ impl Hub {
             let mut old = View::new(level);
             old.sent = own;
             g.viewed.views.insert(left.to_owned(), old);
-            // What the view sent is the player's own now: `update_view` forgets what is past the
-            // player's view and queues the rest.
+            // What the view sent is the player's own now. The tracked view starts afresh, so
+            // `update_view` forgets the chunks it doesn't track and queues the ones not yet sent.
             g.sent_chunks = view.sent;
             let mut kept: Vec<_> = g.sent_chunks.iter().copied().collect();
             kept.sort_unstable();

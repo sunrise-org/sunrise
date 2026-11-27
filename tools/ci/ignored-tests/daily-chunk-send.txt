@@ -1,0 +1,3 @@
+# Chunk sending in vanilla's order (#5719): a viewed-level swap and an own-level area need the network fixture.
+sunrise-client-lib lan::viewed_levels::tests::a_swap_forgets_the_views_chunks_past_the_players_view lib daily network
+sunrise-client-lib lan::viewed_levels::tests::an_own_level_area_sends_its_columns_though_its_ticket_only_loads_them lib daily network

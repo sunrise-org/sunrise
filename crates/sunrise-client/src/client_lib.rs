@@ -217,6 +217,7 @@ pub use sunrise_client_core::nbt_path;
 pub use sunrise_client_core::scoreboard;
 pub use sunrise_client_core::snbt;
 pub use sunrise_client_core::text;
+pub use sunrise_client_core::top_k;
 pub use sunrise_client_input::actions;
 pub use sunrise_client_input::clipboard;
 pub use sunrise_client_input::gamepad;

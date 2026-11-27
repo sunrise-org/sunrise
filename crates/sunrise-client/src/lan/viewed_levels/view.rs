@@ -109,7 +109,7 @@ pub(in crate::lan) fn covers(areas: &[((i32, i32), i32)], x: i32, z: i32) -> boo
 }
 
 /// The Chebyshev distance from the chunk to the nearest area's centre.
-pub(super) fn distance(areas: &[((i32, i32), i32)], x: i32, z: i32) -> i32 {
+pub(in crate::lan) fn distance(areas: &[((i32, i32), i32)], x: i32, z: i32) -> i32 {
     (areas.iter())
         .map(|&((cx, cz), _)| (x - cx).abs().max((z - cz).abs()))
         .min()

@@ -148,6 +148,7 @@ fn a_client_and_a_server_that_disagree_about_a_parts_state_get_a_correction() {
         collision: Some(&collision),
         border: &border,
         streaming: None,
+        ticking: None,
     };
     let into = walk.iter().position(|at| at[0] + 0.3 > 22.0).unwrap();
     let before = if into == 0 {

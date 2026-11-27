@@ -22,6 +22,7 @@ fn with_input_context<T>(run: impl FnOnce(&mut TickCtx<'_>) -> T) -> T {
         collision: None,
         border: &border,
         streaming: None,
+        ticking: None,
     })
 }
 

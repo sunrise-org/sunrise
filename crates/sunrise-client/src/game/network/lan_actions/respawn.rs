@@ -201,6 +201,7 @@ impl Game<'_> {
             collision: Some(self.collision),
             border: &self.border,
             streaming: Some(&self.streaming),
+            ticking: Some(self.tickets.levels()),
         };
         if let Some(host) = self.lan.as_mut() {
             if missing {

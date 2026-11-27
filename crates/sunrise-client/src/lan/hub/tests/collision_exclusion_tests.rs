@@ -104,6 +104,7 @@ fn the_server_checks_a_guests_moves_through_the_same_exclusions_as_its_client() 
         collision: Some(&fixture.collision),
         border: &border,
         streaming: None,
+        ticking: None,
     };
     let start = ([20.5, 5.0, 20.5], true);
     let place = |hub: &mut Hub, (at, on_ground): ([f64; 3], bool)| {
@@ -159,6 +160,7 @@ fn a_change_of_level_and_a_respawn_clear_a_guests_exclusions() {
         collision: None,
         border: &border,
         streaming: None,
+        ticking: None,
     };
     let boxes = |hub: &Hub| hub.guests[0].collision_exclusions.boxes().len();
     hub.guests

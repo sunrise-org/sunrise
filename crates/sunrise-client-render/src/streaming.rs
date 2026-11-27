@@ -1942,7 +1942,7 @@ impl Streaming {
                 let n = (x + dx as i32 - 1, z + dz as i32 - 1);
                 region[dz][dx] = match world.chunks.get(&n) {
                     Some(chunk) => Some(chunk.clone()),
-                    None if !self.in_range(n.0, n.1, 1) && self.decorated.contains(&n) => {
+                    None if self.is_border_proto(n.0, n.1) => {
                         if let Some(view) = self.light_views.get(&n) {
                             Some(view.clone())
                         } else {
@@ -2027,6 +2027,12 @@ impl Streaming {
 
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
+    }
+    /// A decorated proto chunk at (x, z) that this level won't finish: past every area it keeps,
+    /// where the last finished ring reads it as vanilla's last FULL ring reads its neighbours at
+    /// FEATURES ([`full_around`]).
+    pub fn is_border_proto(&self, x: i32, z: i32) -> bool {
+        !self.in_range(x, z, 1) && self.decorated.contains(&(x, z))
     }
     /// The non-air sections of a column that is a decorated proto chunk
     /// here (vanilla's INITIALIZE_LIGHT and on), if it is one: a level
@@ -4003,6 +4009,21 @@ pub enum FullColumn {
 /// Whether column `chunk` is FULL: resident and lit (vanilla's FULL follows the LIGHT step).
 pub fn full_column_ready(world: &World, chunk: (i32, i32)) -> bool {
     world.chunks.get(&chunk).is_some_and(|c| c.lit)
+}
+
+/// Whether the 3x3 around `chunk` is at FULL, what `ChunkMap.prepareTickingChunk` waits for
+/// (`getChunkRangeFuture(holder, 1, distance -> ChunkStatus.FULL)`): each column FULL
+/// ([`full_column_ready`]), or one `border` says stands where vanilla keeps its neighbour below
+/// FULL (a decorated proto chunk past FULL's ticket level, or [`Streaming::is_border_proto`]).
+/// A decorated proto chunk that will still finish doesn't count: vanilla's neighbour there is not
+/// FULL yet either.
+pub fn full_around(world: &World, border: impl Fn(i32, i32) -> bool, (x, z): (i32, i32)) -> bool {
+    (-1..=1).all(|dz| {
+        (-1..=1).all(|dx| {
+            let n = (x + dx, z + dz);
+            full_column_ready(world, n) || border(n.0, n.1)
+        })
+    })
 }
 
 /// The square a synchronous FULL load finishes while it waits: the column and its 3x3. Vanilla
@@ -6879,6 +6900,41 @@ mod cover_tests {
                 time(&ranges(Some(&cover))),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod full_around_tests {
+    use super::*;
+
+    /// `ChunkMap.prepareTickingChunk` waits for its 3x3 at FULL: a neighbour resident but not lit,
+    /// or a decorated proto chunk that will still finish, holds the column back; a lit column, or a
+    /// proto chunk the level never finishes, counts.
+    #[test]
+    fn a_column_waits_for_its_3x3_at_full() {
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        let lit = |world: &mut World, (x, z): (i32, i32)| {
+            let mut chunk = Chunk::empty(x, z);
+            chunk.lit = true;
+            world.chunks.insert((x, z), Arc::new(chunk));
+        };
+        for (dx, dz) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (dx, dz))) {
+            if (dx, dz) != (1, 0) {
+                lit(&mut world, (dx, dz));
+            }
+        }
+        let finishes = |_, _| false;
+        // (1, 0) is a decorated proto chunk that will still finish.
+        assert!(!full_around(&world, finishes, (0, 0)));
+        // ... a level chunk, not lit yet.
+        world.chunks.insert((1, 0), Arc::new(Chunk::empty(1, 0)));
+        assert!(!full_around(&world, finishes, (0, 0)));
+        // ... lit: FULL.
+        lit(&mut world, (1, 0));
+        assert!(full_around(&world, finishes, (0, 0)));
+        // A proto chunk past every area, never finished, counts in its place.
+        world.chunks.remove(&(1, 0));
+        assert!(full_around(&world, |x, z| (x, z) == (1, 0), (0, 0)));
     }
 }
 

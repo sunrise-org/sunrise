@@ -33,6 +33,7 @@ fn players_receive_another_players_initial_main_hand_and_changes() {
         collision: None,
         border: &crate::worldborder::WorldBorder::default(),
         streaming: None,
+        ticking: None,
     };
     let received = || {
         queued_play_packets(&viewer)

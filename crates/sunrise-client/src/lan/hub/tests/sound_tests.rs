@@ -45,6 +45,7 @@ fn a_trident_joining_after_tracking_is_paired_before_its_throw_sound() {
         collision: None,
         border: &border,
         streaming: None,
+        ticking: None,
     };
     hub.track_entities(&mut ctx, None);
     while rx.try_recv().is_ok() {}
@@ -148,6 +149,7 @@ fn a_captured_sound_reaches_the_client_before_its_emitter_is_removed() {
         collision: None,
         border: &border,
         streaming: None,
+        ticking: None,
     };
     hub.track_entities(&mut ctx, None);
     assert!(hub.guests[0].tracker.is_tracking(37));
@@ -249,6 +251,7 @@ fn a_new_pair_does_not_reorder_sounds_or_remove_an_old_emitter_early() {
                 collision: None,
                 border: &border,
                 streaming: None,
+                ticking: None,
             };
             hub.track_entities(&mut ctx, None);
             assert!(hub.guests[0].tracker.is_tracking(37));

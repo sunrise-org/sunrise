@@ -147,6 +147,7 @@ fn in_tick(world: &mut World, f: impl FnOnce(&mut TickCtx<'_>)) {
         collision: None,
         border: &crate::worldborder::WorldBorder::default(),
         streaming: None,
+        ticking: None,
     });
 }
 

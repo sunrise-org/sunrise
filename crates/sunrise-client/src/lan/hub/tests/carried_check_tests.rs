@@ -183,6 +183,7 @@ impl<'a> Guestside<'a> {
             collision: Some(&self.fixture.collision),
             border: &self.border,
             streaming: None,
+            ticking: None,
         };
         let hub = &mut self.hub;
         rig.within(|| hub.drain_packets(&mut ctx))
@@ -1329,6 +1330,7 @@ fn a_carried_guests_settle_asks_a_part_about_the_guest() {
         collision: Some(&collision),
         border: &side.border,
         streaming: None,
+        ticking: None,
     };
     let looped = Arc::new(crate::native_client_hooks::test_hooks::loop_context());
     let parts = Rc::new(crate::collision_parts::ModParts::new(looped.clone()));

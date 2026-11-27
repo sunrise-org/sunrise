@@ -170,6 +170,7 @@ impl Host {
             collision: None,
             border: &sunrise_client::worldborder::WorldBorder::default(),
             streaming: None,
+            ticking: None,
         };
         for event in self.hub.tick(&mut ctx) {
             if let HostEvent::Joined(conn, _) = event {

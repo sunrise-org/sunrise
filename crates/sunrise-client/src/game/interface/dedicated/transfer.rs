@@ -182,6 +182,7 @@ impl Game<'_> {
             Ok(v) => v,
             Err(e) => return json!({ "error": format!("the request is not JSON: {e}") }),
         };
+        let ticking = self.tickets.levels();
         let Some(host) = self.lan.as_mut() else {
             return json!({ "error": "the server is not open to players" });
         };
@@ -201,11 +202,18 @@ impl Game<'_> {
                 "retried": true,
             });
         }
+        // The level in place, which a recentring import asks readiness against.
+        let level = sunrise_client::lan::hub::LevelNow {
+            world: &self.world,
+            streaming: Some(&self.streaming),
+            ticking: Some(&ticking),
+        };
         let result = sunrise_client::lan::import::import_player(
             &mut host.hub,
             &self.motion.attributes,
             uuid,
             &request,
+            Some(level),
         );
         match result {
             Ok(done) => {

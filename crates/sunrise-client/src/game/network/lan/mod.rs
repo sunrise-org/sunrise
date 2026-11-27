@@ -2783,6 +2783,7 @@ impl Game<'_> {
                 collision: Some(self.collision),
                 border: &self.border,
                 streaming: Some(&self.streaming),
+                ticking: Some(self.tickets.levels()),
             };
             host.hub.movement_checks = (
                 self.ui
@@ -2957,6 +2958,10 @@ impl Game<'_> {
     pub(super) fn lan_broadcast_changes(&mut self) -> Option<usize> {
         if let Some(host) = self.lan.as_mut() {
             host.hub.broadcast_changes(&mut self.world);
+            // `ChunkMap.tick` right after: each player's view follows it.
+            let ticking = self.tickets.levels();
+            host.hub
+                .update_views(&self.world, Some(&self.streaming), Some(&ticking));
         }
         self.world.block_log.as_ref().map(Vec::len)
     }
@@ -3253,6 +3258,7 @@ impl Game<'_> {
                     collision: Some(self.collision),
                     border: &self.border,
                     streaming: Some(&self.streaming),
+                    ticking: Some(self.tickets.levels()),
                 };
                 host.hub.movement_checks = (
                     self.ui
@@ -3549,6 +3555,7 @@ impl Game<'_> {
                     collision: Some(self.collision),
                     border: &self.border,
                     streaming: Some(&self.streaming),
+                    ticking: Some(self.tickets.levels()),
                 }
             }};
         }

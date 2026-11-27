@@ -496,14 +496,15 @@ fn player_census(hub: &Hub) -> Players {
         let (packets, queued) = g.sender.queued();
         bytes += queued
             + set(g.sent_chunks.capacity())
-            + vec_bytes(&g.chunk_queue)
+            + g.pending_chunks.heap_bytes()
+            + vec_bytes(&g.recheck_chunks)
             + g.tracker.heap_bytes();
         rows.push((
             g.name.clone(),
             [
                 queued,
                 packets,
-                g.chunk_queue.len(),
+                g.pending_chunks.len() + g.recheck_chunks.len(),
                 g.sent_chunks.len(),
                 g.tracker.len(),
             ],
