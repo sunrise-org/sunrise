@@ -32,10 +32,10 @@ PROBES = {
     "tree_feature_fixture": "tags fluid_tags",
 }
 CALLERS = {
-    "sunrise-client-render/src/assets.rs": "definitions",
+    "sunrise-level/src/assets.rs": "definitions",
     "sunrise-client/src/animate_tick.rs": "definitions",
-    "sunrise-client/src/mod_content_load_conditions_tests.rs": "tags",
-    "sunrise-client/src/motion.rs": "definitions",
+    "sunrise-sim/src/mod_content_load_conditions_tests.rs": "tags",
+    "sunrise-sim/src/motion.rs": "definitions",
     "sunrise-world/src/worldgen/tags.rs": "definitions " * 5,
     **{f"sunrise-world/examples/probe/{stem}.rs": names for stem, names in PROBES.items()},
 }

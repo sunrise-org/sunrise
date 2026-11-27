@@ -3061,6 +3061,7 @@ mod tests {
             .is_err()
         );
     }
+
     #[test]
     fn worldgen_block_tag_bundle_binds_more_than_8192_definitions() {
         let mut raw: BTreeMap<_, _> = (0..8192)
