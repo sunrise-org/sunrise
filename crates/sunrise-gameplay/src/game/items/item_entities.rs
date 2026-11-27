@@ -470,12 +470,12 @@ impl crate::game::ServerGame<'_> {
             });
         }
         if !pass.pending_left.is_empty() {
-            self.common.put_back_dropped(items);
-            for id in pass.pending_left {
-                self.native_entity_left(id);
-            }
-            self.native_item_removals_flush(|_| {});
-            items = self.common.dropped.lift();
+            items = self.hand_back_dropped(items, |game| {
+                for id in pass.pending_left {
+                    game.native_entity_left(id);
+                }
+                game.native_item_removals_flush(|_| {});
+            });
         }
         let Some(p) = self.common.player.as_ref() else {
             self.common.put_back_dropped(items);
@@ -506,6 +506,29 @@ impl crate::game::ServerGame<'_> {
         self.common.put_back_dropped(items);
         self.spawn_destroyed_contents(destroyed);
     }
+    #[inline(always)]
+    fn hand_back_dropped(
+        &mut self,
+        items: JoinList<ItemEntity>,
+        work: impl FnOnce(&mut Self),
+    ) -> JoinList<ItemEntity> {
+        self.common.put_back_dropped(items);
+        work(self);
+        self.common.dropped.lift()
+    }
+
+    #[inline(always)]
+    fn with_lifted_orbs<R>(
+        &mut self,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(&mut Self, &mut JoinList<ExperienceOrb>) -> R,
+    ) -> R {
+        let mut orbs = self.common.orbs.lift();
+        let result = work(self, &mut orbs);
+        self.common.orbs.restore(orbs, order);
+        result
+    }
+
     /// Gives the lifted items back to the level for a hook that reads them live (a named item's
     /// own Pre or Post, at item `i`), then takes them again. The items gone this pass so far
     /// leave the list first, so the hook sees the level as it stands. When none left, none
@@ -880,34 +903,36 @@ impl crate::game::ServerGame<'_> {
                 ],
             )
         });
-        let mut orbs = self.common.orbs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let mut gained = 0i32;
-        let mut taken = Vec::new();
-        if let Some((min, max)) = bounds {
-            orbs.retain_mut(|o| {
-                let touching = o.position.x + 0.25 > min[0]
-                    && o.position.x - 0.25 < max[0]
-                    && o.position.y + 0.5 > min[1]
-                    && o.position.y < max[1]
-                    && o.position.z + 0.25 > min[2]
-                    && o.position.z - 0.25 < max[2];
-                if touching && self.server.xp_delay == 0 {
-                    // ExperienceOrb.playerTouch: one orb every 2 ticks; a
-                    // merged orb gives its value once per count.
-                    self.server.xp_delay = 2;
-                    gained = gained.saturating_add(o.value);
-                    taken.push(o.clone());
-                    o.count -= 1;
-                    return o.count > 0;
+        let (mut gained, taken) = self.with_lifted_orbs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, orbs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let mut gained = 0i32;
+                let mut taken = Vec::new();
+                if let Some((min, max)) = bounds {
+                    orbs.retain_mut(|o| {
+                        let touching = o.position.x + 0.25 > min[0]
+                            && o.position.x - 0.25 < max[0]
+                            && o.position.y + 0.5 > min[1]
+                            && o.position.y < max[1]
+                            && o.position.z + 0.25 > min[2]
+                            && o.position.z - 0.25 < max[2];
+                        if touching && game.server.xp_delay == 0 {
+                            // ExperienceOrb.playerTouch: one orb every 2 ticks; a
+                            // merged orb gives its value once per count.
+                            game.server.xp_delay = 2;
+                            gained = gained.saturating_add(o.value);
+                            taken.push(o.clone());
+                            o.count -= 1;
+                            return o.count > 0;
+                        }
+                        true
+                    });
                 }
-                true
-            });
-        }
-        self.common
-            .orbs
-            .restore(orbs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+                (gained, taken)
+            },
+        );
         // ExperienceOrb.playerTouch repairs with the signed value, whatever it is.
         if !taken.is_empty() {
             gained = self.mending(gained);

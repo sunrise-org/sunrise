@@ -3240,57 +3240,58 @@ impl crate::game::ServerGame<'_> {
         let mut harmed_mobs: Vec<(u32, i32, [f64; 3], u32)> = Vec::new();
         let ticking = self.entity_ticking_area();
         let through = self.server.ticked_entities_through;
-        let mut clouds = self.common.breath_clouds.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        clouds.retain_mut(|c| {
-            // Lingering potions' clouds tick with the potions.
-            if c.potion.is_some() {
-                return true;
-            }
-            if c.id > through || !ticking(c.at[0].floor() as i32, c.at[2].floor() as i32) {
-                return true;
-            }
-            self.cloud_fluid_step(c);
-            c.age += 1;
-            if breath_expired(c.age, c.duration) {
-                return self.forget_expired_cloud(c.id);
-            }
-            if !c.from_dragon && c.age >= BREATH_WAIT {
-                // DragonFireball's cloud: radius per tick (7 - 3) / duration.
-                c.radius += (7.0 - 3.0) / c.duration as f32;
-            }
-            let r = c.radius;
-            for _ in 0..((std::f32::consts::PI * r * r) as i32).min(40) {
-                let _a = self.common.world.random.next_float() * std::f32::consts::TAU;
-                let _d = self.common.world.random.next_float().sqrt() * r;
-            }
-            // AreaEffectCloud: after its wait, each entity every 20 ticks.
-            // Instant damage I from the flame cloud, II from a fireball's,
-            // both at the cloud's 0.5 scale.
-            let amount = harm_amount(u32::from(!c.from_dragon));
-            let inside = players
-                .iter()
-                .filter(|p| cloud_hits(c.at, r, p.bounds, p.position))
-                .map(|p| Victim::Player(p.who))
-                .chain(
-                    mobs.iter()
-                        .filter(|m| cloud_hits(c.at, r, m.1, m.2))
-                        .map(|m| Victim::Mob(m.0)),
-                );
-            for victim in breath_victims(c.age, &mut c.victims, inside) {
-                match victim {
-                    Victim::Player(who) => harmed.push((who, amount)),
-                    Victim::Mob(id) => {
-                        harmed_mobs.push((id, i32::from(!c.from_dragon), c.at, c.id));
+        self.with_lifted_breath_clouds(
+            sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
+            |game, clouds| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                clouds.retain_mut(|c| {
+                    // Lingering potions' clouds tick with the potions.
+                    if c.potion.is_some() {
+                        return true;
                     }
-                }
-            }
-            true
-        });
-        self.common
-            .breath_clouds
-            .restore(clouds, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
+                    if c.id > through || !ticking(c.at[0].floor() as i32, c.at[2].floor() as i32) {
+                        return true;
+                    }
+                    game.cloud_fluid_step(c);
+                    c.age += 1;
+                    if breath_expired(c.age, c.duration) {
+                        return game.forget_expired_cloud(c.id);
+                    }
+                    if !c.from_dragon && c.age >= BREATH_WAIT {
+                        // DragonFireball's cloud: radius per tick (7 - 3) / duration.
+                        c.radius += (7.0 - 3.0) / c.duration as f32;
+                    }
+                    let r = c.radius;
+                    for _ in 0..((std::f32::consts::PI * r * r) as i32).min(40) {
+                        let _a = game.common.world.random.next_float() * std::f32::consts::TAU;
+                        let _d = game.common.world.random.next_float().sqrt() * r;
+                    }
+                    // AreaEffectCloud: after its wait, each entity every 20 ticks.
+                    // Instant damage I from the flame cloud, II from a fireball's,
+                    // both at the cloud's 0.5 scale.
+                    let amount = harm_amount(u32::from(!c.from_dragon));
+                    let inside = players
+                        .iter()
+                        .filter(|p| cloud_hits(c.at, r, p.bounds, p.position))
+                        .map(|p| Victim::Player(p.who))
+                        .chain(
+                            mobs.iter()
+                                .filter(|m| cloud_hits(c.at, r, m.1, m.2))
+                                .map(|m| Victim::Mob(m.0)),
+                        );
+                    for victim in breath_victims(c.age, &mut c.victims, inside) {
+                        match victim {
+                            Victim::Player(who) => harmed.push((who, amount)),
+                            Victim::Mob(id) => {
+                                harmed_mobs.push((id, i32::from(!c.from_dragon), c.at, c.id));
+                            }
+                        }
+                    }
+                    true
+                });
+            },
+        );
         for (who, amount) in harmed {
             self.as_fight_player(who, |g| {
                 g.dragon_hurts_player("minecraft:indirect_magic", amount);

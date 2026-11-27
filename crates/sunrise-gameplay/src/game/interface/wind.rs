@@ -754,15 +754,15 @@ impl ServerGame<'_> {
         if late.is_empty() {
             return;
         }
-        let mut entities = self.take_entities();
-        for_each_entity_mut!(entities, entity => {
-            // Every burst of the tick pushed it, one after the other.
-            let id = entity.id();
-            for (_, push) in late.iter().filter(|(pushed, _)| *pushed == id) {
-                entity.push_from_explosion(*push);
-            }
+        self.with_taken_entities(|_, entities| {
+            for_each_entity_mut!(entities, entity => {
+                // Every burst of the tick pushed it, one after the other.
+                let id = entity.id();
+                for (_, push) in late.iter().filter(|(pushed, _)| *pushed == id) {
+                    entity.push_from_explosion(*push);
+                }
+            });
         });
-        self.restore_entities(entities);
     }
     /// `ServerExplosion.hurtEntities` for the player: the push, less
     /// explosion knockback resistance, and `ServerPlayer.onExplosionHit`.

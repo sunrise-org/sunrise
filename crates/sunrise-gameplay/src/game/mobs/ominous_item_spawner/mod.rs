@@ -99,6 +99,18 @@ impl ServerGame<'_> {
             raw: Some(Box::new(tag)),
         });
     }
+    #[inline(always)]
+    fn with_lifted_ominous_spawners<R>(
+        &mut self,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::join_seq::ResidentList<OminousItemSpawner>) -> R,
+    ) -> R {
+        let mut spawners = self.common.ominous_spawners.lift();
+        let result = work(self, &mut spawners);
+        self.common.ominous_spawners.restore(spawners, order);
+        result
+    }
+
     /// Every item spawner's tick: `commonTick`'s count, `tickServer` (the
     /// warning sound, then the item) and `tickClient` (particles every 5
     /// game ticks).
@@ -106,41 +118,41 @@ impl ServerGame<'_> {
         // ServerLevel.tick: only entities in entity-ticking chunks that joined before the pass tick.
         let ticking = self.entity_ticking_area();
         let through = self.server.ticked_entities_through;
-        let mut spawners = self.common.ominous_spawners.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        spawners.retain_mut(|s| {
-            if s.id > through
-                || !ticking(s.position[0].floor() as i32, s.position[2].floor() as i32)
-            {
-                return true;
-            }
-            // Entity.baseTick: the spawner burns down; its hurt does nothing.
-            if s.fire_ticks > 0 {
-                s.fire_ticks -= 1;
-            }
-            s.synced_fire = s.fire_ticks > 0 || s.has_visual_fire;
-            s.tick_count += 1;
-            let at = block(s.position);
-            let center = at.map(|v| f64::from(v) + 0.5);
-            if s.tick_count == s.spawn_item_after - ABOUT_TO_SPAWN {
-                self.server_play_sound_on(
-                    6,
-                    "minecraft:block.trial_spawner.about_to_spawn_item",
-                    center,
-                    1.0,
-                    1.0,
-                );
-            }
-            if s.tick_count >= s.spawn_item_after {
-                self.spawn_ominous_item(s);
-                return self.forget_finished_spawner(s.id);
-            }
-            true
-        });
-        self.common.ominous_spawners.restore(
-            spawners,
+        self.with_lifted_ominous_spawners(
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, spawners| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                spawners.retain_mut(|s| {
+                    if s.id > through
+                        || !ticking(s.position[0].floor() as i32, s.position[2].floor() as i32)
+                    {
+                        return true;
+                    }
+                    // Entity.baseTick: the spawner burns down; its hurt does nothing.
+                    if s.fire_ticks > 0 {
+                        s.fire_ticks -= 1;
+                    }
+                    s.synced_fire = s.fire_ticks > 0 || s.has_visual_fire;
+                    s.tick_count += 1;
+                    let at = block(s.position);
+                    let center = at.map(|v| f64::from(v) + 0.5);
+                    if s.tick_count == s.spawn_item_after - ABOUT_TO_SPAWN {
+                        game.server_play_sound_on(
+                            6,
+                            "minecraft:block.trial_spawner.about_to_spawn_item",
+                            center,
+                            1.0,
+                            1.0,
+                        );
+                    }
+                    if s.tick_count >= s.spawn_item_after {
+                        game.spawn_ominous_item(s);
+                        return game.forget_finished_spawner(s.id);
+                    }
+                    true
+                });
+            },
         );
     }
     /// `spawnItem`: a projectile shot down, or an item entity; level event

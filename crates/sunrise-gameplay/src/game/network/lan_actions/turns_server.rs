@@ -402,8 +402,7 @@ impl crate::game::ServerGame<'_> {
             self.common.level.player_fall_particles.take(),
         );
         let g = &host.hub.guests[i];
-        self.common.hook.begin_loan();
-        std::mem::swap(&mut self.common.hook, &mut play.hook);
+        self.common.hook.swap_in_loan(&mut play.hook);
         let adv_loaded = std::mem::replace(&mut self.common.adv.loaded, true);
         let last_inventory =
             std::mem::replace(&mut self.common.adv.last_inventory, play.last_inventory);

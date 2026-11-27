@@ -37,44 +37,57 @@ impl ServerGame<'_> {
         .unwrap_or(0)
     }
 
+    #[inline(always)]
+    fn with_lifted_fangs<R>(
+        &mut self,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::join_seq::ResidentList<Fangs>) -> R,
+    ) -> R {
+        let mut list = self.common.fangs.list.lift();
+        let result = work(self, &mut list);
+        self.common.fangs.list.restore(list, order);
+        result
+    }
+
     /// `EvokerFangs.tick`.
     pub fn tick_fangs(&mut self) {
         sunrise_threads::work::clear_work();
         // ServerLevel.tick: only entities in entity-ticking chunks that joined before the pass tick.
         let ticking = self.entity_ticking_area();
         let through = self.server.ticked_entities_through;
-        let mut list = self.common.fangs.list.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        list.retain_mut(|f| {
-            if f.id > through || !ticking(f.pos[0].floor() as i32, f.pos[2].floor() as i32) {
-                return true;
-            }
-            self.fangs_fluid_step(f);
-            // Entity.baseTick: the fangs burn down; their hurt does nothing.
-            if f.fire_ticks > 0 {
-                f.fire_ticks -= 1;
-            }
-            f.synced_fire = f.fire_ticks > 0 || f.has_visual_fire;
-            f.warmup = f.warmup.wrapping_sub(1);
-            if f.warmup >= 0 {
-                return true;
-            }
-            if f.warmup == -8 {
-                self.fangs_bite(f);
-            }
-            if !f.started {
-                f.started = true;
-                self.lan_entity_event(f.id as i32, 4, f.pos);
-                let _pitch = fang_attack_pitch(&mut f.random);
-            }
-            f.life -= 1;
-            f.life >= 0
-        });
-        self.common
-            .fangs
-            .list
-            .restore(list, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        self.with_lifted_fangs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, list| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                list.retain_mut(|f| {
+                    if f.id > through || !ticking(f.pos[0].floor() as i32, f.pos[2].floor() as i32)
+                    {
+                        return true;
+                    }
+                    game.fangs_fluid_step(f);
+                    // Entity.baseTick: the fangs burn down; their hurt does nothing.
+                    if f.fire_ticks > 0 {
+                        f.fire_ticks -= 1;
+                    }
+                    f.synced_fire = f.fire_ticks > 0 || f.has_visual_fire;
+                    f.warmup = f.warmup.wrapping_sub(1);
+                    if f.warmup >= 0 {
+                        return true;
+                    }
+                    if f.warmup == -8 {
+                        game.fangs_bite(f);
+                    }
+                    if !f.started {
+                        f.started = true;
+                        game.lan_entity_event(f.id as i32, 4, f.pos);
+                        let _pitch = fang_attack_pitch(&mut f.random);
+                    }
+                    f.life -= 1;
+                    f.life >= 0
+                });
+            },
+        );
     }
     /// `Entity.baseTick`'s `updateFluidInteraction` for fangs (0.5F x 0.8F): the
     /// currents of the water and lava the box touches add to the motion.
