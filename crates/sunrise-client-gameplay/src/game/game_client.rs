@@ -1314,6 +1314,10 @@ impl crate::game::ClientGame<'_> {
         self.client.kept_block_entities.get_mut().clear();
         self.client.mod_view_distances.take();
         self.client.streaming.paused = true;
+        self.client
+            .native_shaders
+            .translation
+            .world_changed(self.client.renderer.0.as_deref_mut());
         self.common.world =
             sunrise_gameplay_common::game::world_for_mods(self.common.res.facts().air, 0);
         self.common.player = None;

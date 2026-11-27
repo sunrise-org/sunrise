@@ -511,6 +511,7 @@ struct PackSelection {
     path: PathBuf,
     dimension: &'static str,
     options_revision: u64,
+    pick_revision: u64,
     renderer_epoch: u64,
     renderer_layout: (bool, u32, Option<Tonemap>),
     resource_generation: u64,
@@ -579,7 +580,7 @@ struct TranslationWorker {
     key: TranslationKey,
     cancel: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<TranslationReply>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     ready: Option<std::thread::Result<TranslationReply>>,
 }
 
@@ -633,13 +634,13 @@ impl TranslationWorker {
             key,
             cancel,
             thread: Some(thread),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             ready: None,
         })
     }
 
     fn is_finished(&self) -> bool {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.ready.is_some() {
             return true;
         }
@@ -649,7 +650,7 @@ impl TranslationWorker {
     }
 
     fn finish(mut self) -> Option<TranslationReply> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(ready) = self.ready.take() {
             return ready.ok();
         }
@@ -679,6 +680,7 @@ pub(in crate::game) struct ShaderTranslation {
     retiring_build: Option<sunrise_client_render::gfx::PackBuildDrain>,
     generation: u64,
     options_revision: u64,
+    pick_revision: u64,
     resource_generation: u64,
     renderer_epoch: u64,
     world_generation: u64,
@@ -694,10 +696,7 @@ impl ShaderTranslation {
             .active
             .take()
             .is_some_and(|job| matches!(job.stage, LoadStage::Building));
-        self.cancel_translation();
-        if let Some(build) = renderer.and_then(|r| r.cancel_shader_pack_build()) {
-            self.retiring_build = Some(build);
-        }
+        self.cancel_work(renderer);
         was_building
     }
 
@@ -709,19 +708,36 @@ impl ShaderTranslation {
         self.cancel(old)
     }
 
-    pub(in crate::game) fn resources_changed(&mut self) {
+    pub(in crate::game) fn resources_changed(
+        &mut self,
+        renderer: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) {
         self.resource_generation = self.resource_generation.wrapping_add(1);
-        self.cancel_translation();
+        self.cancel_work(renderer);
     }
 
-    pub(in crate::game) fn world_changed(&mut self) {
+    pub(in crate::game) fn world_changed(
+        &mut self,
+        renderer: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) {
         self.world_generation = self.world_generation.wrapping_add(1);
-        self.cancel_translation();
+        self.cancel_work(renderer);
     }
 
-    fn cancel_translation(&self) {
+    pub(super) fn pick_changed(
+        &mut self,
+        renderer: Option<&mut sunrise_client_render::gfx::Renderer>,
+    ) {
+        self.pick_revision = self.pick_revision.wrapping_add(1);
+        self.cancel_work(renderer);
+    }
+
+    fn cancel_work(&mut self, renderer: Option<&mut sunrise_client_render::gfx::Renderer>) {
         if let Some(worker) = &self.worker {
             worker.cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(build) = renderer.and_then(|r| r.cancel_shader_pack_build()) {
+            self.retiring_build = Some(build);
         }
     }
 
@@ -761,8 +777,9 @@ impl ShaderTranslation {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ShaderTranslation {
+    #[cfg(test)]
     pub(super) fn block_next(&mut self) -> std::sync::mpsc::Sender<TranslationTestAction> {
         let (release, wait) = std::sync::mpsc::channel();
         self.gate = Some(wait);
@@ -904,7 +921,15 @@ impl crate::game::ClientGame<'_> {
         let enabled = !selected.is_empty()
             && !unsupported
             && !active_pack(&file, &self.client.settings.mods).is_empty();
-        let translation = &mut self.client.native_shaders.translation;
+        let native = &mut self.client.native_shaders;
+        if enabled {
+            path.to_string_lossy()
+                .as_ref()
+                .clone_into(&mut native.picked);
+        } else {
+            native.picked.clear();
+        }
+        let translation = &mut native.translation;
         let renderer = self.client.renderer.0.as_mut();
         let selection = renderer.as_deref().filter(|_| enabled).map(|renderer| {
             use std::hash::{Hash, Hasher};
@@ -915,6 +940,7 @@ impl crate::game::ClientGame<'_> {
                 path,
                 dimension: self.common.dim.id(),
                 options_revision: translation.options_revision,
+                pick_revision: translation.pick_revision,
                 renderer_epoch: translation.renderer_epoch,
                 renderer_layout: renderer.shader_pack_input_layout(),
                 resource_generation: translation.resource_generation,
@@ -955,7 +981,7 @@ impl crate::game::ClientGame<'_> {
             return false;
         }
         if self.client.pack_reload.0.is_some() {
-            return false;
+            return true;
         }
         let Some(selection) = selection else {
             return true;
@@ -1155,7 +1181,10 @@ impl crate::game::ClientGame<'_> {
         if translation.retiring_build.is_some() || !(worker_ready || build_ready) {
             return;
         }
-        if fingerprint(&job.key.selection.path) != job.key.fingerprint {
+        let current_fingerprint = sunrise_level::spans::time("shader_pack_validate", || {
+            fingerprint(&job.key.selection.path)
+        });
+        if current_fingerprint != job.key.fingerprint {
             if translation.cancel(Some(renderer)) {
                 self.drop_published_shader_pack();
             }
@@ -1270,6 +1299,7 @@ impl crate::game::ClientGame<'_> {
             terrain_states: pack.terrain_states,
             block_states: RefCell::default(),
         });
+        self.set_translucent_layers(Vec::new());
         job.stage = LoadStage::Building;
     }
 
@@ -1626,7 +1656,16 @@ impl crate::game::ClientGame<'_> {
         }
         let translation = &mut self.client.native_shaders.translation;
         translation.options_revision = translation.options_revision.wrapping_add(1);
-        translation.cancel_translation();
+        translation.cancel_work(self.client.renderer.0.as_deref_mut());
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline(always)]
+    pub fn test_wait_shader_pack_translation(&mut self) {
+        self.client
+            .native_shaders
+            .translation
+            .wait_for_translation();
     }
 
     #[cfg(any(test, feature = "test-support"))]
