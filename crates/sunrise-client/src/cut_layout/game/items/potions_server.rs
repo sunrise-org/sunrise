@@ -15,9 +15,9 @@ use sunrise_sim::projectiles::ProjectileKind;
 pub(crate) mod tests {
     use super::*;
     use sunrise_gameplay::game::server_side::potions_server::collect_dragon_breath;
-    use sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt;
     use sunrise_gameplay_common::game::client_side::potions::tests::FoodEffectMod;
     use sunrise_gameplay_common::game::client_side::potions::tests::OtherEffectMod;
+    use sunrise_gameplay_common::game::potions_common::area_effect_cloud_to_nbt;
     use sunrise_sim::motion::PlayerMotion;
 
     pub(crate) fn effect_test_mod(
@@ -87,7 +87,7 @@ pub(crate) mod tests {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.breath_clouds.clear();
             for _ in 0..2 {
-                game.spawn_creeper_cloud([0.0, 80.0, 0.0], Vec::new(), Vec::new(), Vec::new(), 0);
+                game.spawn_creeper_cloud([0.0, 80.0, 0.0], Vec::new());
             }
             if !potion_pass {
                 game.breath_clouds.for_each_mut(|c| c.potion = None);
@@ -99,13 +99,7 @@ pub(crate) mod tests {
                 |game| {
                     assert!(game.breath_clouds.is_empty());
                     for _ in 0..2 {
-                        game.spawn_creeper_cloud(
-                            [0.0, 80.0, 0.0],
-                            Vec::new(),
-                            Vec::new(),
-                            Vec::new(),
-                            0,
-                        );
+                        game.spawn_creeper_cloud([0.0, 80.0, 0.0], Vec::new());
                     }
                 },
                 || {
@@ -196,7 +190,7 @@ pub(crate) mod tests {
             seed: |game, entries| {
                 game.breath_clouds.clear();
                 for &(id, at) in entries {
-                    game.spawn_creeper_cloud(at, Vec::new(), Vec::new(), Vec::new(), 0);
+                    game.spawn_creeper_cloud(at, Vec::new());
                     let i = game.breath_clouds.len() - 1;
                     let mut cloud = game.breath_clouds.remove(i);
                     cloud.id = id;
@@ -281,7 +275,7 @@ pub(crate) mod tests {
             assert_eq!(name, "test:measured");
             assert_eq!(options, &[1, 1, 0, 0]);
 
-            let saved = potion_cloud_to_nbt(&game.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
+            let saved = area_effect_cloud_to_nbt(&game.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
             let particle_tag = saved.get("custom_particle").unwrap();
             assert_eq!(particle_tag.get("measure"), Some(&Tag::Int(257)));
             assert!(

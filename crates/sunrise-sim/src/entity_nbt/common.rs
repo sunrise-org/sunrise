@@ -13,50 +13,6 @@ fn string(s: &str) -> Tag {
     Tag::String(s.into())
 }
 
-fn hidden_effect_nbt(effect: &crate::effects::EffectInstance) -> Tag {
-    let mut fields = vec![("duration", Tag::Int(effect.duration))];
-    if effect.amplifier != 0 {
-        fields.push((
-            "amplifier",
-            Tag::Byte(effect.amplifier.clamp(0, 255) as u8 as i8),
-        ));
-    }
-    if effect.ambient {
-        fields.push(("ambient", Tag::Byte(1)));
-    }
-    if !effect.visible {
-        fields.push(("show_particles", Tag::Byte(0)));
-    }
-    fields.push(("show_icon", Tag::Byte(i8::from(effect.show_icon))));
-    if let Some(hidden) = &effect.hidden {
-        fields.push(("hidden_effect", hidden_effect_nbt(hidden)));
-    }
-    Tag::compound(fields)
-}
-
-/// `MobEffectInstance.Details`' `amplifier`, `ExtraCodecs.UNSIGNED_BYTE` (default 0): Codec.BYTE
-/// takes the stored number's `byteValue()`, read as 0..255, so `-56b` is 200 and an int `256` is
-/// 0. The same codec reads an active effect and every hidden effect of its chain.
-fn effect_amplifier(tag: &Tag) -> i32 {
-    tag.get("amplifier")
-        .and_then(sunrise_world::datafix::dynamic::as_number)
-        .map_or(0, |n| i32::from(n.byte_value() as u8))
-}
-
-fn hidden_effect_from_nbt(effect: &'static str, tag: &Tag) -> crate::effects::EffectInstance {
-    let mut instance = crate::effects::EffectInstance::new(
-        effect,
-        number(tag.get("duration")).unwrap_or(0) as i32,
-        effect_amplifier(tag),
-    );
-    instance.ambient = number(tag.get("ambient")).is_some_and(|v| v != 0);
-    instance.visible = number(tag.get("show_particles")) != Some(0);
-    instance.show_icon = number(tag.get("show_icon")).map_or(instance.visible, |v| v != 0);
-    instance.hidden = tag
-        .get("hidden_effect")
-        .map(|hidden| Box::new(hidden_effect_from_nbt(effect, hidden)));
-    instance
-}
 /// Entity type ID (`id`).
 pub fn kind(tag: &Tag) -> Option<String> {
     sunrise_game_data::identifier::normalize_id(&text(tag.get("id"))?)

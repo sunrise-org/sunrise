@@ -68,71 +68,135 @@ pub fn contents_name_key(stack: &ItemStack) -> Option<String> {
         None => potion_name_key(item, stack.potion()),
     })
 }
-/// `PotionContents.getAllEffects`: the potion's effects, then the stack's
-/// `custom_effects` (id, duration, amplifier). Unknown effect ids are dropped.
-pub fn contents_effects(stack: &ItemStack) -> Vec<(&'static str, i32, i32)> {
-    let potion = stack.potion().and_then(self::potion);
-    let custom = stack.custom_potion_effects();
-    potion
-        .map_or(&[][..], |d| d.effects)
-        .iter()
-        .copied()
-        .chain(
-            custom
-                .iter()
-                .filter_map(|(id, duration, amp)| Some((effect(id)?.id, *duration, *amp))),
-        )
-        .collect()
+/// `PotionContents`: the potion holder and its optional presentation and effect overrides.
+#[derive(Default)]
+pub struct PotionContents {
+    pub potion: Option<&'static PotionDef>,
+    pub custom_color: Option<i32>,
+    pub custom_effects: Vec<crate::effects::EffectInstance>,
+    pub custom_name: Option<sunrise_core::nbt::JavaString>,
 }
-/// `PotionContents.getAllEffects`, retaining each custom instance's flags.
-pub fn contents_instances(stack: &ItemStack) -> Vec<crate::effects::EffectInstance> {
-    use sunrise_core::nbt::Tag;
-    use sunrise_game_data::nbt_value::{number, text};
-    let mut effects: Vec<_> = stack
-        .potion()
-        .and_then(potion)
-        .map_or(&[][..], |p| p.effects)
-        .iter()
-        .map(|(id, duration, amp)| crate::effects::EffectInstance::new(id, *duration, *amp))
-        .collect();
-    if let Some((_, Tag::List(custom))) = stack
-        .data()
-        .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == "custom_effects"))
-    {
-        for e in custom {
-            let Some(def) = text(e.get("id")).and_then(|id| effect(&id)) else {
-                continue;
-            };
-            let mut instance = crate::effects::EffectInstance::new(
-                def.id,
-                number(e.get("duration")).unwrap_or(0) as i32,
-                number(e.get("amplifier")).unwrap_or(0).clamp(0, 255) as i32,
-            );
-            instance.ambient = number(e.get("ambient")).unwrap_or(0) != 0;
-            instance.visible = number(e.get("show_particles")) != Some(0);
-            effects.push(instance);
+
+impl PotionContents {
+    pub fn from_stack(stack: &ItemStack) -> Self {
+        let data = stack.data();
+        Self::read_fields(stack.potion().and_then(potion), |key| {
+            data?
+                .potion_extra
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v)
+        })
+    }
+
+    /// `PotionContents.CODEC`, including the bare potion ID accepted on read.
+    pub fn from_nbt(tag: &sunrise_core::nbt::Tag) -> Self {
+        use sunrise_core::nbt::Tag;
+        use sunrise_game_data::nbt_value::text;
+        let id = if matches!(tag, Tag::String(_)) {
+            Some(tag)
+        } else {
+            tag.get("potion")
+        };
+        Self::read_fields(text(id).as_deref().and_then(potion), |key| tag.get(key))
+    }
+
+    fn read_fields<'a>(
+        potion: Option<&'static PotionDef>,
+        field: impl Fn(&str) -> Option<&'a sunrise_core::nbt::Tag>,
+    ) -> Self {
+        use sunrise_core::nbt::Tag;
+        use sunrise_world::datafix::dynamic::as_number;
+        Self {
+            potion,
+            custom_color: field("custom_color")
+                .and_then(as_number)
+                .map(|n| n.int_value()),
+            custom_effects: match field("custom_effects") {
+                Some(Tag::List(effects)) => effects
+                    .iter()
+                    .filter_map(crate::effects::EffectInstance::from_nbt)
+                    .collect(),
+                _ => Vec::new(),
+            },
+            custom_name: match field("custom_name") {
+                Some(Tag::String(name)) => Some(name.clone()),
+                _ => None,
+            },
         }
     }
-    effects
-}
-/// `PotionContents.getColor`: an explicit colour wins; otherwise mix only
-/// visible base and custom effects, with their amplifier weights.
-pub fn contents_color(stack: &ItemStack) -> u32 {
-    use sunrise_game_data::nbt_value::number;
-    if let Some(color) = stack
-        .data()
-        .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == "custom_color"))
-        .and_then(|(_, v)| number(Some(v)))
-    {
-        return color as u32;
+
+    /// The full record form; a cloud omits the field entirely for `PotionContents.EMPTY`.
+    pub fn to_nbt(&self) -> Option<sunrise_core::nbt::Tag> {
+        use sunrise_core::nbt::Tag;
+        let mut fields = Vec::new();
+        if let Some(potion) = self.potion {
+            fields.push((
+                "potion",
+                Tag::String(format!("minecraft:{}", potion.id).as_str().into()),
+            ));
+        }
+        if let Some(color) = self.custom_color {
+            fields.push(("custom_color", Tag::Int(color)));
+        }
+        if !self.custom_effects.is_empty() {
+            fields.push((
+                "custom_effects",
+                Tag::List(
+                    self.custom_effects
+                        .iter()
+                        .map(crate::effects::EffectInstance::to_nbt)
+                        .collect(),
+                ),
+            ));
+        }
+        if let Some(name) = &self.custom_name {
+            fields.push(("custom_name", Tag::String(name.clone())));
+        }
+        (!fields.is_empty()).then(|| Tag::compound(fields))
     }
-    0xFF00_0000
-        | sunrise_game_data::potions::effects_color(
-            contents_instances(stack)
-                .iter()
-                .filter(|e| e.visible)
-                .map(|e| (e.id, e.amplifier)),
+
+    /// `PotionContents.getAllEffects`: base instances followed by custom ones.
+    pub fn effects(&self) -> impl Iterator<Item = crate::effects::EffectInstance> + '_ {
+        self.potion
+            .map_or(&[][..], |p| p.effects)
+            .iter()
+            .map(|&(id, duration, amp)| crate::effects::EffectInstance::new(id, duration, amp))
+            .chain(self.custom_effects.iter().cloned())
+    }
+
+    /// `PotionContents.getColor`: weight only the visible instances unless overridden.
+    pub fn color(&self) -> u32 {
+        self.custom_color.map_or_else(
+            || {
+                0xFF00_0000
+                    | sunrise_game_data::potions::effects_color(
+                        self.effects()
+                            .filter(|e| e.visible)
+                            .map(|e| (e.id, e.amplifier)),
+                    )
+            },
+            |color| color as u32,
         )
+    }
+}
+
+/// The effects shown for a potion item: (id, duration, amplifier).
+pub fn contents_effects(stack: &ItemStack) -> Vec<(&'static str, i32, i32)> {
+    PotionContents::from_stack(stack)
+        .effects()
+        .map(|e| {
+            (
+                e.id.strip_prefix("minecraft:").unwrap_or(e.id),
+                e.duration,
+                e.amplifier,
+            )
+        })
+        .collect()
+}
+
+pub fn contents_color(stack: &ItemStack) -> u32 {
+    PotionContents::from_stack(stack).color()
 }
 /// `PotionContents.equals(EMPTY)`: colour and custom name also make contents
 /// nonempty, even when there is no registered potion or custom effect.
