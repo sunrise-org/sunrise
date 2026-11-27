@@ -862,7 +862,9 @@ reproducible by anyone, and show the same gameplay on both sides.
   `--rehome` makes a server teleport of more than 32 blocks the bot's new home (where it walks, how high it flies).
   `tools/bench.py --spread BLOCKS` uses it: once the bots are in, the console teleports each one above its own spot in
   a square of that side (the spots follow from the seed) and then down onto the ground there, so the players are spread
-  over the map instead of gathered at the world spawn.
+  over the map instead of gathered at the world spawn. `tools/bench.py --profile SECONDS` (Sunrise only) runs
+  `sunrise-server report SECONDS` inside the measured window, copies the capture into `--out` as
+  `<server>-<bots>.hzperf` and records it in `report.json` and the table.
 
   For controlled chunk-pacing tests, use `--behaviour explore --ack-mode 64`: the bot sends exactly
   one acknowledgement per completed chunk batch, requesting 64 chunks per tick. The default

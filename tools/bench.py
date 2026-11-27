@@ -31,7 +31,9 @@ back with `--pre-generated` is never generated further and every run ticks the s
 many entities, players and items were loaded when its window ended. With
 `--behaviour random` each bot then keeps switching between wandering, flying off, standing, hotbar switching,
 attacking mobs and placing and breaking blocks. A spread run loads view distance around every bot, so give it a
-longer --warmup: the window should start after the terrain around the bots is generated.
+longer --warmup: the window should start after the terrain around the bots is generated. With `--profile SECONDS`
+(Sunrise only, needing `--seconds` of at least `SECONDS + 10`), the bench asks the running server for a performance
+capture inside the measured window and copies it into `--out` as `<server>-<bots>.hzperf`.
 """
 
 import argparse
@@ -119,6 +121,13 @@ TICK_PERCENTILES = re.compile(r'P50: ([0-9.]+) ?ms P95: ([0-9.]+) ?ms P99: ([0-9
 GAMETIME = re.compile(r'The game time is (-?\d+) tick\(s\)')
 COUNTED = re.compile(r'Test passed[.,] count: (\d+)|Test failed', re.IGNORECASE)
 TELEPORTED = re.compile(r'Teleported (\w+) to')
+PROFILE_SUMMARY = re.compile(
+    r'^(?:dedicated|integrated) server(?:,\s*([0-9]+(?:\.[0-9]+)?)\s*s)?(?:,\s*(\d+)\s*ticks)?$'
+)
+PROFILE_SAVED = re.compile(r'Saved\s+(.+?\.hzperf)(?:\s|$)')
+PROFILE_MAX_SECONDS = 600
+# Margin kept before and after a capture so it sits inside the measured window.
+PROFILE_MARGIN = 5
 # Above every terrain height, so the drop onto the ground is always a long one.
 SPREAD_HEIGHT = 320
 # How long spread bots stay at most; the bench stops them when its window ends.
@@ -158,6 +167,103 @@ def parse_count(lines):
         if m := COUNTED.search(line):
             return int(m.group(1) or 0)
     return None
+
+
+def profile_min_seconds(profile_seconds):
+    return profile_seconds + 2 * PROFILE_MARGIN
+
+
+def profile_delay(window_seconds, profile_seconds):
+    """Seconds after the window starts to launch `sunrise-server report` so it stays inside the window."""
+    minimum = profile_min_seconds(profile_seconds)
+    if window_seconds < minimum:
+        raise ValueError(f'--profile {profile_seconds} needs --seconds of at least {minimum} (got {window_seconds})')
+    return (window_seconds - profile_seconds) / 2
+
+
+def parse_profile_output(lines):
+    """Path, recorded seconds and tick count from `sunrise-server report`'s output."""
+    path = seconds = ticks = None
+    for line in lines:
+        stripped = line.strip()
+        if (m := PROFILE_SUMMARY.match(stripped)) and (m.group(1) or m.group(2)):
+            if m.group(1) is not None:
+                seconds = float(m.group(1))
+            if m.group(2) is not None:
+                ticks = int(m.group(2))
+        if (m := PROFILE_SAVED.search(stripped)) and path is None:
+            path = m.group(1)
+    return {'path': path, 'seconds': seconds, 'ticks': ticks}
+
+
+def report_command(args, scratch):
+    return [str(Path(args.exe).resolve()), '--dir', str(scratch), 'report', str(args.profile)]
+
+
+def start_profile(args, scratch):
+    env = lab.game_env(SUNRISE_HOME=scratch / 'sunrise-home')
+    return subprocess.Popen(report_command(args, scratch), cwd=scratch, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            encoding='utf-8', errors='replace', env=env)
+
+
+def stop_profile(proc):
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def find_capture(scratch, reported_path):
+    if reported_path:
+        candidate = Path(reported_path)
+        if not candidate.is_absolute():
+            candidate = scratch / candidate
+        if candidate.is_file():
+            return candidate
+    reports = Path(scratch) / 'reports'
+    if reports.is_dir():
+        matches = sorted(reports.glob('profile-*.hzperf'))
+        if matches:
+            return matches[-1]
+    return None
+
+
+def finish_profile(proc, start_error, scratch, destination, requested_seconds):
+    """Waits for `sunrise-server report`, copies the capture into --out and returns the report entry."""
+    if start_error is not None:
+        return {'error': start_error}
+    if proc is None:
+        return {'error': 'capture did not start inside the measured window'}
+    timeout = requested_seconds + 90
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return {'error': f'sunrise-server report timed out after {timeout} s'}
+    except OSError as e:
+        return {'error': str(e)}
+    if proc.returncode != 0:
+        detail = (stderr or stdout or '').strip().splitlines()
+        suffix = f': {detail[-1]}' if detail else ''
+        return {'error': f'sunrise-server report exited with {proc.returncode}{suffix}'}
+    parsed = parse_profile_output(stdout.splitlines())
+    source = find_capture(scratch, parsed['path'])
+    if source is None:
+        return {'error': 'sunrise-server report finished without a capture file'}
+    try:
+        shutil.copy2(source, destination)
+    except OSError as e:
+        return {'error': f'could not copy capture to {destination}: {e}'}
+    return {
+        'path': str(destination),
+        'seconds': parsed['seconds'],
+        'ticks': parsed['ticks'],
+    }
 
 
 def tps(start_ticks, end_ticks, seconds):
@@ -400,10 +506,49 @@ def summarize(kind, args, ticks, rss, cpu, gametime, window_seconds, summary, st
     }
 
 
+def measure_window(server, supports, seconds, profile=None, start_profile_fn=None,
+                   clock=time.time, sleep=time.sleep, usage_fn=tree_usage):
+    """Runs the measured window queries and optionally starts a capture inside it without blocking."""
+    profile_at = profile_delay(seconds, profile) if profile is not None else None
+    profile_proc = None
+    profile_start_error = None
+    try:
+        first_time = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
+        began = clock()
+        rss, cpu = [], []
+        ticks = [] if supports['tick_query'] else None
+        usage = usage_fn(server.process.pid)
+        last_cpu, last_time = (usage[1] if usage else 0), clock()
+        next_query = clock()
+        while clock() - began < seconds:
+            sleep(1)
+            now = clock()
+            if (profile_at is not None and profile_proc is None and profile_start_error is None
+                    and now - began >= profile_at):
+                try:
+                    profile_proc = start_profile_fn()
+                except OSError as e:
+                    profile_start_error = str(e)
+            if usage and (u := usage_fn(server.process.pid)):
+                rss.append(u[0])
+                cpu.append((u[1] - last_cpu) / (now - last_time) * 100)
+                last_cpu, last_time = u[1], now
+            if ticks is not None and now >= next_query:
+                ticks.append(server.ask('tick query', parse_tick_query))
+                next_query = now + 5
+        window = clock() - began
+        last = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
+        return (first_time, last), window, ticks, rss, cpu, profile_proc, profile_start_error
+    except BaseException:
+        stop_profile(profile_proc)
+        raise
+
+
 def run_once(kind, args, out):
     scratch = Path(tempfile.mkdtemp(prefix=f'sunrise-bench-{kind}-'))
     result = {'server': kind, 'bots': args.bots, 'behaviour': args.behaviour}
     server = None
+    profile_proc = None
     try:
         port = free_port()
         command = prepare(kind, scratch, port, args)
@@ -426,25 +571,11 @@ def run_once(kind, args, out):
             spread(server, args)
         time.sleep(args.warmup)
         supports = SERVERS[kind]
-        first_time = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
-        began = time.time()
-        rss, cpu = [], []
-        ticks = [] if supports['tick_query'] else None
-        usage = tree_usage(server.process.pid)
-        last_cpu, last_time = (usage[1] if usage else 0), time.time()
-        next_query = time.time()
-        while time.time() - began < args.seconds:
-            time.sleep(1)
-            now = time.time()
-            if usage and (u := tree_usage(server.process.pid)):
-                rss.append(u[0])
-                cpu.append((u[1] - last_cpu) / (now - last_time) * 100)
-                last_cpu, last_time = u[1], now
-            if ticks is not None and now >= next_query:
-                ticks.append(server.ask('tick query', parse_tick_query))
-                next_query = now + 5
-        window = time.time() - began
-        last = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
+        gametime, window, ticks, rss, cpu, profile_proc, profile_start_error = measure_window(
+            server, supports, args.seconds,
+            profile=args.profile,
+            start_profile_fn=(lambda: start_profile(args, scratch)) if args.profile is not None else None,
+        )
         # What the server was ticking, so two runs can be told to have done the same work.
         loaded = {name: server.ask(f'execute if entity {selector}', parse_count, timeout=30)
                   for name, selector in (('entities', '@e'), ('players', '@a'), ('items', '@e[type=minecraft:item]'))}
@@ -455,18 +586,36 @@ def run_once(kind, args, out):
         bot_process.wait(timeout=total + 120)
         time.sleep(0.5)
         _, summary = split_bot_output(list(bot_lines))
-        result.update(summarize(kind, args, ticks, rss, cpu, (first_time, last) if supports['gametime'] else None, window, summary, start_seconds,
+        result.update(summarize(kind, args, ticks, rss, cpu, gametime if supports['gametime'] else None, window, summary, start_seconds,
                                 total))
         result['loaded'] = loaded
+        if args.profile is not None:
+            result['profile'] = finish_profile(profile_proc, profile_start_error, scratch,
+                                               out / f'{kind}-{args.bots}.hzperf', args.profile)
     except Exception as e:  # a failed run is reported, and the next one still runs
         result['error'] = str(e)
     finally:
+        stop_profile(profile_proc)
         if server:
             server.stop()
         if args.save_world and (scratch / 'world').is_dir():
             shutil.copytree(scratch / 'world', args.save_world, dirs_exist_ok=True)
         shutil.rmtree(scratch, ignore_errors=True)
     return result
+
+
+def format_profile(profile):
+    if not isinstance(profile, dict):
+        return '-'
+    if 'error' in profile:
+        return f'failed: {profile["error"].splitlines()[0]}'
+    parts = []
+    if profile.get('seconds') is not None:
+        parts.append(f'{profile["seconds"]} s')
+    if profile.get('ticks') is not None:
+        parts.append(f'{profile["ticks"]} ticks')
+    suffix = f' ({", ".join(parts)})' if parts else ''
+    return f'{profile.get("path", "-")}{suffix}'
 
 
 def table(runs):
@@ -493,6 +642,8 @@ def table(runs):
         ('Start s', ('start_seconds',)),
     ]
     body = ''.join(f'| {name} | ' + ' | '.join(cell(r, path) for r in ok) + ' |\n' for name, path in rows)
+    if any('profile' in r for r in ok):
+        body += '| Profile | ' + ' | '.join(format_profile(r.get('profile')) for r in ok) + ' |\n'
     failed = ''.join(f'\n{r["server"]} failed: {r["error"].splitlines()[0]}\n' for r in runs if 'error' in r)
     return head + body + failed
 
@@ -501,6 +652,16 @@ def check(args):
     for kind in args.server:
         if kind not in SERVERS:
             sys.exit(f'--server: {kind!r} is not one of {", ".join(SERVERS)}')
+    if args.profile is not None:
+        unsupported = [k for k in args.server if k != 'sunrise']
+        if unsupported:
+            sys.exit(f'--profile only works with sunrise (not {", ".join(unsupported)})')
+        if not 1 <= args.profile <= PROFILE_MAX_SECONDS:
+            sys.exit(f'--profile must be between 1 and {PROFILE_MAX_SECONDS} seconds (got {args.profile})')
+        try:
+            profile_delay(args.seconds, args.profile)
+        except ValueError as e:
+            sys.exit(str(e))
     if 'vanilla' in args.server and not args.jar:
         sys.exit('vanilla needs --jar, your own server.jar')
     if any(k != 'vanilla' for k in args.server) and not args.exe:
@@ -525,6 +686,8 @@ def main(argv=None):
                         help='spread the bots over a square of this side (0: they stay at the world spawn)')
     parser.add_argument('--warmup', type=int, default=30)
     parser.add_argument('--seconds', type=int, default=60)
+    parser.add_argument('--profile', type=int, metavar='SECONDS',
+                        help='record a performance capture of this many seconds inside the measured window (Sunrise only)')
     parser.add_argument('--seed', type=int, default=12345)
     parser.add_argument('--view-distance', type=int, default=10)
     parser.add_argument('--heap', default='4g', help='the Java heap for vanilla')

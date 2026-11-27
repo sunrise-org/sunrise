@@ -1,6 +1,7 @@
 """tools/bench.py: the parsers, the report table and the per-server setup (no server is started)."""
 
 from pathlib import Path
+import subprocess
 import tempfile
 import types
 import unittest
@@ -9,9 +10,9 @@ from tools import bench
 
 
 def args(**kw):
-    base = dict(seed=777, view_distance=8, pre_generated=None, pumpkin_config=None, exe='pumpkin', jar='server.jar',
-                heap='2g', bots=5, behaviour='mixed', warmup=1, join_every=0.5, spread=0, bots_bin='sunrise-bots',
-                bots_arg=[], save_world=None)
+    base = dict(server=['sunrise'], seed=777, view_distance=8, pre_generated=None, pumpkin_config=None, exe='pumpkin',
+                jar='server.jar', heap='2g', bots=5, behaviour='mixed', warmup=1, seconds=60, join_every=0.5, spread=0,
+                bots_bin='sunrise-bots', bots_arg=[], save_world=None, profile=None)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -166,6 +167,152 @@ class TableTests(unittest.TestCase):
         self.assertIn('| TPS | 20.0 |', text)
         self.assertIn('| Bytes in per player and s online | - |', text)
         self.assertIn('pumpkin failed: no start', text)
+        self.assertNotIn('| Profile |', text)
+
+
+class ProfileTests(unittest.TestCase):
+    def test_profile_timing_stays_inside_the_measured_window(self):
+        self.assertEqual(bench.profile_min_seconds(30), 40)
+        self.assertEqual(bench.profile_delay(60, 30), 15.0)
+        self.assertEqual(bench.profile_delay(40, 30), 5.0)
+        with self.assertRaisesRegex(ValueError, 'at least 40'):
+            bench.profile_delay(39, 30)
+
+        now = [100.0]
+        events = []
+
+        class FakeServer:
+            process = types.SimpleNamespace(pid=1234)
+
+            def ask(self, command, parse, timeout=5):
+                events.append((now[0], command))
+                if command == 'time query gametime':
+                    return int((now[0] - 100.0) * 20)
+                return {'average': 10.0, 'p50': 9.0, 'p95': 15.0, 'p99': 20.0}
+
+        def sleep(dt):
+            now[0] += dt
+
+        started = []
+        fake_proc = types.SimpleNamespace(poll=lambda: 0)
+
+        def start_profile():
+            started.append(now[0])
+            events.append((now[0], 'report'))
+            return fake_proc
+
+        gametime, window, ticks, rss, cpu, proc, err = bench.measure_window(
+            FakeServer(), bench.SERVERS['sunrise'], 40, profile=30,
+            start_profile_fn=start_profile, clock=lambda: now[0], sleep=sleep, usage_fn=lambda pid: None,
+        )
+        self.assertEqual(gametime, (0, 800))
+        self.assertEqual(window, 40.0)
+        self.assertEqual(len(ticks), 8)
+        self.assertIs(proc, fake_proc)
+        self.assertIsNone(err)
+        self.assertEqual(len(started), 1)
+        gametime_times = [t for t, cmd in events if cmd == 'time query gametime']
+        self.assertGreater(started[0], gametime_times[0])
+        self.assertLess(started[0] + 30, gametime_times[-1])
+
+    def test_profile_argument_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bots = Path(tmp) / 'sunrise-bots'
+            bots.write_text('')
+            bench.check(args(server=['sunrise'], exe='sunrise-server', bots_bin=str(bots), seconds=40, profile=30))
+            for servers in (['vanilla'], ['pumpkin'], ['sunrise', 'vanilla']):
+                with self.assertRaises(SystemExit) as cm:
+                    bench.check(args(server=servers, exe='sunrise-server', jar='server.jar',
+                                     bots_bin=str(bots), seconds=60, profile=30))
+                self.assertIn('sunrise', str(cm.exception).lower())
+            with self.assertRaises(SystemExit) as cm:
+                bench.check(args(server=['sunrise'], exe='sunrise-server', bots_bin=str(bots), seconds=39, profile=30))
+            self.assertIn('40', str(cm.exception))
+            for bad in (0, -5, 601):
+                with self.assertRaises(SystemExit):
+                    bench.check(args(server=['sunrise'], exe='sunrise-server', bots_bin=str(bots),
+                                     seconds=700, profile=bad))
+
+    def test_profile_output_copy_and_report_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            scratch = tmp / 'scratch'
+            reports = scratch / 'reports'
+            reports.mkdir(parents=True)
+            capture = reports / 'profile-20261127-190000Z.hzperf'
+            capture.write_bytes(b'hzperf-bytes')
+            out = tmp / 'out'
+            out.mkdir()
+            stdout = '\n'.join([
+                'Recording for 30 s...',
+                'dedicated server, 30.0 s, 600 ticks',
+                'health  TPS 20.0/20 · MSPT mean 10.0 max 15.0 ms',
+                f'Saved {capture} (the file stays on your computer)',
+            ])
+
+            class FakeProc:
+                returncode = 0
+
+                def communicate(self, timeout=None):
+                    return stdout, ''
+
+            dest = out / 'sunrise-50.hzperf'
+            entry = bench.finish_profile(FakeProc(), None, scratch, dest, 30)
+            self.assertEqual(entry, {'path': str(dest), 'seconds': 30.0, 'ticks': 600})
+            self.assertEqual(dest.read_bytes(), b'hzperf-bytes')
+
+            # Without a summary line, the file is still copied and seconds/ticks are None.
+            class MinimalProc:
+                returncode = 0
+
+                def communicate(self, timeout=None):
+                    return f'Recording for 30 s...\n(no summary: bad)\nSaved {capture} (the file stays on your computer)\n', ''
+
+            minimal = bench.finish_profile(MinimalProc(), None, scratch, out / 'sunrise-5.hzperf', 30)
+            self.assertEqual(minimal, {'path': str(out / 'sunrise-5.hzperf'), 'seconds': None, 'ticks': None})
+
+    def test_profile_failure_and_table_rows(self):
+        class FailingProc:
+            returncode = 1
+
+            def communicate(self, timeout=None):
+                return '', 'sunrise-server: no server is running\n'
+
+        class TimedOutProc:
+            returncode = None
+            killed = False
+
+            def communicate(self, timeout=None):
+                if not self.killed:
+                    raise subprocess.TimeoutExpired(['sunrise-server'], timeout)
+                return '', ''
+
+            def kill(self):
+                self.killed = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            failed = bench.finish_profile(FailingProc(), None, tmp, tmp / 'sunrise-5.hzperf', 30)
+            self.assertIn('error', failed)
+            self.assertIn('no server is running', failed['error'])
+            timed = TimedOutProc()
+            timed_entry = bench.finish_profile(timed, None, tmp, tmp / 'sunrise-5.hzperf', 30)
+            self.assertTrue(timed.killed)
+            self.assertIn('timed out', timed_entry['error'])
+            spawn_failed = bench.finish_profile(None, 'missing binary', tmp, tmp / 'sunrise-5.hzperf', 30)
+            self.assertEqual(spawn_failed, {'error': 'missing binary'})
+
+        base = {'server': 'sunrise', 'bots': 50, 'tps': 20.0, 'mspt': {'average': 12.0, 'p99': 25.0},
+                'mspt_worst_p99': 30.0, 'rss_mb': {'mean': 512.0}, 'cpu_percent': 80.0,
+                'bytes_per_player_second': None, 'join_ms': {'p50': 50, 'worst': 90}, 'start_seconds': 3.5}
+        ok_table = bench.table([dict(base, profile={'path': '/out/sunrise-50.hzperf', 'seconds': 30.0, 'ticks': 600})])
+        self.assertIn('| Profile | /out/sunrise-50.hzperf (30.0 s, 600 ticks) |', ok_table)
+        fail_table = bench.table([dict(base, profile=failed)])
+        self.assertIn('| TPS | 20.0 |', fail_table)
+        self.assertIn('| Profile | failed: sunrise-server report exited with 1: sunrise-server: no server is running |',
+                      fail_table)
+        plain_table = bench.table([base])
+        self.assertNotIn('| Profile |', plain_table)
 
 
 if __name__ == '__main__':
