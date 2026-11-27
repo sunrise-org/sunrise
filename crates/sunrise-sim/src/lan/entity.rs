@@ -2272,8 +2272,7 @@ impl Entities {
                         continue;
                     }
                     let f = flags[m.index];
-                    if attachments.is_some()
-                        && f & (TRACKS | SEES) == SEES
+                    if f & (TRACKS | SEES) == SEES
                         && let Some(p) = &m.pairing
                         && v.pairs_with(p.kind)
                     {

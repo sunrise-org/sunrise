@@ -2,7 +2,9 @@
 //! See docs/performance/tracker-send.md. Normal tests and `--ignored` alone do not measure.
 
 use super::*;
+use crate::{lan::conn::PlayerSender, raw_payloads::Transport};
 use std::time::{Duration, Instant};
+use sunrise_mod_runtime::attachments::{Attachments, attachment_sync_watermark};
 
 #[cfg(feature = "tracker-send-bench")]
 #[global_allocator]
@@ -79,6 +81,16 @@ impl Scene {
     }
 
     fn step(&mut self, tick: usize, send_only: bool) -> Duration {
+        self.step_with_attachments(tick, send_only, None, None)
+    }
+
+    fn step_with_attachments(
+        &mut self,
+        tick: usize,
+        send_only: bool,
+        sender: Option<&PlayerSender>,
+        attachments: Option<&InitialAttachmentLookup<'_>>,
+    ) -> Duration {
         for (e, &origin) in self.entities.iter_mut().zip(&self.origins) {
             e.position = origin;
             e.position[0] += (tick % 64) as f64 / 32.0;
@@ -103,7 +115,7 @@ impl Scene {
                 entity_id: i as i32 + 1,
                 sunrise: true,
                 general_entity: true,
-                attachment_sender: None,
+                attachment_sender: sender.filter(|_| i == 0).cloned(),
                 sources: None,
                 far: &[],
                 spectator: false,
@@ -120,7 +132,7 @@ impl Scene {
         if !send_only {
             let started = Instant::now();
             self.level
-                .tick(&refs, &riding, &mut viewers, None, |_| Some(5));
+                .tick(&refs, &riding, &mut viewers, attachments, |_| Some(5));
             return started.elapsed();
         }
         let mut flags = std::mem::take(&mut self.level.flags);
@@ -130,10 +142,10 @@ impl Scene {
         let started = Instant::now();
         if self.level.send_apart_always == Some(true) {
             self.level
-                .send_on_threads(&refs, &riding, &mut players, &active, None);
+                .send_on_threads(&refs, &riding, &mut players, &active, attachments);
         } else {
             self.level
-                .send_in_order(&refs, &riding, &mut players, &active, None);
+                .send_in_order(&refs, &riding, &mut players, &active, attachments);
         }
         let elapsed = started.elapsed();
         drop(players);
@@ -195,6 +207,42 @@ fn pooled_tracker_send_matches_serial_on_small_spread() {
         }
     }
     assert!(saw_start && saw_stop);
+}
+
+#[test]
+fn pooled_pairing_matches_serial_with_mixed_attachment_senders() {
+    let (sender, _) = PlayerSender::payload_executor_test_sender(Transport::empty());
+    let map = Attachments::default();
+    let lookup = |entity: &EntityState| Some((AttachmentHolder::Entity(entity.id as u32), &map));
+    let lookup: &InitialAttachmentLookup<'_> = &lookup;
+    for attachments in [None, Some(lookup)] {
+        let [mut serial, mut pooled] =
+            [false, true].map(|parallel| Scene::new(10, 130, true, parallel));
+        let before = attachment_sync_watermark();
+        serial.step_with_attachments(1, false, Some(&sender), attachments);
+        pooled.step_with_attachments(1, false, Some(&sender), attachments);
+        let after = attachment_sync_watermark();
+        assert_eq!(serial.out, pooled.out);
+        let normalize_events = |scene: &mut Scene| {
+            let mut events = scene.events();
+            for (viewer, events) in events.iter_mut().enumerate() {
+                assert!(!events.is_empty());
+                for event in events {
+                    if viewer == 0 {
+                        let (holder, watermark) = event.attachment_sync_from.as_mut().unwrap();
+                        assert_eq!(*holder, AttachmentHolder::Entity(event.entity as u32));
+                        assert!((before..=after).contains(watermark));
+                        // Other tests can advance the process-wide watermark between the ticks.
+                        *watermark = 0;
+                    } else {
+                        assert_eq!(event.attachment_sync_from, None);
+                    }
+                }
+            }
+            events
+        };
+        assert_eq!(normalize_events(&mut serial), normalize_events(&mut pooled));
+    }
 }
 
 #[test]
