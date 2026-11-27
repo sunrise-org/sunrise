@@ -234,9 +234,6 @@ impl ServerGame<'_> {
         let Some(kind) = Kind::from_block(name) else {
             return false;
         };
-        if self.common.level.xp_seed == 0 {
-            self.common.level.xp_seed = self.common.world.random.next_int();
-        }
         self.common.station = Some(Station::new(kind, pos));
         self.station_changed();
         self.common.beacon_opened();

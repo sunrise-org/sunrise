@@ -1,5 +1,6 @@
 //! Restore the guest's first body without borrowing another player's RNG.
 use sunrise_core::geometry::Vec3;
+use sunrise_core::random::RandomSource as _;
 #[allow(unused_imports)]
 use sunrise_sim::{
     lan::{guest::Guest, hub::CommittedMove},
@@ -41,6 +42,11 @@ pub fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool {
         && let Some(m) = g.motion.as_mut()
     {
         saved.apply(m);
+        // Player.readAdditionalSaveData: a saved XpSeed that is missing or 0 is drawn now,
+        // from the player's own random. A new player (nothing saved) keeps 0 (#6705).
+        if g.xp_seed == 0 {
+            g.xp_seed = m.random.next_int();
+        }
         let _ = m.set_walking_speed_base(g.abilities.walking_speed);
         // LivingEntity.readAdditionalSaveData: the saved attributes.
         let _ = m.apply_saved_attributes(g.saved.as_ref().and_then(|t| t.get("attributes")));

@@ -36,6 +36,46 @@ pub(crate) fn guest(entity_id: i32) -> Guest {
     )
 }
 
+/// #6705: `Player.readAdditionalSaveData` draws a missing or zero `XpSeed` from the player's own
+/// random as the saved data loads, keeps a saved non-zero one (so the table offers it as the
+/// save did), and a new player, whose data is never read, keeps 0.
+#[test]
+#[ignore = "daily"]
+fn the_enchanting_seed_is_drawn_at_load_from_the_players_own_random() {
+    use sunrise_core::nbt::Tag;
+    use sunrise_sim::{lan::playerdata, save::Level};
+    let root = std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").unwrap());
+    let assets = Assets::load(&root).unwrap();
+    let resources = MotionResources::load(&root, &assets).unwrap();
+    let loaded = |entity_id: i32, saved: Tag| {
+        let mut level = Level::default();
+        level.read_player(&saved);
+        let mut g = guest(entity_id);
+        playerdata::apply(&mut g, &level);
+        // The data is read before any table could open: the seed waits for the body.
+        assert_eq!(g.xp_seed, level.xp_seed);
+        initialize(&resources, &mut g);
+        g
+    };
+    // The body's random is seeded from its identity and place, so its first draw is known.
+    let first_draw = |entity_id: i32| {
+        sunrise_sim::mobs::entity_random(entity_id as u32, Vec3::new(0.5, 64.0, 0.5)).next_int()
+    };
+    // A saved 0 and a missing XpSeed are both drawn, from the player's own random.
+    let zero = loaded(2, Tag::compound([("XpSeed", Tag::Int(0))]));
+    assert_eq!(zero.xp_seed, first_draw(2));
+    assert_ne!(zero.xp_seed, 0);
+    let missing = loaded(3, Tag::compound([("XpLevel", Tag::Int(5))]));
+    assert_eq!(missing.xp_seed, first_draw(3));
+    // A saved seed stays as it was, so the table's offers are the save's.
+    let kept = loaded(4, Tag::compound([("XpSeed", Tag::Int(-123_456_789))]));
+    assert_eq!(kept.xp_seed, -123_456_789);
+    // A new player: nothing is read, nothing is drawn.
+    let mut fresh = guest(5);
+    initialize(&resources, &mut fresh);
+    assert_eq!(fresh.xp_seed, 0);
+}
+
 #[test]
 #[ignore = "daily"]
 fn co_located_guests_own_distinct_streams_and_restore_the_saved_body() {

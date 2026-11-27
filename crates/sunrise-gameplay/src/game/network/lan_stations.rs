@@ -77,21 +77,10 @@ impl ServerGame<'_> {
             menu.grind_hook = kind == Kind::Grindstone;
             menu.item_smithed_hook = kind == Kind::Smithing && hooked;
             if kind == Kind::Enchanting {
-                // Player.enchantmentSeed, made when first needed.
-                let needs_seed = game
-                    .server
-                    .lan
-                    .as_ref()
-                    .and_then(|host| host.hub.guests.iter().find(|g| g.conn == conn))
-                    .is_some_and(|g| g.xp_seed == 0);
-                let drawn = needs_seed.then(|| game.common.world.random.next_int());
+                // EnchantmentMenu copies Player.getEnchantmentSeed(), made when the player's
+                // data loaded (or 0 for a new player), never drawn here (#6705).
                 if let Some(host) = game.server.lan.as_mut() {
-                    let _ = host.hub.update_guest(conn, |g| {
-                        if let Some(drawn) = drawn {
-                            g.xp_seed = drawn;
-                        }
-                        menu.data[3] = g.xp_seed;
-                    });
+                    let _ = host.hub.update_guest(conn, |g| menu.data[3] = g.xp_seed);
                 }
             }
             if kind == Kind::Beacon {
@@ -727,12 +716,13 @@ impl ServerGame<'_> {
             // CriteriaTriggers.ENCHANTED_ITEM, with the levels it cost.
             game.trigger_enchanted_item(&enchanted, need);
         });
-        let new_seed = self.common.world.random.next_int();
+        // Player.onEnchantmentPerformed: the next seed comes from the player's own random.
         if let Some(host) = self.server.lan.as_mut() {
-            {
-                let value = new_seed;
-                host.hub.guests.update(gi, |guest| guest.xp_seed = value);
-            }
+            host.hub.guests.update(gi, |guest| {
+                if let Some(seed) = guest.motion.as_mut().map(|m| m.random.next_int()) {
+                    guest.xp_seed = seed;
+                }
+            });
         }
         let env = self.menu_env();
         let lapis = gs.menu.slot(1).cloned().filter(|_| !creative).map(|mut l| {

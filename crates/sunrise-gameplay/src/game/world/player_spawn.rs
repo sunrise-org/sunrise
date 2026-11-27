@@ -71,7 +71,13 @@ impl crate::game::ServerGame<'_> {
         };
         let mut player = PlayerMotion::new(self.common.motion, feet)?;
         player.yaw = self.common.yaw;
+        let loading = self.server.restore_player_state;
         player.load_saved_state_once(&mut self.server.restore_player_state, &self.common.level)?;
+        // Player.readAdditionalSaveData: a saved player whose XpSeed is missing or 0 draws one
+        // from its own random as it loads; a new player (no saved data) keeps 0 (#6705).
+        if loading && self.common.level.player_extra.is_some() && self.common.level.xp_seed == 0 {
+            self.common.level.xp_seed = player.random.next_int();
+        }
         let spectator = self.common.mode == sunrise_command::args::GameMode::Spectator;
         player.may_fly = self.common.creative || spectator;
         player.invulnerable = self.common.creative || spectator;
