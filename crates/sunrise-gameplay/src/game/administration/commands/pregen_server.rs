@@ -140,6 +140,8 @@ impl crate::game::ServerGame<'_> {
         // A viewed area's chunks (#3716) as the forced ones.
         let players = !paused && self.server.spawn_wait.is_empty();
         let viewed = self.viewed_level(self.common.dim).is_some();
+        let capture = self.common.is_dedicated_server()
+            && crate::tick_profile::wanted(crate::tick_profile::SPANS_REPORT);
         let mut idle = Duration::ZERO;
         while self.pregen_runs_here()
             || ((players || viewed || !self.server.streaming.forced.is_empty())
@@ -153,6 +155,9 @@ impl crate::game::ServerGame<'_> {
                 .server
                 .streaming
                 .wait((until - now).min(Duration::from_millis(5)));
+            let _phase = capture.then(|| {
+                sunrise_level::spans::guard(sunrise_perf_format::BETWEEN_TICK_CHUNK_STREAMING)
+            });
             self.server_update_world();
             self.run_tasks();
         }

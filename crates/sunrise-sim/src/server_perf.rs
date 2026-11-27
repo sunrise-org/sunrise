@@ -343,6 +343,12 @@ impl ServerPerf {
         }
     }
 
+    pub fn between_tick_chunk_streaming(&mut self, spans: &[Span]) {
+        if let Some(session) = &mut self.session {
+            session.spans.between_tick_chunk_streaming(spans);
+        }
+    }
+
     /// The window's frame that ended at `t`: its CPU ms and the GPU frames timed since the last, written about once a second when the capture times the GPU.
     pub fn gpu_frames(&mut self, t: f64, cpu_ms: f32, frames: &TimedFramesDto) {
         let Some(session) = &mut self.session else {

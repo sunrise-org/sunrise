@@ -31,6 +31,9 @@ pub(super) fn all(
     base: Option<&Diff>,
 ) -> Result<Vec<Section>, Error> {
     let mut parts = vec![phases(view, side, options, base)?];
+    if !options.slow && side == Side::Server {
+        parts.push(between_ticks(view, options));
+    }
     parts.extend(super::hot::sections(view, side, options));
     parts.extend([
         worst(view, side),
@@ -240,6 +243,29 @@ fn phases(
         }
     }
     Ok(lines)
+}
+
+fn between_ticks(view: &View, options: &SummaryOptions) -> Vec<Line> {
+    let phase = view
+        .resolve_thread(Side::Server, options.thread.as_deref())
+        .ok()
+        .and_then(|thread| view.summary(Side::Server, thread))
+        .and_then(|s| Some((s.count, s.between_tick_chunk_streaming.as_ref()?)));
+    let Some((ticks, phase)) = phase else {
+        return Vec::new();
+    };
+    let per_tick = if ticks == 0 {
+        String::new()
+    } else {
+        format!(
+            " · {:.2} ms per tick interval",
+            phase.wall_ms / ticks as f64
+        )
+    };
+    vec![Line::body(format!(
+        "between ticks  chunk streaming {:.1} ms wall · {:.1} ms CPU{per_tick} (outside MSPT)",
+        phase.wall_ms, phase.cpu_ms,
+    ))]
 }
 
 /// The biggest spans of one unit below its root.

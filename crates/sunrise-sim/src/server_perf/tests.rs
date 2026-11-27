@@ -43,6 +43,7 @@ fn options(window_s: f64) -> CaptureOptions {
 
 fn span(name: &'static str, ms: f32) -> Span {
     Span {
+        lap: false,
         name,
         ms,
         cpu_ms: ms,
@@ -394,11 +395,62 @@ use sunrise_perf_format::v1::SpanSummary;
 
 fn nested(name: &'static str, ms: f32, cpu_ms: f32, depth: u8) -> Span {
     Span {
+        lap: false,
         name,
         ms,
         cpu_ms,
         depth,
     }
+}
+
+#[test]
+fn between_tick_work_stays_out_of_tick_totals_and_laps_keep_their_enclosure() {
+    use sunrise_perf_format::BETWEEN_TICK_CHUNK_STREAMING;
+
+    let scratch = Scratch::new("between-ticks");
+    let mut perf = ServerPerf::new(0.0, 50.0);
+    perf.start_capture(0.0, &scratch.0, options(2.0)).unwrap();
+    let mut lap = nested("creature_loop", 10.0, 9.0, 1);
+    lap.lap = true;
+    perf.tick(
+        0.5,
+        20.0,
+        Some(TickDetail {
+            cpu_ms: Some(18.0),
+            spans: vec![lap, nested("tick_creature_entities", 12.0, 10.0, 0)],
+        }),
+        WorldCounts::default,
+        Vec::new,
+    );
+    perf.between_tick_chunk_streaming(&[
+        nested("unrelated", 30.0, 15.0, 0),
+        nested(BETWEEN_TICK_CHUNK_STREAMING, 8.0, 6.0, 0),
+        nested(BETWEEN_TICK_CHUNK_STREAMING, 4.0, 2.0, 0),
+    ]);
+    let saved = perf
+        .stop_capture(1.0, R::Normal, CaptureEnd::default())
+        .unwrap()
+        .unwrap();
+    let capture = read(&saved.path);
+    let summary = &capture.spans[0];
+    assert_eq!(
+        (summary.count, summary.wall_ms_total, summary.cpu_ms_total),
+        (1, 20.0, 18.0)
+    );
+    assert_eq!(summary.worst[0].wall_ms, 20.0);
+    assert_eq!(summary.spans.len(), 2);
+    let between = summary.between_tick_chunk_streaming.as_ref().unwrap();
+    assert_eq!(
+        (between.wall_ms, between.cpu_ms, between.seen),
+        (12.0, 8.0, 2)
+    );
+    let laps = &summary.laps.as_ref().unwrap().entries;
+    assert_eq!(laps.len(), 1);
+    assert_eq!(name(&capture, laps[0].name), "creature_loop");
+    assert_eq!(
+        name(&capture, laps[0].enclosing_span),
+        "tick_creature_entities"
+    );
 }
 
 /// The spans of one tick as they are recorded: `tick` holds `tick_mobs` (twice, 1 + 2 ms) and `tick_lan` (1 ms).

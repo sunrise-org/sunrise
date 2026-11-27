@@ -16,6 +16,8 @@ mod strings;
 mod timing;
 mod writer;
 
+pub const BETWEEN_TICK_CHUNK_STREAMING: &str = "between_ticks_chunk_streaming";
+
 pub use brief::server_brief;
 pub use counters::{
     Counter, CounterReport, CounterReporter, Gauge, Registry, counter, gauge,

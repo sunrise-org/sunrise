@@ -39,6 +39,7 @@ pub struct Span {
     pub cpu_ms: f32,
     /// How many timed spans it ran inside (0: none): `tick_mobs` is inside `tick`.
     pub depth: u8,
+    pub lap: bool,
 }
 
 pub fn enable(on: bool) {
@@ -179,6 +180,7 @@ impl Drop for Guard {
         DEPTH.with(|d| d.set(depth));
         timeline::span(name, started, elapsed, depth);
         push(Span {
+            lap: false,
             name,
             ms,
             cpu_ms,
@@ -268,6 +270,7 @@ impl Laps {
         timeline::span(name, *started, elapsed, depth);
         nest_since(*mark, depth);
         push(Span {
+            lap: true,
             name,
             ms,
             cpu_ms,
@@ -303,6 +306,7 @@ impl SpanTotal {
     pub fn record(self, name: &'static str) {
         if let Some(depth) = self.depth {
             push(Span {
+                lap: false,
                 name,
                 ms: self.wall.as_secs_f32() * 1000.0,
                 cpu_ms: self.cpu.as_secs_f32() * 1000.0,
@@ -893,24 +897,28 @@ mod tests {
         super::SPANS.with(|s| {
             s.borrow_mut().extend([
                 Span {
+                    lap: false,
                     name: "tick",
                     ms: 2.0,
                     cpu_ms: 2.0,
                     depth: 0,
                 },
                 Span {
+                    lap: false,
                     name: "submit",
                     ms: 30.0,
                     cpu_ms: 0.2,
                     depth: 0,
                 },
                 Span {
+                    lap: false,
                     name: "tick",
                     ms: 3.0,
                     cpu_ms: 2.9,
                     depth: 0,
                 },
                 Span {
+                    lap: false,
                     name: "hud",
                     ms: 0.3,
                     cpu_ms: 0.3,
@@ -922,6 +930,7 @@ mod tests {
         assert_eq!(
             spans[0],
             Span {
+                lap: false,
                 name: "submit",
                 ms: 30.0,
                 cpu_ms: 0.2,
@@ -1000,6 +1009,7 @@ mod tests {
     #[test]
     fn a_frame_is_put_down_to_the_step_that_took_most_of_it() {
         let span = |name, ms, depth| Span {
+            lap: false,
             name,
             ms,
             cpu_ms: ms,

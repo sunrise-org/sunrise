@@ -9,7 +9,7 @@ use sunrise_bench::{Frames, Summary};
 use crate::wire::{
     Amount, BoundName, CounterKindName, GpuBackendName, GpuFragmentUnitName, GpuModeName,
     GpuPartsModeName, GpuPassSplitName, GpuSourceName, KindName, MemoryUnit, ModKindName, SampleBy,
-    SeriesUnit, SideName, StopReasonName, SymbolsName, ThreadSelectionName, TriggerName,
+    SeriesUnit, SideName, SpanKind, StopReasonName, SymbolsName, ThreadSelectionName, TriggerName,
     WarningCodeName,
 };
 
@@ -54,6 +54,8 @@ pub struct SpanRow {
     pub id: String,
     pub name: String,
     pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<SpanKind>,
     pub values: Vec<Option<f64>>,
     pub cpu: Vec<Option<f64>>,
     pub waited: Vec<Option<f64>>,

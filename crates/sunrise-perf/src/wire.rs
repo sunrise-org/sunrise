@@ -173,6 +173,13 @@ vocab! {
 }
 
 vocab! {
+    SpanKind {
+        Span = "span",
+        Lap = "lap",
+    }
+}
+
+vocab! {
     /// `--by`: how `world` groups its rows.
     GroupBy {
         Dimension = "dimension",

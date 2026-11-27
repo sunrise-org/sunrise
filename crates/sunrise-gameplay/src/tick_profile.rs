@@ -56,7 +56,6 @@ pub fn want_spans(user: u8, on: bool) {
     sunrise_level::spans::enable(users != 0);
 }
 
-#[cfg(test)]
 pub fn wanted(user: u8) -> bool {
     SPAN_USERS.load(Ordering::Relaxed) & user != 0
 }

@@ -49,6 +49,7 @@ fn run(perf: &mut ClientPerf, from: u32, to: u32, per_s: u32, hitch: f32) {
         let detail = (wall > SLOW_FRAME_MS).then(|| TickDetail {
             cpu_ms: Some(wall - 30.0),
             spans: vec![Span {
+                lap: false,
                 name: "terrain",
                 ms: wall - 20.0,
                 cpu_ms: wall - 40.0,

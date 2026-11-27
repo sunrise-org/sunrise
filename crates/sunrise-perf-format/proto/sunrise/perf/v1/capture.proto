@@ -504,6 +504,20 @@ message SpanSummary {
   double wall_ms_total = 8;
   double cpu_ms_total = 9;
   TimingSummary timing = 10;
+  // A separate phase outside the captured ticks. Seen counts pump work intervals.
+  SpanTotal between_tick_chunk_streaming = 11;
+  SpanLaps laps = 12;
+}
+
+message SpanLaps {
+  repeated SpanLap entries = 1;
+}
+
+message SpanLap {
+  // String id of the lap name.
+  uint32 name = 1;
+  // String id of the nearest enclosing non-lap span, or zero.
+  uint32 enclosing_span = 2;
 }
 
 // Chunk-worker CPU by job kind.

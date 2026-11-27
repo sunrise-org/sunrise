@@ -80,6 +80,23 @@ fn prepare_on<'a>(
     let f = &ctx.q.filters;
     let side = ctx.side(i)?;
     let file = &ctx.files[i].file;
+    for span in f.where_.get(&ContextKey::Span).into_iter().flatten() {
+        let name = span.strip_prefix("s:").unwrap_or(span);
+        if let Some(parents) = ctx.views[i].lap_parents(side, name) {
+            let hint = if parents.is_empty() {
+                "it has no enclosing span to filter on".to_owned()
+            } else {
+                let filters: Vec<_> = parents
+                    .iter()
+                    .map(|p| format!("--where span={p}"))
+                    .collect();
+                format!("use its enclosing span: {}", filters.join(" or "))
+            };
+            return Err(QueryError::new(format!(
+                "{name} is a lap and samples have no lap context; {hint}"
+            )));
+        }
+    }
     let samples = Samples::new(&ctx.views[i], side).ok_or_else(|| {
         QueryError::new(format!(
             "{file} has no samples for its {} side: it was captured without them",

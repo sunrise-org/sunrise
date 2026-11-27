@@ -428,6 +428,7 @@ mod tests {
     fn slow_frames_are_put_down_to_their_step() {
         use crate::spans::Span;
         let span = |name, ms, depth| Span {
+            lap: false,
             name,
             ms,
             cpu_ms: ms,

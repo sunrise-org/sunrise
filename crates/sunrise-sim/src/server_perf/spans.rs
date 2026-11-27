@@ -1,10 +1,13 @@
 //! The tick thread's spans as the capture's `span_blocks` (live) and `spans` (at the end).
+use std::collections::BTreeSet;
+
 use crate::fast_hash::FxHashMap;
 use crate::spans::Span;
-use sunrise_perf_format::Interner;
 use sunrise_perf_format::v1::{
-    FrameTiming, Histogram, Side, SpanBlock, SpanCost, SpanSummary, SpanTotal, Unit, WorstUnit,
+    FrameTiming, Histogram, Side, SpanBlock, SpanCost, SpanLap, SpanLaps, SpanSummary, SpanTotal,
+    Unit, WorstUnit,
 };
+use sunrise_perf_format::{BETWEEN_TICK_CHUNK_STREAMING, Interner};
 
 /// Seconds one `SpanBlock` covers.
 pub const BLOCK_S: f32 = 5.0;
@@ -51,7 +54,7 @@ fn parents(spans: &[Span]) -> Vec<Option<usize>> {
 }
 
 /// One tick's spans merged by (name, parent name), with the tree depth of the first of each.
-fn merge_by_parent(spans: &[Span]) -> Vec<(Key, Sum)> {
+fn merge_by_parent(spans: &[Span], laps: &mut BTreeSet<Key>) -> Vec<(Key, Sum)> {
     let parent = parents(spans);
     let mut depth = vec![0u32; spans.len()];
     for i in (0..spans.len()).rev() {
@@ -60,6 +63,13 @@ fn merge_by_parent(spans: &[Span]) -> Vec<(Key, Sum)> {
     let mut merged: Vec<(Key, Sum)> = Vec::new();
     let mut index: FxHashMap<Key, usize> = FxHashMap::default();
     for (i, span) in spans.iter().enumerate() {
+        if span.lap {
+            let mut enclosing = parent[i];
+            while let Some(p) = enclosing.filter(|&p| spans[p].lap) {
+                enclosing = parent[p];
+            }
+            laps.insert((span.name, enclosing.map_or("", |p| spans[p].name)));
+        }
         let key = (span.name, parent[i].map_or("", |p| spans[p].name));
         let at = *index.entry(key).or_insert_with(|| {
             merged.push((
@@ -164,6 +174,8 @@ pub struct SpanRecorder {
     wall_total: f64,
     cpu_total: f64,
     timing: sunrise_perf_format::TimingRecorder,
+    between_tick_chunk_streaming: Sum,
+    laps: BTreeSet<Key>,
     histogram: [u64; HISTOGRAM_EDGES_MS.len() + 1],
     worst: Vec<Worst>,
     recorded: u64,
@@ -190,6 +202,8 @@ impl SpanRecorder {
             wall_total: 0.0,
             cpu_total: 0.0,
             timing: sunrise_perf_format::TimingRecorder::default(),
+            between_tick_chunk_streaming: Sum::default(),
+            laps: BTreeSet::new(),
             histogram: [0; HISTOGRAM_EDGES_MS.len() + 1],
             worst: Vec::new(),
             recorded: 0,
@@ -209,6 +223,18 @@ impl SpanRecorder {
     /// The mean tick time in ms.
     pub fn mean_wall_ms(&self) -> f64 {
         self.wall_total / self.count.max(1) as f64
+    }
+
+    pub(super) fn between_tick_chunk_streaming(&mut self, spans: &[Span]) {
+        let sum = &mut self.between_tick_chunk_streaming;
+        for phase in spans
+            .iter()
+            .filter(|s| s.depth == 0 && s.name == BETWEEN_TICK_CHUNK_STREAMING)
+        {
+            sum.wall_ms += f64::from(phase.ms);
+            sum.cpu_ms += f64::from(phase.cpu_ms);
+            sum.seen += 1;
+        }
     }
 
     /// Adds one tick; returns the block it closed, if it began a new one.
@@ -243,7 +269,7 @@ impl SpanRecorder {
         self.wall_total += f64::from(wall_ms);
         self.cpu_total += f64::from(cpu_ms);
         self.histogram[HISTOGRAM_EDGES_MS.partition_point(|&edge| edge <= wall_ms)] += 1;
-        for (key, sum) in merge_by_parent(spans) {
+        for (key, sum) in merge_by_parent(spans, &mut self.laps) {
             for rows in [&mut self.rows, &mut self.totals] {
                 let row = rows.entry(key).or_insert(Sum {
                     depth: sum.depth,
@@ -352,6 +378,30 @@ impl SpanRecorder {
             wall_ms_total: self.wall_total,
             cpu_ms_total: self.cpu_total,
             timing: self.timing.finish(),
+            laps: Some(SpanLaps {
+                entries: self
+                    .laps
+                    .into_iter()
+                    .map(|(name, enclosing)| SpanLap {
+                        name: strings.intern(name),
+                        enclosing_span: if enclosing.is_empty() {
+                            0
+                        } else {
+                            strings.intern(enclosing)
+                        },
+                    })
+                    .collect(),
+            }),
+            between_tick_chunk_streaming: {
+                let phase = self.between_tick_chunk_streaming;
+                (phase.seen != 0).then(|| SpanTotal {
+                    name: strings.intern(BETWEEN_TICK_CHUNK_STREAMING),
+                    wall_ms: phase.wall_ms,
+                    cpu_ms: phase.cpu_ms,
+                    seen: phase.seen,
+                    ..SpanTotal::default()
+                })
+            },
         };
         (last, summary)
     }
