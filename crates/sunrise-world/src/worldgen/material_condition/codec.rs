@@ -80,12 +80,9 @@ impl MaterialConditionRegistry {
             .map(|name| identifier(name))
             .collect::<Result<_, _>>()?;
         let mut values = BTreeMap::new();
-        let mut count = 0usize;
+        // `HolderSetCodec.lookupTag` binds each tag as it is: no ceiling on the memberships of all
+        // the tags together, which overlap freely.
         for (name, members) in tags {
-            count = count.saturating_add(members.len());
-            if count > 65536 {
-                return Err(DecodeError::Field("material biome tag size"));
-            }
             let mut bound = Vec::with_capacity(members.len());
             for member in members {
                 let member = identifier(member)?;
@@ -468,5 +465,48 @@ mod tests {
         duplicate.insert("minecraft:z".to_owned(), r#"{"type":"steep"}"#.to_owned());
         assert!(MaterialConditionRegistry::from_json(&duplicate).is_err());
         assert_eq!(reference.to_json().unwrap(), r#""minecraft:a""#);
+    }
+
+    /// `BiomeCondition.CODEC` binds each tag through `HolderSetCodec.lookupTag`, with no ceiling
+    /// on the memberships of all the tags together (#6489): 8192 overlapping tags of the same
+    /// nine biomes, 73,728 memberships, bind with each tag's members in order. An unknown member
+    /// and a duplicate tag are still refused.
+    #[test]
+    fn overlapping_biome_tags_bind_past_any_total_membership_count() {
+        let biomes: BTreeSet<String> = (0..9).map(|i| format!("minecraft:b{i}")).collect();
+        let members: Vec<String> = biomes.iter().rev().cloned().collect();
+        let tags: BTreeMap<String, Vec<String>> = (0..8192)
+            .map(|i| (format!("minecraft:t{i}"), members.clone()))
+            .collect();
+        assert!(tags.values().map(Vec::len).sum::<usize>() > 65536);
+        let definitions = BTreeMap::from([(
+            "last".to_owned(),
+            r##"{"type":"biome","biome_is":"#t8191"}"##.to_owned(),
+        )]);
+        let registry =
+            MaterialConditionRegistry::from_json_with_biome_tags(&definitions, &biomes, &tags)
+                .unwrap();
+        let last = registry.get("last").unwrap();
+        let MaterialCondition::BiomeTag(tag) = last.value() else {
+            panic!("a biome tag condition")
+        };
+        assert_eq!(tag.name, "minecraft:t8191");
+        assert_eq!(&*tag.members, members.as_slice());
+
+        let mut unknown = tags.clone();
+        unknown.insert(
+            "minecraft:t0".to_owned(),
+            vec!["minecraft:nowhere".to_owned()],
+        );
+        assert!(
+            MaterialConditionRegistry::from_json_with_biome_tags(&definitions, &biomes, &unknown)
+                .is_err()
+        );
+        let mut duplicate = tags;
+        duplicate.insert("t0".to_owned(), members);
+        assert!(
+            MaterialConditionRegistry::from_json_with_biome_tags(&definitions, &biomes, &duplicate)
+                .is_err()
+        );
     }
 }
