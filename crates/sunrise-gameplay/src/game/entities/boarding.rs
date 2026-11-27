@@ -437,6 +437,89 @@ use sunrise_gameplay_common::game::passengers_common::PassengersCommonGameExt2 a
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI32, AtomicUsize},
+    };
+    use sunrise_core::geometry::Vec3;
+    use sunrise_protocol::packets::configuration::ClientInformation;
+    use sunrise_sim::lan::{Joined, PlayerSender};
+
+    fn test_guest(conn: u32, entity_id: i32, vehicle: Option<u32>, order: i64) -> Guest {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut guest = Guest::new(
+            Joined {
+                conn,
+                uuid: u128::from(conn),
+                name: format!("guest-{conn}"),
+                properties: Vec::new(),
+                info: ClientInformation::new(8),
+                brand: String::new(),
+                sender: PlayerSender::new(tx, Arc::new(AtomicUsize::new(0))),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:1".parse().unwrap(),
+                expected: false,
+            },
+            entity_id,
+            [0.0, 64.0, 0.0],
+            10,
+        );
+        guest.placed = true;
+        guest.dimension = "minecraft:overworld".to_owned();
+        guest.vehicle = vehicle;
+        guest.vehicle_order = order;
+        guest
+    }
+
+    fn test_mob(id: u32, mount: Option<u32>, order: i64, removed: bool) -> Mob {
+        let mut mob = Mob::new(
+            id,
+            sunrise_sim::mobs::sensor_scan_tests::kind(),
+            Vec3::new(0.0, 64.0, 0.0),
+            0.0,
+        );
+        mob.extra.mount = mount;
+        mob.extra.vehicle_order = order;
+        mob.removed = removed;
+        mob
+    }
+
+    fn test_general_row(
+        id: u32,
+        mount: Option<u32>,
+        order: i64,
+    ) -> sunrise_gameplay_common::game::general::GeneralRow {
+        sunrise_gameplay_common::game::general::GeneralRow {
+            id,
+            uuid: [id as i32, 0, 0, 1],
+            join: Default::default(),
+            type_slot: 0,
+            position: Vec3::new(0.0, 64.0, 0.0),
+            previous: Vec3::new(0.0, 64.0, 0.0),
+            velocity: Vec3::ZERO,
+            rotation: [0.0; 2],
+            previous_rotation: [0.0; 2],
+            owner: None,
+            fall_distance: 0.0,
+            on_ground: false,
+            tick_count: 0,
+            no_physics: false,
+            horizontal_collision: false,
+            vertical_collision: false,
+            vertical_collision_below: false,
+            fluids: Default::default(),
+            under_water: false,
+            custom_name: None,
+            custom_name_visible: false,
+            base: Default::default(),
+            payload_version: 0,
+            payload_bytes: Vec::new(),
+            mount,
+            vehicle_order: order,
+            boarding_cooldown: 0,
+            attachment_lifetime: Default::default(),
+        }
+    }
 
     #[test]
     fn started_riding_reaches_every_rider_of_the_vehicle() {
@@ -450,5 +533,362 @@ mod tests {
         assert!(aboard.contains(&8), "the rider of that mob");
         assert!(!aboard.contains(&9), "a mob riding another vehicle");
         assert!(!aboard.contains(&6), "a mob riding nothing");
+    }
+
+    #[test]
+    fn ordered_passengers_preserves_source_tie_order_for_equal_places() {
+        let vehicle = 500;
+        let other = 999;
+
+        // Acting guest rides `vehicle` through `riding`, overriding its stale hub vehicle.
+        let guests = [
+            test_guest(1, 101, Some(other), 0),
+            test_guest(2, 102, Some(vehicle), 0),
+            test_guest(3, 103, Some(other), 0),
+        ];
+        let resident_mobs = [
+            test_mob(201, Some(vehicle), 0, false),
+            test_mob(202, Some(vehicle), 0, true),
+        ];
+        let lent_mobs = [
+            test_mob(203, Some(vehicle), 0, false),
+            test_mob(204, Some(vehicle), 0, true),
+            test_mob(205, Some(other), 0, false),
+        ];
+        let off_level_mobs = [
+            test_mob(206, Some(vehicle), 0, false),
+            test_mob(207, Some(vehicle), 0, true),
+        ];
+        let general = [(0, 301)];
+        let bolts = [(Some(vehicle), 0, 401), (Some(other), 0, 402)];
+
+        let with_acting_guest = collect_ordered_seats(|visit| {
+            visit_seat_sources(
+                vehicle,
+                SeatIterators {
+                    acting: Some(1),
+                    riding: Some(vehicle),
+                    has_player: true,
+                    riding_player: Some((101, i64::MIN)),
+                    placed_guests: guests.iter(),
+                    resident_mobs: resident_mobs.iter(),
+                    lent_mobs: &lent_mobs,
+                    off_level_mobs: off_level_mobs.iter(),
+                    general_passengers: general.iter().copied(),
+                    bolts: bolts.iter().copied(),
+                },
+                visit,
+            );
+        });
+        assert_eq!(
+            with_acting_guest,
+            vec![
+                SeatedPassenger {
+                    order: 0,
+                    id: 101,
+                    player: true,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 102,
+                    player: true,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 201,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 203,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 206,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 301,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 401,
+                    player: false,
+                },
+            ]
+        );
+
+        // Unlisted own player ties after placed guests and ahead of mobs.
+        let with_own_player = collect_ordered_seats(|visit| {
+            visit_seat_sources(
+                vehicle,
+                SeatIterators {
+                    acting: None,
+                    riding: Some(vehicle),
+                    has_player: true,
+                    riding_player: Some((110, 0)),
+                    placed_guests: guests.iter(),
+                    resident_mobs: resident_mobs.iter(),
+                    lent_mobs: &lent_mobs,
+                    off_level_mobs: off_level_mobs.iter(),
+                    general_passengers: general.iter().copied(),
+                    bolts: bolts.iter().copied(),
+                },
+                visit,
+            );
+        });
+        let expected_ids = vec![102, 110, 201, 203, 206, 301, 401];
+        assert_eq!(
+            with_own_player.iter().map(|s| s.id).collect::<Vec<_>>(),
+            expected_ids
+        );
+
+        // Cursor stepping matches the ordered list verbatim.
+        let mut cursor_ids = Vec::new();
+        let mut after = None;
+        while let Some(id) = next_boarded_rider(after, |visit| {
+            visit_seat_sources(
+                vehicle,
+                SeatIterators {
+                    acting: None,
+                    riding: Some(vehicle),
+                    has_player: true,
+                    riding_player: Some((110, 0)),
+                    placed_guests: guests.iter(),
+                    resident_mobs: resident_mobs.iter(),
+                    lent_mobs: &lent_mobs,
+                    off_level_mobs: off_level_mobs.iter(),
+                    general_passengers: general.iter().copied(),
+                    bolts: bolts.iter().copied(),
+                },
+                |seat| visit(seat.order, seat.id),
+            );
+        }) {
+            cursor_ids.push(id);
+            after = Some(id);
+        }
+        assert_eq!(cursor_ids, expected_ids);
+    }
+
+    #[test]
+    fn ordered_passengers_sorts_mixed_and_tied_places_across_sources() {
+        let vehicle = 600;
+        let guests = [
+            test_guest(1, 101, Some(vehicle), 2),
+            test_guest(2, 102, Some(vehicle), 0),
+        ];
+        let resident_mobs = [
+            test_mob(201, Some(vehicle), 2, false),
+            test_mob(202, Some(vehicle), -1, false),
+        ];
+        let off_level_mobs = [test_mob(203, Some(vehicle), 0, false)];
+        let general = [(0, 301), (-1, 302)];
+        let bolts = [(Some(vehicle), 2, 401), (Some(vehicle), -2, 402)];
+
+        let ordered = collect_ordered_seats(|visit| {
+            visit_seat_sources(
+                vehicle,
+                SeatIterators {
+                    acting: None,
+                    riding: Some(vehicle),
+                    has_player: true,
+                    riding_player: Some((110, 0)),
+                    placed_guests: guests.iter(),
+                    resident_mobs: resident_mobs.iter(),
+                    lent_mobs: &[],
+                    off_level_mobs: off_level_mobs.iter(),
+                    general_passengers: general.iter().copied(),
+                    bolts: bolts.iter().copied(),
+                },
+                visit,
+            );
+        });
+        assert_eq!(
+            ordered,
+            vec![
+                SeatedPassenger {
+                    order: -2,
+                    id: 402,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: -1,
+                    id: 202,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: -1,
+                    id: 302,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 102,
+                    player: true,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 110,
+                    player: true,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 203,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 0,
+                    id: 301,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 2,
+                    id: 101,
+                    player: true,
+                },
+                SeatedPassenger {
+                    order: 2,
+                    id: 201,
+                    player: false,
+                },
+                SeatedPassenger {
+                    order: 2,
+                    id: 401,
+                    player: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ordered_passengers_matches_seated_passengers_on_live_game() {
+        if std::env::var_os("SUNRISE_TEST_RESOURCES").is_none() {
+            return;
+        }
+        use sunrise_gameplay_common::game::lightning_common::Bolt;
+        use sunrise_sim::lan::{NetConfig, hub::HubConfig};
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let vehicle = 500;
+            game.lan_host(
+                crate::game::server_side::lan::LanSettings {
+                    port: 0,
+                    guest_commands: false,
+                    force_game_mode: false,
+                },
+                NetConfig {
+                    listen: false,
+                    announce: false,
+                    lod_distance: 0,
+                    ..NetConfig::lan(0, String::new(), 2)
+                },
+                HubConfig {
+                    default_game_mode: 0,
+                    guest_commands: false,
+                    force_game_mode: false,
+                    hardcore: false,
+                    view_distance: 2,
+                    simulation_distance: 2,
+                    dimension: game.dim.id().to_owned(),
+                    allow_flight: true,
+                    seed: 0,
+                    max_players: 4,
+                    integrated: true,
+                    levels: game.server.level_shapes.clone(),
+                    level_seeds: game.server.levels.0.runtime.seeds(),
+                },
+            )
+            .unwrap();
+
+            game.common.player.as_mut().unwrap().entity_id = 511;
+            game.server.lan_acting = None;
+            game.server.lan_acting_entity = None;
+            game.server.lan_acting_uuid = None;
+            game.common.riding = Some(vehicle);
+            game.server.riding_order = 0;
+
+            let guest_index = game.server.lan.as_ref().unwrap().hub.guests.len();
+            game.server
+                .lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .guests
+                .push(test_guest(1, 510, Some(vehicle), 0));
+            let mob_index = game.common.mobs.len();
+            game.common
+                .mobs
+                .push(test_mob(520, Some(vehicle), 0, false));
+            game.common.mobs.push(test_mob(521, Some(vehicle), 0, true));
+            game.common
+                .persist
+                .off_level
+                .insert(522, OffLevel::Mob(test_mob(522, Some(vehicle), 0, false)));
+            let general_index = game.common.resident_entities.general.rows.len();
+            game.common
+                .resident_entities
+                .general
+                .rows
+                .push(test_general_row(530, Some(vehicle), 0));
+            let bolt_index = game.common.bolts.len();
+            let (mut bolt, _) = Bolt::new(540, [0.0, 64.0, 0.0], false);
+            bolt.mount = Some(vehicle);
+            bolt.vehicle_order = 0;
+            game.common.bolts.push(bolt);
+
+            let seats = ordered_passengers(game, vehicle);
+            let as_tuples: Vec<(i64, u32, bool)> =
+                seats.iter().map(|s| (s.order, s.id, s.player)).collect();
+            assert_eq!(as_tuples, game.seated_passengers(vehicle));
+            assert_eq!(
+                seats.iter().map(|s| s.id).collect::<Vec<_>>(),
+                vec![510, 511, 520, 522, 530, 540]
+            );
+            assert_eq!(
+                game.passenger_order(vehicle),
+                vec![510, 511, 520, 522, 530, 540]
+            );
+            assert_eq!(game.first_seated_passenger(vehicle), Some((0, 510, true)));
+            assert_eq!(game.seated_passenger_count(vehicle), 6);
+            assert!(game.has_seated_passengers(vehicle));
+
+            for rider in [510, 511, 520, 522, 530] {
+                assert_eq!(vehicle_of_entity(game, rider), Some(vehicle));
+            }
+            assert_eq!(vehicle_of_entity(game, 521), None);
+
+            // Reassign places with mixed and equal orders across sources.
+            game.server.riding_order = 1;
+            game.server
+                .lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .guests
+                .update(guest_index, |g| g.vehicle_order = 1);
+            game.common
+                .mobs
+                .update(mob_index, |m| m.extra.vehicle_order = -1);
+            game.common
+                .resident_entities
+                .general
+                .rows
+                .update(general_index, |r| r.vehicle_order = -1);
+            game.common
+                .bolts
+                .update(bolt_index, |b| b.vehicle_order = 0);
+
+            let mixed = ordered_passengers(game, vehicle);
+            let mixed_tuples: Vec<(i64, u32, bool)> =
+                mixed.iter().map(|s| (s.order, s.id, s.player)).collect();
+            assert_eq!(mixed_tuples, game.seated_passengers(vehicle));
+            assert_eq!(
+                mixed.iter().map(|s| s.id).collect::<Vec<_>>(),
+                vec![520, 530, 522, 540, 510, 511]
+            );
+        });
     }
 }
