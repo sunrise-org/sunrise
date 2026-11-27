@@ -5,7 +5,7 @@ impl crate::game::ClientGame<'_> {
     /// (`RenderFrameEvent.Post`).
     pub(in crate::game) fn native_render_frame_post(
         &mut self,
-        elapsed: Duration,
+        elapsed: std::time::Duration,
         world_partial_tick: f32,
         partial_tick: f32,
     ) {
