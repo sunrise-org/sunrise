@@ -109,7 +109,7 @@ impl crate::game::ServerGame<'_> {
                     id,
                     pos: [0, 1, 0],
                     facing: 2,
-                    variant: "minecraft:kebab".into(),
+                    variant: Some("minecraft:kebab".into()),
                     asset: None,
                     width: 1,
                     height: 1,

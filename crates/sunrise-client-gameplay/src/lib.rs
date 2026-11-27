@@ -36,6 +36,9 @@ pub mod upload_pace;
 
 extern crate self as sunrise_client_gameplay;
 pub mod game;
+#[cfg(all(test, feature = "client"))]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+mod prepared_test_root;
 #[cfg(test)]
 mod test_game_dir;
 
