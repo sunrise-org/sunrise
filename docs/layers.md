@@ -66,9 +66,12 @@ Vanilla Minecraft: Java Edition 26.3, and nothing else.
   protocol, rendering, sound, vanilla's screens, saves, the integrated and dedicated servers. It also holds
   optimizations that keep vanilla's behaviour, and the extension points the platform plugs into.
 - **Also the render pipeline's own capabilities that vanilla's path doesn't use**, when a higher layer could only
-  get them by rebuilding the pipeline. The one today is the **compositor**: drawing a view into an offscreen target
+  get them by rebuilding the pipeline. One is the **compositor**: drawing a view into an offscreen target
   and composing several targets into a window's views. The ordinary client does not use the compositor;
-  the renderer's `examples/compositor.rs` still exercises it.
+  the renderer's `examples/compositor.rs` still exercises it. Another is the **frame planner**
+  (`sunrise-frame-plan`, #6552): which draws and clears of a frame's state graph can go without changing what
+  anything reads, over resources, states, events, guards and observers, with no pack format in it; the
+  pack-specific lowering that feeds it belongs to the platform.
 - **Examples:** `sunrise-world` (`worldgen/`, `level/redstone.rs`), `sunrise-protocol` (`packets/`),
   `sunrise-items`, `sunrise-command`, `sunrise-core`, `game/creatures.rs`, `game/integrated.rs`, `gfx.rs`,
   `mesher.rs`, `streaming.rs`, `lan/`.
@@ -80,8 +83,8 @@ Vanilla Minecraft: Java Edition 26.3, and nothing else.
 
 `sunrise-core`, `sunrise-world`, `sunrise-protocol`, `sunrise-items`, `sunrise-command`, `sunrise-game-data`
 and `sunrise-assets` hold vanilla's rules and data with no desktop in them. `sunrise-threads` provides worker
-scheduling and sampling, and `sunrise-java-properties` reads and writes Java-properties files with the standard
-library alone. These portable crates have no window, GPU, sound, gamepad or clipboard library, no HTTP client,
+scheduling and sampling, `sunrise-java-properties` reads and writes Java-properties files with the standard
+library alone, and `sunrise-frame-plan` plans a frame's draws and clears with the standard library alone. These portable crates have no window, GPU, sound, gamepad or clipboard library, no HTTP client,
 and no engine crate outside the portable list. The platform sits on the desktop engine
 (`wgpu`, `winit`, `cpal`), which a handheld console or a browser can't run, so a port there builds on these crates
 instead. They stay that way: the layer check fails when one takes `winit`, `wgpu`, `cpal`, `gilrs`, `arboard` or

@@ -4945,6 +4945,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunrise-frame-plan"
+version = "0.1.0"
+
+[[package]]
 name = "sunrise-friends"
 version = "0.1.0"
 dependencies = [

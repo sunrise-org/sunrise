@@ -371,10 +371,11 @@ name = "render"
 about = "rendering, models, particles, HUD and screens, audio, resource packs, options"
 paths = [
   "crates/sunrise-client-render/*", "crates/sunrise-assets/*", "crates/sunrise-optifine/*", "crates/sunrise-connected/*", "crates/sunrise-polytone/*",
-  "crates/sunrise-shader*", "crates/sunrise-hdr/*",
+  "crates/sunrise-shader*", "crates/sunrise-hdr/*", "crates/sunrise-frame-plan/*",
 ]
 cargo = [
   { package = "sunrise-assets", target = "lib", filter = "" },
+  { package = "sunrise-frame-plan", target = "lib", filter = "" },
   { package = "sunrise-client-render", target = "lib", filter = "hud" },
   { package = "sunrise-client-render", target = "test:standard_pack_gpu_entities", filter = "" },
   { package = "sunrise-client", target = "lib", filter = "game::server_side::advancements::" }, { package = "sunrise-client-gameplay", target = "lib", filter = "game::server_side::advancements::" }, { package = "sunrise-gameplay", target = "lib", filter = "game::server_side::advancements::" },

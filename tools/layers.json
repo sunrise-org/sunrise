@@ -46,6 +46,7 @@
     "sunrise-server-files": "engine",
     "sunrise-server-profiles-http": "engine",
     "sunrise-java-properties": "engine",
+    "sunrise-frame-plan": "engine",
     "sunrise-system": "engine",
     "sunrise-threads": "engine",
     "sunrise-deflate": "engine",
@@ -142,7 +143,8 @@
       "sunrise-level",
       "sunrise-sim",
       "sunrise-system",
-      "sunrise-bench"
+      "sunrise-bench",
+      "sunrise-frame-plan"
     ],
     "pending": {
       "_doc": "Engine crates that still take a non-portable crate, until the types they need move down. Entries only go away."
