@@ -1471,6 +1471,49 @@ fn key_conflicts(
     conflicts
 }
 
+/// The native mapping's chosen key, reset state and shared Controls/Config presentation.
+fn mod_key_presentation(
+    s: &Settings,
+    owner: &str,
+    mapping: &crate::mod_list::KeyMapping,
+    selected: bool,
+) -> (String, u32, bool, Text) {
+    let (key, modifiers) = s.mods.binding(
+        owner,
+        &mapping.id,
+        (mapping.key.as_str(), mapping.modifiers),
+    );
+    let at_default = key == mapping.key && modifiers == mapping.modifiers;
+    let mut label = binding_text(&key, modifiers);
+    if !key_conflicts(
+        s,
+        owner,
+        &mapping.id,
+        &key,
+        modifiers,
+        mapping.context,
+        at_default,
+    )
+    .is_empty()
+    {
+        label = Text::literal("[ ")
+            .append(label.with_color(text::WHITE))
+            .append(" ]")
+            .with_color(text::YELLOW);
+    }
+    if selected {
+        label = Text::literal("> ")
+            .append(label.with_style(&Style {
+                color: Some(text::WHITE),
+                underlined: Some(true),
+                ..Style::default()
+            }))
+            .append(" <")
+            .with_color(text::YELLOW);
+    }
+    (key, modifiers, at_default, label)
+}
+
 /// The caption of a key row: a vanilla mapping's name is its own translation key, and
 /// Sunrise's own keys ([`crate::extras::KEYS`]) have theirs.
 fn key_caption(name: &str) -> &str {
@@ -2542,7 +2585,7 @@ impl OptionsUi {
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
             Page::Mods => "sunrise.pages.mods",
-            Page::NativeMod(_) => "Mod Settings",
+            Page::NativeMod(_) => "sunrise.mods.settings",
             Page::Added(i) => pages::title(i),
             Page::ShaderOptions => "sunrise.pages.shader_options",
             Page::PackOptions => "sunrise.pack.options.title",
@@ -2623,6 +2666,26 @@ impl OptionsUi {
         let Some(page) = &m.native else {
             return rows;
         };
+        if !page.mappings.is_empty() {
+            rows.push(Row::Heading("controls.keybinds.title".into()));
+        }
+        let mut last_mapping_category = "";
+        for (k, mapping) in page.mappings.iter().enumerate() {
+            let category = mapping.category.as_str();
+            if !category.is_empty() && category != last_mapping_category {
+                last_mapping_category = category;
+                rows.push(Row::Heading(category.to_owned()));
+            }
+            let (_, _, at_default, binding) =
+                mod_key_presentation(s, &m.id, mapping, self.selected_mod_key == Some((i, k)));
+            let label = Text::translate("options.generic_value", &[tr(&mapping.label), binding]);
+            let bind = button(0.0, 0.0, 150.0, label, Act::ModKey(i, k));
+            let reset = button(0.0, 0.0, 75.0, tr("controls.reset"), Act::ResetModKey(i, k));
+            rows.push(Row::Buttons(
+                bind,
+                Some(if at_default { inactive(reset) } else { reset }),
+            ));
+        }
         let mut category: Option<&str> = None;
         for (j, setting) in page.settings.iter().enumerate() {
             if setting.category.as_deref() != category {
@@ -5971,6 +6034,294 @@ mod tests {
                 false
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn native_mod_config_keybind_controls_do_not_overlap_and_reset_from_their_center() {
+        use crate::mod_list::{Installed, KeyMapping, NativePage};
+        let atlas = atlas();
+        let mut settings = Settings::default();
+        settings.mods.installed.push(Installed {
+            id: "sample".into(),
+            title: "Sample".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(NativePage {
+                mappings: vec![KeyMapping {
+                    id: "zoom".into(),
+                    label: "key.zoom".into(),
+                    key: "key.keyboard.z".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        });
+        settings
+            .mods
+            .set_binding("sample", "zoom", "key.keyboard.x", 0);
+        let mut ui = OptionsUi::default();
+        ui.show(Page::NativeMod(0));
+        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
+        let bind = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let reset = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ResetModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(bind.x + bind.w <= reset.x);
+
+        let center_x = reset.x + reset.w / 2.0;
+        let center_y = reset.y + reset.h / 2.0;
+        let events = ui.click(
+            &mut settings,
+            &atlas,
+            center_x,
+            center_y,
+            (480.0, 270.0),
+            [960, 540],
+            false,
+            false,
+        );
+        assert_eq!(events, [Event::ButtonClick, Event::Changed]);
+        assert_eq!(
+            settings
+                .mods
+                .binding("sample", "zoom", ("key.keyboard.z", 0)),
+            ("key.keyboard.z".into(), 0)
+        );
+    }
+
+    #[test]
+    fn native_mod_key_presentation_marks_conflicts_and_capture_consistently() {
+        use crate::mod_list::{Installed, KeyConflictContext, KeyMapping, NativePage};
+        let mut settings = Settings::default();
+        settings.mods.installed.push(Installed {
+            id: "sample".into(),
+            title: "Sample".into(),
+            description: String::new(),
+            problem: None,
+            dev: false,
+            native: Some(NativePage {
+                mappings: vec![KeyMapping {
+                    id: "zoom".into(),
+                    label: "key.zoom".into(),
+                    key: "key.keyboard.w".into(),
+                    context: KeyConflictContext::Universal,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        });
+        let mapping = settings.mods.installed[0].native.as_ref().unwrap().mappings[0].clone();
+        let (_, _, _, conflict) = mod_key_presentation(&settings, "sample", &mapping, false);
+        assert!(conflict.plain().starts_with("[ "));
+        let (_, _, _, capturing) = mod_key_presentation(&settings, "sample", &mapping, true);
+        assert!(capturing.plain().starts_with("> "));
+
+        settings
+            .mods
+            .set_binding("sample", "zoom", "key.keyboard.f24", 0);
+        let (_, _, _, clear) = mod_key_presentation(&settings, "sample", &mapping, false);
+        assert!(!clear.plain().starts_with("[ "));
+    }
+
+    #[test]
+    fn native_mod_config_keybind_can_rebind_reset_and_unbind_with_conflict_tooltip() {
+        use crate::mod_list::{Installed, KeyConflictContext, KeyMapping, NativePage};
+        use winit::keyboard::KeyCode;
+
+        let atlas = atlas();
+        let mut settings = Settings::default();
+        for (id, context) in [
+            ("sample", KeyConflictContext::Universal),
+            ("other", KeyConflictContext::Universal),
+        ] {
+            settings.mods.installed.push(Installed {
+                id: id.into(),
+                title: id.into(),
+                description: String::new(),
+                problem: None,
+                dev: false,
+                native: Some(NativePage {
+                    mappings: vec![KeyMapping {
+                        id: "zoom".into(),
+                        label: "key.zoom".into(),
+                        key: if id == "sample" {
+                            "key.keyboard.z".into()
+                        } else {
+                            "key.keyboard.x".into()
+                        },
+                        context,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            });
+        }
+        let mut ui = OptionsUi::default();
+        ui.show(Page::NativeMod(0));
+        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
+        let bind = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(
+            tooltip_text(&settings, bind).is_none(),
+            "default key has no conflict"
+        );
+
+        // The vanilla forward key conflicts with the universal native mapping.
+        settings
+            .mods
+            .set_binding("sample", "zoom", "key.keyboard.w", 0);
+        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
+        let bind = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(tooltip_text(&settings, bind).is_some());
+
+        // A second mod's binding also appears as a conflict tooltip.
+        settings
+            .mods
+            .set_binding("sample", "zoom", "key.keyboard.f24", 0);
+        settings
+            .mods
+            .set_binding("other", "zoom", "key.keyboard.f24", 0);
+        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
+        let bind = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert!(tooltip_text(&settings, bind).is_some());
+
+        let x = bind.x + bind.w / 2.0;
+        let y = bind.y + bind.h / 2.0;
+        ui.click(
+            &mut settings,
+            &atlas,
+            x,
+            y,
+            (480.0, 270.0),
+            [960, 540],
+            false,
+            false,
+        );
+        ui.key(&mut settings, &atlas, KeyCode::KeyQ, None);
+        assert_eq!(
+            settings
+                .mods
+                .binding("sample", "zoom", ("key.keyboard.z", 0))
+                .0,
+            "key.keyboard.q"
+        );
+
+        // Reset restores the registered default from its own hit target.
+        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
+        let reset = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ResetModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        ui.click(
+            &mut settings,
+            &atlas,
+            reset.x + reset.w / 2.0,
+            reset.y + reset.h / 2.0,
+            (480.0, 270.0),
+            [960, 540],
+            false,
+            false,
+        );
+        assert_eq!(
+            settings
+                .mods
+                .binding("sample", "zoom", ("key.keyboard.z", 0))
+                .0,
+            "key.keyboard.z"
+        );
+
+        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
+        let bind = widgets
+            .iter()
+            .find(|widget| {
+                matches!(
+                    widget.kind,
+                    WKind::Button {
+                        act: Act::ModKey(0, 0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        ui.click(
+            &mut settings,
+            &atlas,
+            bind.x + bind.w / 2.0,
+            bind.y + bind.h / 2.0,
+            (480.0, 270.0),
+            [960, 540],
+            false,
+            false,
+        );
+        ui.key(&mut settings, &atlas, KeyCode::Escape, None);
+        assert_eq!(
+            settings
+                .mods
+                .binding("sample", "zoom", ("key.keyboard.z", 0))
+                .0,
+            "key.keyboard.unknown"
         );
     }
 

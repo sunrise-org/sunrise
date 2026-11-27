@@ -438,39 +438,12 @@ impl OptionsUi {
                             y += 20.0;
                             rows.end(&mut out, y);
                         }
-                        let (key, modifiers) = s.mods.binding(
-                            &m.id,
-                            &mapping.id,
-                            (mapping.key.as_str(), mapping.modifiers),
-                        );
-                        let at_default = key == mapping.key && modifiers == mapping.modifiers;
-                        let mut message = binding_text(&key, modifiers);
-                        if !key_conflicts(
+                        let (_, _, at_default, message) = mod_key_presentation(
                             s,
                             &m.id,
-                            &mapping.id,
-                            &key,
-                            modifiers,
-                            mapping.context,
-                            at_default,
-                        )
-                        .is_empty()
-                        {
-                            message = Text::literal("[ ")
-                                .append(message.with_color(text::WHITE))
-                                .append(" ]")
-                                .with_color(text::YELLOW);
-                        }
-                        if self.selected_mod_key == Some((i, k)) {
-                            message = Text::literal("> ")
-                                .append(message.with_style(&Style {
-                                    color: Some(text::WHITE),
-                                    underlined: Some(true),
-                                    ..Style::default()
-                                }))
-                                .append(" <")
-                                .with_color(text::YELLOW);
-                        }
+                            mapping,
+                            self.selected_mod_key == Some((i, k)),
+                        );
                         rows.begin(&out, y);
                         out.push(Widget {
                             x: row_left + 2.0,
