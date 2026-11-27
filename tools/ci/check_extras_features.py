@@ -19,6 +19,8 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_ROOTS = ("sunrise-game", "sunrise-mod-host")
 EXTRAS_OFF_FEATURES = "audio"
+EXTRAS_FEATURE = "sunrise-extras"
+EXTRAS_CRATES = ("sunrise-client", "sunrise-client-gameplay", "sunrise-client-render")
 
 
 def in_workspace(pkg_id):
@@ -27,9 +29,22 @@ def in_workspace(pkg_id):
                                                       ).is_relative_to(ROOT)
 
 
+def parse_pkg_id(pkg_id):
+    """(name, version) of a Cargo pkg_id (`...#<name>@<ver>` or `.../<dir>#<ver>`)."""
+    path_part, fragment = pkg_id.rsplit("#", 1)
+    if "@" in fragment:
+        name, version = fragment.rsplit("@", 1)
+        return name, version
+    return Path(unquote(path_part.split("?", 1)[0].split("://", 1)[-1])).name, fragment
+
+
+def workspace_pkg_name(unit):
+    """Package name of a workspace unit from its pkg_id."""
+    return parse_pkg_id(unit["pkg_id"])[0]
+
+
 def plan(root, *, extras_off):
-    """{key: unit} of every dependency unit outside the workspace, each keyed by what it is built from: itself and,
-    recursively, the units it depends on."""
+    """(external_units, workspace_units): external units keyed by recursive build inputs, plus all workspace units."""
     command = ["cargo", "build", "--locked", "--offline", "--release", "-p", root, "--unit-graph", "-Z",
                "unstable-options"]
     if extras_off:
@@ -46,7 +61,9 @@ def plan(root, *, extras_off):
             keys[index] = hashlib.sha256(json.dumps([own(unit), dependencies]).encode()).hexdigest()
         return keys[index]
 
-    return {key(index): unit for index, unit in enumerate(units) if not in_workspace(unit["pkg_id"])}
+    external = {key(index): unit for index, unit in enumerate(units) if not in_workspace(unit["pkg_id"])}
+    workspace = [unit for unit in units if in_workspace(unit["pkg_id"])]
+    return external, workspace
 
 
 def own(unit):
@@ -56,15 +73,37 @@ def own(unit):
 
 
 def describe(unit):
-    name, version = unit["pkg_id"].rsplit("#", 1)[-1].rsplit("@", 1)
+    name, version = parse_pkg_id(unit["pkg_id"])
     return f"{name} {version} {unit['target']['name']} ({unit['mode']}; features [{', '.join(unit['features'])}])"
+
+
+def check_workspace_extras(root, default_ws, extras_off_ws):
+    """Verify EXTRAS_CRATES get sunrise-extras in default builds and no workspace crate enables it in vanilla builds."""
+    errors = []
+    default_libs = {
+        workspace_pkg_name(u): u
+        for u in default_ws
+        if u["mode"] == "build" and "lib" in u["target"]["kind"]
+    }
+    for crate in EXTRAS_CRATES:
+        unit = default_libs.get(crate)
+        if unit is None or EXTRAS_FEATURE not in unit["features"]:
+            errors.append(f"{root}: {crate} is missing {EXTRAS_FEATURE} in the default build")
+    leaked = sorted({
+        workspace_pkg_name(u)
+        for u in extras_off_ws
+        if EXTRAS_FEATURE in u["features"]
+    })
+    for crate in leaked:
+        errors.append(f"{root}: {crate} enables {EXTRAS_FEATURE} in the vanilla build")
+    return errors
 
 
 def main():
     failed = False
     for root in BUILD_ROOTS:
-        default = plan(root, extras_off=False)
-        extras_off = plan(root, extras_off=True)
+        default, default_ws = plan(root, extras_off=False)
+        extras_off, extras_off_ws = plan(root, extras_off=True)
         # What the vanilla build compiles again after the default build: the units that differ themselves, and how
         # many more are compiled again only because something below them did.
         rebuilt = [unit for key, unit in extras_off.items() if key not in default]
@@ -76,6 +115,9 @@ def main():
             failed = True
             print(f"{root}: {len(rebuilt)} dependency units would be compiled again for the vanilla build",
                   file=sys.stderr)
+        for line in check_workspace_extras(root, default_ws, extras_off_ws):
+            failed = True
+            print(line, file=sys.stderr)
     if not failed:
         print("The vanilla build reuses every dependency the default build compiled (sunrise-game and sunrise-mod-host).")
     return int(failed)

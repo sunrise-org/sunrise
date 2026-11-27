@@ -7976,6 +7976,12 @@ mod tests {
         let mut put = |id: String, page: &str| {
             places.entry(id).or_default().insert(page.to_owned());
         };
+        let extra_id = |e: crate::extras::Item| match e {
+            crate::extras::Item::HideBlockParticles => "sunrise:hide_block_particles".to_owned(),
+            crate::extras::Item::DynamicLights => "sunrise:dynamic_lights".to_owned(),
+            crate::extras::Item::Fullbright => "sunrise:fullbright".to_owned(),
+            other => format!("extra:{other:?}"),
+        };
         // Sunrise Settings, on the settings shell: the graphics screen's rows, the extras', and
         // its rows that open other pages.
         let mut graphics_rows = BTreeSet::new();
@@ -7993,8 +7999,8 @@ mod tests {
                         }
                         SunriseRow::Graphics(Item::Vanilla(o)) => format!("{o:?}"),
                         SunriseRow::Graphics(Item::Sunrise(h)) => format!("graphics:{h:?}"),
-                        SunriseRow::Graphics(Item::Extra(e))
-                        | SunriseRow::Extra(ExtraRow::Item(e)) => format!("extra:{e:?}"),
+                        SunriseRow::Graphics(Item::Described(id)) => id.as_str().to_owned(),
+                        SunriseRow::Extra(ExtraRow::Item(e)) => extra_id(e),
                         SunriseRow::Pack(item) => format!("shader:{item:?}"),
                         SunriseRow::ShaderOptions => {
                             let way = format!("Sunrise/{tab:?}");
@@ -8049,7 +8055,7 @@ mod tests {
                     WKind::Button { act, .. } => match act {
                         Act::Cycle(Opt::GraphicsBackend) => "graphics-api".to_owned(),
                         Act::Cycle(opt) => format!("{opt:?}"),
-                        Act::Extra(e) => format!("extra:{e:?}"),
+                        Act::Extra(e) => extra_id(*e),
                         Act::PvpPreset => "pvp-preset".to_owned(),
                         Act::Push(to) => {
                             ways_in

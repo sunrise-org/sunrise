@@ -212,6 +212,29 @@ pub mod render_slots;
 
 pub mod render_views;
 
+pub(crate) fn described_graphics_rows() -> &'static [&'static graphics_ui::RowDescriptor] {
+    #[cfg(feature = "sunrise-extras")]
+    {
+        extras::GRAPHICS_ROWS
+    }
+    #[cfg(not(feature = "sunrise-extras"))]
+    {
+        &[]
+    }
+}
+
+pub(crate) fn described_graphics_stamp(s: &settings::Settings) -> u64 {
+    #[cfg(feature = "sunrise-extras")]
+    {
+        extras::graphics_stamp(s)
+    }
+    #[cfg(not(feature = "sunrise-extras"))]
+    {
+        let _ = s;
+        0
+    }
+}
+
 #[cfg(test)]
 mod glsl_spirv_dump_tests;
 #[cfg(test)]

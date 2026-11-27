@@ -4714,7 +4714,7 @@ impl crate::game::ClientGame<'_> {
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
         pr.lap("pr_weather_border");
-        if title {
+        if title || !cfg!(feature = "sunrise-extras") {
             self.client.dynamic_lights.clear();
         } else {
             self.gather_dynamic_lights(camera, alpha);

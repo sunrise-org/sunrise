@@ -127,7 +127,7 @@ controllers = ["client", "sunrise-client-gameplay/controllers"]
 # them; there is no switch. `grep -rn sunrise-extras crates/` lists
 # every place it gates. Without it (`--no-default-features --features audio,controllers`) the
 # client is best effort: CI builds only the default.
-sunrise-extras = ["client", "friends", "sunrise-client-gameplay/sunrise-extras"]
+sunrise-extras = ["client", "friends", "sunrise-client-gameplay/sunrise-extras", "sunrise-client-render?/sunrise-extras"]
 # Play with Friends: sharing a world behind an invite code (game/friends.rs). Joining one is
 # sunrise-friends' `game` side, which sunrise-official registers (`sunrise_hooks::tunnel`).
 friends = ["sunrise-client-gameplay?/friends"]

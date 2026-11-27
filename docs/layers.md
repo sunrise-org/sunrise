@@ -213,7 +213,8 @@ lookups; the platform owns profiling, resource access and Parts authoring. See t
 
 Code that belongs to another layer than the crate it has to live in today (a Sunrise extra in
 `sunrise-client-render`, say) goes in its own module, never mixed into an engine module. Sunrise code in the game
-also goes behind `sunrise-extras`. That keeps each later move a pure file move.
+also goes behind `sunrise-extras` (`sunrise-client-render` keeps it opt-in, forwarded from `sunrise-client` and
+`sunrise-client-gameplay`, so plain builds do not inherit it). That keeps each later move a pure file move.
 
 ## The Sunrise layer in its own repository
 
@@ -640,7 +641,7 @@ themselves, or stays a module linked into the official build, as auto-reconnect 
 - UI-sound channels, the music page;
 - the PvP & HUD presets and widgets, the replay editor (Replay Studio's camera paths and timeline), the AI agent page;
 - the Sunrise Settings menu itself, the advanced menu that hosts them;
-- the renderer's extras: fullbright, dynamic lights, hidden block-break particles;
+- the renderer's extras: fullbright, dynamic lights, hidden block-break particles (static descriptors in `extras.rs` behind `sunrise-client-render`'s opt-in `sunrise-extras` feature, with their gameplay effects gated on `sunrise-extras` while their saved keys in `sunrise-extras.txt` still round-trip);
 - chunk pregeneration.
 
 Zoom, the FPS counter and Keystrokes already moved to native mods ([extras.md](extras.md#moved-to-native-mods)).

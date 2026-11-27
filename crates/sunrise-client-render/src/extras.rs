@@ -766,6 +766,139 @@ impl Item {
     }
 }
 
+#[cfg(feature = "sunrise-extras")]
+mod graphics_rows {
+    use crate::{
+        graphics_style::Cost,
+        graphics_ui::{GroupId, Page, Placement, RowControl, RowDescriptor, RowId, vanilla_row_id},
+        settings::{Opt, Settings},
+    };
+
+    const HIDE_BLOCK_PARTICLES_ID: RowId = RowId("sunrise:hide_block_particles");
+    const DYNAMIC_LIGHTS_ID: RowId = RowId("sunrise:dynamic_lights");
+    const FULLBRIGHT_ID: RowId = RowId("sunrise:fullbright");
+
+    fn always_shown(_: &Settings) -> bool {
+        true
+    }
+
+    fn fullbright_shown(s: &Settings) -> bool {
+        !s.fullbright_held
+    }
+
+    fn get_hide_block_particles(s: &Settings) -> bool {
+        s.extras.hide_block_particles
+    }
+
+    fn set_hide_block_particles(s: &mut Settings, v: bool) {
+        s.extras.hide_block_particles = v;
+    }
+
+    fn undo_hide_block_particles(s: &mut Settings, b: &Settings) {
+        s.extras.hide_block_particles = b.extras.hide_block_particles;
+    }
+
+    fn get_dynamic_lights(s: &Settings) -> bool {
+        s.extras.dynamic_lights
+    }
+
+    fn set_dynamic_lights(s: &mut Settings, v: bool) {
+        s.extras.dynamic_lights = v;
+    }
+
+    fn undo_dynamic_lights(s: &mut Settings, b: &Settings) {
+        s.extras.dynamic_lights = b.extras.dynamic_lights;
+    }
+
+    fn get_fullbright(s: &Settings) -> bool {
+        s.extras.fullbright
+    }
+
+    fn set_fullbright(s: &mut Settings, v: bool) {
+        s.extras.fullbright = v;
+    }
+
+    fn undo_fullbright(s: &mut Settings, b: &Settings) {
+        s.extras.fullbright = b.extras.fullbright;
+    }
+
+    static HIDE_BLOCK_PARTICLES: RowDescriptor = RowDescriptor {
+        id: HIDE_BLOCK_PARTICLES_ID,
+        placement: Placement {
+            page: Page::Quality,
+            group: GroupId::SKY_AND_WEATHER,
+            after: vanilla_row_id(Opt::Particles),
+        },
+        caption_key: "sunrise.extras.hide_block_particles",
+        caption_fallback: Some("Hide block-break particles"),
+        description_key: "sunrise.extras.hide_block_particles.tooltip",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: get_hide_block_particles,
+            set: set_hide_block_particles,
+        },
+        shown: always_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: undo_hide_block_particles,
+    };
+
+    static DYNAMIC_LIGHTS: RowDescriptor = RowDescriptor {
+        id: DYNAMIC_LIGHTS_ID,
+        placement: Placement {
+            page: Page::Quality,
+            group: GroupId::LIGHTING_AND_ENTITIES,
+            after: vanilla_row_id(Opt::ChunkFade),
+        },
+        caption_key: "sunrise.extras.dynamic_lights",
+        caption_fallback: Some("Dynamic lights"),
+        description_key: "sunrise.extras.dynamic_lights.tooltip",
+        chosen_description: None,
+        cost: Cost::Low,
+        control: RowControl::Switch {
+            get: get_dynamic_lights,
+            set: set_dynamic_lights,
+        },
+        shown: always_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: undo_dynamic_lights,
+    };
+
+    static FULLBRIGHT: RowDescriptor = RowDescriptor {
+        id: FULLBRIGHT_ID,
+        placement: Placement {
+            page: Page::Quality,
+            group: GroupId::LIGHTING_AND_ENTITIES,
+            after: Some(DYNAMIC_LIGHTS_ID),
+        },
+        caption_key: "sunrise.extras.fullbright",
+        caption_fallback: Some("Fullbright"),
+        description_key: "sunrise.extras.fullbright.tooltip",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: get_fullbright,
+            set: set_fullbright,
+        },
+        shown: fullbright_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: undo_fullbright,
+    };
+
+    pub(crate) const GRAPHICS_ROWS: &[&RowDescriptor] =
+        &[&HIDE_BLOCK_PARTICLES, &DYNAMIC_LIGHTS, &FULLBRIGHT];
+
+    pub(crate) fn graphics_stamp(s: &Settings) -> u64 {
+        crate::settings_shell::stamp_of(&(&s.extras, s.fullbright_held))
+    }
+}
+
+#[cfg(feature = "sunrise-extras")]
+pub(crate) use graphics_rows::{GRAPHICS_ROWS, graphics_stamp};
+
 #[cfg(test)]
 mod tests {
     use super::*;
