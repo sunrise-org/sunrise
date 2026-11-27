@@ -2015,7 +2015,10 @@ impl Game<'_> {
         // ItemLore.addToTooltip: after the enchantments, before the attributes
         // (ItemStack.addDetailsToTooltip).
         if display.shows("minecraft:lore") {
-            for text in sunrise_client::item_tooltip::lore_texts(stack) {
+            for text in sunrise_client::item_tooltip::lore_texts(
+                stack,
+                item_info.map(|i| &i.component_prototype),
+            ) {
                 lines.push((text, u32::MAX));
             }
         }

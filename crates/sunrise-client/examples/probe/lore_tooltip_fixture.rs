@@ -20,7 +20,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
             writeln!(output, "-")?;
             continue;
         }
-        let lines = lore_texts(&stack);
+        let lines = lore_texts(&stack, None);
         if lines.is_empty() {
             writeln!(output, "-")?;
             continue;

@@ -1561,7 +1561,11 @@ pub fn lines(
     }
     let mut lines = vec![name_line(stack, translate)];
     if display.shows("minecraft:lore") {
-        lines.extend(lore_texts(stack).into_iter().map(|t| t.plain()));
+        lines.extend(
+            lore_texts(stack, info.map(|i| &i.component_prototype))
+                .into_iter()
+                .map(|t| t.plain()),
+        );
     }
     lines.extend(detail_lines(
         stack, info, attributes, holders, creative, translate, style,
@@ -1571,8 +1575,18 @@ pub fn lines(
 
 /// `ItemLore.addToTooltip`: each lore component under dark purple italic, with
 /// the component's own styles (including explicit `false`) winning on children.
-pub fn lore_texts(stack: &ItemStack) -> Vec<crate::text::Text> {
-    let Some(raw) = stack.data().and_then(|d| d.other("minecraft:lore")) else {
+/// The lore is `ItemStack.get(DataComponents.LORE)`: the stack's own, or the item's
+/// default (`prototype`, `ItemInfo::component_prototype`) when the stack neither sets nor
+/// removes it.
+pub fn lore_texts(stack: &ItemStack, prototype: Option<&ItemStack>) -> Vec<crate::text::Text> {
+    let data = stack.data();
+    if data.is_some_and(|d| d.other("!minecraft:lore").is_some()) {
+        return Vec::new();
+    }
+    let Some(raw) = data
+        .and_then(|d| d.other("minecraft:lore"))
+        .or_else(|| prototype?.data()?.other("minecraft:lore"))
+    else {
         return Vec::new();
     };
     let base = crate::text::Style {
@@ -1697,7 +1711,7 @@ mod tests {
                 ("with", Tag::List(vec![Tag::String("argument".into())])),
             ])])),
         );
-        let lines = lore_texts(&stack);
+        let lines = lore_texts(&stack, None);
         // Decoding canonicalizes string arguments to literal text components.
         assert_eq!(
             lines[0].component(),
@@ -1715,6 +1729,39 @@ mod tests {
     }
 
     #[test]
+    fn lore_falls_back_to_the_item_default_unless_the_stack_sets_or_removes_it() {
+        let lore = |text: &str, color: &str| {
+            Some(Tag::List(vec![Tag::compound([
+                ("translate", Tag::String(text.into())),
+                ("color", Tag::String(color.into())),
+                ("italic", Tag::Byte(0)),
+            ])]))
+        };
+        let mut prototype = ItemStack::new("example:print", 1);
+        prototype
+            .data_mut()
+            .set_other("minecraft:lore", lore("example.desc", "gray"));
+        let mut stack = ItemStack::new("example:print", 1);
+        let lines = lore_texts(&stack, Some(&prototype));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain(), "example.desc");
+        assert_eq!(lines[0].spans[0].style.color, Some(crate::text::GRAY));
+        assert!(!lines[0].spans[0].style.is_italic());
+        stack
+            .data_mut()
+            .set_other("minecraft:lore", lore("example.own", "yellow"));
+        let lines = lore_texts(&stack, Some(&prototype));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain(), "example.own");
+        assert_eq!(lines[0].spans[0].style.color, Some(crate::text::YELLOW));
+        let mut removed = ItemStack::new("example:print", 1);
+        removed
+            .data_mut()
+            .set_other("!minecraft:lore", Some(Tag::Compound(Default::default())));
+        assert!(lore_texts(&removed, Some(&prototype)).is_empty());
+    }
+
+    #[test]
     fn lore_keeps_component_colours_under_dark_purple_italic() {
         let mut stack = ItemStack::new("minecraft:stick", 1);
         stack.data_mut().set_other(
@@ -1728,7 +1775,7 @@ mod tests {
                 Tag::String("Plain lore".into()),
             ])),
         );
-        let lines = lore_texts(&stack);
+        let lines = lore_texts(&stack, None);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].plain(), "Gold line");
         assert_eq!(lines[0].spans[0].style.color, Some(crate::text::GOLD));
@@ -2091,7 +2138,7 @@ mod tests {
         assert_eq!(name.plain(), "Simple Custom Name");
         assert_eq!(name.spans[0].style.italic, Some(false));
 
-        let lore = lore_texts(&stack);
+        let lore = lore_texts(&stack, None);
         assert_eq!(lore.len(), 1);
         assert_eq!(lore[0].plain(), "Simple Custom Lore");
         assert_eq!(lore[0].spans[0].style.italic, Some(false));
