@@ -51,6 +51,11 @@ pub trait KeysHost {
     /// entry; an absent tag, or a tag not containing the entry, returns false.
     fn registry_entry_in_tag(&self, entry: &RegistryEntry, tag: &str) -> Option<bool>;
     /// Side: both.
+    /// The members of `tag` in `registry`, in tag order (`HolderSet.Named`: tag file order, nested
+    /// tags expanded in place), from the current side's merged tags. An absent tag returns an empty
+    /// list (`getTagOrEmpty`); None for an unknown or unavailable registry.
+    fn registry_tag_members(&self, registry: &str, tag: &str) -> Option<Vec<Identifier>>;
+    /// Side: both.
     /// Every block key in the registry's registration order: vanilla's first, then
     /// mod blocks in the order they registered. A block registry lists a name once
     /// per state; this yields it once. Empty before the block table completes.

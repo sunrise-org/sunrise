@@ -105,6 +105,11 @@ both a missing and a bound-but-empty tag; enumerate to tell them apart. Leave a 
 when matching the non-exhaustive `TagMembers` enum. See [Load phases and access](load-phases.md)
 for when to refresh caches built from these tables.
 
+For any other registry, `host.registry_tag_members(registry, tag)` lists a tag's members by
+identifier in tag order (nested tags expanded in place, as vanilla's `HolderSet.Named` lists
+them) from the current side's merged tags, the order `minecraft:tooltip_order` gives enchantment
+tooltips. A tag nothing binds is an empty list; an unknown or unavailable registry is `None`.
+
 ## Owned values
 
 Use API values rather than engine types. Owned records retain facts, not live access; a handle

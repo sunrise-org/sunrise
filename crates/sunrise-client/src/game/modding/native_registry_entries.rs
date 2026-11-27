@@ -4,7 +4,10 @@ use mod_api::{RegistryEntry, RegistryReadError};
 use std::{collections::BTreeMap, ops::ControlFlow, sync::Arc};
 use sunrise_client::{command::args::normalized, lan::data::SyncData};
 use sunrise_core::identifier::Identifier;
-use sunrise_protocol::registry::{Builtin, Dynamic};
+use sunrise_protocol::{
+    packets::configuration::UpdateTags,
+    registry::{Builtin, Dynamic},
+};
 
 enum LocalRegistry<'a> {
     Enchantments(&'a sunrise_client::enchant::Enchantments),
@@ -320,6 +323,59 @@ impl Game<'_> {
         Some(self.sync_tag_contains(&registry, &id, &tag))
     }
 
+    /// `HolderLookup.RegistryLookup.get(TagKey)`: the members of a tag in `HolderSet.Named` order,
+    /// from the same owners as `registry_entry_in_tag`. An absent tag is empty (`getTagOrEmpty`);
+    /// an unknown or unavailable registry is None.
+    pub(super) fn registry_tag_members(
+        &self,
+        registry: &str,
+        tag: &str,
+    ) -> Option<Vec<Identifier>> {
+        let registry = normalized(registry);
+        let _ = self
+            .visit_registry_entries(&registry, &mut |_| ControlFlow::Break(()))
+            .ok()?;
+        let tag = normalized(tag);
+        if let Some(set) = self.registry_datapacks(&registry)
+            && let Some(members) = set.tag_members(&registry, &tag)
+        {
+            return identifiers(members.iter().map(String::as_str));
+        }
+        if let Some(remote) = &self.remote {
+            return network_tag_members(
+                &remote.builtin,
+                &remote.registries,
+                &registry,
+                remote.registries.tag(&registry, &tag),
+            );
+        }
+        if registry == "minecraft:slot_source" {
+            let members = self.fns.store.slot_source_tag(&tag).unwrap_or_default();
+            return identifiers(members.iter().map(String::as_str));
+        }
+        if registry == "minecraft:villager_trade" {
+            let members = self.stations().trades.tags.get(tag.as_ref());
+            return identifiers(members.into_iter().flatten().map(String::as_str));
+        }
+        let item_tags = match registry.as_ref() {
+            "minecraft:block" => Some(sunrise_client::items::TagRegistry::Block),
+            "minecraft:item" => Some(sunrise_client::items::TagRegistry::Item),
+            "minecraft:fluid" => Some(sunrise_client::items::TagRegistry::Fluid),
+            _ => None,
+        };
+        if let Some(kind) = item_tags {
+            let members = self.items().tag_members(kind, &tag).unwrap_or_default();
+            return identifiers(members.iter().map(String::as_str));
+        }
+        let sync = self.registry_sync()?;
+        network_tag_members(
+            &sync.builtin,
+            &sync.dynamic,
+            &registry,
+            sync_tag_ids(&sync.tags, &registry, &tag),
+        )
+    }
+
     fn sync_tag_contains(&self, registry: &str, id: &str, tag: &str) -> bool {
         let Some(sync) = self.registry_sync() else {
             return false;
@@ -387,6 +443,46 @@ fn visit_network_entries(
         .try_for_each(visit))
 }
 
+fn identifiers<'a>(entries: impl IntoIterator<Item = &'a str>) -> Option<Vec<Identifier>> {
+    Some(
+        entries
+            .into_iter()
+            .filter_map(|name| Identifier::parse(name).ok())
+            .collect(),
+    )
+}
+
+/// A tag's members from a network tag table, in the order the table lists them (the order
+/// `TagNetworkSerialization` sent). An absent tag is empty; a registry neither table holds is None.
+fn network_tag_members(
+    builtin: &Builtin,
+    dynamic: &Dynamic,
+    registry: &str,
+    ids: Option<&[i32]>,
+) -> Option<Vec<Identifier>> {
+    if !builtin.registries.contains_key(registry) && !dynamic.registries.contains_key(registry) {
+        return None;
+    }
+    let name = |id: i32| {
+        builtin
+            .get(registry)
+            .and_then(|entries| entries.name(id))
+            .or_else(|| dynamic.name(registry, id))
+    };
+    identifiers(ids.into_iter().flatten().filter_map(|id| name(*id)))
+}
+
+/// One tag's ids in a server's `UpdateTags`, in the order it lists them.
+fn sync_tag_ids<'a>(tags: &'a UpdateTags, registry: &str, tag: &str) -> Option<&'a [i32]> {
+    tags.registries
+        .iter()
+        .find(|tags| tags.registry == registry)?
+        .tags
+        .iter()
+        .find(|candidate| candidate.name == tag)
+        .map(|tag| tag.ids.as_slice())
+}
+
 /// Bind a mod registry's tags against the entries it just admitted. A missing
 /// required member prevents that tag from binding, not the other tags.
 pub(super) fn load_registry_tags(
@@ -450,6 +546,107 @@ mod condition_tests {
         )
         .unwrap();
         assert_eq!(tags["test:hot"], ["test:fire"]);
+    }
+}
+
+#[cfg(test)]
+mod tag_member_tests {
+    use super::{network_tag_members, sync_tag_ids};
+    use serde_json::json;
+    use sunrise_protocol::{
+        packets::configuration::{RegistryTags, TagEntry, UpdateTags},
+        registry::{Builtin, Dynamic},
+    };
+    use sunrise_world::tag_layers::TagLayers;
+
+    const ENCHANTMENT: &str = "minecraft:enchantment";
+
+    fn enchantments() -> Dynamic {
+        let names = ["a", "b", "c", "d", "e"];
+        Dynamic {
+            registries: [(
+                ENCHANTMENT.to_owned(),
+                names
+                    .map(|name| (format!("minecraft:{name}"), None))
+                    .to_vec(),
+            )]
+            .into(),
+            ..Dynamic::default()
+        }
+    }
+
+    fn names(members: Option<Vec<sunrise_core::identifier::Identifier>>) -> Option<Vec<String>> {
+        members.map(|members| members.iter().map(ToString::to_string).collect())
+    }
+
+    #[test]
+    fn tooltip_order_keeps_tag_order_with_a_nested_tag_expanded_in_place() {
+        let dynamic = enchantments();
+        let raw = [
+            (
+                "minecraft:tooltip_order",
+                json!({"values": ["minecraft:e", "#minecraft:nested", "minecraft:a"]}),
+            ),
+            (
+                "minecraft:nested",
+                json!({"values": ["minecraft:d", "minecraft:b"]}),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, file)| (name.to_owned(), TagLayers::from_file(file).unwrap()))
+        .collect();
+        let bound = TagLayers::bind("enchantment", &raw, |id| {
+            dynamic.id(ENCHANTMENT, id).is_some()
+        });
+        let tags = UpdateTags {
+            registries: vec![RegistryTags {
+                registry: ENCHANTMENT.to_owned(),
+                tags: bound
+                    .iter()
+                    .map(|(name, members)| TagEntry {
+                        name: name.clone(),
+                        ids: members
+                            .iter()
+                            .map(|id| dynamic.id(ENCHANTMENT, id).unwrap())
+                            .collect(),
+                    })
+                    .collect(),
+            }],
+        };
+        let ids = sync_tag_ids(&tags, ENCHANTMENT, "minecraft:tooltip_order");
+        assert_eq!(
+            names(network_tag_members(
+                &Builtin::default(),
+                &dynamic,
+                ENCHANTMENT,
+                ids
+            )),
+            Some(
+                ["minecraft:e", "minecraft:d", "minecraft:b", "minecraft:a"]
+                    .map(String::from)
+                    .to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn an_absent_tag_is_empty_and_an_unknown_registry_is_none() {
+        let dynamic = enchantments();
+        let tags = UpdateTags { registries: vec![] };
+        let absent = sync_tag_ids(&tags, ENCHANTMENT, "minecraft:missing");
+        assert_eq!(
+            names(network_tag_members(
+                &Builtin::default(),
+                &dynamic,
+                ENCHANTMENT,
+                absent
+            )),
+            Some(vec![])
+        );
+        assert_eq!(
+            network_tag_members(&Builtin::default(), &dynamic, "test:nothing", None),
+            None
+        );
     }
 }
 

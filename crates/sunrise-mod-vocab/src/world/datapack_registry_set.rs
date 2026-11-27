@@ -442,6 +442,17 @@ impl DatapackRegistrySet {
                 .any(|member| member == entry),
         )
     }
+
+    /// Current merged-tag members in tag order (`HolderSet.Named`), nested tags expanded in
+    /// place. None for an unknown registry; an absent tag is an empty list.
+    pub fn tag_members(&self, registry: &str, tag: &str) -> Option<&[String]> {
+        self.registries.contains_key(registry).then(|| {
+            self.tags
+                .get(registry)
+                .and_then(|tags| tags.get(tag))
+                .map_or(&[][..], Vec::as_slice)
+        })
+    }
 }
 
 /// Members already bound by the load that produced this registry set.
