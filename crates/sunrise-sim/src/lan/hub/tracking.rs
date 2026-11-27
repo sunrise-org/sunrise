@@ -1437,7 +1437,7 @@ mod tests {
                 brand: "sunrise".into(),
                 sender: crate::lan::PlayerSender::new(tx, Arc::default()),
                 latency: Arc::new(std::sync::atomic::AtomicI32::new(0)),
-                address: super::super::conn::MEMORY_ADDRESS,
+                address: crate::lan::conn::MEMORY_ADDRESS,
                 expected: false,
             },
             1,
@@ -1489,7 +1489,7 @@ mod tests {
                 for (dst, src) in client.sections.iter_mut().zip(&server.sections) {
                     *dst = Arc::new((**src).clone());
                 }
-                let taken = super::super::handoff::take(&mut client);
+                let taken = crate::lan::handoff::take(&mut client);
                 assert_eq!(taken, server.sections.len());
                 for (dst, src) in client.sections.iter().zip(&server.sections) {
                     assert!(Arc::ptr_eq(dst, src));
