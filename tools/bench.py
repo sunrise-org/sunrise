@@ -31,9 +31,10 @@ back with `--pre-generated` is never generated further and every run ticks the s
 many entities, players and items were loaded when its window ended. With
 `--behaviour random` each bot then keeps switching between wandering, flying off, standing, hotbar switching,
 attacking mobs and placing and breaking blocks. A spread run loads view distance around every bot, so give it a
-longer --warmup: the window should start after the terrain around the bots is generated. With `--profile SECONDS`
-(Sunrise only, needing `--seconds` of at least `SECONDS + 10`), the bench asks the running server for a performance
-capture inside the measured window and copies it into `--out` as `<server>-<bots>.hzperf`.
+longer --warmup: the window should start after the terrain around the bots is generated. Every Sunrise run records a
+performance capture inside the measured window (40 s by default, shortened automatically when `--seconds` is shorter;
+`--profile SECONDS` picks its length and `--no-profile` turns it off) and copies it into `--out` as
+`<server>-<bots>.hzperf`; vanilla and Pumpkin runs record none, and every run states whether a capture was recording.
 """
 
 import argparse
@@ -125,6 +126,7 @@ PROFILE_SUMMARY = re.compile(
     r'^(?:dedicated|integrated) server(?:,\s*([0-9]+(?:\.[0-9]+)?)\s*s)?(?:,\s*(\d+)\s*ticks)?$'
 )
 PROFILE_SAVED = re.compile(r'Saved\s+(.+?\.hzperf)(?:\s|$)')
+PROFILE_DEFAULT_SECONDS = 40
 PROFILE_MAX_SECONDS = 600
 # Margin kept before and after a capture so it sits inside the measured window.
 PROFILE_MARGIN = 5
@@ -173,6 +175,31 @@ def profile_min_seconds(profile_seconds):
     return profile_seconds + 2 * PROFILE_MARGIN
 
 
+def resolve_profile(window_seconds, requested, disabled):
+    """Capture length and an optional shortening note for a Sunrise run, or (None, None) when disabled."""
+    if disabled:
+        if requested is not None:
+            raise ValueError('--profile cannot be combined with --no-profile')
+        return None, None
+    if requested is not None:
+        if not 1 <= requested <= PROFILE_MAX_SECONDS:
+            raise ValueError(f'--profile must be between 1 and {PROFILE_MAX_SECONDS} seconds (got {requested})')
+        minimum = profile_min_seconds(requested)
+        if window_seconds < minimum:
+            raise ValueError(f'--profile {requested} needs --seconds of at least {minimum} (got {window_seconds})')
+        return requested, None
+    max_fit = window_seconds - 2 * PROFILE_MARGIN
+    if max_fit < 1:
+        minimum = profile_min_seconds(1)
+        raise ValueError(
+            f'--seconds {window_seconds} is too short for a capture (needs at least {minimum}, or pass --no-profile)'
+        )
+    if max_fit < PROFILE_DEFAULT_SECONDS:
+        note = f'capture shortened from {PROFILE_DEFAULT_SECONDS} s to {max_fit} s to fit inside the {window_seconds} s window'
+        return max_fit, note
+    return PROFILE_DEFAULT_SECONDS, None
+
+
 def profile_delay(window_seconds, profile_seconds):
     """Seconds after the window starts to launch `sunrise-server report` so it stays inside the window."""
     minimum = profile_min_seconds(profile_seconds)
@@ -196,13 +223,13 @@ def parse_profile_output(lines):
     return {'path': path, 'seconds': seconds, 'ticks': ticks}
 
 
-def report_command(args, scratch):
-    return [str(Path(args.exe).resolve()), '--dir', str(scratch), 'report', str(args.profile)]
+def report_command(exe, scratch, seconds):
+    return [str(Path(exe).resolve()), '--dir', str(scratch), 'report', str(seconds)]
 
 
-def start_profile(args, scratch):
+def start_profile(exe, scratch, seconds):
     env = lab.game_env(SUNRISE_HOME=scratch / 'sunrise-home')
-    return subprocess.Popen(report_command(args, scratch), cwd=scratch, stdin=subprocess.DEVNULL,
+    return subprocess.Popen(report_command(exe, scratch, seconds), cwd=scratch, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             encoding='utf-8', errors='replace', env=env)
 
@@ -235,31 +262,32 @@ def find_capture(scratch, reported_path):
 def finish_profile(proc, start_error, scratch, destination, requested_seconds):
     """Waits for `sunrise-server report`, copies the capture into --out and returns the report entry."""
     if start_error is not None:
-        return {'error': start_error}
+        return {'recording': False, 'error': start_error}
     if proc is None:
-        return {'error': 'capture did not start inside the measured window'}
+        return {'recording': False, 'error': 'capture did not start inside the measured window'}
     timeout = requested_seconds + 90
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.communicate()
-        return {'error': f'sunrise-server report timed out after {timeout} s'}
+        return {'recording': True, 'error': f'sunrise-server report timed out after {timeout} s'}
     except OSError as e:
-        return {'error': str(e)}
+        return {'recording': True, 'error': str(e)}
     if proc.returncode != 0:
         detail = (stderr or stdout or '').strip().splitlines()
         suffix = f': {detail[-1]}' if detail else ''
-        return {'error': f'sunrise-server report exited with {proc.returncode}{suffix}'}
+        return {'recording': True, 'error': f'sunrise-server report exited with {proc.returncode}{suffix}'}
     parsed = parse_profile_output(stdout.splitlines())
     source = find_capture(scratch, parsed['path'])
     if source is None:
-        return {'error': 'sunrise-server report finished without a capture file'}
+        return {'recording': True, 'error': 'sunrise-server report finished without a capture file'}
     try:
         shutil.copy2(source, destination)
     except OSError as e:
-        return {'error': f'could not copy capture to {destination}: {e}'}
+        return {'recording': True, 'error': f'could not copy capture to {destination}: {e}'}
     return {
+        'recording': True,
         'path': str(destination),
         'seconds': parsed['seconds'],
         'ticks': parsed['ticks'],
@@ -544,9 +572,15 @@ def measure_window(server, supports, seconds, profile=None, start_profile_fn=Non
         raise
 
 
-def run_once(kind, args, out):
+def run_once(kind, args, out, profile_seconds=None):
     scratch = Path(tempfile.mkdtemp(prefix=f'sunrise-bench-{kind}-'))
-    result = {'server': kind, 'bots': args.bots, 'behaviour': args.behaviour}
+    if kind != 'sunrise':
+        initial_profile = {'recording': False, 'reason': UNSUPPORTED}
+    elif profile_seconds is None:
+        initial_profile = {'recording': False, 'reason': 'disabled'}
+    else:
+        initial_profile = {'recording': False}
+    result = {'server': kind, 'bots': args.bots, 'behaviour': args.behaviour, 'profile': initial_profile}
     server = None
     profile_proc = None
     try:
@@ -573,8 +607,9 @@ def run_once(kind, args, out):
         supports = SERVERS[kind]
         gametime, window, ticks, rss, cpu, profile_proc, profile_start_error = measure_window(
             server, supports, args.seconds,
-            profile=args.profile,
-            start_profile_fn=(lambda: start_profile(args, scratch)) if args.profile is not None else None,
+            profile=profile_seconds,
+            start_profile_fn=(lambda: start_profile(args.exe, scratch, profile_seconds))
+            if profile_seconds is not None else None,
         )
         # What the server was ticking, so two runs can be told to have done the same work.
         loaded = {name: server.ask(f'execute if entity {selector}', parse_count, timeout=30)
@@ -589,9 +624,9 @@ def run_once(kind, args, out):
         result.update(summarize(kind, args, ticks, rss, cpu, gametime if supports['gametime'] else None, window, summary, start_seconds,
                                 total))
         result['loaded'] = loaded
-        if args.profile is not None:
+        if profile_seconds is not None:
             result['profile'] = finish_profile(profile_proc, profile_start_error, scratch,
-                                               out / f'{kind}-{args.bots}.hzperf', args.profile)
+                                               out / f'{kind}-{args.bots}.hzperf', profile_seconds)
     except Exception as e:  # a failed run is reported, and the next one still runs
         result['error'] = str(e)
     finally:
@@ -609,6 +644,8 @@ def format_profile(profile):
         return '-'
     if 'error' in profile:
         return f'failed: {profile["error"].splitlines()[0]}'
+    if not profile.get('recording', True):
+        return UNSUPPORTED if profile.get('reason') == UNSUPPORTED else 'off'
     parts = []
     if profile.get('seconds') is not None:
         parts.append(f'{profile["seconds"]} s')
@@ -642,8 +679,7 @@ def table(runs):
         ('Start s', ('start_seconds',)),
     ]
     body = ''.join(f'| {name} | ' + ' | '.join(cell(r, path) for r in ok) + ' |\n' for name, path in rows)
-    if any('profile' in r for r in ok):
-        body += '| Profile | ' + ' | '.join(format_profile(r.get('profile')) for r in ok) + ' |\n'
+    body += '| Profile | ' + ' | '.join(format_profile(r.get('profile')) for r in ok) + ' |\n'
     failed = ''.join(f'\n{r["server"]} failed: {r["error"].splitlines()[0]}\n' for r in runs if 'error' in r)
     return head + body + failed
 
@@ -652,14 +688,12 @@ def check(args):
     for kind in args.server:
         if kind not in SERVERS:
             sys.exit(f'--server: {kind!r} is not one of {", ".join(SERVERS)}')
-    if args.profile is not None:
-        unsupported = [k for k in args.server if k != 'sunrise']
-        if unsupported:
-            sys.exit(f'--profile only works with sunrise (not {", ".join(unsupported)})')
-        if not 1 <= args.profile <= PROFILE_MAX_SECONDS:
-            sys.exit(f'--profile must be between 1 and {PROFILE_MAX_SECONDS} seconds (got {args.profile})')
+    if args.no_profile and args.profile is not None:
+        sys.exit('--profile cannot be combined with --no-profile')
+    profile_seconds = profile_note = None
+    if args.profile is not None or (not args.no_profile and 'sunrise' in args.server):
         try:
-            profile_delay(args.seconds, args.profile)
+            profile_seconds, profile_note = resolve_profile(args.seconds, args.profile, args.no_profile)
         except ValueError as e:
             sys.exit(str(e))
     if 'vanilla' in args.server and not args.jar:
@@ -670,6 +704,7 @@ def check(args):
         sys.exit(f'{args.bots_bin} is missing: cargo build --release -p sunrise-bots')
     if args.pre_generated and not Path(args.pre_generated).is_dir():
         sys.exit(f'--pre-generated {args.pre_generated} is not a folder')
+    return profile_seconds, profile_note
 
 
 def main(argv=None):
@@ -686,8 +721,12 @@ def main(argv=None):
                         help='spread the bots over a square of this side (0: they stay at the world spawn)')
     parser.add_argument('--warmup', type=int, default=30)
     parser.add_argument('--seconds', type=int, default=60)
-    parser.add_argument('--profile', type=int, metavar='SECONDS',
-                        help='record a performance capture of this many seconds inside the measured window (Sunrise only)')
+    profile_group = parser.add_mutually_exclusive_group()
+    profile_group.add_argument('--profile', type=int, metavar='SECONDS',
+                               help=f'length of Sunrise\'s performance capture inside the measured window '
+                                    f'(default {PROFILE_DEFAULT_SECONDS} s, shortened if --seconds is shorter)')
+    profile_group.add_argument('--no-profile', action='store_true',
+                               help='do not record a performance capture on Sunrise runs')
     parser.add_argument('--seed', type=int, default=12345)
     parser.add_argument('--view-distance', type=int, default=10)
     parser.add_argument('--heap', default='4g', help='the Java heap for vanilla')
@@ -699,18 +738,22 @@ def main(argv=None):
     parser.add_argument('--start-timeout', type=int, default=600)
     parser.add_argument('--out', type=Path, default=ROOT / '.local/bench', help='the folder for report.json and logs')
     args = parser.parse_args(argv)
-    check(args)
+    profile_seconds, profile_note = check(args)
+    if profile_note:
+        print(f'Note: {profile_note}', flush=True)
     args.out.mkdir(parents=True, exist_ok=True)
     runs = []
     for kind in args.server:
         print(f'{kind}, {args.bots} {args.behaviour} bots...', flush=True)
-        runs.append(run_once(kind, args, args.out))
+        runs.append(run_once(kind, args, args.out, profile_seconds if kind == 'sunrise' else None))
         print(json.dumps(runs[-1]), flush=True)
+    settings = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+    settings['profile'] = profile_seconds if 'sunrise' in args.server else None
     report = {
         'kind': 'sunrise-bench',
         'date': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
         'machine': {'system': platform.system(), 'machine': platform.machine(), 'cpus': os.cpu_count()},
-        'settings': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+        'settings': settings,
         'runs': runs,
     }
     path = args.out / 'report.json'
