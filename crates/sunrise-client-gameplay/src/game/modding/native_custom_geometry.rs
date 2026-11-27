@@ -5,7 +5,7 @@ use crate::game::host::draw::GameWorldDrawContext;
 use glam::{DVec3, Mat4, Vec3};
 use mod_api::{
     DrawError, InstanceError, ModelInstance, ModelRef, NameTagOptions, PipelineDrawError,
-    PipelineQuad, RenderLevelStage, RenderPipelineRef, WorldLine, WorldQuad,
+    PipelineQuad, RenderLevelStage, RenderPipelineRef, WorldLine, WorldQuad, WorldTextOptions,
 };
 use sunrise_client::mesher::Vertex;
 use sunrise_client::screen_effects::{CameraQuads, sampling};
@@ -321,13 +321,17 @@ impl ClientGame<'_> {
             .extend_from_slice(see_through);
     }
     /// A mod's label as `SubmitNodeCollection.submitNameTag` draws a name: 0.5 above `at`,
-    /// facing the camera, 0.025 blocks a font pixel. See-through, twice: opaque white text in
-    /// the world, its light raised to at least 2 unless `exact_light` (no backdrop), and the
-    /// faded text on the backdrop over everything, unlit. Otherwise once, depth tested and
+    /// facing the camera, `options.scale` blocks a font pixel (a name tag's 0.025 by default).
+    /// See-through, twice: opaque white text in the world, its light raised to at least 2
+    /// unless `exact_light` (no backdrop), and the faded text on the backdrop over everything,
+    /// unlit. Otherwise once, depth tested and
     /// translucent: the faded text on the backdrop in the caller's light. The faded text's alpha
     /// (unless `faded_alpha`) and the backdrop's follow the player's text background opacity.
-    /// Refused whole, before layout, for a position that is not finite; any newly
-    /// rasterized glyphs are uploaded with the label.
+    /// Refused whole, before layout, for a position that is not finite
+    /// ([`DrawError::NonFinite`]) or a scale that is not finite and positive
+    /// ([`DrawError::InvalidScale`]); after layout, for a finite scale whose text positions
+    /// overflow f32 ([`DrawError::NonFinite`]). Any newly rasterized glyphs are uploaded with
+    /// the label, and also when it is refused after layout, as the atlas already holds them.
     pub(in crate::game) fn native_world_name_tag(
         &self,
         draw: &mut WorldGeometry,
@@ -336,6 +340,9 @@ impl ClientGame<'_> {
         options: NameTagOptions,
     ) -> Result<(), DrawError> {
         draw.check_label(at)?;
+        if !options.scale.is_finite() || options.scale <= 0.0 {
+            return Err(DrawError::InvalidScale);
+        }
         let text = sunrise_client_lib::api_text::to_engine_inprocess(text);
         let from_camera = DVec3::from(at) - DVec3::from(draw.camera());
         let o = from_camera + DVec3::new(0.0, 0.5, 0.0);
@@ -350,7 +357,8 @@ impl ClientGame<'_> {
             .faded_alpha
             .map_or_else(|| self.client.settings.faded_text_alpha(0.25), u32::from);
         let light = options.light;
-        let unit = super::names::NAME_TAG_UNIT;
+        // PoseStack.scale(s, -s, s) in place of the name tag's 0.025.
+        let unit = options.scale;
         let (mut world, mut see_through) = (Vec::new(), Vec::new());
         let quads = |alpha, backdrop, layer, light, out: &mut Vec<Vertex>| {
             self.styled_name_tag_quads(o, &lines, alpha, backdrop, layer, light, unit, out, None)
@@ -371,9 +379,72 @@ impl ClientGame<'_> {
             let lit = sunrise_client::block_entity_render::vertex_light(light);
             quads(faded, backdrop, 0, lit, &mut world)
         };
+        // A finite scale can still overflow the camera-relative positions (f32::MAX): refused
+        // as any draw whose coordinates overflow f32, with nothing drawn.
+        let finite = |v: &Vertex| v.pos.iter().all(|c| c.is_finite());
+        if !world.iter().chain(&see_through).all(finite) {
+            self.client.text_patches.borrow_mut().append(&mut patches);
+            return Err(DrawError::NonFinite);
+        }
         draw.label(from_camera.length_squared(), &world, &see_through);
         self.client.text_patches.borrow_mut().append(&mut patches);
         Ok(())
+    }
+    /// A mod's posed text, as a block entity's text is drawn (`world_text_quads`), under
+    /// `pose` (row-major 3×4) at `origin`, the camera subtracted in `f64`. Depth tested, it
+    /// draws with the labels the world's name tags draw with, far to near by `origin`, full
+    /// bright when `glowing` (`LightCoordsUtil.FULL_BRIGHT`, as glowing sign text) and otherwise
+    /// in `light`. See-through (`Font.DisplayMode.SEE_THROUGH`, `RenderPipelines.TEXT_SEE_THROUGH`:
+    /// no depth test, no lightmap), with the labels' copies over everything. Refused whole,
+    /// before layout, for an `origin`, `pose` or `at` that is not finite, and after it when a
+    /// finite pose or origin still overflows a vertex to infinity or NaN.
+    pub(in crate::game) fn native_world_text(
+        &self,
+        draw: &mut WorldGeometry,
+        origin: [f64; 3],
+        pose: [f32; 12],
+        text: &mod_api::Text,
+        options: WorldTextOptions,
+    ) -> Result<f32, DrawError> {
+        draw.check_label(origin)?;
+        if !pose.iter().chain(&options.at).all(|v| v.is_finite()) {
+            return Err(DrawError::NonFinite);
+        }
+        let text = sunrise_client_lib::api_text::to_engine_inprocess(text);
+        let from_camera = DVec3::from(origin) - DVec3::from(draw.camera());
+        let pose =
+            Mat4::from_translation(from_camera.as_vec3()) * world_geometry::row_major_3x4(pose);
+        let hud = |c: u32| {
+            sunrise_client::hud::rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8)
+        };
+        let look = super::native_block_entity_draw::TextLook {
+            color: hud(options.color),
+            shadow: options.shadow,
+            outline: options.outline.map(hud),
+            background: hud(options.background),
+        };
+        let (layer, light) = if options.see_through {
+            (2, 0)
+        } else {
+            let light = if options.glowing { 0xFF } else { options.light };
+            (0, sunrise_client::block_entity_render::vertex_light(light))
+        };
+        let mut quads = Vec::new();
+        let width = self.world_text_quads(&text, options.at, look, pose, |quad| {
+            quads.extend(quad.map(|v| Vertex { layer, light, ..v }));
+            true
+        });
+        // A huge pose entry or origin can overflow the camera-relative corners: draw nothing.
+        if !quads.iter().flat_map(|v| v.pos).all(f32::is_finite) {
+            return Err(DrawError::NonFinite);
+        }
+        let (world, see_through): (&[Vertex], &[Vertex]) = if options.see_through {
+            (&[], &quads)
+        } else {
+            (&quads, &[])
+        };
+        draw.label(from_camera.length_squared(), world, see_through);
+        Ok(width)
     }
     /// Submit unlit ARGB world lines atomically. Invalid coordinates or widths leave the batch
     /// unchanged.

@@ -1,9 +1,13 @@
 //! Core gameplay regression tests.
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::client_side::inventory_input::drop_whole_stack;
 use sunrise_gameplay::game::server_side::autosave_server::autosave_interval;
+#[cfg(feature = "client")]
 use winit::event::MouseButton;
+#[cfg(feature = "client")]
 use winit::keyboard::KeyCode;
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn client_option_snapshots_follow_settings() {
@@ -39,6 +43,7 @@ fn client_option_snapshots_follow_settings() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn client_input_options_follow_settings() {
@@ -101,20 +106,28 @@ fn weather_follows_the_dimension_type_not_the_id() {
     assert!(!open.can_have_weather(true)); // the End is named by id
 }
 
+#[cfg(feature = "client")]
 use sunrise_client::container_screen::{Button, Clicks, Release, Target};
+#[cfg(feature = "client")]
 use sunrise_client::{creative::Creative, hud_layout, hud_overlays, settings::Settings};
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::select_creative_tab;
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::{
+    FallingBlock, HashSet, Level, PathBuf, PlayerMotion, Screen, execution_role, in_own_process,
+    tick_sleep_timer,
+};
 use {
     crate::game::*,
     sunrise_gameplay_common::game::{
         Aabb, BlockPos, BlockStateId, CollisionContext, CollisionEntity, Duration, EntityIdentity,
-        FallingBlock, HashSet, Instant, Level, Options, PackResources, PathBuf, PlayerMotion,
-        Progress, Resources, Screen, Vec3, WorldRestLoader, clip_start_source, execution_role,
-        falling_block_visible, in_own_process, interact_location, outline_stop, ray_box,
-        tick_sleep_timer, vanilla_tool_state,
+        Instant, Options, PackResources, Progress, Resources, Vec3, WorldRestLoader,
+        clip_start_source, falling_block_visible, interact_location, outline_stop, ray_box,
+        vanilla_tool_state,
     },
 };
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn blank_inventory_presses_are_handled_and_feed_double_click_history() {
@@ -124,6 +137,7 @@ fn blank_inventory_presses_are_handled_and_feed_double_click_history() {
     );
 }
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use crate::game::client_side::core_tests_client::exercise_blank_inventory_presses;
 
@@ -181,6 +195,7 @@ fn the_autosave_waits_for_three_hundred_seconds_of_ticks() {
 
 /// `Minecraft.<init>`: only an explicit `startedCleanly: false` is an
 /// unclean start, and it leaves fullscreen; the packs stay selected.
+#[cfg(feature = "client")]
 #[test]
 fn an_unclean_start_leaves_fullscreen_and_keeps_the_packs() {
     let fullscreen = || Settings {
@@ -215,6 +230,7 @@ fn an_unclean_start_leaves_fullscreen_and_keeps_the_packs() {
 /// contract: every `Screen` has its own id, and it does not change.
 /// `Screen::id`'s match makes a new variant give itself one; this list
 /// makes the test cover it too.
+#[cfg(feature = "client")]
 #[test]
 fn screen_ids_are_distinct_and_stable() {
     use std::collections::BTreeSet;
@@ -262,6 +278,7 @@ fn screen_ids_are_distinct_and_stable() {
 /// The `modifiers` a native mod's input hooks hand over are GLFW's bits
 /// (`GLFW_MOD_SHIFT` 1, `GLFW_MOD_CONTROL` 2, `GLFW_MOD_ALT` 4,
 /// `GLFW_MOD_SUPER` 8), each on its own and all together.
+#[cfg(feature = "client")]
 #[test]
 fn glfw_modifier_bits_are_glfw_modifier_bits() {
     use winit::keyboard::ModifiersState;
@@ -292,6 +309,7 @@ fn glfw_modifier_bits_are_glfw_modifier_bits() {
 /// left, 1 right, 2 middle, 3 back, 4 forward, else the button's number).
 /// `keybinds::mouse_name` names left, right and middle by name and the rest
 /// `key.mouse.<index + 1>`, vanilla's number only from the back button on.
+#[cfg(feature = "client")]
 #[test]
 fn glfw_button_indices_are_glfw_indices() {
     for (button, index, name) in [
@@ -314,6 +332,7 @@ fn glfw_button_indices_are_glfw_indices() {
 }
 
 /// F3 left on when leaving a world kept the axes on the title screen.
+#[cfg(feature = "client")]
 #[test]
 fn the_debug_crosshair_is_gone_once_the_world_is() {
     assert!(debug_crosshair_drawn(true, true, false, false, false));
@@ -321,6 +340,7 @@ fn the_debug_crosshair_is_gone_once_the_world_is() {
 }
 
 /// Opening a world in front of a block left its outline over Loading terrain's panorama (#12872).
+#[cfg(feature = "client")]
 #[test]
 fn the_block_outline_stays_off_the_panorama() {
     assert!(block_outline_drawn(false, false, true, false));
@@ -345,6 +365,7 @@ fn a_snuffed_candle_and_candle_cake_smoke_at_vanillas_offsets() {
     );
 }
 
+#[cfg(feature = "client")]
 use sunrise_client::keymapping::{KeyAction, SNEAK, SPRINT, ToggleKeys};
 
 /// A guest's interact packet names its entity and the server keeps it:
@@ -446,6 +467,7 @@ fn a_mod_screen_on_a_machine_menu_takes_the_stock_layout_out() {
 /// `ModelBlockRenderer.tesselateBlock` does with `BlockState.getOffset`
 /// of `BlockPos.containing(x, maxY, z)`: a pointed dripstone that breaks
 /// off stays where it hung instead of jumping to the block's centre (#4102).
+#[cfg(feature = "client")]
 #[test]
 fn a_falling_block_keeps_its_model_offset() {
     let at = Vec3::new(3.5, 70.25, -1.5);
@@ -559,6 +581,7 @@ fn falling_block_does_not_descend_through_scaffolding() {
 
 /// A key bound to key.attack keeps attacking while it is held: each
 /// repeat clicks like the press (#3243).
+#[cfg(feature = "client")]
 #[test]
 fn a_held_key_bound_to_a_button_repeats_its_clicks() {
     assert_eq!(keyboard_button(true, KeyAction::Press), Some(true));
@@ -573,6 +596,7 @@ fn a_held_key_bound_to_a_button_repeats_its_clicks() {
 /// screen: held keys and the mouse buttons are released
 /// (`KeyMapping.releaseAll`), and toggled sneak comes back when it closes
 /// (#4974, #9729).
+#[cfg(feature = "client")]
 #[test]
 fn a_dialog_releases_held_keys_like_a_screen() {
     assert!(gameplay_has_keyboard(Screen::Playing, false, false));
@@ -598,6 +622,7 @@ fn a_dialog_releases_held_keys_like_a_screen() {
     toggles.screen_closed(options);
     assert!(toggles.is_down(SNEAK));
 }
+#[cfg(feature = "client")]
 #[test]
 fn sleep_fade_lasts_ten_ticks_after_waking() {
     let alpha = |timer| match hud_overlays::sleep_overlay(320, 240, timer).first() {
@@ -698,6 +723,7 @@ fn shared_resources_can_cross_threads() {
     shared::<PackResources>();
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn selecting_creative_tabs_does_not_drop_the_carried_stack_on_release() {
     let mut creative = Creative::from_json(&serde_json::json!({
@@ -773,6 +799,7 @@ fn a_ray_starting_above_a_source_surface_enters_through_the_top() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn stack_drop_requires_ctrl_even_with_sprint_latched() {
     for sprint in [false, true] {
@@ -812,6 +839,7 @@ fn stack_drop_requires_ctrl_even_with_sprint_latched() {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn quit_shortcut_blocks_window_close_when_option_disabled() {
     use winit::keyboard::ModifiersState;
@@ -853,6 +881,7 @@ fn quit_shortcut_blocks_window_close_when_option_disabled() {
     ));
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn integrated_server_save_persists_owner_player_data() {
     use sunrise_client::lan::playerdata;
@@ -979,12 +1008,14 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
 #[path = "incoming_tests/knot_command_view.rs"]
 pub(crate) mod knot_command_view_tests;
 
+#[cfg(feature = "client")]
 #[test]
 fn the_debug_crosshair_gives_way_to_the_radial_menu() {
     assert!(!debug_crosshair_drawn(true, true, false, false, true));
 }
 
 /// Wind charges: where they burst, and what their hit deals.
+#[cfg(feature = "client")]
 pub(crate) mod wind_charge_burst_tests {
     use super::*;
     use std::sync::Arc;
@@ -1128,4 +1159,5 @@ pub(crate) mod wind_charge_burst_tests {
     }
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

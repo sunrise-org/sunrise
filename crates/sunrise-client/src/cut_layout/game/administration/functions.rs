@@ -438,6 +438,7 @@ pub(crate) mod tests {
             let _ = std::fs::remove_dir_all(root);
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn pack_changes_publish_the_new_zip_generation_for_template_reads() {

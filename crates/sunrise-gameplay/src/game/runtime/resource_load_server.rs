@@ -34,7 +34,8 @@ pub fn load_resources_server(
     )
 }
 
-pub(in crate::game) fn load_resources_for_role(
+#[doc(hidden)]
+pub fn load_resources_for_role(
     root: ResourceRoot,
     additional_data: Vec<Arc<sunrise_level::datapack::DataPack>>,
     vanilla_root: &Path,

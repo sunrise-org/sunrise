@@ -1,4 +1,5 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_core::position::BlockPos;
 #[cfg(test)]
 #[path = "falling_blocks/moving_piston_tests.rs"]
@@ -6,8 +7,10 @@ pub(crate) mod moving_piston_tests;
 
 #[cfg(test)]
 pub(crate) mod geometry_tests {
+    #[cfg(feature = "client")]
     use super::*;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn falling_model_cache_matches_direct_vertices() {

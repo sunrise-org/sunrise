@@ -1,23 +1,31 @@
+#[cfg(feature = "client")]
+use mod_api::MustSurviveEvent;
 use mod_api::{
-    BlockPart, BlockState, Hooks, ItemPart, LevelSide, MustSurviveEvent, PlacementContextEvent,
-    PlacementSource, Registrar, StateForPlacementEvent,
+    BlockPart, BlockState, Hooks, ItemPart, LevelSide, PlacementContextEvent, PlacementSource,
+    Registrar, StateForPlacementEvent,
 };
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-use sunrise_core::{
-    geometry::{Direction, Vec3},
-    nbt::Tag,
-    position::BlockPos,
-};
+#[cfg(feature = "client")]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+#[cfg(feature = "client")]
+use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
+use sunrise_core::nbt::Tag;
+use sunrise_core::{geometry::Direction, position::BlockPos};
+#[cfg(feature = "client")]
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::GameGameExt1;
+#[cfg(feature = "client")]
 use sunrise_items::items::ItemStack;
+#[cfg(feature = "client")]
 use sunrise_sim::motion::PlayerMotion;
+#[cfg(feature = "client")]
 use sunrise_world::level::{PlaceContext, PlacementSource as EnginePlacementSource};
 
+#[cfg(feature = "client")]
 pub(crate) struct Move;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl ItemPart for Move {
     fn placement_context(
@@ -53,7 +61,9 @@ impl ItemPart for Move {
         Some(Some(context))
     }
 }
+#[cfg(feature = "client")]
 pub(crate) struct Refuse;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl ItemPart for Refuse {
     fn placement_context(
@@ -64,11 +74,13 @@ impl ItemPart for Refuse {
         Some(None)
     }
 }
+#[cfg(feature = "client")]
 pub(crate) enum Invalid {
     Nonfinite,
     Item,
     Bounds,
 }
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl ItemPart for Invalid {
     fn placement_context(
@@ -89,7 +101,9 @@ impl ItemPart for Invalid {
 }
 /// Rewrites the placement into a dispenser-like `DirectionalPlaceContext` at the same cell,
 /// along and clicking East, and claims the clicked block is not replaced.
+#[cfg(feature = "client")]
 pub(crate) struct Directional;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl ItemPart for Directional {
     fn placement_context(
@@ -107,10 +121,12 @@ impl ItemPart for Directional {
         Some(Some(context))
     }
 }
+#[cfg(feature = "client")]
 pub(crate) enum Survival {
     Skip,
     RequireWhen(Arc<AtomicBool>),
 }
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl ItemPart for Survival {
     fn must_survive(&self, _: LevelSide<'_>, _: &mut MustSurviveEvent<'_>) -> Option<bool> {
@@ -120,7 +136,9 @@ impl ItemPart for Survival {
         }
     }
 }
+#[cfg(feature = "client")]
 pub(crate) struct Parts(pub(crate) Arc<AtomicBool>);
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Parts {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -153,6 +171,7 @@ impl Hooks for Parts {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn item_parts_rewrite_or_refuse_context_and_control_survival_on_both_sides() {
@@ -584,11 +603,13 @@ impl Hooks for VetoProbe {
     }
 }
 
+#[cfg(feature = "client")]
 #[derive(Clone, Default)]
 pub(in crate::game) struct SourceSpy(
     pub(in crate::game) Arc<Mutex<Vec<(bool, BlockPos, PlacementSource)>>>,
 );
 
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for SourceSpy {
     fn state_for_placement(
@@ -605,6 +626,7 @@ impl BlockPart for SourceSpy {
     }
 }
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for SourceSpy {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {

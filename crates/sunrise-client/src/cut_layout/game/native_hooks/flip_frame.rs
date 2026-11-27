@@ -1,18 +1,25 @@
 #![cfg(test)]
 #[cfg(test)]
 mod tests {
-    use mod_api::{
-        ClientHost, FlipFrameEvent, Hooks, ModEntry, RenderFramePostEvent, RenderFramePreEvent,
-    };
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
+    use mod_api::{ClientHost, FlipFrameEvent, Hooks, RenderFramePostEvent, RenderFramePreEvent};
+    #[cfg(feature = "client")]
     use std::sync::{Arc, Mutex};
+    #[cfg(feature = "client")]
     use std::time::Duration;
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::native_hooks::particle_count_tests::frame_scene;
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_client_game,
         sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
     };
 
+    #[cfg(feature = "client")]
     struct Moments(Arc<Mutex<Vec<&'static str>>>);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Moments {
         fn render_frame_pre(&self, _: &mut dyn ClientHost, _: &mut RenderFramePreEvent) {
@@ -26,6 +33,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn flip_frame_follows_render_frame_post_on_presented_frames_only() {

@@ -75,6 +75,8 @@ pub enum DrawError {
     InvalidWidth,
     /// The selected stage has no render pass.
     NoRenderPass,
+    /// A name tag's [`NameTagOptions::scale`] is not finite, or is zero or negative.
+    InvalidScale,
 }
 
 // no wire: a draw handle only names a batch in the current in-process render view.
@@ -107,7 +109,7 @@ impl PreparedWorldDraw {
 pub struct PreparedWorldDrawError;
 
 /// How [`WorldDrawContext::name_tag`](crate::WorldDrawContext::name_tag) draws a label.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 // no wire: local world label drawing options.
 pub struct NameTagOptions {
@@ -136,8 +138,54 @@ pub struct NameTagOptions {
     /// raising each level to at least 2. No effect without `see_through`, which already draws
     /// in `light` as given.
     pub exact_light: bool,
+    /// The world size of one text pixel: the label is drawn under `PoseStack.scale(scale,
+    /// -scale, scale)` where a name tag uses `0.025` ([`NameTagOptions::NAME_TAG_SCALE`]), so
+    /// `0.05` draws text twice a name tag's size and `0.0125` half. The label still sits 0.5
+    /// above `at`, as a name tag sits above its entity, and the backdrop's gap behind the text
+    /// scales with the text. A scale that is not finite, or is zero or negative, refuses the
+    /// label with [`DrawError::InvalidScale`]; one so large the text's positions overflow f32,
+    /// with [`DrawError::NonFinite`].
+    pub scale: f32,
 }
+impl Default for NameTagOptions {
+    fn default() -> Self {
+        Self::new(false, false, 0)
+    }
+}
+// The scale is compared by its bits, so the options stay `Eq` as before the field existed.
+// Both sides are destructured whole, so a field added later must be compared here too.
+impl PartialEq for NameTagOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            see_through,
+            background,
+            light,
+            faded_alpha,
+            exact_light,
+            scale,
+        } = *self;
+        let Self {
+            see_through: other_see_through,
+            background: other_background,
+            light: other_light,
+            faded_alpha: other_faded_alpha,
+            exact_light: other_exact_light,
+            scale: other_scale,
+        } = *other;
+        see_through == other_see_through
+            && background == other_background
+            && light == other_light
+            && faded_alpha == other_faded_alpha
+            && exact_light == other_exact_light
+            && scale.to_bits() == other_scale.to_bits()
+    }
+}
+impl Eq for NameTagOptions {}
 impl NameTagOptions {
+    /// A name tag's text pixel size in the world, `Matrix4f.scale(0.025F, -0.025F, 0.025F)`
+    /// in vanilla's name tag submit: the default [`NameTagOptions::scale`].
+    pub const NAME_TAG_SCALE: f32 = 0.025;
+
     /// Describe a label's drawing; the faded text's alpha follows the text background opacity
     /// and the light of the copy in the world is raised to at least 2.
     pub fn new(see_through: bool, background: bool, light: u8) -> Self {
@@ -147,7 +195,14 @@ impl NameTagOptions {
             light,
             faded_alpha: None,
             exact_light: false,
+            scale: Self::NAME_TAG_SCALE,
         }
+    }
+
+    /// Draw the text at `scale` world units per text pixel ([`NameTagOptions::scale`]).
+    pub fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self
     }
 
     /// Draw the faded text at alpha `alpha` ([`NameTagOptions::faded_alpha`]).
@@ -159,6 +214,104 @@ impl NameTagOptions {
     /// Draw the opaque copy in `light` exactly ([`NameTagOptions::exact_light`]).
     pub fn with_exact_light(mut self) -> Self {
         self.exact_light = true;
+        self
+    }
+}
+
+/// How [`WorldDrawContext::text`](crate::WorldDrawContext::text) draws a line, as the arguments
+/// of vanilla's `Font.drawInBatch`. The default is white text from the pose's origin, no shadow,
+/// outline or backdrop, depth tested in full sky light (`0xF0`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+// no wire: local world text drawing options.
+pub struct WorldTextOptions {
+    /// Where the line's left end is, in font pixels in the pose's x-y plane (y down): centre a
+    /// line by starting it at minus half its width (`WorldDrawContext::text_width`).
+    pub at: [f32; 2],
+    /// The colour, `0xAARRGGBB`, of the spans with no colour of their own. Fragments under alpha
+    /// 0.1 are discarded, so an alpha under 26 draws no text.
+    pub color: u32,
+    /// `Font.drawInBatch`'s drop shadow, one font pixel right and down, a quarter as bright. Not
+    /// drawn with an `outline`, as `Font.drawInBatch8xOutline` draws none.
+    pub shadow: bool,
+    /// Full bright, as glowing sign text is (a glow ink sac's), whatever `light` is.
+    pub glowing: bool,
+    /// Ring each glyph in this `0xAARRGGBB` colour (`Some(0xFF000000)` is black), as glowing
+    /// sign text is (`Font.drawInBatch8xOutline`): eight copies of the line one font pixel round
+    /// it, then the line in front of them, nine glyphs' worth of quads each.
+    pub outline: Option<u32>,
+    /// The backdrop's colour, `0xAARRGGBB` (`Font.drawInBatch`'s `backgroundColor`), from a font
+    /// pixel above and left of the line to its advance, ten pixels high, just behind the glyphs;
+    /// none when its alpha is 0, the default.
+    pub background: u32,
+    /// The light at the text, as [`NameTagOptions::light`]: sky light in the high four bits,
+    /// block light in the low four. Not used when `glowing` or `see_through`.
+    pub light: u8,
+    /// `Font.DisplayMode.SEE_THROUGH`: drawn over everything, walls included, with no depth test
+    /// and unlit, after the world. Off, it is depth tested and drawn with the world's name tags,
+    /// far to near.
+    pub see_through: bool,
+}
+impl Default for WorldTextOptions {
+    fn default() -> Self {
+        Self {
+            at: [0.0, 0.0],
+            color: 0xFFFF_FFFF,
+            shadow: false,
+            glowing: false,
+            outline: None,
+            background: 0,
+            light: 0xF0,
+            see_through: false,
+        }
+    }
+}
+impl WorldTextOptions {
+    /// Start the line at `at` ([`WorldTextOptions::at`]).
+    pub fn with_at(mut self, at: [f32; 2]) -> Self {
+        self.at = at;
+        self
+    }
+
+    /// Draw the line in `0xAARRGGBB` `color` ([`WorldTextOptions::color`]).
+    pub fn with_color(mut self, color: u32) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Draw its drop shadow ([`WorldTextOptions::shadow`]).
+    pub fn with_shadow(mut self) -> Self {
+        self.shadow = true;
+        self
+    }
+
+    /// Draw it full bright ([`WorldTextOptions::glowing`]).
+    pub fn with_glowing(mut self) -> Self {
+        self.glowing = true;
+        self
+    }
+
+    /// Ring each glyph in `0xAARRGGBB` `color` ([`WorldTextOptions::outline`]).
+    pub fn with_outline(mut self, color: u32) -> Self {
+        self.outline = Some(color);
+        self
+    }
+
+    /// Put a `0xAARRGGBB` backdrop behind it ([`WorldTextOptions::background`]).
+    pub fn with_background(mut self, color: u32) -> Self {
+        self.background = color;
+        self
+    }
+
+    /// Light it as packed `light` ([`WorldTextOptions::light`]).
+    pub fn with_light(mut self, light: u8) -> Self {
+        self.light = light;
+        self
+    }
+
+    /// Draw it over everything ([`WorldTextOptions::see_through`]).
+    pub fn with_see_through(mut self) -> Self {
+        self.see_through = true;
         self
     }
 }

@@ -1,4 +1,5 @@
 //! Witness-driven parity tests for FishingHook hitting pickable targets and ItemEntities.
+#![cfg(feature = "client")]
 use serde::Deserialize;
 use std::path::PathBuf;
 use sunrise_core::geometry::Vec3;

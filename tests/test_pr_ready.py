@@ -2,12 +2,12 @@ import argparse
 import contextlib
 import io
 import datetime
-import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from tools import pr_ready
+from tests.git_fixture import isolated_git_env
 from tests.os_support import POSIX_BASH
 
 PACKAGES = {"sunrise-core": "crates/sunrise-core", "sunrise-client": "crates/sunrise-client",
@@ -25,7 +26,8 @@ DEPENDENCIES = {"sunrise-client": {"sunrise-core"}}
 # the core, the vocabulary its API crates); sunrise-theme and sunrise-client are outside that closure.
 SURFACE_PACKAGES = {**PACKAGES, **{name: f"crates/{name}" for name in (
     "sunrise-stage", "sunrise-mod-api-gen", "sunrise-game-discovery", "sunrise-mod-package", "sunrise-mod-source",
-    "sunrise-mod-surface", "sunrise-mod-vocab", "sunrise-mod-api", "sunrise-mod-api-macros")}}
+    "sunrise-mod-surface", "sunrise-mod-vocab", "sunrise-mod-api", "sunrise-mod-api-macros",
+    "sunrise-gameplay-common", "sunrise-gameplay", "sunrise-client-gameplay")}}
 SURFACE_DEPENDENCIES = {
     **DEPENDENCIES,
     "sunrise-stage": {"sunrise-mod-api-gen", "sunrise-mod-package", "sunrise-mod-source", "sunrise-mod-surface"},
@@ -38,8 +40,8 @@ MODS = ""
 CLIPPY = f'status=0\n{pr_ready.CI_CLIPPY} || status=$?\n{pr_ready.CI_CLIPPY_SERVER} || status=$?\nexit "$status"'
 
 
-def args(host="local", quick=False, harnesses=False):
-    return argparse.Namespace(host=host, quick=quick, harnesses=harnesses)
+def args(host="local", quick=False, harnesses=False, full=False):
+    return argparse.Namespace(host=host, quick=quick, harnesses=harnesses, full=full)
 
 
 class GitChangedPathsTests(unittest.TestCase):
@@ -47,9 +49,10 @@ class GitChangedPathsTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
+        self.enterContext(mock.patch.dict(os.environ, isolated_git_env(), clear=True))
         self.git("init")
         for key, value in (("core.quotePath", "true"), ("core.autocrlf", "false"),
-                           ("core.hooksPath", str(self.root / "no-hooks")), ("commit.gpgsign", "false")):
+                           ("core.hooksPath", str(self.root / "no-hooks"))):
             self.git("config", key, value)
         for module in (pr_ready, pr_ready.parity):
             patcher = mock.patch.object(module, "ROOT", self.root)
@@ -284,10 +287,13 @@ class PrReadyTests(unittest.TestCase):
         self.assertIn("--base origin/main", by_name["Layers"].command)
 
     def test_content_root_tests_run_only_when_what_they_load_changes(self):
+        packages = {**PACKAGES, "sunrise-mod-package": "crates/sunrise-mod-package",
+                    "sunrise-assets": "crates/sunrise-assets", "sunrise-sim": "crates/sunrise-sim"}
+
         def content_step(path):
             with mock.patch.object(pr_ready, "affected_here", return_value=[]), \
                     mock.patch.object(pr_ready, "holds_loop", return_value=False):
-                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages, LIBRARIES, DEPENDENCIES)
             return {step.name: step for step in steps}["content root tests"]
         self.assertEqual(content_step("crates/sunrise-client/src/game.rs").skip, "content root untouched")
         for path in ["crates/sunrise-sim/src/mod_content.rs", "crates/sunrise-sim/src/mod_content_tests.rs",
@@ -300,7 +306,8 @@ class PrReadyTests(unittest.TestCase):
     def test_dispatch_and_registry_suites_run_when_their_inputs_change(self):
         def suite_steps(path):
             with mock.patch.object(pr_ready, "affected_here", return_value=[]):
-                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, SURFACE_PACKAGES, LIBRARIES,
+                                      SURFACE_DEPENDENCIES)
             return {step.name: step for step in steps}
         for path in ["crates/sunrise-mod-api-gen/src/lib.rs",
                      "crates/sunrise-mod-api-gen/dispatch-tests/src/lib.rs",
@@ -322,6 +329,10 @@ class PrReadyTests(unittest.TestCase):
                 for name in ("mod registry tests clippy", "mod registry tests tests"):
                     self.assertIsNone(by_name[name].skip)
                 self.assertEqual(by_name["dispatch tests clippy"].skip, "dispatch surface untouched")
+                # A separate workspace: refused by nothing, and none of the root workspace's checks.
+                for name in ("rustfmt", "clippy"):
+                    self.assertEqual(by_name[name].skip, "no Rust change")
+                self.assertEqual(by_name["tests"].skip, "no crate touched")
         by_name = suite_steps("crates/sunrise-core/src/lib.rs")
         self.assertEqual(by_name["dispatch tests clippy"].skip, "dispatch surface untouched")
         self.assertEqual(by_name["mod registry tests tests"].skip, "mod registry untouched")
@@ -366,7 +377,10 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual(pr_ready.surface_crates({}), ["sunrise-stage"])
 
     def test_a_branch_without_rust_runs_the_surface_report_for_its_own_files_and_notes_only(self):
-        for path in ("tools/ci/surface_report.py", "tools/ci/surface.toml", "crates/sunrise-mod-vocab/changes/a.toml"):
+        # A change note is a workspace path, so plan() refuses one under crates/ when packages is empty: the
+        # surface rule itself still counts it, with no packages or dependencies.
+        self.assertTrue(pr_ready.surface_touched({"crates/sunrise-mod-vocab/changes/a.toml"}, {}, {}, "abc123"))
+        for path in ("tools/ci/surface_report.py", "tools/ci/surface.toml"):
             with self.subTest(path=path):
                 self.assertIsNone(self.surface_step({path}, packages={}, dependencies={}).skip)
         self.assertEqual(self.surface_step({"README.md"}, packages={}, dependencies={}).skip,
@@ -438,7 +452,7 @@ class PrReadyTests(unittest.TestCase):
         self.assertIn("breaking change without a change note: type:HookId", step.detail)
 
     def test_shared_rust_configuration_keeps_workspace_coverage(self):
-        for path in sorted(pr_ready.ROOT_RUST | {".cargo/config.toml", "crates/unknown/src/lib.rs"}):
+        for path in sorted(pr_ready.ROOT_RUST | {".cargo/config.toml"}):
             with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
                 by_name = {step.name: step for step in steps}
@@ -449,8 +463,7 @@ class PrReadyTests(unittest.TestCase):
 
     def test_holder_actor_is_built_before_applicable_tests(self):
         packages = {**PACKAGES, "sunrise-mod-package": "crates/sunrise-mod-package"}
-        for path in ("Cargo.lock", "crates/unknown/src/lib.rs",
-                     "crates/sunrise-mod-package/src/holder.rs"):
+        for path in ("Cargo.lock", ".cargo/config.toml", "crates/sunrise-mod-package/src/holder.rs"):
             with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages,
                                       LIBRARIES, DEPENDENCIES)
@@ -544,7 +557,8 @@ class PrReadyTests(unittest.TestCase):
             steps = pr_ready.plan(args(), "origin/main",
                                   {"xtask/src/main.rs", "crates/sunrise-core/src/lib.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
         by_name = {step.name: step for step in steps}
-        self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p sunrise-core --doc")
+        # sunrise-client depends on sunrise-core, so its doc tests run too.
+        self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p sunrise-client -p sunrise-core --doc")
 
     def test_clippy_is_ci_s_and_the_server_build_when_the_game_is_affected(self):
         packages = {name: f"crates/{name}" for name in ("core", "world", "sunrise-client", "unrelated")}
@@ -557,8 +571,11 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual({step.name: step for step in unrelated}["clippy"].command, pr_ready.CI_CLIPPY)
         by_name = {step.name: step for step in steps}
         self.assertEqual(by_name["clippy"].command, CLIPPY)
-        self.assertEqual(by_name["tests: core"].command, "cargo test --locked -p core --tests")
-        self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p core --doc")
+        # The dependents of core (world, then sunrise-client through it) are tested with it; unrelated is not.
+        self.assertEqual(by_name["tests: core, sunrise-client, world"].command,
+                         "cargo test --locked -p core -p sunrise-client -p world --tests")
+        self.assertEqual(by_name["doc tests"].command,
+                         "cargo test --locked -p core -p sunrise-client -p world --doc")
 
     def test_dependent_scope_handles_cycles_and_multiple_changed_crates(self):
         dependencies = {"a": {"b"}, "b": {"a"}, "c": {"b"}, "d": set()}
@@ -566,6 +583,193 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual(pr_ready.dependent_crates(["a", "d"], dependencies), ["a", "b", "c", "d"])
         self.assertEqual(pr_ready.dependent_crates([], dependencies), [])
         self.assertIsNone(pr_ready.dependent_crates(None, dependencies))
+
+    def selected_steps(self, changed, packages=SURFACE_PACKAGES, dependencies=SURFACE_DEPENDENCIES, **flags):
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True, **flags), "origin/main", set(changed), packages,
+                                  set(packages) - {"xtask"}, dependencies)
+        return {step.name: step for step in steps}
+
+    def test_tests_doc_tests_and_holder_actor_cover_transitive_dependents(self):
+        # sunrise-core is used by sunrise-client and sunrise-mod-package, and sunrise-stage uses the package.
+        by_name = self.selected_steps({"crates/sunrise-core/src/lib.rs"})
+        crates = "-p sunrise-client -p sunrise-core -p sunrise-mod-package -p sunrise-stage"
+        tests = by_name["tests: sunrise-client, sunrise-core, sunrise-mod-package, sunrise-stage"]
+        self.assertEqual(tests.command, f"cargo test --locked {crates} --features sunrise-mod-package/index --tests")
+        self.assertEqual(by_name["doc tests"].command, f"cargo test --locked {crates} --doc")
+        self.assertIsNone(by_name["holder actor"].skip)
+        # Touching the crate directly keeps working, and a leaf crate pulls in nothing.
+        self.assertIsNone(self.selected_steps({"crates/sunrise-mod-package/src/a.rs"})["holder actor"].skip)
+        leaf = self.selected_steps({"crates/sunrise-client/src/game/a.rs"})
+        self.assertEqual(leaf["holder actor"].skip, "holder tests untouched")
+        self.assertEqual(leaf["tests: sunrise-client"].command, "cargo test --locked -p sunrise-client --tests")
+
+    def test_a_large_dependent_closure_keeps_the_tests_title_short(self):
+        names = [f"c{number:02}" for number in range(15)]
+        packages = {name: f"crates/{name}" for name in names}
+        dependencies = {names[i + 1]: {names[i]} for i in range(14)}
+        by_name = self.selected_steps({"crates/c00/src/lib.rs"}, packages, dependencies)
+        title = f"tests: {', '.join(names[:12])} and 3 more"
+        self.assertIn(title, by_name)
+        self.assertEqual(by_name[title].command,
+                         "cargo test --locked " + " ".join(f"-p {name}" for name in names) + " --tests")
+
+    def test_touched_crates_stays_the_directly_touched_set(self):
+        self.assertEqual(pr_ready.touched_crates({"crates/sunrise-core/src/lib.rs"}, SURFACE_PACKAGES),
+                         ["sunrise-core"])
+
+    def test_an_unmapped_rust_path_is_refused_not_run_as_the_workspace(self):
+        unknown = ["crates/unknown/src/lib.rs", "crates/another/Cargo.toml"]
+        for changed in (unknown[:1], unknown, [*unknown, "crates/sunrise-core/src/lib.rs"],
+                        [*unknown, "Cargo.toml"], [*unknown, ".cargo/config.toml"]):
+            with self.subTest(changed=changed), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                with self.assertRaises(ValueError) as caught:
+                    pr_ready.plan(args(quick=True), "origin/main", set(changed), PACKAGES, LIBRARIES, DEPENDENCIES)
+                for path in set(changed) & set(unknown):
+                    self.assertIn(path, str(caught.exception))
+                self.assertIn("--full", str(caught.exception))
+        # Documentation next to a crate's sources, and the paths no workspace builds, are not Rust to refuse.
+        for path in ("crates/unknown/README.md", "tools/pr_ready.py", "docs/guide.md"):
+            with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+                self.assertEqual({step.name: step for step in steps}["clippy"].status, "skip")
+
+    def test_the_refusal_names_every_unmapped_path_sorted(self):
+        with self.assertRaises(ValueError) as caught:
+            pr_ready.select_crates(args(), {"crates/zeta/a.rs", "crates/alpha/b.rs", "crates/sunrise-core/a.rs"},
+                                   PACKAGES)
+        self.assertIn("no workspace crate owns crates/alpha/b.rs, crates/zeta/a.rs:", str(caught.exception))
+
+    def test_separate_workspaces_are_not_built_by_the_main_workspace(self):
+        for path in ("crates/sunrise-mod-registry/src/main.rs", "crates/sunrise-telemetry-server/src/main.rs"):
+            with self.subTest(path=path):
+                self.assertFalse(pr_ready.workspace_rust(path))
+                by_name = self.selected_steps({path}, PACKAGES, DEPENDENCIES)
+                for name in ("rustfmt", "clippy"):
+                    self.assertEqual(by_name[name].skip, "no Rust change")
+                self.assertEqual(by_name["tests"].skip, "no crate touched")
+                self.assertEqual(by_name["doc tests"].skip, "no crate touched")
+        # Beside a mapped crate they neither widen the selection nor get refused.
+        by_name = self.selected_steps({"crates/sunrise-telemetry-server/src/main.rs", "xtask/src/main.rs"}, PACKAGES,
+                                      DEPENDENCIES)
+        self.assertEqual(by_name["tests: xtask"].command, "cargo test --locked -p xtask --tests")
+
+    def test_full_runs_the_workspace_whatever_changed(self):
+        for changed in ({"crates/sunrise-client/src/game/a.rs"}, {"README.md"}, {"crates/unknown/src/lib.rs"},
+                        {"crates/sunrise-mod-registry/src/main.rs"}):
+            with self.subTest(changed=changed):
+                by_name = self.selected_steps(changed, full=True)
+                self.assertEqual(by_name["clippy"].command, CLIPPY)
+                self.assertEqual(by_name["tests: workspace"].command, "cargo test --locked --workspace --tests")
+                self.assertEqual(by_name["doc tests"].command, "cargo test --locked --workspace --doc")
+                self.assertIsNone(by_name["holder actor"].skip)
+                self.assertIsNone(by_name["tests: workspace"].skip)
+        self.assertEqual(pr_ready.select_crates(args(full=True), {"README.md"}, {}), (None, "--full"))
+        step = pr_ready.Step("tests: workspace")
+        step.status = "pass"
+        text = pr_ready.block(args(full=True), "origin/main", "abcdef123", [], {}, [step], "skip-release", 0,
+                              ("a" * 40, "", ""), test_scope="workspace (--full)")
+        self.assertIn("`tools/pr_ready.py --full`", text.splitlines()[0])
+        self.assertIn("| Test scope | workspace (--full) |", text)
+
+    def test_root_configuration_selects_the_workspace_and_is_checked_for_unmapped_paths(self):
+        self.assertEqual(pr_ready.select_crates(args(), {"Cargo.toml", ".cargo/config.toml", "crates/sunrise-core/a.rs"},
+                                                PACKAGES),
+                         (None, "root config: .cargo/config.toml, Cargo.toml"))
+        self.assertEqual(pr_ready.format_test_scope(None, {}, "root config: Cargo.toml"),
+                         "workspace (root config: Cargo.toml)")
+        with self.assertRaises(ValueError):
+            pr_ready.select_crates(args(), {"Cargo.toml", "crates/unknown/src/lib.rs"}, PACKAGES)
+        self.assertEqual(pr_ready.select_crates(args(full=True), {"Cargo.toml", "crates/unknown/src/lib.rs"}, PACKAGES),
+                         (None, "--full"))
+
+    def test_selection_reasons_name_the_dependency_that_pulled_each_crate_in(self):
+        dependencies = {"world": {"core"}, "client": {"world"}, "render": {"core", "assets"}, "app": {"client", "render"},
+                        "assets": set(), "lone": set()}
+        reasons = pr_ready.crate_selection_reasons(["core"], dependencies)
+        self.assertEqual(list(reasons.items()), [
+            ("core", "touched"), ("render", "depends on core"), ("world", "depends on core"),
+            ("app", "depends on render"), ("client", "depends on world")])
+        # Two touched crates reaching one dependent in the same wave are both named; a touched crate stays touched.
+        reasons = pr_ready.crate_selection_reasons({"core", "assets"}, dependencies)
+        self.assertEqual(reasons["render"], "depends on assets, core")
+        self.assertEqual(reasons["assets"], "touched")
+        reasons = pr_ready.crate_selection_reasons(["core", "world"], dependencies)
+        self.assertEqual((reasons["world"], reasons["client"]), ("touched", "depends on world"))
+        # The shortest wave wins: app uses core directly and through client.
+        self.assertEqual(pr_ready.crate_selection_reasons(["core"], {**dependencies, "app": {"core", "client"}})["app"],
+                         "depends on core")
+        # A cycle terminates, and holds exactly the crates dependent_crates selects.
+        cycle = {"a": {"b"}, "b": {"a"}, "c": {"b"}}
+        self.assertEqual(list(pr_ready.crate_selection_reasons(["a"], cycle).items()),
+                         [("a", "touched"), ("b", "depends on a"), ("c", "depends on b")])
+        self.assertEqual(sorted(pr_ready.crate_selection_reasons(["a"], cycle)), pr_ready.dependent_crates(["a"], cycle))
+
+    def test_the_test_scope_reads_as_one_line(self):
+        dependencies = {"world": {"core"}, "sunrise-client": {"world"}}
+        self.assertEqual(pr_ready.format_test_scope(["core"], dependencies),
+                         "core (touched), world (depends on core), sunrise-client (depends on world)")
+        self.assertEqual(pr_ready.format_test_scope(["core"], {}), "core (touched)")
+        self.assertEqual(pr_ready.format_test_scope(None, {}, "--full"), "workspace (--full)")
+        self.assertIsNone(pr_ready.format_test_scope([], dependencies))
+
+    def test_block_shows_the_test_scope_after_the_scope_row_only_when_there_is_one(self):
+        def rows(**extra):
+            return pr_ready.block(args(), "origin/main", "abcdef123", [], {}, [], "skip-release", 0,
+                                  ("a" * 40, "", ""), **extra).splitlines()
+        without = rows()
+        self.assertFalse(any(row.startswith("| Test scope") for row in without))
+        shown = rows(test_scope="core (touched), world (depends on core)")
+        self.assertEqual(shown[without.index(next(row for row in without if row.startswith("| Scope"))) + 1],
+                         "| Test scope | core (touched), world (depends on core) |")
+
+    def test_block_accepts_a_namespace_without_a_full_attribute(self):
+        legacy = argparse.Namespace(host="local", quick=True, harnesses=False)
+        text = pr_ready.block(legacy, "origin/main", "abcdef123", [], {}, [], "skip-release", 0, ("a" * 40, "", ""))
+        self.assertIn("`tools/pr_ready.py --quick`", text.splitlines()[0])
+
+    def run_main(self, changed, *argv):
+        packages = (PACKAGES, LIBRARIES, DEPENDENCIES)
+        with mock.patch.object(sys, "argv", ["pr_ready.py", "--quick", *argv]), \
+                mock.patch.object(pr_ready.parity, "changed_files", return_value=set(changed)), \
+                mock.patch.object(pr_ready, "git", return_value="abc123\n"), \
+                mock.patch.object(pr_ready, "line_counts", return_value={}), \
+                mock.patch.object(pr_ready, "packages", return_value=packages), \
+                mock.patch.object(pr_ready, "affected_here", return_value=[]), \
+                mock.patch.object(pr_ready, "rust_version", return_value=None), \
+                mock.patch.object(pr_ready, "revision_state", return_value=("a" * 40, "", "")), \
+                mock.patch.object(pr_ready.release_train, "exporters", return_value=set()), \
+                mock.patch.object(pr_ready, "run_checks", side_effect=lambda steps, host, verbose: [
+                    setattr(step, "status", step.status or "pass") for step in steps]) as run_checks, \
+                contextlib.redirect_stderr(io.StringIO()) as log, contextlib.redirect_stdout(io.StringIO()) as out:
+            try:
+                code = pr_ready.main()
+            except SystemExit as error:
+                code = error.code
+        return code, log.getvalue(), out.getvalue(), run_checks
+
+    def test_main_prints_the_test_scope_and_refuses_unmapped_paths_cleanly(self):
+        code, log, out, run_checks = self.run_main({"crates/sunrise-core/src/lib.rs"})
+        lines = log.splitlines()
+        self.assertEqual(code, 0)
+        header = next(index for index, line in enumerate(lines) if line.startswith("pr_ready: 1 files changed"))
+        self.assertEqual(lines[header + 1],
+                         "pr_ready: test scope: sunrise-core (touched), sunrise-client (depends on sunrise-core)")
+        self.assertIn("| Test scope | sunrise-core (touched), sunrise-client (depends on sunrise-core) |", out)
+        code, log, out, run_checks = self.run_main({"README.md"})
+        self.assertNotIn("test scope", log)
+        self.assertNotIn("Test scope", out)
+        code, log, out, run_checks = self.run_main({"Cargo.toml"})
+        self.assertIn("pr_ready: test scope: workspace (root config: Cargo.toml)", log)
+        code, log, out, run_checks = self.run_main({"crates/unknown/src/lib.rs"}, "--full")
+        self.assertIn("pr_ready: test scope: workspace (--full)", log)
+        self.assertIn("`tools/pr_ready.py --quick --full", out)
+        code, log, out, run_checks = self.run_main({"crates/unknown/src/lib.rs"})
+        self.assertEqual(out, "")
+        self.assertIsInstance(code, str)
+        self.assertTrue(code.startswith("pr_ready: no workspace crate owns crates/unknown/src/lib.rs"))
+        self.assertIn("--full", code)
+        run_checks.assert_not_called()
 
     def test_metadata_includes_renamed_optional_platform_build_and_dev_consumers(self):
         core = str(pr_ready.ROOT / "crates/core")

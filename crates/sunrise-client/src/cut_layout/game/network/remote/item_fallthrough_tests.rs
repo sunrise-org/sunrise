@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn entity_pass_falls_through_but_success_stops_the_apple() {
@@ -49,6 +50,7 @@ fn entity_pass_falls_through_but_success_stops_the_apple() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn air_use_fires_once_and_passing_hands_fire_in_main_off_order() {
@@ -148,4 +150,5 @@ fn apple_on_stone_passes_to_item_fallthrough_once() {
     );
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::pick_ray::PickRayGameExt1 as _;

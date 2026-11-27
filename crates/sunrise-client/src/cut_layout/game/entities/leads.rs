@@ -49,6 +49,7 @@ pub(crate) mod attach_tests {
     }
 
     /// The centre of a mob's box: `Leashable.leashDistanceTo`'s own end.
+    #[cfg(feature = "client")]
     fn centre(m: &sunrise_sim::mobs::Mob) -> glam::DVec3 {
         let b = m.bounds();
         let (lo, hi) = (b.min_position(), b.max_position());
@@ -61,6 +62,7 @@ pub(crate) mod attach_tests {
 
     /// `Leashable.canHaveALeashAttachedTo` measures with the leashee's own
     /// `leashSnapDistance`: a happy ghast's 16, a cow's default 12.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_lead_attaches_within_the_species_own_snap_distance() {

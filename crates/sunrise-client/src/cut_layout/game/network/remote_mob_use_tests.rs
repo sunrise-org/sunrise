@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use {
     sunrise_items::items::ItemStack, sunrise_sim::first_person_sim::Hand, sunrise_sim::mobs::Mob,

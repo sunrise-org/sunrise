@@ -1931,18 +1931,22 @@ fn login_and_configure(
     }))
 }
 
+fn payload_control_body(
+    control: sunrise_protocol::payload_negotiation::Control,
+) -> Result<Vec<u8>, String> {
+    Ok(cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+        channel: sunrise_protocol::payload_negotiation::CHANNEL.into(),
+        data: control.encode().map_err(|e| e.to_string())?,
+    })
+    .encode())
+}
+
 fn send_payload_control(
     c: &mut ConfigIo<'_>,
     control: sunrise_protocol::payload_negotiation::Control,
 ) -> Result<(), String> {
-    c.send(
-        &cfg::Clientbound::CustomPayload(cfg::CustomPayload {
-            channel: sunrise_protocol::payload_negotiation::CHANNEL.into(),
-            data: control.encode().map_err(|e| e.to_string())?,
-        })
-        .encode(),
-    )
-    .map_err(|e| e.to_string())
+    c.send(&payload_control_body(control)?)
+        .map_err(|e| e.to_string())
 }
 
 /// The configuration ping that orders a Sunrise client's payload Offer before
@@ -1982,8 +1986,47 @@ fn payload_disconnect(c: &mut ConfigIo<'_>, error: String) -> String {
     error
 }
 
-/// Consume transport metadata in every configuration receive loop. Application
-/// payloads stay ordered for the configuration dispatcher (not implemented here).
+/// Decode a packet and consume its transport metadata in every configuration receive loop,
+/// replying through `reply`. None when the packet was that metadata.
+fn negotiate_payloads(
+    id: i32,
+    bytes: &[u8],
+    transport: &Transport,
+    negotiation: &mut sunrise_protocol::payload_negotiation::Negotiation,
+    reply: impl FnOnce(sunrise_protocol::payload_negotiation::Control) -> Result<(), String>,
+) -> Result<Option<cfg::Serverbound>, String> {
+    let packet = cfg::Serverbound::decode_with_payload_codecs(id, bytes, &transport.local.codecs)
+        .map_err(|e| e.to_string())?;
+    if let cfg::Serverbound::CustomPayload(payload) = &packet
+        && payload.channel == sunrise_protocol::payload_negotiation::CHANNEL
+    {
+        let control = sunrise_protocol::payload_negotiation::Control::decode(&payload.data)
+            .and_then(|control| negotiation.receive(control))
+            .map_err(|e| e.to_string())?;
+        if let Some(control) = control {
+            reply(control)?;
+        }
+        if let Some(accepted) = negotiation.accepted() {
+            transport.accept(accepted)?;
+        }
+        return Ok(None);
+    }
+    Ok(Some(packet))
+}
+
+/// A custom payload goes to `application`, which gives it back unless it took it.
+fn take_application(
+    packet: Option<cfg::Serverbound>,
+    application: impl FnOnce(cfg::CustomPayload) -> Result<Option<cfg::CustomPayload>, String>,
+) -> Result<Option<cfg::Serverbound>, String> {
+    match packet {
+        Some(cfg::Serverbound::CustomPayload(payload)) => {
+            application(payload).map(|payload| payload.map(cfg::Serverbound::CustomPayload))
+        }
+        packet => Ok(packet),
+    }
+}
+
 fn receive_configuration(
     c: &mut ConfigIo<'_>,
     id: i32,
@@ -1991,29 +2034,29 @@ fn receive_configuration(
     transport: &Transport,
     negotiation: &mut sunrise_protocol::payload_negotiation::Negotiation,
 ) -> Result<Option<cfg::Serverbound>, String> {
-    let packet = cfg::Serverbound::decode_with_payload_codecs(id, bytes, &transport.local.codecs)
-        .map_err(|e| payload_disconnect(c, e.to_string()))?;
-    if let cfg::Serverbound::CustomPayload(payload) = &packet
-        && payload.channel == sunrise_protocol::payload_negotiation::CHANNEL
-    {
-        let result = sunrise_protocol::payload_negotiation::Control::decode(&payload.data)
-            .and_then(|control| negotiation.receive(control));
-        let reply = result.map_err(|e| payload_disconnect(c, e.to_string()))?;
-        if let Some(reply) = reply {
-            send_payload_control(c, reply)?;
+    // A reply the writer refused is not answered with a disconnect through that writer.
+    let mut unsent = false;
+    let packet = negotiate_payloads(id, bytes, transport, negotiation, |control| {
+        send_payload_control(c, control).inspect_err(|_| unsent = true)
+    })
+    .map_err(|e| if unsent { e } else { payload_disconnect(c, e) })?;
+    take_application(packet, |payload| c.application(payload))
+}
+
+/// Read packets from `next` until `answer` has a result.
+fn answer_configuration<T>(
+    mut next: impl FnMut() -> Result<Option<cfg::Serverbound>, String>,
+    mut answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
+) -> Result<T, String> {
+    loop {
+        let packet = match next() {
+            Ok(Some(packet)) => Ok(packet),
+            Ok(None) => continue,
+            Err(e) => Err(e),
+        };
+        if let Some(result) = answer(packet) {
+            return result;
         }
-        if let Some(accepted) = negotiation.accepted() {
-            transport
-                .accept(accepted)
-                .map_err(|e| payload_disconnect(c, e))?;
-        }
-        return Ok(None);
-    }
-    match packet {
-        cfg::Serverbound::CustomPayload(payload) => c
-            .application(payload)
-            .map(|payload| payload.map(cfg::Serverbound::CustomPayload)),
-        packet => Ok(Some(packet)),
     }
 }
 
@@ -2191,7 +2234,7 @@ fn wait_alive<T>(
     c: &mut ConfigIo<'_>,
     transport: &Transport,
     negotiation: &mut sunrise_protocol::payload_negotiation::Negotiation,
-    mut answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
+    answer: impl FnMut(Result<cfg::Serverbound, String>) -> Option<Result<T, String>>,
 ) -> Result<T, String> {
     if let Some(sender) = c.sender.clone() {
         return std::thread::scope(|scope| {
@@ -2208,20 +2251,13 @@ fn wait_alive<T>(
                     }
                 }
             });
-            let result = loop {
-                let (id, payload) = match c.recv() {
-                    Ok(packet) => packet,
-                    Err(e) => break Err(e.to_string()),
-                };
-                let packet = match receive_configuration(c, id, &payload, transport, negotiation) {
-                    Ok(Some(packet)) => Ok(packet),
-                    Ok(None) => continue,
-                    Err(e) => Err(e),
-                };
-                if let Some(result) = answer(packet) {
-                    break result;
-                }
-            };
+            let result = answer_configuration(
+                || {
+                    let (id, payload) = c.recv().map_err(|e| e.to_string())?;
+                    receive_configuration(c, id, &payload, transport, negotiation)
+                },
+                answer,
+            );
             drop(stop);
             result
         });
@@ -2249,61 +2285,24 @@ fn wait_alive<T>(
                     }
                 }
             });
-            let result = loop {
-                let packet = match connection.reader.recv() {
-                    Ok((id, payload)) => cfg::Serverbound::decode_with_payload_codecs(
-                        id,
-                        &payload,
-                        &transport.local.codecs,
-                    )
-                    .map_err(|e| e.to_string()),
-                    Err(err) => break Err(err.to_string()),
-                };
-                if let Ok(cfg::Serverbound::CustomPayload(payload)) = &packet
-                    && payload.channel == sunrise_protocol::payload_negotiation::CHANNEL
-                {
-                    let result = (|| {
-                        let control =
-                            sunrise_protocol::payload_negotiation::Control::decode(&payload.data)
-                                .map_err(|e| e.to_string())?;
-                        if let Some(reply) =
-                            negotiation.receive(control).map_err(|e| e.to_string())?
-                        {
-                            let body = cfg::Clientbound::CustomPayload(
-                                sunrise_protocol::packets::custom_payload::CustomPayload {
-                                    channel: sunrise_protocol::payload_negotiation::CHANNEL.into(),
-                                    data: reply.encode().map_err(|e| e.to_string())?,
-                                },
-                            )
-                            .encode();
+            // Every error ends the wait, and the disconnect follows once the keep-alive stopped.
+            let result = answer_configuration(
+                || {
+                    let (id, payload) = connection.reader.recv().map_err(|e| e.to_string())?;
+                    let packet =
+                        negotiate_payloads(id, &payload, transport, negotiation, |control| {
                             writer
                                 .lock()
                                 .unwrap()
-                                .send(&body)
-                                .map_err(|e| e.to_string())?;
-                        }
-                        if let Some(accepted) = negotiation.accepted() {
-                            transport.accept(accepted)?;
-                        }
-                        Ok::<(), String>(())
-                    })();
-                    if let Err(error) = result {
-                        break Err(error);
-                    }
-                    continue;
-                }
-                // As receive_configuration does: the engine's channels are read here too.
-                if let Ok(cfg::Serverbound::CustomPayload(payload)) = &packet {
-                    match channels.receive(payload) {
-                        Ok(true) => continue,
-                        Ok(false) => {}
-                        Err(error) => break Err(error),
-                    }
-                }
-                if let Some(result) = answer(packet) {
-                    break result;
-                }
-            };
+                                .send(&payload_control_body(control)?)
+                                .map_err(|e| e.to_string())
+                        })?;
+                    take_application(packet, |payload| {
+                        Ok((!channels.receive(&payload)?).then_some(payload))
+                    })
+                },
+                answer,
+            );
             drop(stop);
             result
         })
@@ -2708,37 +2707,51 @@ impl SharedFrames {
     /// `frame::contents(body, Some(threshold))`, compressed only when no
     /// connection has sent the same body lately or compresses it now.
     fn contents(&self, body: &[u8], threshold: usize) -> sunrise_protocol::Result<Arc<[u8]>> {
+        let (key, frame) = self.frame_slot(body, threshold);
+        self.fill_frame(key, &frame, body)
+    }
+
+    fn frame_slot(&self, body: &[u8], threshold: usize) -> (FrameKey, Frame) {
         let hash = xxhash_rust::xxh3::xxh3_128_with_secret(body, &self.secret);
         let key = (body.len(), hash, threshold);
-        let (frame, made_here) = {
-            let mut cache = self.cache();
-            match cache.frames.get(&key) {
-                Some(frame) => (frame.clone(), false),
-                None => {
-                    let frame = Frame::default();
-                    cache.frames.insert(key, frame.clone());
-                    cache.order.push_back(key);
-                    (frame, true)
-                }
-            }
-        };
-        let contents = frame
-            .get_or_init(|| {
-                sunrise_protocol::frame::contents(body, Some(threshold))
-                    .map(Arc::from)
-                    .map_err(|e| e.to_string())
-            })
-            .clone()
-            .map_err(sunrise_protocol::Error::new)?;
-        if made_here {
-            let mut cache = self.cache();
-            // Unless pushed out while it was being made.
-            if cache
+        let mut cache = self.cache();
+        if let Some(frame) = cache.frames.get(&key) {
+            return (key, frame.clone());
+        }
+        let frame = Frame::default();
+        cache.frames.insert(key, frame.clone());
+        cache.order.push_back(key);
+        (key, frame)
+    }
+
+    fn fill_frame(
+        &self,
+        key: FrameKey,
+        frame: &Frame,
+        body: &[u8],
+    ) -> sunrise_protocol::Result<Arc<[u8]>> {
+        let mut publication = None;
+        let contents = frame.get_or_init(|| {
+            let contents = sunrise_protocol::frame::contents(body, Some(key.2))
+                .map(Arc::from)
+                .map_err(|e| e.to_string());
+            // Only the initializer takes this lock, after encoding. Hold it across
+            // publication and accounting so eviction cannot see an uncharged result.
+            publication = Some(self.cache());
+            contents
+        });
+        if let Some(mut cache) = publication
+            && cache
                 .frames
                 .get(&key)
-                .is_some_and(|f| Arc::ptr_eq(f, &frame))
-            {
-                cache.bytes += contents.len();
+                .is_some_and(|f| Arc::ptr_eq(f, frame))
+        {
+            match contents {
+                Ok(contents) => cache.bytes += contents.len(),
+                Err(_) => {
+                    cache.frames.remove(&key);
+                    cache.order.retain(|old| *old != key);
+                }
             }
             while cache.bytes > self.limit
                 && let Some(old) = cache.order.pop_front()
@@ -2749,7 +2762,7 @@ impl SharedFrames {
                     .unwrap_or(0);
             }
         }
-        Ok(contents)
+        contents.clone().map_err(sunrise_protocol::Error::new)
     }
 }
 
@@ -3902,6 +3915,48 @@ mod tests {
                 .sum::<usize>()
         );
         assert!(cache.bytes <= first * 2);
+    }
+
+    #[test]
+    fn shared_frames_charge_the_initializer_before_other_frames_can_evict() {
+        // Below the compression threshold the contents add exactly one byte.
+        let threshold = 16;
+        let frames = SharedFrames::new(9);
+        let oldest = [1; 4];
+        // Pause the original caller just after it inserts the FIFO slot. A caller
+        // on another thread initializes that slot and then forces eviction before
+        // the original caller resumes. Joining fixes the order without a sleep.
+        let (key, slot) = frames.frame_slot(&oldest, threshold);
+        let (first, newest) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let first = frames.contents(&oldest, threshold).unwrap(); // 5 bytes
+                    frames.contents(&[2; 2], threshold).unwrap(); // 3 bytes
+                    let newest = frames.contents(&[3; 8], threshold).unwrap(); // 9 bytes
+                    (first, newest)
+                })
+                .join()
+                .unwrap()
+        });
+        let resumed = frames.fill_frame(key, &slot, &oldest).unwrap();
+        assert!(Arc::ptr_eq(&first, &resumed));
+        // The old insertion-owner accounting charged only 3 + 9, then debited
+        // the uncharged 5. It stopped at 7, leaving 12 bytes resident.
+        assert_eq!(frames.census(), (1, newest.len()));
+        assert!(Arc::ptr_eq(
+            &newest,
+            &frames.contents(&[3; 8], threshold).unwrap()
+        ));
+    }
+
+    #[test]
+    fn shared_frames_remove_failed_encodes_from_both_cache_and_fifo() {
+        // The uncompressed marker would make the encoded contents one byte too big.
+        let body = vec![0; sunrise_protocol::frame::MAX_FRAME];
+        let frames = SharedFrames::new(usize::MAX);
+        assert!(frames.contents(&body, body.len() + 1).is_err());
+        assert_eq!(frames.census(), (0, 0));
+        assert!(frames.cache().order.is_empty());
     }
 
     #[test]

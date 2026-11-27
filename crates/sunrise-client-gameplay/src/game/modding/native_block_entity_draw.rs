@@ -33,6 +33,19 @@ use sunrise_world::registry::BlockStateId;
 // The native block-entity draw helper submits the outline and fill as one material.
 const TEXT_OVER_OUTLINE: f32 = 0.05;
 
+/// How [`Game::world_text_quads`] colours a line, in the HUD batch's colours.
+#[derive(Clone, Copy)]
+pub(in crate::game) struct TextLook {
+    /// The colour of the spans with none of their own.
+    pub(in crate::game) color: u32,
+    /// `Font.drawInBatch`'s drop shadow; none with an outline.
+    pub(in crate::game) shadow: bool,
+    /// Each glyph ringed in this colour (`Font.drawInBatch8xOutline`).
+    pub(in crate::game) outline: Option<u32>,
+    /// The backdrop behind the line (`Font.drawInBatch`'s `backgroundColor`), none at alpha 0.
+    pub(in crate::game) background: u32,
+}
+
 /// Atlas-resolved standalone geometry, indexed by model slot and resource generation.
 pub(in crate::game) struct StandaloneGeometry {
     generation: u64,
@@ -2196,32 +2209,72 @@ impl crate::game::ClientGame<'_> {
     ) -> f32 {
         let opaque =
             |c: u32| sunrise_client::hud::rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, 255);
+        let look = TextLook {
+            color: opaque(color),
+            shadow: false,
+            outline: outline.map(opaque),
+            background: 0,
+        };
+        let light = if glowing { 240 | 240 << 8 } else { draw.light };
+        let pose = draw.pose();
+        let mut scope = draw.quad_scope();
+        self.world_text_quads(text, at, look, pose, |quad| {
+            scope.submit_quad(quad.map(|v| Vertex { light, ..v }))
+        })
+    }
+    /// `text` laid out as `Font.drawInBatch` lays a component out in the world (a sign's line,
+    /// a text display's), through the path name tags and text displays use
+    /// (`HudBatch::text_styled_world`; `text_styled_outline_world` with an outline, as
+    /// `Font.drawInBatch8xOutline`): in font pixels, y down, its left end at `at`, each quad's
+    /// `depth` its z, the text `TEXT_OVER_OUTLINE` in front of its rings and the backdrop 0.01
+    /// behind its glyphs (`Font.prepareBackground`). Each quad's corners go through `pose`, in
+    /// the order the world draws quads, unlit in layer 0, to `emit` until it returns false.
+    /// Returns the width drawn, in font pixels (`Font.width`, rounded up). Glyphs new to the
+    /// atlas upload with this frame (`Game::text_patches`). Shared by block entity text
+    /// (`native_draw_text`) and a world draw's posed text (`native_world_text`).
+    pub(in crate::game) fn world_text_quads(
+        &self,
+        text: &Text,
+        at: [f32; 2],
+        look: TextLook,
+        pose: Mat4,
+        mut emit: impl FnMut([Vertex; 4]) -> bool,
+    ) -> f32 {
         let atlas = &self.client.gui.atlas;
         let mut batch = sunrise_client::hud::HudBatch::scratch([1, 1]);
-        let (width, front) = match outline {
-            Some(ring) => batch.text_styled_outline_world(
-                atlas,
-                text,
-                at[0],
-                at[1],
-                opaque(color),
-                opaque(ring),
-            ),
+        let (width, mut front) = match look.outline {
+            Some(ring) => {
+                batch.text_styled_outline_world(atlas, text, at[0], at[1], look.color, ring)
+            }
             None => (
-                batch.text_styled_world(atlas, text, at[0], at[1], opaque(color), false),
+                batch.text_styled_world(atlas, text, at[0], at[1], look.color, look.shadow),
                 0,
             ),
         };
-        // Glyphs new to the atlas upload with this frame (`Game::text_patches`).
+        // PreparedTextBuilder.markBackground: one pixel round the advance, from a pixel above
+        // the line to 9 below its top, drawn first.
+        if look.background >> 24 != 0 {
+            let glyphs = std::mem::take(&mut batch.vertices);
+            batch.fill(
+                atlas,
+                at[0] - 1.0,
+                at[1] - 1.0,
+                width + 1.0,
+                10.0,
+                look.background,
+            );
+            for v in &mut batch.vertices {
+                v.depth = -0.01;
+            }
+            front += batch.vertices.len();
+            batch.vertices.extend(glyphs);
+        }
         self.client
             .text_patches
             .borrow_mut()
             .append(&mut batch.patches);
-        let light = if glowing { 240 | 240 << 8 } else { draw.light };
-        let pose = draw.pose();
-        let mut scope = draw.quad_scope();
         for (i, quad) in batch.vertices.as_chunks::<6>().0.iter().enumerate() {
-            let lift = if outline.is_some() && i * 6 >= front {
+            let lift = if look.outline.is_some() && i * 6 >= front {
                 TEXT_OVER_OUTLINE
             } else {
                 0.0
@@ -2234,23 +2287,19 @@ impl crate::game::ClientGame<'_> {
                 uv: v.uv,
                 layer: 0,
                 color: v.color,
-                light,
+                light: 0,
                 normal: [0; 4],
                 glint_uv: [0.0, 0.0],
             });
-            if !scope.submit_quad(submitted) {
+            if !emit(submitted) {
                 break;
             }
         }
         width.ceil()
     }
-    /// The width of `text` in font pixels, as `draw_text` draws it, styles
+    /// The width of `text` in font pixels, as `world_text_quads` draws it, styles
     /// included (`Font.width`), to lay a line out before drawing it.
-    pub(in crate::game) fn native_draw_text_width(
-        &self,
-        _draw: &BlockEntityDraw,
-        text: &Text,
-    ) -> f32 {
+    pub(in crate::game) fn native_styled_text_width(&self, text: &Text) -> f32 {
         self.client.gui.atlas.font.width_text(text)
     }
 

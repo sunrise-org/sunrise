@@ -202,6 +202,10 @@ fn the_engines_after_place_call_reaches_the_type() {
         writes: Vec::new(),
         states: Vec::new(),
         placed: Vec::new(),
+        water: false,
+        ticks: Vec::new(),
+        flags: Vec::new(),
+        marks: Vec::new(),
     };
     let mut piece_random = LegacyRandom::new(3);
     let mut engine = EngineContext {
@@ -488,6 +492,14 @@ pub(in crate::game) struct RecordingWorld {
     pub(in crate::game) states: Vec<sunrise_world::registry::BlockStateId>,
     /// The features and elements placed, with where, in order.
     pub(in crate::game) placed: Vec<String>,
+    /// Whether every position holds water.
+    pub(in crate::game) water: bool,
+    /// The fluid ticks scheduled, with where.
+    pub(in crate::game) ticks: Vec<[i32; 3]>,
+    /// The flags of each write, parallel to `writes`.
+    pub(in crate::game) flags: Vec<i32>,
+    /// The positions marked for post-processing, in order.
+    pub(in crate::game) marks: Vec<[i32; 3]>,
 }
 impl sunrise_world::worldgen::structure::legacy::PieceWorld for RecordingWorld {
     fn block(&mut self, _: [i32; 3]) -> PieceResult<sunrise_world::registry::BlockStateId> {
@@ -497,14 +509,19 @@ impl sunrise_world::worldgen::structure::legacy::PieceWorld for RecordingWorld {
         &mut self,
         pos: [i32; 3],
         state: sunrise_world::registry::BlockStateId,
-        _: i32,
+        flags: i32,
     ) -> PieceResult<bool> {
         self.writes.push(pos);
         self.states.push(state);
+        self.flags.push(flags);
         Ok(true)
     }
     fn fluid(&mut self, _: [i32; 3]) -> PieceResult<sunrise_world::fluid::FluidState> {
-        Ok(sunrise_world::fluid::FluidState::EMPTY)
+        Ok(if self.water {
+            sunrise_world::fluid::FluidState::WATER
+        } else {
+            sunrise_world::fluid::FluidState::EMPTY
+        })
     }
     fn height(
         &mut self,
@@ -526,15 +543,17 @@ impl sunrise_world::worldgen::structure::legacy::PieceWorld for RecordingWorld {
     fn entity(&mut self, _: Compound) -> PieceResult<()> {
         Ok(())
     }
-    fn post_process(&mut self, _: [i32; 3]) -> PieceResult<()> {
+    fn post_process(&mut self, pos: [i32; 3]) -> PieceResult<()> {
+        self.marks.push(pos);
         Ok(())
     }
     fn fluid_tick(
         &mut self,
-        _: [i32; 3],
+        pos: [i32; 3],
         _: sunrise_world::fluid::FluidKind,
         _: i32,
     ) -> PieceResult<()> {
+        self.ticks.push(pos);
         Ok(())
     }
     fn seed(&mut self) -> PieceResult<i64> {
@@ -657,9 +676,10 @@ pub(in crate::game) fn test_resources()
             ["air", true, false, "", {"id":"minecraft:air","properties":{}}],
             ["stone", false, false, "", {"id":"minecraft:stone","properties":{}}],
             ["cave_air", true, false, "", {"id":"minecraft:cave_air","properties":{}}],
-            ["void_air", true, false, "", {"id":"minecraft:void_air","properties":{}}]
+            ["void_air", true, false, "", {"id":"minecraft:void_air","properties":{}}],
+            ["torch", false, false, "", {"id":"minecraft:torch","properties":{}}]
         ],
-        "defaults":{"minecraft:air":0,"minecraft:stone":1,"minecraft:cave_air":2,"minecraft:void_air":3}
+        "defaults":{"minecraft:air":0,"minecraft:stone":1,"minecraft:cave_air":2,"minecraft:void_air":3,"minecraft:torch":4}
     });
     let registry =
         sunrise_world::registry::BlockRegistry::from_facts_json(facts.to_string().as_bytes())
@@ -701,6 +721,10 @@ fn a_write_outside_the_chunk_box_is_dropped_silently() {
         writes: Vec::new(),
         states: Vec::new(),
         placed: Vec::new(),
+        water: false,
+        ticks: Vec::new(),
+        flags: Vec::new(),
+        marks: Vec::new(),
     };
     let mut random = sunrise_core::random::LegacyRandom::new(7);
     {
@@ -724,6 +748,71 @@ fn a_write_outside_the_chunk_box_is_dropped_silently() {
         assert!(context.set_block([15, 64, 15], stone));
     }
     assert_eq!(world.writes, [[15, 64, 15]]);
+}
+
+/// `set_block` is `StructurePiece.placeBlock`: it writes with flags 2, schedules a fluid tick for
+/// a position that holds a fluid and marks a shape-check block (a torch) for post-processing.
+/// `set_block_raw` is `WorldGenLevel.setBlock(pos, state, 2)`: the same write with the same flags
+/// and the same clipping to the chunk box, and neither of those two additions. Flags 18 would
+/// also suppress the level's own post-processing mark, so both writes must carry flags 2.
+#[test]
+fn a_raw_write_skips_the_fluid_tick_and_the_mark_that_place_block_adds() {
+    use sunrise_world::worldgen::structure::legacy::{PieceContext as EngineContext, SolidRender};
+    let resources = test_resources();
+    struct Air;
+    impl SolidRender for Air {
+        fn solid_render(&self, _: sunrise_world::registry::BlockStateId) -> bool {
+            false
+        }
+    }
+    let air = resources.registry.default_state("minecraft:air").unwrap();
+    let mut world = RecordingWorld {
+        air,
+        writes: Vec::new(),
+        states: Vec::new(),
+        placed: Vec::new(),
+        water: true,
+        ticks: Vec::new(),
+        flags: Vec::new(),
+        marks: Vec::new(),
+    };
+    let mut random = sunrise_core::random::LegacyRandom::new(7);
+    {
+        let mut engine = EngineContext {
+            world: &mut world,
+            resources,
+            blocks: &Air,
+            random: &mut random,
+            chunk_box: BoundingBox::new([0, -64, 0], [15, 320, 15]),
+            chunk: ChunkPos::new(0, 0),
+            reference: [8, 64, 8],
+        };
+        let mut context = Placing::new(&mut engine, "testmod", "testmod:boxes").unwrap();
+        let stone = context.state(mod_api::__private::block_key("minecraft:stone").unwrap());
+        let torch = context.state(mod_api::__private::block_key("minecraft:torch").unwrap());
+        assert!(context.set_block_raw([1, 64, 1], stone));
+        assert!(context.set_block([2, 64, 2], stone));
+        assert!(context.set_block_raw([3, 64, 3], torch));
+        assert!(context.set_block([4, 64, 4], torch));
+        // Clipped to the chunk box like `set_block`, silently.
+        assert!(!context.set_block_raw([16, 64, 0], stone));
+        assert!(!context.set_block_raw([0, 64, -1], stone));
+    }
+    assert_eq!(
+        world.writes,
+        [[1, 64, 1], [2, 64, 2], [3, 64, 3], [4, 64, 4]]
+    );
+    assert_eq!(world.flags, [2; 4], "both writes are flags 2");
+    assert_eq!(
+        world.ticks,
+        [[2, 64, 2], [4, 64, 4]],
+        "only placeBlock ticks the fluid"
+    );
+    assert_eq!(
+        world.marks,
+        [[4, 64, 4]],
+        "only placeBlock marks a shape-check block; the raw torch is left to the level"
+    );
 }
 
 #[test]
@@ -994,6 +1083,10 @@ fn compiled_book_piece_resolves_on_worker_load_and_refuses_bad_saved_values() {
             writes: vec![],
             states: vec![],
             placed: vec![],
+            water: false,
+            ticks: Vec::new(),
+            flags: Vec::new(),
+            marks: Vec::new(),
         };
         let mut random = LegacyRandom::new(9);
         piece

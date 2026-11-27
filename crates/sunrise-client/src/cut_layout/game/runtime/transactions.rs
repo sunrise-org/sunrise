@@ -12,9 +12,9 @@ pub(crate) mod tests {
         TransactionContext, TransactionError,
     };
     use std::{sync::Arc, time::Instant};
-    use sunrise_client_gameplay::game::native_hooks::ModGameExt1;
     use sunrise_gameplay_common::game::api_values::TryIntoApi;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    use sunrise_gameplay_common::game::native_hooks::ModGameExt1;
     use sunrise_gameplay_common::game::native_menu_refs_common::NativeMenuRefsCommonGameExt1;
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
     use sunrise_gameplay_common::game::tables::WorldTablesExt;

@@ -1,21 +1,29 @@
 //! Bootstrap capture, mod registration and the real Game hosts.
-use mod_api::{Dist, Hooks, Host, ModEntry, PackageInfo, RegistrationContext, RuntimeEnvironment};
+#[cfg(feature = "client")]
+use mod_api::{Dist, ModEntry, PackageInfo};
+#[cfg(feature = "client")]
+use mod_api::{Hooks, Host, RegistrationContext, RuntimeEnvironment};
+#[cfg(feature = "client")]
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use sunrise_gameplay_common::game::Options;
 use sunrise_mod_package::selection::LaunchArguments;
+#[cfg(feature = "client")]
 use {
     sunrise_gameplay_common::game::execution_role::ExecutionRole,
     sunrise_gameplay_common::game::mods,
 };
 
+#[cfg(feature = "client")]
 #[derive(Default)]
 struct Observed {
     pub registration: Vec<RuntimeEnvironment>,
     later: Vec<RuntimeEnvironment>,
     tests: usize,
 }
+#[cfg(feature = "client")]
 struct Probe(Arc<Mutex<Observed>>);
+#[cfg(feature = "client")]
 fn from_host(host: &dyn Host, tests: bool) -> RuntimeEnvironment {
     RuntimeEnvironment::new(
         host.dist(),
@@ -24,6 +32,7 @@ fn from_host(host: &dyn Host, tests: bool) -> RuntimeEnvironment {
         tests,
     )
 }
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
     fn register(&self, _: &mut dyn mod_api::Registrar, cx: &RegistrationContext) {
@@ -64,6 +73,7 @@ impl Hooks for Probe {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn native_process_environment_in_registration_and_game_hosts() {

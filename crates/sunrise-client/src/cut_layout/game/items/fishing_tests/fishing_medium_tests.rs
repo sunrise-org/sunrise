@@ -1,6 +1,7 @@
 //! `fishing_medium` through the game's own bobber: no listener and a None answer leave the
 //! bobber falling; an answer floats it at its surface, tells the caster, and the catch rolls
 //! its checked table; the client keeps only the surface; the first mod in order wins.
+#![cfg(feature = "client")]
 use sunrise_core::geometry::Vec3;
 use sunrise_core::random::LegacyRandom;
 use sunrise_gameplay::game::server_side::fishing::WARNED_TABLES;

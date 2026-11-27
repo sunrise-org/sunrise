@@ -2,16 +2,24 @@ use mod_api::PackFinders;
 use mod_api::{AddPackFindersEvent, Hooks, Identifier, ModEntry};
 use mod_platform::testing::with_mods;
 use std::{fs, io::Write, path::PathBuf};
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::client_side::pack_discovery_client::into_resource_pack;
+#[cfg(feature = "client")]
 use sunrise_client_render::packs;
+#[cfg(feature = "client")]
 use sunrise_game_data::text::Text;
 use sunrise_gameplay_common::game::pack_discovery::{
     HookId, ModsState, PackDiscoveryContext, PackFinderError, PackPosition, PackRegistration,
-    PackSource, PackType, Registry, ResourceSource, Source, StartupDiscovery, data_packs,
-    data_repository, discover,
+    PackSource, PackType, Registry, StartupDiscovery, data_packs, discover,
 };
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::pack_discovery::{ResourceSource, Source, data_repository};
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::pack_finders_common::CommonGameExt1;
-use sunrise_level::datapack::{DataPacks, DataStore, FunctionLine};
+use sunrise_level::datapack::FunctionLine;
+#[cfg(feature = "client")]
+use sunrise_level::datapack::{DataPacks, DataStore};
+#[cfg(feature = "client")]
 use sunrise_level::pack_meta::{RESOURCE_FORMAT, SelectionModel};
 
 const ASSET_PACK: &str = "assets/packmod/resourcepacks/optional";
@@ -228,6 +236,7 @@ fn both_startup_repositories_lend_only_available_text_services() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn live_pack_rediscovery_can_read_a_registered_client_setting() {
@@ -302,6 +311,7 @@ fn live_pack_rediscovery_can_read_a_registered_client_setting() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn hidden_packs_reach_the_screens_marked_hidden_and_still_apply() {
     let fixture = Fixture::new(false);
@@ -336,6 +346,7 @@ fn hidden_packs_reach_the_screens_marked_hidden_and_still_apply() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn contributed_packs_are_discoverable_and_only_selected_resources_apply() {
     for archive in [false, true] {
@@ -466,6 +477,7 @@ fn refused_registrations_leave_the_repository_unchanged() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn required_packs_keep_their_priority_and_cannot_be_cleared() {
     let fixture = Fixture::new(false);
@@ -649,6 +661,7 @@ fn registered_data_commands_respect_flags_required_packs_and_default_priority() 
     assert_eq!(ran, 3, "every prepared-resource case must run");
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
@@ -742,6 +755,7 @@ fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
     assert!(ran, "the prepared-resource fixture must run this case");
 }
 
+#[cfg(feature = "client")]
 #[test]
 fn hidden_optional_data_pack_is_command_selectable_and_loads_its_function() {
     let fixture = Fixture::new(false);

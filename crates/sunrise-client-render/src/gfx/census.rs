@@ -205,8 +205,8 @@ impl Renderer {
     }
     /// Bytes of the renderer's largest GPU resources, by name (`scene_replay --memory`):
     /// the terrain arenas (their pages, and what resident sections and far tiles use of
-    /// them), the quad indices, the block sprites with their mips, the LabPBR maps, flat
-    /// draws' buffers and the visibility buffer's.
+    /// them), the quad indices, the block sprites with their mips, the LabPBR maps, a shader
+    /// pack's material atlases, flat draws' buffers and the visibility buffer's.
     pub fn gpu_census(&self) -> Vec<(&'static str, u64)> {
         let [near, far] = self.vertex_bytes_split();
         let textures = |t: &[wgpu::Texture]| t.iter().map(texture_bytes).sum::<u64>();
@@ -227,6 +227,12 @@ impl Renderer {
                 self.pbr_maps
                     .as_ref()
                     .map_or(0, |maps| maps.iter().flatten().map(texture_bytes).sum()),
+            ),
+            (
+                "pack_material_atlases",
+                self.pack_material_atlases.as_ref().map_or(0, |atlases| {
+                    atlases.iter().map(|a| texture_bytes(a.texture())).sum()
+                }),
             ),
             (
                 "flat_draws",

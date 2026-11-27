@@ -418,6 +418,8 @@ fn input<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     } else if ptr.is_null() {
         None
     } else {
+        // SAFETY: callers are `pub unsafe extern "C"` entry points whose contract requires `ptr`
+        // to be valid for `len` bytes from `hp_alloc`.
         Some(unsafe { std::slice::from_raw_parts(ptr, len) })
     }
 }
@@ -453,6 +455,8 @@ pub unsafe extern "C" fn hp_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY: `ptr` is non-null and came from `hp_alloc` or `reply_buffer` with length `len`
+    // (the caller's contract) and has not been freed yet.
     drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)) });
 }
 

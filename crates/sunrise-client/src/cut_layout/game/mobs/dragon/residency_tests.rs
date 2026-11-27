@@ -1,4 +1,5 @@
 //! Production singleton installation/removal and id-allocation contracts.
+#[cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::Tag;
@@ -95,12 +96,14 @@ fn singleton_fight_dragon_install_reserves_nine_ids() {
     });
 }
 
+#[cfg(feature = "client")]
 fn install_server_dragon(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, at: [f64; 3]) {
     let mut dragon = Dragon::new(Vec3::new(at[0], at[1], at[2]), 0.0, 0);
     dragon.id = id;
     game.replace_resident_dragon(dragon);
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn singleton_client_dragon_install_explicitly_replaces_network_owner() {
@@ -134,6 +137,7 @@ fn singleton_late_dragon_id_reserves_all_eight_parts_once() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn singleton_lifecycle_commands_unload_and_parked_owners() {
@@ -152,6 +156,7 @@ fn singleton_lifecycle_commands_unload_and_parked_owners() {
     .run_singleton();
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn singleton_death_fight_scan_and_resets_discard_owners() {

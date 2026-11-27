@@ -1,16 +1,24 @@
+#[cfg(feature = "client")]
+use mod_api::ModEntry;
+#[cfg(feature = "client")]
 use mod_api::{
-    HandlerThread, Hooks, IPayloadContext, IPayloadHandler, ModEntry, PayloadBytes,
-    PayloadContextError, PayloadDirection, PayloadId, PayloadProtocol, PayloadWork,
-    PayloadWorkStatus, Registrar,
+    HandlerThread, Hooks, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadContextError,
+    PayloadDirection, PayloadId, PayloadProtocol, PayloadWork, PayloadWorkStatus, Registrar,
 };
+#[cfg(feature = "client")]
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use std::time::{Duration, Instant};
+#[cfg(feature = "client")]
+use std::time::Duration;
+use std::time::Instant;
 
+#[cfg(feature = "client")]
 const NAME: &str = "cut_layout::game::payload_transport::tests::integrated_memory_delivers_registered_raw_payload_and_reply";
+#[cfg(feature = "client")]
 const CHANNEL: &str = "raw_probe:message";
+#[cfg(feature = "client")]
 const WAIT_BUDGET: Duration = Duration::from_secs(60);
 
 // Completion takes precedence when a poll itself crosses the deadline.
@@ -38,21 +46,25 @@ fn completion_observed_on_last_poll_wins_over_deadline() {
     assert!(!drive_until(expired, || false));
 }
 
+#[cfg(feature = "client")]
 #[derive(Clone, Copy)]
 struct Stamp {
     pub wall: Duration,
     cpu: Option<(u64, u64)>,
 }
+#[cfg(feature = "client")]
 fn process_cpu_ticks() -> Option<(u64, u64)> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     let mut fields = stat.rsplit_once(')')?.1.split_whitespace().skip(11);
     Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
 }
+#[cfg(feature = "client")]
 struct Timeline {
     pub started: Instant,
     ticks_per_second: Option<u64>,
     marks: std::sync::Mutex<[Option<Stamp>; 7]>,
 }
+#[cfg(feature = "client")]
 impl Timeline {
     fn new() -> Self {
         Self {
@@ -74,6 +86,7 @@ impl Timeline {
         });
     }
 }
+#[cfg(feature = "client")]
 struct TimingReport {
     pub timeline: Arc<Timeline>,
     server: Arc<AtomicUsize>,
@@ -82,6 +95,7 @@ struct TimingReport {
     probe: sunrise_sim::raw_payloads::staging_probe::Watch,
     printed: std::sync::atomic::AtomicBool,
 }
+#[cfg(feature = "client")]
 impl TimingReport {
     fn sample(&self) {
         eprintln!(
@@ -149,10 +163,12 @@ impl TimingReport {
         );
     }
 }
+#[cfg(feature = "client")]
 struct Sampler {
     pub signal: std::sync::mpsc::Sender<bool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
+#[cfg(feature = "client")]
 impl Sampler {
     fn new(report: std::sync::Weak<TimingReport>) -> Self {
         let (signal, events) = std::sync::mpsc::channel();
@@ -179,18 +195,21 @@ impl Sampler {
         let _ = self.signal.send(false);
     }
 }
+#[cfg(feature = "client")]
 impl Drop for Sampler {
     fn drop(&mut self) {
         self.stop();
         let _ = self.thread.take().unwrap().join();
     }
 }
+#[cfg(feature = "client")]
 impl Drop for TimingReport {
     fn drop(&mut self) {
         // Also report an unexpected panic before the normal completion/timeout path.
         self.print("drop_fallback_may_be_post_teardown");
     }
 }
+#[cfg(feature = "client")]
 struct Probe {
     pub expected: Arc<Vec<u8>>,
     server: Arc<AtomicUsize>,
@@ -198,6 +217,7 @@ struct Probe {
     network: bool,
     timeline: Arc<Timeline>,
 }
+#[cfg(feature = "client")]
 struct Handler {
     pub expected: Arc<Vec<u8>>,
     hits: Arc<AtomicUsize>,
@@ -205,6 +225,7 @@ struct Handler {
     network: bool,
     timeline: Arc<Timeline>,
 }
+#[cfg(feature = "client")]
 struct Work {
     pub bytes: std::sync::Mutex<Option<PayloadBytes>>,
     hits: Arc<AtomicUsize>,
@@ -212,6 +233,7 @@ struct Work {
     network_thread: std::thread::ThreadId,
     timeline: Arc<Timeline>,
 }
+#[cfg(feature = "client")]
 impl PayloadWork for Work {
     fn run(&self, context: &mut dyn IPayloadContext) -> Result<(), String> {
         assert_ne!(
@@ -230,6 +252,7 @@ impl PayloadWork for Work {
         )
     }
 }
+#[cfg(feature = "client")]
 fn finish(
     bytes: PayloadBytes,
     context: &mut dyn IPayloadContext,
@@ -260,6 +283,7 @@ fn finish(
     hits.fetch_add(1, Ordering::SeqCst);
     Ok(())
 }
+#[cfg(feature = "client")]
 impl IPayloadHandler for Handler {
     fn handle(
         &self,
@@ -313,6 +337,7 @@ impl IPayloadHandler for Handler {
         }
     }
 }
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
     fn register(&self, registrar: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -344,6 +369,7 @@ impl Hooks for Probe {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn integrated_memory_delivers_registered_raw_payload_and_reply() {
@@ -486,6 +512,7 @@ fn integrated_memory_delivers_registered_raw_payload_and_reply() {
 }
 
 // These selectors are explicitly ignored, not silently optional once selected.
+#[cfg(feature = "client")]
 pub(super) fn require_resources() {
     let root =
         std::path::PathBuf::from(std::env::var_os("SUNRISE_TEST_RESOURCES").expect(
@@ -512,6 +539,7 @@ pub(super) fn require_resources() {
 
 // Inspect vanilla bytes independently of both the raw encoder and CustomPayload decoder.
 // These fixed fixture channels have single-byte vanilla string lengths.
+#[cfg(feature = "client")]
 pub(super) fn assert_bare_body(body: &[u8], channel: &str, expected: &[u8]) {
     assert_eq!(
         body.len(),
@@ -531,12 +559,14 @@ pub(super) fn assert_bare_body(body: &[u8], channel: &str, expected: &[u8]) {
     );
 }
 
+#[cfg(feature = "client")]
 pub(super) struct WireReceipt {
     pub channel: &'static str,
     pub(super) expected: Arc<Vec<u8>>,
     pub(super) hits: Arc<AtomicUsize>,
     pub(super) observed: Option<Arc<dyn Fn() + Send + Sync>>,
 }
+#[cfg(feature = "client")]
 impl sunrise_client::net::PacketRecorder for WireReceipt {
     fn is_active(&self) -> bool {
         true

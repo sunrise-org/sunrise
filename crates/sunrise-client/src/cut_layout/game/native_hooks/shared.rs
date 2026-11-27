@@ -309,6 +309,7 @@ pub(in crate::game) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     #[test]
     fn observed_overlay_prefers_first_open_screen() {
         assert_eq!(

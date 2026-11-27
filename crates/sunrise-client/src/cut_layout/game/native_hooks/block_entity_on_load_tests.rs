@@ -7,6 +7,7 @@ mod tests {
         ModEntry, Registrar, RegistrationContext,
     };
     use std::sync::{Arc, Mutex};
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;
     use sunrise_gameplay_common::game::GameGameExt1;
     use sunrise_gameplay_common::game::native_hooks::block_entity_on_load::BlockEntityOnLoadGameExt1;
@@ -163,6 +164,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_client_instance_reads_received_fields() {

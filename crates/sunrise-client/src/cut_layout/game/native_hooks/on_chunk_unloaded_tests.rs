@@ -10,7 +10,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sunrise_core::nbt::{Compound, Tag};
 use sunrise_gameplay::game::world_loading::WorldRequest;
+#[cfg(feature = "client")]
 use sunrise_level::containers::BlockEntity;
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_game_role_client,
     sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
@@ -112,6 +114,7 @@ pub(crate) fn pump_until(game: &mut sunrise_gameplay::game::ServerGame<'_>, resi
 
 /// A client's copies: a column the server forgets tells its mod block entities, while
 /// the client level going (a respawn, a dimension change, leaving) tells none.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_tells_a_forgotten_column_but_not_its_level_going() {

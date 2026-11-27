@@ -12,7 +12,6 @@ use super::{
 use crate::environment::Frame;
 use serde_json::Value as Json;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use sunrise_core::random::{LegacyRandom, RandomSource};
 use sunrise_polytone::expr::{Host, Program, Root, Value as V};
@@ -127,12 +126,18 @@ impl Tint {
     }
 }
 
+/// The resource-name prefix of a namespace's Polytone `kind` folder: `/`-separated with a
+/// trailing `/`, as `ResourceSource::list` takes it (it refuses a `\`).
+fn polytone_dir(namespace: &str, kind: &str) -> String {
+    format!("assets/{namespace}/polytone/{kind}/")
+}
+
 /// Every `.json` under `dir`, with its path relative to `root`.
 fn json_files(
     root: &sunrise_assets::resource_source::ResourceSource,
-    dir: &Path,
+    dir: &str,
 ) -> Vec<(String, Json)> {
-    root.list(&dir.to_string_lossy())
+    root.list(dir)
         .into_iter()
         .filter(|p| p.ends_with(".json"))
         .filter_map(|p| {
@@ -178,8 +183,9 @@ impl Registry {
             }
         }
         for namespace in pack_root.namespaces("assets") {
-            let polytone = std::path::PathBuf::from(format!("assets/{namespace}/polytone"));
-            for (relative, json) in json_files(pack_root, &polytone.join("custom_particles")) {
+            for (relative, json) in
+                json_files(pack_root, &polytone_dir(&namespace, "custom_particles"))
+            {
                 let Some(id) = sunrise_polytone::implicit_id(&relative, "custom_particles") else {
                     continue;
                 };
@@ -190,7 +196,9 @@ impl Registry {
                     Err(e) => log::warn!("{relative}: {e}"),
                 }
             }
-            for (relative, json) in json_files(pack_root, &polytone.join("entity_modifiers")) {
+            for (relative, json) in
+                json_files(pack_root, &polytone_dir(&namespace, "entity_modifiers"))
+            {
                 let implicit = sunrise_polytone::implicit_id(&relative, "entity_modifiers");
                 match EntityEmitters::parse(&json, implicit.as_deref()) {
                     Ok(Some(m)) if !m.emitters.is_empty() => entity_modifiers.push(Arc::new(m)),
@@ -198,7 +206,9 @@ impl Registry {
                     Err(e) => log::warn!("{relative}: {e}"),
                 }
             }
-            for (relative, json) in json_files(pack_root, &polytone.join("particle_modifiers")) {
+            for (relative, json) in
+                json_files(pack_root, &polytone_dir(&namespace, "particle_modifiers"))
+            {
                 let implicit = sunrise_polytone::implicit_id(&relative, "particle_modifiers");
                 match ParticleModifier::parse(&json, implicit.as_deref()) {
                     Ok(Some(m)) => {
@@ -216,7 +226,9 @@ impl Registry {
                     Err(e) => log::warn!("{relative}: {e}"),
                 }
             }
-            for (relative, json) in json_files(pack_root, &polytone.join("block_modifiers")) {
+            for (relative, json) in
+                json_files(pack_root, &polytone_dir(&namespace, "block_modifiers"))
+            {
                 let implicit = sunrise_polytone::implicit_id(&relative, "block_modifiers");
                 match BlockEmitters::parse(&json, implicit.as_deref()) {
                     Ok(Some(m)) => modifiers.push(Arc::new(m)),
@@ -1760,6 +1772,7 @@ mod tests {
     use crate::world::World;
     use glam::DVec3;
     use std::collections::HashSet;
+    use std::path::Path;
     use sunrise_core::nbt::Tag;
     use sunrise_world::DATA_VERSION;
     use sunrise_world::block_collision::BlockCollisionRegistry;
@@ -1891,6 +1904,36 @@ mod tests {
                 }),
             ),
         ])
+    }
+
+    #[test]
+    fn json_files_finds_a_directory_packs_files_under_the_prefix_registry_builds() {
+        let root = pack(&[
+            (
+                "assets/test/polytone/custom_particles/spark.json",
+                serde_json::json!({"a": 1}),
+            ),
+            (
+                "assets/test/polytone/custom_particles/nested/glow.json",
+                serde_json::json!({"a": 2}),
+            ),
+            (
+                "assets/test/polytone/block_modifiers/torch.json",
+                serde_json::json!({"a": 3}),
+            ),
+        ]);
+        let source = sunrise_assets::resource_source::ResourceSource::directory(root.clone());
+        let found = json_files(&source, &polytone_dir("test", "custom_particles"));
+        let names: Vec<_> = found.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "assets/test/polytone/custom_particles/nested/glow.json",
+                "assets/test/polytone/custom_particles/spark.json",
+            ]
+        );
+        assert_eq!(found[1].1, serde_json::json!({"a": 1}));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

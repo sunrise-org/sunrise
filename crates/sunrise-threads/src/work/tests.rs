@@ -1,7 +1,6 @@
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use super::*;
 use crate::sampler::test_support::{cpu_count, cpu_hz, ensure, first_passing_run};
@@ -47,7 +46,7 @@ fn sampled(name: &'static str, body: fn()) -> Vec<Record> {
     go.send(()).unwrap();
     let mut records = Vec::new();
     while !worker.is_finished() {
-        thread::sleep(Duration::from_millis(20));
+        thread::yield_now();
         session.drain(|_, r| records.push(*r));
     }
     worker.join().unwrap();

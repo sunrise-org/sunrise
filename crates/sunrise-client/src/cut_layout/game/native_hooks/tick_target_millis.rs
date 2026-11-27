@@ -1,12 +1,19 @@
 #![cfg(test)]
 #[cfg(test)]
 mod tick_target_millis_tests {
-    use mod_api::{ClientHost, Hooks, ModEntry, TickTargetMillisEvent};
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
+    use mod_api::{ClientHost, Hooks, TickTargetMillisEvent};
+    #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
+    #[cfg(feature = "client")]
     use std::sync::{Arc, Mutex};
 
     /// A "timer": logs vanilla's tick length and answers `answer(millis)`.
+    #[cfg(feature = "client")]
     struct Timer(Arc<Mutex<Vec<f32>>>, fn(f32) -> f32);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Timer {
         fn tick_target_millis(&self, _: &dyn ClientHost, event: &mut TickTargetMillisEvent) {
@@ -15,6 +22,7 @@ mod tick_target_millis_tests {
         }
     }
 
+    #[cfg(feature = "client")]
     fn with_timer(
         answer: fn(f32) -> f32,
         check: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
@@ -36,6 +44,7 @@ mod tick_target_millis_tests {
     /// `Minecraft.getTickTargetMillis`: the mod gets the clock's tick length, the `/tick rate`
     /// included, and its answer paces the client; an answer that is not a positive number keeps
     /// vanilla's, and without a listener the length is vanilla's.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_mod_sets_how_long_a_client_tick_lasts() {

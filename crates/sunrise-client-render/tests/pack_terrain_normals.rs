@@ -4,8 +4,10 @@
 //! each direction, solid (`gbuffers_terrain`) and translucent (`gbuffers_water`). Each face must
 //! read its own normal and tangent in both draw paths (#432), per-section draws reading their
 //! page or, where they read none (no storage in vertex shaders, or the pack's buffers leave no
-//! room), the normal stream. Asset-free; run with throwaway SUNRISE_HOME,
-//! SUNRISE_LAUNCHER_HOME, XDG_DATA_HOME and XDG_CONFIG_HOME (AGENTS.md):
+//! room), the normal stream. A pack with no program drawing the sections (a `final` alone)
+//! runs in each draw mode without binding vertex-only pages as storage (#6542). Asset-free; run
+//! with throwaway SUNRISE_HOME, SUNRISE_LAUNCHER_HOME, XDG_DATA_HOME and XDG_CONFIG_HOME
+//! (AGENTS.md):
 //! `cargo test -p sunrise-client-render --test pack_terrain_normals -- --ignored`
 //! (under `python3 tools/ci/with_xvfb.py` without a display) gives each its own. On a Wayland
 //! desktop, unset `WAYLAND_DISPLAY` as `with_xvfb.py` does: the child's own `XDG_RUNTIME_DIR`
@@ -162,6 +164,85 @@ fn pack_terrain_normals_stream_where_pages_dont_fit() {
         "pack_terrain_normals_stream_where_pages_dont_fit",
         &[("SUNRISE_FLAT_DRAWS", "0")],
         fixture_pages_dont_fit,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_final_only() {
+    run_daily("pack_terrain_normals_final_only", &[], fixture_final_only);
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_final_only_pages() {
+    run_daily(
+        "pack_terrain_normals_final_only_pages",
+        &[("SUNRISE_FLAT_DRAWS", "0")],
+        fixture_final_only,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_final_only_stream() {
+    run_daily(
+        "pack_terrain_normals_final_only_stream",
+        &[
+            ("SUNRISE_FLAT_DRAWS", "0"),
+            ("SUNRISE_SHADER_PACK_WITHOUT", "vertex-storage"),
+        ],
+        fixture_final_only,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_final_only_pages_from_start() {
+    run_daily(
+        "pack_terrain_normals_final_only_pages_from_start",
+        &[("SUNRISE_FLAT_DRAWS", "0")],
+        fixture_final_only_from_start,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_pending_post_only_pages() {
+    run_daily(
+        "pack_terrain_normals_pending_post_only_pages",
+        &[("SUNRISE_FLAT_DRAWS", "0")],
+        fixture_pending_post_only,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_water_only_pages() {
+    run_daily(
+        "pack_terrain_normals_water_only_pages",
+        &[("SUNRISE_FLAT_DRAWS", "0")],
+        fixture_water_only,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_pages_in_the_shadow_pass() {
+    run_daily(
+        "pack_terrain_normals_pages_in_the_shadow_pass",
+        &[("SUNRISE_FLAT_DRAWS", "0")],
+        fixture_shadow,
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_terrain_normals_external_shadow_pages() {
+    run_daily(
+        "pack_terrain_normals_external_shadow_pages",
+        &[("SUNRISE_FLAT_DRAWS", "0")],
+        fixture_external_shadow,
     );
 }
 
@@ -814,8 +895,10 @@ fn fixture_pending_packed(
 }
 
 /// A pack whose programs draw no terrain and no shadow pass (a `composite` alone), loaded
-/// mid-session where per-section terrain would read the normal stream: the frames while it
-/// builds, and once it runs, keep the layout without a pack's terrain; no section is dropped.
+/// mid-session where per-section terrain would read the normal stream, or the pages (flat draws
+/// off, vertex storage kept): the frames while it builds, and once it runs, keep the layout
+/// without a pack's terrain; no section is dropped, and no frame binds the pages, vertex buffers
+/// alone, as storage (#6542).
 fn fixture_pending_post_only(
     window: Arc<Window>,
     out: &Path,
@@ -857,18 +940,27 @@ fn fixture_pending_post_only(
 /// A pack whose only program drawing the game's sections is `gbuffers_water` (and a `final`
 /// that shows `colortex0`), no terrain program: per-section translucent quads read the
 /// normal stream, which both arenas keep from the start (a pack picked, vertex storage taken
-/// away), through the frames while the pack builds and once it runs, and each translucent view
-/// reads its face's own normal.
+/// away), or else the section arena's pages, storage from the start, which then hold the
+/// translucent quads too (#6542): through the frames while the pack builds and once it runs,
+/// and each translucent view reads its face's own normal.
 fn fixture_water_only(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(out)?;
     let mut renderer = renderer(window, (true, true))?;
+    let stream = std::env::var("SUNRISE_SHADER_PACK_WITHOUT").as_deref() == Ok("vertex-storage");
     let hud = HudBatch::scratch([320, 180]);
     let mut result = serde_json::Map::new();
     let start = layout(&renderer);
-    assert!(
-        start.1 && start.2,
-        "a pack picked: the stream from the start"
-    );
+    if stream {
+        assert!(
+            start.1 && start.2,
+            "a pack picked: the stream from the start"
+        );
+    } else {
+        assert!(
+            start.0.0 && !start.1 && !start.3,
+            "a pack picked: pages storage from the start, no stream, no translucent arena"
+        );
+    }
     renderer.upload(SECTION, &mesh(true));
     let folder = out.join("pack-water");
     let shaders = folder.join("shaders");
@@ -910,7 +1002,15 @@ fn fixture_water_only(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std
     frames_keep(&mut renderer, &hud, out, "running", 1, start);
     check_views(&mut renderer, &hud, out, "water", true, normal, &mut result);
     let (section, translucent, _) = renderer.section_arena_normals();
-    assert!(section && translucent, "both arenas keep the stream");
+    if stream {
+        assert!(section && translucent, "both arenas keep the stream");
+    } else {
+        assert!(!section, "no stream where the pages are read");
+        assert!(
+            renderer.section_arena_pages().0,
+            "the water reads the pages"
+        );
+    }
     finish(out, result)
 }
 
@@ -968,7 +1068,8 @@ fn fixture_pending_refused(
 }
 
 /// The shadow pass of a pack whose per-section terrain reads the normal stream (vertex storage
-/// taken away, flat draws off) reads it too: a shadow program that writes the normal into
+/// taken away, flat draws off) reads it too, and one whose per-section terrain reads the pages
+/// (flat draws off alone) reads them (#6542): a shadow program that writes the normal into
 /// `shadowcolor0` over the whole shadow map (each quad drawn from its UVs, 0 to 1 across the
 /// block atlas's one sprite), and a `final` program that shows the map's middle. A single quad
 /// facing east (+x) writes (255, 153, 153); the constant normal would write (153, 255, 153).
@@ -977,6 +1078,7 @@ fn fixture_shadow(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::er
     std::fs::create_dir_all(out)?;
     let mut renderer = renderer(window, (false, false))?;
     assert!(!renderer.flat_draws(), "SUNRISE_FLAT_DRAWS=0");
+    let stream = std::env::var("SUNRISE_SHADER_PACK_WITHOUT").as_deref() == Ok("vertex-storage");
     let hud = HudBatch::scratch([320, 180]);
     let mut result = serde_json::Map::new();
     let folder = out.join("pack-shadow");
@@ -1044,7 +1146,15 @@ fn fixture_shadow(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::er
         result.insert(name.into(), format!("{pixel:?}").into());
     }
     let (section, translucent, _) = renderer.section_arena_normals();
-    assert!(section && translucent, "both arenas keep the stream");
+    if stream {
+        assert!(section && translucent, "both arenas keep the stream");
+    } else {
+        assert!(!section, "no stream where the pages are read");
+        assert!(
+            renderer.section_arena_pages().0,
+            "the shadow pass reads the pages"
+        );
+    }
     finish(out, result)
 }
 
@@ -1090,6 +1200,245 @@ fn fixture_stream_after_flat(
             translucent, !flat,
             "{draws}: the translucent arena's stream"
         );
+    }
+    finish(out, result)
+}
+
+/// `final`'s colour in `write_final_only_pack`: (0.2, 0.6, 1.0), each a whole number of 255ths.
+const FINAL: [u8; 4] = [51, 153, 255, 255];
+
+/// Writes a pack in `folder` with a `final` program alone, which writes `FINAL` everywhere, and
+/// reads it: no program draws the game's sections (no terrain, water or shadow program), so the
+/// pack leaves terrain undrawn (`Post::terrain_undrawn`).
+fn write_final_only_pack(renderer: &mut Renderer, folder: &Path) -> sunrise_shaders::Post {
+    let shaders = folder.join("shaders");
+    std::fs::create_dir_all(&shaders).unwrap();
+    std::fs::write(
+        shaders.join("final.vsh"),
+        "#version 120\nvoid main() { gl_Position = ftransform(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        shaders.join("final.fsh"),
+        "#version 120\nvoid main() { gl_FragColor = vec4(0.2, 0.6, 1.0, 1.0); }\n",
+    )
+    .unwrap();
+    std::fs::write(shaders.join("shaders.properties"), "shadow.enabled=false\n").unwrap();
+    let post = read_pack(renderer, folder);
+    assert!(post.terrain_undrawn, "no terrain program: terrain undrawn");
+    assert!(
+        post.terrain.is_none()
+            && post.terrain_cutout.is_none()
+            && post.water.is_none()
+            && post.shadow.is_none(),
+        "no program draws the sections"
+    );
+    post
+}
+
+/// Draws a settling frame, uploads the box's solid and translucent quads into the layout it
+/// left, and draws again: the arena then has pages while the pack runs. The second frame must
+/// show `final`'s colour.
+fn shoot_with_sections(renderer: &mut Renderer, hud: &HudBatch, out: &Path, name: &str) -> [u8; 4] {
+    shoot(
+        renderer,
+        hud,
+        0.0,
+        0.0,
+        &out.join(format!("settle-{name}.png")),
+    );
+    renderer.take_dropped_sections();
+    let mut both = mesh(false);
+    both.translucent = mesh(true).translucent;
+    renderer.upload(SECTION, &both);
+    let pixel = shoot(renderer, hud, 0.0, 0.0, &out.join(format!("{name}.png")));
+    assert_eq!(pixel, FINAL, "{name}: final's colour");
+    assert_eq!(renderer.resident_sections(), 1, "{name}: the box's section");
+    assert!(
+        !renderer.take_dropped_sections(),
+        "{name}: the section stays in the arena"
+    );
+    assert!(
+        renderer.section_vertex_bytes()[1] > 0,
+        "{name}: the arena's pages hold its vertices"
+    );
+    pixel
+}
+
+/// A pack with a `final` program alone (#6542), loaded after the renderer, with sections in the
+/// arena: per-section draws, and flat ones where the device has them. No program of the pack
+/// draws the sections, so the arena's pages are storage only where flat draws exist, and no
+/// frame binds them as storage otherwise (wgpu refuses a storage binding of a buffer made
+/// without `STORAGE`, a panic under its default error handler).
+fn fixture_final_only(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(out)?;
+    let mut renderer = renderer(window, (false, false))?;
+    let hud = HudBatch::scratch([320, 180]);
+    let mut result = serde_json::Map::new();
+    let flat_device = renderer.flat_draws();
+    let modes: &[bool] = if flat_device {
+        &[true, false]
+    } else {
+        &[false]
+    };
+    for &flat in modes {
+        renderer.set_flat_draws(flat)?;
+        let draws = if flat { "flat" } else { "per-section" };
+        let post = write_final_only_pack(&mut renderer, &out.join(format!("pack-{draws}")));
+        renderer
+            .set_shader_pack(0, Some(post), &[])
+            .unwrap()
+            .expect("the pack runs");
+        let pixel = shoot_with_sections(&mut renderer, &hud, out, draws);
+        assert_eq!(
+            renderer.section_arena_pages().0,
+            flat_device,
+            "{draws}: pages storage only where flat draws exist"
+        );
+        result.insert(draws.into(), format!("{pixel:?}").into());
+    }
+    finish(out, result)
+}
+
+/// A renderer made with a `shaders/` pack picked, which takes it to read the pages per section
+/// (pages storage from the start), and that pack turning out to have a `final` program alone,
+/// loaded as the game loads it (`load_shader_pack`, then `poll_shader_pack`): the pages become
+/// vertex buffers alone, and the frames once it runs, with sections in the arena, draw.
+fn fixture_final_only_from_start(
+    window: Arc<Window>,
+    out: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(out)?;
+    let mut renderer = renderer(window, (true, true))?;
+    assert!(!renderer.flat_draws(), "SUNRISE_FLAT_DRAWS=0");
+    let hud = HudBatch::scratch([320, 180]);
+    let mut result = serde_json::Map::new();
+    assert!(
+        renderer.section_arena_pages().0,
+        "a pack picked: pages storage from the start"
+    );
+    renderer.upload(SECTION, &mesh(false));
+    let post = write_final_only_pack(&mut renderer, &out.join("pack-final"));
+    renderer.load_shader_pack(
+        0,
+        post,
+        Vec::new(),
+        "final".into(),
+        std::time::Instant::now(),
+    );
+    shoot(&mut renderer, &hud, 0.0, 0.0, &out.join("pending.png"));
+    assert!(poll(&mut renderer).unwrap(), "the pack runs");
+    let pixel = shoot_with_sections(&mut renderer, &hud, out, "running");
+    assert!(
+        !renderer.section_arena_pages().0,
+        "no program reads the pages: vertex buffers alone"
+    );
+    result.insert("running".into(), format!("{pixel:?}").into());
+    finish(out, result)
+}
+
+/// A shadow pass asked for by an external pipeline (`set_external_pipeline`), not by the pack,
+/// counting the frames that asked.
+struct ExternalShadow(Arc<std::sync::atomic::AtomicUsize>);
+
+impl client::gfx::external::ExternalPipeline for ExternalShadow {
+    fn shadow_request(
+        &self,
+        _: &client::gfx::external::FrameState<'_>,
+    ) -> Option<client::gfx::external::ShadowView> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // From above the box, looking down at it.
+        let view = glam::Mat4::look_at_rh(
+            glam::Vec3::new(8.0, 200.0, 8.0),
+            glam::Vec3::new(8.0, 104.0, 8.0),
+            glam::Vec3::Z,
+        );
+        let projection = glam::Mat4::orthographic_rh(-64.0, 64.0, -64.0, 64.0, 0.0, 256.0);
+        Some(client::gfx::external::ShadowView::new(
+            projection * view,
+            glam::Vec3::Y,
+        ))
+    }
+}
+
+/// Writes a pack in `folder` whose `gbuffers_terrain` is there but doesn't compile, and a `final`
+/// that writes `FINAL`, and reads it: the game draws the terrain (the program is there, so the
+/// pack doesn't leave it undrawn), and no program of the pack draws the sections.
+fn write_unloaded_terrain_pack(renderer: &mut Renderer, folder: &Path) -> sunrise_shaders::Post {
+    let shaders = folder.join("shaders");
+    std::fs::create_dir_all(&shaders).unwrap();
+    std::fs::write(
+        shaders.join("gbuffers_terrain.vsh"),
+        "#version 120\nvoid main() { gl_Position = ftransform(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        shaders.join("gbuffers_terrain.fsh"),
+        "#version 120\nvoid main() { gl_FragData[0] = undeclared; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        shaders.join("final.vsh"),
+        "#version 120\nvoid main() { gl_Position = ftransform(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        shaders.join("final.fsh"),
+        "#version 120\nvoid main() { gl_FragColor = vec4(0.2, 0.6, 1.0, 1.0); }\n",
+    )
+    .unwrap();
+    std::fs::write(shaders.join("shaders.properties"), "shadow.enabled=false\n").unwrap();
+    let post = read_pack(renderer, folder);
+    assert!(
+        post.terrain.is_none() && post.terrain_cutout.is_none() && !post.terrain_undrawn,
+        "the terrain program doesn't load; the game draws terrain"
+    );
+    assert!(
+        post.water.is_none() && post.shadow.is_none(),
+        "no program draws the sections"
+    );
+    post
+}
+
+/// Per-section draws reading the pages (flat draws off), an external pipeline asking for a
+/// shadow pass every frame, and a pack with no program drawing the sections: first a pack whose
+/// terrain program doesn't load, where the external shadow request is the only reason the frame
+/// would hand the pack its pages, then a `final` alone. Each runs with the box's section in the
+/// arena, whose pages stay vertex buffers alone, and draws `final`'s colour; the external
+/// pipeline was asked each time (#6542).
+fn fixture_external_shadow(
+    window: Arc<Window>,
+    out: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(out)?;
+    let mut renderer = renderer(window, (false, false))?;
+    assert!(!renderer.flat_draws(), "SUNRISE_FLAT_DRAWS=0");
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    renderer.set_external_pipeline(Some(Box::new(ExternalShadow(asked.clone()))));
+    let hud = HudBatch::scratch([320, 180]);
+    let mut result = serde_json::Map::new();
+    let packs: [(&str, fn(&mut Renderer, &Path) -> sunrise_shaders::Post); 2] = [
+        // First: on its own, the external request is what hands the pages over.
+        ("terrain-not-loaded", write_unloaded_terrain_pack),
+        ("final-only", write_final_only_pack),
+    ];
+    for (name, write) in packs {
+        let post = write(&mut renderer, &out.join(format!("pack-{name}")));
+        renderer
+            .set_shader_pack(0, Some(post), &[])
+            .unwrap()
+            .expect("the pack runs");
+        let before = asked.load(std::sync::atomic::Ordering::Relaxed);
+        let pixel = shoot_with_sections(&mut renderer, &hud, out, name);
+        assert!(
+            asked.load(std::sync::atomic::Ordering::Relaxed) > before,
+            "{name}: the external pipeline asked for the shadow pass"
+        );
+        assert!(
+            !renderer.section_arena_pages().0,
+            "{name}: no program reads the pages: vertex buffers alone"
+        );
+        result.insert(name.into(), format!("{pixel:?}").into());
     }
     finish(out, result)
 }

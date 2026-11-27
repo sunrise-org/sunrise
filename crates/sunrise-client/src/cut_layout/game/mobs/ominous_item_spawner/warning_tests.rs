@@ -177,6 +177,7 @@ fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {

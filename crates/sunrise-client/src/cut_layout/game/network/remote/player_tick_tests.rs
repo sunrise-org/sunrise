@@ -267,8 +267,10 @@ fn guest_tick_brackets_sleep_cooldowns_pickups_and_death() {
 
 // `player_name_format` on the name tag over a player (`Player.getDisplayName`).
 /// Renames "Steve" and counts how often the hook is asked.
+#[cfg(feature = "client")]
 pub(crate) struct Captain(pub(crate) std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Captain {
     fn player_name_format(
@@ -284,6 +286,7 @@ impl mod_api::Hooks for Captain {
 }
 
 /// A client game with Steve (entity 66) in the level, and the names its tags show.
+#[cfg(feature = "client")]
 pub(crate) fn tags_over_steve(mods: mod_api::Mods) -> Vec<String> {
     let mut shown = Vec::new();
     mod_platform::testing::with_mods(mods, || {
@@ -310,6 +313,7 @@ pub(crate) fn tags_over_steve(mods: mod_api::Mods) -> Vec<String> {
     shown
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn the_name_tag_over_a_player_shows_the_name_a_mod_formats() {
@@ -323,6 +327,7 @@ fn the_name_tag_over_a_player_shows_the_name_a_mod_formats() {
     assert!(asked.load(std::sync::atomic::Ordering::Relaxed) > 0);
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_mod_that_does_not_listen_is_never_asked_for_the_name_tag() {

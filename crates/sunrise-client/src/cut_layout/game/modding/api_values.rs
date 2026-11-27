@@ -1,6 +1,7 @@
 #[path = "api_values/small_values.rs"]
 pub(crate) mod small_values;
 
+#[cfg(feature = "client")]
 #[cfg(test)]
 pub(crate) fn resolve_cached_block_definitions(
     cached_registry: &'static sunrise_world::registry::BlockRegistry,

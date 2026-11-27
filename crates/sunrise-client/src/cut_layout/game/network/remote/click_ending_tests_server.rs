@@ -4,6 +4,7 @@ use super::*;
 /// air and nothing above, FAIL (no swing) on grass or with the player in the space above. Each
 /// sends one use_item_on and tries neither UseItem nor the off hand, whose shield stays down.
 /// On cooldown its useOn doesn't run, and the click goes on to the item.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn an_end_crystal_click_on_a_block_ends_there() {
@@ -75,6 +76,7 @@ fn an_end_crystal_click_on_a_block_ends_there() {
 /// #14773: Flint and steel and fire charge useOn on a client level ends the
 /// click (returning true), so when held with an unusable off-hand item, the
 /// click does not fall through to UseItem or try the off hand.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn flint_and_steel_use_on_ends_the_click() {

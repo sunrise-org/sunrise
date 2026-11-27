@@ -1,9 +1,12 @@
 //! Independently specified outcomes for the interaction hooks.
+#[cfg(feature = "client")]
 use super::*;
 #[path = "interaction_matrix_tests/fixture.rs"]
 pub(crate) mod fixture;
 
+#[cfg(feature = "client")]
 pub(crate) struct Native;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Native {
     fn right_click_block(&self, host: HostSide<'_>, event: &mut RightClickBlockEvent<'_>) -> Flow {
@@ -14,6 +17,7 @@ impl Hooks for Native {
     }
 }
 
+#[cfg(feature = "client")]
 #[derive(Debug)]
 pub(crate) struct Case {
     pub(in crate::game) controls: [u8; 6],
@@ -29,6 +33,7 @@ pub(crate) struct Case {
     pub(in crate::game) lever: bool,
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn cases(hand: Hand) -> Vec<Case> {
     let mut cases = Vec::new();
     // RightClickBlock: TRUE overrides secondary use; Default skips the block
@@ -198,6 +203,7 @@ pub(crate) fn cases(hand: Hand) -> Vec<Case> {
     cases
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn advancement_tree(game: &mut sunrise_gameplay_common::game::CommonGame<'_>) {
     use sunrise_sim::advancements as a;
     let mut tree = a::Tree::default();
@@ -228,9 +234,11 @@ pub(crate) fn advancement_tree(game: &mut sunrise_gameplay_common::game::CommonG
     game.adv.progress = Default::default();
 }
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use crate::game::server_side::remote_server::interaction_event_tests::interaction_matrix_tests::matrix;
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn native_interaction_shared_matrix() {

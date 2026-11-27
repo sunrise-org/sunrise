@@ -1,4 +1,5 @@
 //! Production gameplay triggers, with one isolated game process per group of scenarios.
+#[cfg(feature = "client")]
 use mod_api::LevelRandomHost as _;
 use std::sync::{Arc, Mutex};
 use sunrise_core::{
@@ -21,6 +22,7 @@ use {
 const POS: (i32, i32, i32) = (8, 64, 8);
 const TABLE: &str = "test:first_access";
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn level_container_reads_preserve_snapshot_and_unpack_comparator_once() {
@@ -1455,6 +1457,8 @@ fn seeds_and_fill_listeners() {
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_block_entity_read::NativeBlockEntityReadGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;

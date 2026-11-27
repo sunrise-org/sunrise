@@ -1,4 +1,5 @@
 //! Ordinary effect blends through the public handle and the client's packet/countdown paths.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::LivingRef;
 use mod_platform::__private::part_tests::effect_key;

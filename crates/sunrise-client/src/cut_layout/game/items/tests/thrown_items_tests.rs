@@ -8,7 +8,9 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 use sunrise_gameplay_common::game::GameGameExt1;
 use sunrise_items::items::ItemStack;
 use sunrise_level::chunk::Chunk;
+#[cfg(feature = "client")]
 use sunrise_protocol::packets::play::{self, Clientbound as C};
+#[cfg(feature = "client")]
 use sunrise_sim::entities::{ExperienceOrb, ItemEntity};
 
 /// A game with the player standing at 8.5 70 8.5 in a ticking chunk, with the
@@ -30,6 +32,7 @@ pub(crate) fn standing_game<'a>(
     game
 }
 
+#[cfg(feature = "client")]
 fn server_sound(game: &mut sunrise_gameplay::game::ServerGame<'_>, event: &str) -> (f32, f32) {
     let heard = std::mem::take(&mut game.server.pending_sounds);
     let sound = heard
@@ -39,6 +42,7 @@ fn server_sound(game: &mut sunrise_gameplay::game::ServerGame<'_>, event: &str) 
     (sound.volume, sound.pitch)
 }
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use crate::game::client_side::item_entities_client::thrown_items_tests::sound;
 
@@ -106,6 +110,7 @@ fn a_death_scatter_takes_the_throwers_random_not_the_levels() {
 /// `ClientPacketListener.handleTakeItemEntity` pitches the pickup from the
 /// client's own random; `GiveCommand.giveItem` uses the player's. Neither is
 /// the level's, which random ticks draw from.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_pickup_pitch_is_not_drawn_from_the_levels_random() {
@@ -174,6 +179,7 @@ fn a_pickup_pitch_is_not_drawn_from_the_levels_random() {
     });
 }
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use crate::game::client_side::item_entities_client::thrown_items_tests::with_remote_game;
 
@@ -181,6 +187,7 @@ pub(crate) use crate::game::client_side::item_entities_client::thrown_items_test
 /// an orb's pickup from its own random (`ClientPacketListener.random`), so a
 /// pickup never draws the level's stream, which its particles and ambient
 /// sounds share.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_pickup_sound_takes_the_listeners_random() {
@@ -225,6 +232,7 @@ fn a_client_pickup_sound_takes_the_listeners_random() {
 
 /// `ClientPacketListener.handleTakeItemEntity` shrinks an item's stack by the amount taken and
 /// removes the entity only once it is empty, so a survivor or a replacement stays in view.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_take_shrinks_an_item_and_removes_it_only_when_empty() {
@@ -264,6 +272,7 @@ fn a_client_take_shrinks_an_item_and_removes_it_only_when_empty() {
 
 /// `Entity.lavaHurt` pitches the burn sound from the item's own random, the
 /// one its constructor drew from.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_burning_items_sound_is_not_drawn_from_the_levels_random() {
@@ -298,4 +307,5 @@ fn a_burning_items_sound_is_not_drawn_from_the_levels_random() {
     );
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

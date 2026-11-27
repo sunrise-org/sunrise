@@ -6,6 +6,7 @@ pub use sunrise_gameplay::game::server_side::entity_server::taken_pass_tests::{
 };
 
 /// Storage adapters for the same production lifecycle walk across entity kinds.
+#[cfg(feature = "client")]
 pub(crate) struct LifecycleFixture {
     pub seed: fn(&mut sunrise_gameplay::game::ServerGame<'_>, &[(u32, [f64; 3])]),
     pub ids: fn(&sunrise_gameplay::game::ServerGame<'_>) -> Vec<u32>,
@@ -14,11 +15,13 @@ pub(crate) struct LifecycleFixture {
     pub remote: Option<RemoteLifecycle>,
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct RemoteLifecycle {
     pub prepare: fn(&mut sunrise_client_gameplay::game::ClientGame<'_>),
     pub apply: fn(&mut sunrise_client_gameplay::game::ClientGame<'_>, u32, u32),
 }
 
+#[cfg(feature = "client")]
 impl LifecycleFixture {
     /// Adapters seed owners and read ordered identities; all exchanges and
     /// removals run through production entry points, never a substitute model.
@@ -146,6 +149,7 @@ impl LifecycleFixture {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn run_remote_lifecycle(
     seed: fn(&mut sunrise_client_gameplay::game::ClientGame<'_>, &[(u32, [f64; 3])]),
     ids: fn(&sunrise_client_gameplay::game::ClientGame<'_>) -> Vec<u32>,
@@ -183,6 +187,7 @@ fn lifecycle_scratch_is_removed_when_an_assertion_unwinds() {
     assert!(!path.exists());
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn lifecycle_fixture_walks_fangs_owners() {
@@ -201,6 +206,7 @@ fn lifecycle_fixture_walks_fangs_owners() {
     .run();
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn lifecycle_fixture_walks_other_owners() {

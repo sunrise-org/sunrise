@@ -2,6 +2,7 @@
 //! answers `SUCCESS_SERVER` for it, so `Mob.interact` posts `ENTITY_INTERACT` with the
 //! player as its source, at the mob. The offspring is `getBreedOffspring(level, this)`,
 //! so a mooshroom's 1-in-1024 colour flip is rolled with the parent as its own mate.
+#![cfg(feature = "client")]
 use sunrise_core::geometry::Vec3;
 use sunrise_core::random::{LegacyRandom, RandomSource};
 use sunrise_gameplay_common::game::InteractTarget;

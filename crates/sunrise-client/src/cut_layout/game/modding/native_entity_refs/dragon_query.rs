@@ -8,6 +8,7 @@ use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCo
 
 use sunrise_gameplay_common::game::native_living_body::NativeLivingBodyGameExt6 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 
 #[cfg(test)]
@@ -419,6 +420,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_lists_the_dragon_and_its_parts_in_a_box() {

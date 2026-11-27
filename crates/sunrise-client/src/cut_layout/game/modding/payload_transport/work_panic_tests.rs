@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use mod_api::{
     BlockUpdateFlags, Hooks, IPayloadContext, IPayloadHandler, ModEntry, PayloadBytes,
     PayloadContextError, PayloadHandleError, PayloadId, PayloadWork, Registrar, TransactionError,

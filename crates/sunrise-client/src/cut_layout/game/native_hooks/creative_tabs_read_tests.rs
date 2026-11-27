@@ -1,4 +1,5 @@
 //! Client item-model lighting queries.
+#![cfg(feature = "client")]
 
 /// A block item's model is lit from the side, a flat item's from the front.
 #[test]

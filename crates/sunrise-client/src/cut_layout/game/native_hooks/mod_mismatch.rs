@@ -3,8 +3,8 @@
 pub(crate) mod tests {
     use mod_api::{Hooks, HostSide, ModEntry, ModMismatchEvent};
     use std::sync::{Arc, Mutex};
-    use sunrise_client_gameplay::game::native_hooks::mod_mismatch::GameHooks;
     use sunrise_gameplay_common::game::execution_role;
+    use sunrise_gameplay_common::game::native_hooks::mod_mismatch::GameHooks;
     use sunrise_gameplay_common::game::native_hooks::mod_mismatch::level_mods;
 
     #[test]

@@ -1,5 +1,6 @@
 //! tools/test_block_entity_item_geometry_parity.py: the items campfires, suspicious sand
 //! and gravel, shelves and vaults hand to the item renderer, case by case.
+#![cfg(feature = "client")]
 use std::sync::Arc;
 use sunrise_assets::item_model::DisplayContext;
 use sunrise_items::items::ItemStack;

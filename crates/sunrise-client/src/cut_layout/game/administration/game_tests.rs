@@ -44,7 +44,7 @@ pub(crate) mod tests {
                 .expect("set SUNRISE_TEST_RESOURCES to prepared resources"),
         );
         let settings = Settings::default();
-        let mut loaded = if menu {
+        let loaded = if menu {
             load_resources_skip_lang(
                 sunrise_assets::resource_source::ResourceRoot::directory(root.clone()),
                 Vec::new(),
@@ -72,7 +72,8 @@ pub(crate) mod tests {
             )
             .unwrap()
         };
-        if let Some(rest) = loaded.rest_loader.take() {
+        #[cfg(feature = "client")]
+        if let Some(rest) = loaded.rest_loader {
             rest.finish().unwrap();
         }
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();

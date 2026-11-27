@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 #![cfg(test)]
 use mod_api::{BiomeKey, BiomeKeyError, DataMap, DataMapError, Tag};
 

@@ -1,6 +1,7 @@
 //! `register_entity_renderers` for primed TNT (#1296): a renderer registered for
 //! `minecraft:tnt` draws in place of the primed TNT cube, reading the TNT fuse; with no
 //! renderer the family's own geometry is unchanged; an `Err` leaves its cube for just that draw.
+#![cfg(feature = "client")]
 use mod_api::{
     BlockEntityDrawContext, EntityRenderState, EntityRenderer, Hooks, RegisterEntityRenderersEvent,
     RegistrationContext,

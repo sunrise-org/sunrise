@@ -606,9 +606,12 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     pub(crate) const DISPENSER: BlockPos = BlockPos::new(POS.x - 1, POS.y, POS.z);
+    #[cfg(feature = "client")]
     pub(crate) const DISPENSER_SLOT: (i32, i32, i32) = (DISPENSER.x, DISPENSER.y, DISPENSER.z);
 
+    #[cfg(feature = "client")]
     pub(crate) fn place_dispenser(
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
     ) -> BlockStateId {

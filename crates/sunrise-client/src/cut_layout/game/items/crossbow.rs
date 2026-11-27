@@ -1,13 +1,18 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_items::items::ItemStack;
 #[cfg(test)]
 pub(crate) mod tests {
 
+    #[cfg(feature = "client")]
     use super::*;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::crossbow_common::{ARROW, CROSSBOW};
 
+    #[cfg(feature = "client")]
     pub(crate) use crate::game::client_side::crossbow_client::tests::game_with_player;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_refused_crossbow_shot_keeps_its_loaded_projectiles() {
@@ -46,6 +51,7 @@ pub(crate) mod tests {
     /// for the weapon an arrow is fired from, bow or crossbow, so a Flame
     /// crossbow shoots burning arrows: Flame's `Ignite(constant(100))` is 100
     /// seconds, 2000 ticks, on every arrow of a Multishot volley (#10482).
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_flame_crossbow_shoots_burning_arrows() {

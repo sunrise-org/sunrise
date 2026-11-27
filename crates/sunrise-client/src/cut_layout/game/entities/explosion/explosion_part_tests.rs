@@ -7,12 +7,12 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicI32, Ordering},
 };
-use sunrise_client_gameplay::game::native_hooks::explosion_resistance::ExplosionResistanceGameExt1;
 use sunrise_core::geometry::Vec3;
 use sunrise_core::position::BlockPos;
 use sunrise_core::random::LegacyRandom;
 use sunrise_gameplay::game::server_side::explosion::BlockInteraction;
 use sunrise_gameplay_common::game::GameGameExt1;
+use sunrise_gameplay_common::game::native_hooks::explosion_resistance::ExplosionResistanceGameExt1;
 
 #[derive(Clone)]
 struct Xp(Arc<AtomicI32>);

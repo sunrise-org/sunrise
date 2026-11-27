@@ -220,8 +220,11 @@ fn build_command(
     let built = package
         .is_native()
         .then(|| {
+            let bundle = dev::project_bundle(root, &package)?;
+            let cargo =
+                sunrise_native_build::api::Project::read(&bundle).map_err(|e| e.to_string())?;
             dev::build(
-                root,
+                &cargo,
                 &package,
                 &with,
                 update_lock,

@@ -198,3 +198,29 @@ the full list.
   pipeline.
 - **Tests:** `pack_post::tests::a_sampler_of_another_class_than_its_image_refuses_the_program`
   (`sunrise-render-shaderpack`).
+
+## D-10: what `indirect.<pass>` names, and what a key or counts that can't run do
+
+- **Open point:** spec rev 1, 3.2, line 398 gives `indirect.<pass>` = `<ssbo index> <byte offset>`, "read the compute
+  dispatch size (a `uvec3`) from an SSBO", and line 104 points there from the work-group counts of 1.3. It doesn't say
+  which compute shader `<pass>` names when a program has several (`<program>.csh`, `<program>_a.csh` ..., line 98), and
+  says nothing of a value that is malformed, names a buffer the pack doesn't declare (6.5, line 973) or an offset the
+  counts don't fit at, nor of counts the device can't dispatch. It is not one of section 9's open questions.
+- **Decision:** `<pass>` is one compute shader's file name without `.csh`, in the folder being loaded: `composite`
+  names `composite.csh` only, `composite_a` names `composite_a.csh`. Its counts are the three 4-byte words at the
+  offset, read as the shader is about to run, after every earlier pass of the frame; its `workGroups` and
+  `workGroupsRender` are not read or checked. A value that is not two unsigned 32-bit integers, a buffer the pack doesn't
+  declare, an offset that is not a multiple of 4, or one where the three words end past a fixed-size buffer
+  (`<bytes>` or `<bytes> <file>`) skips that compute shader, with a note naming the key; the rest of the program
+  and pack loads. A buffer sized by the render size is checked as the shader runs: counts that end past it, or with
+  one over the device's `max_compute_workgroups_per_dimension`, run no work group. Zero in any count runs none. A key
+  naming no compute shader of the folder does nothing.
+- **Reason:** naming each shader by its own name lets every compute shader of a program have its own counts, and a
+  key for the unsuffixed name reads the same under either reading of line 98. The direct path already does not run a
+  `workGroupsRender` dispatch over the device's limit; the indirect one matches it, and the check happens on the GPU
+  because the counts only exist there. A shader skipped for a key it can't honour runs nothing, rather than a
+  per-pixel default dispatch the pack never asked for. Multiples of 4: the counts are `uint`s, and wgpu takes an
+  indirect dispatch only at a 4-byte aligned offset. A key naming no shader gets no note because a folder is loaded
+  on its own: the key may name another dimension folder's shader.
+- **Tests:** `post::indirect_tests` (`sunrise-shaders`) and the daily
+  `gfx::pack_post::indirect_dispatch_tests` (`sunrise-client-render`).

@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use mod_api::{ClientHost, Text, TextAlign, TextLayoutSpec, VisualTextCharacter};
 
 fn retain_visual(host: &dyn ClientHost, text: &Text) -> Vec<VisualTextCharacter> {

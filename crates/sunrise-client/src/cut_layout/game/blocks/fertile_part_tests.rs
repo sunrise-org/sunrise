@@ -1,5 +1,6 @@
 //! A farmland part answers `is_fertile` and `can_be_hydrated` (`IBlockExtension.isFertile`,
 //! `canBeHydrated`) through the game's level, on an authoritative server only.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{BlockPart, CanBeHydratedEvent, Hooks, IsFertileEvent, LevelHost, Registrar};
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;

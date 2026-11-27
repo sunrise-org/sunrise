@@ -1,6 +1,7 @@
 //! `on_block_state_change` heard by a block Part at the end of `Level.setBlock`: after the
 //! neighbours' shapes settled, where `block_changed` hears the write before them, and on a
 //! client for each block the server sends and each write of a piston's replay.
+#![cfg(feature = "client")]
 use mod_api::{
     BlockChangedEvent, BlockPart, BlockState, BlockUpdateFlags, Hooks, LevelHost, LevelSide,
     OnBlockStateChangeEvent, Registrar,

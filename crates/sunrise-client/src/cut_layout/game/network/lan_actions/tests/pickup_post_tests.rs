@@ -241,6 +241,7 @@ pub(crate) fn host_case(
     (notices, ground(game, id), first)
 }
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use sunrise_client_gameplay::game::client_side::lan_actions_client::pickups::pickup_post_tests::host_animations;
 

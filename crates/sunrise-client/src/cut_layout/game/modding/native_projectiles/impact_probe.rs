@@ -19,6 +19,7 @@ pub(crate) enum Action {
     Allow,
     SaveOnImpact,
     ReadSectionPosition,
+    #[cfg(feature = "client")]
     ClearBlockOnImpact,
     ClearBlockOnShoot([i32; 3]),
     Cancel,
@@ -96,6 +97,7 @@ impl Hooks for Probe {
                 assert!(host.commands().run_command("save-all flush"));
                 Flow::Cancel
             }
+            #[cfg(feature = "client")]
             Action::ClearBlockOnImpact => {
                 let level = host.level(event.dimension).unwrap();
                 assert!(level.remove_block(host, event.block, false));

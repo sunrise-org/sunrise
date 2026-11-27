@@ -1,20 +1,33 @@
+#[cfg(feature = "client")]
 use crate::game::client_side::potions::cloud_water_tests::offset_coord;
+#[cfg(feature = "client")]
 use crate::game::client_side::potions::cloud_water_tests::parse_double_bits;
+#[cfg(feature = "client")]
 use crate::game::client_side::potions::cloud_water_tests::parse_motion_bits;
+#[cfg(feature = "client")]
 use crate::game::client_side::potions::cloud_water_tests::read_witness;
+#[cfg(feature = "client")]
 use serde_json::Value;
+#[cfg(feature = "client")]
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
 use sunrise_core::position::ChunkPos;
+#[cfg(feature = "client")]
 use sunrise_gameplay::game::commands::data::DataRef;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::GameGameExt1;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::dragon_common::Breath;
+#[cfg(feature = "client")]
 use sunrise_sim::motion::PlayerMotion;
+#[cfg(feature = "client")]
 use {
     sunrise_gameplay::game::native_entity_refs::tests::bind_local_player,
     sunrise_gameplay::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood,
     sunrise_gameplay::game::native_entity_refs::tests::with_game,
 };
 
+#[cfg(feature = "client")]
 pub(crate) fn run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_it() {
     let witness = read_witness();
     let witness: Value = serde_json::from_str(&witness).unwrap();
@@ -204,6 +217,8 @@ pub(crate) fn run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;

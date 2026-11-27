@@ -315,6 +315,10 @@ jobs:
             with self.assertRaisesRegex(AssertionError, "checkout"):
                 self.test_light_runners_take_main_code_only()
 
+    def test_the_mojang_republish_check_runs_main_s_script_whatever_ref_is_dispatched(self):
+        check = dict(jobs(workflow(WORKFLOWS / "mojang-republish.yml")))["check"]
+        self.assertEqual([step.get("with", {}).get("ref") for step in checkouts(check)], ["main"])
+
     def test_no_secret_or_writing_token_on_our_runners(self):
         for where, _, document, job, _, pools in routed():
             self.assertNotIn("secrets.", json.dumps(job), where)
@@ -384,7 +388,7 @@ jobs:
             def job(event, head=None):
                 path = home / "event.json"
                 path.write_text(json.dumps({"pull_request": {"head": {"repo": {"full_name": head}}}}))
-                return subprocess.run(["bash", str(hook)], capture_output=True, text=True, env={
+                return subprocess.run([BASH, str(hook)], capture_output=True, text=True, env={
                     "PATH": os.environ["PATH"], "GITHUB_EVENT_NAME": event, "GITHUB_EVENT_PATH": str(path),
                     "GITHUB_REPOSITORY": "sunrise-org/sunrise"})
 
@@ -405,7 +409,7 @@ jobs:
             du = home / "bin/du"
             du.write_text("#!/bin/sh\nexit 1\n")
             du.chmod(0o755)
-            job = subprocess.run(["bash", str(ROOT / "tools/ci/job-started.sh")], capture_output=True, text=True, env={
+            job = subprocess.run([BASH, str(ROOT / "tools/ci/job-started.sh")], capture_output=True, text=True, env={
                 "PATH": f"{home / 'bin'}{os.pathsep}{os.environ['PATH']}", "GITHUB_EVENT_NAME": "push",
                 "GITHUB_WORKSPACE": str(home / "workspace")})
             self.assertEqual(job.returncode, 0, job.stderr)

@@ -1,5 +1,6 @@
 //! A client start publishes its models only once the world-rest worker it started is joined, so
 //! the renderer table never reads the rest tables before they exist (#1377).
+#![cfg(feature = "client")]
 
 #[allow(unused_imports)]
 pub(crate) use crate::game::client_side::initial_client_models_tests_client::with_loading_client;

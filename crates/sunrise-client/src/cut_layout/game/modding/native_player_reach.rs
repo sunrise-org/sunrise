@@ -10,6 +10,7 @@ mod tests {
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
     use sunrise_gameplay_common::game::native_player_reach::NativePlayerReachGameExt1;
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1;
     use sunrise_items::items::ItemStack;
     use sunrise_sim::mobs::Mob;
@@ -184,6 +185,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn client_reach_uses_predicted_eyes_and_the_tracked_targets_box() {

@@ -9,11 +9,13 @@ use sunrise_core::geometry::Vec3;
 use sunrise_level::chunk::Chunk;
 use sunrise_protocol::connection::Pipe;
 use sunrise_sim::motion::PlayerMotion;
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_client_game,
     sunrise_gameplay_common::game::Hit,
 };
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn stopping_a_retained_client_dig_aborts_only_once() {

@@ -5,6 +5,7 @@ pub(crate) mod current_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::client_side::fangs_client::fang_crit;
     use sunrise_core::random::LegacyRandom;
     use sunrise_gameplay_common::game::fangs_common::fang_attack_pitch;
@@ -51,6 +52,7 @@ pub(crate) mod tests {
         assert!((0.85..1.05).contains(&pitch));
     }
 
+    #[cfg(feature = "client")]
     #[test]
     fn fang_crit_sits_above_the_jaws() {
         // Java Random seed 1, the first crit of the twelve. The y is

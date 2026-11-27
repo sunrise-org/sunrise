@@ -1,13 +1,21 @@
 #![cfg(test)]
 #[cfg(test)]
 mod player_heart_type_tests {
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
     use mod_api::client::hud_layout::HeartKind;
-    use mod_api::{ClientHost, Hooks, ModEntry, PlayerHeartTypeEvent};
+    #[cfg(feature = "client")]
+    use mod_api::{ClientHost, Hooks, PlayerHeartTypeEvent};
+    #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
+    #[cfg(feature = "client")]
     use std::sync::{Arc, Mutex};
 
     /// Draws frozen hearts for normal ones and withered for frozen ones, logging each pick.
+    #[cfg(feature = "client")]
     struct Swap(Arc<Mutex<Vec<HeartKind>>>);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Swap {
         fn player_heart_type(&self, _: &mut dyn ClientHost, event: &mut PlayerHeartTypeEvent) {
@@ -20,6 +28,7 @@ mod player_heart_type_tests {
         }
     }
 
+    #[cfg(feature = "client")]
     fn add_player(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) {
         let at = sunrise_core::geometry::Vec3::ZERO;
         game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at).unwrap());
@@ -27,6 +36,7 @@ mod player_heart_type_tests {
 
     /// `PlayerHeartTypeEvent`: the mod gets vanilla's pick and its answer is drawn; without a
     /// listener the pick is vanilla's.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_mod_changes_the_health_bars_hearts() {

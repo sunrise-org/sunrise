@@ -1,23 +1,33 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_core::geometry::Aabb;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 #[cfg(test)]
 pub(crate) mod pass_tests {
+    #[cfg(feature = "client")]
     use super::*;
+    #[cfg(feature = "client")]
     use sunrise_client::mobs::Mob;
+    #[cfg(feature = "client")]
     use sunrise_core::random::RandomSource;
+    #[cfg(feature = "client")]
     use sunrise_core::{geometry::Vec3, random::LegacyRandom};
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::potent_sulfur_common::PassMobs;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::potent_sulfur::nearby_living_area;
 
     /// The mobs whose box meets `area`, by walking them all.
+    #[cfg(feature = "client")]
     fn scan(game: &sunrise_gameplay::game::ServerGame<'_>, area: Aabb) -> Vec<u32> {
         (0..game.mobs.len() as u32)
             .filter(|&j| game.mobs[j as usize].bounds().intersects(area))
             .collect()
     }
     /// The same from the pass's grid.
+    #[cfg(feature = "client")]
     fn from_grid(game: &mut sunrise_gameplay::game::ServerGame<'_>, area: Aabb) -> Vec<u32> {
         let mut near = Vec::new();
         assert!(
@@ -30,6 +40,7 @@ pub(crate) mod pass_tests {
 
     /// A nausea listener can change another mob's spatial membership. The next
     /// geyser in the same pass must see that write, not bless the old grid.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn nausea_listener_moving_a_mob_invalidates_the_pass_grid() {
@@ -115,6 +126,7 @@ pub(crate) mod pass_tests {
 
     /// The grid of a block entity pass finds every mob a scan finds, in the
     /// same order, however the mob list changed between two geysers.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_pass_grid_finds_what_a_scan_finds() {

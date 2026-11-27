@@ -18,6 +18,7 @@
 pub mod construction;
 pub mod execution;
 mod image_formats;
+pub mod indirect;
 mod mod_link;
 pub mod mod_pack;
 mod packed;

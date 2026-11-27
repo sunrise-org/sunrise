@@ -4,6 +4,7 @@ use sunrise_protocol::connection::Connection;
 use sunrise_protocol::packets::play::Serverbound as S;
 
 /// The move packets the client sent before a fence, as (kind, yaw, pitch).
+#[cfg(feature = "client")]
 pub(crate) fn sent_moves(
     game: &sunrise_client_gameplay::game::ClientGame<'_>,
     server: &mut Connection,
@@ -24,6 +25,7 @@ pub(crate) fn sent_moves(
 }
 
 /// How many packets of any kind the client sent before a fence.
+#[cfg(feature = "client")]
 pub(crate) fn sent_packets(
     game: &sunrise_client_gameplay::game::ClientGame<'_>,
     server: &mut Connection,

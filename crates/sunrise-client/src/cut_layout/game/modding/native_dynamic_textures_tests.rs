@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 #![cfg(test)]
 //! A client mod's dynamic textures (`ClientRenderClientHost::create_dynamic_texture`): one GPU
 //! texture each, drawn by `GuiCanvas::texture` on the real HUD pipeline, changed by region

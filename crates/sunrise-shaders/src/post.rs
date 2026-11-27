@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 use crate::config::{self, Config};
 use crate::custom::Custom;
 use crate::{
-    ComputeProgram, eval_condition, preprocess, translate_composite, translate_compute,
-    translate_gbuffers, translate_shadow,
+    ComputeProgram, eval_condition, preprocess, translate_composite, translate_gbuffers,
+    translate_shadow,
 };
 use crate::{GbuffersInputs, Macros, Pack, Preprocessed, Program, Properties, Target};
 
@@ -310,6 +310,54 @@ impl BufferSize {
 
     /// The largest side a buffer may have, the size every device takes for a 2D texture.
     pub const MAX: u32 = 8192;
+}
+
+/// `indirect.<pass>` (spec 3.2): the compute shader `<pass>` takes its work-group counts, three
+/// `uint`s, from storage buffer `buffer` at byte `offset`, as written there when it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Indirect {
+    pub buffer: u32,
+    pub offset: u32,
+}
+
+impl Indirect {
+    /// The bytes the three counts take.
+    pub const BYTES: u64 = 12;
+
+    /// `value` (`<buffer> <byte offset>`) against the pack's `objects`: an error names what is
+    /// wrong with it. A buffer of fixed size must hold the three counts at `offset`; one sized
+    /// by the render size is checked as each frame runs (decision D-10).
+    fn parse(
+        value: &str,
+        objects: &std::collections::BTreeMap<u32, BufferObject>,
+    ) -> Result<Self, String> {
+        let words: Vec<&str> = value.split_whitespace().collect();
+        let [buffer, offset] = words[..] else {
+            return Err("not a buffer object and a byte offset".to_owned());
+        };
+        let (Ok(buffer), Ok(offset)) = (buffer.parse::<u32>(), offset.parse::<u32>()) else {
+            return Err("not a buffer object and a byte offset".to_owned());
+        };
+        let Some(object) = objects.get(&buffer) else {
+            return Err(format!("`bufferObject.{buffer}` is not declared"));
+        };
+        // The counts are 4-byte words, and wgpu reads an indirect dispatch at a multiple of 4.
+        if offset % 4 != 0 {
+            return Err(format!("byte offset {offset} is not a multiple of 4"));
+        }
+        let fixed = match object {
+            BufferObject::Bytes(bytes) | BufferObject::File { bytes, .. } => Some(*bytes),
+            BufferObject::PerPixel { .. } => None,
+        };
+        if let Some(bytes) = fixed
+            && u64::from(offset) + Self::BYTES > bytes
+        {
+            return Err(format!(
+                "the three counts at byte {offset} end past `bufferObject.{buffer}`'s {bytes} bytes"
+            ));
+        }
+        Ok(Self { buffer, offset })
+    }
 }
 
 /// `bufferObject.<n>`: an SSBO's size in bytes, or bytes per pixel of the render size scaled.
@@ -884,7 +932,13 @@ pub fn load_post(
     };
     // One file's work for every size's options, as for the file itself.
     let options = crate::with_options(pack, macros).for_file();
+    // `indirect.<pass>`, by pass, read as each compute shader loads.
+    let mut indirect = std::collections::BTreeMap::new();
     for e in &properties.entries {
+        if let Some(pass) = e.key.strip_prefix("indirect.") {
+            indirect.insert(pass, e.value.as_str());
+            continue;
+        }
         if let Some(n) = e.key.strip_prefix("bufferObject.") {
             match (n.parse(), BufferObject::parse(&e.value)) {
                 (Ok(n), Some(b)) => match buffer_object_file(pack, b) {
@@ -938,6 +992,7 @@ pub fn load_post(
         options,
         geometry: None,
         limits: inputs.interface_limits,
+        indirect,
         post: &mut post,
     };
     for (group, base) in GROUPS {
@@ -1499,6 +1554,8 @@ struct Loader<'a> {
     geometry: Option<crate::GeometryInputs>,
     /// The device's stage interface limits ([`GameInputs::interface_limits`]).
     limits: naga::front::glsl::InterfaceLimits,
+    /// `indirect.<pass>` values by pass, as `properties` holds them.
+    indirect: std::collections::BTreeMap<&'a str, &'a str>,
     post: &'a mut Post,
 }
 
@@ -1836,7 +1893,22 @@ impl Loader<'_> {
             }
             // Conditions read as false, as the other programs' (`load`).
             notes.extend(warnings(&pp));
-            match translate_compute(&pp) {
+            let indirect = match self.indirect.get(name.as_str()) {
+                None => None,
+                Some(value) => match self
+                    .options
+                    .try_expand(value)
+                    .and_then(|v| Indirect::parse(&v, &self.post.buffer_objects))
+                {
+                    Ok(indirect) => Some(indirect),
+                    Err(why) => {
+                        notes.push(format!("`indirect.{name}`: {why}"));
+                        notes.push(format!("{name}: skipped"));
+                        continue;
+                    }
+                },
+            };
+            match crate::translate::translate_compute_with(&pp, indirect) {
                 Ok(program) => {
                     notes.extend(program.notes.iter().map(ToString::to_string));
                     out.push((name, program));
@@ -4150,3 +4222,6 @@ mod material_variant_tests;
 
 #[cfg(test)]
 mod sky_switch_tests;
+
+#[cfg(test)]
+mod indirect_tests;

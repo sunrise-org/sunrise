@@ -1,5 +1,6 @@
 //! The client `BlockPart` tables the fluid mesher reads (#3191), resolved on the client thread:
 //! with no part there are none, and a part's answers land per state, fluid and direction.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{
     BlockPart, ClientHost, Hooks, Registrar, ShouldDisplayFluidOverlayEvent,

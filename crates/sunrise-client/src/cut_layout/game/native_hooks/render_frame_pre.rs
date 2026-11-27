@@ -1,29 +1,38 @@
 #![cfg(test)]
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
     use mod_api::{
-        ClientHost, Hooks, ModEntry, RenderFramePostEvent, RenderFramePreEvent,
-        RenderLevelStageEvent,
+        ClientHost, Hooks, RenderFramePostEvent, RenderFramePreEvent, RenderLevelStageEvent,
     };
-    use std::{
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    #[cfg(feature = "client")]
+    use std::sync::{Arc, Mutex};
+    #[cfg(feature = "client")]
+    use std::time::Duration;
+    #[cfg(feature = "client")]
     use sunrise_client::title::Title;
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::native_hooks::particle_count_tests::frame_scene;
+    #[cfg(feature = "client")]
     use sunrise_sim::clock::FixedStep;
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_client_game,
         sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
     };
 
+    #[cfg(feature = "client")]
     #[derive(Default)]
     struct Heard {
         pub pre: Vec<(f32, f32)>,
         post: Vec<(f32, f32)>,
         stages: Vec<f32>,
     }
+    #[cfg(feature = "client")]
     struct Frames(Arc<Mutex<Heard>>);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Frames {
         fn render_frame_pre(&self, _: &mut dyn ClientHost, event: &mut RenderFramePreEvent) {
@@ -48,6 +57,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn frame_interpolation_matches_draw_and_holds_while_paused_or_frozen() {

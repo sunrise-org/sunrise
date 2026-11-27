@@ -1,7 +1,9 @@
 #![cfg(test)]
 #[cfg(test)]
 mod tests {
-    use mod_api::{FluidDefinition, FluidStateError, FluidTypeProperties, HostBlockStates};
+    #[cfg(feature = "client")]
+    use mod_api::{FluidDefinition, FluidStateError};
+    use mod_api::{FluidTypeProperties, HostBlockStates};
     use sunrise_gameplay_common::game::native_block_states::{
         Arc, BlockRegistry, BlockStateId, FluidState, ItemStack, Registries, StateConstraint,
         StateMatchError, block_registries, description_id, match_state_properties, parse,
@@ -521,6 +523,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn fluid_definitions_and_constraints_use_the_loaded_registry() {
@@ -978,8 +981,11 @@ mod crafting_remainder_tests {
         crate::game::native_block_states::*,
         sunrise_gameplay_common::game::native_block_states::ItemStack,
     };
+    #[cfg(feature = "client")]
     static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    #[cfg(feature = "client")]
     struct Worn;
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl mod_api::ItemPart for Worn {
         fn crafting_remainder(
@@ -1002,7 +1008,9 @@ mod crafting_remainder_tests {
             };
         }
     }
+    #[cfg(feature = "client")]
     struct Empty;
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl mod_api::ItemPart for Empty {
         fn crafting_remainder(
@@ -1014,7 +1022,9 @@ mod crafting_remainder_tests {
             *event.remainder = None;
         }
     }
+    #[cfg(feature = "client")]
     struct DefaultPart;
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl mod_api::ItemPart for DefaultPart {
         fn inventory_tick(
@@ -1024,7 +1034,9 @@ mod crafting_remainder_tests {
         ) {
         }
     }
+    #[cfg(feature = "client")]
     struct RemainderMod;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for RemainderMod {
         fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
@@ -1070,6 +1082,7 @@ mod crafting_remainder_tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn crafting_remainder_part_override_and_default() {

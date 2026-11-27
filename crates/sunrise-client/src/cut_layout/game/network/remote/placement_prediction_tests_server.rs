@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use crate::game::remote::placement_prediction_tests::top_of;
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;

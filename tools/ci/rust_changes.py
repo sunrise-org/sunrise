@@ -191,7 +191,9 @@ def rust_includes():
     scanned = rust_literals()
     # An attribute's `#[` and `path` can be on different lines: also list a line ending in `#[` or holding `path =`
     # and a quote or the end of the line. (An anchored `^ *path` pattern costs git grep half a second.)
-    pattern = r'\binclude(_str|_bytes)?\b|#\[[[:space:]]*path|\bpath[[:space:]]*=[[:space:]]*("|$)|#\[[[:space:]]*$'
+    # POSIX ERE has no word boundary (`\b` is GNU's): a non-identifier character or the line's edge stands for it.
+    pattern = (r'(^|[^[:alnum:]_])include(_str|_bytes)?([^[:alnum:]_]|$)|#\[[[:space:]]*path'
+               r'|(^|[^[:alnum:]_])path[[:space:]]*=[[:space:]]*("|$)|#\[[[:space:]]*$')
     listed = git("grep", "-l", "-z", "-E", pattern, "--", "*.rs")
     if scanned is None or listed.returncode not in (0, 1):
         return None

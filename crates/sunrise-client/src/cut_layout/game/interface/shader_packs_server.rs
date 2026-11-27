@@ -1,16 +1,21 @@
 #![cfg(test)]
 #[cfg(test)]
 pub(crate) mod player_status_tests {
+    #[cfg(feature = "client")]
     use crate::game::client_side::shader_packs::player_status_tests::{
         rain_on_the_player, stand_player,
     };
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game_side;
+    #[cfg(feature = "client")]
     use sunrise_level::effects::EffectInstance;
+    #[cfg(feature = "client")]
     use sunrise_sim::motion::MotionWorld;
 
     /// The player booleans only custom uniforms read follow the window's player (spec 3.4):
     /// `LivingEntity.isAlive`, `Entity.isCurrentlyGlowing` (the Glowing effect fallback),
     /// `Entity.isInLava` and `Entity.isInWaterOrRain`.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn pack_status_follows_the_player() {

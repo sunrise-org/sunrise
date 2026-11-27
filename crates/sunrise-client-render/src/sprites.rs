@@ -30,7 +30,17 @@ impl SpriteAnimation {
     /// Material categories follow the selected colour frame, without colour interpolation.
     pub(crate) fn material_pixels(&self, kind: usize, tick: u64) -> Option<&[u8]> {
         let frames = self.materials[kind].as_ref()?;
-        Some(&frames[self.frame(tick) % frames.len()])
+        Some(&frames[self.material_frame(kind, tick)?])
+    }
+    /// Which frame of its map of `kind` (0 normals, 1 specular) [`Self::material_pixels`] gives
+    /// at `tick`: always the first of a map with one frame.
+    pub(crate) fn material_frame(&self, kind: usize, tick: u64) -> Option<usize> {
+        let frames = self.materials[kind].as_ref()?;
+        Some(self.frame(tick) % frames.len())
+    }
+    #[cfg(test)]
+    pub(crate) fn set_materials(&mut self, materials: [Option<Vec<Vec<u8>>>; 2]) {
+        self.materials = materials.map(|m| m.map(Arc::new));
     }
     /// Polytone's `mode` on this animation, when it has one.
     pub fn mode(&self) -> Option<&sunrise_assets::animation::ClipMode> {

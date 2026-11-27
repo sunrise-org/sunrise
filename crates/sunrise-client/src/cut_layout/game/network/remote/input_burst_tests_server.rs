@@ -1,6 +1,8 @@
 use super::*;
 use crate::game::remote::interaction_event_tests::mapping_press_tests::input_burst_tests::counts;
+#[cfg(feature = "client")]
 use winit::event::MouseButton;
+#[cfg(feature = "client")]
 use winit::keyboard::KeyCode;
 
 /// Click counters are not capped at 1024 entries: 1100 drops, 1100 attack clicks and 1100 hotbar
@@ -76,6 +78,7 @@ fn a_mods_burst_drains_all_clicks_in_one_tick() {
 /// the click's punch; the first drop tells the server of the new slot
 /// (`ensureHasSentCarriedItem`), the swap doesn't. One press of each a tick for twenty ticks acts
 /// once a tick, on its own tick, the drop before the punch.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_players_burst_acts_on_the_next_tick_in_handle_keybinds_order() {

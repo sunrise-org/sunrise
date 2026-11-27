@@ -543,6 +543,7 @@ pub(crate) mod sweep_tests {
     /// A panicking `run_after` callback disables only its owning mod for `entity_inside`,
     /// preserves its completed live write, leaves other mods running on the first and
     /// subsequent sweeps, and queues an error toast naming the panicking mod.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn panicking_mod_callback_disables_only_that_mod_and_queues_error_toast() {

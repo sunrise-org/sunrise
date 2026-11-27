@@ -3,6 +3,7 @@
 //! state's light, an answer above 15 is stored as 15, a bulk replacement and a reload of the
 //! chunk keep or ask again as the cells' states say, and `check_light` and a server's light
 //! update ask again.
+#![cfg(feature = "client")]
 use mod_api::*;
 use std::sync::{
     Arc, Mutex,

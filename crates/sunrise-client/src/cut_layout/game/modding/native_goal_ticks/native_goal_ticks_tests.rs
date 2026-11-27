@@ -675,6 +675,7 @@ fn a_client_copy_registers_no_mod_goals() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_screens_entity_registers_no_mod_goals() {

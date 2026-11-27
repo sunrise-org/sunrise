@@ -1,6 +1,7 @@
 //! `player.sees`, `player.ack_block_changes` and `player.show_block` against real LAN guests,
 //! through the public player handle, with a literal test for each refusal.
 
+#[cfg(feature = "client")]
 use super::native_entity_refs::tests::with_client_game;
 use super::native_guest_turn_tests::with_guests;
 use mod_api::{EntityRef, PlayerRef, PlayerWorldRefusal as Refusal, WorldEpoch};
@@ -233,6 +234,7 @@ fn each_sees_refusal_has_its_own_name() {
 }
 
 /// On a client `sees` answers `Client` (server writes are refused at compile time).
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_cannot_ack_show_or_ask_who_sees() {
@@ -314,6 +316,7 @@ fn latency_reads_what_the_keep_alives_measured() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn player_support_uses_the_footprint_then_the_exact_feet_offset_on_both_sides() {
@@ -450,6 +453,7 @@ fn a_stale_handle_is_refused_latency_hide_level_and_nickname() {
 }
 
 /// A client has no server list to read: all three name the client.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_is_refused_latency_hide_level_and_nickname() {
@@ -461,12 +465,15 @@ fn a_client_is_refused_latency_hide_level_and_nickname() {
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_server::NativeServerGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::piston_push::PistonPushGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;

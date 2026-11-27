@@ -97,3 +97,83 @@ fn matches_the_jdk() {
         assert!(out == zlib[2..zlib.len() - 4], "{name}: raw stream differs");
     }
 }
+
+#[test]
+fn zlib_header_and_adler32_trailer() {
+    let mut deflater = Deflater::new();
+    for input in [b"".as_slice(), b"hello world", &vec![0x42u8; 4096]] {
+        let mut out = Vec::new();
+        deflater.zlib(input, &mut out);
+        assert!(out.len() >= 6);
+        assert_eq!(&out[..2], &[0x78, 0x9c]);
+        let expected_adler = simd_adler32::adler32(&input).to_be_bytes();
+        assert_eq!(&out[out.len() - 4..], &expected_adler);
+    }
+}
+
+#[test]
+fn gzip_header_crc32_and_isize_trailer() {
+    let mut deflater = Deflater::new();
+    for input in [b"".as_slice(), b"Sunrise", &vec![b'a'; 10_000]] {
+        let mut out = Vec::new();
+        deflater.gzip(input, &mut out);
+        assert!(out.len() >= 18);
+        assert_eq!(&out[..10], &super::GZIP_HEADER);
+        let expected_crc = crc32fast::hash(input).to_le_bytes();
+        let expected_isize = (input.len() as u32).to_le_bytes();
+        assert_eq!(&out[out.len() - 8..out.len() - 4], &expected_crc);
+        assert_eq!(&out[out.len() - 4..], &expected_isize);
+    }
+}
+
+#[test]
+fn appends_without_clobbering_prefix() {
+    let mut deflater = Deflater::new();
+    let input = b"prefix-safe-payload";
+
+    let mut zlib_out = vec![0xde, 0xad];
+    deflater.zlib(input, &mut zlib_out);
+    assert_eq!(&zlib_out[..2], &[0xde, 0xad]);
+
+    let mut gzip_out = vec![0xbe, 0xef];
+    deflater.gzip(input, &mut gzip_out);
+    assert_eq!(&gzip_out[..2], &[0xbe, 0xef]);
+
+    let mut raw_out = vec![0xca, 0xfe];
+    deflater.raw(input, &mut raw_out);
+    assert_eq!(&raw_out[..2], &[0xca, 0xfe]);
+}
+
+#[test]
+fn deflater_reuse_is_stateless() {
+    let mut reused = Deflater::new();
+    let mut scratch = Vec::new();
+    reused.zlib(&mixed(), &mut scratch);
+
+    let mut reused_out = Vec::new();
+    reused.zlib(b"after-large-input", &mut reused_out);
+
+    let mut fresh = Deflater::new();
+    let mut fresh_out = Vec::new();
+    fresh.zlib(b"after-large-input", &mut fresh_out);
+
+    assert_eq!(reused_out, fresh_out);
+}
+
+#[test]
+fn incompressible_data_respects_bound() {
+    let mut x: u32 = 0x1234_5678;
+    let data: Vec<u8> = (0..32_768)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect();
+    let mut deflater = Deflater::new();
+    let mut out = Vec::new();
+    deflater.raw(&data, &mut out);
+    assert!(!out.is_empty());
+    assert!(out.len() <= super::bound(data.len()));
+}

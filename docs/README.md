@@ -4,7 +4,7 @@ To play, use [the launcher](https://github.com/sunrise-org/sunrise-launcher/blob
 
 ## Build and run
 
-- [AGENTS.md](../AGENTS.md) and [Architecture](architecture.md): where each part of the code lives, how `Game` is organised, which harness checks which area.
+- [AGENTS.md](../AGENTS.md) and [Architecture](architecture.md): where client, server and shared gameplay live, and which harness checks each area.
 - [How Sunrise is built](how-sunrise-is-built.md): who writes Sunrise, how changes are checked, and what is safe to run.
 - [Release flow](release-flow.md): pull request checks, merging and the automatic Nightly releases that reach players.
 - [Operations](operations.md): running Sunrise by hand when no agent runs and the maintainer's machines are off: merging, releases, offline runners, the mods registry, Kira, the official server, security.

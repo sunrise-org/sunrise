@@ -7,6 +7,7 @@ mod tests {
     /// A client reads its own player's damage cooldown as `LocalPlayer.hurtTo` sets it from
     /// the server's health (20 on a drop, 10 on a rise), its invulnerable time, and a tracked
     /// mob's cooldown from its damage event; an entity it doesn't keep reads None (#5694).
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_reads_its_players_and_a_kept_mobs_damage_timers() {
@@ -95,6 +96,7 @@ mod tests {
 
     use sunrise_sim::mobs::Mob;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_native_mods_data_damage_type_hurts_and_names_the_death() {

@@ -1,6 +1,7 @@
 //! A client reads `Entity.DATA_NO_GRAVITY` (5) for a mob and a dropped item: its own tick's
 //! `isNoGravity` follows the server's flag (#5028). An item's flag can come before its stack
 //! (`DATA_ITEM`, 8), which is what makes a client's item, and it is kept for it.
+#![cfg(feature = "client")]
 use crate::game::server_side::item_entities::thrown_items_tests::with_remote_game;
 use sunrise_protocol::{
     entity_data::{Value, serializer},

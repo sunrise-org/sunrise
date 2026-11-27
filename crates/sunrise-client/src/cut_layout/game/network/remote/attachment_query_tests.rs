@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{AttachmentCodec, AttachmentDescriptor, AttachmentKey, Host};
 use std::sync::{Arc, Mutex};

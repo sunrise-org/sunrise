@@ -1,4 +1,5 @@
 //! End-to-end client receive notices with independent tag values.
+#![cfg(feature = "client")]
 use mod_api::{BlockEntityPart, BlockPart, Hooks, Registrar};
 use std::sync::{Arc, Mutex};
 use sunrise_gameplay_common::game::remote::Tag;

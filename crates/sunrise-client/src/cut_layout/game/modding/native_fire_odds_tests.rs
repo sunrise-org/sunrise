@@ -1,6 +1,7 @@
 //! `fire_odds` answered by a block Part with the asked block's position and face (#3185): the
 //! Part's answer for one face makes the fire beside that face valid, and the other faces keep
 //! vanilla's table.
+#![cfg(feature = "client")]
 #![cfg(test)]
 
 use mod_api::{self, BlockPart, FireOddsEvent, Hooks, LevelSide, Registrar};

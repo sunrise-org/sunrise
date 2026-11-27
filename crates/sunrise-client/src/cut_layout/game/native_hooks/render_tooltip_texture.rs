@@ -1,13 +1,21 @@
 #![cfg(test)]
 #[cfg(test)]
 pub(crate) mod render_tooltip_texture_tests {
-    use mod_api::{ClientHost, Hooks, Identifier, ModEntry, RenderTooltipTextureEvent};
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
+    use mod_api::{ClientHost, Hooks, Identifier, RenderTooltipTextureEvent};
+    #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
+    #[cfg(feature = "client")]
     use sunrise_client::hud::{HudBatch, Rect};
+    #[cfg(feature = "client")]
     use sunrise_items::items::ItemStack;
 
     /// Gives a stick's tooltip the `lobby:gold` style and a text tooltip a red background.
+    #[cfg(feature = "client")]
     struct Gold;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Gold {
         fn render_tooltip_texture(
@@ -30,6 +38,7 @@ pub(crate) mod render_tooltip_texture_tests {
         }
     }
 
+    #[cfg(feature = "client")]
     fn sprite(u0: f32) -> Rect {
         Rect {
             u0,
@@ -40,6 +49,7 @@ pub(crate) mod render_tooltip_texture_tests {
             h: 100,
         }
     }
+    #[cfg(feature = "client")]
     fn drawn(
         game: &sunrise_client_gameplay::game::ClientGame<'_>,
         stack: Option<&ItemStack>,
@@ -48,17 +58,20 @@ pub(crate) mod render_tooltip_texture_tests {
         game.tooltip_box(&mut batch, stack, 40.0, 30.0, 60.0, 8.0);
         batch.vertices.iter().map(|v| (v.uv, v.color)).collect()
     }
+    #[cfg(feature = "client")]
     fn in_sprite(uv: [f32; 2], r: Rect) -> bool {
         (r.u0..=r.u1).contains(&uv[0]) && (r.v0..=r.v1).contains(&uv[1])
     }
 
     /// Vanilla 26.3 `TooltipRenderUtil.extractTooltipBackground` witness recorded by `tools/test_tooltip_display_parity.py`: a stack's `minecraft:tooltip_style` draws exact sprites, bounds, and colours.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "run by tools/test_tooltip_display_parity.py"]
     fn an_items_tooltip_style_draws_its_own_sprites() {
         run_an_items_tooltip_style_draws_its_own_sprites();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_an_items_tooltip_style_draws_its_own_sprites() {
         #[derive(serde::Deserialize)]
         struct Witness {
@@ -186,6 +199,7 @@ pub(crate) mod render_tooltip_texture_tests {
     /// sprites from the GUI atlas, follows the atlas a resource reload restitches, and falls
     /// back to the fills when no pack has it; its colours change the fills; and an unheard
     /// tooltip draws as before.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_mod_gives_a_tooltip_its_own_texture_or_colours() {

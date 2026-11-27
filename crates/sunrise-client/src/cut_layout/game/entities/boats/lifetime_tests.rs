@@ -45,6 +45,7 @@ fn a_bound_boat_keeps_its_registration_through_ticks_until_discard() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_bound_boat_commits_the_driven_client_tick() {
@@ -125,6 +126,7 @@ fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<
     });
 }
 
+#[cfg(feature = "client")]
 fn bound_boat_client_case(tick: impl Fn(&mut sunrise_client_gameplay::game::ClientGame<'_>, i32)) {
     super::super::native_entity_refs::tests::with_client_game(|game| {
         let (client, _server) = sunrise_protocol::connection::Pipe::pair();

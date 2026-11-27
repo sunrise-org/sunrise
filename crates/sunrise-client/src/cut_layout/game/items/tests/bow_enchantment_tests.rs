@@ -3,11 +3,13 @@
 //! is whatever `#minecraft:arrows` lists.
 use sunrise_items::items::ItemStack;
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use crate::game::client_side::use_hand_client::bow_enchantment_tests::game_with_player;
 
 /// The horizontal heading `p` was shot with, in degrees:
 /// `Projectile.shootFromRotation` sends it along `(-sin(yaw), ..., cos(yaw))`.
+#[cfg(feature = "client")]
 pub(crate) fn heading(p: &sunrise_sim::projectiles::Projectile) -> f32 {
     (-p.velocity.x as f32)
         .atan2(p.velocity.z as f32)
@@ -18,6 +20,7 @@ pub(crate) fn heading(p: &sunrise_sim::projectiles::Projectile) -> f32 {
 /// (`EnchantmentHelper.getPiercingCount`): a bow with Piercing 4 shoots arrows
 /// that pass through four entities. Before, only a crossbow's arrows carried
 /// a pierce level, so a piercing bow's arrow stopped at the first mob.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_piercing_bow_shoots_arrows_that_pierce_their_level() {
@@ -43,6 +46,7 @@ fn a_piercing_bow_shoots_arrows_that_pierce_their_level() {
 /// and +10 degrees in the order they are shot. `useAmmo` takes one arrow and
 /// marks the extra ones `INTANGIBLE_PROJECTILE`, so only the first is the
 /// player's to take. Before, a multishot bow shot one arrow.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_multishot_bow_fires_three_arrows_ten_degrees_apart() {

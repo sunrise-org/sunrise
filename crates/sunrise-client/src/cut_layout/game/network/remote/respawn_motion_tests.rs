@@ -3,6 +3,7 @@
 //! position packet's `DELTA_*` relatives). A player standing in a Nether portal so arrives still falling
 //! by a tick's gravity and lands on its first move; a new player without it reported `on_ground`
 //! false on that move and Grim flagged it (GroundSpoof). A death's packet (`resetPos`) keeps none.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use sunrise_core::geometry::Vec3;
 use sunrise_protocol::packets::play::{self, Clientbound as C};

@@ -1,15 +1,23 @@
+#[cfg(feature = "client")]
 use mod_api::{
     BlockPart, BlockState, CanSurviveEvent, CanSustainPlantEvent, FenceGateInWallEvent, Hooks,
     LevelSide, MayPlaceOnEvent, Registrar, StateForPlacementEvent,
 };
+#[cfg(feature = "client")]
 use std::sync::Arc;
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::GameGameExt1;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::api_values::TryIntoApi;
-use sunrise_gameplay_common::game::remote::dry_level::{DryLevel, DryLevelGameExt2 as _};
-use sunrise_gameplay_common::game::remote::{
-    BlockEntity, BlockStateId, C, Chunk, Holder, ItemStack, Tag, play,
-};
+use sunrise_gameplay_common::game::remote::BlockStateId;
+use sunrise_gameplay_common::game::remote::dry_level::DryLevel;
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::remote::dry_level::DryLevelGameExt2 as _;
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::remote::{BlockEntity, C, Chunk, Holder, ItemStack, Tag, play};
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_game_role_client,
     sunrise_client_gameplay::game::native_connection_groups::ReceivedGroup,
@@ -17,11 +25,14 @@ use {
 };
 
 /// Every answer below is a client's: the hooks are asked by its placement prediction.
+#[cfg(feature = "client")]
 pub(crate) fn client(level: LevelSide<'_>) {
     assert!(matches!(level, LevelSide::Client(_)));
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct Refuse;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Refuse {
     fn state_for_placement(
@@ -34,7 +45,9 @@ impl BlockPart for Refuse {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct Fall;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Fall {
     fn can_survive(&self, level: LevelSide<'_>, _: &mut CanSurviveEvent) -> Option<bool> {
@@ -43,7 +56,9 @@ impl BlockPart for Fall {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct Soil;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Soil {
     fn can_sustain_plant(
@@ -56,7 +71,9 @@ impl BlockPart for Soil {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct Hardy;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Hardy {
     fn may_place_on(&self, level: LevelSide<'_>, _: &mut MayPlaceOnEvent) -> Option<bool> {
@@ -65,7 +82,9 @@ impl BlockPart for Hardy {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct PlaceMod;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for PlaceMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -82,6 +101,7 @@ impl Hooks for PlaceMod {
 
 /// `test` on a survival-mode client game with `mods`' parts, connected to a server and with
 /// chunk (0, 0) loaded and empty.
+#[cfg(feature = "client")]
 pub(crate) fn on_a_client(
     mods: mod_api::Mods,
     test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
@@ -106,6 +126,7 @@ pub(crate) fn on_a_client(
 }
 
 /// The click at the top of `[x, 64, z]`.
+#[cfg(feature = "client")]
 pub(crate) fn top_of(x: i32, z: i32) -> sunrise_gameplay_common::game::Hit {
     sunrise_gameplay_common::game::Hit {
         pos: [x, 64, z],
@@ -115,6 +136,7 @@ pub(crate) fn top_of(x: i32, z: i32) -> sunrise_gameplay_common::game::Hit {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn client_placement_prediction_asks_placement_and_survival_parts() {
@@ -144,7 +166,9 @@ fn client_placement_prediction_asks_placement_and_survival_parts() {
     });
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct StorageFacing;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for StorageFacing {
     fn state_for_placement(
@@ -163,7 +187,9 @@ impl BlockPart for StorageFacing {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct StoragePort;
+#[cfg(feature = "client")]
 impl mod_api::ResourceHandler<mod_api::ItemResource> for StoragePort {
     fn size(&self, _: &mut dyn mod_api::ServerHost) -> usize {
         0
@@ -204,7 +230,9 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for StoragePort {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct PlacementStorageMod;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for PlacementStorageMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -219,6 +247,7 @@ impl Hooks for PlacementStorageMod {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn placement_and_prediction_choose_from_their_local_item_providers() {
@@ -385,7 +414,9 @@ fn placement_and_prediction_choose_from_their_local_item_providers() {
     });
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct BedInstead;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for BedInstead {
     fn state_for_placement(
@@ -400,7 +431,9 @@ impl BlockPart for BedInstead {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct BedPlacementMod;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for BedPlacementMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -409,6 +442,7 @@ impl Hooks for BedPlacementMod {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn predicts_the_selected_beds_component_adjusted_head() {
@@ -452,7 +486,9 @@ fn predicts_the_selected_beds_component_adjusted_head() {
 }
 
 /// A dandelion that stands while a cobblestone is east of it, as its level shows it.
+#[cfg(feature = "client")]
 pub(crate) struct BesideCobblestone;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for BesideCobblestone {
     fn can_survive(&self, level: LevelSide<'_>, event: &mut CanSurviveEvent) -> Option<bool> {
@@ -464,7 +500,9 @@ impl BlockPart for BesideCobblestone {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct NeighbourMod;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for NeighbourMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -473,15 +511,18 @@ impl Hooks for NeighbourMod {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) type BreakRead = (
     sunrise_core::position::BlockPos,
     Option<BlockState>,
     Option<BlockState>,
 );
 
+#[cfg(feature = "client")]
 #[derive(Clone, Default)]
 pub(crate) struct BreakObserver(pub(in crate::game) Arc<std::sync::Mutex<Vec<BreakRead>>>);
 
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for BreakObserver {
     fn on_block_state_change(
@@ -502,7 +543,9 @@ impl BlockPart for BreakObserver {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct BreakMod(pub(crate) BreakObserver);
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for BreakMod {
     fn register(&self, r: &mut dyn Registrar, context: &mod_api::RegistrationContext) {
@@ -517,6 +560,7 @@ impl Hooks for BreakMod {
 /// A placement's shape update asks a neighbour's survival part over the prediction's own
 /// writes: the dandelion on stone, which its template pops off, stands because its part sees
 /// the cobblestone just predicted beside it.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_neighbour_s_survival_part_reads_the_prediction_s_blocks() {
@@ -550,6 +594,7 @@ fn a_neighbour_s_survival_part_reads_the_prediction_s_blocks() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_predicted_break_reconciles_its_neighbour_s_shape_change() {
@@ -604,6 +649,7 @@ fn a_predicted_break_reconciles_its_neighbour_s_shape_change() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
@@ -752,10 +798,13 @@ fn a_denied_break_restores_wall_sign_text_and_synced_attachments() {
     });
 }
 
+#[cfg(feature = "client")]
 pub(crate) static GUIDE_ASKS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(feature = "client")]
 pub(crate) struct Counted;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Counted {
     fn state_for_placement(
@@ -769,7 +818,9 @@ impl BlockPart for Counted {
 }
 
 /// A dandelion's survival, asked from a neighbour's shape update.
+#[cfg(feature = "client")]
 pub(crate) struct CountedSurvival;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for CountedSurvival {
     fn can_survive(&self, _: LevelSide<'_>, _: &mut CanSurviveEvent) -> Option<bool> {
@@ -778,7 +829,9 @@ impl BlockPart for CountedSurvival {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct CountedWall;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for CountedWall {
     fn fence_gate_in_wall(
@@ -792,7 +845,9 @@ impl BlockPart for CountedWall {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct GuideMod;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for GuideMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -807,6 +862,7 @@ impl Hooks for GuideMod {
 
 /// The controller guide's look at what a click would do asks no placement, survival or
 /// fence-gate wall-height part; the click does.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn the_guide_s_look_asks_no_placement_or_survival_part_and_the_click_does() {
@@ -888,11 +944,15 @@ fn the_guide_s_look_asks_no_placement_or_survival_part_and_the_click_does() {
 }
 
 /// The comparator east of the clicked block's spot and what its part read of its signal.
+#[cfg(feature = "client")]
 pub(crate) const COMPARATOR: [i32; 3] = [2, 65, 0];
+#[cfg(feature = "client")]
 pub(crate) static COMPARATOR_READS: std::sync::Mutex<Vec<Option<i32>>> =
     std::sync::Mutex::new(Vec::new());
 
+#[cfg(feature = "client")]
 pub(crate) struct ReadsComparator;
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for ReadsComparator {
     fn can_survive(&self, level: LevelSide<'_>, _: &mut CanSurviveEvent) -> Option<bool> {
@@ -905,7 +965,9 @@ impl BlockPart for ReadsComparator {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct ComparatorMod;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for ComparatorMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -916,6 +978,7 @@ impl Hooks for ComparatorMod {
 
 /// A placement part reads a powered comparator's output from the client's own ticks, not from
 /// the prediction's scratch ones: unknown while the client holds none, its value once it does.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_placement_part_reads_comparator_outputs_the_client_holds() {
@@ -964,6 +1027,7 @@ fn a_placement_part_reads_comparator_outputs_the_client_holds() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_placement_view_hides_block_entity_data_at_replaced_positions() {
@@ -1064,6 +1128,7 @@ fn a_prediction_asks_the_live_level_over_its_writes() {
     assert_eq!(ask(&guess), None);
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn blocks_answer_a_held_item_s_click_on_the_client_as_vanilla() {

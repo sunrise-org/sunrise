@@ -3,9 +3,12 @@
 //! turns it into what `ParticleProvider.createParticle` reads — a block
 //! crumble's block state, a dust transition's colours and scale, a spell's
 //! colour and power, a sculk charge's roll, a vibration's destination.
+#[cfg(feature = "client")]
 use mod_api::client::particles::PositionSource;
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
+use sunrise_level::particle_options::ParticleType;
 use {
     crate::game::resource_load::load_resources, sunrise_gameplay_common::game::execution_role,
     sunrise_gameplay_common::game::launch_options::Options,
@@ -13,7 +16,7 @@ use {
 };
 use {
     sunrise_client::settings::Settings, sunrise_level::chunk::Chunk,
-    sunrise_level::particle_options::ParticleType, sunrise_sim::motion::PlayerMotion,
+    sunrise_sim::motion::PlayerMotion,
 };
 
 pub(crate) fn game<'a>(
@@ -33,7 +36,10 @@ pub(crate) fn game<'a>(
         std::time::Instant::now(),
         false,
         // A window's resources: a headless load parses no models, so it has no particle sprites.
+        #[cfg(feature = "client")]
         crate::game::execution_role::ExecutionRole::Client,
+        #[cfg(not(feature = "client"))]
+        crate::game::execution_role::ExecutionRole::IntegratedServer,
         &Progress::new(),
         &mut |_, _| unreachable!(),
     )
@@ -64,9 +70,11 @@ pub(crate) fn game<'a>(
     game
 }
 
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(crate) use crate::game::client_side::commands_client::world_cmds::particle_command_tests::drawn;
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn particle_options_carry_their_codec_data() {
@@ -116,6 +124,7 @@ fn particle_options_carry_their_codec_data() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn typed_particle_commands_suggest_and_execute_the_decoded_value() {

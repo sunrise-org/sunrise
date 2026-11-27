@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use crate::game::remote::movement_input_tests::Native;
 use crate::game::remote::movement_input_tests::reset_player;
 use crate::game::remote::movement_input_tests::tick;

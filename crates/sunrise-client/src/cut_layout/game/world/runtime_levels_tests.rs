@@ -2030,6 +2030,7 @@ fn a_delete_keeps_references_when_shared_level_metadata_is_unreadable() {
 /// Single player: the integrated server and the window's client share the process's table of
 /// levels. A runtime level the server opened, which the client entered and left, stays the
 /// server's: it still unloads, and, opened again, entered and left again, still deletes.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_level_the_player_left_in_single_player_still_unloads_and_deletes() {

@@ -191,6 +191,13 @@ jobs:
         run: >-
           cargo test --locked -p cargo-sunrise-mod --test addon --
           --ignored --exact builds_and_checks_a_native_addon_with_local_libraries
+      # `sunrise-prepare --server` on a source checkout compiles the exporters, so it needs a JDK 25 with `javac`
+      # (crates/sunrise-prepare/src/java.rs); the runners ship none.
+      - uses: actions/setup-java@v4
+        if: inputs.own_sdk
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: Prepare dedicated server resources for the own-sdk tests
         if: inputs.own_sdk
         run: |
@@ -219,19 +226,6 @@ jobs:
         run: >-
           cargo test --locked -p cargo-sunrise-mod --test dependency_identity --
           --ignored --exact a_library_whose_crates_another_mod_changed_is_refused_beside_its_dependent
-      - name: Prepare dedicated server resources for the own-sdk tests
-        if: inputs.own_sdk
-        run: |
-          if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && [ -n "${DYNA_CI_KEEP:-}" ]; then
-            mkdir -p "$DYNA_CI_KEEP/mojang-server" .local
-            ln -sfn "$DYNA_CI_KEEP/mojang-server" .local/server-downloads
-          fi
-          profile="$QS_SCRATCH/server-resources"
-          cargo build --release --locked -p sunrise-prepare
-          preparer="${CARGO_TARGET_DIR:-target}/release/sunrise-prepare"
-          python3 tools/ci/preparation_step.py resource-export "$RUNNER_TEMP/server-prepare.log" \
-            "$preparer" --server --output "$profile"
-          echo "SUNRISE_TEST_SERVER_PROFILE=$profile" >> "$GITHUB_ENV"
       - name: "Two separately built native mods interoperate through c: convention tags"
         if: inputs.own_sdk
         run: >-

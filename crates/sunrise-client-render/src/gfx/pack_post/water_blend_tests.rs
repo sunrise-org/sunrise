@@ -49,6 +49,15 @@ fn files(properties: &str) -> Vec<(String, String)> {
 
 /// The picture of one frame whose translucent terrain is the water quad, then the glass quad.
 fn picture(gpu: &Gpu, properties: &str) -> Vec<[u8; 4]> {
+    picture_with(gpu, properties, sunrise_shaders::Macros::standard()).0
+}
+
+/// [`picture`] of the pack read with `macros`, and the notes on its feature flags.
+pub(super) fn picture_with(
+    gpu: &Gpu,
+    properties: &str,
+    macros: sunrise_shaders::Macros,
+) -> (Vec<[u8; 4]>, Vec<String>) {
     // Water at z = 0, glass at z = 1: the vertex shader passes z on as `glass` and draws both
     // at the same depth.
     let mut positions = Vec::new();
@@ -78,7 +87,7 @@ fn picture(gpu: &Gpu, properties: &str) -> Vec<[u8; 4]> {
     let color = gpu.texture(T::Rgba8Unorm);
     let depth = gpu.texture(T::Depth32Float);
     gpu.clear(&color, &depth, 0.0);
-    let mut post = gpu.load(
+    let (mut post, notes) = gpu.load_with(
         files(properties),
         World {
             atlas: None,
@@ -110,10 +119,11 @@ fn picture(gpu: &Gpu, properties: &str) -> Vec<[u8; 4]> {
             }),
             ..Default::default()
         },
+        macros,
     );
     assert!(post.has_water(), "{:?}", post.notes);
     let hud = HudBatch::scratch(SIZE);
-    gpu.render(
+    let pixels = gpu.render(
         &mut post,
         &color,
         &depth,
@@ -124,11 +134,12 @@ fn picture(gpu: &Gpu, properties: &str) -> Vec<[u8; 4]> {
                 rp.draw(0..12, 0..1);
             }
         },
-    )
+    );
+    (pixels, notes)
 }
 
 /// Every pixel of the left half is `left`, every pixel of the right half `right`.
-fn halves(pixels: &[[u8; 4]], left: [u8; 4], right: [u8; 4], case: &str) {
+pub(super) fn halves(pixels: &[[u8; 4]], left: [u8; 4], right: [u8; 4], case: &str) {
     let width = SIZE[0] as usize;
     assert_eq!(pixels.len(), width * SIZE[1] as usize);
     for (i, &p) in pixels.iter().enumerate() {

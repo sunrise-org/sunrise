@@ -3,10 +3,13 @@
 #[cfg(test)]
 mod tests {
     use super::super::native_guest_turn_tests::{place_host, with_guests};
-    use mod_api::{ChunkRef, EntityReadError, LevelReadError, LevelRef, PlayerRef, WorldEpoch};
+    #[cfg(feature = "client")]
+    use mod_api::EntityReadError;
+    use mod_api::{ChunkRef, LevelReadError, LevelRef, PlayerRef, WorldEpoch};
     use sunrise_gameplay::game::server_side::native_level_players::ControlFlow;
     use sunrise_gameplay_common::game::Dim;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
 
     /// Open the Nether and go back, so it is a parked level of the server.
@@ -147,6 +150,7 @@ mod tests {
 
     /// The players whose tracker holds the entity, in server order: a guest far away, the entity's
     /// own player and a fake player are left out, and a stale handle names nothing.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn entity_trackers_are_the_guests_that_hold_the_entity() {

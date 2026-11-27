@@ -1,4 +1,5 @@
 //! Play-phase `post_effects` lifecycle and pre-login protocol error against 26.3.
+#![cfg(feature = "client")]
 use std::time::{Duration, Instant};
 use sunrise_protocol::{
     connection::Connection,

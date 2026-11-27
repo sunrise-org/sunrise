@@ -1,6 +1,7 @@
 #[path = "refused_entry_tests.rs"]
 mod refused_entry_tests;
 
+#[cfg(feature = "client")]
 use mod_api::__private::reload::ReloadStageError;
 use mod_api::FileToIdConverter;
 use mod_api::{
@@ -15,7 +16,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
-use sunrise_client_gameplay::game::native_hooks::tags_updated::GameHooks;
+use sunrise_gameplay_common::game::native_hooks::tags_updated::GameHooks;
 use {
     sunrise_gameplay::game::native_entity_refs::tests::with_game,
     sunrise_gameplay::game::world_loading::WorldRequest,
@@ -491,6 +492,7 @@ fn dedicated_world_open_publishes_crafting_item_tags() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn missing_original_at_reload_preserves_the_published_data_and_reports_its_owners() {

@@ -4,9 +4,9 @@ use mod_api::{
     StatType,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use sunrise_gameplay_common::game::cauldron_interactions::{
-    Arc, Items, Registrar, clear, install, snapshot,
-};
+use sunrise_gameplay_common::game::cauldron_interactions::{Arc, Items, Registrar, snapshot};
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::cauldron_interactions::{clear, install};
 use sunrise_gameplay_common::hit::Hit;
 use sunrise_items::items::ItemStack;
 use sunrise_sim::cauldron::{Outcome, interactions::Entry};
@@ -294,6 +294,7 @@ pub(crate) fn fixture_mods(
         .to_path_buf();
     with_game_at(root, test);
 }
+#[cfg(feature = "client")]
 pub(crate) fn fixture_mods_client(
     mods: mod_api::Mods,
     test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
@@ -311,6 +312,7 @@ pub(crate) fn fixture_mods_client(
         test,
     );
 }
+#[cfg(feature = "client")]
 pub(crate) fn fixture_mods_pair(
     mods: mod_api::Mods,
     test: impl FnOnce(
@@ -427,6 +429,7 @@ pub(crate) fn events() -> usize {
     sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
         .with(|events| events.borrow().as_ref().unwrap().len())
 }
+#[cfg(feature = "client")]
 pub(crate) fn unchanged<'g, G: sunrise_gameplay_common::game::SideGame<'g>>(game: &G, seen: &Seen) {
     assert_eq!(state(game), ("minecraft:cauldron".into(), None));
     let held = game.inventory[0].as_ref().unwrap();
@@ -1502,6 +1505,7 @@ fn cauldron_displaced_handlers_drop_under_original_owner_and_order_edits() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn cauldron_packet_pass_resumes_item_use_once_without_client_prediction() {
@@ -2083,4 +2087,5 @@ use sunrise_gameplay_common::game::tables::WorldTablesExt as _;
 
 use sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycleCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::pick_ray::PickRayGameExt1 as _;

@@ -285,6 +285,7 @@ fn a_failure_line_then_zero_is_a_red_line_and_a_zero_result() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn cart_failure_metadata_keeps_timestamp_and_literal_fragments() {

@@ -1,9 +1,13 @@
 use crate::game::fireworks::events_tests::start_events;
 use crate::game::fireworks::events_tests::stop_events;
+#[cfg(feature = "client")]
 use crate::game::fireworks::events_tests::twinkling;
 use crate::game::fireworks::events_tests::with_game;
-use sunrise_core::{geometry::Vec3, position::ChunkPos, random::LegacyRandom};
+use sunrise_core::position::ChunkPos;
+#[cfg(feature = "client")]
+use sunrise_core::{geometry::Vec3, random::LegacyRandom};
 use sunrise_gameplay_common::game::GameGameExt1;
+#[cfg(feature = "client")]
 use sunrise_items::items::ItemStack;
 
 #[test]
@@ -66,6 +70,7 @@ fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
 
 /// `FireworkParticles.Starter.playSound`: a silent rocket launches quietly (as
 /// it already did) and bursts quietly too, drawing its sparks and flash only.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_silent_rocket_bursts_without_blast_or_twinkle() {

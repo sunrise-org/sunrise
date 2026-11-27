@@ -1,5 +1,6 @@
 #![cfg(test)]
 use mod_api::TooltipElement;
+#[cfg(feature = "client")]
 use sunrise_client::hud::HudBatch;
 use sunrise_items::items::ItemStack;
 #[cfg(test)]

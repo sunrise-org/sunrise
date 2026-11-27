@@ -5,6 +5,7 @@ pub(crate) mod interaction_matrix_tests;
 pub(crate) mod item_fallthrough_tests;
 #[path = "item_used_on_block_tests.rs"]
 pub(crate) mod item_used_on_block_tests;
+#[cfg(feature = "client")]
 #[path = "predicted_use_tests.rs"]
 pub(crate) mod predicted_use_tests;
 #[path = "use_item_hand_tests.rs"]
@@ -20,12 +21,15 @@ use mod_api::{
 };
 use std::sync::{Arc, Mutex};
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
 use sunrise_core::nbt::Tag;
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::execution_role::ExecutionRole;
+#[cfg(feature = "client")]
 use sunrise_protocol::connection::Pipe;
 use {
     sunrise_gameplay::game::native_entity_refs::tests::with_game,
     sunrise_gameplay_common::game::Hit,
-    sunrise_gameplay_common::game::execution_role::ExecutionRole,
 };
 use {
     sunrise_items::items::ItemStack, sunrise_level::chunk::Chunk,
@@ -315,6 +319,7 @@ impl ItemPart for Observer {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn with_interaction_client_game(
     test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
 ) {
@@ -322,6 +327,7 @@ pub(crate) fn with_interaction_client_game(
     with_interaction_client_game_at(root, test);
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn with_interaction_client_game_at(
     root: std::path::PathBuf,
     test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
@@ -374,14 +380,22 @@ pub(crate) fn with_interaction_server_game_at(
 }
 
 pub(crate) trait InteractionSide<'g>: sunrise_gameplay_common::game::SideGame<'g> {
+    #[cfg(feature = "client")]
     const IS_CLIENT: bool;
+    #[cfg(feature = "client")]
     const LOGICAL_SIDE: LogicalSide;
+    #[cfg(feature = "client")]
     fn set_interaction_mode(game: &mut Self, mode: sunrise_command::args::GameMode);
     fn interaction_use_block_hand(game: &mut Self, hand: Hand) -> bool;
+    #[cfg(feature = "client")]
     fn interaction_use_air_hand(game: &mut Self, hand: Hand) -> bool;
+    #[cfg(feature = "client")]
     fn interaction_use_item_as_player(game: &mut Self) -> bool;
+    #[cfg(feature = "client")]
     fn interaction_set_sneak(game: &mut Self, sneak: bool);
+    #[cfg(feature = "client")]
     fn interaction_clear_guest_use(game: &mut Self);
+    #[cfg(feature = "client")]
     fn interaction_reset_use_failed(game: &mut Self);
 }
 
@@ -401,6 +415,7 @@ pub(crate) fn hit() -> Hit {
 #[allow(unused_imports)]
 pub(crate) use crate::game::server_side::remote_server::interaction_event_tests::setup_interaction_guest;
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_server_client_fires_use_item_finish_when_the_server_completes_the_use() {
@@ -580,6 +595,7 @@ fn a_server_client_fires_use_item_finish_when_the_server_completes_the_use() {
 /// `CreativeModeInventoryScreen` listens with only while it is open. (Hotbar loads and creative
 /// drops send their own packets; they are not this path.) So a hand a finish listener replaced
 /// in creative mode is not sent as `SetCreativeModeSlot` by either of this client's senders.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_creative_hand_replaced_by_a_finish_listener_is_not_sent_as_a_creative_slot() {
@@ -649,9 +665,11 @@ fn a_creative_hand_replaced_by_a_finish_listener_is_not_sent_as_a_creative_slot(
 
 #[path = "interaction_key_tests.rs"]
 pub(crate) mod interaction_key_tests;
+#[cfg(feature = "client")]
 #[path = "mapping_press_tests.rs"]
 pub(crate) mod mapping_press_tests;
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_server_client_keeps_a_bundle_use_until_the_server_completes_it() {
@@ -689,4 +707,5 @@ fn a_server_client_keeps_a_bundle_use_until_the_server_completes_it() {
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;

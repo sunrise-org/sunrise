@@ -1,4 +1,5 @@
 //! Exercise both owning player tick routes, not the standalone swim oracle.
+#![cfg(feature = "client")]
 use mod_api::{CanStartSwimmingEvent, EquipmentSlot, Hooks, Host, LogicalSide, SwimmingCheck};
 use std::sync::Arc;
 use std::sync::Mutex;

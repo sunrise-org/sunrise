@@ -33,6 +33,7 @@ fn vanilla_potions_in_registry_order_with_ids() {
 
 /// The game's read is the prepared `registries.json` report's `minecraft:potion` registry, id for
 /// id in protocol-id order.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn host_read_matches_the_prepared_potion_registry() {

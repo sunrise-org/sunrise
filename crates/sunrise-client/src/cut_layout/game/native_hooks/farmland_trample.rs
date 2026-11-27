@@ -667,6 +667,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_panicking_creative_listener_during_trample_does_not_abort_the_trample() {

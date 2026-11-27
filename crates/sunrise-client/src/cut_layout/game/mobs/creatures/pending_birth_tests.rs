@@ -120,6 +120,7 @@ pub(crate) fn assert_vanilla_children(children: &[Mob], kind: &str, first_id: u3
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn sulfur_cube_splits_two_babies_unless_primed_and_size_one_asks_nobody() {

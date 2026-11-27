@@ -3,22 +3,30 @@
 pub(crate) mod tests {
 
     use sunrise_gameplay_common::game::native_data_bound::NativeDataBoundGameExt1;
+    #[cfg(feature = "client")]
+    use sunrise_gameplay_common::game::native_data_bound::tests::DefaultsProbe;
+    use sunrise_gameplay_common::game::native_data_bound::tests::Probe;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_data_bound::tests::dirt_stack_size;
-    use sunrise_gameplay_common::game::native_data_bound::tests::{DefaultsProbe, Probe};
 
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_data_bound::tests::install_default_component_loads;
 
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_data_bound::tests::login_packet;
 
     use crate::game::native_entity_refs::tests::with_game;
 
+    #[cfg(feature = "client")]
     use mod_api::{
-        DataLoadContext, DefaultComponentsBoundEvent, Hooks, ModEntry,
-        ModifyDefaultComponentsEvent, ReloadContext, TagsUpdateCause, TagsUpdatedEvent,
+        DataLoadContext, DefaultComponentsBoundEvent, Hooks, ModifyDefaultComponentsEvent,
+        ReloadContext, TagsUpdatedEvent,
     };
+    use mod_api::{ModEntry, TagsUpdateCause};
 
     use std::sync::{Arc, Mutex};
 
+    #[cfg(feature = "client")]
     use sunrise_protocol::packets::{
         configuration::{RegistryTags, TagEntry, UpdateTags},
         play::Clientbound as C,
@@ -45,6 +53,7 @@ pub(crate) mod tests {
     /// bound before the tags, `should_update_static_data()` holds for its
     /// cause, and a listener's read inside the notice returns the stack
     /// size its own `modify_default_components` published.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_first_open_announces_bound_defaults_readable() {
@@ -105,6 +114,7 @@ pub(crate) mod tests {
     /// A remote login: the applied tags announce the defaults bound once,
     /// with the client cause, before the tags notice; a listener's read
     /// inside returns the published defaults. An update in play refires.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_remote_login_announces_the_client_cause_before_the_tags() {

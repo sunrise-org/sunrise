@@ -1,12 +1,20 @@
 //! ClientLevel.animateTick lends the level random to each block part before that pick's fluid runs.
+#[cfg(feature = "client")]
+use mod_api::ModEntry;
+#[cfg(feature = "client")]
 use mod_api::{
-    AnimateTickEvent, BlockPart, BlockPos, ClientHost, Hooks, ModEntry, ParticleOptions, Registrar,
+    AnimateTickEvent, BlockPart, BlockPos, ClientHost, Hooks, ParticleOptions, Registrar,
     RegistrationContext,
 };
+#[cfg(feature = "client")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "client")]
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
 use sunrise_level::chunk::Chunk;
+#[cfg(feature = "client")]
 use sunrise_sim::motion::PlayerMotion;
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_client_game,
     sunrise_client_gameplay::game::client_side::native_client_session::tests::logged_client,
@@ -14,14 +22,18 @@ use {
 
 /// One call the part heard: its position and block, its draw before and after its particle,
 /// and whether the particle was submitted.
+#[cfg(feature = "client")]
 pub(crate) type Call = (BlockPos, String, f32, f32, bool);
+#[cfg(feature = "client")]
 pub(crate) type Calls = Arc<Mutex<Vec<Call>>>;
 
 /// Draws, adds a heart at the block's centre, draws again.
+#[cfg(feature = "client")]
 pub(crate) struct Hearts {
     pub calls: Calls,
     pub(crate) heart: mod_api::ParticleKey,
 }
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Hearts {
     fn animate_tick(&self, host: &mut dyn ClientHost, event: &mut AnimateTickEvent<'_>) {
@@ -41,7 +53,9 @@ impl BlockPart for Hearts {
             .push((p, block, first, second, added));
     }
 }
+#[cfg(feature = "client")]
 pub(crate) struct Register(pub(crate) Calls);
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Register {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -61,6 +75,7 @@ impl Hooks for Register {
 
 /// A client game with the hearts part installed, in loaded empty chunks around a player at
 /// `(8.5, 65, 8.5)`.
+#[cfg(feature = "client")]
 pub(crate) fn with_hearts(
     test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>, &Calls),
 ) {

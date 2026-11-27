@@ -10,6 +10,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io::Read as _;
     use sunrise_assets::resource_source::{Resource, ResourceSource};
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_resources::NativeResourceReads as _;
 
     fn read(host: &dyn Host, pack_type: PackType, name: &str) -> Option<Vec<u8>> {
@@ -21,6 +22,7 @@ mod tests {
         Some(bytes)
     }
 
+    #[cfg(feature = "client")]
     fn id(value: &str) -> Identifier {
         Identifier::parse(value).unwrap()
     }
@@ -133,6 +135,7 @@ mod tests {
 
     /// `getResourceStack` gives each copy lowest first, and `listResources` the names under a
     /// folder of every namespace with the suffix, path first, without metadata files.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn resource_stacks_and_listings_cover_every_pack_and_namespace() {
@@ -232,6 +235,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn client_assets_read_the_winning_pack_file() {

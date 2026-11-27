@@ -1,15 +1,19 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use std::fs;
 #[cfg(test)]
 pub(crate) mod tests {
 
+    #[cfg(feature = "client")]
     use super::*;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_configs::NativeConfigsGameExt1;
 
     /// A mod saves its registered config and a sibling file inside `ConfigContext::config_dir()`
     /// from `ConfigEvent::Loading`, and the reload poll hands the saved text back.
     /// Runs in a fresh process in a scratch folder since `config/` is beside the
     /// game's working folder.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_mod_saves_its_config_through_the_game_and_the_reload_hears_it() {
@@ -78,6 +82,7 @@ pub(crate) mod tests {
         assert_eq!(fs::read(config.join("proof/state.bin")).unwrap(), [1, 2, 3]);
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn world_bulk_files_survive_save_reload_backup_and_world_deletion() {

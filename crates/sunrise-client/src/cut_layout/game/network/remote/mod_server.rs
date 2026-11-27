@@ -10,7 +10,7 @@ pub(crate) mod passage_cross_tests;
 #[path = "riptide_tests_server.rs"]
 pub(crate) mod riptide_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod tests {
     pub(crate) use crate::game::remote::tests::connect_menu_test;
     use sunrise_items::items::ItemStack;

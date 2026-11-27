@@ -1,17 +1,27 @@
 //! `on_caught_fire` heard by a block Part (#3185): the listener gets the burned block's old state
 //! and the face toward the fire, and what it writes through its level is in the world.
+#[cfg(feature = "client")]
+use mod_api::{self};
+#[cfg(feature = "client")]
 use mod_api::{
-    self, BlockPart, BlockUpdateFlags, FireOddsEvent, Hooks, LevelWriteHost, OnCaughtFireEvent,
-    Registrar,
+    BlockPart, BlockUpdateFlags, FireOddsEvent, Hooks, LevelWriteHost, OnCaughtFireEvent, Registrar,
 };
-use sunrise_core::{geometry::Direction, position::BlockPos};
+#[cfg(feature = "client")]
+use sunrise_core::geometry::Direction;
+#[cfg(feature = "client")]
+use sunrise_core::position::BlockPos;
+#[cfg(feature = "client")]
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::{GameGameExt1, SideGame};
+#[cfg(feature = "client")]
 use sunrise_world::{level::LevelAccess, registry::BlockStateId};
 
 /// Wool that, burned from its west face, leaves its old state on the cell above.
+#[cfg(feature = "client")]
 struct Ember(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for Ember {
     fn fire_odds(&self, _: mod_api::LevelSide<'_>, _: &mut FireOddsEvent) -> Option<(i32, i32)> {
@@ -30,8 +40,10 @@ impl BlockPart for Ember {
     }
 }
 
+#[cfg(feature = "client")]
 struct EmberMod(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for EmberMod {
     fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {

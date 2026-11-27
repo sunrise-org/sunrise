@@ -244,6 +244,7 @@ fn owned_hooks_keep_their_own_uuid_and_source_across_nested_actor_loans() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn production_login_and_local_body_constructor_admit_profile_and_real_loan() {
@@ -656,8 +657,10 @@ fn parked_mob_attachment_values_survive_other_level_cleanup() {
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::side_ops::player::PlayerSideGameExt as _;
 
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;

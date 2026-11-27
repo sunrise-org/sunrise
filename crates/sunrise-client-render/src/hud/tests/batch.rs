@@ -20,6 +20,38 @@ fn clip_since_keeps_the_visible_part_of_a_straddling_triangle() {
 }
 
 #[test]
+fn repeated_partial_scissors_leave_gradient_vertex_bytes_unchanged() {
+    let atlas = HudAtlas::fonts(&Default::default()).unwrap();
+    let mut batch = HudBatch::scratch([4, 2]);
+    let mut before = Vec::new();
+    for x in 0..4 {
+        let start = batch.vertices.len();
+        batch.fill_gradient(
+            &atlas,
+            (x as f32, -0.5, 1.0, 4.0),
+            rgba(0, 0, 0, 255),
+            rgba(128, 0, 0, 255),
+        );
+        before.extend_from_slice(&batch.vertices[start..]);
+        let top = if x < 2 { 1.0 } else { 0.25 };
+        batch.clip_since(start, 0.0, top, 4.0, 2.0);
+    }
+    batch.clip_since(0, 1.0, 0.0, 4.0, 2.0);
+
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&batch.vertices),
+        bytemuck::cast_slice::<_, u8>(&before)
+    );
+    assert_eq!(
+        batch.scissors_in(0..24).collect::<Vec<_>>(),
+        [
+            (0..12, Some([1.0, 1.0, 4.0, 2.0])),
+            (12..24, Some([1.0, 0.25, 4.0, 2.0])),
+        ]
+    );
+}
+
+#[test]
 fn clip_since_keeps_blend_ranges_in_submission_order() {
     let mut batch = HudBatch::scratch([320, 240]);
     let start = batch.vertices.len();

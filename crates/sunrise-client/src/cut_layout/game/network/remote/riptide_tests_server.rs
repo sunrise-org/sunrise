@@ -1,11 +1,17 @@
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::remote::riptide_tests::OWNER;
+#[cfg(feature = "client")]
 use sunrise_protocol::connection::ConnReader;
+#[cfg(feature = "client")]
 use sunrise_protocol::packets::Empty;
+#[cfg(feature = "client")]
 use sunrise_protocol::packets::play::Serverbound as S;
+#[cfg(feature = "client")]
 use sunrise_sim::lan::guest::InboxItem;
 
 /// Transfer the client's real play packets to the integrated server's normal
 /// connection drain. The test drives ticks without scheduling two game loops.
+#[cfg(feature = "client")]
 pub(crate) fn client_tick_to_server(
     client: &sunrise_client_gameplay::game::ClientGame<'_>,
     peer: &mut ConnReader,

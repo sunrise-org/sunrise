@@ -43,9 +43,11 @@ modifier's `depth` applies to the built-in `lines`, `quads` and `draw_model_inst
 modifier applies to a registered pipeline drawn with `pipeline_quads`.
 
 `WorldDrawContext::name_tag(at, &text, NameTagOptions::new(see_through, background, light))` draws
-a label as vanilla draws a name tag (`submitNameTag`): 0.5 above `at`, facing the camera, 0.025
-blocks a font pixel, so it shrinks with distance (scale by distance yourself for a constant size),
-centred, in the text's styles. `background` puts the black backdrop behind it at the player's
+a label as vanilla draws a name tag (`submitNameTag`): 0.5 above `at`, facing the camera,
+`NameTagOptions::scale` blocks a font pixel (a name tag's 0.025, `NameTagOptions::NAME_TAG_SCALE`,
+unless `with_scale` sets another; the backdrop's gap behind the text scales with it), so it
+shrinks with distance (scale by distance yourself for a constant size), centred, in the text's
+styles. `background` puts the black backdrop behind it at the player's
 text background opacity; `light` is the light at the label, sky light in the high four bits and
 block light in the low four. Without `see_through` it is drawn once, depth tested and translucent:
 the faded text on the backdrop, in `light` as given, hidden behind what is in front. With
@@ -53,11 +55,18 @@ the faded text on the backdrop, in `light` as given, hidden behind what is in fr
 raised to at least 2, and faded on the backdrop over everything, walls included, unlit. The
 backdrop's alpha is 255 times the text background opacity (0.25 when it is set for chat only), the
 faded text's 255 times the larger of (opacity + 0.75) / 2 and 0.5. Labels draw with the world's
-name tags whatever the stage, sorted far to near. A position that is not
-finite (`DrawError::NonFinite`) is refused whole: nothing is drawn. Only visible text and styles
-are used, not click, hover or opaque metadata. `see_through` can show a
+name tags whatever the stage, sorted far to near. A position that is not finite, or text
+positions that overflow f32 at a huge scale (`DrawError::NonFinite`), and a scale that is not
+finite, or is zero or negative (`DrawError::InvalidScale`), are refused whole: nothing is drawn.
+Only visible text and styles are used, not click, hover or opaque metadata. `see_through` can show a
 label through any wall, which vanilla does only for the names its own renderers choose; the call
-sends nothing and reads nothing the client does not already hold."#]
+sends nothing and reads nothing the client does not already hold.
+
+`WorldDrawContext::text(origin, pose, &text, WorldTextOptions::default())` draws text under a
+pose of the mod's own (row-major 3x4 at `origin`), as `BlockEntityDrawContext::text` does: rolled,
+tilted, laid flat or turned to the camera as the pose says, glowing (full bright) or ringed with an
+outline as glowing sign text, and `text_width` measures a line to centre it. It draws with the
+labels."#]
     #[hook(
         receiver = "read",
         dispatch = "flat",

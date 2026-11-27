@@ -1,8 +1,11 @@
 use mod_api::Holder;
 use mod_api::{AttachmentDescriptor, AttachmentKey, EntityConstructingEvent, Hooks, HostSide};
+#[cfg(feature = "client")]
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "client")]
 use sunrise_core::nbt::Tag;
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_client_game,
     sunrise_gameplay::game::native_entity_refs::tests::{fixture_resident_column, with_game},
@@ -66,6 +69,7 @@ fn observe_with_key(test: impl FnOnce(Calls, KeySlot)) {
     mod_platform::testing::with_mods(mods, || test(calls, value));
 }
 
+#[cfg(feature = "client")]
 fn tag(kind: &str, uuid: i32) -> Tag {
     Tag::compound([
         ("id", Tag::String(kind.into())),
@@ -81,6 +85,7 @@ fn tag(kind: &str, uuid: i32) -> Tag {
     ])
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn spawn_summon_and_disk_load_initialize_before_first_attachment_read() {
@@ -167,6 +172,7 @@ fn spawn_summon_and_disk_load_initialize_before_first_attachment_read() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
@@ -310,6 +316,7 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
     });
 }
 
+#[cfg(feature = "client")]
 fn spawn_info() -> sunrise_protocol::packets::play::SpawnInfo {
     sunrise_protocol::packets::play::SpawnInfo {
         dimension_type: 0,
@@ -325,6 +332,7 @@ fn spawn_info() -> sunrise_protocol::packets::play::SpawnInfo {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn client_login_tracking_and_retracking_initialize_the_client_store_once() {
@@ -505,9 +513,11 @@ fn server_players_initialize_on_join_and_new_respawn_but_not_rebind() {
     });
 }
 
+#[cfg(feature = "client")]
 fn encode(n: &i32) -> Result<sunrise_core::nbt::Compound, mod_api::AttachmentError> {
     Ok([("value".into(), Tag::Int(*n))].into())
 }
+#[cfg(feature = "client")]
 fn decode(c: &sunrise_core::nbt::Compound) -> Result<i32, mod_api::AttachmentError> {
     match c.get(&"value".into()) {
         Some(Tag::Int(n)) => Ok(*n),
@@ -515,6 +525,7 @@ fn decode(c: &sunrise_core::nbt::Compound) -> Result<i32, mod_api::AttachmentErr
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn player_construction_precedes_disk_load_and_clone() {
@@ -739,6 +750,7 @@ fn player_construction_precedes_disk_load_and_clone() {
         })
     });
 }
+#[cfg(feature = "client")]
 const SAVED_RAW: sunrise_mod_runtime::attachments::AttachmentType<i32> =
     sunrise_mod_runtime::attachments::AttachmentType {
         namespace: "constructing",
@@ -748,14 +760,17 @@ const SAVED_RAW: sunrise_mod_runtime::attachments::AttachmentType<i32> =
         copy_on_death: false,
         sync_codec: None,
     };
+#[cfg(feature = "client")]
 type Kinds = Arc<Mutex<Vec<(Holder, String)>>>;
 
+#[cfg(feature = "client")]
 struct Saving {
     kinds: Kinds,
     value: KeySlot,
     saved: KeySlot,
 }
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Saving {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
@@ -795,6 +810,7 @@ impl Hooks for Saving {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_loaded_entity_reads_its_saved_attachments_over_the_listeners_and_is_named_by_type() {
@@ -957,6 +973,7 @@ fn a_loaded_entity_reads_its_saved_attachments_over_the_listeners_and_is_named_b
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn mob_constructor_first_store_binds_only_the_resident_lifetime() {
@@ -1002,6 +1019,7 @@ fn mob_constructor_first_store_binds_only_the_resident_lifetime() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn marker_constructor_store_reaches_its_real_owned_map() {
@@ -1041,6 +1059,7 @@ fn marker_constructor_store_reaches_its_real_owned_map() {
     assert!(ran.load(Ordering::SeqCst));
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn cancelled_mob_creation_forgets_constructor_payload_and_identity() {
@@ -1093,6 +1112,7 @@ fn cancelled_mob_creation_forgets_constructor_payload_and_identity() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn dragon_part_constructor_first_read_indexes_payload_and_same_id_replacement_reconstructs() {
@@ -1233,6 +1253,8 @@ fn dragon_part_constructor_first_read_indexes_payload_and_same_id_replacement_re
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;

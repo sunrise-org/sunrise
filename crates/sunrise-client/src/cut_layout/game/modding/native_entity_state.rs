@@ -3,24 +3,35 @@ use mod_api::EntityRef;
 #[cfg(test)]
 pub(crate) mod tests {
 
+    #[cfg(feature = "client")]
     use sunrise_gameplay::game::server_side::native_entity_state::tests::with_player;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_entity_state_common::NativeEntityStateCommonGameExt1 as _;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1;
 
     use super::*;
 
-    use sunrise_sim::{mobs::Mob, motion::PlayerMotion, thrown_trident::ThrownTrident};
+    #[cfg(feature = "client")]
+    use sunrise_sim::motion::PlayerMotion;
+    use sunrise_sim::{mobs::Mob, thrown_trident::ThrownTrident};
 
+    #[cfg(feature = "client")]
     use super::super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
 
+    #[cfg(feature = "client")]
     use super::super::native_guest_turn_tests::with_resident_guests;
 
+    #[cfg(feature = "client")]
     use mod_api::MainHand;
 
+    #[cfg(feature = "client")]
     use sunrise_protocol::entity_data::{Value, serializer};
 
+    #[cfg(feature = "client")]
     use sunrise_protocol::packets::play::{self, Clientbound as C};
 
     #[test]
@@ -328,6 +339,7 @@ pub(crate) mod tests {
             assert_eq!(guest.portal_cooldown(game), Some(7));
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn on_fire_reads_timers_immunity_and_client_shared_flag() {
@@ -483,6 +495,7 @@ pub(crate) mod tests {
             });
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn under_water_reads_previous_eye_sample_and_current_contact_on_both_sides() {
@@ -537,6 +550,7 @@ pub(crate) mod tests {
             });
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn secondary_use_reads_reachable_client_handles_and_keeps_server_flags() {
@@ -583,6 +597,7 @@ pub(crate) mod tests {
             );
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn client_fluid_reads_use_cached_local_and_tracked_bodies() {
@@ -696,6 +711,7 @@ pub(crate) mod tests {
     /// (`Mob.DATA_MOB_FLAGS_ID`) and another player's main hand (`Avatar.DATA_PLAYER_MAIN_HAND`);
     /// its own player follows its Main Hand option. An entity that isn't living, and one the
     /// client doesn't track, has none.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_reads_the_main_arm_the_server_sent() {
@@ -791,6 +807,7 @@ pub(crate) mod tests {
     }
     /// A server reads a player's main arm from the Main Hand its client reported, and a mob's
     /// from its left-handed flag.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_server_reads_the_reported_main_hand_and_the_left_handed_flag() {

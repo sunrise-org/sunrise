@@ -101,6 +101,8 @@ mod sprite_arrays_tests;
 mod terrain_model;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_gpu;
+#[cfg(feature = "test-support")]
+pub use test_gpu::lock as lock_test_gpu;
 mod weather;
 mod world_text;
 use cull::occlusion_culling_requested;
@@ -226,6 +228,9 @@ mod hdr_start;
 mod hdr_stats;
 pub(crate) mod hud_coverage;
 mod in_flight;
+mod material_animation;
+#[cfg(test)]
+mod material_animation_renderer_tests;
 mod sourced_geometry;
 mod terrain_normals;
 use display_watch::DisplayWatch;
@@ -813,50 +818,21 @@ impl Renderer {
             self.own_timing.as_mut(),
         );
         if let Some(arrays) = &self.pbr_maps {
-            for animation in &self.material_animations {
-                if !self.animations.changed().contains(&animation.layer) {
-                    continue;
-                }
-                let Some(pair) = arrays.get((animation.layer / self.sprite_split) as usize) else {
-                    continue;
-                };
-                for kind in 0..2 {
-                    let Some(pixels) = animation.material_pixels(kind, tick) else {
-                        continue;
-                    };
-                    let texture = &pair[kind];
-                    let from = (pixels.len() / 4).isqrt() as u32;
-                    for level in 0..texture.mip_level_count() {
-                        let size = texture.width() >> level;
-                        let pixels = crate::sprites::resample(pixels, from, size);
-                        self.uploads.texture(
-                            encoder,
-                            wgpu::TexelCopyTextureInfo {
-                                texture,
-                                mip_level: level,
-                                origin: wgpu::Origin3d {
-                                    x: 0,
-                                    y: 0,
-                                    z: animation.layer % self.sprite_split,
-                                },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            size,
-                            size,
-                            &pixels,
-                        );
-                    }
-                }
-            }
+            let written = self.material_animations.upload(
+                encoder,
+                &mut self.uploads,
+                arrays,
+                self.sprite_split,
+                tick,
+                self.animations.changed(),
+            );
             if let Some(atlases) = &self.pack_material_atlases {
-                for kind in 0..2 {
+                for (kind, layers) in written.into_iter().enumerate() {
+                    if layers.is_empty() {
+                        continue;
+                    }
                     let arrays: Vec<_> = arrays.iter().map(|pair| pair[kind].clone()).collect();
-                    atlases[kind].copy(
-                        &self.device,
-                        encoder,
-                        &arrays,
-                        self.animations.changed().iter().copied(),
-                    );
+                    atlases[kind].copy(&self.device, encoder, &arrays, layers);
                 }
             }
         }

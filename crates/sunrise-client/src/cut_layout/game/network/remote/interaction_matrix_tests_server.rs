@@ -1,8 +1,13 @@
+#[cfg(feature = "client")]
 use super::*;
+#[cfg(feature = "client")]
 use crate::game::remote::interaction_event_tests::interaction_matrix_tests::advancement_tree;
+#[cfg(feature = "client")]
 use crate::game::remote::interaction_event_tests::interaction_matrix_tests::cases;
+#[cfg(feature = "client")]
 use crate::game::remote::interaction_event_tests::interaction_matrix_tests::*;
 
+#[cfg(feature = "client")]
 pub(crate) fn matrix(mods: mod_api::Mods) {
     fn run<'g, S: InteractionSide<'g>>(game: &mut S) {
         let client = S::IS_CLIENT;
@@ -101,6 +106,8 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::pick_ray::PickRayGameExt1 as _;

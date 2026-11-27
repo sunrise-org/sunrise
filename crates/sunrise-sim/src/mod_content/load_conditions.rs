@@ -87,7 +87,6 @@ pub(super) fn merge_tag(
             values.push(removal);
         }
     }
-    doc.remove("remove");
     Ok(serde_json::to_string_pretty(&doc)?)
 }
 

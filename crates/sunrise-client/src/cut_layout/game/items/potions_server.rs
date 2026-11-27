@@ -188,6 +188,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn lifecycle_cloud_commands_and_parked_owners() {

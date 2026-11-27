@@ -5,6 +5,10 @@ crates/sunrise-theme/tokens.css text eol=lf
 docs/api/*-reference.md text eol=lf
 crates/sunrise-mod-api-gen/crossing-foreign.json text eol=lf
 crates/sunrise-render-shaderpack/tests/spirv_dump/** text eol=lf
+crates/sunrise-client-render/tests/fixtures/extras_default.txt text eol=lf
+crates/sunrise-client-render/tests/fixtures/extras_set.txt text eol=lf
+tools/light_storage_scenario.txt text eol=lf
+tools/light_storage_witness.txt text eol=lf
 # Signed test fixtures, checked byte for byte against their signatures and hashes: never converted.
 crates/sunrise-release-sign/tests/signed/** -text
 crates/sunrise-mod-package/tests/index/** -text
