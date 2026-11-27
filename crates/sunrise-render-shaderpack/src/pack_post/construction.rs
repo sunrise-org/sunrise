@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use sunrise_shaders::{BUFFERS, Format, Group, Kind, Post, SHADOW_COLORS};
 
 use super::mod_pack::{
-    ModDepthTargetDecl, ModDrawChunk, ModPackPass, ModPackRuntime, ModPassSlot, ModProgramMode,
-    ModUniformDecl, ModUniformMatch, ModUniformTable, ModVertexStage, match_mod_uniform,
+    MOD_SET_BASE, ModDepthTargetDecl, ModDrawChunk, ModPackPass, ModPackRuntime, ModPassSlot,
+    ModPipelineLayouts, ModUniformDecl, ModUniformMatch, ModUniformTable, match_mod_uniform,
     mod_depth_source,
 };
 use super::packed;
@@ -619,9 +619,9 @@ pub struct Resources<'a> {
     pub depth_compare: std::cell::Cell<wgpu::CompareFunction>,
     /// The linked mod pass's declared depth bias; `None` leaves the pack program's own bias.
     pub mod_depth_bias: std::cell::Cell<Option<wgpu::DepthBiasState>>,
-    /// The mod's own vertex stage for the pass about to be built, which `build_pass` takes and
-    /// links to that pass's fragment stage ([`ModProgramMode::ModVertexPackFragment`]).
-    pub mod_vertex: std::cell::RefCell<Option<ModVertexStage>>,
+    /// The mod pipeline's bind-group layouts for the pass about to be built, used when a pack
+    /// prelude binds mod resources at [`MOD_SET_BASE`] (set 6) or `MOD_SET_BASE + 1` (set 7).
+    pub mod_layouts: std::cell::RefCell<Option<ModPipelineLayouts>>,
 }
 
 impl Resources<'_> {
@@ -1253,6 +1253,34 @@ fn resolve_mod_uniforms<'a>(
     }
 }
 
+fn module_uses_group(module: &naga::Module, group: u32) -> bool {
+    module
+        .global_variables
+        .iter()
+        .any(|(_, g)| g.binding.is_some_and(|b| b.group == group))
+}
+
+fn module_has_vertex_inputs(module: &naga::Module) -> bool {
+    let Some(ep) = module
+        .entry_points
+        .iter()
+        .find(|e| e.stage == naga::ShaderStage::Vertex)
+    else {
+        return false;
+    };
+    ep.function.arguments.iter().any(|arg| match arg.binding {
+        Some(naga::Binding::Location { .. }) => true,
+        None => matches!(
+            &module.types[arg.ty].inner,
+            naga::TypeInner::Struct { members, .. }
+                if members
+                    .iter()
+                    .any(|m| matches!(m.binding, Some(naga::Binding::Location { .. })))
+        ),
+        _ => false,
+    })
+}
+
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
 /// wgpu refuses it or it writes nothing. `formats` are its buffers' (for a program of the shadow
 /// buffers, buffer n is shadowcolor n); `shadow` the shadowcolor formats when the shadow pass
@@ -1280,39 +1308,46 @@ pub fn build_pass(
     let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
     let mut p = p;
     let mut program = p.program.take()?;
-    // A mod's own vertex stage replaces the pack's, when it fits the pack's fragment stage.
-    let mod_vertex = match pack.mod_vertex.borrow_mut().take() {
-        Some(stage) => {
-            // The pack's vertex stage carries a geometry stage's inputs: the mod's can't replace it.
-            if p.geometry_triangles > 0 {
-                notes.push(format!(
-                    "{}: the mod's own vertex stage is not used: the pack's program has a geometry stage",
-                    p.name
-                ));
-                return None;
-            }
-            match super::mod_link::link_vertex_stage(
-                &stage.module,
-                &program.fragment,
-                &program.varyings,
-                stage.set1_layout.is_some(),
-                device.limits().max_bind_groups,
-            ) {
-                Ok(linked) => {
-                    program.vertex = linked;
-                    Some(stage)
-                }
-                Err(reason) => {
-                    notes.push(format!(
-                        "{}: the mod's own vertex stage is not used: {reason}",
-                        p.name
-                    ));
-                    return None;
-                }
-            }
-        }
-        None => None,
+    let mod_layouts = pack.mod_layouts.borrow_mut().take();
+    let uses_mod_globals = module_uses_group(&program.vertex, MOD_SET_BASE)
+        || module_uses_group(&program.fragment, MOD_SET_BASE);
+    let uses_mod_set1 = module_uses_group(&program.vertex, MOD_SET_BASE + 1)
+        || module_uses_group(&program.fragment, MOD_SET_BASE + 1);
+    let has_vertex_inputs = module_has_vertex_inputs(&program.vertex);
+    let needed_sets = if uses_mod_set1 {
+        MOD_SET_BASE + 2
+    } else if uses_mod_globals {
+        MOD_SET_BASE + 1
+    } else {
+        0
     };
+    if needed_sets > device.limits().max_bind_groups {
+        notes.push(format!(
+            "{}: mod bind groups after the pack's would number {needed_sets}, over this device's limit of {}",
+            p.name,
+            device.limits().max_bind_groups
+        ));
+        return None;
+    }
+    if (uses_mod_globals || uses_mod_set1) && mod_layouts.is_none() {
+        notes.push(format!(
+            "{}: mod prelude binds mod resources, but no mod layouts were supplied",
+            p.name
+        ));
+        return None;
+    }
+    if uses_mod_set1
+        && mod_layouts
+            .as_ref()
+            .and_then(|l| l.set1_layout.as_ref())
+            .is_none()
+    {
+        notes.push(format!(
+            "{}: mod prelude binds set 1, but this pipeline has no set-1 layout",
+            p.name
+        ));
+        return None;
+    }
     let interface = &program.interface;
     let draw = interface.draw;
     let storage = !interface.images.is_empty() || !interface.buffers.is_empty();
@@ -1464,10 +1499,13 @@ pub fn build_pass(
             (!interface.buffers.is_empty()).then_some(&pack.buffers.layout),
             pack.indices.filter(|_| reads_indices),
         ];
-        // The mod's own sets go after the pack's (`MOD_SET_BASE`).
-        if let Some(stage) = &mod_vertex {
-            sets.push(Some(&stage.globals_layout));
-            sets.extend(stage.set1_layout.as_ref().map(Some));
+        // The mod's own sets go after the pack's (`MOD_SET_BASE` = 6 and `MOD_SET_BASE + 1` = 7).
+        if uses_mod_globals || uses_mod_set1 {
+            let layouts = mod_layouts.as_ref().expect("checked above");
+            sets.push(uses_mod_globals.then_some(&layouts.globals_layout));
+            if uses_mod_set1 {
+                sets.push(layouts.set1_layout.as_ref());
+            }
         }
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&p.name),
@@ -1491,18 +1529,14 @@ pub fn build_pass(
             layout: pipeline_layout,
             vs,
             fs,
-            // A geometry stage reads its vertices itself.
+            // A geometry stage reads its vertices itself, and a vertex prelude with no vertex
+            // inputs pulls its vertices via `gl_VertexIndex`.
             buffers: geometry
-                .filter(|_| p.geometry_triangles == 0)
+                .filter(|_| p.geometry_triangles == 0 && has_vertex_inputs)
                 .map_or_else(Vec::new, |g| owned_buffers(g.buffers)),
             // Rows flipped to GL's turn front faces clockwise.
             primitive: wgpu::PrimitiveState {
-                // The mod's own vertex stage winds as its pipeline does.
-                front_face: if mod_vertex.is_some() {
-                    wgpu::FrontFace::Ccw
-                } else {
-                    wgpu::FrontFace::Cw
-                },
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: geometry
                     .filter(|g| g.cull && p.geometry_triangles == 0)
                     .map(|_| wgpu::Face::Back),
@@ -2395,7 +2429,7 @@ impl PackPost {
             mod_depth_target: std::cell::Cell::new(None),
             depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
             mod_depth_bias: Default::default(),
-            mod_vertex: Default::default(),
+            mod_layouts: Default::default(),
         };
         // Flat terrain resolves each quad's source state against the current pack; terrain that
         // reads its pages per section binds them by the same layout.
@@ -2843,7 +2877,7 @@ impl PackPost {
         let lines = post.lines.and_then(|p| build(p, Some(&line_geometry)));
         // Build mod-declared pipeline passes that resolved to a pack program.
         let mut mod_passes = Vec::new();
-        if !mods.vertex_buffers.is_empty() {
+        if !mods.pipelines.is_empty() {
             for resolved in post.mod_programs {
                 let Some(program) = resolved.program else {
                     continue;
@@ -2858,22 +2892,18 @@ impl PackPost {
                     spec.pass_slot != ModPassSlot::Shadow
                         && pre_mod_depth_sampled.get(idx).copied().unwrap_or(false)
                 });
-                let mod_set1_layout = mods.bind_group_layouts.get(spec.slot).copied().flatten();
-                // The mod's own vertex stage, its layouts and its vertices, or the pack's
-                // program over the engine's mod vertex format.
-                let own_stage = match spec.program_mode {
-                    ModProgramMode::PackVertexAndFragment => None,
-                    ModProgramMode::ModVertexPackFragment => {
-                        let stage = mods.vertex_stages.get(spec.slot).and_then(Option::as_ref);
-                        // A pipeline the GPU refused has no stage: its slot stays unbound.
-                        if stage.is_none() {
-                            continue;
-                        }
-                        stage
-                    }
-                };
+                let mod_layouts = mods.mod_layouts.get(spec.slot).and_then(Option::as_ref);
+                let (uses_mod_globals, uses_mod_set1) =
+                    program.program.as_ref().map_or((false, false), |p| {
+                        (
+                            module_uses_group(&p.vertex, MOD_SET_BASE)
+                                || module_uses_group(&p.fragment, MOD_SET_BASE),
+                            module_uses_group(&p.vertex, MOD_SET_BASE + 1)
+                                || module_uses_group(&p.fragment, MOD_SET_BASE + 1),
+                        )
+                    });
                 let mut own_buffers: Vec<Option<wgpu::VertexBufferLayout<'_>>> = Vec::new();
-                for buffer in own_stage.iter().flat_map(|s| &s.buffers) {
+                for buffer in mod_layouts.iter().flat_map(|s| &s.buffers) {
                     let slot = buffer.binding as usize;
                     if own_buffers.len() <= slot {
                         own_buffers.resize(slot + 1, None);
@@ -2885,13 +2915,13 @@ impl PackPost {
                     });
                 }
                 let mod_geometry = Geometry {
-                    buffers: if own_stage.is_some() {
+                    buffers: if mod_layouts.is_some() {
                         &own_buffers[..]
                     } else {
                         mods.vertex_buffers
                     },
-                    // The mod's own sets go after the pack's, not into set 1.
-                    table: mod_set1_layout.filter(|_| own_stage.is_none()),
+                    // Mod sets live at MOD_SET_BASE (6) and MOD_SET_BASE + 1 (7), never set 1.
+                    table: None,
                     depth_write: spec.depth_write,
                     atlas: None,
                     material_maps: true,
@@ -2902,9 +2932,9 @@ impl PackPost {
                 pack.mod_depth_target.set(active_depth);
                 pack.depth_compare.set(spec.depth_compare);
                 pack.mod_depth_bias.set(spec.depth_bias);
-                *pack.mod_vertex.borrow_mut() = own_stage.cloned();
+                *pack.mod_layouts.borrow_mut() = mod_layouts.cloned();
                 let built_pass = build(program, Some(&mod_geometry));
-                pack.mod_vertex.borrow_mut().take();
+                pack.mod_layouts.borrow_mut().take();
                 pack.mod_depth_target.set(None);
                 pack.mod_depth_bias.set(None);
                 pack.depth_compare.set(wgpu::CompareFunction::LessEqual);
@@ -2913,11 +2943,8 @@ impl PackPost {
                         slot: spec.slot,
                         pass_slot: spec.pass_slot,
                         depth_target: active_depth,
-                        has_mod_bind_group: own_stage.map_or_else(
-                            || mod_set1_layout.is_some(),
-                            |stage| stage.set1_layout.is_some(),
-                        ),
-                        mod_vertex: own_stage.is_some(),
+                        uses_mod_globals,
+                        uses_mod_set1,
                         pass,
                     });
                 }

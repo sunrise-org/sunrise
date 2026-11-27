@@ -110,6 +110,7 @@ pub fn inputs() -> sunrise_shaders::GbuffersInputs {
         paged_maps: false,
         water_mask: false,
         water_patches: false,
+        prelude: None,
     }
 }
 
@@ -141,6 +142,7 @@ pub fn celestial_inputs() -> sunrise_shaders::GbuffersInputs {
         paged_maps: false,
         water_mask: false,
         water_patches: false,
+        prelude: None,
     }
 }
 

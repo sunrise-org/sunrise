@@ -249,3 +249,74 @@ pub fn implicit_input_type(name: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+/// Whether `name` is a non-empty ASCII GLSL identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+pub fn is_valid_glsl_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Built-in pack, per-draw, implicit-input, or engine-injected identifier that a mod
+/// `PackBinding` prelude may not declare.
+pub fn reserved_prelude_identifier(name: &str) -> Option<&'static str> {
+    if let Some(kind) = reserved_pack_identifier(name) {
+        return Some(kind);
+    }
+    if implicit_input_type(name).is_some() {
+        return Some("implicit shader-pack vertex input");
+    }
+    if crate::DRAW_UNIFORMS.iter().any(|&(n, _)| n == name) {
+        return Some("built-in per-draw shader-pack uniform");
+    }
+    if name.starts_with("hz_") {
+        return Some("engine-injected identifier");
+    }
+    if name.starts_with("gl_") {
+        return Some("GLSL reserved identifier");
+    }
+    if matches!(name, "HzUniforms" | "HzDraw") {
+        return Some("engine-injected uniform block");
+    }
+    if name == "sunrisePatchPos"
+        || name == "sunriseWaterPatchCount"
+        || name.starts_with("sunriseWaterPatch")
+    {
+        return Some("engine-injected water-patch identifier");
+    }
+    if name == "main" {
+        return Some("reserved shader entry point");
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserved_prelude_covers_pack_implicit_draw_and_engine_names() {
+        assert!(reserved_prelude_identifier("colortex0").is_some());
+        assert!(reserved_prelude_identifier("depthtex0").is_some());
+        assert!(reserved_prelude_identifier("cameraPosition").is_some());
+        assert!(reserved_prelude_identifier("gbufferModelView").is_some());
+        assert!(reserved_prelude_identifier("vaPosition").is_some());
+        assert!(reserved_prelude_identifier("mc_chunkFade").is_some());
+        assert!(reserved_prelude_identifier("renderStage").is_some());
+        assert!(reserved_prelude_identifier("currentRenderedItemId").is_some());
+        assert!(reserved_prelude_identifier("hz_Vertex").is_some());
+        assert!(reserved_prelude_identifier("gl_Position").is_some());
+        assert!(reserved_prelude_identifier("HzUniforms").is_some());
+        assert!(reserved_prelude_identifier("sunrisePatchPos").is_some());
+        assert!(reserved_prelude_identifier("main").is_some());
+
+        // Pack-declared attributes and mod-owned identifiers remain free to declare.
+        assert!(reserved_prelude_identifier("mc_Entity").is_none());
+        assert!(reserved_prelude_identifier("at_tangent").is_none());
+        assert!(reserved_prelude_identifier("modelOffset").is_none());
+        assert!(reserved_prelude_identifier("customMaterialId").is_none());
+    }
+}

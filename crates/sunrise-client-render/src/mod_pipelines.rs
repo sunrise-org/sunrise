@@ -8,10 +8,10 @@
 //! load; an optional one is logged and left out. A frame reads none of this by name.
 use mod_api::{
     BUILTIN_RENDER_TYPE_IDS, BlendFactor, ColorTargetState, DepthCompare, Identifier,
-    LayeringTransform, PackGlslInput, PackPassSlot, PackUniformType, PackUniformValue,
-    PipelineBlend, PipelineModifier, PipelineModifierRef, PipelineState, PipelineTexture,
-    PipelineTextureError, PrimitiveTopology, RenderPipeline, RenderPipelineError,
-    RenderPipelineRef, RenderSetup, RenderTypeError, RenderTypeRef, TextureTransform,
+    LayeringTransform, PackPassSlot, PackUniformType, PackUniformValue, PipelineBlend,
+    PipelineModifier, PipelineModifierRef, PipelineState, PipelineTexture, PipelineTextureError,
+    PrimitiveTopology, RenderPipeline, RenderPipelineError, RenderPipelineRef, RenderSetup,
+    RenderTypeError, RenderTypeRef, TextureTransform,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -57,6 +57,11 @@ pub enum RegistrationError {
         id: Identifier,
     },
     InvalidPackBinding(String),
+    InvalidPackPrelude {
+        owner: String,
+        id: Identifier,
+        error: sunrise_shaders::PreludeError,
+    },
     InvalidShaderDefine(String),
     InvalidPipelineState(String),
     InvalidVertexFormat(String),
@@ -115,6 +120,10 @@ impl std::fmt::Display for RegistrationError {
                 "mod {owner}: pipeline {id} collides with earlier registration from mod {earlier}"
             ),
             Self::InvalidPackBinding(reason) => f.write_str(reason),
+            Self::InvalidPackPrelude { owner, id, error } => write!(
+                f,
+                "invalid pack prelude on render pipeline {id} (registered by {owner}): {error}"
+            ),
             Self::InvalidShaderDefine(reason) => f.write_str(reason),
             Self::InvalidPipelineState(reason) => f.write_str(reason),
             Self::InvalidVertexFormat(reason) => f.write_str(reason),
@@ -147,6 +156,7 @@ impl std::error::Error for RegistrationError {
         match self {
             Self::Read { error, .. } => Some(error),
             Self::Parse { error, .. } => Some(error),
+            Self::InvalidPackPrelude { error, .. } => Some(error),
             _ => None,
         }
     }
@@ -233,18 +243,128 @@ pub fn register(
             )));
         }
     }
-    validate_pack_bindings(&pipelines).map_err(RegistrationError::InvalidPackBinding)?;
+    validate_pack_bindings(&pipelines)?;
     REGISTERED
         .set(pipelines)
         .map_err(|_| RegistrationError::AlreadyPublished)
 }
 
-/// Validate GLSL syntax, reserved Iris/OptiFine names, and cross-mod uniqueness across every
-/// registered `RenderPipeline::pack_binding`. Multiple pipelines owned by the same mod may
+/// Build the set-0 and set-1 resource descriptors exposed to a pipeline's pack prelude.
+fn prelude_bindings_of(pipeline: &RenderPipeline) -> Vec<sunrise_shaders::PreludeBinding> {
+    use sunrise_shaders::{PreludeBinding, PreludeImageAccess, PreludeResourceKind, PreludeStages};
+    let mut bindings = vec![
+        PreludeBinding {
+            set: 0,
+            binding: 0,
+            kind: PreludeResourceKind::UniformBuffer,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        },
+        PreludeBinding {
+            set: 0,
+            binding: 1,
+            kind: PreludeResourceKind::UniformBuffer,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        },
+        PreludeBinding {
+            set: 0,
+            binding: 2,
+            kind: PreludeResourceKind::UniformBuffer,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        },
+        PreludeBinding {
+            set: 0,
+            binding: 3,
+            kind: PreludeResourceKind::UniformBuffer,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        },
+    ];
+    if pipeline.texture.is_some() {
+        bindings.push(PreludeBinding {
+            set: 0,
+            binding: 4,
+            kind: PreludeResourceKind::CombinedSampler2D,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        });
+        bindings.push(PreludeBinding {
+            set: 0,
+            binding: 10,
+            kind: PreludeResourceKind::UniformBuffer,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        });
+    }
+    let mut next = 0u32;
+    for entry in &pipeline.bind_group_layout.entries {
+        match entry.kind {
+            mod_api::BindingKind::UniformBuffer { .. } => {
+                bindings.push(PreludeBinding {
+                    set: 1,
+                    binding: next,
+                    kind: PreludeResourceKind::UniformBuffer,
+                    stages: PreludeStages::VERTEX_FRAGMENT,
+                });
+                next += 1;
+            }
+            mod_api::BindingKind::CombinedImageSampler { .. } => {
+                bindings.push(PreludeBinding {
+                    set: 1,
+                    binding: next,
+                    kind: PreludeResourceKind::CombinedSampler2D,
+                    stages: PreludeStages::VERTEX_FRAGMENT,
+                });
+                next += 2;
+            }
+            mod_api::BindingKind::TexelBuffer { .. } => {
+                bindings.push(PreludeBinding {
+                    set: 1,
+                    binding: next,
+                    kind: PreludeResourceKind::StorageBuffer { read_only: true },
+                    stages: PreludeStages::VERTEX_FRAGMENT,
+                });
+                next += 1;
+            }
+            mod_api::BindingKind::StorageBuffer { read_only, .. } => {
+                bindings.push(PreludeBinding {
+                    set: 1,
+                    binding: next,
+                    kind: PreludeResourceKind::StorageBuffer { read_only },
+                    stages: PreludeStages::VERTEX_FRAGMENT,
+                });
+                next += 1;
+            }
+            mod_api::BindingKind::StorageImage { access } => {
+                let access = match access {
+                    mod_api::StorageImageAccess::ReadOnly => PreludeImageAccess::ReadOnly,
+                    mod_api::StorageImageAccess::WriteOnly => PreludeImageAccess::WriteOnly,
+                    _ => PreludeImageAccess::ReadWrite,
+                };
+                bindings.push(PreludeBinding {
+                    set: 1,
+                    binding: next,
+                    kind: PreludeResourceKind::StorageImage { access },
+                    stages: PreludeStages::VERTEX_FRAGMENT,
+                });
+                next += 1;
+            }
+            _ => {}
+        }
+    }
+    if pipeline.push_constant_size > 0 {
+        bindings.push(PreludeBinding {
+            set: 1,
+            binding: next,
+            kind: PreludeResourceKind::UniformBuffer,
+            stages: PreludeStages::VERTEX_FRAGMENT,
+        });
+    }
+    bindings
+}
+
+/// Validate GLSL syntax, preludes, reserved Iris/OptiFine names, and cross-mod uniqueness across
+/// every registered `RenderPipeline::pack_binding`. Multiple pipelines owned by the same mod may
 /// share one `PackDepthTarget.id` (with identical samplers), compatible defines, and typed
 /// uniforms; cross-mod collisions and GLSL uniform/sampler namespace collisions fail startup
 /// naming the offending mod(s) and identifier.
-fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
+fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), RegistrationError> {
     let mut depth_targets: BTreeMap<&Identifier, (&str, &mod_api::PackDepthTarget)> =
         BTreeMap::new();
     let mut samplers: BTreeMap<&str, (&str, &Identifier)> = BTreeMap::new();
@@ -258,11 +378,39 @@ fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
         };
         let owner = pipeline.owner();
         binding.validate_syntax().map_err(|reason| {
-            format!(
+            RegistrationError::InvalidPackBinding(format!(
                 "Invalid pack binding on render pipeline {} (registered by {}): {reason}",
                 pipeline.id, owner
-            )
+            ))
         })?;
+        if binding.vertex_prelude.is_some() || binding.fragment_prelude.is_some() {
+            let prelude = sunrise_shaders::PackPrelude {
+                vertex: binding.vertex_prelude.clone(),
+                fragment: binding.fragment_prelude.clone(),
+            };
+            let effective_vbs = pipeline.effective_vertex_bindings();
+            let vertex_inputs: Vec<sunrise_shaders::PreludeVertexInput<'_>> = effective_vbs
+                .iter()
+                .flat_map(|(_, fmt)| fmt.attributes.iter())
+                .enumerate()
+                .map(|(loc, attr)| sunrise_shaders::PreludeVertexInput {
+                    location: loc as u32,
+                    glsl_type: attr.format.glsl_type(),
+                })
+                .collect();
+            let bindings = prelude_bindings_of(pipeline);
+            let layout = sunrise_shaders::PreludeLayout {
+                vertex_inputs: &vertex_inputs,
+                bindings: &bindings,
+            };
+            sunrise_shaders::validate_pack_prelude(&prelude, &layout).map_err(|error| {
+                RegistrationError::InvalidPackPrelude {
+                    owner: owner.to_owned(),
+                    id: pipeline.id.clone(),
+                    error,
+                }
+            })?;
+        }
 
         if let Some(target) = &binding.depth_target
             && let mod_api::PackDepthTarget::Aux {
@@ -274,51 +422,51 @@ fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
         {
             if let Some(&(first_owner, first_target)) = depth_targets.get(id) {
                 if first_owner != owner {
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Duplicate pack depth target registration: {} (registered by {} and {})",
                         id, first_owner, owner
-                    ));
+                    )));
                 }
                 if first_target != target {
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Conflicting pack depth target declaration for {} in mod {}: shared targets must declare identical samplers",
                         id, owner
-                    ));
+                    )));
                 }
             } else {
                 depth_targets.insert(id, (owner, target));
             }
             for sampler in depth_samplers.iter().chain(opaque_depth_samplers.iter()) {
                 if let Some(kind) = sunrise_shaders::reserved_pack_identifier(sampler) {
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Reserved pack sampler name {:?} on render pipeline {} (registered by {}) collides with a {kind}",
                         sampler, pipeline.id, owner
-                    ));
+                    )));
                 }
                 if let Some(&(u_owner, _, _)) = uniforms.get(sampler.as_str()) {
                     if u_owner != owner {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Pack GLSL identifier collision on {:?}: registered as a uniform by {} and as a sampler by {}",
                             sampler, u_owner, owner
-                        ));
+                        )));
                     }
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Conflicting pack GLSL identifier {:?} in mod {}: declared as both a uniform and a sampler",
                         sampler, owner
-                    ));
+                    )));
                 }
                 if let Some(&(first_owner, first_target_id)) = samplers.get(sampler.as_str()) {
                     if first_owner != owner {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Duplicate pack sampler registration: {:?} (registered by {} and {})",
                             sampler, first_owner, owner
-                        ));
+                        )));
                     }
                     if first_target_id != id {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Conflicting pack sampler registration {:?} in mod {}: bound to both {} and {}",
                             sampler, owner, first_target_id, id
-                        ));
+                        )));
                     }
                 } else {
                     samplers.insert(sampler.as_str(), (owner, id));
@@ -331,41 +479,41 @@ fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
                 .chain(uniform.previous_name.as_deref().map(|n| (n, true)));
             for (name, is_previous) in names {
                 if let Some(kind) = sunrise_shaders::reserved_pack_identifier(name) {
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Reserved pack uniform name {:?} on render pipeline {} (registered by {}) collides with a {kind}",
                         name, pipeline.id, owner
-                    ));
+                    )));
                 }
                 if let Some(&(s_owner, _)) = samplers.get(name) {
                     if s_owner != owner {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Pack GLSL identifier collision on {:?}: registered as a sampler by {} and as a uniform by {}",
                             name, s_owner, owner
-                        ));
+                        )));
                     }
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Conflicting pack GLSL identifier {:?} in mod {}: declared as both a sampler and a uniform",
                         name, owner
-                    ));
+                    )));
                 }
                 if let Some(&(first_owner, first_ty, first_is_previous)) = uniforms.get(name) {
                     if first_owner != owner {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Duplicate pack uniform registration: {:?} (registered by {} and {})",
                             name, first_owner, owner
-                        ));
+                        )));
                     }
                     if first_ty != uniform.ty {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Conflicting pack uniform type for {:?} in mod {}: declared as {:?} and {:?}",
                             name, owner, first_ty, uniform.ty
-                        ));
+                        )));
                     }
                     if first_is_previous != is_previous {
-                        return Err(format!(
+                        return Err(RegistrationError::InvalidPackBinding(format!(
                             "Conflicting pack uniform role for {:?} in mod {}: declared as both current and previous_name",
                             name, owner
-                        ));
+                        )));
                     }
                 } else {
                     uniforms.insert(name, (owner, uniform.ty, is_previous));
@@ -377,16 +525,16 @@ fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
             let val = value.as_deref();
             if let Some(&(first_owner, first_val)) = defines.get(name.as_str()) {
                 if first_owner != owner {
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Duplicate pack define registration: {:?} (registered by {} and {})",
                         name, first_owner, owner
-                    ));
+                    )));
                 }
                 if first_val != val {
-                    return Err(format!(
+                    return Err(RegistrationError::InvalidPackBinding(format!(
                         "Conflicting pack define value for {:?} in mod {}: {:?} vs {:?}",
                         name, owner, first_val, val
-                    ));
+                    )));
                 }
             } else {
                 defines.insert(name.as_str(), (owner, val));
@@ -879,6 +1027,8 @@ pub struct Built {
     pub bind_group_layout: mod_api::BindGroupLayout,
     /// Declared push-constant byte size (`0..=128`, multiple of 4).
     pub push_constant_size: u32,
+    /// Whether this pipeline attaches a vertex or fragment shader-pack prelude.
+    pub has_pack_prelude: bool,
 }
 
 impl Built {
@@ -1139,6 +1289,9 @@ impl Pipelines {
                         texture,
                         bind_group_layout: pipeline.bind_group_layout.clone(),
                         push_constant_size: pipeline.push_constant_size,
+                        has_pack_prelude: pipeline.pack_binding.as_ref().is_some_and(|b| {
+                            b.vertex_prelude.is_some() || b.fragment_prelude.is_some()
+                        }),
                     })),
                     Err(reason) => {
                         let refusal = format!(
@@ -1635,60 +1788,98 @@ fn pack_blend_for(blend: PipelineBlend) -> Option<sunrise_shaders::Blend> {
     ])
 }
 
-fn glsl_input_expr(input: &PackGlslInput) -> String {
-    match (input.source.as_str(), input.ty) {
-        ("position" | "pos", PackUniformType::Vec3) => "mod_position".to_owned(),
-        ("position" | "pos", PackUniformType::Vec4) => "vec4(mod_position, 1.0)".to_owned(),
-        ("uv" | "uv0", PackUniformType::Vec2) => "mod_uv".to_owned(),
-        ("uv" | "uv0", PackUniformType::Vec4) => "vec4(mod_uv, 0.0, 1.0)".to_owned(),
-        ("color", PackUniformType::Vec4) => "mod_color".to_owned(),
-        ("color", PackUniformType::Vec3) => "mod_color.rgb".to_owned(),
-        ("normal", PackUniformType::Vec3) => "vec3(0.0, 1.0, 0.0)".to_owned(),
-        ("light" | "uv2", PackUniformType::Vec2) => "vec2(240.0, 240.0)".to_owned(),
-        (_, PackUniformType::Float) => "0.0".to_owned(),
-        (_, PackUniformType::Int) => "0".to_owned(),
-        (_, PackUniformType::Vec2) => "vec2(0.0)".to_owned(),
-        (_, PackUniformType::Vec3) => "vec3(0.0)".to_owned(),
-        (_, PackUniformType::Vec4) => "vec4(0.0)".to_owned(),
-        (_, PackUniformType::Mat3) => "mat3(1.0)".to_owned(),
-        (_, PackUniformType::Mat4) => "mat4(1.0)".to_owned(),
-        _ => "0.0".to_owned(),
+fn mod_pipeline_gbuffers_inputs(pipeline: &RenderPipeline) -> sunrise_shaders::GbuffersInputs {
+    use std::fmt::Write as _;
+    let prelude = pipeline.pack_binding.as_ref().and_then(|b| {
+        let p = sunrise_shaders::PackPrelude {
+            vertex: b.vertex_prelude.clone(),
+            fragment: b.fragment_prelude.clone(),
+        };
+        (!p.is_empty()).then_some(p)
+    });
+    if prelude.as_ref().is_some_and(|p| p.vertex.is_some()) {
+        // In prelude mode, the vertex prelude owns every real vertex input (possibly none) and
+        // `sunrise_pack_vertex_init()` populates the standard inputs and pack attributes.
+        return sunrise_shaders::GbuffersInputs {
+            prelude,
+            ..Default::default()
+        };
     }
-}
+    // Ordinary mod pipeline with no vertex prelude: derive vertex inputs dynamically from the
+    // pipeline's effective `VertexFormat` bindings (defaulting any omitted standard inputs).
+    let mut declarations = String::new();
+    let mut pos_expr: Option<(&'static str, String)> = None;
+    let mut color_expr: Option<(&'static str, String)> = None;
+    let mut uv0_expr: Option<(&'static str, String)> = None;
+    let mut uv1_expr: Option<String> = None;
+    let mut uv2_expr: Option<String> = None;
+    let mut normal_expr: Option<String> = None;
 
-fn mod_pipeline_gbuffers_inputs(
-    binding: Option<&mod_api::PackBinding>,
-) -> sunrise_shaders::GbuffersInputs {
-    let mut attributes = vec![
-        ("vaPosition".to_owned(), "mod_position".to_owned()),
-        ("vaColor".to_owned(), "mod_color".to_owned()),
-        ("vaUV0".to_owned(), "mod_uv".to_owned()),
-        ("vaUV2".to_owned(), "ivec2(240, 240)".to_owned()),
-        ("vaNormal".to_owned(), "vec3(0.0, 1.0, 0.0)".to_owned()),
-    ];
-    if let Some(binding) = binding {
-        for input in &binding.glsl_bindings {
-            let expr = glsl_input_expr(input);
-            if let Some(existing) = attributes.iter_mut().find(|(k, _)| k == &input.glsl_name) {
-                existing.1 = expr;
-            } else {
-                attributes.push((input.glsl_name.clone(), expr));
+    let mut loc = 0u32;
+    for (_, fmt) in pipeline.effective_vertex_bindings() {
+        for attr in fmt.attributes {
+            let ty = attr.format.glsl_type();
+            let var = format!("hz_in_{loc}");
+            writeln!(declarations, "layout(location = {loc}) in {ty} {var};").unwrap();
+            match attr.name.as_str() {
+                "Position" => pos_expr = Some((ty, var)),
+                "Color" => color_expr = Some((ty, var)),
+                "UV0" => uv0_expr = Some((ty, var)),
+                "UV1" => uv1_expr = Some(var),
+                "UV2" => uv2_expr = Some(var),
+                "Normal" => normal_expr = Some(var),
+                _ => {}
             }
+            loc += 1;
         }
     }
+    let hz_vertex = match &pos_expr {
+        Some(("vec4", v)) => v.clone(),
+        Some(("vec3", v)) => format!("vec4({v}, 1.0)"),
+        Some(("vec2", v)) => format!("vec4({v}, 0.0, 1.0)"),
+        _ => "vec4(0.0, 0.0, 0.0, 1.0)".to_owned(),
+    };
+    let hz_color = match &color_expr {
+        Some(("vec4", v)) => v.clone(),
+        Some(("vec3", v)) => format!("vec4({v}, 1.0)"),
+        _ => "vec4(1.0)".to_owned(),
+    };
+    let hz_uv0 = match &uv0_expr {
+        Some(("vec4", v)) => v.clone(),
+        Some(("vec2", v)) => format!("vec4({v}, 0.0, 1.0)"),
+        _ => "vec4(0.0, 0.0, 0.0, 1.0)".to_owned(),
+    };
+    let (hz_uv1, va_uv2) = match &uv2_expr {
+        Some(v) => (format!("vec4(vec2({v}), 0.0, 1.0)"), format!("ivec2({v})")),
+        None => (
+            "vec4(240.0, 240.0, 0.0, 1.0)".to_owned(),
+            "ivec2(240, 240)".to_owned(),
+        ),
+    };
+    let hz_normal = normal_expr.unwrap_or_else(|| "vec3(0.0, 1.0, 0.0)".to_owned());
+    let body = format!(
+        "    hz_Vertex = {hz_vertex};\n    \
+         hz_Color = {hz_color};\n    \
+         hz_MultiTexCoord0 = {hz_uv0};\n    \
+         hz_MultiTexCoord1 = {hz_uv1};\n    \
+         hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
+         hz_Normal = {hz_normal};\n"
+    );
+    let mut attributes = vec![
+        ("vaPosition".to_owned(), "hz_Vertex.xyz".to_owned()),
+        ("vaColor".to_owned(), "hz_Color".to_owned()),
+        ("vaUV0".to_owned(), "hz_MultiTexCoord0.xy".to_owned()),
+        ("vaUV2".to_owned(), va_uv2),
+        ("vaNormal".to_owned(), "hz_Normal".to_owned()),
+    ];
+    if let Some(uv1) = uv1_expr {
+        attributes.push(("vaUV1".to_owned(), format!("ivec2({uv1})")));
+    }
     sunrise_shaders::GbuffersInputs {
-        declarations: "layout(location = 0) in vec3 mod_position;\n\
-             layout(location = 1) in vec2 mod_uv;\n\
-             layout(location = 2) in vec4 mod_color;\n"
-            .to_owned(),
-        body: "    hz_Vertex = vec4(mod_position, 1.0);\n\
-             hz_Color = mod_color;\n\
-             hz_MultiTexCoord0 = vec4(mod_uv, 0.0, 1.0);\n\
-             hz_MultiTexCoord1 = vec4(240.0, 240.0, 0.0, 1.0);\n\
-             hz_MultiTexCoord2 = hz_MultiTexCoord1;\n\
-             hz_Normal = vec3(0.0, 1.0, 0.0);\n"
-            .to_owned(),
+        declarations,
+        body,
         attributes,
+        prelude,
         ..Default::default()
     }
 }
@@ -1740,7 +1931,7 @@ pub(crate) fn pack_program_requests_of(
             slot,
             programs,
             group: shader_group_for_slot(pass_slot),
-            inputs: mod_pipeline_gbuffers_inputs(pipeline.pack_binding.as_ref()),
+            inputs: mod_pipeline_gbuffers_inputs(pipeline),
             default_blend: match pass_slot {
                 PackPassSlot::AfterOpaqueGbuffers | PackPassSlot::Shadow => None,
                 PackPassSlot::AfterSky
@@ -1795,8 +1986,7 @@ pub(crate) fn pack_runtime_specs_of(
     pipelines: &[RenderPipeline],
 ) -> sunrise_render_shaderpack::pack_post::OwnedModPackRuntime {
     use sunrise_render_shaderpack::pack_post::{
-        ModDepthTargetDecl, ModPipelinePackSpec, ModProgramMode, ModUniformDecl,
-        OwnedModPackRuntime,
+        ModDepthTargetDecl, ModPipelinePackSpec, ModUniformDecl, OwnedModPackRuntime,
     };
     let mut depth_targets = Vec::new();
     let mut depth_target_ids: Vec<Identifier> = Vec::new();
@@ -1879,12 +2069,6 @@ pub(crate) fn pack_runtime_specs_of(
                 .map(|ds| wgpu_depth_bias(ds, true)),
             depth_write,
             cull: pipeline.state.cull,
-            program_mode: pipeline
-                .pack_binding
-                .as_ref()
-                .map_or(ModProgramMode::default(), |b| {
-                    mod_program_mode(b.program_mode)
-                }),
         });
     }
 
@@ -1892,16 +2076,6 @@ pub(crate) fn pack_runtime_specs_of(
         depth_targets,
         uniforms,
         pipelines: specs,
-    }
-}
-
-fn mod_program_mode(
-    mode: mod_api::PackProgramMode,
-) -> sunrise_render_shaderpack::pack_post::ModProgramMode {
-    use sunrise_render_shaderpack::pack_post::ModProgramMode as M;
-    match mode {
-        mod_api::PackProgramMode::ModVertexPackFragment => M::ModVertexPackFragment,
-        _ => M::PackVertexAndFragment,
     }
 }
 
@@ -2295,7 +2469,9 @@ void main() {
                     &mut staged_compute,
                     &mut staged,
                 );
-                result = validate_pack_bindings(&staged).map(|()| staged);
+                result = validate_pack_bindings(&staged)
+                    .map(|()| staged)
+                    .map_err(|e| e.to_string());
             });
             result
         };
@@ -2656,9 +2832,7 @@ void main() {
 
     #[test]
     fn pack_runtime_helpers_deduplicate_targets_uniforms_and_defines() {
-        use mod_api::{
-            PackBinding, PackDepthTarget, PackGlslInput, PackUniformDecl, PipelineGeometryClass,
-        };
+        use mod_api::{PackBinding, PackDepthTarget, PackUniformDecl, PipelineGeometryClass};
         let shared_depth = PackDepthTarget::new(id("example:aux_depth"))
             .depth_sampler("modDepthTex0")
             .opaque_depth_sampler("modDepthTex1");
@@ -2680,11 +2854,13 @@ void main() {
                     PackUniformDecl::new("modProj", PackUniformType::Mat4)
                         .with_previous("prevModProj"),
                 )
-                .glsl_binding(PackGlslInput::new(
-                    "color",
-                    "modColor",
-                    PackUniformType::Vec4,
-                )),
+                .vertex_prelude(
+                    "int modMaterial;\n\
+                     void sunrise_pack_vertex_init() {\n\
+                         gl_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n\
+                         modMaterial = 1;\n\
+                     }\n",
+                ),
         );
         let water = RenderPipeline::new(
             id("example:water"),
@@ -2725,12 +2901,10 @@ void main() {
         assert_eq!(reqs[0].group, sunrise_shaders::Group::Gbuffers);
         assert_eq!(reqs[0].default_blend, None);
         assert!(
-            reqs[0]
-                .inputs
-                .attributes
-                .iter()
-                .any(|(k, v)| k == "modColor" && v == "mod_color")
+            reqs[0].inputs.declarations.is_empty(),
+            "vertex prelude owns all vertex inputs"
         );
+        assert!(reqs[0].inputs.prelude.as_ref().unwrap().vertex.is_some());
         assert_eq!(reqs[1].slot, 1);
         assert_eq!(reqs[1].programs[0], "custom_water");
         assert_eq!(reqs[1].programs[1], "gbuffers_water");
@@ -2738,6 +2912,10 @@ void main() {
         assert_eq!(
             reqs[1].default_blend,
             Some(sunrise_shaders::TRANSLUCENT_BLEND)
+        );
+        assert!(
+            reqs[1].inputs.prelude.is_none() && !reqs[1].inputs.declarations.is_empty(),
+            "no-prelude pipeline still derives default vertex inputs"
         );
 
         let runtime = pack_runtime_specs_of(&list);
@@ -2771,8 +2949,7 @@ void main() {
 
     #[test]
     fn an_explicit_main_depth_target_allows_requested_writes_and_cull_reaches_the_pack_spec() {
-        use mod_api::{PackBinding, PackDepthTarget, PackProgramMode, PipelineGeometryClass};
-        use sunrise_render_shaderpack::pack_post::ModProgramMode;
+        use mod_api::{PackBinding, PackDepthTarget, PipelineGeometryClass};
         let translucent = |name: &str, binding: PackBinding, cull: bool| {
             RenderPipeline::new(
                 id(name),
@@ -2793,27 +2970,64 @@ void main() {
                 PackBinding::new().depth_target(PackDepthTarget::Main),
                 true,
             ),
-            translucent(
-                "example:own_vertex",
-                PackBinding::new().program_mode(PackProgramMode::ModVertexPackFragment),
-                true,
-            ),
         ];
         let runtime = pack_runtime_specs_of(&list);
-        let [plain, main, own_vertex] = &runtime.pipelines[..] else {
-            panic!("three pipelines expected");
+        let [plain, main] = &runtime.pipelines[..] else {
+            panic!("two pipelines expected");
         };
         assert!(!plain.depth_write && !plain.cull);
-        assert_eq!(plain.program_mode, ModProgramMode::PackVertexAndFragment);
         assert!(main.depth_write);
         assert_eq!(main.depth_target, None);
         assert!(main.cull);
-        assert_eq!(main.program_mode, ModProgramMode::PackVertexAndFragment);
-        assert!(own_vertex.cull);
-        assert_eq!(
-            own_vertex.program_mode,
-            ModProgramMode::ModVertexPackFragment
-        );
+    }
+
+    #[test]
+    fn registration_validates_pack_preludes_with_typed_errors() {
+        use mod_api::{BindGroupLayout, BindingKind, PackBinding};
+
+        let storage_layout = BindGroupLayout::builder()
+            .entry(
+                "Verts",
+                BindingKind::StorageBuffer {
+                    read_only: true,
+                    min_size: 16,
+                },
+            )
+            .build()
+            .unwrap();
+        let valid = pipeline("example:prelude_ok", "example:prelude_ok")
+            .bind_group_layout(storage_layout.clone())
+            .pack_binding(PackBinding::new().vertex_prelude(
+                "layout(set = 1, binding = 0, std430) readonly buffer Verts { vec4 pos[]; };\n\
+                     void sunrise_pack_vertex_init() { gl_Vertex = pos[gl_VertexIndex]; }\n",
+            ));
+        assert!(validate_pack_bindings(&[valid]).is_ok());
+
+        // Missing sunrise_pack_vertex_init in vertex prelude -> typed MissingVertexInit error.
+        let missing_init = pipeline("example:no_init", "example:no_init")
+            .pack_binding(PackBinding::new().vertex_prelude("int customFlag;\n"));
+        assert!(matches!(
+            validate_pack_bindings(&[missing_init]),
+            Err(RegistrationError::InvalidPackPrelude {
+                error: sunrise_shaders::PreludeError::MissingVertexInit,
+                ..
+            })
+        ));
+
+        // Unknown set-1 binding -> typed InvalidBinding error.
+        let bad_binding = pipeline("example:bad_binding", "example:bad_binding")
+            .bind_group_layout(storage_layout)
+            .pack_binding(PackBinding::new().vertex_prelude(
+                "layout(set = 1, binding = 5, std430) readonly buffer Missing { vec4 x[]; };\n\
+                     void sunrise_pack_vertex_init() { gl_Vertex = x[0]; }\n",
+            ));
+        assert!(matches!(
+            validate_pack_bindings(&[bad_binding]),
+            Err(RegistrationError::InvalidPackPrelude {
+                error: sunrise_shaders::PreludeError::InvalidBinding { .. },
+                ..
+            })
+        ));
     }
 
     #[test]

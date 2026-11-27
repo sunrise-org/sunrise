@@ -53,10 +53,14 @@ pub(super) struct Stage<'p> {
     /// Vertex inputs, now private globals, and the value our `main` gives each.
     /// Vertex inputs: name, our composite value, type.
     pub(super) attributes: Vec<(String, String, String)>,
+    /// Token spans of vertex `in`/`attribute` statements (for hoisting in prelude mode).
+    pub(super) attribute_ranges: Vec<std::ops::Range<usize>>,
     /// A gbuffers-style program: the matrices are the frame's, not the quad's.
     pub(super) gbuffers: bool,
     /// `normals` and `specular` are paged maps (`GbuffersInputs::paged_maps`).
     pub(super) paged_maps: bool,
+    /// Names read by a fragment prelude so `varyings::assign` keeps those varyings live.
+    pub(super) prelude_reads: BTreeSet<String>,
     /// The pack's fragment outputs, declared again with their locations.
     pub(super) frag_outs: Vec<(u32, String)>,
     /// Narrow outputs copied into their vec4 after the pack's `main`.
@@ -96,6 +100,10 @@ pub(super) struct Stage<'p> {
     pub(super) uninitialized: Vec<(usize, String, String)>,
     /// Authored global names; automatic core matrix inputs must not hide them.
     pub(super) globals: BTreeSet<String>,
+    /// Authored plain global variable/constant types by name (for prelude collision checks).
+    pub(super) global_types: HashMap<String, String>,
+    /// Top-level function names declared or defined by this stage (for prelude collision checks).
+    pub(super) functions: BTreeSet<String>,
     /// The other names the stage declares at file scope: its structs' and blocks' names, a
     /// block's instances, and the members of a block without one, which the stage reads as
     /// globals (GLSL 4.60, 4.3.9). A game input of one of these names isn't given.
@@ -106,7 +114,7 @@ pub(super) struct Stage<'p> {
 }
 
 /// The format qualifiers of images (GLSL 4.60, 4.4.6.2).
-const IMAGE_FORMATS: [&str; 39] = [
+pub(super) const IMAGE_FORMATS: [&str; 39] = [
     "rgba32f",
     "rgba16f",
     "rg32f",
@@ -463,6 +471,7 @@ impl<'p> Stage<'p> {
             ins: Vec::new(),
             outs: Vec::new(),
             attributes: Vec::new(),
+            attribute_ranges: Vec::new(),
             frag_outs: Vec::new(),
             out_copies: Vec::new(),
             wide_outs: HashMap::new(),
@@ -479,10 +488,13 @@ impl<'p> Stage<'p> {
             frag_coord: false,
             gbuffers: false,
             paged_maps: false,
+            prelude_reads: BTreeSet::new(),
             replaced: HashMap::new(),
             inits: Vec::new(),
             uninitialized: Vec::new(),
             globals: BTreeSet::new(),
+            global_types: HashMap::new(),
+            functions: BTreeSet::new(),
             declared: BTreeSet::new(),
             runtime_array_lengths: HashMap::new(),
             errors: Vec::new(),
@@ -696,19 +708,42 @@ impl<'p> Stage<'p> {
         {
             type_at += 1;
         }
+        let ty = words.get(type_at).map(|&i| self.tokens[i]);
         let (mut depth, mut name) = (0i32, true);
+        let mut current: Option<(String, String)> = None;
+        let mut in_init = false;
         for &i in words.iter().skip(type_at + 1) {
             let token = self.tokens[i];
             if depth == 0 && name && is_ident(token) {
                 self.globals.insert(token.to_owned());
+                current = Some((token.to_owned(), String::new()));
+                in_init = false;
                 name = false;
+                continue;
+            }
+            if depth == 0 && token == "=" {
+                in_init = true;
+            } else if depth == 0 && token == "," {
+                if let (Some(ty), Some((n, arr))) = (ty, current.take()) {
+                    self.global_types.insert(n, format!("{ty}{arr}"));
+                }
+                in_init = false;
+                name = true;
+                continue;
+            } else if !in_init
+                && let Some((_, arr)) = &mut current
+                && (token == "[" || token == "]" || depth > 0)
+            {
+                arr.push_str(token);
             }
             match token {
                 "(" | "[" | "{" => depth += 1,
                 ")" | "]" | "}" => depth -= 1,
-                "," if depth == 0 => name = true,
                 _ => {}
             }
+        }
+        if let (Some(ty), Some((n, arr))) = (ty, current.take()) {
+            self.global_types.insert(n, format!("{ty}{arr}"));
         }
     }
 
@@ -886,6 +921,7 @@ impl<'p> Stage<'p> {
                 _ if input && !fragment => {
                     let value = attribute_value(&name, &ty);
                     self.attributes.push((name, value, ty.clone()));
+                    self.attribute_ranges.push(from..to + 1);
                     self.removed.pop();
                     // A private global of ours now: `in`/`attribute` and qualifiers go.
                     for &w in &words[..k] {
@@ -1446,6 +1482,7 @@ impl<'p> Stage<'p> {
             return;
         };
         self.globals.insert(self.tokens[name].to_owned());
+        self.functions.insert(self.tokens[name].to_owned());
         let mut params = Vec::new();
         let mut is_sampler = false;
         for &i in &words[open + 1..] {

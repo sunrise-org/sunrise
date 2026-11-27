@@ -145,21 +145,9 @@ pub enum ModPassSlot {
 
 /// First bind group index of a mod's own sets in a pack pass, after the pack's own sets
 /// `0..=5` (the frame's, the geometry's, the draws', the block ids', the storage buffers' and
-/// the geometry stage's indices). The mod's set goes after the pack's and never into one of
-/// them, so the pack's layouts stay as they are.
-pub const MOD_SET_BASE: u32 = 6;
-
-/// Which stages of a mod pipeline's pack pass come from the pack.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ModProgramMode {
-    /// The pack's program replaces both stages, its vertex stage reading the mod's vertices.
-    #[default]
-    PackVertexAndFragment,
-    /// The mod's own vertex stage, linked to the pack's fragment stage of the same program.
-    /// Needs the pack's fragment inputs to match the mod's vertex outputs, else the slot is
-    /// unbound and the mod's own shaders draw.
-    ModVertexPackFragment,
-}
+/// the geometry stage's indices). Prelude `set = 0` maps to `MOD_SET_BASE` (6) and prelude
+/// `set = 1` maps to `MOD_SET_BASE + 1` (7).
+pub use sunrise_shaders::MOD_SET_BASE;
 
 /// One vertex buffer binding of a mod pipeline's own vertex format.
 #[derive(Clone, Debug)]
@@ -170,12 +158,11 @@ pub struct ModVertexBuffer {
     pub attributes: Vec<wgpu::VertexAttribute>,
 }
 
-/// A mod pipeline's own translated vertex stage for [`ModProgramMode::ModVertexPackFragment`],
-/// with the vertex layout it reads and the layouts of the bind groups it declares: its frame
-/// uniforms (group 0) and, when declared, its own set 1.
+/// A mod pipeline's vertex buffer layouts and bind-group layouts for shader-pack passes:
+/// its frame uniforms (bound at [`MOD_SET_BASE`] when a prelude uses `set = 0`) and, when
+/// declared, its own set-1 layout (bound at `MOD_SET_BASE + 1` when a prelude uses `set = 1`).
 #[derive(Clone, Debug)]
-pub struct ModVertexStage {
-    pub module: naga::Module,
+pub struct ModPipelineLayouts {
     pub buffers: Vec<ModVertexBuffer>,
     pub globals_layout: wgpu::BindGroupLayout,
     pub set1_layout: Option<wgpu::BindGroupLayout>,
@@ -200,8 +187,6 @@ pub struct ModPipelinePackSpec {
     pub depth_write: bool,
     /// Whether back faces are culled (`PipelineState::cull`).
     pub cull: bool,
-    /// Which stages come from the pack.
-    pub program_mode: ModProgramMode,
 }
 
 /// Mod-pipeline shader-pack declarations handed to `PackPost::new_with_mods`.
@@ -210,21 +195,16 @@ pub struct ModPackRuntime<'a> {
     pub depth_targets: &'a [ModDepthTargetDecl],
     pub uniforms: &'a [ModUniformDecl],
     pub pipelines: &'a [ModPipelinePackSpec],
-    /// Vertex buffer layout for mod pipeline quads when `pipelines` is non-empty.
+    /// Fallback vertex buffer layout for mod pipelines when [`Self::mod_layouts`] is empty.
     pub vertex_buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
-    /// Optional per-pipeline-slot set-1 `wgpu::BindGroupLayout` for mod pipelines declaring
-    /// custom uniforms, samplers, texel buffers, or push constants (`#5428`).
-    pub bind_group_layouts: &'a [Option<&'a wgpu::BindGroupLayout>],
-    /// Per-pipeline-slot own vertex stage, for pipelines in
-    /// [`ModProgramMode::ModVertexPackFragment`].
-    pub vertex_stages: &'a [Option<ModVertexStage>],
+    /// Per-pipeline-slot vertex buffer layouts and set-0/set-1 bind-group layouts.
+    pub mod_layouts: &'a [Option<ModPipelineLayouts>],
 }
 
 impl<'a> ModPackRuntime<'a> {
-    /// This runtime with each slot's own vertex stage, for pipelines in
-    /// [`ModProgramMode::ModVertexPackFragment`].
-    pub fn with_vertex_stages(mut self, stages: &'a [Option<ModVertexStage>]) -> Self {
-        self.vertex_stages = stages;
+    /// Attach per-slot vertex and bind-group layouts for mod pipeline pack passes.
+    pub fn with_mod_layouts(mut self, layouts: &'a [Option<ModPipelineLayouts>]) -> Self {
+        self.mod_layouts = layouts;
         self
     }
 }
@@ -243,23 +223,12 @@ impl OwnedModPackRuntime {
         &'a self,
         vertex_buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
     ) -> ModPackRuntime<'a> {
-        self.as_runtime_with_layouts(vertex_buffers, &[])
-    }
-
-    /// Borrow as a [`ModPackRuntime`] paired with `vertex_buffers` and per-slot set-1
-    /// `bind_group_layouts`.
-    pub fn as_runtime_with_layouts<'a>(
-        &'a self,
-        vertex_buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
-        bind_group_layouts: &'a [Option<&'a wgpu::BindGroupLayout>],
-    ) -> ModPackRuntime<'a> {
         ModPackRuntime {
             depth_targets: &self.depth_targets,
             uniforms: &self.uniforms,
             pipelines: &self.pipelines,
             vertex_buffers,
-            bind_group_layouts,
-            vertex_stages: &[],
+            mod_layouts: &[],
         }
     }
 }
@@ -271,12 +240,11 @@ pub struct ModPackPass {
     /// Index into `Targets::mod_depth` when the active pack actually samples this target;
     /// `None` uses the pack's main `depthtex0` (or shadow depth in `Shadow`).
     pub depth_target: Option<usize>,
-    /// Whether this pass's pipeline layout includes a mod-declared set-1 bind group (`#5428`).
-    pub has_mod_bind_group: bool,
-    /// Whether the pass runs the mod's own vertex stage ([`ModProgramMode::ModVertexPackFragment`]):
-    /// its frame uniforms are then bound at [`MOD_SET_BASE`] and its set 1 at the one after,
-    /// instead of its set 1 at index 1.
-    pub mod_vertex: bool,
+    /// Whether this pass's pipeline layout binds the mod's frame uniforms at [`MOD_SET_BASE`].
+    pub uses_mod_globals: bool,
+    /// Whether this pass's pipeline layout binds the mod's set-1 bind group at
+    /// `MOD_SET_BASE + 1`.
+    pub uses_mod_set1: bool,
     pub pass: Pass,
 }
 

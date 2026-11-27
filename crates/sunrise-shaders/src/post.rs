@@ -1027,6 +1027,23 @@ pub fn load_post(
     // Whether the pack has a program for each part, loaded or not.
     let [has_solid, has_cutout] =
         [&TERRAIN_SOLID, &TERRAIN_CUTOUT].map(|chain| chain.iter().any(|n| loader.has(n)));
+    // Pick each non-shadow mod pipeline's first existing, enabled program stem up front: if that
+    // program fails translation (or has a geometry stage), the slot stays unbound with no fallback
+    // stem.
+    let mod_stems: Vec<Option<&str>> = inputs
+        .mod_programs
+        .iter()
+        .map(|req| {
+            (!req.group.shadow())
+                .then(|| {
+                    req.programs
+                        .iter()
+                        .map(String::as_str)
+                        .find(|name| loader.has(name))
+                })
+                .flatten()
+        })
+        .collect();
     let mut gbuffers = |names: &[&str], group, inputs: &GbuffersInputs| {
         names.iter().find_map(|name| {
             // `alphaTest.<program>` replaces the geometry's default test (OQ-23).
@@ -1171,16 +1188,14 @@ pub fn load_post(
     let mod_programs: Vec<ModPackProgram> = inputs
         .mod_programs
         .iter()
-        .map(|req| {
-            let program = if req.group.shadow() {
-                None
-            } else {
-                let names: Vec<&str> = req.programs.iter().map(String::as_str).collect();
-                gbuffers(&names, req.group, &req.inputs).map(|mut p| {
+        .zip(mod_stems)
+        .map(|(req, stem)| {
+            let program = stem
+                .and_then(|name| gbuffers(&[name], req.group, &req.inputs))
+                .map(|mut p| {
                     p.blend = blend(properties, &p.name).unwrap_or(req.default_blend);
                     p
-                })
-            };
+                });
             ModPackProgram {
                 slot: req.slot,
                 program,
@@ -1520,7 +1535,8 @@ fn load_shadow(
         if !req.group.shadow() {
             continue;
         }
-        let resolved = req.programs.iter().find_map(|name| {
+        let stem = req.programs.iter().find(|name| loader.has(name));
+        let resolved = stem.and_then(|name| {
             let test = match properties.get(&format!("alphaTest.{name}")) {
                 Some(v) => crate::AlphaTest::parse(v.trim()).flatten(),
                 None => req.inputs.alpha_test,

@@ -1588,21 +1588,17 @@ impl PackPost {
                     if chunk.slot != m.slot || chunk.is_empty() {
                         continue;
                     }
-                    // The mod's own vertex stage has its frame uniforms and set 1 after the
-                    // pack's sets; the pack's vertex stage reads the mod's set 1 at index 1.
-                    let mut set1 = 1;
-                    if m.mod_vertex {
+                    if m.uses_mod_globals {
                         let Some(globals) = &chunk.mod_globals else {
                             continue;
                         };
                         rp.set_bind_group(MOD_SET_BASE, globals, &[]);
-                        set1 = MOD_SET_BASE + 1;
                     }
-                    if m.has_mod_bind_group {
+                    if m.uses_mod_set1 {
                         let Some((ref bg, ref offsets)) = chunk.mod_bind_group else {
                             continue;
                         };
-                        rp.set_bind_group(set1, bg, offsets);
+                        rp.set_bind_group(MOD_SET_BASE + 1, bg, offsets);
                     }
                     for (binding, buffer, range) in &chunk.vertex_buffers {
                         rp.set_vertex_buffer(*binding, buffer.slice(range.clone()));

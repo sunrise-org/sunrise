@@ -1,6 +1,10 @@
 sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_aux_depth_is_lazy_when_pack_never_samples_it lib daily gpu
 sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_falls_back_to_gbuffers_terrain_when_custom_program_absent lib daily gpu
 sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_frame_uniform_type_mismatch_draws_with_zero lib daily gpu
+sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_prelude_collision_or_failure_leaves_slot_unbound_without_fallback lib daily gpu
+sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_prelude_deduplicates_matching_declarations_with_pack lib daily gpu
+sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_prelude_far_terrain_reads_attributes_helpers_and_mod_set1_texture lib daily gpu
+sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_prelude_vertex_pull_storage_buffer_with_no_vertex_inputs lib daily gpu
 sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_program_draws_aux_depth_and_tracks_previous_uniform lib daily gpu
 sunrise-client-render gfx::pack_post::mod_pack_binding_tests::mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic lib daily gpu
 sunrise-client-render gfx::pack_post::mod_pack_binding_tests::pack_owned_feature_stages_draw_only_unbound_prepared_mod_pipelines lib daily gpu
