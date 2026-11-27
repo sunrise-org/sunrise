@@ -4,15 +4,38 @@ use sunrise_gameplay_common::game::{
     combat_common::PlayerCredit, entity_memory::OffLevel, native_ticks,
 };
 use sunrise_gameplay_common::lan::mob_players::{GuestViews, acts_on_player};
-use sunrise_items::{
-    blocks::BlockFacts,
-    items::{BlockTagFlags, Items},
-};
+use sunrise_items::{blocks::BlockFacts, items::BlockTagFlags};
 use sunrise_level::world::World;
 use sunrise_sim::parallel;
 use sunrise_world::registry::{BlockRegistry, BlockStateId};
 
 pub(super) const MIN_PARALLEL_MOBS: usize = 256;
+
+enum ClimbInput {
+    Fixed(bool),
+    Feet { position: Vec3, fall_flying: bool },
+}
+
+impl ClimbInput {
+    fn from_mob(mob: &Mob) -> Self {
+        if mob.kind.flags.climber {
+            return Self::Fixed(mob.climbing);
+        }
+        let species = mob.species();
+        if sunrise_sim::mobs::equine::is_equine(species)
+            || matches!(
+                species,
+                Species::Ghast | Species::Phantom | Species::HappyGhast
+            )
+        {
+            return Self::Fixed(false);
+        }
+        Self::Feet {
+            position: mob.position,
+            fall_flying: mob.extra.fall_flying,
+        }
+    }
+}
 
 struct ClimbingBlocks<'a> {
     world: &'a World,
@@ -23,27 +46,22 @@ struct ClimbingBlocks<'a> {
 
 impl ClimbingBlocks<'_> {
     // Match Mob::on_climbable with both block-part callbacks absent.
-    fn on_climbable(&self, mob: &Mob) -> bool {
-        if mob.kind.flags.climber {
-            return mob.climbing;
-        }
-        let species = mob.species();
-        if sunrise_sim::mobs::equine::is_equine(species)
-            || matches!(
-                species,
-                Species::Ghast | Species::Phantom | Species::HappyGhast
-            )
-        {
-            return false;
-        }
+    fn on_climbable(&self, input: &ClimbInput) -> bool {
+        let (position, fall_flying) = match *input {
+            ClimbInput::Fixed(climbing) => return climbing,
+            ClimbInput::Feet {
+                position,
+                fall_flying,
+            } => (position, fall_flying),
+        };
         let (x, y, z) = (
-            mob.position.x.floor() as i32,
-            mob.position.y.floor() as i32,
-            mob.position.z.floor() as i32,
+            position.x.floor() as i32,
+            position.y.floor() as i32,
+            position.z.floor() as i32,
         );
         let state = self.world.block(x, y, z);
         let tags = self.tags.get(state.0 as usize).copied().unwrap_or(0);
-        if mob.extra.fall_flying && tags & BlockTagFlags::CAN_GLIDE_THROUGH != 0 {
+        if fall_flying && tags & BlockTagFlags::CAN_GLIDE_THROUGH != 0 {
             return false;
         }
         if tags & BlockTagFlags::CLIMBABLE != 0 {
@@ -77,19 +95,9 @@ pub(super) fn climbing_flags(mobs: &[Mob], view: &MobWorld<'_>, lanes: usize) ->
         registry: view.registry,
         tags: view.block_tag_flags,
     };
-    parallel::par_map_on(mobs, MIN_PARALLEL_MOBS, lanes, |part, out| {
-        out.extend(part.iter().map(|mob| blocks.on_climbable(mob)));
-    })
-}
-
-pub(super) fn seen_on_helpers(
-    mobs: &[Mob],
-    uuid: Option<[i32; 4]>,
-    items: &Items,
-    lanes: usize,
-) -> Vec<Seen> {
-    parallel::par_map_on(mobs, MIN_PARALLEL_MOBS, lanes, |part, out| {
-        out.extend(part.iter().map(|mob| seen(mob, uuid, items)));
+    let inputs: Vec<_> = mobs.iter().map(ClimbInput::from_mob).collect();
+    parallel::par_map_on(&inputs, MIN_PARALLEL_MOBS, lanes, |part, out| {
+        out.extend(part.iter().map(|input| blocks.on_climbable(input)));
     })
 }
 
@@ -2050,11 +2058,16 @@ fn mob_batch_preparation_matches_serial() {
             assert_eq!(shared, serial);
 
             let uuid = Some([1, 2, 3, 4]);
-            for (mob, flag) in mobs.iter_mut().zip(shared) {
-                mob.on_climbable = flag;
-            }
-            let serial: Vec<_> = mobs.iter().map(|mob| seen(mob, uuid, items)).collect();
-            let shared = seen_on_helpers(&mobs, uuid, items, 2);
+            let mut snapshot_for = |flags: Vec<bool>| {
+                for (mob, flag) in mobs.iter_mut().zip(flags) {
+                    mob.on_climbable = flag;
+                }
+                mobs.iter()
+                    .map(|mob| seen(mob, uuid, items))
+                    .collect::<Vec<_>>()
+            };
+            let serial = snapshot_for(serial);
+            let shared = snapshot_for(shared);
             assert_eq!(serial.len(), shared.len());
             for (expected, actual) in serial.iter().zip(&shared) {
                 assert_eq!(format!("{expected:?}"), format!("{actual:?}"));

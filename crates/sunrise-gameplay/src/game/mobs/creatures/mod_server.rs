@@ -6059,12 +6059,7 @@ impl crate::game::ServerGame<'_> {
         }
         self.flush_pending_mob_parts();
         let mut snapshot = std::mem::take(&mut self.common.creatures.seen_buf);
-        if prep_lanes > 1 && self.common.mobs.len() >= borrowed_tick::MIN_PARALLEL_MOBS {
-            snapshot =
-                borrowed_tick::seen_on_helpers(&self.common.mobs, uuid, self.items(), prep_lanes);
-        } else {
-            snapshot.extend(self.common.mobs.iter().map(|m| seen(m, uuid, self.items())));
-        }
+        snapshot.extend(self.common.mobs.iter().map(|m| seen(m, uuid, self.items())));
         let mut events = std::mem::take(&mut self.common.creatures.event_buf);
         events.clear();
         let passenger_objects = self.retained_passenger_snapshot(uuid);
