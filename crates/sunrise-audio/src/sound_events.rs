@@ -185,7 +185,7 @@ fn json_int(v: &Value, fallback: i32) -> i32 {
         _ => fallback,
     }
 }
-pub(crate) fn json_bool(v: &Value, fallback: bool) -> bool {
+pub fn json_bool(v: &Value, fallback: bool) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::String(s) => s == "true",

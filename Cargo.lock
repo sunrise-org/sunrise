@@ -4572,6 +4572,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunrise-audio"
+version = "0.1.0"
+dependencies = [
+ "alsa",
+ "cpal",
+ "glam",
+ "libc",
+ "log",
+ "serde_json",
+ "sunrise-assets",
+ "sunrise-audio-input",
+ "sunrise-client-core",
+ "sunrise-core",
+ "sunrise-hooks",
+ "sunrise-mod-api",
+ "sunrise-mod-vocab",
+ "sunrise-world",
+ "symphonia",
+ "zip",
+]
+
+[[package]]
 name = "sunrise-audio-input"
 version = "0.1.0"
 dependencies = [
@@ -4687,6 +4709,7 @@ dependencies = [
  "serde_json",
  "sunrise-assets",
  "sunrise-core",
+ "sunrise-mod-api",
  "sunrise-mod-vocab",
  "sunrise-world",
 ]
@@ -4787,16 +4810,13 @@ name = "sunrise-client-render"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
- "alsa",
  "base64 0.22.1",
  "bytemuck",
  "chrono",
- "cpal",
  "flate2",
  "glam",
  "half",
  "image-webp",
- "libc",
  "log",
  "lz4_flex",
  "miniz_oxide 0.8.9",
@@ -4810,7 +4830,7 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "sunrise-assets",
- "sunrise-audio-input",
+ "sunrise-audio",
  "sunrise-border",
  "sunrise-client-core",
  "sunrise-client-input",
@@ -4841,7 +4861,6 @@ dependencies = [
  "sunrise-theme",
  "sunrise-threads",
  "sunrise-world",
- "symphonia",
  "tempfile",
  "unicode-bidi",
  "ureq",

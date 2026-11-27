@@ -1286,6 +1286,9 @@ impl ParticleEngine {
         factories: &[groups::Factory],
         providers: HashMap<ParticleKey, Arc<ParticleProviderFactory>>,
     ) -> Self {
+        // A sound captured beside these records this thread's count (`CapturedSound::particles_before`),
+        // so a test reads both captures as one ordered stream; the audio crate is below this one.
+        sunrise_hooks::sound::set_particle_request_count(requested_count);
         Self {
             particles: Vec::new(),
             groups: groups::Group::all(factories),

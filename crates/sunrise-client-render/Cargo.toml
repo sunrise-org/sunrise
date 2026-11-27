@@ -15,6 +15,7 @@ sunrise-mod-api-macros = { path = "../sunrise-mod-api-macros" }
 # The GUI atlas's pixels, kept compressed once uploaded (hud/atlas.rs `pack_pixels`).
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 sunrise-assets = { path = "../sunrise-assets" }
+sunrise-audio = { path = "../sunrise-audio" }
 sunrise-client-core = { path = "../sunrise-client-core" }
 sunrise-client-input = { path = "../sunrise-client-input" }
 sunrise-command = { path = "../sunrise-command" }
@@ -44,8 +45,6 @@ sunrise-world = { path = "../sunrise-world" }
 ab_glyph = "0.2.32"
 base64 = "0.22"
 bytemuck = { version = "1.24", features = ["derive"] }
-# Sound (ALSA on Linux); the `audio` feature.
-cpal = { version = "0.16", optional = true }
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 glam = "0.30"
@@ -64,7 +63,6 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 sha1 = "0.10"
 sha2 = "0.10.9"
 smallvec = { version = "1", features = ["const_new"] }
-symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 unicode-bidi = "0.3.18"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
@@ -74,16 +72,6 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", default-features = false, features = ["std", "time"] }
 
-[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
-# CPAL 0.16's ALSA enumeration drops failed opens and hides the PCM addresses.
-alsa = { version = "0.9", optional = true }
-libc = { version = "0.2", optional = true }
-
-# The microphone's native APIs (audio/mic.rs): ALSA's capture controls on Linux and the BSDs, CoreAudio's input
-# streams on macOS. Windows' microphone goes through cpal alone.
-[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "macos"))'.dependencies]
-sunrise-audio-input = { path = "../sunrise-audio-input", optional = true }
-
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 
@@ -92,9 +80,9 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
 # Sound output and input: sunrise-client's `audio` feature.
-audio = ["dep:cpal", "dep:alsa", "dep:libc", "dep:sunrise-audio-input"]
+audio = ["sunrise-audio/audio"]
 # Helpers sunrise-client's tests build their fixtures with.
-test-support = []
+test-support = ["sunrise-audio/test-support"]
 
 [lints]
 workspace = true

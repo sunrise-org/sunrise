@@ -41,7 +41,7 @@ def main():
                lab.ROOT / 'tools/oracle_harness.py', lab.ROOT / 'tools/lab.py',
                lab.ROOT / 'tools/test_rust_parity.py', lab.ROOT / 'tools/integration_env.py',
                lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/sunrise-client-render/src/sound_engine.rs',
+               lab.ROOT / 'crates/sunrise-audio/src/sound_engine.rs',
                lab.ROOT / 'crates/sunrise-client/examples/probe/sound_engine_fixture.rs',
                lab.ROOT / 'crates/sunrise-client/examples/probe/audio_common/mod.rs',
                *[lab.ROOT / 'mods/sunrise/src/test/java/dev/sunriselab/parity' / (name + '.java')

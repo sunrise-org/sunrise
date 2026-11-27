@@ -37,6 +37,7 @@
     "sunrise-gameplay": "engine",
     "sunrise-items": "engine",
     "sunrise-narrator": "engine",
+    "sunrise-audio": "engine",
     "sunrise-audio-input": "engine",
     "sunrise-perf-format": "engine",
     "sunrise-prepare": "engine",

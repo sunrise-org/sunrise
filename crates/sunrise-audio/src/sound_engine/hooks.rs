@@ -9,6 +9,16 @@ use super::{Attenuation, ChannelId, SoundEngine, SoundInstance};
 use mod_api::__private::built;
 use mod_api::{ChannelRef, HookId, SoundAttenuation, SoundPlay, SoundSource};
 
+/// The game installs the mod API runtime before it plays a sound; this crate's tests have no game,
+/// so its hook points install it instead, rather than sealing the dispatch scope off when they look
+/// for listeners (test builds only).
+#[cfg(test)]
+pub(crate) fn install_test_runtime() {
+    if let Err(error) = mod_platform::__private::initialize() {
+        panic!("the audio tests' mod API runtime: {error}");
+    }
+}
+
 /// Hook point for native mods (docs/modding/src/how-to/native-mods.md, declared in `hooks/`
 /// with the game's): a sound that is not streamed has started on `channel`
 /// (`PlaySoundSourceEvent`), after the engine set its pitch, volume and position.

@@ -10,7 +10,7 @@ import re
 
 
 root = Path(__file__).resolve().parents[1]
-mic = root / "crates/sunrise-client-render/src/audio/mic.rs"
+mic = root / "crates/sunrise-audio/src/audio/mic.rs"
 modules = mic.with_suffix("")
 source = mic.read_text()
 audio = '#[cfg(feature = "audio")]\n'

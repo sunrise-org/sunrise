@@ -18,6 +18,7 @@ members = [
     "docs/modding/examples",
     "crates/sunrise-dualsense",
     "crates/sunrise-narrator",
+    "crates/sunrise-audio",
     "crates/sunrise-audio-input",
     "crates/sunrise-threads",
     "crates/sunrise-hdr",

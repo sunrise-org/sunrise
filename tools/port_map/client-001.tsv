@@ -104,7 +104,7 @@ ClientLevel.spawnParticle	port	crates/sunrise-client/src/animate_tick.rs::try_sp
 ClientLevel.spawnFluidParticle	port	crates/sunrise-client/src/animate_tick.rs::try_spawn_drip	drip particle over a solid top (doAnimateTick)
 ClientLevel.fillReportDetails	skip:debug		crash report details only
 ClientLevel.playPlayerSound	skip:other		no caller in the 26.3 client sources
-ClientLevel.playSound	port	crates/sunrise-client-render/src/audio.rs::Audio::play_distance_delayed	a sound over 10 blocks from the camera starts sqrt(distance)/40 s later (Audio::play_after)
+ClientLevel.playSound	port	crates/sunrise-audio/src/audio.rs::Audio::play_distance_delayed	a sound over 10 blocks from the camera starts sqrt(distance)/40 s later (Audio::play_after)
 ClientLevel.getRelativeTickSpeed	skip:other		no caller in the 26.3 client sources
 ClientLevel.destroyBlockProgress	port	crates/sunrise-client/src/game/modding/client_cracks.rs::Game::destroy_block_progress	sets or clears another player's crack on a block
 ClientLevel.addAlwaysVisibleParticle	port	crates/sunrise-client-render/src/particles.rs::ParticleEngine::add_with	always-show flag set

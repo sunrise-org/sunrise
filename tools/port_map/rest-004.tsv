@@ -9,7 +9,7 @@ OptionInstance.UnitDouble.validateValue	port	crates/sunrise-client-render/src/op
 OptionInstance.UnitDouble.codec	port	crates/sunrise-client-render/src/options_file.rs::codec_double
 Options.updateResourcePacks	port	crates/sunrise-client/src/game/interface/options.rs::Game::handle_option_events	gap: minor: saves and reloads on every packs event; vanilla only when the list changed
 Options.maxAnisotropyValue	port	crates/sunrise-client-render/src/gfx.rs::sampler_anisotropy	the options.txt maxAnisotropyBit (and textureFiltering) reach the sampler
-Options.createSoundSliderOptionInstance	port	crates/sunrise-client-render/src/audio.rs::Audio::sync_volumes	gap: player: no now-playing toast when master or music changes
+Options.createSoundSliderOptionInstance	port	crates/sunrise-audio/src/audio.rs::Audio::sync_volumes	gap: player: no now-playing toast when master or music changes
 Options.setGraphicsPresetToCustom	inline	crates/sunrise-client-render/src/options_ui.rs::Opt::set_slider	gap: minor: cycle buttons set custom in Opt::cycle as well
 Options.processOptions	inline	crates/sunrise-client-render/src/options_file.rs::OptionsFile::parse	gap: minor: the save direction is OptionsFile::serialize
 Options.dataFix	port	crates/sunrise-client-render/src/options_fixes.rs::update

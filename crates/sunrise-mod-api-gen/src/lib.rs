@@ -281,6 +281,7 @@ fn free_function_source(target: &str) -> Option<(&'static str, &str)> {
         ("mod_render::", "sunrise-mod-render"),
         ("sunrise_client_lib::", "sunrise-client-lib"),
         ("sunrise_client_render::", "sunrise-client-render"),
+        ("sunrise_audio::", "sunrise-audio"),
     ];
     prefixes
         .into_iter()
@@ -1097,6 +1098,15 @@ mod tests {
             Some((
                 "sunrise-client-render",
                 "sound_engine::hooks::native_play_sound"
+            ))
+        );
+        assert_eq!(
+            super::free_function_source(
+                "sunrise_audio::sound_engine::hooks::native_play_sound_source"
+            ),
+            Some((
+                "sunrise-audio",
+                "sound_engine::hooks::native_play_sound_source"
             ))
         );
         for target in [

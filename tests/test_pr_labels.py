@@ -77,7 +77,7 @@ class AreaTests(unittest.TestCase):
             "crates/sunrise-world/src/datafix/v3.rs": "saves",
             "crates/sunrise-client/src/game/administration/commands/admin.rs": "commands",
             "crates/sunrise-command/src/args.rs": "commands",
-            "crates/sunrise-client-render/src/sound_engine.rs": "audio",
+            "crates/sunrise-audio/src/sound_engine.rs": "audio",
             "crates/sunrise-client-render/src/streaming.rs": "chunks",
             "crates/sunrise-world/src/level/redstone.rs": "blocks",
             "crates/sunrise-client/src/title/worlds.rs": "ui",
@@ -96,7 +96,7 @@ class AreaTests(unittest.TestCase):
 
     def test_biggest_three_with_a_tenth_each(self):
         files = [("crates/sunrise-world/src/worldgen/a.rs", 50), ("crates/sunrise-client/src/mobs/a.rs", 30),
-                 ("crates/sunrise-command/src/a.rs", 10), ("crates/sunrise-client-render/src/audio.rs", 9),
+                 ("crates/sunrise-command/src/a.rs", 10), ("crates/sunrise-audio/src/audio.rs", 9),
                  ("tools/x.py", 1)]
         self.assertEqual(pl.areas(files), ["worldgen", "mobs", "commands"])
         self.assertEqual(pl.areas([("tools/x.py", 95), ("crates/sunrise-world/src/worldgen/a.rs", 5)]), [])

@@ -42,6 +42,25 @@ pub mod engine {
     pub fn mod_stream_gain() -> f32 {
         super::MOD_STREAM_GAIN.get()
     }
+
+    /// How many particle requests the calling thread has taken, as the crate above the engine counts
+    /// them: a captured sound records it beside itself, so a test reads particle and sound captures as
+    /// one ordered stream. 0 until that crate installs its counter.
+    pub fn particle_request_count() -> u64 {
+        super::PARTICLE_REQUESTS
+            .get()
+            .copied()
+            .map_or(0, |count| count())
+    }
+}
+
+/// The counter [`engine::particle_request_count`] reads, installed once by the crate that owns the
+/// particle captures.
+static PARTICLE_REQUESTS: std::sync::OnceLock<fn() -> u64> = std::sync::OnceLock::new();
+
+/// Installs the counter [`engine::particle_request_count`] reads; calls after the first do nothing.
+pub fn set_particle_request_count(count: fn() -> u64) {
+    let _ = PARTICLE_REQUESTS.set(count);
 }
 
 #[cfg(test)]

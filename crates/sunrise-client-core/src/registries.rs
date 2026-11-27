@@ -132,7 +132,7 @@ pub struct Registries {
 /// Read the registered particle type's fields. `None` leaves built-in arguments
 /// on their vanilla path; `Some(Err(_))` means the type refused its options.
 pub type DecodeParticleOptions =
-    fn(&str, &sunrise_core::nbt::Compound) -> Option<Result<mod_vocab::ParticleOptions, String>>;
+    fn(&str, &sunrise_core::nbt::Compound) -> Option<Result<mod_api::ParticleOptions, String>>;
 
 /// A codec check of an inline value: its error message when it does not decode.
 #[derive(Clone)]

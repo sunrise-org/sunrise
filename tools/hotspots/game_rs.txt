@@ -1,7 +1,7 @@
 # fork-owner name upstream-owner upstream-path reason
 # Destinations are pinned; a same-owner method move overrides these rows.
 Dim key Field crates/sunrise-client/src/game/dialogs.rs Dimension registry key; upstream Field::key handles dialog keyboard input.
-Dim level MuffleFade crates/sunrise-client-render/src/audio.rs Dimension level identifier; upstream MuffleFade::level returns audio filter levels.
+Dim level MuffleFade crates/sunrise-audio/src/audio.rs Dimension level identifier; upstream MuffleFade::level returns audio filter levels.
 Dim sea_level GameLevel crates/sunrise-client/src/game/natural_spawning.rs Dimension sea level constant; upstream GameLevel::sea_level delegates world access for spawning.
 Dim exists free crates/sunrise-client/src/lan/playerdata.rs Dimension registration lookup; upstream exists checks a player data file.
 Dim all free crates/sunrise-client-render/src/gfx/hold.rs Enumerate dimensions; upstream all constructs a renderer WorldHold in tests.

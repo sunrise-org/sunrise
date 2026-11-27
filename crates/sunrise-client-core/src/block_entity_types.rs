@@ -1,5 +1,5 @@
 //! Accepted native block entity membership, frozen before resources or worlds load.
-use mod_vocab::BlockEntityTypeKey;
+use mod_api::BlockEntityTypeKey;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, OnceLock},

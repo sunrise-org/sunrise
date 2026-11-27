@@ -10,9 +10,13 @@ description = "The client's lowest layer: chat text and translations, SNBT and N
 log = "0.4"
 sunrise-assets = { path = "../sunrise-assets" }
 sunrise-core = { path = "../sunrise-core" }
-mod_vocab = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
+mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
 sunrise-world = { path = "../sunrise-world" }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+
+[dev-dependencies]
+# The load/loop readers' tests install scoped mod fixtures.
+mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 
 [features]
 # Mutable thread-local language publication for resource-backed game fixtures only.

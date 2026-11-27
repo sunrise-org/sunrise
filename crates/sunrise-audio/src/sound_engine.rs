@@ -1149,6 +1149,10 @@ fn handle_channel(h: &Handle) -> Option<ChannelId> {
 }
 impl SoundEngine {
     pub fn new(registry: SoundRegistry) -> Self {
+        // The game installs the mod API runtime at startup; the tests that build an engine have no
+        // game, so the engine installs it before any play looks for listeners (test builds only).
+        #[cfg(test)]
+        hooks::install_test_runtime();
         Self {
             registry,
             playback_hook: None,

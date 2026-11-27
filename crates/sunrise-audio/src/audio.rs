@@ -480,8 +480,8 @@ pub struct CapturedSound {
     /// The seed the sound's instance takes (`SoundInstance`'s random).
     pub seed: i64,
     /// How many particle requests this thread's particle captures had taken when this sound
-    /// was captured (`particles::requested_count`): a test reads the two captures as one
-    /// ordered stream.
+    /// was captured (`sunrise_hooks::sound::engine::particle_request_count`): a test reads the
+    /// two captures as one ordered stream.
     pub particles_before: u64,
 }
 
@@ -2209,7 +2209,7 @@ impl Audio {
                 entity: None,
                 except_entity: None,
                 seed,
-                particles_before: crate::particles::requested_count(),
+                particles_before: sunrise_hooks::sound::engine::particle_request_count(),
             });
         }
         *self.heard.entry(event.to_owned()).or_default() += 1;
@@ -2237,7 +2237,7 @@ impl Audio {
                 entity: None,
                 except_entity: None,
                 seed,
-                particles_before: crate::particles::requested_count(),
+                particles_before: sunrise_hooks::sound::engine::particle_request_count(),
             });
         }
         *self.heard.entry(sound.identifier.clone()).or_default() += 1;
@@ -2363,7 +2363,7 @@ impl Audio {
                 entity: Some(entity.id),
                 except_entity,
                 seed,
-                particles_before: crate::particles::requested_count(),
+                particles_before: sunrise_hooks::sound::engine::particle_request_count(),
             });
         }
         self.play_entity_seeded(event, source, volume, pitch, seed, entity);
@@ -2402,7 +2402,7 @@ impl Audio {
                 entity: None,
                 except_entity: None,
                 seed,
-                particles_before: crate::particles::requested_count(),
+                particles_before: sunrise_hooks::sound::engine::particle_request_count(),
             });
         }
         if at.is_some() {
@@ -3164,10 +3164,46 @@ mod tests {
     }
 
     fn camera_orientation(yaw: f32, pitch: f32, roll: f32) -> ListenerOrientation {
-        let rotation = crate::camera::rotation_with_roll(yaw, pitch, roll);
+        // `camera::rotation_with_roll` builds a JOML `Quaternionf` with `jmath`'s floats; that
+        // module lives above this crate, so its four components are rebuilt here.
+        const PI: f32 = std::f32::consts::PI;
+        const TAU: f32 = 2.0 * PI;
+        const HALF_PI: f32 = PI / 2.0;
+        let sin = |rad: f32| sunrise_core::jmath::sin(f64::from(rad)) as f32;
+        let cos_from_sin = |sin_angle: f32, angle: f32| {
+            let cos = (1.0 - sin_angle * sin_angle).sqrt();
+            let a = angle + HALF_PI;
+            let mut b = a - (a / TAU) as i32 as f32 * TAU;
+            if f64::from(b) < 0.0 {
+                b += TAU;
+            }
+            if b >= PI { -cos } else { cos }
+        };
+        use sunrise_core::geometry::trig;
+        let angle_y = PI - yaw * trig::DEG_TO_RAD;
+        let angle_x = -pitch * trig::DEG_TO_RAD;
+        let angle_z = if roll == 0.0 {
+            0.0
+        } else {
+            -roll * trig::DEG_TO_RAD
+        };
+        let sx = sin(angle_x * 0.5);
+        let cx = cos_from_sin(sx, angle_x * 0.5);
+        let sy = sin(angle_y * 0.5);
+        let cy = cos_from_sin(sy, angle_y * 0.5);
+        let sz = sin(angle_z * 0.5);
+        let cz = cos_from_sin(sz, angle_z * 0.5);
+        let (x, y, z, w) = (cy * sx, sy * cx, sy * sx, cy * cx);
+        let rotation = glam::Quat::from_xyzw(
+            x * cz + y * sz,
+            y * cz - x * sz,
+            w * sz - z * cz,
+            w * cz + z * sz,
+        );
+        let transform = |v: [f32; 3]| (rotation * glam::Vec3::from_array(v)).to_array();
         ListenerOrientation {
-            forward: rotation.transform([0.0, 0.0, -1.0]),
-            up: rotation.transform([0.0, 1.0, 0.0]),
+            forward: transform([0.0, 0.0, -1.0]),
+            up: transform([0.0, 1.0, 0.0]),
         }
     }
 

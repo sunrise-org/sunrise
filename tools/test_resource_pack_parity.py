@@ -130,7 +130,7 @@ def main():
                                     "pack_resources_fixture", make,
                                     "Pack discovery, overlays, filters and the resource stacks vanilla merges.",
                                     sources=[lab.ROOT / "crates/sunrise-client-render/src/packs.rs",
-                                             lab.ROOT / "crates/sunrise-client-render/src/sound_events.rs",
+                                             lab.ROOT / "crates/sunrise-audio/src/sound_events.rs",
                                              lab.ROOT / "crates/sunrise-client-core/src/lang.rs"])
         total += len(QUERIES)
     print(f"{total} resource pack queries match the pinned client over {len(SELECTIONS)} selections")

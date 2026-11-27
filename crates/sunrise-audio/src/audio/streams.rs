@@ -385,6 +385,10 @@ impl StreamPool {
         entity_pos: Option<[f64; 3]>,
         source: Box<dyn AudioStream>,
     ) -> Result<Arc<dyn AudioStreamSource>, AudioRefusal> {
+        // The game installs the mod API runtime at startup; tests that open a stream have no game,
+        // so the stream installs it before the stream's owner looks for listeners (test builds only).
+        #[cfg(test)]
+        crate::sound_engine::hooks::install_test_runtime();
         let source = OwnedSource::new(owner, source);
         let fault = |fault| Err(AudioRefusal::BadSpec(fault));
         if !matches!(spec.channels, 1 | 2) {

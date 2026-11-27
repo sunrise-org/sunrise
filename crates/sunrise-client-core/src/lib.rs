@@ -5,6 +5,7 @@
 //! sunrise-client re-exports each module under its old path
 //! (`sunrise_client::text`, ...).
 #![forbid(unsafe_code)]
+pub mod api_context;
 pub mod block_entity_nbt;
 pub mod block_entity_types;
 pub mod bossbar;
@@ -21,6 +22,7 @@ pub mod nbt_value;
 pub use sunrise_world::particle_type;
 pub mod pattern;
 pub mod potions;
+pub mod random_source;
 pub mod registries;
 pub mod scoreboard;
 pub mod snbt;
