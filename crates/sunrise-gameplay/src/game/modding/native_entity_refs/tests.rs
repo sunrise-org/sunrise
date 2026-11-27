@@ -201,6 +201,7 @@ pub fn with_game_role_and_facts(
     test: impl FnOnce(&mut crate::game::ServerGame<'_>),
 ) {
     use mod_api::Authority;
+    use sunrise_game_data::lang::{self, Language};
     use sunrise_gameplay_common::game::Options;
     use sunrise_level::sim_settings::SimSettings;
 
@@ -210,6 +211,7 @@ pub fn with_game_role_and_facts(
     );
     let saves = tempfile::tempdir().unwrap();
     let settings = SimSettings::default();
+    let _language = lang::isolate_publication(Language::of("en_us", []));
     let (mut resources, pack) = load_fixture_server_resources(&root, role);
     if let Some(configure) = configure {
         configure(pack.assets.registry, fixture_facts_mut(&mut resources));
@@ -237,6 +239,30 @@ pub fn with_game_role_and_facts(
         Some(Default::default()),
     ));
     test(&mut game);
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "daily"]
+fn fixture_boot_keeps_language_publication_local() {
+    use sunrise_game_data::lang;
+
+    if run_fresh_cases(
+        "game::server_side::native_entity_refs::tests::fixture_boot_keeps_language_publication_local",
+        "SUNRISE_FIXTURE_LANGUAGE_CASE",
+        &["boot"],
+    ) {
+        return;
+    }
+
+    // The fresh process isolates the boot's registries; this thread observes its global language.
+    let generation = lang::generation();
+    assert!(lang::current().is_none());
+    run_with_game_stack(|| {
+        with_game(|_| assert!(lang::has("Anti-aliasing"), "fixture English is not loaded"));
+    });
+    assert!(lang::current().is_none(), "fixture English leaked globally");
+    assert_eq!(lang::generation(), generation);
 }
 
 pub(in crate::game) fn load_fixture_server_resources(

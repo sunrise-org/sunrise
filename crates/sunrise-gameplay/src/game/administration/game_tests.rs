@@ -1875,6 +1875,7 @@ pub mod tests {
 
     use crate::game::native_entity_refs::tests::load_fixture_server_resources;
     use std::sync::Arc;
+    use sunrise_game_data::lang::{self, Language};
     use sunrise_gameplay_common::game::{
         Options, Resources,
         execution_role::ExecutionRole,
@@ -1885,7 +1886,10 @@ pub mod tests {
     pub fn server_game(resources: &mut Option<Arc<Resources>>) -> crate::game::ServerGame<'_> {
         let root = fixture_root();
         let settings = SimSettings::default();
-        let (loaded, pack) = load_fixture_server_resources(&root, ExecutionRole::IntegratedServer);
+        let (loaded, pack) = {
+            let _language = lang::isolate_publication(Language::of("en_us", []));
+            load_fixture_server_resources(&root, ExecutionRole::IntegratedServer)
+        };
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
         options.resources = root;
         options.execution_role = ExecutionRole::IntegratedServer;
