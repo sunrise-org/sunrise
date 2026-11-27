@@ -477,11 +477,20 @@ event.register(
   solid geometry with `depth_write(true)`).
 - `PolygonMode::Line` requires the device's wireframe feature (`POLYGON_MODE_LINE`); if the GPU
   lacks it, the pipeline (or modifier variant) is refused.
-- Depth is a `DepthState` (`compare`, `write`, `depth_bias_constant`, `depth_bias_slope_scale`) in
-  `PipelineState::depth_stencil`. `.depth(WorldDepth)` is the coarse form (`Tested` is
-  `DepthCompare::GreaterEqual` over Sunrise's reversed depth, `ThroughWalls` is `Always`);
-  `.depth_compare`, `.depth_bias(constant, slope_scale)` and `.depth_stencil(Option<DepthState>)`
-  set it exactly. `.depth_stencil(None)` declares a depthless pipeline.
+- Depth is a `DepthState` (`compare`, `write`, `depth_bias_constant`, `depth_bias_slope_scale`,
+  `stencil_test`) in `PipelineState::depth_stencil`. `.depth(WorldDepth)` is the coarse form
+  (`Tested` is `DepthCompare::GreaterEqual` over Sunrise's reversed depth, `ThroughWalls` is
+  `Always`); `.depth_compare`, `.depth_bias(constant, slope_scale)` and
+  `.depth_stencil(Option<DepthState>)` set it exactly. `.depth_stencil(None)` declares a depthless
+  pipeline.
+- Stencil testing lives on `DepthState::stencil_test` (`Option<StencilTest>`, `None` = off), using
+  NeoForge's `StencilTest`, `StencilPerFaceTest`, and `StencilOperation` types (`StencilTest::both`
+  applies one face rule to front and back; masks default to `u32::MAX`, reference to `0`). On
+  offscreen targets with a stencil plane (`RenderTargetDepth::Depth24PlusStencil8`), the renderer
+  applies the stencil state and binds `StencilTest::reference_value` automatically. On targets
+  without a stencil plane (such as `Depth32Float` or the main world pass), stencil state has no
+  effect and is not refused. A `PipelineModifier` can replace or clear it with
+  `.stencil_test(Some(test))` or `.stencil_test(None)`.
 - `PipelineBlend::Custom(BlendFunction)` takes separate colour and alpha equations (factors and
   `BlendOp`), with vanilla's presets as `BlendFunction` constants. `ConstantColor`,
   `ConstantAlpha` and their one-minus forms are refused when the pipeline is registered, because

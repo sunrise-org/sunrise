@@ -1833,6 +1833,44 @@ pub(crate) fn wgpu_depth_bias(ds: mod_api::DepthState, standard_z: bool) -> wgpu
     }
 }
 
+fn wgpu_stencil_op(op: mod_api::StencilOperation) -> wgpu::StencilOperation {
+    match op {
+        mod_api::StencilOperation::Keep => wgpu::StencilOperation::Keep,
+        mod_api::StencilOperation::Zero => wgpu::StencilOperation::Zero,
+        mod_api::StencilOperation::Replace => wgpu::StencilOperation::Replace,
+        mod_api::StencilOperation::Incr => wgpu::StencilOperation::IncrementClamp,
+        mod_api::StencilOperation::Decr => wgpu::StencilOperation::DecrementClamp,
+        mod_api::StencilOperation::Invert => wgpu::StencilOperation::Invert,
+        mod_api::StencilOperation::IncrWrap => wgpu::StencilOperation::IncrementWrap,
+        mod_api::StencilOperation::DecrWrap => wgpu::StencilOperation::DecrementWrap,
+        _ => wgpu::StencilOperation::Keep,
+    }
+}
+
+fn wgpu_stencil_face(face: mod_api::StencilPerFaceTest) -> wgpu::StencilFaceState {
+    wgpu::StencilFaceState {
+        // Stencil comparison never flips for standard-Z targets.
+        compare: wgpu_compare(face.compare),
+        fail_op: wgpu_stencil_op(face.fail),
+        depth_fail_op: wgpu_stencil_op(face.depth_fail),
+        pass_op: wgpu_stencil_op(face.pass),
+    }
+}
+
+/// Convert [`mod_api::DepthState::stencil_test`] to [`wgpu::StencilState`]. `None` maps to the
+/// disabled default (`Always`/`Keep`, zero masks).
+pub(crate) fn wgpu_stencil_state(stencil: Option<mod_api::StencilTest>) -> wgpu::StencilState {
+    match stencil {
+        Some(test) => wgpu::StencilState {
+            front: wgpu_stencil_face(test.front),
+            back: wgpu_stencil_face(test.back),
+            read_mask: test.read_mask,
+            write_mask: test.write_mask,
+        },
+        None => wgpu::StencilState::default(),
+    }
+}
+
 /// Owned runtime descriptors (`depth_targets`, `uniforms`, `pipelines`) for `PackPost`.
 pub fn pack_runtime_specs() -> sunrise_render_shaderpack::pack_post::OwnedModPackRuntime {
     pack_runtime_specs_of(registered())
@@ -3224,5 +3262,34 @@ void main() {
         let scrolled = texture_transform_matrix(TextureTransform::Glint, 55_000, 1.0);
         assert_eq!(scrolled.w_axis.x, 0.0);
         assert_eq!(scrolled.w_axis.y, f32::from_bits(0x3f2aaaab));
+    }
+
+    #[test]
+    fn wgpu_stencil_state_maps_all_operations_and_preserves_compare() {
+        use mod_api::{StencilOperation as Op, StencilPerFaceTest, StencilTest};
+
+        assert_eq!(wgpu_stencil_state(None), wgpu::StencilState::default());
+
+        let cases = [
+            (Op::Keep, wgpu::StencilOperation::Keep),
+            (Op::Zero, wgpu::StencilOperation::Zero),
+            (Op::Replace, wgpu::StencilOperation::Replace),
+            (Op::Incr, wgpu::StencilOperation::IncrementClamp),
+            (Op::Decr, wgpu::StencilOperation::DecrementClamp),
+            (Op::Invert, wgpu::StencilOperation::Invert),
+            (Op::IncrWrap, wgpu::StencilOperation::IncrementWrap),
+            (Op::DecrWrap, wgpu::StencilOperation::DecrementWrap),
+        ];
+        for (op, expected) in cases {
+            let face = StencilPerFaceTest::new(op, op, op, DepthCompare::Less);
+            let mapped = wgpu_stencil_state(Some(StencilTest::both(face, 0xAA, 0x55, 7)));
+            assert_eq!(mapped.front.compare, wgpu::CompareFunction::Less);
+            assert_eq!(mapped.front.fail_op, expected);
+            assert_eq!(mapped.front.depth_fail_op, expected);
+            assert_eq!(mapped.front.pass_op, expected);
+            assert_eq!(mapped.back, mapped.front);
+            assert_eq!(mapped.read_mask, 0xAA);
+            assert_eq!(mapped.write_mask, 0x55);
+        }
     }
 }

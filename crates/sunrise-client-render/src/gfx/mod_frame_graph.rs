@@ -975,6 +975,8 @@ impl FrameGraphRunner {
                         transient_indices: &pass.transient_indices,
                         inline_uniforms: &pass.inline_uniforms,
                         texel_data: &pass.texel_data,
+                        modifiers: None,
+                        modifier_defs: None,
                     },
                 );
             }
