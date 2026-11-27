@@ -15,9 +15,9 @@ use sunrise_sim::projectiles::ProjectileKind;
 pub(crate) mod tests {
     use super::*;
     use sunrise_gameplay::game::server_side::potions_server::collect_dragon_breath;
-    use sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt;
     use sunrise_gameplay_common::game::client_side::potions::tests::FoodEffectMod;
     use sunrise_gameplay_common::game::client_side::potions::tests::OtherEffectMod;
+    use sunrise_gameplay_common::game::potions_common::area_effect_cloud_to_nbt;
     use sunrise_sim::motion::PlayerMotion;
 
     pub(crate) fn effect_test_mod(
@@ -281,7 +281,7 @@ pub(crate) mod tests {
             assert_eq!(name, "test:measured");
             assert_eq!(options, &[1, 1, 0, 0]);
 
-            let saved = potion_cloud_to_nbt(&game.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
+            let saved = area_effect_cloud_to_nbt(&game.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
             let particle_tag = saved.get("custom_particle").unwrap();
             assert_eq!(particle_tag.get("measure"), Some(&Tag::Int(257)));
             assert!(
