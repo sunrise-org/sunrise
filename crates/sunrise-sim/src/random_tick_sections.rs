@@ -1234,7 +1234,7 @@ mod tick_parity {
                 while let Some((y, mask)) =
                     cache.next_masked(key, chunk, &facts, |_| unreachable!("prepared ahead"), from)
                 {
-                    masks.push((key, y, *mask));
+                    masks.push((key, y, (*mask).clone()));
                     from = y + 16;
                 }
             }
